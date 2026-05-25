@@ -6,14 +6,19 @@ contractUsages:
     role: publish
   - contract: event.user.created.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.user.locked.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.user.unlocked.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.user.updated.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.user.deleted.v1
     role: subscribe
+    handler: HandleEvent
 verify:
   unit:
     - unit.auditappenduser.service

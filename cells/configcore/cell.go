@@ -215,8 +215,6 @@ type ConfigCore struct {
 	// +slice:route:slice=flagwrite,subPath=/flags
 	flagWriteHandler *flagwrite.Handler
 
-	// +slice:subscribe:slice=configsubscribe,topic=event.config.entry-upserted.v1,handler=HandleEntryUpserted,group=configcore
-	// +slice:subscribe:slice=configsubscribe,topic=event.config.entry-deleted.v1,handler=HandleEntryDeleted,group=configcore
 	subscribeSvc *configsubscribe.Service
 }
 

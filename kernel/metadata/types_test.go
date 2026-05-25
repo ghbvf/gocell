@@ -135,6 +135,8 @@ func TestContractMetaHTTPTransportRoundTrip(t *testing.T) {
 
 func TestContractMetaEventRoundTrip(t *testing.T) {
 	replayable := true
+	// Subscribers is yaml:"-" (derived, not persisted). Round-trip via
+	// actorSubscribers only; cell subscribers are derived at parse time.
 	orig := ContractMeta{
 		ID:               "event.session.created.v1",
 		Kind:             "event",
@@ -142,8 +144,8 @@ func TestContractMetaEventRoundTrip(t *testing.T) {
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
 		Endpoints: EndpointsMeta{
-			Publisher:   "accesscore",
-			Subscribers: []string{"auditcore"},
+			Publisher:        "accesscore",
+			ActorSubscribers: []string{"external-sink"},
 		},
 		Replayable:        &replayable,
 		IdempotencyKey:    "event_id",
@@ -156,6 +158,10 @@ func TestContractMetaEventRoundTrip(t *testing.T) {
 	assert.Contains(t, string(data), "replayable")
 	assert.Contains(t, string(data), "idempotencyKey")
 	assert.Contains(t, string(data), "deliverySemantics")
+	assert.Contains(t, string(data), "actorSubscribers")
+
+	// subscribers must not appear in marshaled output (yaml:"-")
+	assert.NotContains(t, string(data), "subscribers:")
 
 	// SchemaRefs should be absent (omitempty)
 	assert.NotContains(t, string(data), "schemaRefs")
@@ -419,10 +425,12 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 			absent:  []string{"publisher", "subscribers", "handler", "invokers", "provider", "readers"},
 		},
 		{
+			// Subscribers is yaml:"-" (derived, not persisted in YAML).
+			// Use actorSubscribers to exercise the event endpoints round-trip.
 			name:    "event only",
-			meta:    EndpointsMeta{Publisher: "cell-a", Subscribers: []string{"cell-b"}},
-			present: []string{"publisher", "subscribers"},
-			absent:  []string{"server", "clients", "http", "handler", "invokers", "provider", "readers"},
+			meta:    EndpointsMeta{Publisher: "cell-a", ActorSubscribers: []string{"external-sink"}},
+			present: []string{"publisher", "actorSubscribers"},
+			absent:  []string{"server", "clients", "http", "handler", "invokers", "provider", "readers", "subscribers"},
 		},
 		{
 			name:    "command only",

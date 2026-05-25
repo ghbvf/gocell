@@ -134,8 +134,6 @@ type OrderCell struct {
 	// +slice:route:slice=orderprojectionrebuild,listener=cell.InternalListener,subPath=/orders
 	projectionRebuildHandler *projectionrebuildv1.Handler
 
-	// +slice:subscribe:slice=orderprojection,topic=event.order-created.v1,handler=HandleOrderCreated,group=ordercell
-	// +slice:subscribe:slice=orderprojection,topic=event.order-status-changed.v1,handler=HandleOrderStatusChanged,group=ordercell
 	projectionSvc *orderprojection.Service
 }
 
@@ -240,7 +238,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// and order-status-changed, maintains an in-memory status-grouped read model
 	// (projection.order.status-summary.v1), serves the summary query, and exposes
 	// a business-level rebuild on the internal listener. The subscription wiring
-	// is emitted into cell_gen.go from the +slice:subscribe markers above.
+	// is emitted into cell_gen.go from the slice.yaml contractUsages[role=subscribe].
 	projSvc, err := orderprojection.NewService(orderprojection.WithLogger(c.logger))
 	if err != nil {
 		return fmt.Errorf("orderprojection: %w", err)

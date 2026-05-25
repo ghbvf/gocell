@@ -127,8 +127,9 @@ func (c *MyCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 ```
 
 `cell_gen.go::Init` 会自动调 `c.BaseCell.Init(ctx, reg) → c.initInternal(ctx, reg)`，并按
-`cell.go` 中的 `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers
-生成 RouteGroup/Subscribe 注册代码（参考 `cells/configcore/cell_gen.go`）。
+`cell.go` 中的 `// +cell:listener` / `// +slice:route` markers 生成 RouteGroup 注册代码，
+并从 slice.yaml `contractUsages[role=subscribe]` 生成 Subscribe 注册代码
+（参考 `cells/configcore/cell_gen.go`）。
 
 > 健康探针只能经 typed funnel 注册：cell repo probe 走 cellgen `RegisterRepoReady`，emitter
 > probe 走 `cell.RegisterEmitterHealthProbes(reg, emitter)`（内部做 `healthz.ProbeSet` 断言 +
@@ -316,38 +317,63 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 ### 7. 注册事件订阅（可选）
 
-通过 `reg.Subscribe(...)` 在 `Init` 内声明订阅意图——禁止手动启动 goroutine 或
-直接调 `Subscriber.Subscribe`，goroutine 生命周期、错误收敛、Setup/Ready 阶段
-一律由 EventRouter 统一接管。
+订阅的唯一权威源是 **slice.yaml `contractUsages[role=subscribe]`**——cellgen 从此生成
+`reg.Subscribe(...)` 调用进 `cell_gen.go`。禁止手动启动 goroutine 或直接调
+`Subscriber.Subscribe`，goroutine 生命周期、错误收敛、Setup/Ready 阶段一律由
+EventRouter 统一接管。
+
+#### 新增订阅：三步
+
+**1. 在 slice.yaml 的 `contractUsages` 下声明订阅**：
+
+```yaml
+# slice.yaml
+contractUsages:
+  - contract: event.my.topic.v1
+    role: subscribe
+    handler: HandleEvent          # 必填：cell struct 上对应字段的 handler 方法名
+    # group: my-subgroup          # 可选：消费组，缺省 = cellID
+verify:
+  contract:
+    - contract.event.my.topic.v1.subscribe   # 手写，断言有可执行 consumer contract 测试
+```
+
+**2. 在 cell.go struct 中声明对应字段**（新建 slice 时才需要；字段指针类型的包名必须与 sliceID 匹配）：
 
 ```go
-// Init 内每次 reg.Subscribe(...) 注册一个 (contract, handler, consumerGroup) 三元组：
-//   - contract      : contract id、broker 路由键、observability metadata
-//   - handler       : outbox.EntryHandler 业务处理函数
-//   - consumerGroup : 通常等于 cell.ID()，作为幂等键命名空间；同 group 竞争消费，
-//                     不同 group 各自一份（fanout）。drain loop 已知真实 owner cellID，
-//                     consumerGroup 与 owner 解耦（参见 watermill router.AddHandler 模式）
-//
-// 框架会包装 ConsumerBase（两阶段 Claim/Commit/Release + 退避重试 + DLX 路由），
-// 业务 handler 只需返回 outbox.HandleResult{Disposition: Ack/Requeue/Reject}。
-func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
-    if err := c.BaseCell.Init(ctx, reg); err != nil {
-        return err
-    }
-    // c.svc.HandleEvent 是 outbox.EntryHandler 类型 (ctx, entry) → HandleResult
-    // 由 029 #03 ADR Decision 1 起直接传入，不再需要 WrapLegacyHandler 适配。
-    //
-    // 订阅通过生成包（generated/contracts/...）的 NewSubscription 完成。
-    // wrapper.EventSpec(id, transport) 已删除（PR #376）；直接用生成的适配器：
-    //   import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
-    //   if err := mytopicv1.NewSubscription(c.svc.HandleEvent, "mycell", "myslice").Mount(reg); err != nil { ... }
-    import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
-    if err := mytopicv1.NewSubscription(c.svc.HandleEvent, c.ID(), "myslice").Mount(reg); err != nil {
-        return fmt.Errorf("mycell: subscribe event.my.topic.v1: %w", err)
-    }
-    return nil
+// cell.go
+type MyCell struct {
+    *cell.BaseCell
+    // +slice:route:slice=myslice,subPath=/foo
+    mySliceSvc *myslice.Service   // cellgen 按「字段指针类型包名 == sliceID」解析
 }
 ```
+
+如果同一 cell struct 持有多个来自同一包的字段（如 sessionlogout 场景），用 slice.yaml
+中 `field:` 字段消歧：
+
+```yaml
+contractUsages:
+  - contract: event.role.assigned.v1
+    role: subscribe
+    handler: HandleRoleAssigned
+    field: logoutSvc              # 指定 cell struct 的字段名
+```
+
+**3. 实现 handler 方法**（`outbox.EntryHandler` 签名）：
+
+```go
+// myslice/service.go
+func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+    // 解析 payload，处理业务，返回 Ack / Requeue / Reject
+    return outbox.Ack()
+}
+```
+
+运行 `gocell generate cell` 后 `cell_gen.go` 自动包含 `reg.Subscribe(...)` 调用。
+
+框架会包装 ConsumerBase（两阶段 Claim/Commit/Release + 退避重试 + DLX 路由），
+业务 handler 只需返回 `outbox.HandleResult`。
 
 EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
 1. **Setup**：串行调 `Subscriber.Setup(sub)` 声明 broker topology；任一失败立即终止

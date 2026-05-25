@@ -346,16 +346,16 @@
         "properties": {
           "endpoints": {
             "type": "object",
-            "required": ["publisher", "subscribers"],
+            "required": ["publisher"],
             "additionalProperties": false,
             "properties": {
               "publisher": {
                 "type": "string",
                 "description": "The cell that publishes this event."
               },
-              "subscribers": {
+              "actorSubscribers": {
                 "type": "array",
-                "description": "Cells or actors that subscribe to this event.",
+                "description": "External actors (from actors.yaml) that subscribe to this event. Cell subscribers are derived from slice.yaml contractUsages[role=subscribe] and must not be listed here.",
                 "items": { "type": "string" }
               }
             }

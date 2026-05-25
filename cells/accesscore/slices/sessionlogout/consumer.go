@@ -16,8 +16,8 @@ import (
 // retained for wiring continuity even though the consumer no longer handles
 // session-logout events directly; a clearer name like "rbacaudit" would fit
 // the current responsibility better but the rename is a cross-file refactor
-// (slice.yaml id + cell_init.go wiring + contract subscribers + archtest
-// fixtures) that is intentionally out of scope here.
+// (slice.yaml id + cell_init.go wiring + archtest fixtures) that is
+// intentionally out of scope here.
 //
 // Credential invalidation (epoch bump + session revoke + refresh chain
 // revoke) is performed upstream by rbacassign.Service.Revoke through the

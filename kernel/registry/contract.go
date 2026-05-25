@@ -72,6 +72,7 @@ func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 	cp := *c
 	// Deep copy mutable Endpoints slices.
 	cp.Endpoints.Clients = append([]string(nil), c.Endpoints.Clients...)
+	cp.Endpoints.ActorSubscribers = append([]string(nil), c.Endpoints.ActorSubscribers...)
 	cp.Endpoints.Subscribers = append([]string(nil), c.Endpoints.Subscribers...)
 	cp.Endpoints.Invokers = append([]string(nil), c.Endpoints.Invokers...)
 	cp.Endpoints.Readers = append([]string(nil), c.Endpoints.Readers...)

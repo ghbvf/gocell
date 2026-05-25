@@ -1589,3 +1589,65 @@ func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
 	}
 	return hasPublic && hasInternal
 }
+
+// validateFMT35 enforces the subscribe-only placement of the contractUsage
+// handler / group / field columns:
+//
+//   - role=subscribe MUST carry a handler (the consumer handler method name
+//     cellgen renders into reg.Subscribe; absent → cellgen would emit an empty
+//     c.<field>. expression).
+//   - any non-subscribe role MUST NOT carry handler / group / field — those
+//     columns are meaningless outside subscribe and silently ignored by
+//     cellgen, so a stray value is a latent authoring mistake.
+//
+// These constraints also live in slice.schema.json as if/then conditionals,
+// but that schema is not run by `gocell validate` (see
+// kernel/metadata/schemas/embed.go — "planned Phase 2"). FMT-35 enforces them
+// in the governance main path so the rule actually fires, independent of any
+// schema-runner wiring.
+func (v *Validator) validateFMT35() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		for i, cu := range s.ContractUsages {
+			field := fmt.Sprintf("contractUsages[%d]", i)
+			if cu.Role == string(cellvocab.RoleSubscribe) {
+				if cu.Handler == "" {
+					results = append(results, v.newError(
+						codeFMT35, IssueRequired,
+						sliceFile(s), field+".handler",
+						fmt.Sprintf(
+							"slice %q contractUsage %q has role=subscribe but no handler;"+
+								" cellgen needs the consumer handler method name to generate reg.Subscribe",
+							s.ID, cu.Contract,
+						),
+						"set handler: to the consumer handler method name (e.g. HandleEvent)",
+					))
+				}
+				continue
+			}
+			results = append(results, v.forbidSubscribeColumn(s, cu, field, "handler", cu.Handler)...)
+			results = append(results, v.forbidSubscribeColumn(s, cu, field, "group", cu.Group)...)
+			results = append(results, v.forbidSubscribeColumn(s, cu, field, "field", cu.Field)...)
+		}
+	}
+	return results
+}
+
+// forbidSubscribeColumn reports a FMT-35 error when a subscribe-only column
+// (handler / group / field) is set on a non-subscribe contractUsage.
+func (v *Validator) forbidSubscribeColumn(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column, value string,
+) []ValidationResult {
+	if value == "" {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT35, IssueForbidden,
+		sliceFile(s), field+"."+column,
+		fmt.Sprintf(
+			"slice %q contractUsage %q has role=%q but sets %s; %s is only valid for role=subscribe",
+			s.ID, cu.Contract, cu.Role, column, column,
+		),
+		fmt.Sprintf("remove %s: from this contractUsage (only role=subscribe carries it)", column),
+	)}
+}

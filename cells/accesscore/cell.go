@@ -403,12 +403,8 @@ type AccessCore struct {
 	// +slice:route:slice=rbacassign,listener=cell.InternalListener,subPath=/roles
 	rbacAssignHandler *rbacassign.Handler
 
-	// +slice:subscribe:slice=configreceive,topic=event.config.entry-upserted.v1,handler=HandleEntryUpserted,group=accesscore
-	// +slice:subscribe:slice=configreceive,topic=event.config.entry-deleted.v1,handler=HandleEntryDeleted,group=accesscore
 	configReceiveSvc *configreceive.Service
 
-	// +slice:subscribe:slice=sessionlogout,topic=event.role.assigned.v1,handler=HandleRoleChanged,group=accesscore-rbac-session-sync
-	// +slice:subscribe:slice=sessionlogout,topic=event.role.revoked.v1,handler=HandleRoleChanged,group=accesscore-rbac-session-sync
 	rbacSessionConsumer *sessionlogout.Consumer
 }
 

@@ -21,11 +21,11 @@ var sliceMeta = &metadata.SliceMeta{
 	ConsistencyLevel: "L2",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.audit.appended.v1", Role: "publish"},
-		{Contract: "event.user.created.v1", Role: "subscribe"},
-		{Contract: "event.user.locked.v1", Role: "subscribe"},
-		{Contract: "event.user.unlocked.v1", Role: "subscribe"},
-		{Contract: "event.user.updated.v1", Role: "subscribe"},
-		{Contract: "event.user.deleted.v1", Role: "subscribe"},
+		{Contract: "event.user.created.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.user.locked.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.user.unlocked.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.user.updated.v1", Role: "subscribe", Handler: "HandleEvent"},
+		{Contract: "event.user.deleted.v1", Role: "subscribe", Handler: "HandleEvent"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{

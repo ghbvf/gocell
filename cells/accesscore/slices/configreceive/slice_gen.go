@@ -20,8 +20,8 @@ var sliceMeta = &metadata.SliceMeta{
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L3",
 	ContractUsages: []metadata.ContractUsage{
-		{Contract: "event.config.entry-upserted.v1", Role: "subscribe"},
-		{Contract: "event.config.entry-deleted.v1", Role: "subscribe"},
+		{Contract: "event.config.entry-upserted.v1", Role: "subscribe", Handler: "HandleEntryUpserted"},
+		{Contract: "event.config.entry-deleted.v1", Role: "subscribe", Handler: "HandleEntryDeleted"},
 		{Contract: "http.config.internal.get.v1", Role: "call"},
 	},
 	Verify: metadata.SliceVerifyMeta{

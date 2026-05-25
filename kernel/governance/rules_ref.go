@@ -409,3 +409,73 @@ func (v *Validator) validateREF17() []ValidationResult {
 	}
 	return results
 }
+
+// validateREF18 checks that every entry in an event contract's
+// endpoints.actorSubscribers is a registered EXTERNAL actor — not a cell ID and
+// not a wildcard.
+//
+// Since the subscribe single-source flip, cell subscribers are DERIVED from
+// slice.yaml contractUsages[role=subscribe] (a cell never appears in the
+// contract.yaml). actorSubscribers is the one remaining hand-written subscriber
+// list, reserved for external systems (no slice, not derivable) registered in
+// actors.yaml. Without this rule, writing a cell ID or "*" into
+// actorSubscribers would union straight into the derived Subscribers
+// (parser.deriveEventSubscribers), silently re-opening the hand-written
+// cell-subscriber bypass the flip was designed to close. REF-18 makes that
+// bypass a governance error.
+//
+// External-actor membership comes from actors.yaml (every entry is external by
+// construction — see ActorMeta godoc), mirroring REF-17's audience model.
+func (v *Validator) validateREF18() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "event" {
+			continue
+		}
+		for i, sub := range c.Endpoints.ActorSubscribers {
+			field := fmt.Sprintf("actorSubscribers[%d]", i)
+			switch {
+			case sub == "*":
+				results = append(results, v.newError(
+					codeREF18, IssueForbidden,
+					contractFile(c), field,
+					fmt.Sprintf(
+						"event contract %q lists wildcard %q in actorSubscribers;"+
+							" wildcards are not a valid external-actor identity",
+						c.ID, sub,
+					),
+					"replace the wildcard with explicit external-actor IDs registered in actors.yaml",
+				))
+			case v.isCellID(sub):
+				results = append(results, v.newError(
+					codeREF18, IssueForbidden,
+					contractFile(c), field,
+					fmt.Sprintf(
+						"event contract %q lists cell %q in actorSubscribers;"+
+							" cell subscribers are derived from slice.yaml contractUsages[role=subscribe]"+
+							" and must not be hand-written here",
+						c.ID, sub,
+					),
+					"remove the cell from actorSubscribers and declare contractUsages[role=subscribe] in the cell's slice.yaml instead",
+				))
+			case !v.isExternalActor(sub):
+				results = append(results, v.newError(
+					codeREF18, IssueRefNotFound,
+					contractFile(c), field,
+					fmt.Sprintf(
+						"event contract %q lists %q in actorSubscribers but it is not registered in actors.yaml",
+						c.ID, sub,
+					),
+					"register the external subscriber in actors.yaml, or remove it from actorSubscribers",
+				))
+			}
+		}
+	}
+	return results
+}
+
+// isCellID reports whether id names a cell in the project.
+func (v *Validator) isCellID(id string) bool {
+	_, ok := v.project.Cells[id]
+	return ok
+}

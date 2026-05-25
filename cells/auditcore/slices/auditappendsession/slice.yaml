@@ -6,8 +6,10 @@ contractUsages:
     role: publish
   - contract: event.session.created.v1
     role: subscribe
+    handler: HandleEvent
   - contract: event.session.revoked.v1
     role: subscribe
+    handler: HandleEvent
 verify:
   unit:
     - unit.auditappendsession.service

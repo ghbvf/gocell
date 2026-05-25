@@ -20,8 +20,8 @@ var sliceMeta = &metadata.SliceMeta{
 	BelongsToCell:    "ordercell",
 	ConsistencyLevel: "L3",
 	ContractUsages: []metadata.ContractUsage{
-		{Contract: "event.order-created.v1", Role: "subscribe"},
-		{Contract: "event.order-status-changed.v1", Role: "subscribe"},
+		{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleOrderCreated"},
+		{Contract: "event.order-status-changed.v1", Role: "subscribe", Handler: "HandleOrderStatusChanged"},
 		{Contract: "projection.order.status-summary.v1", Role: "provide"},
 		{Contract: "http.order.projection-summary.v1", Role: "serve"},
 	},

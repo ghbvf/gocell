@@ -52,6 +52,7 @@ const (
 	codeREF15 RuleCode = "REF-15"
 	codeREF16 RuleCode = "REF-16"
 	codeREF17 RuleCode = "REF-17"
+	codeREF18 RuleCode = "REF-18"
 
 	// TOPO — topology legality (rules_topo.go).
 	codeTOPO01 RuleCode = "TOPO-01"
@@ -107,17 +108,19 @@ const (
 	codeFMT32 RuleCode = "FMT-32"
 	codeFMT33 RuleCode = "FMT-33"
 	codeFMT34 RuleCode = "FMT-34"
+	codeFMT35 RuleCode = "FMT-35"
 	codeFMTA1 RuleCode = "FMT-A1"
 	codeFMTC1 RuleCode = "FMT-C1"
 
 	// ADV — advisory warnings & dead-event detection (rules_misc_advisory.go).
-	// 5 active constants (ADV-01/03/04/05/06); ADV-02 retired, gap intentional.
-	// ADV-05/06 are SeverityError; ADV-01/03/04 are SeverityWarning.
+	// 4 active constants (ADV-01/03/04/05); ADV-02 retired and ADV-06 removed
+	// (gap intentional). Subscribers are now derived from slice contractUsages +
+	// actorSubscribers, making drift-detection moot.
+	// ADV-05 is SeverityError; ADV-01/03/04 are SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"
 	codeADV05 RuleCode = "ADV-05"
-	codeADV06 RuleCode = "ADV-06"
 
 	// CH — contract-health (contracthealth.go, rules_http.go).
 	// Registered via Validator.CheckContractHealth, not rules().

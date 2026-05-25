@@ -4,8 +4,10 @@ consistencyLevel: L3
 contractUsages:
   - contract: event.config.entry-upserted.v1
     role: subscribe
+    handler: HandleEntryUpserted
   - contract: event.config.entry-deleted.v1
     role: subscribe
+    handler: HandleEntryDeleted
 verify:
   unit:
     - unit.configsubscribe.service

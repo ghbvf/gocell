@@ -51,12 +51,14 @@ func TestCollectFromCellFile(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name:          "cell_withmarkers: fieldLevel FieldName extraction",
+			// After subscribe single-source flip, cell_withmarkers.go no longer
+			// contains a slice:subscribe marker. Only listener + route remain.
+			name:          "cell_withmarkers: fieldLevel FieldName extraction (route only)",
 			fixture:       "cell_withmarkers.go",
-			wantCount:     3,
-			wantNames:     []string{"cell:listener", "slice:route", "slice:subscribe"},
-			wantTargets:   []markerTarget{typeLevel, fieldLevel, fieldLevel},
-			wantFieldName: []string{"", "Items", "Sub"},
+			wantCount:     2,
+			wantNames:     []string{"cell:listener", "slice:route"},
+			wantTargets:   []markerTarget{typeLevel, fieldLevel},
+			wantFieldName: []string{"", "Items"},
 		},
 	}
 	for _, tc := range cases {

@@ -60,6 +60,20 @@ verify:
     - contract.event.session.created.v1.publish
   waivers: []
 `)},
+		"cells/auditcore/slices/session-ingest/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-ingest
+belongsToCell: auditcore
+consistencyLevel: L2
+contractUsages:
+  - contract: event.session.created.v1
+    role: subscribe
+    handler: Handle
+verify:
+  unit:
+    - unit.session-ingest.service
+  contract:
+    - contract.event.session.created.v1.subscribe
+  waivers: []
+`)},
 
 		// --- contracts ---
 		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
@@ -82,8 +96,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: accesscore
-  subscribers:
-    - auditcore
 replayable: true
 idempotencyKey: eventId
 deliverySemantics: at-least-once
@@ -235,8 +247,9 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Equal(t, []string{"smoke.accesscore.startup"}, pm.Cells["accesscore"].Verify.Smoke)
 
 	// Slices
-	assert.Len(t, pm.Slices, 1)
+	assert.Len(t, pm.Slices, 2)
 	assert.Contains(t, pm.Slices, "accesscore/session-login")
+	assert.Contains(t, pm.Slices, "auditcore/session-ingest")
 	sl := pm.Slices["accesscore/session-login"]
 	assert.Equal(t, "session-login", sl.ID)
 	assert.Equal(t, "accesscore", sl.BelongsToCell)
@@ -414,8 +427,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: accesscore
-  subscribers:
-    - auditcore
 replayable: true
 idempotencyKey: eventId
 deliverySemantics: at-least-once
@@ -892,7 +903,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: cell-b
-  subscribers: [cell-a]
 `,
 			wantOwner: "cell-b",
 		},

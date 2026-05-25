@@ -22,8 +22,8 @@ var sliceMeta = &metadata.SliceMeta{
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.session.delete.v1", Role: "serve"},
 		{Contract: "event.session.revoked.v1", Role: "publish"},
-		{Contract: "event.role.assigned.v1", Role: "subscribe"},
-		{Contract: "event.role.revoked.v1", Role: "subscribe"},
+		{Contract: "event.role.assigned.v1", Role: "subscribe", Handler: "HandleRoleChanged", Group: "accesscore-rbac-session-sync", Field: "rbacSessionConsumer"},
+		{Contract: "event.role.revoked.v1", Role: "subscribe", Handler: "HandleRoleChanged", Group: "accesscore-rbac-session-sync", Field: "rbacSessionConsumer"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{

@@ -158,25 +158,12 @@ type AuditCore struct {
 	metricsProvider metrics.Provider
 	clk             clock.Clock
 
-	// +slice:subscribe:slice=auditappendsession,topic=event.session.created.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappendsession,topic=event.session.revoked.v1,handler=HandleEvent,group=auditcore
 	appendSessionSvc *auditappendsession.Service
 
-	// +slice:subscribe:slice=auditappenduser,topic=event.user.created.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappenduser,topic=event.user.locked.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappenduser,topic=event.user.unlocked.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappenduser,topic=event.user.updated.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappenduser,topic=event.user.deleted.v1,handler=HandleEvent,group=auditcore
 	appendUserSvc *auditappenduser.Service
 
-	// +slice:subscribe:slice=auditappendconfig,topic=event.config.entry-upserted.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappendconfig,topic=event.config.entry-deleted.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappendconfig,topic=event.config.version-published.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappendconfig,topic=event.config.rollback.v1,handler=HandleEvent,group=auditcore
 	appendConfigSvc *auditappendconfig.Service
 
-	// +slice:subscribe:slice=auditappendrole,topic=event.role.assigned.v1,handler=HandleEvent,group=auditcore
-	// +slice:subscribe:slice=auditappendrole,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
 	appendRoleSvc *auditappendrole.Service
 
 	// +slice:route:slice=auditquery,subPath=

@@ -5,7 +5,7 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: ordercell
-  subscribers: [ordercell, example-order-platform]
+  actorSubscribers: [example-order-platform]
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

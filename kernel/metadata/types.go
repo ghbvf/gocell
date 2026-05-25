@@ -145,6 +145,18 @@ func (s *SliceMeta) Clone() *SliceMeta {
 type ContractUsage struct {
 	Contract string `yaml:"contract"`
 	Role     string `yaml:"role"` // serve|call|publish|subscribe|handle|invoke|provide|read
+	// Handler is the consumer handler method name on the slice's service/consumer
+	// struct field; REQUIRED for role=subscribe, forbidden otherwise. Single source
+	// for the reg.Subscribe handler expression that cellgen emits.
+	Handler string `yaml:"handler,omitempty"`
+	// Group is the broker consumer group for role=subscribe; optional, defaults to
+	// the owning cell ID when empty. Forbidden for non-subscribe roles.
+	Group string `yaml:"group,omitempty"`
+	// Field optionally names the cell-struct field holding the subscribe slice's
+	// consumer, disambiguating slices that own more than one *sliceID.T field
+	// (e.g. a route Handler plus a subscribe Consumer). Optional for role=subscribe
+	// (cellgen resolves by package convention when empty); forbidden otherwise.
+	Field string `yaml:"field,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.
@@ -226,8 +238,12 @@ type EndpointsMeta struct {
 	Clients []string           `yaml:"clients,omitempty"`
 	HTTP    *HTTPTransportMeta `yaml:"http,omitempty"`
 	// Event
-	Publisher   string   `yaml:"publisher,omitempty"`
-	Subscribers []string `yaml:"subscribers,omitempty"`
+	Publisher        string   `yaml:"publisher,omitempty"`
+	ActorSubscribers []string `yaml:"actorSubscribers,omitempty"`
+	// Subscribers is derived by deriveEventSubscribers (parser post-process):
+	// union of ActorSubscribers + cell IDs from slice.yaml contractUsages[role=subscribe].
+	// yaml:"-" means hand-written "subscribers:" in YAML is rejected by KnownFields strict decode.
+	Subscribers []string `yaml:"-"`
 	// Command
 	Handler  string   `yaml:"handler,omitempty"`
 	Invokers []string `yaml:"invokers,omitempty"`

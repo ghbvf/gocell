@@ -28,6 +28,8 @@ func buildProjectMeta(cells map[string]*metadata.CellMeta, slices map[string]*me
 }
 
 // TestMerge_MarkerPath tests that Merge reads marker comments from cell.go.
+// After the subscribe single-source flip, cell_withmarkers.go only contains
+// listener and route markers (subscribe markers are now unknown).
 func TestMerge_MarkerPath(t *testing.T) {
 	t.Parallel()
 	td := testdataDir(t)
@@ -55,12 +57,6 @@ func TestMerge_MarkerPath(t *testing.T) {
 					{Contract: "api.items.v1", Role: "serve"},
 				},
 			},
-			"markercell/sliceB": {
-				ID: "sliceB",
-				ContractUsages: []metadata.ContractUsage{
-					{Contract: "event.foo.v1", Role: "subscribe"},
-				},
-			},
 		},
 	)
 
@@ -78,9 +74,6 @@ func TestMerge_MarkerPath(t *testing.T) {
 	}
 	if len(bundle.Routes) != 1 || bundle.Routes[0].Slice != "sliceA" {
 		t.Errorf("routes=%v", bundle.Routes)
-	}
-	if len(bundle.Subscribes) != 1 || bundle.Subscribes[0].Topic != "event.foo.v1" {
-		t.Errorf("subscribes=%v", bundle.Subscribes)
 	}
 }
 
@@ -109,7 +102,7 @@ func TestMerge_EmptyBundleWhenNoCellGo(t *testing.T) {
 	if !ok {
 		t.Fatal("bundle for nocellgo not found")
 	}
-	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 || len(bundle.Subscribes) != 0 {
+	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 {
 		t.Errorf("expected empty bundle when cell.go absent, got %+v", bundle)
 	}
 }
@@ -187,7 +180,7 @@ func TestMerge_EmptyBundleWhenNoMarkers(t *testing.T) {
 		t.Fatalf("Merge: %v", err)
 	}
 	bundle := bundles["emptycell"]
-	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 || len(bundle.Subscribes) != 0 {
+	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 {
 		t.Errorf("expected empty bundle when no markers, got %+v", bundle)
 	}
 }
@@ -320,6 +313,7 @@ func TestMerge_SliceTypoFieldSuggestion(t *testing.T) {
 
 // TestMerge_ValidSliceOwnership tests that when all marker slice references
 // exist in ProjectMeta.Slices, Merge succeeds without error.
+// After the subscribe single-source flip, cell_withmarkers.go only has route+listener.
 func TestMerge_ValidSliceOwnership(t *testing.T) {
 	t.Parallel()
 	td := testdataDir(t)
@@ -342,12 +336,6 @@ func TestMerge_ValidSliceOwnership(t *testing.T) {
 				ID: "sliceA",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "api.items.v1", Role: "serve"},
-				},
-			},
-			"markercell2/sliceB": {
-				ID: "sliceB",
-				ContractUsages: []metadata.ContractUsage{
-					{Contract: "event.foo.v1", Role: "subscribe"},
 				},
 			},
 		},
@@ -469,50 +457,10 @@ func TestMerge_ContractUsageRoleServe(t *testing.T) {
 	}
 }
 
-// TestMerge_ContractUsageRoleSubscribe tests that a subscribe marker slice
-// missing role=subscribe in contractUsages produces an error (K05-01a).
-func TestMerge_ContractUsageRoleSubscribe(t *testing.T) {
-	t.Parallel()
-	td := testdataDir(t)
-	tmp := t.TempDir()
-	cellDir := filepath.Join(tmp, "cells", "missingsubscribe")
-	if err := os.MkdirAll(cellDir, 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	copyFile(t, filepath.Join(td, "cell_missing_subscribe_role.go"), filepath.Join(cellDir, "cell.go"))
-
-	project := buildProjectMeta(
-		map[string]*metadata.CellMeta{
-			"missingsubscribe": {
-				ID:   "missingsubscribe",
-				File: "cells/missingsubscribe/cell.yaml",
-			},
-		},
-		map[string]*metadata.SliceMeta{
-			// sliceB exists but only has role=publish, not role=subscribe.
-			"missingsubscribe/sliceB": {
-				ID: "sliceB",
-				ContractUsages: []metadata.ContractUsage{
-					{Contract: "event.foo.v1", Role: "publish"},
-				},
-			},
-		},
-	)
-
-	_, err := Merge(tmp, project)
-	if err == nil {
-		t.Fatal("expected error for missing role=subscribe, got nil")
-	}
-	if !strings.Contains(err.Error(), `missing contractUsages role "subscribe"`) {
-		t.Errorf("error should mention missing role subscribe, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "publish") {
-		t.Errorf("error should mention the declared role 'publish', got: %v", err)
-	}
-}
-
 // TestMerge_ContractUsageRoleValid tests that when slices correctly declare the
 // required roles, Merge succeeds (K05-01a green path).
+// After subscribe single-source flip, only route (serve) role validation remains
+// in markergen; subscribe role validation is done via ADV-06 governance.
 func TestMerge_ContractUsageRoleValid(t *testing.T) {
 	t.Parallel()
 	td := testdataDir(t)
@@ -535,12 +483,6 @@ func TestMerge_ContractUsageRoleValid(t *testing.T) {
 				ID: "sliceA",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "api.items.v1", Role: "serve"},
-				},
-			},
-			"validroles/sliceB": {
-				ID: "sliceB",
-				ContractUsages: []metadata.ContractUsage{
-					{Contract: "event.foo.v1", Role: "subscribe"},
 				},
 			},
 		},
@@ -574,7 +516,6 @@ func TestMerge_ContractUsageRoleSkippedWhenNilMeta(t *testing.T) {
 		// Slices exist in the set but their metadata pointers are nil.
 		map[string]*metadata.SliceMeta{
 			"nilmeta/sliceA": nil,
-			"nilmeta/sliceB": nil,
 		},
 	)
 
@@ -582,6 +523,52 @@ func TestMerge_ContractUsageRoleSkippedWhenNilMeta(t *testing.T) {
 	_, err := Merge(tmp, project)
 	if err != nil {
 		t.Fatalf("expected no error when sliceMeta is nil, got: %v", err)
+	}
+}
+
+// TestMerge_SubscribeMarkerIsUnknown verifies that a cell.go containing a
+// slice:subscribe marker (now removed) produces an "unknown marker" error
+// with a "did you mean" suggestion, after the subscribe single-source flip
+// to slice.yaml contractUsages.
+func TestMerge_SubscribeMarkerIsUnknown(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "subscribemarkercell")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_with_subscribe_marker.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"subscribemarkercell": {
+				ID:   "subscribemarkercell",
+				File: "cells/subscribemarkercell/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{
+			"subscribemarkercell/sliceA": {
+				ID: "sliceA",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "api.items.v1", Role: "serve"},
+				},
+			},
+			"subscribemarkercell/sliceB": {
+				ID: "sliceB",
+			},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for retired slice:subscribe marker, got nil")
+	}
+	if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+		t.Errorf("error should carry the migration hint (retired → slice.yaml), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "slice:subscribe") {
+		t.Errorf("error should name the marker 'slice:subscribe', got: %v", err)
 	}
 }
 

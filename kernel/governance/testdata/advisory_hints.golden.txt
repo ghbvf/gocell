@@ -1,31 +1,11 @@
 advHintADV05EmptySubscribers
 =====
-event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml
+event contract %q is active but has no subscribers; add a subscribing slice (contractUsages[role=subscribe] in slice.yaml), add an external actorSubscribers entry, or set lifecycle: deprecated
 -----
 
 advHintADV05EmptySubscribersFix
 =====
-add subscribers to endpoints.subscribers or set lifecycle: deprecated
------
-
-advHintADV06ContractToSlice
-=====
-event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers
------
-
-advHintADV06ContractToSliceFix
-=====
-add the subscribe contractUsage to a slice or remove the cell from endpoints.subscribers
------
-
-advHintADV06SliceToContract
-=====
-slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice
------
-
-advHintADV06SliceToContractFix
-=====
-add the cell to endpoints.subscribers in the contract or remove the subscribe contractUsage
+declare contractUsages[role=subscribe] in a slice.yaml, add an actorSubscribers entry, or set lifecycle: deprecated
 -----
 
 advHintCCE01DynamicTopicEmit

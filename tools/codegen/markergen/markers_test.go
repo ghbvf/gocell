@@ -142,93 +142,15 @@ func TestParseRoute(t *testing.T) {
 	}
 }
 
-// ---- parseSubscribe -------------------------------------------------------
-
-func TestParseSubscribe(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name        string
-		kv          string
-		wantSlice   string
-		wantTopic   string
-		wantHandler string
-		wantGroup   string
-		wantErr     string
-	}{
-		{
-			name:        "happy: all fields",
-			kv:          "slice=configsubscribe,topic=event.config.entry-upserted.v1,handler=HandleEntryUpserted,group=configcore",
-			wantSlice:   "configsubscribe",
-			wantTopic:   "event.config.entry-upserted.v1",
-			wantHandler: "HandleEntryUpserted",
-			wantGroup:   "configcore",
-		},
-		{
-			name:    "error: missing slice",
-			kv:      "topic=event.foo.v1,handler=Handle,group=grp",
-			wantErr: `missing required field "slice"`,
-		},
-		{
-			name:    "error: missing topic",
-			kv:      "slice=s,handler=Handle,group=grp",
-			wantErr: `missing required field "topic"`,
-		},
-		{
-			name:    "error: missing handler",
-			kv:      "slice=s,topic=t,group=grp",
-			wantErr: `missing required field "handler"`,
-		},
-		{
-			name:    "error: missing group",
-			kv:      "slice=s,topic=t,handler=Handle",
-			wantErr: `missing required field "group"`,
-		},
-		{
-			name:    "error: unknown field",
-			kv:      "slice=s,topic=t,handler=Handle,group=g,extra=x",
-			wantErr: `has unknown field "extra"`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			m := makeFieldMarker("slice:subscribe", tc.kv, "ConfigSub")
-			got, err := parseSubscribe(m)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Errorf("expected error containing %q, got %v", tc.wantErr, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got.Slice != tc.wantSlice {
-				t.Errorf("Slice=%q", got.Slice)
-			}
-			if got.Topic != tc.wantTopic {
-				t.Errorf("Topic=%q", got.Topic)
-			}
-			if got.Handler != tc.wantHandler {
-				t.Errorf("Handler=%q", got.Handler)
-			}
-			if got.Group != tc.wantGroup {
-				t.Errorf("Group=%q", got.Group)
-			}
-		})
-	}
-}
-
 // ---- buildBundle dispatch closed-set -------------------------------------
 
 func TestBuildBundle_Dispatch(t *testing.T) {
 	t.Parallel()
-	t.Run("all three marker types round-trip", func(t *testing.T) {
+	t.Run("two marker types round-trip (subscribe removed from markergen)", func(t *testing.T) {
 		t.Parallel()
 		markers := []collectedMarker{
 			makeMarker("cell:listener", "ref=cell.PrimaryListener,prefix=/api/v1"),
 			makeFieldMarker("slice:route", "slice=ordercreate,subPath=/orders", "CreateHandler"),
-			makeFieldMarker("slice:subscribe", "slice=sub,topic=t,handler=H,group=g", "SubField"),
 		}
 		bundle, errs := buildBundle(markers)
 		if len(errs) != 0 {
@@ -239,9 +161,6 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 		}
 		if len(bundle.Routes) != 1 || bundle.Routes[0].Slice != "ordercreate" {
 			t.Errorf("routes=%v", bundle.Routes)
-		}
-		if len(bundle.Subscribes) != 1 || bundle.Subscribes[0].Topic != "t" {
-			t.Errorf("subscribes=%v", bundle.Subscribes)
 		}
 	})
 
@@ -287,6 +206,38 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 			t.Errorf("expected empty bundle on errors")
 		}
 	})
+}
+
+// ---- slice:subscribe is now unknown (K05 W3 single-source flip) ---------------
+
+// TestBuildBundle_SubscribeMarkerIsNowUnknown verifies that after the
+// subscribe single-source flip, the slice:subscribe marker is rejected — and
+// the error is a dedicated migration hint pointing at the slice.yaml
+// replacement (not a generic "unknown marker" / misleading Levenshtein
+// suggestion).
+func TestBuildBundle_SubscribeMarkerIsNowUnknown(t *testing.T) {
+	t.Parallel()
+	markers := []collectedMarker{
+		makeFieldMarker("slice:subscribe", "slice=sub,topic=t,handler=H,group=g", "SubField"),
+	}
+	_, errs := buildBundle(markers)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for retired slice:subscribe marker, got %d: %v", len(errs), errs)
+	}
+	msg := errs[0].Error()
+	if !strings.Contains(msg, "slice:subscribe") {
+		t.Errorf("expected 'slice:subscribe' named in error, got %q", msg)
+	}
+	// Dedicated migration hint: must steer the author to slice.yaml, not emit a
+	// generic "did you mean cell:listener?" suggestion.
+	for _, want := range []string{"retired", "slice.yaml", "role: subscribe"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("migration hint missing %q, got %q", want, msg)
+		}
+	}
+	if strings.Contains(msg, "did you mean") {
+		t.Errorf("retired slice:subscribe must not emit a Levenshtein suggestion, got %q", msg)
+	}
 }
 
 // ---- K05-04 target level enforcement tests ----------------------------------
@@ -381,28 +332,33 @@ func TestDispatchMarker_TargetEnforcement(t *testing.T) {
 		}
 	})
 
-	t.Run("slice:subscribe on type declaration is rejected", func(t *testing.T) {
+	t.Run("slice:subscribe is rejected with migration hint regardless of target level (type)", func(t *testing.T) {
 		t.Parallel()
 		m := makeMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g")
 		var bundle WireBundle
 		err := dispatchMarker(m, &bundle)
 		if err == nil {
-			t.Fatal("expected error for slice:subscribe on type, got nil")
+			t.Fatal("expected error for retired slice:subscribe marker, got nil")
 		}
-		if !strings.Contains(err.Error(), "slice:subscribe marker must be on a named struct field") {
-			t.Errorf("unexpected error message: %v", err)
+		if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+			t.Errorf("expected migration hint (retired → slice.yaml), got: %v", err)
 		}
 	})
 
-	t.Run("slice:subscribe on named field is accepted", func(t *testing.T) {
+	t.Run("slice:subscribe is rejected with migration hint regardless of target level (field)", func(t *testing.T) {
 		t.Parallel()
 		m := makeFieldMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g", "SubField")
 		var bundle WireBundle
-		if err := dispatchMarker(m, &bundle); err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for retired slice:subscribe marker on field, got nil")
 		}
-		if len(bundle.Subscribes) != 1 {
-			t.Errorf("expected 1 subscribe, got %d", len(bundle.Subscribes))
+		if !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "slice.yaml") {
+			t.Errorf("expected migration hint (retired → slice.yaml), got: %v", err)
+		}
+		// WireBundle no longer has a Subscribes field (removed in single-source flip).
+		if !strings.Contains(err.Error(), "slice:subscribe") {
+			t.Errorf("expected 'slice:subscribe' in error, got: %v", err)
 		}
 	})
 }

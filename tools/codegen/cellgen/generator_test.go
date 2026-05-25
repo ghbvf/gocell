@@ -293,6 +293,33 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 	}
 }
 
+// TestGenerate_CellGoAbsentWithSubscribeCU verifies that when cell.go is absent
+// (IndexCellStructFields errors → fieldIndex=nil) but the cell has a subscribe
+// CU, Generate returns a build error rather than silently succeeding with no
+// subscriptions. The comment "cell.go absent is acceptable (empty index)" only
+// applies to cells without subscribe CUs; with subscribe CUs it must fail fast.
+func TestGenerate_CellGoAbsentWithSubscribeCU(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	// Create minimal directory structure but NO cell.go.
+	if err := os.MkdirAll(filepath.Join(root, "cells", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write go.mod so readModulePath succeeds if reached.
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/ghbvf/gocell\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// cell.go is intentionally absent — IndexCellStructFields will error → fieldIndex=nil.
+	project := buildSyntheticProject() // has a subscribe CU on alpha slice
+	_, err := Generate(root, project, Options{OnlyCell: "demo"})
+	if err == nil {
+		t.Fatal("expected build error when cell.go absent and subscribe CU present, got nil")
+	}
+	if !strings.Contains(err.Error(), "fieldIndex is nil") {
+		t.Errorf("error should mention 'fieldIndex is nil', got: %v", err)
+	}
+}
+
 // TestRenderCell_GoldenSynth renders the synthetic project's CellGenSpec
 // through cell.tmpl and compares the result against a committed golden file.
 // When run with -update it regenerates the golden file instead.
@@ -301,7 +328,7 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 // shared header template changes again after this golden was written.
 func TestRenderCell_GoldenSynth(t *testing.T) {
 	t.Parallel()
-	spec, err := BuildCellSpec(buildSyntheticProject(), "demo", syntheticBundle())
+	spec, err := BuildCellSpec(buildSyntheticProject(), "demo", syntheticBundle(), syntheticFieldIndex())
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -413,10 +440,28 @@ func TestProjectFilteredToCell_UnknownCellReturnsEmpty(t *testing.T) {
 
 // initSyntheticRepo creates a tmp directory with a minimal project layout
 // (cells/demo/) but no cell_gen.go. Used by Generate-flow tests.
+// A minimal cell.go is written so IndexCellStructFields can resolve
+// "alpha → alphaHandler" for the subscribe CU in the synthetic project.
+// A go.mod is written so readModulePath succeeds when subscriptions exist.
 func initSyntheticRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "cells", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cellGo := filepath.Join(root, "cells", "demo", "cell.go")
+	cellGoContent := `package demo
+
+// Cell struct for synthetic test — provides alphaHandler field mapping.
+type Demo struct {
+	alphaHandler *alpha.Service
+}
+`
+	if err := os.WriteFile(cellGo, []byte(cellGoContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goMod := filepath.Join(root, "go.mod")
+	if err := os.WriteFile(goMod, []byte("module github.com/ghbvf/gocell\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -424,7 +469,8 @@ func initSyntheticRepo(t *testing.T) string {
 
 // buildSyntheticProject mirrors what metadata.Parser would produce for a
 // minimal project with one cell + one slice + one event contract.
-// The event contract is needed by syntheticBundle's Subscribes entry (T-8).
+// The alpha slice has a subscribe CU so Build/Generate exercises the
+// subscription rendering path without bundle.Subscribes (single-source flip).
 func buildSyntheticProject() *metadata.ProjectMeta {
 	cell := &metadata.CellMeta{
 		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo"),
@@ -432,6 +478,9 @@ func buildSyntheticProject() *metadata.ProjectMeta {
 	slc := &metadata.SliceMeta{
 		ID: "alpha", BelongsToCell: "demo", ConsistencyLevel: "L2", Dir: "alpha",
 		File: "cells/demo/slices/alpha/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "event.widget.created.v1", Role: "subscribe", Handler: "HandleWidgetCreated"},
+		},
 	}
 	contract := &metadata.ContractMeta{
 		ID:   "event.widget.created.v1",
@@ -441,18 +490,22 @@ func buildSyntheticProject() *metadata.ProjectMeta {
 }
 
 // syntheticBundle returns the WireBundle for the synthetic project's "demo" cell.
-// Mirrors the marker declarations that would appear in a real cell.go.
-// Includes a Subscribes entry (T-8) to exercise the subscription rendering path.
+// Subscribe is no longer sourced from the bundle — it comes from slice.yaml
+// ContractUsages (single-source flip). The bundle only carries listeners and routes.
 func syntheticBundle() markergen.WireBundle {
 	return markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
 		Routes: []markergen.RouteSpec{
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/widgets", HandlerField: "alphaHandler"},
 		},
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "alpha", Topic: "event.widget.created.v1", Handler: "HandleWidgetCreated", SliceField: "alphaHandler", Group: "demo"},
-		},
 	}
+}
+
+// syntheticFieldIndex maps the alpha slice package name to the cell struct
+// field holding it. Used by TestRenderCell_GoldenSynth to supply fieldIndex
+// to BuildCellSpec (single-source flip: subscriptions derived from slice CUs).
+func syntheticFieldIndex() *CellFieldIndex {
+	return idxOf(map[string]string{"alpha": "alphaHandler"})
 }
 
 // mustContain fails the test (with truncated output) when needle is not in haystack.

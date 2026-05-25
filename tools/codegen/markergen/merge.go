@@ -13,11 +13,13 @@ import (
 )
 
 // knownMarkers is the closed set of GoCell marker names.
-var knownMarkers = []string{"cell:listener", "slice:route", "slice:subscribe"}
+// slice:subscribe was removed in the subscribe single-source flip (K05 W3):
+// subscriptions are now declared in slice.yaml contractUsages[role=subscribe].
+var knownMarkers = []string{"cell:listener", "slice:route"}
 
 // Merge scans cell.go marker comments under projectRoot, extracts
-// listener / route / subscribe declarations, and projects them into a
-// per-cell WireBundle map keyed by cell ID.
+// listener / route declarations, and projects them into a per-cell
+// WireBundle map keyed by cell ID.
 //
 // Cells whose cell.go is absent or declares no markers yield an empty
 // WireBundle — the yaml fallback path has been removed (W2 cleanup).
@@ -86,13 +88,14 @@ func loadCellBundle(projectRoot, cellID string, cell *metadata.CellMeta) (WireBu
 	return bundle, true, nil
 }
 
-// crossCheckSliceRefs validates that every RouteSpec.Slice and
-// SubscribeSpec.Slice references a known slice in project.Slices and that the
-// referenced slice declares the expected contractUsages role (route → "serve",
-// subscribe → "subscribe"). Unknown slices and missing roles produce
-// actionable errors listing the declared set/roles for fast triage.
+// crossCheckSliceRefs validates that every RouteSpec.Slice references a
+// known slice in project.Slices and that the slice declares role="serve"
+// in its contractUsages. Unknown slices and missing roles produce actionable
+// errors listing the declared set/roles for fast triage.
 //
-// K05-01a: contractUsages role must match the marker kind.
+// K05-01a: contractUsages role must match the marker kind (route → serve).
+// Subscribe role validation is handled by ADV-06 governance (gocell validate),
+// not by markergen, since subscribe is now sourced from slice.yaml CUs.
 func crossCheckSliceRefs(result map[string]WireBundle, project *metadata.ProjectMeta, allErrs *errList) {
 	for cellID, bundle := range result {
 		cell := project.Cells[cellID]
@@ -102,9 +105,6 @@ func crossCheckSliceRefs(result map[string]WireBundle, project *metadata.Project
 		sliceSet := buildSliceSet(project, cellID)
 		for _, r := range bundle.Routes {
 			checkSliceRoleRef(cellID, r.Slice, "route", "serve", sliceSet, project, allErrs)
-		}
-		for _, s := range bundle.Subscribes {
-			checkSliceRoleRef(cellID, s.Slice, "subscribe", "subscribe", sliceSet, project, allErrs)
 		}
 	}
 }
@@ -194,11 +194,8 @@ func buildBundle(markers []collectedMarker) (WireBundle, []error) {
 // appends the result to bundle. Returns a non-nil error when the marker is
 // unknown, placed on the wrong target level, or otherwise malformed.
 //
-// Implementation note: closed-set marker dispatcher; each switch arm encodes
-// schema enforcement (target level + parse + append) per marker kind. The
-// cognitive load comes from the schema rules, not nested control flow.
-//
-//nolint:gocognit // see comment above
+// slice:subscribe is no longer in knownMarkers — any cell.go still containing
+// a +slice:subscribe: marker will hit the default arm and return "unknown marker".
 func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 	switch m.Name {
 	case "cell:listener":
@@ -225,20 +222,6 @@ func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 			return err
 		}
 		bundle.Routes = append(bundle.Routes, rs)
-	case "slice:subscribe":
-		// K05-04: slice:subscribe must be on a named struct field, not a type declaration.
-		if m.Target != fieldLevel || m.FieldName == "" {
-			target := "type declaration"
-			if m.Target == fieldLevel {
-				target = "anonymous field"
-			}
-			return fmt.Errorf("cell.go:%d: slice:subscribe marker must be on a named struct field, found on %s", m.Line, target)
-		}
-		ss, err := parseSubscribe(m)
-		if err != nil {
-			return err
-		}
-		bundle.Subscribes = append(bundle.Subscribes, ss)
 	default:
 		return unknownMarkerError(m)
 	}
@@ -247,7 +230,18 @@ func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 
 // unknownMarkerError returns a descriptive error for an unrecognized marker,
 // with an optional Levenshtein suggestion.
+//
+// The retired slice:subscribe marker gets a dedicated migration hint instead of
+// a generic suggestion: it was removed in the subscribe single-source flip, so a
+// Levenshtein "did you mean cell:listener?" would be actively misleading. Point
+// authors at the slice.yaml replacement directly.
 func unknownMarkerError(m collectedMarker) error {
+	if m.Name == "slice:subscribe" {
+		return fmt.Errorf("cell.go:%d: marker %q was retired in the subscribe single-source flip; "+
+			"declare the subscription in the slice's slice.yaml as "+
+			"contractUsages: [{contract: <event id>, role: subscribe, handler: <HandlerMethod>}] "+
+			"and delete this marker", m.Line, m.Name)
+	}
 	sug := suggestMarkerName(m.Name, knownMarkers)
 	if sug != "" {
 		return fmt.Errorf("cell.go:%d: unknown marker %q (did you mean %q?)", m.Line, m.Name, sug)
@@ -307,32 +301,6 @@ func parseRoute(m collectedMarker) (RouteSpec, error) {
 		SubPath:      kv["subPath"],
 		Method:       kv["method"],
 		HandlerField: m.FieldName,
-	}, nil
-}
-
-// parseSubscribe converts a "slice:subscribe" collectedMarker into a SubscribeSpec.
-// Required fields: slice, topic, handler, group.
-func parseSubscribe(m collectedMarker) (SubscribeSpec, error) {
-	kv, err := parseKV(m.KVLine)
-	if err != nil {
-		return SubscribeSpec{}, fmt.Errorf("cell.go:%d: marker %q: %w", m.Line, m.Name, err)
-	}
-	var errs errList
-	checkUnknownFields(m, kv, []string{"slice", "topic", "handler", "group"}, &errs)
-	for _, f := range []string{"slice", "topic", "handler", "group"} {
-		if strings.TrimSpace(kv[f]) == "" {
-			errs.Append(fmt.Errorf("cell.go:%d: marker %q missing required field %q", m.Line, m.Name, f))
-		}
-	}
-	if err := errs.AsError(); err != nil {
-		return SubscribeSpec{}, err
-	}
-	return SubscribeSpec{
-		Slice:      kv["slice"],
-		Topic:      kv["topic"],
-		Handler:    kv["handler"],
-		Group:      kv["group"],
-		SliceField: m.FieldName,
 	}, nil
 }
 

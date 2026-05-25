@@ -33,8 +33,8 @@ type Subscription struct {
 	CellID string
 
 	// SliceID is an optional observability owner label. Codegen fills it
-	// from +slice:subscribe markers when a cell wants per-slice consumer
-	// metrics.
+	// from slice.yaml contractUsages[role=subscribe] via cellgen when a cell
+	// wants per-slice consumer metrics.
 	SliceID string
 
 	// ContractID/Kind/Transport identify the contract bound to this

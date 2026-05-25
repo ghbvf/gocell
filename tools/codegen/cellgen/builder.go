@@ -36,8 +36,8 @@ var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
 var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
 
 // goLocalIdentPattern matches valid Go local (unexported) identifiers.
-// Used to validate HandlerField and SliceField, which are derived from AST
-// field names but still validated defensively to catch any unexpected input.
+// Used to validate HandlerField, which is derived from AST field names but
+// still validated defensively to catch any unexpected input.
 var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
 
 // msgUndeclaredListener is the errcode message for a route that references
@@ -45,21 +45,37 @@ var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
 const msgUndeclaredListener = "cellgen build: route references undeclared listener" +
 	" (declare with +cell:listener marker in cell.go, or remove the +slice:route marker)"
 
-// BuildCellSpec projects (cell.yaml + markergen.WireBundle) into the
-// CellGenSpec consumed by cell.tmpl. It is the single bridge between
+// BuildCellSpec projects (cell.yaml + markergen.WireBundle + fieldIndex) into
+// the CellGenSpec consumed by cell.tmpl. It is the single bridge between
 // parsed metadata and the renderer.
 //
-// bundle supplies listener / route / subscribe wire declarations derived
-// from cell.go marker comments (markergen.Merge output). An empty bundle
-// produces a spec with no RouteGroups and no Subscriptions.
+// bundle supplies listener / route wire declarations derived from cell.go
+// marker comments (markergen.Merge output). An empty bundle produces a spec
+// with no RouteGroups.
+//
+// fieldIndex indexes the cell struct's pointer fields (by slice package short
+// name and by field name). It is derived by
+// IndexCellStructFields(cellGoPath, goStructName). Pass nil when no
+// subscriptions are expected; a nil index with subscribe CUs in slices will
+// produce an error.
+//
+// Subscriptions are derived from slice.yaml contractUsages[role=subscribe],
+// not from bundle.Subscribes (subscribe single-source flip K05 W3).
 //
 // Errors:
 //   - cell id not found in project
 //   - cell.GoStructName missing (codegen requires explicit Go type binding)
 //   - bundle listener ref does not match expected pattern
 //   - bundle route references a listener not declared in bundle.Listeners
-//   - bundle subscribe references a contract not declared in project
-func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.WireBundle) (*CellGenSpec, error) {
+//   - subscribe CU handler field empty
+//   - subscribe CU references a contract not declared in project
+//   - fieldIndex missing entry for subscribing slice
+func BuildCellSpec(
+	p *metadata.ProjectMeta,
+	cellID string,
+	bundle markergen.WireBundle,
+	fieldIndex *CellFieldIndex,
+) (*CellGenSpec, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: project is nil")
@@ -115,7 +131,7 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.Wire
 
 	spec.RouteGroups = buildRouteGroupsFromBundle(bundle.Routes, listenerOrder, listenerPrefix)
 
-	subs, err := buildSubscriptionsFromBundle(p, cellID, bundle.Subscribes)
+	subs, err := buildSubscriptionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -128,13 +144,12 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.Wire
 // the project produces a slice_gen.go with a typed `sliceMeta` literal so
 // that cell composition roots can build BaseSlice through the funnel
 // `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`. Slices that
-// also declare event subscriptions get the typed eventHandlerService
-// interface rendered alongside the metadata literal.
+// also declare event subscriptions via contractUsages[role=subscribe] get the
+// typed eventHandlerService interface rendered alongside the metadata literal.
 //
-// bundle is the WireBundle for the parent cell (from markergen.Merge). Only
-// the Subscribes entries whose Slice field matches sliceID are used to
-// populate the handler set.
-func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle markergen.WireBundle) (*SliceGenSpec, error) {
+// Handlers are derived from the slice's ContractUsages (not from a WireBundle)
+// as part of the subscribe single-source flip (K05 W3).
+func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenSpec, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build slice: project is nil")
@@ -155,32 +170,131 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle mark
 		RenderedMetaLiteral: renderSliceMetaLiteral(s),
 	}
 
-	// Collect subscribe entries for this slice from the bundle. Slices without
-	// subscribes still produce slice_gen.go (sliceMeta only); the handler
-	// interface block is rendered conditionally by slice.tmpl when Handlers
-	// is non-empty.
-	var sliceSubs []markergen.SubscribeSpec
-	for _, sub := range bundle.Subscribes {
-		if sub.Slice == sliceID {
-			sliceSubs = append(sliceSubs, sub)
-		}
-	}
-	// Deduplicate handlers by method name: when multiple topics share the same
-	// handler (e.g. HandleEvent for 13 audit topics), the interface only needs
-	// one declaration. Duplicate method names are a compile error in Go interfaces.
-	seen := make(map[string]bool, len(sliceSubs))
-	for _, sub := range sliceSubs {
-		if seen[sub.Handler] {
+	// Collect subscribe handlers from slice contractUsages.
+	// Slices without subscribe CUs still produce slice_gen.go (sliceMeta only);
+	// the handler interface block is rendered conditionally when Handlers is non-empty.
+	seen := make(map[string]bool)
+	for _, cu := range s.ContractUsages {
+		if cu.Role != "subscribe" {
 			continue
 		}
-		seen[sub.Handler] = true
+		if seen[cu.Handler] {
+			continue
+		}
+		seen[cu.Handler] = true
 		spec.Handlers = append(spec.Handlers, SliceHandlerSpec{
-			MethodName: sub.Handler,
-			ContractID: sub.Topic,
+			MethodName: cu.Handler,
+			ContractID: cu.Contract,
 		})
 	}
 	sort.Slice(spec.Handlers, func(i, j int) bool { return spec.Handlers[i].MethodName < spec.Handlers[j].MethodName })
 	return spec, nil
+}
+
+// buildSubscriptionsFromSlices scans all slices belonging to cellID and
+// converts each contractUsage[role=subscribe] entry into a SubscriptionGenSpec.
+// fieldIndex is used to resolve the cell struct field for each subscribing slice.
+// Results are sorted deterministically by SliceID then ContractID.
+func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
+	var out []SubscriptionGenSpec
+	for key, s := range p.Slices {
+		if !strings.HasPrefix(key, cellID+"/") {
+			continue
+		}
+		if s == nil {
+			continue
+		}
+		for _, cu := range s.ContractUsages {
+			if cu.Role != "subscribe" {
+				continue
+			}
+			spec, err := buildSubscriptionSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, spec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SliceID != out[j].SliceID {
+			return out[i].SliceID < out[j].SliceID
+		}
+		return out[i].ContractID < out[j].ContractID
+	})
+	return out, nil
+}
+
+// buildSubscriptionSpecFromCU validates one ContractUsage[role=subscribe]
+// and converts it to a SubscriptionGenSpec.
+//
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
+// HandlerExpr is rendered as `c.<fieldName>.<cu.Handler>`.
+// ConsumerGroup is cu.Group (empty means template falls back to CellGenSpec.ConsumerGroupDefault).
+func buildSubscriptionSpecFromCU(
+	p *metadata.ProjectMeta,
+	cellID, sliceID string,
+	cu metadata.ContractUsage,
+	fieldIndex *CellFieldIndex,
+) (SubscriptionGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(cu.Handler) {
+		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: subscribe Handler must be a non-empty exported Go identifier (e.g. HandleEvent, HandleOrderCreated)",
+			errcode.WithDetails(
+				slog.String("cellID", cellID),
+				slog.String("sliceID", sliceID),
+				slog.String("handler", cu.Handler),
+				slog.String("pattern", goExportedIdentPattern.String()),
+			))
+	}
+
+	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID)
+	if err != nil {
+		return SubscriptionGenSpec{}, err
+	}
+	if !goLocalIdentPattern.MatchString(fieldName) {
+		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: subscribe field name must be a valid Go identifier (e.g. consumerSvc, eventHandler)",
+			errcode.WithDetails(
+				slog.String("cellID", cellID),
+				slog.String("sliceID", sliceID),
+				slog.String("field", fieldName),
+				slog.String("pattern", goLocalIdentPattern.String()),
+			))
+	}
+
+	contract, ok := p.Contracts[cu.Contract]
+	if !ok {
+		details := []slog.Attr{
+			slog.String("cellID", cellID),
+			slog.String("sliceID", sliceID),
+			slog.String("contract", cu.Contract),
+		}
+		if stubTopicPattern.MatchString(cu.Contract) {
+			return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+				"cellgen build: subscribes to unknown contract (looks like a scaffold stub — replace contract with a real contract id)",
+				errcode.WithDetails(details...))
+		}
+		return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+			"cellgen build: subscribes to unknown contract",
+			errcode.WithDetails(details...))
+	}
+	if contract.Kind != "event" {
+		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: subscribes to non-event contract",
+			errcode.WithDetails(
+				slog.String("cellID", cellID),
+				slog.String("sliceID", sliceID),
+				slog.String("contract", cu.Contract),
+				slog.String("kind", contract.Kind),
+			))
+	}
+	return SubscriptionGenSpec{
+		ContractID:    cu.Contract,
+		Transport:     "amqp",
+		SliceID:       sliceID,
+		HandlerExpr:   "c." + fieldName + "." + cu.Handler,
+		ConsumerGroup: cu.Group,
+	}, nil
 }
 
 // validateBundleRoutes ensures every route in the bundle:
@@ -279,90 +393,6 @@ func buildRouteGroupsFromBundle(
 		})
 	}
 	return out
-}
-
-// buildSubscriptionsFromBundle converts bundle.Subscribes into deterministically
-// ordered SubscriptionGenSpecs. Order: by SliceID then by contract topic.
-func buildSubscriptionsFromBundle(p *metadata.ProjectMeta, cellID string, subs []markergen.SubscribeSpec) ([]SubscriptionGenSpec, error) {
-	var out []SubscriptionGenSpec
-	for _, sub := range subs {
-		spec, err := buildSubscriptionSpecFromBundle(p, cellID, sub)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, spec)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].SliceID != out[j].SliceID {
-			return out[i].SliceID < out[j].SliceID
-		}
-		return out[i].ContractID < out[j].ContractID
-	})
-	return out, nil
-}
-
-// buildSubscriptionSpecFromBundle validates one bundle subscribe entry against
-// its contract and converts it to a SubscriptionGenSpec.
-//
-// Identifier validation:
-//   - Handler must be an exported Go identifier (^[A-Z][A-Za-z0-9_]*$) so the
-//     rendered `c.<SliceField>.<Handler>` compiles as an exported method call.
-//   - SliceField is derived from the AST field name; validated as a local Go
-//     identifier (^[a-zA-Z_][A-Za-z0-9_]*$) for defense in depth.
-func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub markergen.SubscribeSpec) (SubscriptionGenSpec, error) {
-	if !goExportedIdentPattern.MatchString(sub.Handler) {
-		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: subscribe Handler must be an exported Go identifier (e.g. HandleEvent, HandleOrderCreated)",
-			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sub.Slice),
-				slog.String("handler", sub.Handler),
-				slog.String("pattern", goExportedIdentPattern.String()),
-			))
-	}
-	if !goLocalIdentPattern.MatchString(sub.SliceField) {
-		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: subscribe SliceField must be a valid Go identifier (e.g. orderSvc, eventHandler)",
-			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sub.Slice),
-				slog.String("sliceField", sub.SliceField),
-				slog.String("pattern", goLocalIdentPattern.String()),
-			))
-	}
-	contract, ok := p.Contracts[sub.Topic]
-	if !ok {
-		details := []slog.Attr{
-			slog.String("cellID", cellID),
-			slog.String("sliceID", sub.Slice),
-			slog.String("topic", sub.Topic),
-		}
-		if stubTopicPattern.MatchString(sub.Topic) {
-			return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
-				"cellgen build: subscribes to unknown contract (looks like a scaffold stub — replace topic with a real contract id)",
-				errcode.WithDetails(details...))
-		}
-		return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
-			"cellgen build: subscribes to unknown contract",
-			errcode.WithDetails(details...))
-	}
-	if contract.Kind != "event" {
-		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: subscribes to non-event contract",
-			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sub.Slice),
-				slog.String("topic", sub.Topic),
-				slog.String("kind", contract.Kind),
-			))
-	}
-	return SubscriptionGenSpec{
-		ContractID:    sub.Topic,
-		Transport:     "amqp",
-		SliceID:       sub.Slice,
-		HandlerExpr:   "c." + sub.SliceField + "." + sub.Handler,
-		ConsumerGroup: sub.Group,
-	}, nil
 }
 
 // readModulePath reads the Go module path from the go.mod file at root.

@@ -5,10 +5,6 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: configcore
-  subscribers:
-    - accesscore
-    - auditcore
-    - configcore
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

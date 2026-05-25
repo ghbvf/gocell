@@ -81,12 +81,14 @@ func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 87 IDs across 12 series.
+// Total: 86 IDs across 12 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).
-		// ADV-02 was retired before PR-FUNNEL-03; the gap is intentional.
-		"ADV-01", "ADV-03", "ADV-04", "ADV-05", "ADV-06",
+		// ADV-02 retired before PR-FUNNEL-03; ADV-06 removed when Subscribers
+		// became a derived field (subscribers are always in sync by construction).
+		// Gaps are intentional.
+		"ADV-01", "ADV-03", "ADV-04", "ADV-05",
 
 		// CONTRACT-ENDPOINT-TEST-MAPPING — active HTTP contract → slice.verify.contract.serve
 		// reverse coverage check (rules_contract_test_mapping.go).
@@ -121,6 +123,9 @@ func goldenRuleIDs() []string {
 		"FMT-20", "FMT-21", "FMT-22", "FMT-23", "FMT-24", "FMT-25",
 		"FMT-26", "FMT-27", "FMT-28", "FMT-29", "FMT-30", "FMT-31",
 		"FMT-32", "FMT-33", "FMT-34",
+		// FMT-35: subscribe CU field placement (handler required for subscribe;
+		// handler/group/field forbidden for non-subscribe roles).
+		"FMT-35",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency
@@ -142,7 +147,9 @@ func goldenRuleIDs() []string {
 		"REF-01", "REF-02", "REF-03", "REF-04", "REF-05",
 		"REF-06", "REF-07", "REF-08", "REF-09", "REF-10",
 		"REF-11", "REF-12", "REF-13", "REF-14", "REF-15",
-		"REF-16", "REF-17",
+		// REF-18: actorSubscribers reference integrity (each entry must be a
+		// registered external actor, not a cell ID and not a wildcard).
+		"REF-16", "REF-17", "REF-18",
 
 		// SLICE-CONSISTENCY — slice level vs parent cell + contractUsages role lower bound (rules_misc_advisory.go)
 		"SLICE-CONSISTENCY-01",
