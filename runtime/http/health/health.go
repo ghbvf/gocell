@@ -217,7 +217,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if h.shuttingDown.Load() {
-			slog.Info("readyz: shutting down (graceful_shutdown)",
+			slog.InfoContext(ctx, "readyz: shutting down (graceful_shutdown)",
 				slog.String("status", readyzStatusShuttingDown),
 				slog.String("reason", readyzReasonGracefulShutdown))
 			writeReadyz503(ctx, w, readyzStatusShuttingDown, readyzReasonGracefulShutdown)
@@ -251,7 +251,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		})
 		result, ok := shared.(readyzResult)
 		if !ok {
-			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+			slog.ErrorContext(ctx, "readyz: singleflight returned unexpected payload; failing closed",
 				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("value", shared))
 			writeReadyz503(ctx, w, "unhealthy", readyzReasonReadinessFailed)
@@ -275,7 +275,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 func (h *Handler) computeReadyzSafe(ctx context.Context, verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("readyz: recovered panic during readiness computation",
+			slog.ErrorContext(ctx, "readyz: recovered panic during readiness computation",
 				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("panic", redaction.RedactAny(r)))
 			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
@@ -477,14 +477,14 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 		// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
 		// Emit channel d ops-diagnostics at Info level so operators can observe
 		// degraded dependency ErrorMsg without triggering a warn-level alert.
-		r.logDiagnostics(slog.LevelInfo, "readyz degraded")
+		r.logDiagnostics(ctx, slog.LevelInfo, "readyz degraded")
 		writeJSON(w, http.StatusOK, envelopeData(body))
 	default: // "unhealthy"
 		reason := r.reason
 		if reason == "" {
 			reason = readyzReasonReadinessFailed
 		}
-		r.logDiagnostics(slog.LevelWarn, "readyz unhealthy", slog.String("reason", reason))
+		r.logDiagnostics(ctx, slog.LevelWarn, "readyz unhealthy", slog.String("reason", reason))
 		writeReadyz503(ctx, w, r.overall, reason)
 	}
 }
@@ -492,6 +492,14 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 // logDiagnostics emits the channel d (ops-diagnostics) breakdown to slog so
 // operators retain the diagnostic data per ADR 202605171200 §3. Public
 // responses always carry no error text on wire (D1 decision).
+//
+// ctx is the request context (threaded from ReadyzHandler via writeTo). Since
+// the wire body carries no error text post-ADR, slog is the *primary*
+// diagnostic channel — it MUST carry the request correlation fields
+// (request_id / trace_id / correlation_id) that the framework's contextHandler
+// (runtime/observability/logging) injects from ctx, same source as the errcode
+// WithInternal path. Passing context.Background() here silently drops them and
+// breaks the link between a 503/degraded record and its request (R2 / #942).
 //
 // The slogDependencies map (not the wire dependencies) is what gets logged
 // — its typed SlogDependencyEntry.ErrorMsg field carries the redacted error
@@ -514,7 +522,7 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 // Cells/dependencies/adapters maps are appended only on verbose probes so
 // that high-frequency k8s readiness probes (typically every 5s) don't spam
 // log backends with full breakdown when only status/reason are actionable.
-func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog.Attr) {
+func (r readyzResult) logDiagnostics(ctx context.Context, level slog.Level, msg string, extra ...slog.Attr) {
 	attrs := []any{
 		slog.String("status", r.overall),
 	}
@@ -539,7 +547,7 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 			slog.Any("adapters", r.adapters),
 		)
 	}
-	slog.Log(context.Background(), level, msg, attrs...)
+	slog.Log(ctx, level, msg, attrs...)
 }
 
 // writeReadyz503 emits the canonical errcode 503 envelope shared with all

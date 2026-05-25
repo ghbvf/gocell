@@ -255,7 +255,7 @@ func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
 // parser (not substring Contains) so the cross-handler snake_case contract
 // (slog.Group + LogValuer) is proven for the key=value format too.
 //
-// It also pins the exact quoting behaviour the docs/ops/readyz.md runbook
+// It also pins the exact quoting behavior the docs/ops/readyz.md runbook
 // cookbook depends on: a redacted/space-containing error_msg is quoted, an
 // empty error_msg is "" — operators' grep patterns must match both.
 func TestLogDiagnostics_TextHandlerRoundTrip(t *testing.T) {
