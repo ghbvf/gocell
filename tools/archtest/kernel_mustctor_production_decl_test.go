@@ -29,13 +29,13 @@
 // AI-robust grade: Medium — the carve-out registry is a (pkgPath, funcName)
 // string-keyed allowlist. The Hard primary defense is the deletion of the
 // 20 production `Must*` constructors plus the physical relocation of the
-// three test-only key fns from `runtime/auth` to `runtime/internal/authtest`
-// (last-leg move by issue #638; previously runtime/auth/authtest), making the
-// symbols unreachable at compile time. This archtest is the secondary defense
-// — preventing future AI from re-introducing Must* declarations in production
-// paths. ADR §"为何 Medium 是终态" documents why upgrading to Hard (sealed
-// marker receiver) is rejected: the 547-caller prefix expansion violates the
-// 优雅简洁 principle.
+// three test-only RSA key fns (MustGenerateKeyPair / MustNewKeySet /
+// MustNewKeyProvider) from `runtime/auth` to `runtime/auth/keystest`, making
+// the symbols unreachable at compile time. This archtest is the secondary
+// defense — preventing future AI from re-introducing Must* declarations in
+// production paths. ADR §"为何 Medium 是终态" documents why upgrading to Hard
+// (sealed marker receiver) is rejected: the 547-caller prefix expansion
+// violates the 优雅简洁 principle.
 //
 // Blind-spot inventory:
 //

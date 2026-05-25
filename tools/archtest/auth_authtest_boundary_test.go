@@ -163,37 +163,28 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 
 // collectGoFiles returns absolute paths to all *.go files in the module,
 // including _test.go files, skipping vendor, hidden directories, generated,
-// testdata, worktrees, and node_modules. tools/archtest is excluded to avoid
-// archtest scanning its own source for rule violations that reference forbidden
-// strings in comments/test names. Both AUTH-AUTHTEST-A and AUTH-AUTHTEST-C
-// rely on this list — A applies its own inline exemption for the authtest
-// package dirs; C operates on the same list, which already skips
-// tools/archtest, so archtest comments mentioning the forbidden import paths
-// do not produce false positives.
+// testdata, worktrees, and node_modules (the mechanical exclusions performed
+// by scannerPkg.ModuleScope).
+//
+// Rule-specific exclusions live in each subtest, not here:
+//
+//   - AUTH-AUTHTEST-A inlines `strings.HasPrefix(rel, "tools/archtest/")` plus
+//     the two authtest package dirs to suppress AST false positives caused by
+//     archtest's own fixture content / doc comments naming the deleted symbol.
+//   - AUTH-AUTHTEST-C does NOT exclude tools/archtest — it scans imports, not
+//     symbol names, so non-_test.go files at the top level of tools/archtest/
+//     must obey the boundary. (tools/archtest/internal/** is framework-excluded
+//     by scannerPkg.ModuleScope.archtestInternalRel — a documented fail-closed
+//     decision so archtest fixtures can deliberately contain forbidden patterns;
+//     see scanner/scope.go.) C's own scope exclusions are just _test.go and the
+//     authtest packages' own implementation dirs.
 func collectGoFiles(root string) ([]string, error) {
 	// IncludeGenerated honors the rule's "anywhere in the module" docstring:
 	// codegen output (generated/contracts/**) must also obey the boundary;
 	// otherwise a regenerated handler reintroducing auth.Authenticated() or
 	// importing runtime/internal/authtest would silently bypass the rule.
 	scope := scannerPkg.ModuleScope(root, scannerPkg.IncludeTests(), scannerPkg.IncludeGenerated())
-	all, err := scope.Files()
-	if err != nil {
-		return nil, err
-	}
-	archtestRel := filepath.Join("tools", "archtest") + string(filepath.Separator)
-	archtestRelExact := filepath.Join("tools", "archtest")
-	var files []string
-	for _, f := range all {
-		rel, relErr := filepath.Rel(root, f)
-		if relErr != nil {
-			continue
-		}
-		if rel == archtestRelExact || strings.HasPrefix(rel, archtestRel) {
-			continue
-		}
-		files = append(files, f)
-	}
-	return files, nil
+	return scope.Files()
 }
 
 // parseImports parses a single Go source file and returns the list of import

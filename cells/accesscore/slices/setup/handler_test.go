@@ -259,9 +259,9 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 // wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
 // bootstrap middleware path.
 //
-// The rate limiter is authtest.AllowAllLimiter — the focus is Basic Auth
-// semantics, not throttling. The 429 path is covered by runtime/auth's own
-// bootstrap_test.go via a configurable fake limiter.
+// The rate limiter is testAllowAllLimiter (file-local; see top of file) —
+// the focus is Basic Auth semantics, not throttling. The 429 path is covered
+// by runtime/auth's own bootstrap_test.go via a configurable fake limiter.
 func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
 	t.Helper()
 	creds := auth.BootstrapCredentials{
