@@ -268,6 +268,23 @@ ctx 仅承载关联值（非 secret），不引入新泄漏面——见 §4 威�
   不携带 probe error 文本，**不扩大 d 列暴露面**。
 - (P1)(P2) 两条前提仍由 guard ①④ 机器强制，未受本次 amendment 影响。
 
+§3 八行逐行对照（改动前 → 改动后，无 ✅→⚠️/❌ 回归）：
+
+| §3 行（Secret 形态） | 改动前 d 列 | 改动后 d 列 |
+|---|---|---|
+| `password=hunter2`（结构化） | ✓ masked | ✓ masked（不变） |
+| `Authorization: Bearer …` | ✓ masked | ✓ masked（不变） |
+| `Authorization: Basic …` | ✓ masked | ✓ masked（不变） |
+| 裸 JWT 子串（无 key 锚） | ⚠ 泄漏到 slog | ⚠ 泄漏到 slog（不变；§SIEM/ELK 改为与此一致） |
+| PEM 块（无 key 锚） | ⚠ 泄漏到 slog | ⚠ 泄漏到 slog（不变） |
+| 裸 UUID API key | ⚠ 泄漏到 slog | ⚠ 泄漏到 slog（不变） |
+| panic %v 含 secret | ✓ masked | ✓ masked（不变） |
+| `connection_string=…;Pwd=…` | ✓ masked | ✓ masked（不变） |
+
+a/b/c 列「✗ wire 不带文本」八行全不变。本次 amendment 仅删除 §SIEM/ELK 与 ⚠ 三行矛盾的
+绝对化断言（文档纠正）+ D8 新增非 secret 关联 ID 到 record（不进 d 列暴露面）；**无任一
+格子从 ✅ 退为 ⚠️/❌**，无需补偿措施。
+
 **slog 序列化路径**：见 §2 D6 — `slog.Group("dependencies", slog.Any(name, entry)...)` 是唯一让 LogValue 真生效的 slog idiom，所有 handler 输出一致 snake_case。**严禁退回 `slog.Any("dependencies", map)` 形态**——unexported 字段 + JSON handler 会输出 `{}`，所有诊断信息丢失（round-4 实测 bug）。
 
 ## §5 ADR amendment 验证矩阵（与 ADR `202605051730` 关系）

@@ -52,7 +52,7 @@ details array):
 
 | slog level | slog `msg` | slog `status` | slog `reason` | Meaning |
 |------------|------------|---------------|---------------|---------|
-| `Warn` | `readyz unhealthy` | `unhealthy` | `readiness_failed` | One or more cells/probes failed (HTTP 503), or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `Warn` | `readyz unhealthy` | `unhealthy` | `readiness_failed` | One or more cells/probes failed (HTTP 503), or the readiness aggregator failed closed. NOTE: an internal computation panic is recovered and logged under a **different** `msg="readyz: recovered panic during readiness computation"` (Error level, `internal_reason=readiness_computation_failed`) — filter that msg separately, it does not appear under `readyz unhealthy`. |
 | `Info` | `readyz degraded` | `degraded` | — (no `reason` attr) | One or more cells/probes are degraded but serving (**HTTP 200**, fail-open). Emitted at Info so operators can observe degraded dependency `error_msg` without a Warn-level alert. |
 | `Info` | `readyz: shutting down (graceful_shutdown)` | `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
 
@@ -274,7 +274,10 @@ kubectl logs <pod> | grep -E 'msg="readyz (unhealthy|degraded)"' \
 text handler 输出形态是 `dependencies.<probe_name>.<field>=<value>` 而非嵌套 `{}` 块，
 Loki / Grafana 通过 key=value 解析直接索引。`error_msg` 的引号取决于值内容（含空格/`=`
 → 加引号；空 → `""`；单 token → 不加引号），所以**只匹配 `error_msg="…"` 会漏掉 unquoted
-值**。如需稳定的结构化查询（不受引号规则影响），切换到 JSON handler。
+值**。另：若 error message 本身含双引号，text handler 会转义为 `\"`，上面的 `"[^"]*"`
+分支会在转义引号处提前截断——这类带引号的 error 用 grep 难以稳健提取。**生产诊断推荐
+JSON handler**（`-log-format=json`）：嵌套对象路径不受引号规则与转义影响，jq / LogQL 可
+稳定索引。
 
 ### Waiving the verbose endpoint
 

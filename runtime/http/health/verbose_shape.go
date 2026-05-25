@@ -117,9 +117,9 @@ func (e SlogDependencyEntry) DurationMs() int64 { return e.durationMs }
 
 // ErrorMsg returns the redacted probe error text (already passed through
 // newRedactedErrorMsg → pkg/redaction.RedactString). Empty string when
-// ProbeResult.Err was nil — which, per the kernel ProbeResult.Err contract
-// ("nil iff Status == StatusUp"), means a healthy probe. Read-only accessor;
-// the underlying field is unexported.
+// ProbeResult.Err was nil — which, per the kernel/healthz.ProbeResult.Err
+// contract ("Err is nil iff Status == StatusUp"), means a healthy probe.
+// Read-only accessor; the underlying field is unexported.
 func (e SlogDependencyEntry) ErrorMsg() string { return string(e.errorMsg) }
 
 // LogValue implements slog.LogValuer. logDiagnostics passes each entry to

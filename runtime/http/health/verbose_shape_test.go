@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,10 @@ func TestSlogDependencyEntry_LogValue(t *testing.T) {
 	}
 	assert.Equal(t, "degraded", got["status"])
 	assert.Equal(t, int64(42), got["duration_ms"])
+	// "drop ratio exceeded" is unchanged: LogValue does NOT redact — redaction
+	// happens upstream in the newRedactedErrorMsg funnel (exercised here, the
+	// input has no key=value secret to mask). This asserts the LogValue
+	// serialization shape, not the redaction contract.
 	assert.Equal(t, "drop ratio exceeded", got["error_msg"])
 }
 
@@ -209,44 +214,71 @@ func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 // correlation values survive the writeTo → logDiagnostics → slog.Log hop.
 // Against the pre-fix code (slog.Log(context.Background(), ...)) the captured
 // ctx is Background and the *From lookups miss → RED.
+//
+// Both writeTo branches are covered: unhealthy (Warn, 503, msg "readyz
+// unhealthy") and degraded (Info, 200, msg "readyz degraded") — each calls
+// logDiagnostics with the request ctx, so both must carry the correlation
+// fields.
 func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-ctx", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	require.NoError(t, asm.Start(context.Background()))
-	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
-
-	agg := newAgg(clock.Real())
-	h := New(asm, agg, clock.Real())
-	h.SetVerboseToken(testVerboseToken)
-	require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
-		return errors.New("connection refused")
-	})))
-
-	capture := withSlogCapture(t)
-
 	const (
 		wantReqID   = "req-abc-123"
 		wantTraceID = "trace-xyz-789"
 		wantCorrID  = "corr-456"
 	)
-	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, wantReqID)
-	ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
-	ctx = ctxkeys.WithCorrelationID(ctx, wantCorrID)
+	tests := []struct {
+		name     string
+		probeErr error
+		wantCode int
+		wantMsg  string
+	}{
+		{
+			name:     "unhealthy path (Warn/503)",
+			probeErr: errors.New("connection refused"),
+			wantCode: http.StatusServiceUnavailable,
+			wantMsg:  "readyz unhealthy",
+		},
+		{
+			name:     "degraded path (Info/200)",
+			probeErr: fmt.Errorf("soft degradation: %w", outbox.ErrDegraded),
+			wantCode: http.StatusOK,
+			wantMsg:  "readyz degraded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asm := assembly.New(assembly.Config{ID: "test-ctx", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+			require.NoError(t, asm.Start(context.Background()))
+			t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	rec := httptest.NewRecorder()
-	req := newVerboseRequest("/readyz?verbose=true").WithContext(ctx)
-	h.ReadyzHandler().ServeHTTP(rec, req)
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			agg := newAgg(clock.Real())
+			h := New(asm, agg, clock.Real())
+			h.SetVerboseToken(testVerboseToken)
+			require.NoError(t, agg.Register(khealthz.NewProbe("db", func(_ context.Context) error {
+				return tt.probeErr
+			})))
 
-	gotCtx, ok := capture.recordCtx("readyz unhealthy")
-	require.True(t, ok, "must capture a 'readyz unhealthy' slog record")
+			capture := withSlogCapture(t)
 
-	reqID, _ := ctxkeys.RequestIDFrom(gotCtx)
-	assert.Equal(t, wantReqID, reqID, "logDiagnostics must pass the request ctx (request_id) to slog, not context.Background()")
-	traceID, _ := ctxkeys.TraceIDFrom(gotCtx)
-	assert.Equal(t, wantTraceID, traceID, "trace_id must survive the slog hop")
-	corrID, _ := ctxkeys.CorrelationIDFrom(gotCtx)
-	assert.Equal(t, wantCorrID, corrID, "correlation_id must survive the slog hop")
+			ctx := ctxkeys.WithRequestID(context.Background(), wantReqID)
+			ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
+			ctx = ctxkeys.WithCorrelationID(ctx, wantCorrID)
+
+			rec := httptest.NewRecorder()
+			req := newVerboseRequest("/readyz?verbose=true").WithContext(ctx)
+			h.ReadyzHandler().ServeHTTP(rec, req)
+			require.Equal(t, tt.wantCode, rec.Code)
+
+			gotCtx, ok := capture.recordCtx(tt.wantMsg)
+			require.Truef(t, ok, "must capture a %q slog record", tt.wantMsg)
+
+			reqID, _ := ctxkeys.RequestIDFrom(gotCtx)
+			assert.Equal(t, wantReqID, reqID, "logDiagnostics must pass the request ctx (request_id) to slog, not context.Background()")
+			traceID, _ := ctxkeys.TraceIDFrom(gotCtx)
+			assert.Equal(t, wantTraceID, traceID, "trace_id must survive the slog hop")
+			corrID, _ := ctxkeys.CorrelationIDFrom(gotCtx)
+			assert.Equal(t, wantCorrID, corrID, "correlation_id must survive the slog hop")
+		})
+	}
 }
 
 // TestLogDiagnostics_TextHandlerRoundTrip is the R5 (#942) coverage lock for
@@ -335,9 +367,16 @@ func findLogfmtLine(t *testing.T, out, msg string) string {
 // parseLogfmtLine tokenizes a single slog text-handler (logfmt) line into a
 // key→value map, handling both bare values (key=value) and double-quoted
 // values (key="value with spaces"). Quoted values have their surrounding
-// quotes stripped and \" / \\ unescaped. This is a round-trip decoder: it
-// reverses what slog.NewTextHandler emitted, so assertions run against the
-// decoded values rather than raw substrings.
+// quotes stripped and \" / \\ unescaped. slog.TextHandler serializes a
+// slog.Group as flat dotted keys (group.sub=val) — a documented log/slog
+// convention, not an internal detail — so dependency fields decode as
+// dependencies.<probe>.<field>. This is a round-trip decoder: it reverses what
+// slog.NewTextHandler emitted, so assertions run against decoded values rather
+// than raw substrings.
+//
+// Known limits (sufficient for the single-line readyz record under test): one
+// line only (caller pre-selects the line); no \n inside values; first
+// occurrence wins on duplicate keys.
 func parseLogfmtLine(line string) map[string]string {
 	m := make(map[string]string)
 	i := 0

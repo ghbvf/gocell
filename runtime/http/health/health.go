@@ -606,7 +606,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	h.mu.RUnlock()
 	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
 	if disabled {
-		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
+		slog.DebugContext(r.Context(), "readyz: verbose requested but endpoint is disabled; serving plain aggregate",
 			slog.String("remote_addr", remoteAddr))
 		return false, false
 	}
@@ -614,7 +614,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	// configure a token or disable the verbose endpoint. Silently rendering
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
-		slog.Warn("readyz: verbose requested but no token configured; denying",
+		slog.WarnContext(r.Context(), "readyz: verbose requested but no token configured; denying",
 			slog.String("reason", "token_unconfigured"),
 			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
 			slog.String("remote_addr", remoteAddr))
@@ -623,7 +623,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseAuthHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
-		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
+		slog.WarnContext(r.Context(), "readyz: verbose token mismatch at handler layer; denying",
 			slog.String("reason", "token_mismatch"),
 			slog.String("remote_addr", remoteAddr))
 		return false, true
