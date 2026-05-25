@@ -193,7 +193,7 @@ func TestBuildWriteServiceClockSingleSource(t *testing.T) {
 }
 
 // TestFakeConfigRepositoryRepoReadiness satisfies CELL-REPO-READYZ-PROBE-01/P1:
-// every kernel/cell.RepoHealthProber implementation must be wired through
+// every healthz.RepoProber implementation must be wired through
 // celltest.RunRepoReadinessConformance. FakeConfigRepository delegates to an
 // in-memory backend that is always ready, so broken=nil (skip the failure-
 // domain sub-test per conformance harness convention).
