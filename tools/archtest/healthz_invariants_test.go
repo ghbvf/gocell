@@ -146,10 +146,10 @@ var healthzRegisterExactPaths = map[string]bool{
 	// healthz.Aggregator.Register. Cells route emitter probes through this
 	// helper (the former per-cell cellgen RegisterEmitterProbes is removed);
 	// cell-repo probes still go through cellgen RegisterRepoReady in
-	// cells/<cell>/healthz_gen.go. The whole funnel's upstream stays Medium
-	// archtest (this caller allowlist): an Aggregator interface seal is
-	// infeasible (HEALTHZ-HOLDER-SEAL-01, gh issue #893, closed won't-do — see
-	// the A3 rationale in this file's package godoc).
+	// cells/<cell>/healthz_gen.go. This A2 caller-identity allowlist is a
+	// downstream guard; the funnel's upstream type-system seal (the only Hard
+	// upstream form) is infeasible, so HEALTHZ-HOLDER-SEAL-01 (gh issue #893) is
+	// won't-do — see the A3 rationale in this file's package godoc.
 	"kernel/cell/healthz.go": true,
 }
 

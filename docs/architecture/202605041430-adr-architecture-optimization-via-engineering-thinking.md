@@ -308,7 +308,7 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 1. **A3 是 holder 约束，Go 类型系统根本无法表达。** A3 限制「哪些 struct 可以*持有* `healthz.Aggregator` 字段」；Go 没有任何机制限制「谁能声明某类型的字段」。interface sealing（unexported marker method）约束的是*实现者*（谁能构造满足该接口的值），与 holder 是两条不同的轴。
 2. **即使实现者轴在此也无法 seal。** unexported marker 作用域限于 `kernel/healthz` 包，而 `Aggregator` 有 4 处跨包实现（`runtime/observability/healthz.aggregator`、`kernel/cell.recorderProbeSink`、公开测试桩 `healthztest.FakeAggregator`、A4 violate fixture）；折叠为单一包内实现被 `kernel/healthz → kernel/outbox → kernel/healthz` import 环阻断。
 
-**结论**：A3（及 A2 caller allowlist）维持 **Medium archtest**——这是 holder / caller-allowlist 轴在 Go 下可达的最强形态，非过渡档。`HEALTHZ-HOLDER-SEAL-01`（gh #893）closed won't-do。
+**结论**：不可达的是 **upstream 的 type-system seal**（让包外无法表达 Aggregator 的实现 / 持有）。**upstream** 的 A3 holder allowlist 作为 archtest backstop 维持 **Medium archtest**——这是 holder 轴在 Go 下的永久天花板，非过渡档。funnel 的 **downstream** caller 侧守卫是另一条正交轴（cellgen + `RepoProber` typed param + `HEALTHZ-TYPED-REGISTER-01` file-identity 整体 Hard；`HEALTHZ-WRITE-01/A2` 为 Medium archtest caller-identity backstop），其评级见 `HEALTHZ-WRITE-01` godoc，本次撤回不改变。`HEALTHZ-HOLDER-SEAL-01`（gh #893）closed won't-do。
 
 **威胁矩阵重评（per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"）**：本 amendment **不**使 K8s 校准表任何格从 ✅ 退化为 ⚠️/❌——holder allowlist 自 PR #886 起即登记为 Medium archtest，从未是 ✅ Hard 格。P-A1/P-A2/P-A3 行机制不变（P-A3 的内存 Aggregator 树聚合与 holder seal 正交）。撤回的只是一个本就不可达的升级目标，现有防御（A2 caller allowlist + A3 holder allowlist archtest + `HEALTHZ-TYPED-REGISTER-01` + `RepoProber` typed param）原样保留。
 

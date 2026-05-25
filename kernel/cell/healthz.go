@@ -29,14 +29,17 @@ import (
 // the emitter, intentionally outside the kernel/healthz.ReadyProbeName funnel
 // (see that type's godoc), so this is orthogonal to OPS-CONTRACT-STRING-FUNNEL-01.
 //
-// AI-robust rating: the funnel inherits the existing healthz registration funnel
-// — downstream Medium (HEALTHZ-TYPED-REGISTER-01 keeps cells/ off reg.Healthz();
-// HEALTHZ-WRITE-01/A2 caller allowlist now covers kernel/), upstream Medium
-// (caller allowlist, not type-system-sealed). The upstream stays Medium archtest:
-// an Aggregator interface seal is infeasible (the holder axis is inexpressible in
-// Go, plus cross-package impls + a kernel/healthz↔kernel/outbox import cycle), so
-// HEALTHZ-HOLDER-SEAL-01 (gh issue #893) is closed won't-do — see the
-// HEALTHZ-WRITE-01/A3 godoc in tools/archtest for the full rationale.
+// AI-robust rating: two orthogonal axes (authoritative grading lives in the
+// HEALTHZ-WRITE-01 godoc — not duplicated here):
+//   - downstream — the registration funnel's caller-side guards are Hard overall
+//     (cellgen + RepoProber typed param + HEALTHZ-TYPED-REGISTER-01 file-identity
+//     keep cells/ off reg.Healthz()); HEALTHZ-WRITE-01/A2 is the Medium archtest
+//     caller-identity backstop covering kernel/ + adapter paths. Unchanged here.
+//   - upstream — a type-system seal of the Aggregator interface is the only Hard
+//     form, but it is infeasible (the holder axis is inexpressible in Go; plus
+//     cross-package impls + a kernel/healthz↔kernel/outbox import cycle), so
+//     HEALTHZ-HOLDER-SEAL-01 (gh #893) is won't-do. The upstream A3 holder
+//     allowlist stays Medium archtest — the ceiling.
 func RegisterEmitterHealthProbes(reg Registrar, emitter outbox.Emitter) error {
 	if validation.IsNilInterface(emitter) {
 		return nil

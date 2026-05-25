@@ -5,12 +5,11 @@
 // This archtest is a *test-existence backstop*: it enforces that every concrete
 // kernel/healthz.RepoProber implementation is exercised by the behavioral
 // conformance harness. It is deliberately NOT the upstream half of the
-// RegisterRepoReady registration funnel — that funnel's downstream-Hard /
-// upstream-(caller-allowlist) grading lives with HEALTHZ-WRITE-01 /
-// HEALTHZ-TYPED-REGISTER-01. That funnel's upstream stays Medium archtest: an
-// Aggregator interface seal is infeasible, so HEALTHZ-HOLDER-SEAL-01 (gh #893)
-// is closed won't-do (see HEALTHZ-WRITE-01/A3 godoc for the rationale).
-// §"Funnel 双向锁评级" governs that funnel, not this
+// RegisterRepoReady registration funnel — that funnel's downstream caller-side
+// guards (HEALTHZ-WRITE-01/A2 + HEALTHZ-TYPED-REGISTER-01) carry its grading
+// (see those rules). Its upstream type-system seal is the only Hard upstream form
+// and is infeasible, so HEALTHZ-HOLDER-SEAL-01 (gh #893) is won't-do (see
+// HEALTHZ-WRITE-01/A3 godoc). §"Funnel 双向锁评级" governs that funnel, not this
 // backstop, so no funnel Hard-ization task is owed here.
 //
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware, identifies every
