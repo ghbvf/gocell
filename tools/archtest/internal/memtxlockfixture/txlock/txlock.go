@@ -1,27 +1,40 @@
 //go:build archtest_fixture
 
 // Package txlock mirrors the production
-// cells/accesscore/internal/mem/internal/txlock sealed lock-witness package so
-// the MEM-TX-LOCK-OWNERSHIP-01 reverse self-check can exercise the
-// witness-funnel detector (W1 Acquire-call-site, W2 txHoldsLock form) against a
-// real, build-tag-gated source corpus. Acquire is the sole witness mint; the
+// cells/accesscore/internal/mem/internal/txlock sealed lock-lease package so the
+// MEM-TX-LOCK-OWNERSHIP-01 reverse self-check can exercise the witness-funnel
+// detector (W1 Acquire-call-site + arg + nesting, W2 inLiveTx form) against a
+// real, build-tag-gated source corpus. Acquire is the sole lease mint; the
 // detector matches it by package name "txlock" + func name "Acquire", so this
 // fixture mirror and the production package are recognized identically.
 package txlock
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
-// Held mirrors the production read-only proof: a *sync.Mutex behind an
-// unexported field, un-forgeable outside this package, with no Release method.
-type Held struct{ mu *sync.Mutex }
-
-// Acquire is the witness mint (mirrors production: proof + unlock closure).
-func Acquire(mu *sync.Mutex) (held Held, unlock func()) {
-	mu.Lock()
-	return Held{mu: mu}, mu.Unlock
+// Lease mirrors the production self-invalidating lease: a *sync.Mutex + a live
+// *atomic.Bool behind unexported fields, un-forgeable outside this package, with
+// no Release method.
+type Lease struct {
+	mu   *sync.Mutex
+	live *atomic.Bool
 }
 
-// Holds reports whether h witnesses mu (pointer identity).
-func (h Held) Holds(mu *sync.Mutex) bool {
-	return h.mu != nil && h.mu == mu
+// Acquire is the lease mint (mirrors production: proof + unlock closure that
+// flips the lease dead before unlocking).
+func Acquire(mu *sync.Mutex) (lease Lease, unlock func()) {
+	mu.Lock()
+	live := &atomic.Bool{}
+	live.Store(true)
+	return Lease{mu: mu, live: live}, func() {
+		live.Store(false)
+		mu.Unlock()
+	}
+}
+
+// Live reports whether l proves mu is held right now (pointer identity + live).
+func (l Lease) Live(mu *sync.Mutex) bool {
+	return l.mu != nil && l.mu == mu && l.live != nil && l.live.Load()
 }

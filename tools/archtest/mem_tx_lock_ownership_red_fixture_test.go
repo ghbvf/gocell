@@ -10,17 +10,19 @@ import (
 // TestMemTxLockOwnership01_FixturePattern is the MEM-TX-LOCK-OWNERSHIP-01
 // reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): a real,
 // build-tag-gated package (internal/memtxlockfixture) modeling the sealed
-// lock-witness funnel. The detector scanMemTxLockWitness MUST report exactly
-// the three RED sites and MUST NOT flag the clean ones:
+// lock-lease funnel. The detector scanMemTxLockWitness MUST report exactly the
+// three RED sites and MUST NOT flag the clean one:
 //
-//	W1 leakAcquire   — txlock.Acquire outside (memTxRunner).runLocked
-//	W2 txHoldsLock   — return drops `&& tok.held.Holds(&s.mu)`
-//	R1 leakToken     — memTxToken literal outside runLocked / WithTxContext
+//	W1 leakAcquire        — txlock.Acquire outside (memTxRunner).runLocked
+//	W1 leakAcquireFuncLit — txlock.Acquire hidden in a closure (scan must descend)
+//	W2 inLiveTx           — return drops the `l.Live(&s.mu)` delegation
 //
-// Clean (MUST NOT be flagged): runLocked's Acquire + memTxToken literal, and
-// WithTxContext's memTxToken literal. Asserting the exact count catches both
-// false-negative drift (detector goes blind) and false-positive drift
-// (detector flags the sanctioned sites).
+// Clean (MUST NOT be flagged): runLocked's Acquire(&r.s.mu) + the Lease injected
+// into ctx. Asserting the exact count catches both false-negative drift (detector
+// goes blind) and false-positive drift (detector flags the sanctioned site). The
+// former R1 (memTxToken literal scope) is gone: the ctx carries txlock.Lease
+// directly and a live Lease can only come from Acquire (W1), so seal + W1 subsume
+// it.
 func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
@@ -33,7 +35,7 @@ func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 		[]string{fixturePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != fixturePkgPath {
-				return nil // skip the txlock sub-package; scan the witness consumer
+				return nil // skip the txlock sub-package; scan the lease consumer
 			}
 			return scanMemTxLockWitness(p)
 		})
@@ -43,21 +45,18 @@ func TestMemTxLockOwnership01_FixturePattern(t *testing.T) {
 	}
 	require.Len(t, diags, 3,
 		"%s reverse self-check: memtxlockfixture must yield exactly 3 RED sites "+
-			"(W1 leakAcquire + W2 txHoldsLock + R1 leakToken); the sanctioned "+
-			"runLocked / WithTxContext sites must not be flagged",
+			"(W1 leakAcquire + W1 leakAcquireFuncLit + W2 inLiveTx); the sanctioned "+
+			"runLocked site must not be flagged",
 		ruleMemTxLockOwnership01)
 
 	joined := ""
 	for _, d := range diags {
 		joined += d.Message + "\n"
 	}
-	// Each diagnostic names its enclosing function as "in <fn>"; assert the
-	// three RED sites are reported there and the sanctioned sites are not
-	// (the messages reference runLocked / WithTxContext as the *allowed* sites,
-	// so match on the "in <fn>" enclosing-function marker, not bare names).
+	// Each diagnostic names its enclosing function as "in <fn>"; assert the three
+	// RED sites are reported there and the sanctioned site is not.
 	assert.Contains(t, joined, "in leakAcquire", "W1: Acquire-outside-runLocked must be reported")
-	assert.Contains(t, joined, "in txHoldsLock", "W2: weakened txHoldsLock form must be reported")
-	assert.Contains(t, joined, "in leakToken", "R1: memTxToken literal outside sites must be reported")
-	assert.NotContains(t, joined, "in runLocked", "runLocked is the sanctioned Acquire + literal site")
-	assert.NotContains(t, joined, "in WithTxContext", "WithTxContext literal is sanctioned")
+	assert.Contains(t, joined, "in leakAcquireFuncLit", "W1: Acquire hidden in a closure must be reported")
+	assert.Contains(t, joined, "in inLiveTx", "W2: weakened inLiveTx form must be reported")
+	assert.NotContains(t, joined, "in runLocked", "runLocked is the sanctioned Acquire site")
 }
