@@ -1526,3 +1526,144 @@ func collectFMT34Fields(matches []ValidationResult) map[string]bool {
 	}
 	return out
 }
+
+// --- FMT-36: assembly.capabilities must be known enum values, no duplicates ---
+
+// buildFMT36Project returns a minimal ProjectMeta with one assembly whose
+// capabilities field is set to the given slice.
+func buildFMT36Project(capabilities []string) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": {
+				ID:           "testasm",
+				Cells:        []string{},
+				Capabilities: capabilities,
+				Owner:        metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
+				Dir:          "testasm",
+				File:         "assemblies/testasm/assembly.yaml",
+			},
+		},
+	}
+}
+
+// TestFMT36_ValidCapabilities verifies that a known subset produces 0 findings.
+func TestFMT36_ValidCapabilities(t *testing.T) {
+	project := buildFMT36Project([]string{"postgres", "redis"})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-36: expected 0 findings for valid capabilities, got: %v", matches)
+	}
+}
+
+// TestFMT36_EmptyCapabilities verifies that an empty capabilities list is accepted.
+func TestFMT36_EmptyCapabilities(t *testing.T) {
+	project := buildFMT36Project([]string{})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-36: expected 0 findings for empty capabilities, got: %v", matches)
+	}
+}
+
+// TestFMT36_NilCapabilities verifies that a nil capabilities field is accepted.
+func TestFMT36_NilCapabilities(t *testing.T) {
+	project := buildFMT36Project(nil)
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-36: expected 0 findings for nil capabilities, got: %v", matches)
+	}
+}
+
+// TestFMT36_AllThree verifies that all three enum members together pass.
+func TestFMT36_AllThree(t *testing.T) {
+	project := buildFMT36Project([]string{"postgres", "redis", "rabbitmq"})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-36: expected 0 findings for all three capabilities, got: %v", matches)
+	}
+}
+
+// TestFMT36_UnknownCapability verifies that a single unknown value produces
+// exactly 1 error finding on field "capabilities[0]".
+func TestFMT36_UnknownCapability(t *testing.T) {
+	project := buildFMT36Project([]string{"foobar"})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-36: expected 1 finding for unknown capability, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-36: expected SeverityError, got %v", matches[0].Severity)
+	}
+	if matches[0].Field != "capabilities[0]" {
+		t.Errorf("FMT-36: expected Field=capabilities[0], got %q", matches[0].Field)
+	}
+	if matches[0].Fix == "" {
+		t.Errorf("FMT-36: Fix field must be non-empty")
+	}
+}
+
+// TestFMT36_DuplicateCapability verifies that a duplicate value produces
+// exactly 1 error finding on field "capabilities[1]".
+func TestFMT36_DuplicateCapability(t *testing.T) {
+	project := buildFMT36Project([]string{"postgres", "postgres"})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 1 {
+		t.Fatalf("FMT-36: expected 1 finding for duplicate capability, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Severity != SeverityError {
+		t.Errorf("FMT-36: expected SeverityError, got %v", matches[0].Severity)
+	}
+	if matches[0].Field != "capabilities[1]" {
+		t.Errorf("FMT-36: expected Field=capabilities[1], got %q", matches[0].Field)
+	}
+	if matches[0].Fix == "" {
+		t.Errorf("FMT-36: Fix field must be non-empty")
+	}
+}
+
+// TestFMT36_MultipleErrors verifies that unknown + duplicate each produce a finding.
+func TestFMT36_MultipleErrors(t *testing.T) {
+	// "redis" valid, "foobar" unknown, "redis" duplicate — two findings expected.
+	project := buildFMT36Project([]string{"redis", "foobar", "redis"})
+	v := NewValidator(project, "", clock.Real())
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 2 {
+		t.Fatalf("FMT-36: expected 2 findings (unknown + duplicate), got %d: %v", len(matches), matches)
+	}
+	for _, m := range matches {
+		if m.Severity != SeverityError {
+			t.Errorf("FMT-36: all findings must be SeverityError, got %v", m.Severity)
+		}
+		if m.Fix == "" {
+			t.Errorf("FMT-36: Fix field must be non-empty for message %q", m.Message)
+		}
+	}
+}
+
+// TestFMT36_NilAssembly verifies that a nil assembly entry does not panic.
+func TestFMT36_NilAssembly(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"nilasm": nil,
+		},
+	}
+	v := NewValidator(project, "", clock.Real())
+	// Must not panic; nil assembly guard mirrors validateFMT29/FMT30.
+	matches := findByCode(v.validateFMT36(), codeFMT36)
+	if len(matches) != 0 {
+		t.Fatalf("FMT-36: expected 0 findings for nil assembly, got: %v", matches)
+	}
+}

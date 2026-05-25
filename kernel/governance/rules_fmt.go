@@ -1563,6 +1563,59 @@ func (v *Validator) validateFMT34() []ValidationResult {
 	return results
 }
 
+// validateFMT36 enforces that every assembly's capabilities list contains only
+// values from metadata.CapabilityEnum (closed enum: postgres, redis, rabbitmq)
+// and that no value appears more than once (uniqueItems). The schema literal at
+// schemas/assembly.schema.json properties.capabilities.items.enum is kept
+// byte-equal to metadata.CapabilityEnum by TestSchemaConstantsMatchSchemaLiterals;
+// governance is the sole runtime gatekeeper that rejects out-of-enum and
+// duplicate values.
+//
+// Without this rule, schema-aware tooling rejects unknown/duplicate values but
+// `gocell validate` accepts them, leaving CLI users with a different contract
+// than the schema declares. Mirrors the pattern established by validateFMT30
+// for build.deployTemplate.
+func (v *Validator) validateFMT36() []ValidationResult {
+	var results []ValidationResult
+	for _, asm := range v.project.Assemblies {
+		if asm == nil {
+			continue
+		}
+		seen := make(map[string]bool, len(asm.Capabilities))
+		for i, cap := range asm.Capabilities {
+			field := fmt.Sprintf("capabilities[%d]", i)
+			if !metadata.IsKnownCapability(cap) {
+				results = append(results, v.newError(
+					codeFMT36, IssueInvalid,
+					assemblyFile(asm),
+					field,
+					fmt.Sprintf(
+						"assembly %q capabilities[%d]=%q is not one of %v",
+						asm.ID, i, cap, metadata.CapabilityEnum,
+					),
+					"set capabilities items to one of the allowed values: postgres, redis, rabbitmq",
+				))
+				continue
+			}
+			if seen[cap] {
+				results = append(results, v.newError(
+					codeFMT36, IssueDuplicate,
+					assemblyFile(asm),
+					field,
+					fmt.Sprintf(
+						"assembly %q capabilities[%d]=%q is a duplicate; each capability may appear at most once",
+						asm.ID, i, cap,
+					),
+					"remove the duplicate capability entry",
+				))
+				continue
+			}
+			seen[cap] = true
+		}
+	}
+	return results
+}
+
 // sliceMixesHTTPVisibility reports whether s serves at least one public
 // (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
 // contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01

@@ -54,6 +54,42 @@ func TestMatchCellID(t *testing.T) {
 	}
 }
 
+// TestIsKnownCapability covers the CapabilityEnum predicate — only the
+// three closed-set values are accepted; unknown strings and empty string
+// are rejected.
+func TestIsKnownCapability(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// Valid — closed enum members.
+		{"postgres", "postgres", true},
+		{"redis", "redis", true},
+		{"rabbitmq", "rabbitmq", true},
+
+		// Invalid — out-of-enum values.
+		{"empty", "", false},
+		{"foobar", "foobar", false},
+		{"mysql", "mysql", false},
+		{"POSTGRES_upper", "POSTGRES", false},
+		{"with_space", "post gres", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := metadata.IsKnownCapability(tc.in)
+			if got != tc.want {
+				t.Fatalf("IsKnownCapability(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestIsValidMetadataText covers the bool predicate for free-text metadata
 // fields (owner.team, owner.role, etc.) — rejects the control characters
 // that would break inline YAML scalar emission or fabricate adjacent fields:

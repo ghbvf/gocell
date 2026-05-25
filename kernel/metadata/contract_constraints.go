@@ -50,6 +50,14 @@ const (
 // reorder without updating schemas/assembly.schema.json in lockstep.
 var DeployTemplateEnum = []string{"k8s", "compose", "binary"}
 
+// CapabilityEnum lists the canonical values accepted for
+// assembly.capabilities items. Order matches the schema enum order at
+// schemas/assembly.schema.json properties.capabilities.items.enum; do not
+// reorder without updating the schema in lockstep.
+// TestSchemaConstantsMatchSchemaLiterals (kernel/metadata/schemas) asserts
+// byte-level parity between this slice and the schema enum array.
+var CapabilityEnum = []string{"postgres", "redis", "rabbitmq"}
+
 var goStructNameRe = regexp.MustCompile(GoStructNamePattern)
 
 // MatchAssemblyID reports whether s satisfies AssemblyIDPattern. Forwards
@@ -97,6 +105,16 @@ func IsValidMetadataText(value string) bool {
 // IsKnownDeployTemplate reports whether s is one of DeployTemplateEnum.
 func IsKnownDeployTemplate(s string) bool {
 	for _, v := range DeployTemplateEnum {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKnownCapability reports whether s is one of CapabilityEnum.
+func IsKnownCapability(s string) bool {
+	for _, v := range CapabilityEnum {
 		if s == v {
 			return true
 		}
