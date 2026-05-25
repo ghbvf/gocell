@@ -12,9 +12,9 @@ import (
 // so the token generation strategy is independent of the backend adapter.
 //
 // ref: adapters/redis/distlock.go randomToken — identical algorithm, hoisted up
-func randomToken() (string, error) { return randomTokenFrom(rand.Reader) }
+func randomToken() (string, error) { return newRandomToken(rand.Reader) }
 
-func randomTokenFrom(r io.Reader) (string, error) {
+func newRandomToken(r io.Reader) (string, error) {
 	b := make([]byte, 32)
 	if _, err := io.ReadFull(r, b); err != nil {
 		return "", fmt.Errorf("distlock: read entropy: %w", err)

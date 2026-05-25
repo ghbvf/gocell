@@ -8,16 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var errEntropyFailedForTest = errors.New("distlock_test: entropy stub failure")
+var errRandomTokenEntropyFailedForTest = errors.New("distlock_test: random-token entropy stub failure")
 
-type failingReader struct{}
+type failingRandomTokenReader struct{}
 
-func (failingReader) Read([]byte) (int, error) { return 0, errEntropyFailedForTest }
+func (failingRandomTokenReader) Read([]byte) (int, error) {
+	return 0, errRandomTokenEntropyFailedForTest
+}
 
 func TestRandomToken_RandFailure(t *testing.T) {
-	tok, err := randomTokenFrom(failingReader{})
+	tok, err := newRandomToken(failingRandomTokenReader{})
 	require.Error(t, err)
 	assert.Empty(t, tok)
-	assert.ErrorIs(t, err, errEntropyFailedForTest)
+	assert.ErrorIs(t, err, errRandomTokenEntropyFailedForTest)
 	assert.ErrorContains(t, err, "distlock: read entropy")
 }

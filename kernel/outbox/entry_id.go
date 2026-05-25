@@ -36,10 +36,10 @@ func newEntryID(r io.Reader) (string, error) {
 	return EntryIDPrefix + hex.EncodeToString(b[:]), nil
 }
 
-// MustNewEntryID is the panic-on-error variant of NewEntryID. crypto/rand.Read
-// only fails on broken OS entropy, which is non-recoverable, so most call
-// sites use this Must variant; outbox writers that want to surface the error
-// to upstream tx callers should use NewEntryID directly.
+// MustNewEntryID is the panic-on-error variant of NewEntryID. The underlying
+// entropy read only fails on broken OS entropy, which is non-recoverable,
+// so most call sites use this Must variant; outbox writers that want to
+// surface the error to upstream tx callers should use NewEntryID directly.
 func MustNewEntryID() string {
 	id, err := NewEntryID()
 	if err != nil {

@@ -17,7 +17,7 @@ func (failingCommandQueueReader) Read([]byte) (int, error) {
 }
 
 func TestCommandQueueNewID_RandFailure(t *testing.T) {
-	id, err := commandQueueNewIDFrom(failingCommandQueueReader{})
+	id, err := newCommandQueueID(failingCommandQueueReader{})
 	require.Error(t, err)
 	assert.Empty(t, id)
 	assert.ErrorIs(t, err, errCommandQueueEntropyFailedForTest)

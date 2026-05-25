@@ -311,9 +311,9 @@ func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
 }
 
 // claimToken generates a 16-byte hex-encoded token for lease ownership.
-func claimToken() (string, error) { return claimTokenFrom(rand.Reader) }
+func claimToken() (string, error) { return newClaimToken(rand.Reader) }
 
-func claimTokenFrom(r io.Reader) (string, error) {
+func newClaimToken(r io.Reader) (string, error) {
 	b := make([]byte, 16)
 	if _, err := io.ReadFull(r, b); err != nil {
 		return "", fmt.Errorf("redis: read entropy: %w", err)

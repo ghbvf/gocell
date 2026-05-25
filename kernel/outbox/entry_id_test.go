@@ -11,17 +11,19 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
-var errEntropyFailedForTest = errors.New("outbox_test: entropy stub failure")
+var errEntryIDEntropyFailedForTest = errors.New("outbox_test: entry-id entropy stub failure")
 
-type failingReader struct{}
+type failingEntryIDReader struct{}
 
-func (failingReader) Read([]byte) (int, error) { return 0, errEntropyFailedForTest }
+func (failingEntryIDReader) Read([]byte) (int, error) {
+	return 0, errEntryIDEntropyFailedForTest
+}
 
 func TestNewEntryID_RandFailure(t *testing.T) {
-	id, err := newEntryID(failingReader{})
+	id, err := newEntryID(failingEntryIDReader{})
 	require.Error(t, err)
 	assert.Empty(t, id)
-	assert.ErrorIs(t, err, errEntropyFailedForTest)
+	assert.ErrorIs(t, err, errEntryIDEntropyFailedForTest)
 	assert.ErrorContains(t, err, "outbox: read entropy")
 }
 

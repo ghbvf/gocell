@@ -12,10 +12,12 @@ var errClaimTokenEntropyFailedForTest = errors.New("redis_test: claim-token entr
 
 type failingClaimTokenReader struct{}
 
-func (failingClaimTokenReader) Read([]byte) (int, error) { return 0, errClaimTokenEntropyFailedForTest }
+func (failingClaimTokenReader) Read([]byte) (int, error) {
+	return 0, errClaimTokenEntropyFailedForTest
+}
 
 func TestClaimToken_RandFailure(t *testing.T) {
-	tok, err := claimTokenFrom(failingClaimTokenReader{})
+	tok, err := newClaimToken(failingClaimTokenReader{})
 	require.Error(t, err)
 	assert.Empty(t, tok)
 	assert.ErrorIs(t, err, errClaimTokenEntropyFailedForTest)

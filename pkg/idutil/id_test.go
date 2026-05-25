@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var errEntropyFailedForTest = errors.New("idutil_test: entropy stub failure")
+var errUUIDEntropyFailedForTest = errors.New("idutil_test: uuid entropy stub failure")
 
-type failingReader struct{}
+type failingUUIDReader struct{}
 
-func (failingReader) Read([]byte) (int, error) { return 0, errEntropyFailedForTest }
+func (failingUUIDReader) Read([]byte) (int, error) { return 0, errUUIDEntropyFailedForTest }
 
 func TestNewUUID_RandFailure(t *testing.T) {
-	id, err := newUUID(failingReader{})
+	id, err := newUUID(failingUUIDReader{})
 	require.Error(t, err)
 	assert.Empty(t, id)
-	assert.ErrorIs(t, err, errEntropyFailedForTest)
+	assert.ErrorIs(t, err, errUUIDEntropyFailedForTest)
 	assert.ErrorContains(t, err, "idutil: read entropy")
 }
 
