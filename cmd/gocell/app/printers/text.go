@@ -161,11 +161,22 @@ func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
 		tw.writelnf("%s\n", rest)
 	}
 
-	// Fix is the typed remediation guidance (error findings only; empty for
-	// warnings). Render it on its own line, aligned with the location anchor,
-	// rather than re-concatenating into Message.
+	// Fix is the typed remediation guidance. Render it on its own line,
+	// aligned with the location anchor, rather than re-concatenating into Message.
 	if r.Fix != "" {
 		tw.writelnf("         fix: %s\n", r.Fix)
+	}
+
+	// Next is the M3 remediation disposition (block/advisory/autofix/…).
+	// Only rendered when non-empty — the zero value is never printed.
+	if r.Next != "" {
+		tw.writelnf("        next: %s\n", string(r.Next))
+	}
+
+	// Metric is the optional continuous distance value (ADR §M3 P-C3).
+	// Only rendered when the engine stamped a value.
+	if r.Metric != nil {
+		tw.writelnf("      metric: %g\n", *r.Metric)
 	}
 
 	switch {

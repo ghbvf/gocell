@@ -31,13 +31,13 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(_ context.Context, s *phaseState) 
 	return nil
 }
 
-// buildCellDepGraph runs governance.DependencyChecker.Graph() and converts to
+// buildCellDepGraph runs governance.Validator.Graph() and converts to
 // catalog.CellDepGraph via catalog.NewCellDepGraph. Validation errors (cycles
 // etc.) are logged at Warn but do not block bootstrap — endpoint surfaces a
 // "best-effort" graph. BuiltAt is stamped from clk so operators can detect
 // stale graphs.
 func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *catalog.CellDepGraph {
-	dc := governance.NewDependencyChecker(pm)
+	dc := governance.NewValidator(pm, "", clk)
 	g, errs := dc.Graph()
 	if len(errs) > 0 {
 		slog.Warn("devtools: cell dep graph has validation errors; graph may be incomplete",

@@ -132,7 +132,7 @@ func attachCellDeps(opts *catalog.ExportOptions, filter catalog.Filter, pm *meta
 	if !filter.Include.CellDeps {
 		return nil
 	}
-	g, errs := governance.NewDependencyChecker(pm).Graph()
+	g, errs := governance.NewValidator(pm, "", clk).Graph()
 	if len(errs) > 0 {
 		return fmt.Errorf("cell dep graph build had validation errors:\n%s", formatValidationErrors(errs))
 	}

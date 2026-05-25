@@ -1,25 +1,43 @@
 package governance
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// CheckContractHealth runs CI-blocking contract metadata invariants:
-//
-//   - ownerCell must be set
-//   - lifecycle must be set
-//   - HTTP contracts must declare schemaRefs (request + response unless
-//     noContent; PUT/PATCH always need request schema; declared
-//     responses[N] entries each need a schemaRef)
-//
-// Findings reuse Validator's locator so Line/Column resolve to yaml.Node
-// field-level positions — same precision as `gocell validate` rules.
-func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []ValidationResult {
+// sortedContracts returns all contracts from v.project in ascending ID order.
+// It is the canonical contract list for PhaseHealth rules so that
+// checkCH01–checkCH06 iterate deterministically without accepting a caller-
+// supplied slice.
+func (v *Validator) sortedContracts() []*metadata.ContractMeta {
+	ids := make([]string, 0, len(v.project.Contracts))
+	for id := range v.project.Contracts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]*metadata.ContractMeta, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, v.project.Contracts[id])
+	}
+	return out
+}
+
+// CheckHealth runs all PhaseHealth rules (CH-01 through CH-06) against the
+// project loaded into v and returns the combined findings.
+// It is the single entry point for `gocell check contract-health`.
+func (v *Validator) CheckHealth(ctx context.Context) []ValidationResult {
+	rules := rulesForPhases(PhaseHealth)
+	results, _ := v.run(ctx, rules, false)
+	return results
+}
+
+// checkCH01 verifies that every contract declares an ownerCell.
+func (v *Validator) checkCH01() []ValidationResult {
 	var results []ValidationResult
-	for _, c := range contracts {
+	for _, c := range v.sortedContracts() {
 		if c.OwnerCell == "" {
 			results = append(results, v.newError(
 				codeCH01, IssueRequired,
@@ -28,6 +46,14 @@ func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []Va
 				"set ownerCell to the cell id that owns this contract",
 			))
 		}
+	}
+	return results
+}
+
+// checkCH02 verifies that every contract declares a lifecycle.
+func (v *Validator) checkCH02() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.sortedContracts() {
 		if c.Lifecycle == "" {
 			results = append(results, v.newError(
 				codeCH02, IssueRequired,
@@ -36,6 +62,14 @@ func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []Va
 				"set lifecycle to draft, active, or deprecated",
 			))
 		}
+	}
+	return results
+}
+
+// checkCH03 verifies that HTTP contracts declare complete schemaRefs.
+func (v *Validator) checkCH03() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.sortedContracts() {
 		if c.Kind == "http" {
 			results = append(results, v.checkHTTPSchemaRefs(c)...)
 		}
@@ -44,7 +78,6 @@ func (v *Validator) CheckContractHealth(contracts []*metadata.ContractMeta) []Va
 }
 
 // checkHTTPSchemaRefs enforces schemaRefs completeness for HTTP contracts.
-// Logic mirrors what was previously in cmd/gocell/app/check.go:
 //   - noContent endpoints (typically DELETE/204) skip schema checks entirely
 //   - non-noContent endpoints need a response schemaRef
 //   - PUT/PATCH need a request schemaRef

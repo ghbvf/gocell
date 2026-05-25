@@ -8,8 +8,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
+
+// depCheck runs all PhaseDep rules (DEP-01, DEP-02, DEP-03) in order and
+// returns the combined findings. Mirrors DependencyChecker.Check() for tests.
+func depCheck(v *Validator) []ValidationResult {
+	var r []ValidationResult
+	r = append(r, v.checkDEP01()...)
+	r = append(r, v.checkDEP02()...)
+	r = append(r, v.checkDEP03()...)
+	return r
+}
+
+// depCheckFailFast runs PhaseDep rules and stops after the first check that
+// produces a SeverityError. Mirrors DependencyChecker.CheckFailFast().
+func depCheckFailFast(v *Validator) []ValidationResult {
+	var r []ValidationResult
+	for _, check := range []func() []ValidationResult{
+		v.checkDEP01, v.checkDEP02, v.checkDEP03,
+	} {
+		findings := check()
+		r = append(r, findings...)
+		if HasErrors(findings) {
+			return r
+		}
+	}
+	return r
+}
 
 // --- DEP-01: One-slice-one-cell ---
 
@@ -60,8 +87,8 @@ func TestDEP01(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dc := NewDependencyChecker(tt.project)
-			results := dc.Check()
+			dc := NewValidator(tt.project, "", clock.Real())
+			results := depCheck(dc)
 			dep01 := findByCode(results, codeDEP01)
 			assert.Len(t, dep01, tt.wantCount)
 			if tt.wantCount > 0 {
@@ -123,8 +150,8 @@ func TestDEP02_CycleDetected(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep02 := findByCode(results, "DEP-02")
 	require.Len(t, dep02, 1, "expected exactly 1 cycle error")
 	assert.Equal(t, SeverityError, dep02[0].Severity)
@@ -161,8 +188,8 @@ func TestDEP02_NoCycle(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep02 := findByCode(results, "DEP-02")
 	assert.Empty(t, dep02, "acyclic graph should produce no DEP-02 errors")
 }
@@ -182,8 +209,8 @@ func TestDEP02_SingleCellNoExternalDeps(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep02 := findByCode(results, "DEP-02")
 	assert.Empty(t, dep02, "single cell with no deps should produce no DEP-02 errors")
 }
@@ -215,8 +242,8 @@ func TestDEP02_UnknownKindWarning(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep02 := findByCode(results, "DEP-02")
 	require.Len(t, dep02, 1)
 	assert.Equal(t, SeverityError, dep02[0].Severity)
@@ -252,8 +279,8 @@ func TestDEP03_SameAssembly(t *testing.T) {
 		},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep03 := findByCode(results, "DEP-03")
 	assert.Empty(t, dep03, "L0 dep in same assembly should produce no DEP-03 errors")
 }
@@ -287,8 +314,8 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 		},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep03 := findByCode(results, "DEP-03")
 	require.Len(t, dep03, 1, "L0 dep in different assembly should produce 1 DEP-03 error")
 	assert.Equal(t, SeverityError, dep03[0].Severity)
@@ -315,8 +342,8 @@ func TestDEP03_NoAssemblies(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep03 := findByCode(results, "DEP-03")
 	assert.Empty(t, dep03, "no assemblies should skip DEP-03 check")
 }
@@ -343,8 +370,8 @@ func TestCheckFailFast_StopsOnFirstError(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.CheckFailFast()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheckFailFast(dc)
 
 	dep01 := findByCode(results, "DEP-01")
 	require.NotEmpty(t, dep01, "DEP-01 must fire on belongsToCell mismatch")
@@ -370,8 +397,8 @@ func TestCheckFailFast_PassesWhenNoErrors(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.CheckFailFast()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheckFailFast(dc)
 	assert.Empty(t, results, "clean project must produce no findings from CheckFailFast")
 }
 
@@ -402,8 +429,8 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 		},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	dep03 := findByCode(results, "DEP-03")
 	require.Len(t, dep03, 1, "cell with L0 deps not in any assembly should produce 1 DEP-03 error")
 	assert.Equal(t, SeverityError, dep03[0].Severity)
@@ -419,7 +446,7 @@ func TestDependencyChecker_Graph_Empty(t *testing.T) {
 		Contracts:  map[string]*metadata.ContractMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	g, errs := dc.Graph()
 	assert.Empty(t, errs)
 	assert.NotNil(t, g.Nodes, "Nodes must not be nil")
@@ -470,7 +497,7 @@ func TestDependencyChecker_Graph_Acyclic(t *testing.T) {
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	g, errs := dc.Graph()
 	assert.Empty(t, errs)
 
@@ -498,7 +525,7 @@ func TestDependencyChecker_Graph_IsolatedCells(t *testing.T) {
 		Contracts:  map[string]*metadata.ContractMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	g, errs := dc.Graph()
 	assert.Empty(t, errs)
 	assert.Contains(t, g.Nodes, "alone", "isolated cell must appear in Nodes")
@@ -548,7 +575,7 @@ func TestDependencyChecker_Graph_DeterministicOrder(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	first, errs := dc.Graph()
 	require.Empty(t, errs)
 
@@ -592,7 +619,7 @@ func TestDependencyChecker_Graph_PropagatesValidationErrors(t *testing.T) {
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	_, errs := dc.Graph()
 	assert.NotEmpty(t, errs, "should propagate validation errors from buildDependencyGraph")
 }
@@ -609,14 +636,14 @@ func TestDependencyChecker_EmptyProject(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	dc := NewDependencyChecker(project)
-	results := dc.Check()
+	dc := NewValidator(project, "", clock.Real())
+	results := depCheck(dc)
 	assert.Empty(t, results, "empty project should produce no findings")
 }
 
 func TestDependencyChecker_NilProject(t *testing.T) {
-	dc := NewDependencyChecker(nil)
-	results := dc.Check()
+	dc := NewValidator(nil, "", clock.Real())
+	results := depCheck(dc)
 	assert.Empty(t, results, "nil project should produce no findings")
 }
 
@@ -654,7 +681,7 @@ func TestGraph_ActorNodesFiltered(t *testing.T) {
 		Actors:     []metadata.ActorMeta{{ID: "webclient", MaxConsistencyLevel: "L0"}},
 	}
 
-	dc := NewDependencyChecker(project)
+	dc := NewValidator(project, "", clock.Real())
 	g, errs := dc.Graph()
 
 	require.Empty(t, errs, "no resolution errors expected")

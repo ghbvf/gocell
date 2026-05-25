@@ -4,75 +4,41 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
-
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
-// TestRuleReachabilityFromRegistrationRoots proves that every rule ID in
-// goldenRuleIDs() is reachable from at least one of the four registration
-// roots, AND that nothing reachable is missing from goldenRuleIDs().
-//
-// Roots:
-//  1. (*Validator).rules()           — base pipeline (validate.go)
-//  2. (*Validator).strictRules()     — strict-only pipeline (rules_misc_strict.go)
-//  3. (*DependencyChecker).checks()  — dependency pipeline (depcheck.go)
-//  4. (*Validator).Check<X>          — public CI entry points (CH-01..06)
-//
-// Edges:
-//   - <recvName>.<methodName> selector / call → enqueue same-receiver method
-//   - freeFunc(...) call → enqueue free function (e.g. docNamingResult)
-//   - .<emitter>() call resolving (via the *locator-receiver type-identity gate,
-//     or the package-level newErrorAt signature gate) → extract first arg as ID
-//   - ValidationResult{Code: ...} composite literal → extract Code value
-//
-// ID arg resolution is fail-fast: only string literals and package-level
-// const idents are accepted. Any other shape triggers t.Fatalf to force
-// new emission patterns through PR review (rather than silently slipping
-// past governance).
-//
-// Replaces TestRuleInventoryGolden (the PR-FUNNEL-03 zero-diff temporary
-// hardening): BFS reachability is strictly stronger than literal scanning
-// because every reachable ID must come from a literal somewhere in the
-// reachable code, while literal scanning misses the "defined but never
-// registered" case.
+// TestAllRulesMatchGolden proves that every rule ID in goldenRuleIDs() appears
+// exactly once in allRules (rules_registry.go), AND that no code in allRules
+// is absent from goldenRuleIDs(). This replaces the former BFS reachability
+// test over rules()/strictRules()/checks(): allRules is now the single source
+// of truth for all rule registration (ADR §M3-RULE-ENGINE), so direct iteration
+// is strictly stronger — it checks the live slice, not a traversal from roots.
 //
 // INVARIANT: GOVERNANCE-RULE-REACHABILITY-TEST-01
 //
 // ref: kubernetes/apimachinery pkg/util/validation/field/errors_test.go
-// (golden error-code allowlist + AST-based equivalence check).
-func TestRuleReachabilityFromRegistrationRoots(t *testing.T) {
+// (golden error-code allowlist + direct enumeration check).
+func TestAllRulesMatchGolden(t *testing.T) {
 	t.Parallel()
 
-	fset := token.NewFileSet()
-	files, typesInfo, pkg := loadGovernancePackageWithTypes(t, fset, ".")
-
-	funcIdx := buildFuncIndex(files)
-
-	roots := collectBFSRoots(funcIdx)
-	if len(roots) == 0 {
-		t.Fatalf("BFS: no registration roots found; expected (Validator,rules), " +
-			"(Validator,strictRules), (DependencyChecker,checks), and Check* " +
-			"public methods on Validator")
+	actual := make([]string, 0, len(allRules))
+	for _, r := range allRules {
+		actual = append(actual, string(r.Code))
 	}
+	sort.Strings(actual)
 
-	gate := resolveEmitterGate(t, pkg.Scope())
-	actual := runReachabilityBFS(t, fset, files, typesInfo, funcIdx, roots, gate)
 	golden := goldenRuleIDs()
 
 	if diff := symmetricDiff(golden, actual); len(diff) > 0 {
-		t.Fatalf("rule reachability drift detected — BFS reachable IDs from "+
-			"the four registration roots disagree with goldenRuleIDs().\n"+
-			"To fix: register the missing rule in rules() / strictRules() / "+
-			"checks() / a public Check* method, OR update goldenRuleIDs() if "+
-			"the new ID is intentional.\nDiff (- only in golden, + only in "+
-			"reachable):\n%s",
+		t.Fatalf("allRules ↔ goldenRuleIDs() drift detected.\n"+
+			"To fix: add or remove the rule from allRules in rules_registry.go, "+
+			"OR update goldenRuleIDs() if the change is intentional.\n"+
+			"Diff (- only in golden, + only in allRules):\n%s",
 			strings.Join(diff, "\n"))
 	}
 }
@@ -204,77 +170,6 @@ type funcKey struct {
 	name string
 }
 
-// loadGovernancePackageWithTypes loads the governance package using
-// packages.Load (module-aware), returning the AST files (sharing fset)
-// and the full *types.Info needed for signature-based BFS emission
-// detection.
-//
-// packages.Load is used over types.Config.Check + importer.Default()
-// because the latter relies on GOPATH-style $GOROOT/src lookup and fails
-// to resolve module-internal imports (kernel/metadata, etc.) in this
-// project. packages.Load consults go/build + module-aware resolvers.
-//
-// dir must contain the governance package (the test's CWD when called
-// with "."). The cost (~1-2s first call) is paid once; subsequent test
-// runs share Go build cache.
-func loadGovernancePackageWithTypes(t *testing.T, fset *token.FileSet, dir string) ([]*ast.File, *types.Info, *types.Package) {
-	t.Helper()
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		t.Fatalf("resolve abs governance dir: %v", err)
-	}
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps |
-			packages.NeedImports,
-		Dir:  absDir,
-		Fset: fset,
-	}
-	pkgs, err := packages.Load(cfg, ".")
-	if err != nil {
-		t.Fatalf("load governance package: %v", err)
-	}
-	if packages.PrintErrors(pkgs) > 0 {
-		t.Fatalf("governance package load reported errors")
-	}
-	if len(pkgs) != 1 {
-		t.Fatalf("expected 1 governance package, got %d", len(pkgs))
-	}
-	pkg := pkgs[0]
-	if pkg.TypesInfo == nil {
-		t.Fatalf("governance package has nil TypesInfo")
-	}
-	if pkg.Types == nil {
-		t.Fatalf("governance package has nil Types")
-	}
-
-	// Filter test files: rule_inventory_test.go and rule_inventory_bfs_test.go
-	// must not appear in the BFS sweep (they would self-reference the helpers).
-	// packages.Load with no test build tag returns non-test files only, but
-	// keep an explicit filter to harden against future flag changes.
-	//
-	// pkg.Syntax and pkg.GoFiles share a 1:1 index correspondence by
-	// packages.Load contract (parsed AST <-> file path); assert it explicitly
-	// so a future loader regression that breaks the alignment fails fast
-	// rather than silently picking the wrong path for each AST file.
-	if len(pkg.Syntax) != len(pkg.GoFiles) {
-		t.Fatalf("packages.Load returned Syntax/GoFiles of unequal length (%d vs %d)",
-			len(pkg.Syntax), len(pkg.GoFiles))
-	}
-	var files []*ast.File
-	for i, f := range pkg.Syntax {
-		path := pkg.GoFiles[i]
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		files = append(files, f)
-	}
-	if len(files) == 0 {
-		t.Fatalf("no governance .go files parsed via governance.Load in %q", absDir)
-	}
-	return files, pkg.TypesInfo, pkg.Types
-}
-
 // emitterGate bundles the three type-system objects the
 // signatureMatchesValidationResultEmitter predicate needs. Resolved once
 // at BFS start from the loaded package's scope so the predicate body
@@ -402,45 +297,6 @@ func extractReceiverInfo(fd *ast.FuncDecl) (recvType, recvName string) {
 		recvType = typ.Name
 	}
 	return recvType, recvName
-}
-
-// collectBFSRoots returns the seed set:
-//   - the three fixed registration-list methods (rules, strictRules, checks),
-//   - every (*Validator).Check<X> public method (CI-only entry points).
-//
-// Roots are sorted for deterministic visitation order.
-func collectBFSRoots(funcIdx map[funcKey]*ast.FuncDecl) []funcKey {
-	fixed := []funcKey{
-		{recv: "Validator", name: "rules"},
-		{recv: "Validator", name: "strictRules"},
-		{recv: "DependencyChecker", name: "checks"},
-	}
-	var roots []funcKey
-	for _, k := range fixed {
-		if _, ok := funcIdx[k]; ok {
-			roots = append(roots, k)
-		}
-	}
-	for k := range funcIdx {
-		if k.recv != "Validator" {
-			continue
-		}
-		if !strings.HasPrefix(k.name, "Check") || len(k.name) < 6 {
-			continue
-		}
-		next := k.name[5]
-		if next < 'A' || next > 'Z' {
-			continue
-		}
-		roots = append(roots, k)
-	}
-	sort.Slice(roots, func(i, j int) bool {
-		if roots[i].recv != roots[j].recv {
-			return roots[i].recv < roots[j].recv
-		}
-		return roots[i].name < roots[j].name
-	})
-	return roots
 }
 
 // walkRule performs the BFS step for one node. ast.Inspect walks the

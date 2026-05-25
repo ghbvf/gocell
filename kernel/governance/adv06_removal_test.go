@@ -90,7 +90,7 @@ func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
 }
 
 // TestADV06_NotInRules asserts that no result has code == "ADV-06" after the rule
-// is removed from the pipeline. We run rules() and confirm no result has code "ADV-06".
+// is removed from the pipeline. We iterate allRules and confirm no result has code "ADV-06".
 func TestADV06_NotInRules(t *testing.T) {
 	project := minimalGovernanceProject()
 	// Add a contract with no subscribers to guarantee ADV-05 fires if present,
@@ -104,11 +104,13 @@ func TestADV06_NotInRules(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	allRules := v.rules()
-	for _, rule := range allRules {
-		for _, r := range rule() {
+	// Only iterate non-Strict/non-Health rules: PhaseStrict rules (e.g. VERIFY-06)
+	// require v.runCtx to be set via run(); PhaseHealth rules require a full project.
+	// ADV-06 was a PhaseBase/advisory rule, so limiting to PhaseBase+PhaseDep is sufficient.
+	for _, rule := range rulesForPhases(PhaseBase, PhaseDep) {
+		for _, r := range rule.Detect(v) {
 			if r.Code == "ADV-06" {
-				t.Errorf("ADV-06 must not be emitted by rules(): found result %v", r)
+				t.Errorf("ADV-06 must not be emitted by allRules: found result %v", r)
 			}
 		}
 	}

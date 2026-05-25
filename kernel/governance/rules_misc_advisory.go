@@ -133,7 +133,7 @@ func (v *Validator) validateADV05() []ValidationResult {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {
-			results = append(results, v.newError(
+			results = append(results, v.newWarning(
 				codeADV05, IssueForbidden,
 				contractFile(c),
 				"endpoints.subscribers",

@@ -88,8 +88,13 @@ type sarifRuleProperties struct {
 // fit into the fixed SARIF 2.1.0 result schema. Stored in the property bag
 // (SARIF 2.1.0 §3.8) so viewers that understand it can surface the data
 // without polluting message.text.
+//
+// Next is the M3 remediation disposition (block/advisory/autofix/suggest/
+// escalate); Metric is the optional continuous distance value (ADR §M3 P-C3).
 type sarifResultProperties struct {
-	Fix string `json:"fix,omitempty"`
+	Fix    string   `json:"fix,omitempty"`
+	Next   string   `json:"next,omitempty"`
+	Metric *float64 `json:"metric,omitempty"`
 }
 
 type sarifResult struct {
@@ -211,8 +216,12 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 		Level:   severityToSARIFLevel(r.Severity),
 		Message: sarifMessage{Text: composeSARIFMessage(r)},
 	}
-	if r.Fix != "" {
-		res.Properties = &sarifResultProperties{Fix: r.Fix}
+	if r.Fix != "" || r.Next != "" || r.Metric != nil {
+		res.Properties = &sarifResultProperties{
+			Fix:    r.Fix,
+			Next:   string(r.Next),
+			Metric: r.Metric,
+		}
 	}
 	if r.File != "" {
 		loc := sarifLocation{

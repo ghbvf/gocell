@@ -16,7 +16,7 @@ import (
 // projectWithEarlyAndLateError constructs a fixture that violates both REF-01
 // (slice references a non-existent cell) and ADV-05 (active event contract
 // without subscribers). REF-01 sits at the head of the rule pipeline; ADV-05
-// sits much later (see Validator.rules() in validate.go: REF-01 is index 0,
+// sits much later (see allRules in rules_registry.go: REF-01 is at the start,
 // ADV-05 is among the trailing ADV/OUTGUARD/SliceConsistency block). Validate
 // finds both; ValidateFailFast must surface REF-01 and skip ADV-05 entirely.
 //

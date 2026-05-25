@@ -62,16 +62,15 @@ func runValidate(ctx context.Context, args []string) error {
 	}
 
 	validator := governance.NewValidator(project, rootDir, clock.Real())
-	depChecker := governance.NewDependencyChecker(project)
 
 	// ctx is the signal-aware context wired in main.go
 	// (signal.NotifyContext) and threaded through Dispatch → runValidate.
 	// It is the cancellation source the entire validate path honors —
 	// runGit subprocesses and verifyJourneyRef both consume it.
 	if *failFast {
-		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)
+		return runValidateFailFast(ctx, printer, *format, validator, *strict)
 	}
-	return runValidateFull(ctx, printer, validator, depChecker, *strict)
+	return runValidateFull(ctx, printer, validator, *strict)
 }
 
 // runValidateFailFast runs validation in short-circuit mode: the validator
@@ -100,7 +99,6 @@ func runValidateFailFast(
 	printer printers.Printer,
 	format string,
 	validator *governance.Validator,
-	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
 	valResults, valErr := runValidatorFailFast(ctx, validator, strict)
@@ -113,17 +111,6 @@ func runValidateFailFast(
 		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
-	depResults := depChecker.CheckFailFast()
-	if firstErr := firstError(depResults); firstErr != nil {
-		if err := emitFailFast(printer, format, depResults); err != nil {
-			return fmt.Errorf(errEmitResultsFmt, err)
-		}
-		return fmt.Errorf("validation failed: %s", firstErr.Code)
-	}
-
-	// No errors. Combine the validator and depcheck results so warnings from
-	// either accumulator are preserved.
-	valResults = append(valResults, depResults...)
 
 	if len(valResults) == 0 {
 		// Truly clean run. Text mode keeps the legacy single-line "OK"
@@ -179,15 +166,12 @@ func runValidateFull(
 	ctx context.Context,
 	printer printers.Printer,
 	validator *governance.Validator,
-	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
 	valResults, valErr := runValidatorFull(ctx, validator, strict)
 	if valErr != nil {
 		return fmt.Errorf("validation interrupted: %w", valErr)
 	}
-	depResults := depChecker.Check()
-	valResults = append(valResults, depResults...)
 
 	if err := printer.Print(valResults); err != nil {
 		return fmt.Errorf(errEmitResultsFmt, err)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
 
@@ -89,6 +90,13 @@ type ValidationResult struct {
 // locator to share locate + the typed constructors (newError/newWarning/newScopedError)
 // with DependencyChecker and to promote the project field so existing rule code
 // keeps using v.project.* directly.
+//
+// Validator is not safe for concurrent ValidateStrict calls. Build one
+// Validator per concurrent caller.
+//
+// runCtx holds the context for the current run() invocation; read by
+// ctx-bound detect funcs (VERIFY-06). Validator is not concurrent-safe,
+// documented above.
 type Validator struct {
 	locator
 	root             string                            // project root for file existence checks
@@ -101,6 +109,13 @@ type Validator struct {
 		j *metadata.JourneyMeta,
 		ref string,
 	) (verify.TestResult, []error)
+	// cells and contracts are the typed registries used by PhaseDep rules.
+	cells     *registry.CellRegistry
+	contracts *registry.ContractRegistry
+	// runCtx holds the context for the current run() invocation; read by
+	// ctx-bound detect funcs (VERIFY-06). Set by run() at the start of each
+	// invocation; zero value is context.Background().
+	runCtx context.Context
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -128,8 +143,10 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		readFile: os.ReadFile,
-		actorSet: actorSet,
+		readFile:  os.ReadFile,
+		actorSet:  actorSet,
+		cells:     registry.NewCellRegistry(project),
+		contracts: registry.NewContractRegistry(project),
 	}
 	if root != "" {
 		runner := verify.NewRunner(project, root)
@@ -146,10 +163,11 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 //   - strict=true,  failFast=false → run base + strict-only rules, collect all
 //   - strict=true,  failFast=true  → run base + strict rules, stop on error
 //
-// rules() and strictRules(ctx) stay separate functions because their closure
-// shapes differ (strictRules captures ctx for VERIFY-06); ValidateStrict
-// concats them at the dispatch site so there is exactly one ctx-cancel /
-// fail-fast loop body covering both halves of the pipeline.
+// The rule pipeline is driven by allRules (rules_registry.go), filtered by
+// phase: base runs PhaseBase+PhaseDep; strict additionally includes
+// PhaseStrict. The engine loop (run) stamps each finding's Next/Metric from
+// the owning Rule, handles ctx cancellation, and implements the fail-fast
+// bailout on the first SeverityError. See engine.go for the loop body.
 //
 // The error return is non-nil only when ctx.Err() != nil at the time the
 // loop is interrupted; it carries the partial findings collected so far so
@@ -158,80 +176,12 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 // Validator is not safe for concurrent ValidateStrict calls. Build one
 // Validator per concurrent caller — same expectation as the underlying
 // locator and the verifyJourneyRef closure.
-//
-// archtest GOVERNANCE-RULES-REGISTRATION-GUARD-01 (tools/archtest/
-// governance_rules_invariants_test.go) reflects over *Validator at build
-// time to confirm every validate* method with the rule signature is
-// reachable from rules() or strictRules(); forgetting to register a new
-// rule fails CI.
 func (v *Validator) ValidateStrict(ctx context.Context, strict, failFast bool) ([]ValidationResult, error) {
-	pipeline := v.rules()
+	phases := []Phase{PhaseBase, PhaseDep}
 	if strict {
-		pipeline = append(pipeline, v.strictRules(ctx)...)
+		phases = append(phases, PhaseStrict)
 	}
-	var results []ValidationResult
-	for _, rule := range pipeline {
-		if err := ctx.Err(); err != nil {
-			return results, err
-		}
-		r := rule()
-		results = append(results, r...)
-		if failFast && HasErrors(r) {
-			return results, nil
-		}
-	}
-	return results, nil
-}
-
-// rules returns the base rule pipeline in the order ValidateStrict runs them.
-// Every entry is a zero-arg closure; ctx-bound work (VERIFY-06's
-// verifyJourneyRef subprocess, runGit shell-outs) lives in strictRules,
-// which captures ctx, so this list keeps the pure-memory invariant.
-//
-// archtest GOVERNANCE-RULES-REGISTRATION-GUARD-01 reflects over *Validator's
-// method set and diffs against the names referenced here plus in
-// strictRules(); a validate* method that returns []ValidationResult but is
-// not referenced from either function fails CI immediately. The check is
-// the single source preventing "method exists but never runs" drift.
-//
-// ref: kubernetes apimachinery validation/field/errors.go (pure-memory rules
-// with no ctx); opentofu internal/command/validate.go (top-level aggregator
-// threads ctx).
-func (v *Validator) rules() []func() []ValidationResult {
-	return []func() []ValidationResult{
-		v.validateREF01, v.validateREF02, v.validateREF03, v.validateREF04,
-		v.validateREF05, v.validateREF06, v.validateREF07, v.validateREF08,
-		v.validateREF09, v.validateREF10, v.validateREF11, v.validateREF12,
-		v.validateREF13, v.validateREF14, v.validateREF15, v.validateREF16,
-		v.validateREF17, v.validateREF18,
-		v.validateTOPO01, v.validateTOPO02, v.validateTOPO03, v.validateTOPO04,
-		v.validateTOPO05, v.validateTOPO06, v.validateTOPO07, v.validateTOPO08,
-		v.validateTOPO09,
-		v.validateVERIFY01, v.validateVERIFY02, v.validateVERIFY03,
-		v.validateVERIFY04, v.validateVERIFY05,
-		v.validateFMT01, v.validateFMT02, v.validateFMT03, v.validateFMT04,
-		v.validateFMT05, v.validateFMT06, v.validateFMT07, v.validateFMT08,
-		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
-		v.validateFMT13, v.validateFMT14, v.validateFMT15, v.validateFMT24, v.validateFMT26,
-		v.validateFMT27, v.validateFMT28, v.validateFMT29, v.validateFMT30, v.validateFMT31,
-		v.validateFMT32, v.validateFMT33, v.validateFMT34, v.validateFMT35, v.validateFMT36,
-		v.validateFMTA1,
-		v.validateFMTC1,
-		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
-		v.validateOUTGUARD01,
-		v.validateSliceConsistency,
-		v.validateSliceConsistencyContractUsages,
-		v.validateFMTRequestStrict01,
-		v.validateFMTContractDirIDMatch01,
-		v.validateStatusBoardStateEnum01,
-		v.validateContractDeprecatedCleanup01,
-		v.validateFMTInputConstraint01,
-		v.validateCONTRACTCONSISTENCYEMIT01,
-		v.validateJOURNEYCONTRACTEXISTENCE01,
-		v.validateJOURNEYSTATUSLIFECYCLE01,
-		v.validateCONTRACTENDPOINTTESTMAPPING01,
-		v.validateProjectionConsistency,
-	}
+	return v.run(ctx, rulesForPhases(phases...), failFast)
 }
 
 // HasErrors returns true if any result has SeverityError.

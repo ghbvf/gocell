@@ -17,7 +17,6 @@ package governance
 // from strictRules() as cross-file calls within the same package.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,48 +33,6 @@ import (
 // =============================================================================
 // strict-only registry + FMT-16/17 + FMT-A1/C1 unconditional (formerly rules_strict.go)
 // =============================================================================
-
-// strictRules returns the strict-only rule pipeline. Entries appended after
-// rules() inside ValidateStrict when the caller requests strict mode:
-//
-//   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
-//   - FMT-16: slice / cell / assembly directory contains '-' (kebab-case disallowed)
-//   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
-//   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
-//   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
-//
-// FMT-A1 (assembly id pattern) and FMT-C1 (cell id pattern) are
-// unconditional inside Validate (registered in rules()): they mirror
-// schemas/{assembly,cell}.schema.json properties.id.pattern and must apply
-// on every validate path so schema-aware tooling and `gocell validate` agree.
-//
-// FMT-18 (contractspec.ContractSpec literals in cells/** cross-check) was
-// removed in PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0
-// ContractSpec literals, enforced by archtest
-// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
-// NO-MANUAL-CONTRACTSPEC-LITERAL-01 /
-// EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01. The /internal/v1 caller-
-// clients invariant FMT-18 also carried was later reclaimed at the YAML
-// governance layer by FMT-31 (rules_fmt.go).
-//
-// ctx is captured for VERIFY-06 (which shells out via verifyJourneyRef);
-// the remaining FMT / DOC rules are pure-memory and bound as bare method
-// values. ValidateStrict drains this list with a single ctx-cancel /
-// fail-fast loop, so ctx cancellation unwinds the strict pass too.
-func (v *Validator) strictRules(ctx context.Context) []func() []ValidationResult {
-	return []func() []ValidationResult{
-		func() []ValidationResult { return v.validateVERIFY06(ctx) },
-		v.validateFMT16,
-		v.validateFMT17,
-		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by archtest
-		// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01).
-		v.validateFMT19,
-		// FMT-A1 and FMT-C1 are now registered in the default rules()
-		// pipeline (they mirror schema constraints and apply on every
-		// validate path).
-		v.validateDOCNAME01,
-	}
-}
 
 // validateFMT16 checks that no slice, cell, or assembly directory contains
 // '-' (kebab-case). The check reads the filesystem directory segment

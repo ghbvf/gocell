@@ -2873,7 +2873,7 @@ func TestADV05(t *testing.T) {
 		wantSev   Severity
 	}{
 		{
-			name: "event contract active with empty subscribers → 1 error",
+			name: "event contract active with empty subscribers → 1 warning",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.dead.nosubscribers.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nosubscribers.v1",
@@ -2888,10 +2888,10 @@ func TestADV05(t *testing.T) {
 				}
 			},
 			wantCount: 1,
-			wantSev:   SeverityError,
+			wantSev:   SeverityWarning,
 		},
 		{
-			name: "event contract active with nil subscribers → 1 error",
+			name: "event contract active with nil subscribers → 1 warning",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.dead.nilsubs.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nilsubs.v1",
@@ -2906,7 +2906,7 @@ func TestADV05(t *testing.T) {
 				}
 			},
 			wantCount: 1,
-			wantSev:   SeverityError,
+			wantSev:   SeverityWarning,
 		},
 		{
 			name: "event contract active with subscribers → 0 findings",
@@ -3005,11 +3005,12 @@ func TestADV05(t *testing.T) {
 func TestADV06_Removed(t *testing.T) {
 	pm := validProject()
 	val := NewValidator(pm, "", clock.Real())
-	allRules := val.rules()
-	for _, rule := range allRules {
-		for _, r := range rule() {
+	// Only iterate non-Strict/non-Health rules: PhaseStrict rules (e.g. VERIFY-06)
+	// require v.runCtx to be set via run(); PhaseHealth rules require a full project.
+	for _, rule := range rulesForPhases(PhaseBase, PhaseDep) {
+		for _, r := range rule.Detect(val) {
 			if r.Code == "ADV-06" {
-				t.Errorf("ADV-06 must not be emitted by rules(): found result %v", r)
+				t.Errorf("ADV-06 must not be emitted by allRules: found result %v", r)
 			}
 		}
 	}

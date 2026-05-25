@@ -102,6 +102,7 @@ type Rule struct {
 // the bailout. This single loop body is what the former ValidateStrict /
 // DependencyChecker.Check{,FailFast} / CheckContractHealth all collapse into.
 func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]ValidationResult, error) {
+	v.runCtx = ctx
 	var out []ValidationResult
 	for i := range rules {
 		if err := ctx.Err(); err != nil {

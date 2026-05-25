@@ -117,7 +117,7 @@ const (
 	// 4 active constants (ADV-01/03/04/05); ADV-02 retired and ADV-06 removed
 	// (gap intentional). Subscribers are now derived from slice contractUsages +
 	// actorSubscribers, making drift-detection moot.
-	// ADV-05 is SeverityError; ADV-01/03/04 are SeverityWarning.
+	// ADV-05 is SeverityWarning (advisory); ADV-01/03/04 are also SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"

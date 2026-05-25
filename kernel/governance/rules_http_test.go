@@ -305,9 +305,10 @@ func runCheckHTTPResponseAlignmentCase(
 	if caseName == "non-http contract is skipped" {
 		c.Kind = "event"
 	}
+	project.Contracts[contractID] = c
 
 	validator := NewValidator(project, root, clock.Real())
-	results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+	results := validator.checkCH04()
 
 	var errs []ValidationResult
 	for _, r := range results {
@@ -503,9 +504,11 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 
 			project := makeCodegenProject(contractID)
 			c := makeContract(contractID, "contracts/http/test/generated/v1/contract.yaml", tc.responses)
+			c.Codegen = true
+			project.Contracts[contractID] = c
 
 			validator := NewValidator(project, root, clock.Real())
-			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+			results := validator.checkCH04()
 
 			var errs []ValidationResult
 			for _, r := range results {
@@ -539,22 +542,18 @@ func h(w http.ResponseWriter, r *http.Request) {
 	require.NotEmpty(t, handlerPath)
 
 	project := makeProject(contractID, sliceRelDir)
-	// Explicitly mark the contract as non-codegen in the project contracts map.
-	project.Contracts[contractID] = &metadata.ContractMeta{
-		ID:      contractID,
-		Kind:    "http",
-		Codegen: false,
-		File:    "contracts/http/test/legacy/v1/contract.yaml",
-	}
 
 	c := makeContract(contractID, "contracts/http/test/legacy/v1/contract.yaml",
 		map[int]metadata.HTTPResponseMeta{
 			400: {Description: "bad request"},
 		},
 	)
+	// Explicitly mark the contract as non-codegen.
+	c.Codegen = false
+	project.Contracts[contractID] = c
 
 	validator := NewValidator(project, root, clock.Real())
-	results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+	results := validator.checkCH04()
 
 	var errs []ValidationResult
 	for _, r := range results {
@@ -660,9 +659,10 @@ func h(w http.ResponseWriter, r *http.Request) {
 				tc.responses,
 				metadata.HTTPAuthMeta{Responses: tc.authResponses},
 			)
+			project.Contracts[contractID] = c
 
 			validator := NewValidator(project, root, clock.Real())
-			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+			results := validator.checkCH04()
 
 			var errs []ValidationResult
 			for _, r := range results {
@@ -786,9 +786,10 @@ func h(w http.ResponseWriter, r *http.Request) {
 
 			project := makeProject(contractID, sliceRelDir)
 			c := makeContract(contractID, "contracts/http/test/helpers/v1/contract.yaml", tc.responses)
+			project.Contracts[contractID] = c
 
 			validator := NewValidator(project, root, clock.Real())
-			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+			results := validator.checkCH04()
 
 			var errs []ValidationResult
 			for _, r := range results {
@@ -1007,8 +1008,11 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 				c = makeUUIDContract(contractID, "contracts/http/test/uuid/v1/contract.yaml", tc.uuidParams)
 			}
 
+			if c != nil {
+				project.Contracts[contractID] = c
+			}
 			validator := NewValidator(project, root, clock.Real())
-			results := validator.CheckHTTPPathParamUUID([]*metadata.ContractMeta{c}, root)
+			results := validator.checkCH05()
 
 			var errs []ValidationResult
 			for _, r := range results {
@@ -1104,9 +1108,11 @@ import (
 
 	cA := makeUUIDContract(contractA, "contracts/http/test/uuid/a/v1/contract.yaml", []string{"id", "userID"})
 	cB := makeUUIDContract(contractB, "contracts/http/test/uuid/b/v1/contract.yaml", []string{"userID"})
+	project.Contracts[contractA] = cA
+	project.Contracts[contractB] = cB
 
 	validator := NewValidator(project, root, clock.Real())
-	results := validator.CheckHTTPPathParamUUID([]*metadata.ContractMeta{cA, cB}, root)
+	results := validator.checkCH05()
 
 	var errMsgs []string
 	for _, r := range results {
@@ -1179,8 +1185,10 @@ type Get404ErrorResponse struct{}
 		File: "contracts/http/test/get/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 
 	assert.Empty(t, results, "fully aligned contract must produce no findings")
 }
@@ -1216,8 +1224,10 @@ type List401ErrorResponse struct{}
 		File: "contracts/http/test/list/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 
 	require.Len(t, results, 1, "exactly one finding for missing 503 typed struct")
 	assert.Equal(t, codeCH06, results[0].Code)
@@ -1259,8 +1269,10 @@ type Delete403ErrorResponse struct{} // orphan — contract.yaml has no 403
 		File: "contracts/http/test/delete/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 
 	require.Len(t, results, 1, "exactly one finding for orphan 403 struct")
 	assert.Equal(t, codeCH06, results[0].Code)
@@ -1280,8 +1292,10 @@ func TestCheckHTTPTypedResponseEnvelope_NonHTTPSkipped(t *testing.T) {
 		File:    "contracts/event/test/created/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 	assert.Empty(t, results, "event contracts have no typed response envelope")
 }
 
@@ -1306,8 +1320,10 @@ func TestCheckHTTPTypedResponseEnvelope_NonCodegenSkipped(t *testing.T) {
 		File: "contracts/http/legacy/foo/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 	assert.Empty(t, results, "non-codegen contracts skip CH-06")
 }
 
@@ -1332,8 +1348,10 @@ func TestCheckHTTPTypedResponseEnvelope_MissingTypesGenFileSkipped(t *testing.T)
 		File: "contracts/http/absent/foo/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 
 	assert.Empty(t, results, "missing types_gen.go is owned by `gocell generate --verify`, not CH-06")
 }
@@ -1367,8 +1385,10 @@ type Foo403ErrorResponse struct{}
 		File: "examples/iotdevice/contracts/http/internal/foo/v1/contract.yaml",
 	}
 
-	v := NewValidator(&metadata.ProjectMeta{}, "", clock.Real())
-	results := v.CheckHTTPTypedResponseEnvelope([]*metadata.ContractMeta{contract}, root)
+	v := NewValidator(&metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{contract.ID: contract},
+	}, root, clock.Real())
+	results := v.checkCH06()
 
 	assert.Empty(t, results, "internal→internalapi path mapping must resolve to the typed-envelope file")
 }

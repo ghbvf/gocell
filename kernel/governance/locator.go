@@ -269,6 +269,8 @@ func canonicalAssemblyID(file string) (string, bool) {
 // users do not mistake the scope label for a jumpable path. fix is REQUIRED
 // (same funnel as newError). There is no newScopedWarning — no scoped warning
 // site exists, and the absence is itself part of the funnel.
+//
+//nolint:unparam // scope is always "project" today; kept as explicit param for future scoped errors.
 func (l *locator) newScopedError(code RuleCode, typ IssueType, scope, field, msg, fix string) ValidationResult {
 	return ValidationResult{
 		Code:      code,

@@ -71,10 +71,14 @@ func TestRunCollectsFindings(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
 	rules := []Rule{
-		{Code: codeREF01, Next: NextBlock,
-			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) }},
-		{Code: codeADV01, Next: NextAdvisory,
-			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeADV01, 2) }},
+		{
+			Code: codeREF01, Next: NextBlock,
+			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
+		},
+		{
+			Code: codeADV01, Next: NextAdvisory,
+			Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeADV01, 2) },
+		},
 	}
 	got, err := v.run(context.Background(), rules, false)
 	require.NoError(t, err)
@@ -90,17 +94,23 @@ func TestRunCollectsFindings(t *testing.T) {
 func TestRunFailFast(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
-	warnFirst := Rule{Code: codeADV01, Next: NextAdvisory,
+	warnFirst := Rule{
+		Code: codeADV01, Next: NextAdvisory,
 		Detect: func(vv *Validator) []ValidationResult {
 			return []ValidationResult{vv.newWarning(codeADV01, IssueRefNotFound, "", "w", "warn", "f")}
-		}}
-	errRule := Rule{Code: codeREF01, Next: NextBlock,
-		Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) }}
-	never := Rule{Code: codeREF02, Next: NextBlock,
+		},
+	}
+	errRule := Rule{
+		Code: codeREF01, Next: NextBlock,
+		Detect: func(vv *Validator) []ValidationResult { return vv.scopedFindings(codeREF01, 1) },
+	}
+	never := Rule{
+		Code: codeREF02, Next: NextBlock,
 		Detect: func(*Validator) []ValidationResult {
 			t.Error("rule after first error must not run in fail-fast mode")
 			return nil
-		}}
+		},
+	}
 
 	got, err := v.run(context.Background(), []Rule{warnFirst, errRule, never}, true)
 	require.NoError(t, err)

@@ -139,23 +139,22 @@ var errcodeKindNameToStatus = map[string]int{
 	"KindNotImplemented":   errcode.KindNotImplemented.Status(),
 }
 
-// CheckHTTPResponseAlignment enforces CH-04: every 4xx/5xx status code that a
-// handler can return must be declared in the corresponding contract's responses
-// map.
+// checkCH04 enforces CH-04: every 4xx/5xx status code that a handler can
+// return must be declared in the corresponding contract's responses map.
 //
 // Contracts without a matching in-repo handler (e.g. external actor) are
 // silently skipped. When multiple contracts share a handler.go file, the rule
 // uses auth.Mount correlation to narrow scanning to the specific handler
 // function linked to each contract.
-func (v *Validator) CheckHTTPResponseAlignment(contracts []*metadata.ContractMeta, projectRoot string) []ValidationResult {
-	// Parse cache is per CheckHTTPResponseAlignment call to avoid cross-test contamination.
+func (v *Validator) checkCH04() []ValidationResult {
+	// Parse cache is per checkCH04 call to avoid cross-test contamination.
 	cache := map[string]*parsedHandlerFile{}
 	var results []ValidationResult
-	for _, c := range contracts {
+	for _, c := range v.sortedContracts() {
 		if c.Kind != "http" {
 			continue
 		}
-		results = append(results, v.checkResponseAlignmentForContract(c, projectRoot, cache)...)
+		results = append(results, v.checkResponseAlignmentForContract(c, v.root, cache)...)
 	}
 	return results
 }
@@ -798,21 +797,24 @@ func stripQuotes(s string) string {
 //
 // Contracts without a matching in-repo handler are silently skipped.
 //
+// checkCH05 enforces CH-05: handlers serving contracts with
+// pathParams.{name}.format=uuid must call httputil.ParseUUIDPathParam.
+//
 // CH-05 reuses the same parsedHandlerFile cache and contractToFuncs mapping
-// from CH-04 (above) to narrow the walk to the specific handler function
-// linked to each contract via auth.Mount. When no auth.Mount correlation is
-// found the rule emits a SeverityError finding (fail-closed) rather than
-// falling back to whole-file scanning.
-func (v *Validator) CheckHTTPPathParamUUID(contracts []*metadata.ContractMeta, projectRoot string) []ValidationResult {
+// from CH-04 to narrow the walk to the specific handler function linked to
+// each contract via auth.Mount. When no auth.Mount correlation is found the
+// rule emits a SeverityError finding (fail-closed) rather than falling back
+// to whole-file scanning.
+func (v *Validator) checkCH05() []ValidationResult {
 	// Share the same parse cache across all contracts in one call; avoids
 	// re-parsing the same handler.go for every contract it serves.
 	cache := map[string]*parsedHandlerFile{}
 	var results []ValidationResult
-	for _, c := range contracts {
+	for _, c := range v.sortedContracts() {
 		if c.Kind != "http" {
 			continue
 		}
-		results = append(results, v.checkPathParamUUIDForContract(c, projectRoot, cache)...)
+		results = append(results, v.checkPathParamUUIDForContract(c, v.root, cache)...)
 	}
 	return results
 }
@@ -971,24 +973,22 @@ func isParseUUIDPathParamCall(call *ast.CallExpr) bool {
 // reports — the two rules together provide the closed-set guarantee.
 var typedResponseStructPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*?(\d{3})(JSONResponse|NoContentResponse|ErrorResponse)$`)
 
-// CheckHTTPTypedResponseEnvelope enforces CH-06: every HTTP contract that
-// opts into codegen must have a typed response struct in its generated
-// types_gen.go for every declared SuccessStatus + responses[] key, and no
-// orphan structs may exist beyond the declared set.
+// checkCH06 enforces CH-06: every HTTP contract that opts into codegen must
+// have a typed response struct in its generated types_gen.go for every
+// declared SuccessStatus + responses[] key, and no orphan structs may exist
+// beyond the declared set.
 //
 // Skipped silently for:
 //   - non-HTTP contracts (event/command/projection)
 //   - codegen=false contracts (legacy hand-written handlers do not emit typed structs)
 //   - missing types_gen.go (treated as codegen drift, surfaced by the verify pipeline)
-func (v *Validator) CheckHTTPTypedResponseEnvelope(
-	contracts []*metadata.ContractMeta, projectRoot string,
-) []ValidationResult {
+func (v *Validator) checkCH06() []ValidationResult {
 	var results []ValidationResult
-	for _, c := range contracts {
+	for _, c := range v.sortedContracts() {
 		if c.Kind != "http" || !c.Codegen {
 			continue
 		}
-		results = append(results, v.checkTypedEnvelopeForContract(c, projectRoot)...)
+		results = append(results, v.checkTypedEnvelopeForContract(c, v.root)...)
 	}
 	return results
 }
