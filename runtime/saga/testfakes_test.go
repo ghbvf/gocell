@@ -99,15 +99,22 @@ func (e *safeFakeEmitter) ClearError() {
 type stagedTxKey struct{}
 
 // stagedTxState captures Append mutations that a stagedJournal defers until
-// commit. Discarded on rollback.
+// commit. Discarded on rollback. parentCtx is the caller-supplied ctx (the
+// one passed into RunInTx, WITHOUT the stagedTxKey marker) — it is the ctx
+// the pending Appends run under at commit time, so cancellation on the
+// parent ctx still propagates to the inner journal. We deliberately avoid
+// the txCtx (which carries stagedTxKey) so a re-stage loop is impossible.
 type stagedTxState struct {
 	mu             sync.Mutex
-	pendingAppends []func() error
+	pendingAppends []func(ctx context.Context) error
+	parentCtx      context.Context //nolint:containedctx // test-fake fixture state, not API; ctx is unmodifiable parent for commit-time use
 }
 
-func newStagedTxState() *stagedTxState { return &stagedTxState{} }
+func newStagedTxState(parent context.Context) *stagedTxState {
+	return &stagedTxState{parentCtx: parent}
+}
 
-func (s *stagedTxState) addAppend(apply func() error) {
+func (s *stagedTxState) addAppend(apply func(ctx context.Context) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pendingAppends = append(s.pendingAppends, apply)
@@ -117,7 +124,7 @@ func (s *stagedTxState) commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, apply := range s.pendingAppends {
-		if err := apply(); err != nil {
+		if err := apply(s.parentCtx); err != nil {
 			return err
 		}
 	}
@@ -150,7 +157,7 @@ type safeFakeTxRunner struct{}
 func newSafeFakeTxRunner() *safeFakeTxRunner { return &safeFakeTxRunner{} }
 
 func (f *safeFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	state := newStagedTxState()
+	state := newStagedTxState(ctx)
 	txCtx := context.WithValue(ctx, stagedTxKey{}, state)
 	txCtx, installed := persistence.WithAfterCommitRegistry(txCtx)
 	mark := persistence.AfterCommitMark(txCtx)
@@ -206,8 +213,8 @@ func (s *stagedJournal) Append(
 		stagedInstance := instanceID
 		stagedLease := leaseID
 		stagedEvent := event
-		state.addAppend(func() error {
-			_, err := inner.Append(context.Background(), stagedInstance, stagedLease, stagedEvent)
+		state.addAppend(func(applyCtx context.Context) error {
+			_, err := inner.Append(applyCtx, stagedInstance, stagedLease, stagedEvent)
 			return err
 		})
 		// Coordinator discards the version return; return 0 deterministically.

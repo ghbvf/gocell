@@ -438,10 +438,16 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	}
 	newState, runErr := safeRun(runCtx, nextStep.Run, &ci.Instance, prevState)
 	runCancel()
-	// If the step-level context expired (deadline fired) while the parent ctx
-	// is still valid, treat the outcome as a saga timeout. This covers both:
-	//   (a) step succeeded but ctx.Err() fired (tight race) → runErr == nil
-	//   (b) step returned ctx.Err() directly → runErr != nil but due to deadline
+	// If the derived deadline ctx fired (def.Timeout or step.Timeout exceeded)
+	// while the parent ctx is still valid, treat the outcome as a saga timeout.
+	// Two paths reach here:
+	//   (a) step returned nil despite its ctx being canceled (non-cooperative
+	//       step that ignored ctx.Done()) → runErr == nil
+	//   (b) step observed ctx.Err() and returned an error derived from it →
+	//       runErr != nil but the cause is the derived deadline, not a domain
+	//       failure
+	// Either way, mark Expired (not Failed). Use the parent ctx for markTerminal
+	// so the journal write is not pre-canceled by the deadline that just fired.
 	if runCtx.Err() != nil && ctx.Err() == nil {
 		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusExpired)
 	}
