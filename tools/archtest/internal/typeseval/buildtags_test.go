@@ -17,36 +17,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// repoSkipTagAllowlist names project-internal tags that the coverage
-// self-check knows about but that are NOT propagated into LoadPackages
-// (KnownNonDefaultTags) and are NOT implicit toolchain defaults. They
-// gate non-source-controlled content (codegen output) or are intentional
-// skip markers; archtest always scans the default variant.
+// repoSkipTagRule constrains WHERE an allowlisted skip-tag may legitimately
+// appear. The coverage self-check exempts the tag from the FlatNonDefaultTags()
+// requirement ONLY for build directives whose repo-relative path satisfies
+// allowPath; any occurrence outside that subtree falls through to the
+// fail-closed unknown list.
 //
-// Tags that the Go toolchain sets implicitly (GOOS/GOARCH/cgo/unix/gc/go1.X)
-// are no longer listed here — they are provided by BuildContextPredicate()
-// which sources them from build.Default.ReleaseTags + hardcoded syslist,
-// ensuring toolchain upgrades automatically propagate without hand-edits.
-var repoSkipTagAllowlist = map[string]bool{
-	// Synthetic always-excluded marker — no file in any real build set uses this.
-	"never": true,
-	// catalog_gen — build-mode marker for codegen output. The active variant
-	// in source control is cmd/corebundle/catalog_gen_stub.go gated on
-	// //go:build !catalog_gen. The generated catalog_gen.go counterpart is
-	// .gitignore'd and only built in CI under -tags=catalog_gen. archtest
-	// scans the source-of-truth stub, so catalog_gen must NOT be propagated
-	// into KnownNonDefaultTags() (doing so causes LoadPackages to attempt
-	// loading the absent generated file → undefined symbol on clean tree).
-	"catalog_gen": true,
-	// archtest_fixture — build-mode marker for archtest RED/GREEN fixtures
-	// (internal/*fixture*/, testdata/*_fixtures/, and the in-package
-	// passfunnel_inpkg_redfixture.go). It must NOT be propagated into
-	// KnownNonDefaultTags() (#944): the fixture tag is fixture-only, loaded
-	// exclusively via archtest.RunTypedFixture (or the framework-exempt
-	// SharedResolver calls in the funnel self-tests), never via a generic
-	// FlatNonDefaultTags() union scan. Recognizing it here keeps the coverage
-	// self-test fail-closed without reopening the FlatNonDefaultTags bypass.
-	"archtest_fixture": true,
+// Without this path binding a global by-name skip would let a production file
+// carry e.g. //go:build archtest_fixture and become a silent archtest blind
+// spot — default build excludes it, no rule loads it (the tag is absent from
+// FlatNonDefaultTags), and the coverage self-test would skip it. That is the
+// exact fail-open this self-test exists to deny (#944 F1). Mirrors x/tools
+// analysistest's dir/testdata isolation and the project's own RunTypedFixture
+// path-boundary funnel: a fixture-only / build-mode tag is bound to its
+// subtree, never globally whitelisted by name.
+type repoSkipTagRule struct {
+	// allowPath reports whether a repo-relative file path is a sanctioned
+	// location for this tag. underDir(prefix) binds to a subtree; the synthetic
+	// "never" marker uses an always-false predicate so any real occurrence fails.
+	allowPath func(rel string) bool
+}
+
+// underDir returns an allowPath predicate matching files under the given
+// slash-normalized repo-relative directory prefix.
+func underDir(prefix string) func(string) bool {
+	return func(rel string) bool {
+		return strings.HasPrefix(filepath.ToSlash(rel), prefix)
+	}
+}
+
+// repoSkipTagAllowlist names project-internal tags the coverage self-check
+// knows about but that are NOT propagated into LoadPackages (KnownNonDefaultTags)
+// and are NOT implicit toolchain defaults — each is bound to the subtree where
+// it may legitimately appear (see repoSkipTagRule). Tags the Go toolchain sets
+// implicitly (GOOS/GOARCH/cgo/unix/gc/go1.X) are not listed; BuildContextPredicate()
+// sources them from build.Default.ReleaseTags + syslist so toolchain upgrades
+// propagate without hand-edits.
+var repoSkipTagAllowlist = map[string]repoSkipTagRule{
+	// Synthetic always-excluded marker — no file in any real build set uses
+	// this. Bound to an always-false predicate: any real occurrence is a finding.
+	"never": {allowPath: func(string) bool { return false }},
+	// catalog_gen — build-mode marker for codegen output. The active variant in
+	// source control is cmd/corebundle/catalog_gen_stub.go gated on
+	// //go:build !catalog_gen; the generated catalog_gen.go counterpart is
+	// .gitignore'd and only built in CI under -tags=catalog_gen. Must NOT enter
+	// KnownNonDefaultTags() (LoadPackages would try to load the absent generated
+	// file → undefined symbol on a clean tree). Bound to cmd/corebundle/.
+	"catalog_gen": {allowPath: underDir("cmd/corebundle/")},
+	// archtest_fixture — build-mode marker for archtest RED/GREEN fixtures. Must
+	// NOT enter KnownNonDefaultTags() (#944): a business RunTyped(Tags:
+	// FlatNonDefaultTags()) scan would otherwise load fixture-tagged code,
+	// bypassing the RunTypedFixture funnel. The only sanctioned loader is
+	// archtest.RunTypedFixture (+ framework-exempt SharedResolver self-tests).
+	// Bound to tools/archtest/ so it cannot silently disable coverage elsewhere.
+	"archtest_fixture": {allowPath: underDir("tools/archtest/")},
+}
+
+// classifySkipTag reports whether tag is an allowlisted skip-tag, and if so
+// which of its occurrence paths fall outside the tag's sanctioned subtree.
+// A tag is legitimately skipped only when allowlisted AND offending is empty.
+func classifySkipTag(tag string, paths []string) (allowlisted bool, offending []string) {
+	rule, ok := repoSkipTagAllowlist[tag]
+	if !ok {
+		return false, nil
+	}
+	for _, p := range paths {
+		if !rule.allowPath(p) {
+			offending = append(offending, p)
+		}
+	}
+	sort.Strings(offending)
+	return true, offending
 }
 
 // isGoVersionTag matches tags like "go1.18", "go1.21", etc.
@@ -135,7 +176,16 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 	defaultPred := BuildContextPredicate()
 	var unknown []string
 	for tag, entry := range seen {
-		if known[tag] || defaultPred(tag) || repoSkipTagAllowlist[tag] || isGoVersionTag(tag) {
+		if known[tag] || defaultPred(tag) || isGoVersionTag(tag) {
+			continue
+		}
+		if allowlisted, offending := classifySkipTag(tag, entry.paths); allowlisted {
+			if len(offending) == 0 {
+				continue // every occurrence is within the tag's sanctioned subtree
+			}
+			unknown = append(unknown, fmt.Sprintf(
+				"%q (allowlisted skip-tag found outside its sanctioned subtree at %s)",
+				tag, strings.Join(offending, ", ")))
 			continue
 		}
 		example := entry.paths[0]
@@ -150,6 +200,82 @@ func TestKnownNonDefaultTagsCoverage(t *testing.T) {
 			"rules that iterate tag-sets (svctoken_caller_cell, test_time_literal, "+
 			"etc.) load the gated files instead of silently skipping them.",
 		unknown)
+}
+
+// TestRepoSkipTagAllowlist_PathScoped is the reproduction + regression test for
+// #944 finding F1: an allowlisted skip-tag is exempt from the
+// FlatNonDefaultTags() coverage requirement ONLY within its sanctioned subtree.
+// Before path scoping, repoSkipTagAllowlist was a global map[string]bool, so a
+// production file carrying //go:build archtest_fixture anywhere would be
+// silently skipped (fail-open). classifySkipTag binds each tag to a subtree;
+// the kernel/cells cases below would NOT have been flagged under the old global
+// allowlist (RED), and are flagged now (GREEN).
+func TestRepoSkipTagAllowlist_PathScoped(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		tag           string
+		paths         []string
+		wantAllowed   bool
+		wantOffending []string
+	}{
+		{
+			name:        "archtest_fixture within tools/archtest is exempt",
+			tag:         "archtest_fixture",
+			paths:       []string{"tools/archtest/internal/foofixture/red.go", "tools/archtest/fixture.go"},
+			wantAllowed: true,
+		},
+		{
+			name:          "archtest_fixture on a production file is flagged",
+			tag:           "archtest_fixture",
+			paths:         []string{"kernel/foo.go"},
+			wantAllowed:   true,
+			wantOffending: []string{"kernel/foo.go"},
+		},
+		{
+			name:          "archtest_fixture partially out of scope flags only the offender",
+			tag:           "archtest_fixture",
+			paths:         []string{"tools/archtest/fixture.go", "cells/accesscore/x.go"},
+			wantAllowed:   true,
+			wantOffending: []string{"cells/accesscore/x.go"},
+		},
+		{
+			name:        "catalog_gen within cmd/corebundle is exempt",
+			tag:         "catalog_gen",
+			paths:       []string{"cmd/corebundle/catalog_gen_stub.go"},
+			wantAllowed: true,
+		},
+		{
+			name:          "catalog_gen elsewhere is flagged",
+			tag:           "catalog_gen",
+			paths:         []string{"cells/configcore/x.go"},
+			wantAllowed:   true,
+			wantOffending: []string{"cells/configcore/x.go"},
+		},
+		{
+			name:          "never is flagged wherever it appears",
+			tag:           "never",
+			paths:         []string{"tools/archtest/x.go"},
+			wantAllowed:   true,
+			wantOffending: []string{"tools/archtest/x.go"},
+		},
+		{
+			name:        "unlisted tag is not allowlisted",
+			tag:         "integration",
+			paths:       []string{"runtime/x.go"},
+			wantAllowed: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			allowlisted, offending := classifySkipTag(tc.tag, tc.paths)
+			require.Equal(t, tc.wantAllowed, allowlisted, "allowlisted")
+			require.Equal(t, tc.wantOffending, offending, "offending paths")
+		})
+	}
 }
 
 // buildEvalPredicate constructs the predicate used in the dual-eval logic for
