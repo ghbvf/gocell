@@ -149,39 +149,60 @@ virtual `CELL-REPO-READYZ-PROBE-01` N1/N2 references in the original ADR text):
 
 ## AI-robust Rating
 
-### Funnel 双向锁评级 (per `ai-robust.md` §"Funnel 双向锁评级")
+This ADR ships **two independent enforcement mechanisms** with different governance
+classifications. Conflating them was the original ADR's error; they are separated here.
 
-| Dimension | Grade | Evidence |
-|-----------|-------|----------|
-| **Downstream Hard** — only cellgen `RegisterRepoReady` may register a repo probe for a cell | **Hard** (codegen funnel + typed interface + HEALTHZ-TYPED-REGISTER-01) | Three interlocking carriers: (1) cellgen `healthz_gen.go` is the only file that may call `reg.Healthz()` in cells/ — enforced by `HEALTHZ-TYPED-REGISTER-01`; (2) `RegisterRepoReady(reg, p healthz.RepoProber)` typed parameter — anonymous duck-type bypass fails to compile; (3) `HEALTHZ-WRITE-01` A2 caller-identity allowlist locks `healthz.Aggregator.Register` callsites to a closed set that includes only `cells/<cell>/healthz_gen.go` (and explicitly listed runtime/bootstrap paths). Any bypass — bare `reg.Healthz()` call in hand-written cell code, anonymous interface literal, wrong file — fails CI or compiler. |
-| **Upstream Medium (conformance auto-join)** — every `healthz.RepoProber` implementation must be exercised by `RunRepoReadinessConformance` | **Medium** (archtest `CELL-REPO-READYZ-PROBE-01` conformance-enrollment backstop) | Archtest `CELL-REPO-READYZ-PROBE-01` (`tools/archtest/cell_repo_readyz_probe_test.go`) uses `types.Implements` to scan production source (cells/ + adapters/ + runtime/ + examples/) for concrete types that satisfy `healthz.RepoProber`, then cross-checks _test.go files for `celltest.RunRepoReadinessConformance` call sites.  A new implementation that omits conformance wiring fails archtest at CI time — not at compile time.  **Medium 天花板**: Go cannot require a test to exist at compile time; this is the enforcement ceiling for a correctness-presence property.  See sibling pattern `USERREPO-CONFORMANCE-ENROLLMENT-01` for the same Medium ceiling reasoning.  kernel/ implementations (e.g., `kernel/saga.MemJournal`, `kernel/command.InMemQueue`) are **architecturally excluded**: kernel/ cannot import `kernel/cell/celltest` (CELLTEST-B layer invariant); both are mem no-op stores whose differentiated failure domain is covered by their PG siblings in adapters/postgres.  examples/ implementations ARE in scope and must enroll. |
+### Mechanism 1 — Registration funnel (governed by `ai-robust.md` §"Funnel 双向锁评级")
 
-**Combined posture**: Hard downstream + Medium upstream.  Per charter: "允许 Medium 上游 + Hard 下游的过渡形态，但必须同步登记 backlog 显式 Hard 化任务."
+`RegisterRepoReady` is a genuine funnel ("集合内必须经过" — every repo-probe registration must
+pass through it):
 
-**Backlog resolution**: Backlog item `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) tracked an
-upgrade to Hard upstream (sealed interface or codegen marker forcing conformance wiring at
-compile time).  Two corrections of the historical record:
+| Direction | Grade | Carrier |
+|-----------|-------|---------|
+| **Downstream** | **Hard** | (1) cellgen `healthz_gen.go` is the only file allowed to call `reg.Healthz()` in cells/ — `HEALTHZ-TYPED-REGISTER-01`; (2) `RegisterRepoReady(reg, p healthz.RepoProber)` typed parameter — anonymous duck-type bypass fails to compile; (3) `HEALTHZ-WRITE-01` A2 caller-identity allowlist locks `healthz.Aggregator.Register` callsites to a closed set. |
+| **Upstream** | **Medium** (caller allowlist) → Hard *tracked* | `HEALTHZ-WRITE-01` A2 is an archtest caller allowlist, not a type-system seal. Per §"Funnel 双向锁评级", this Medium-upstream + Hard-downstream transitional form has its explicit Hard-ization task tracked by the open `HEALTHZ-HOLDER-SEAL-01` (seal the `Aggregator` interface, cap-13 §13.1). |
 
-- The downstream form-uniqueness this ADR originally attributed to a standalone
-  `CELL-REPO-READYZ-PROBE-01` N1/N2 archtest **was never implemented as such** — no archtest
-  by that ID existed in `tools/`.  Downstream Hard is, and always was, carried by
-  `HEALTHZ-TYPED-REGISTER-01` + the cellgen funnel + the typed `RepoProber` parameter (see
-  the Funnel table above).  PR #886 (M1-OBSERVED) changed only the probe *names*, not the
-  archtest topology.
-- The upstream conformance-enrollment archtest `CELL-REPO-READYZ-PROBE-01`
-  (`tools/archtest/cell_repo_readyz_probe_test.go`) is **newly built in this PR** — it did not
-  exist before, so upstream was effectively unenforced (not Medium) prior to this PR.
+This is the funnel the charter §"Funnel 双向锁评级" governs, and its Medium-upstream tracking
+obligation is discharged by the standing `HEALTHZ-HOLDER-SEAL-01` issue.
 
-The upstream Hard upgrade is **type-theoretically unreachable**: Go cannot make "a test must
-exist" a compile-time property.  This is a property ceiling, not a missing mechanism — there
-is **no upgrade path** for it.  The Medium ceiling is therefore permanent, mirroring the
-sibling `USERREPO-CONFORMANCE-ENROLLMENT-01`.  Backlog item
-`REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) is **closed** on this basis.
+### Mechanism 2 — Conformance-enrollment backstop (`ai-robust.md` §"Funnel 双向锁评级" does **not** apply)
 
-> `HEALTHZ-HOLDER-SEAL-01` (sealing the `Aggregator` interface, cap-13 §13.1) is an
-> **orthogonal, downstream-axis** task: it would upgrade the `HEALTHZ-WRITE-01` A2
-> caller-allowlist row (Medium) to Hard.  It does **not** bear on the upstream
-> conformance-test-existence property of this ADR and is not a successor to #699.
+`CELL-REPO-READYZ-PROBE-01` is a **test-existence backstop**, *not* the upstream lock of the
+registration funnel. It enforces a categorically different property — "a behavioral conformance
+test must exist for every concrete `healthz.RepoProber` implementation" — which is not a
+"集合内必须经过" constraint over a method call. The §"Funnel 双向锁评级" clause (which governs a
+caller-allowlist transitional Medium with a sealed-interface Hard upgrade path) therefore does
+not classify this mechanism, and no funnel Hard-ization task is owed by it.
+
+| Property | Grade | Carrier |
+|----------|-------|---------|
+| Harness behavioral correctness (DROP TABLE → non-nil) | **Hard** (behavioral max) | `RunRepoReadinessConformance` scenario 2 — a no-op `return nil` cannot satisfy it. |
+| Per-impl test existence (every concrete impl is exercised) | **Medium** (type-theoretic ceiling) | `CELL-REPO-READYZ-PROBE-01`: `types.Implements` scan + per-implementation resolution of each conformance call's prober argument (cells/ + adapters/ + runtime/ + examples/). Go cannot require a test to exist at compile time, so Medium is the **ceiling by construction**, not a transitional rung. The sibling `USERREPO-CONFORMANCE-ENROLLMENT-01` is the established precedent for this backstop shape. |
+
+**kernel/ scope exclusion**: `kernel/saga.MemJournal` and `kernel/command.InMemQueue` implement
+`healthz.RepoProber` but are out of scan scope — `kernel/**` cannot import `kernel/cell/celltest`
+(`CELLTEST-IMPORT-BOUNDARY-01` sub-rule CELLTEST-B), a layer invariant, not a deferred task. Both
+are mem no-ops; their differentiated failure domain is carried by PG siblings in adapters/postgres.
+examples/ implementations ARE in scope and enroll.
+
+### Historical-record corrections
+
+- The downstream form-uniqueness the original ADR attributed to a standalone
+  `CELL-REPO-READYZ-PROBE-01` N1/N2 archtest **was never implemented as such** — no archtest by
+  that ID existed in `tools/`. Downstream Hard is, and always was, carried by Mechanism 1's three
+  carriers. PR #886 (M1-OBSERVED) changed only probe *names*, not archtest topology.
+- The conformance-enrollment archtest `CELL-REPO-READYZ-PROBE-01` is **newly built in this PR** —
+  it did not exist before, so the backstop was unenforced prior to this PR.
+
+### #699 resolution
+
+`REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) was filed while this mechanism was mis-framed as a
+funnel upstream lock. Under the corrected classification (Mechanism 2 — a test-existence backstop,
+Hard at the behavioral layer, Medium-by-construction at the existence layer), the §"Funnel 双向锁
+评级" Hard-ization obligation is not owed by this mechanism, and the registration funnel's own
+upstream Hard-ization continues to be tracked separately by `HEALTHZ-HOLDER-SEAL-01`. #699 is
+resolved as **built**: the backstop now exists and is CI-enforced, matching the
+`USERREPO-CONFORMANCE-ENROLLMENT-01` precedent.
 
 ### Full AI-robust table
 
@@ -194,13 +215,7 @@ sibling `USERREPO-CONFORMANCE-ENROLLMENT-01`.  Backlog item
 | `RunRepoReadinessConformance` real-failure harness | Integration test + real PG DROP TABLE | **Hard** (behavioral max) | Trivial `return nil` implementation satisfying typed funnel but not detecting schema drift | Cannot be satisfied by no-op; behavioral Hard is the ceiling for correctness properties |
 | `CELL-REPO-READYZ-PROBE-01` conformance-enrollment archtest (cells/+adapters/+runtime/+examples/ scope; kernel/ excluded per CELLTEST-B) | `types.Implements` + test-corpus scan in `tools/archtest/cell_repo_readyz_probe_test.go` | **Medium** (archtest backstop) | New `healthz.RepoProber` implementation missing `RunRepoReadinessConformance` wiring | Built in this PR; Medium ceiling permanent (Go cannot require test existence at compile time); mirrors `USERREPO-CONFORMANCE-ENROLLMENT-01` |
 
-**Scope note on kernel/ exclusion**: `kernel/saga.MemJournal` and `kernel/command.InMemQueue`
-implement `healthz.RepoProber` but are architecturally excluded from `CELL-REPO-READYZ-PROBE-01`
-scan scope.  The exclusion is not a deferred task — it is a layer invariant:
-`kernel/**` cannot import `kernel/cell/celltest` (`CELLTEST-IMPORT-BOUNDARY-01` sub-rule CELLTEST-B), so conformance wiring is
-structurally impossible.  Both are mem no-op implementations (always-ready); their
-differentiated failure domain is carried by PG siblings in adapters/postgres, which ARE
-in scope and enrolled.
+(kernel/ scope exclusion is documented once under Mechanism 2 above.)
 
 **AI-robust table amendment re-evaluation** (required per ai-robust.md §"ADR amendment 落地必查"):
 
@@ -211,8 +226,8 @@ This amendment rebuilds the picture:
 | Row | Before this PR | After this PR |
 |-----|---------------|--------------|
 | Downstream registration gate | ❌ Virtual N1/N2 claimed Hard | ✅ Hard — HEALTHZ-TYPED-REGISTER-01 + cellgen + typed param |
-| Upstream conformance-enrollment | ❌ Virtual P1 claimed Medium | ✅ Medium — CELL-REPO-READYZ-PROBE-01 built this PR |
-| Backlog Hard-upgrade task | ⚠️ REPO-READYZ-UPSTREAM-FUNNEL-HARD-01 (#699) open | ✅ Closed — upstream Hard type-theoretically unreachable (no upgrade path; permanent Medium ceiling). HEALTHZ-HOLDER-SEAL-01 is an orthogonal downstream-axis task, not a successor. |
+| Conformance-enrollment backstop | ❌ Virtual P1 claimed to exist | ✅ Medium (test-existence ceiling) — CELL-REPO-READYZ-PROBE-01 built this PR |
+| #699 disposition | ⚠️ Open, mis-framed as funnel-upstream Hard-upgrade | ✅ Resolved as built — reclassified as a test-existence backstop (Mechanism 2); §"Funnel 双向锁评级" does not classify it. Registration-funnel upstream Hard-ization stays tracked by HEALTHZ-HOLDER-SEAL-01. |
 
 ### AI-robust honest caveats
 

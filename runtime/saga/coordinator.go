@@ -719,7 +719,8 @@ func stepCompletedTopic(defID idutil.SafeID) string {
 //
 // For errcode.Error values, only the const-literal Message is used to avoid
 // leaking runtime PII that may appear in InternalMessage or the Cause chain.
-// Non-errcode errors fall back to err.Error() (existing behavior).
+// Non-errcode errors are redacted via pkg/redaction.RedactString (masking
+// key=value secrets / DSN / token) before truncation.
 func failurePayload(err error) []byte {
 	const maxReason = 256
 	var ec *errcode.Error
