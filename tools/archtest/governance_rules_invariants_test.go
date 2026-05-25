@@ -3,6 +3,7 @@
 //   - INVARIANT: GOVERNANCE-RULES-REGISTRATION-GUARD-01
 //   - INVARIANT: GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01
 //   - INVARIANT: GOVERNANCE-RULE-ERROR-FIX-FIELD-01
+//   - INVARIANT: GOVERNANCE-RULE-CODE-DETECT-BINDING-01
 //
 // G-13 elevates governance rule registration from a hand-edited slice to an
 // archtest-guarded contract. The three invariants together catch:
@@ -374,9 +375,22 @@ func extractDetectMethodName(expr ast.Expr, relPath string, fset *token.FileSet)
 		return msg, false, true
 	}
 
-	// Case 2: FuncLit — VERIFY-06 closure pattern; skip.
-	if _, ok := expr.(*ast.FuncLit); ok {
-		return "", false, false
+	// Case 2: FuncLit — only the VERIFY-06 closure pattern is accepted.
+	// The accepted shape is exactly:
+	//   func(v *Validator) []ValidationResult { return v.validateVERIFY06(v.runCtx) }
+	// i.e. a FuncLit whose body is a single ReturnStmt whose one result is a
+	// CallExpr with Fun a SelectorExpr with Sel.Name == "validateVERIFY06".
+	// Any other FuncLit is fatal (fail-closed: prevents future anonymous closures
+	// from silently bypassing the orphan check).
+	if fl, ok := expr.(*ast.FuncLit); ok {
+		if isVERIFY06ClosureShape(fl) {
+			return "", false, false
+		}
+		pos := fset.Position(expr.Pos())
+		msg := "unexpected FuncLit Detect in allRules at " + relPath + ":" + strconv.Itoa(pos.Line) +
+			" — only the VERIFY-06 closure (return v.validateVERIFY06(v.runCtx)) may be a closure;" +
+			" everything else must be a (*Validator).method expression"
+		return msg, false, true
 	}
 
 	// Any other shape → fatal.
@@ -384,6 +398,34 @@ func extractDetectMethodName(expr ast.Expr, relPath string, fset *token.FileSet)
 	msg := "unrecognized Detect shape at " + relPath + ":" + strconv.Itoa(pos.Line) +
 		" — every allRules Detect must be (*Validator).methodName or a FuncLit closure"
 	return msg, false, true
+}
+
+// isVERIFY06ClosureShape reports whether fl is the exact VERIFY-06 FuncLit shape:
+//
+//	func(v *Validator) []ValidationResult { return v.validateVERIFY06(v.runCtx) }
+//
+// Structurally: a FuncLit whose body is a BlockStmt containing exactly one
+// statement, a ReturnStmt whose single result is a CallExpr whose Fun is a
+// SelectorExpr with Sel.Name == "validateVERIFY06". Argument count and types
+// are not checked (avoid over-specifying the ctx argument expression), but the
+// single-return shape and the callee name are pinned.
+func isVERIFY06ClosureShape(fl *ast.FuncLit) bool {
+	if fl.Body == nil || len(fl.Body.List) != 1 {
+		return false
+	}
+	ret, ok := fl.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return false
+	}
+	call, ok := ret.Results[0].(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil {
+		return false
+	}
+	return sel.Sel.Name == "validateVERIFY06"
 }
 
 // methodExprValidatorName returns the method name if expr is the structural
@@ -1312,6 +1354,449 @@ func TestFindTypesPackageByPath(t *testing.T) {
 		got := findTypesPackageByPath(nil, governancePkgPath)
 		assert.Nil(t, got, "findTypesPackageByPath must return nil safely for nil input")
 	})
+}
+
+// TestGovernanceRuleCodeDetectBinding verifies INVARIANT:
+// GOVERNANCE-RULE-CODE-DETECT-BINDING-01.
+//
+// For every entry in kernel/governance allRules, the Rule.Code value must
+// appear as the first argument of at least one newError / newWarning /
+// newScopedError / newErrorAt call reachable from the entry's Detect method
+// (transitively following same-receiver *Validator method calls via BFS).
+//
+// This closes the gap left by TestAllRulesMatchGolden: a swapped pair like
+//
+//	{Code: codeREF01, Detect: (*Validator).validateREF02}
+//
+// compiles (method expressions are compiler-checked) and passes the set+
+// uniqueness test when two codes are swapped with each other, yet mis-binds
+// Phase / Metric to the wrong rule body.
+//
+// AI-robust grading: Medium (type-aware archtest AST walk). Hard path does
+// not exist — Rule.Code is structurally separate from the detect body's
+// newError argument; no type-system mechanism can enforce their equality at
+// compile time without merging the two fields into a single codegen funnel
+// (a larger refactor tracked separately).
+//
+// Blind-spot: the transitive walk follows same-receiver *Validator method
+// calls only (v.someHelper(...) style SelectorExpr). A rule that emits its
+// code exclusively through a package-level function (e.g. buildAlignmentFindings
+// for CH-04) would not be reached by this walk. In practice this does not
+// occur for CH-04 and similar cases because the *Validator method that
+// delegates to the package-level function (checkResponseAlignmentForContract)
+// also contains a direct newError call with the same code — so the code is
+// found anyway. The walk also doesn't follow function-value indirection.
+// Governance has no such paths; this is documented here as the declared
+// blind spot, not tracked as a Hard-upgrade issue (no low-cost Hard path
+// exists given the structural separation of Code and Detect).
+func TestGovernanceRuleCodeDetectBinding(t *testing.T) {
+	t.Run("production_source_all_bound", testBindingProductionSource)
+	t.Run("negative_fixture_mislabel_detected", testBindingNegativeFixture)
+}
+
+func testBindingProductionSource(t *testing.T) {
+	root := findModuleRoot(t)
+	pkg := loadGovernancePackage(t, root)
+
+	ruleCodeConsts := collectRuleCodeConsts(pkg)
+	require.NotEmpty(t, ruleCodeConsts, "rulecodes.go must declare at least one RuleCode const")
+
+	methodMap := buildValidatorMethodMap(pkg.files)
+	entries, fatal := extractAllRulesEntries(t, pkg)
+	if fatal != "" {
+		t.Fatal(fatal)
+	}
+
+	for _, entry := range entries {
+		entry := entry
+		t.Run(entry.codeValue+"_bound_to_"+entry.methodName, func(t *testing.T) {
+			t.Parallel()
+			assertCodeDetectBinding(t, entry, methodMap, ruleCodeConsts, pkg.info)
+		})
+	}
+}
+
+func testBindingNegativeFixture(t *testing.T) {
+	const fixturePattern = "./tools/archtest/testdata/governance_binding_check_fixtures/mislabeled_detect_red"
+
+	var fixtureGP *governancePackage
+
+	RunTyped(t, TypedOpts{Tests: false}, []string{fixturePattern},
+		func(p *Pass) []Diagnostic {
+			fixtureGP = &governancePackage{
+				scope:     p.Pkg.Scope(),
+				info:      p.TypesInfo,
+				fset:      p.Fset,
+				files:     p.Files,
+				fileRelFn: p.Rel,
+			}
+			return nil
+		})
+
+	require.NotNil(t, fixtureGP, "RunTyped must visit the fixture package")
+
+	// Collect RuleCode consts from the fixture package's own scope.
+	// The fixture defines its own RuleCode type, so we cannot use
+	// collectRuleCodeConsts (which filters by governancePkgPath).
+	fixtureRuleCodeConsts := collectRuleCodeConstsInScope(fixtureGP.scope)
+	require.NotEmpty(t, fixtureRuleCodeConsts, "fixture must declare at least one RuleCode const")
+
+	methodMap := buildValidatorMethodMap(fixtureGP.files)
+	entries, fatal := extractAllRulesEntries(t, fixtureGP)
+	require.Empty(t, fatal, "fixture must not trigger a fatal shape error")
+	require.Len(t, entries, 1, "fixture allRules must have exactly one entry")
+
+	entry := entries[0]
+	// codeB is registered but methodA emits codeA — mismatch expected.
+	emitted := collectEmittedCodes(entry.methodName, methodMap, fixtureRuleCodeConsts, fixtureGP.info)
+	assert.NotContains(t, emitted, entry.codeValue,
+		"fixture: entry Code %q must NOT be in emitted set %v — this is the mislabel the check must catch",
+		entry.codeValue, emitted)
+	assert.NotEmpty(t, emitted,
+		"fixture: methodA must emit at least one code (codeA) — confirms the walk is functioning")
+}
+
+// allRulesEntry holds the Code string value and Detect method name extracted
+// from a single Rule composite literal in allRules. For the VERIFY-06 closure,
+// methodName is "validateVERIFY06".
+type allRulesEntry struct {
+	codeValue  string // resolved string value of the Code RuleCode const
+	methodName string // name of the detect method
+}
+
+// extractAllRulesEntries parses each element of the allRules composite literal
+// in the governance package and returns one allRulesEntry per Rule element.
+//
+// For each element the Code: KeyValueExpr value must be an *ast.Ident resolving
+// (via info.Uses) to a *types.Const whose value can be extracted as a string.
+// The Detect: value is parsed by extractDetectMethodName; the VERIFY-06 closure
+// is represented as methodName "validateVERIFY06".
+//
+// Returns (nil, fatalMsg) when a fatal shape is encountered.
+func extractAllRulesEntries(t *testing.T, pkg *governancePackage) ([]allRulesEntry, string) {
+	t.Helper()
+
+	var entries []allRulesEntry
+	var fatal string
+
+	for _, file := range pkg.files {
+		if fatal != "" {
+			break
+		}
+		relPath := pkg.fileRel(file)
+		scanner.EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+			if fatal != "" || gd.Tok != token.VAR {
+				return
+			}
+			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+				if fatal != "" {
+					return
+				}
+				isAllRules := false
+				for _, nameIdent := range vs.Names {
+					if nameIdent.Name == "allRules" {
+						isAllRules = true
+						break
+					}
+				}
+				if !isAllRules || len(vs.Values) == 0 {
+					return
+				}
+				cl, ok := vs.Values[0].(*ast.CompositeLit)
+				if !ok {
+					return
+				}
+				for _, elt := range cl.Elts {
+					ruleLit, ok := elt.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					entry, entryFatal := parseRuleEntry(ruleLit, relPath, pkg)
+					if entryFatal != "" {
+						fatal = entryFatal
+						return
+					}
+					if entry != nil {
+						entries = append(entries, *entry)
+					}
+				}
+			})
+		})
+	}
+	return entries, fatal
+}
+
+// parseRuleEntry extracts the Code and Detect values from a single Rule
+// composite literal element of allRules.
+// Returns (nil, "") when the entry has no Code or Detect field (skip).
+// Returns (nil, fatalMsg) on a shape error.
+func parseRuleEntry(ruleLit *ast.CompositeLit, relPath string, pkg *governancePackage) (*allRulesEntry, string) {
+	var codeExpr ast.Expr
+	var detectExpr ast.Expr
+
+	scanner.EachInChildren[ast.KeyValueExpr](ruleLit, func(kv *ast.KeyValueExpr) {
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			return
+		}
+		switch key.Name {
+		case "Code":
+			codeExpr = kv.Value
+		case "Detect":
+			detectExpr = kv.Value
+		}
+	})
+
+	if codeExpr == nil || detectExpr == nil {
+		return nil, ""
+	}
+
+	// Resolve Code to its string value.
+	codeValue, ok := resolveRuleCodeValue(codeExpr, pkg.info)
+	if !ok {
+		pos := pkg.fset.Position(codeExpr.Pos())
+		return nil, "cannot resolve Code value at " + relPath + ":" + strconv.Itoa(pos.Line) +
+			" — Code must be an Ident referencing a RuleCode const"
+	}
+
+	// Resolve Detect to a method name.
+	methodName, found, isFatal := extractDetectMethodName(detectExpr, relPath, pkg.fset)
+	if isFatal {
+		return nil, methodName // methodName carries the fatal message
+	}
+	if !found {
+		// FuncLit VERIFY-06 closure: use the inner method name.
+		if fl, ok := detectExpr.(*ast.FuncLit); ok && isVERIFY06ClosureShape(fl) {
+			methodName = "validateVERIFY06"
+		} else {
+			return nil, ""
+		}
+	}
+
+	return &allRulesEntry{codeValue: codeValue, methodName: methodName}, ""
+}
+
+// resolveRuleCodeValue extracts the string value of a RuleCode const ident.
+// Returns ("", false) if the expression is not an Ident or doesn't resolve to
+// a string-kinded constant.
+func resolveRuleCodeValue(expr ast.Expr, info *types.Info) (string, bool) {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if v, ok := EvaluateConstString(info, ident); ok {
+		return v, true
+	}
+	return "", false
+}
+
+// buildValidatorMethodMap builds a map from method name to *ast.FuncDecl for
+// all methods with receiver *Validator (by name, not by type) in the given
+// AST files. The receiver name check is structural ("Validator") to match
+// both production and fixture packages.
+func buildValidatorMethodMap(files []*ast.File) map[string]*ast.FuncDecl {
+	out := make(map[string]*ast.FuncDecl)
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Name == nil || fd.Recv == nil || len(fd.Recv.List) == 0 {
+				continue
+			}
+			if !isPointerValidatorReceiver(fd.Recv.List[0]) {
+				continue
+			}
+			out[fd.Name.Name] = fd
+		}
+	}
+	return out
+}
+
+// isPointerValidatorReceiver reports whether field is a *Validator receiver.
+// Matches: *ast.StarExpr{X: *ast.Ident{Name: "Validator"}}.
+func isPointerValidatorReceiver(field *ast.Field) bool {
+	star, ok := field.Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := star.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "Validator"
+}
+
+// collectEmittedCodes performs a BFS over same-receiver *Validator method calls
+// starting from startMethod, collecting the string values of every RuleCode
+// const passed as the first argument to newError / newWarning / newScopedError /
+// newErrorAt within the reachable call graph.
+//
+// The BFS visits each method at most once (visited set prevents cycles).
+// Only calls where the method name is present in methodMap are followed;
+// package-level functions and non-Validator-method calls are not traversed.
+//
+// Returns an empty map when startMethod is not in methodMap (not found).
+func collectEmittedCodes(
+	startMethod string,
+	methodMap map[string]*ast.FuncDecl,
+	ruleCodeConsts map[*types.Const]struct{},
+	info *types.Info,
+) map[string]struct{} {
+	emitted := map[string]struct{}{}
+	visited := map[string]bool{}
+	queue := []string{startMethod}
+
+	for len(queue) > 0 {
+		methodName := queue[0]
+		queue = queue[1:]
+		if visited[methodName] {
+			continue
+		}
+		visited[methodName] = true
+
+		fd, ok := methodMap[methodName]
+		if !ok {
+			continue
+		}
+
+		// Walk the method body.
+		collectEmittedCodesInFunc(fd, methodMap, ruleCodeConsts, info, emitted, &queue)
+	}
+	return emitted
+}
+
+// collectEmittedCodesInFunc walks fd's body collecting emitted codes and
+// queuing new *Validator method calls for BFS expansion.
+func collectEmittedCodesInFunc(
+	fd *ast.FuncDecl,
+	methodMap map[string]*ast.FuncDecl,
+	ruleCodeConsts map[*types.Const]struct{},
+	info *types.Info,
+	emitted map[string]struct{},
+	queue *[]string,
+) {
+	if fd.Body == nil {
+		return
+	}
+	scanner.EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			// newErrorAt is a package-level Ident call.
+			if ident, ok := call.Fun.(*ast.Ident); ok {
+				if isGovernanceEmitterName(ident.Name) && len(call.Args) > 0 {
+					if v, resolved := resolveRuleCodeArg(call.Args[0], info, ruleCodeConsts); resolved {
+						emitted[v] = struct{}{}
+					}
+				}
+			}
+			return
+		}
+		if sel.Sel == nil {
+			return
+		}
+		callee := sel.Sel.Name
+		if isGovernanceEmitterName(callee) && len(call.Args) > 0 {
+			// Emitter call — collect its code arg.
+			if v, resolved := resolveRuleCodeArg(call.Args[0], info, ruleCodeConsts); resolved {
+				emitted[v] = struct{}{}
+			}
+			return
+		}
+		// Same-receiver method call — enqueue for BFS if in methodMap.
+		if _, inMap := methodMap[callee]; inMap {
+			*queue = append(*queue, callee)
+		}
+	})
+}
+
+// resolveRuleCodeArg resolves expr (the first argument of a governance emitter
+// call) to its RuleCode string value. Returns ("", false) when the expression
+// is not an Ident referencing a known RuleCode const.
+func resolveRuleCodeArg(expr ast.Expr, info *types.Info, ruleCodeConsts map[*types.Const]struct{}) (string, bool) {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	if info == nil {
+		return "", false
+	}
+	obj, ok := info.Uses[ident]
+	if !ok {
+		return "", false
+	}
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return "", false
+	}
+	// Check it is in the known RuleCode const set (when non-empty).
+	// For fixture packages the set may contain all RuleCode consts in scope.
+	if len(ruleCodeConsts) > 0 {
+		if _, found := ruleCodeConsts[c]; !found {
+			return "", false
+		}
+	}
+	v, ok := EvaluateConstString(info, ident)
+	return v, ok
+}
+
+// assertCodeDetectBinding asserts that entry.codeValue appears in the set of
+// RuleCode strings emitted by entry.methodName (transitively).
+func assertCodeDetectBinding(
+	t *testing.T,
+	entry allRulesEntry,
+	methodMap map[string]*ast.FuncDecl,
+	ruleCodeConsts map[*types.Const]struct{},
+	info *types.Info,
+) {
+	t.Helper()
+	emitted := collectEmittedCodes(entry.methodName, methodMap, ruleCodeConsts, info)
+	if len(emitted) == 0 {
+		t.Fatalf(
+			"allRules entry Code=%q Detect=%q: the detect method (and its transitive *Validator"+
+				" helper calls) emit NO RuleCode consts — either the walk is incomplete or the"+
+				" rule body is empty (both are bugs to surface)",
+			entry.codeValue, entry.methodName,
+		)
+	}
+	if _, ok := emitted[entry.codeValue]; !ok {
+		t.Fatalf(
+			"allRules entry Code=%q Detect=%q: entry Code not in emitted set %v"+
+				" — mislabeled entry: the detect method emits a different code",
+			entry.codeValue, entry.methodName, sortedStringSet(emitted),
+		)
+	}
+}
+
+// collectRuleCodeConstsInScope collects all *types.Const objects in scope
+// whose type's named-type name is "RuleCode", regardless of package path.
+// Used for fixture packages that define their own RuleCode type.
+func collectRuleCodeConstsInScope(scope *types.Scope) map[*types.Const]struct{} {
+	out := map[*types.Const]struct{}{}
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		c, ok := obj.(*types.Const)
+		if !ok {
+			continue
+		}
+		named, ok := c.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		if named.Obj().Name() != "RuleCode" {
+			continue
+		}
+		out[c] = struct{}{}
+	}
+	return out
+}
+
+// sortedStringSet returns the keys of a string set in sorted order.
+func sortedStringSet(s map[string]struct{}) []string {
+	out := make([]string, 0, len(s))
+	for k := range s {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // collectPackageStringConsts walks scope's names and returns a map from
