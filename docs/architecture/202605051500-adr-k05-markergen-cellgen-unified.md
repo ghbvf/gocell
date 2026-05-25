@@ -4,6 +4,44 @@
 - **Status**: Accepted (shipped via refactor/510-k05-markergen-merge)
 - **Supersedes**: roadmap K#05 PR-V1-CODEGEN-MARKER-MIGRATE 3-PR split plan (PR-A1 ✅ shipped 2026-05-04 commit `9ccef27a`; PR-A2 + PR-B merged into this single PR after deeper analysis — see "Decision 1" below)
 - **Related**: ADR `202605051300-adr-kernel-cellmeta-single-source.md` (K#05 PR-A1 type-layer)
+- **Amended**: 2026-05-25 (#856) — see "Amendment 2026-05-25 (#856)" below
+
+## Amendment 2026-05-25 (#856): subscribe wire inverted to slice.yaml single-source
+
+K#05 established "wire single source = marker" for all three marker kinds. Issue
+#856 **inverts the subscribe axis**: event subscriptions are now single-sourced
+in slice.yaml `contractUsages[role=subscribe]` (each carrying `handler` +
+optional `group`), and the `// +slice:subscribe` marker is **retired**. Routes
+and listeners are unchanged — they remain marker-sourced.
+
+What changed vs the original decisions below (these clauses are superseded for
+the subscribe axis only; they remain authoritative for `cell:listener` /
+`slice:route`):
+
+- **Decision 3** "closed set of **3** markers" → now **2** (`cell:listener`,
+  `slice:route`). `slice:subscribe` removed from markergen `knownMarkers`; a
+  leftover marker is an unknown-marker error.
+- **Decision 5** `// +slice:subscribe` syntax → removed. The same facts
+  (`topic` = contract id, `handler`, `group`) now live on the slice.yaml
+  subscribe CU; cellgen resolves the cell-struct field by "field pointer-type
+  package == sliceID" (replacing the marker's auto-derived `SliceField`).
+- **Decision 8** scaffold emits a `// +slice:subscribe:` stub → removed from
+  the event template.
+
+Threat re-eval (the K#05 anti-drift goal still holds):
+- Marker-vs-yaml drift for subscribe is now impossible — there is one source
+  (slice.yaml). cellgen reads it directly; no second wire source exists.
+- contract.yaml `endpoints.subscribers` (cell subscribers) is **derived** from
+  slice CUs (`EndpointsMeta.Subscribers` is `yaml:"-"`; KnownFields rejects a
+  hand-written `subscribers:` key); external-actor subscribers move to
+  `actorSubscribers:`. Governance ADV-06 (the old contract↔slice drift check)
+  is **deleted** — drift is structurally impossible. VERIFY-01 (verify.contract
+  test-closure) is retained; verify.contract subscribe entries stay hand-written
+  because they assert an executable consumer contract test (`gocell verify`),
+  which is not derivable.
+- Enforcement carriers: archtest `SUBSCRIBERS-DERIVED-FIELD-FROZEN-01` (Hard
+  reflect-lock on the `yaml:"-"` tag), `CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01`,
+  `SUBSCRIBE-MARKER-RETIRED-01`; markergen unknown-marker grammar error.
 
 ## Context
 
@@ -37,7 +75,7 @@ Saving: ~6h dev, ~5 archtest → 4 archtest, ~10 fewer files.
 
 `tools/codegen/markergen` adopts the **formal grammar** of `kubernetes-sigs/controller-tools pkg/markers/parse.go` (`splitMarker` at L751-L773; `// +<prefix>:<name>[:subname]=k=v[,k=v…]`) and the **error aggregation** pattern (`MaybeErrList` at `collect.go:L94-L106`). It does **not** adopt the `Registry` + `Definition` + `reflect.Type` 3-layer abstraction.
 
-Why: controller-tools is built for kubebuilder's plugin ecosystem with 50+ marker types registered dynamically. GoCell has a **closed set of 3 markers** (`cell:listener`, `slice:route`, `slice:subscribe`) that are forever co-located in the markergen package. A `switch markerName { case "cell:listener": parseListener(…) }` dispatch is ~50 LOC and lets every marker's required-field validation be hand-written next to the spec it produces. The Registry abstraction would be ~350 LOC for zero behavioral benefit at our scale.
+Why: controller-tools is built for kubebuilder's plugin ecosystem with 50+ marker types registered dynamically. GoCell has a **closed set of 3 markers** (`cell:listener`, `slice:route`, `slice:subscribe`) that are forever co-located in the markergen package. _(Amended #856: `slice:subscribe` retired → 2 markers; see Amendment above.)_ A `switch markerName { case "cell:listener": parseListener(…) }` dispatch is ~50 LOC and lets every marker's required-field validation be hand-written next to the spec it produces. The Registry abstraction would be ~350 LOC for zero behavioral benefit at our scale.
 
 Saving: ~350 LOC, ~4h W2 dev. Trade-off: adding a 4th marker type costs ~10 LOC of switch + parse function; if GoCell ever needs ~10+ marker types we can introduce Registry then. Per CLAUDE.md「规则不超前于代码库现状」.
 
@@ -62,7 +100,7 @@ Implementation: shipped in this PR — `CellMeta.Listeners`, `SliceMeta.RouteMou
 Fields and defaults:
 - `cell:listener`: `ref` required, `prefix` optional (empty = mount on root)
 - `slice:route`: `slice` required; `listener` defaults to `cell.PrimaryListener` (covers ~90% of single-listener cells); `subPath` optional (empty = direct attach to listener prefix); `method` optional (defaults to `RegisterRoutes`; alternative is `RegisterInternalRoutes` for devicecell internal routes); `HandlerField` auto-derived from the AST field name on which the marker sits
-- `slice:subscribe`: `slice`, `topic`, `handler`, `group` all required; `SliceField` auto-derived from the AST field name
+- `slice:subscribe`: _(retired by #856 — see Amendment above. Subscriptions are now declared on the slice.yaml subscribe CU: `topic` = contract id, plus `handler` + optional `group`; cellgen resolves the cell-struct field by "field pointer-type package == sliceID".)_
 
 Multiple markers on the same field are legal (e.g. devicecell `commandHandler` carries both a primary `RegisterRoutes` marker and an internal `RegisterInternalRoutes` marker).
 

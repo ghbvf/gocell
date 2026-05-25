@@ -87,7 +87,7 @@ sub-condition；txRunner nil guard 现在由 `gocell:"required"` tag 统一生�
 
 ### Cell 订阅注册（Registry builder 模式）
 
-Cell 在 `Init(ctx, reg)` 中通过 `reg.Subscribe(spec, handler, consumerGroup, cellID, opts...)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。
+Cell 通过 `reg.Subscribe(spec, handler, consumerGroup, cellID, opts...)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。该调用**由 cellgen 从 slice.yaml `contractUsages[role=subscribe]` 生成进 `cell_gen.go`**（下方代码是生成形态示意，不手写）。
 
 ```go
 func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
@@ -114,14 +114,27 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 > **不要**新增 `WithSubscriptionCellID(string)` option — 这会把 HARD 位置必填降级为 Soft 可选，由 `REGISTRY-SUBSCRIBE-CELLID-POSITIONAL-01` archtest 拒绝。详见 ADR `docs/architecture/202605111000-adr-subscription-cellid-mandatory.md`。
 
-**声明对齐约束**：`spec.ID` 必须同步声明在三处：
-1. slice.yaml `contractUsages` 含 `{contract: event.my.topic.v1, role: subscribe}` 条目
-2. contract.yaml `endpoints.subscribers` 含本 slice 所属 cell 的 ID
-3. slice.yaml `verify.contract` 含 `contract.event.my.topic.v1.subscribe`
+**单源派生**：订阅的唯一权威源是 slice.yaml `contractUsages[role=subscribe]`，每条携带 `handler`（消费 handler 方法名，必填）+ `group`（消费组，可选，缺省 = 本 cell ID）：
 
-前两项任一漂移由 `gocell validate` ADV-06 规则拦截（error 级，双向校验
-`endpoints.subscribers ↔ contractUsages[role=subscribe]`）。第三项
-`verify.contract` ↔ `contractUsages` 闭环由 VERIFY-01 拦截，与 ADV-06 互补。
+```yaml
+# slice.yaml
+contractUsages:
+  - contract: event.my.topic.v1
+    role: subscribe
+    handler: HandleEvent          # 必填
+    # group: my-subgroup          # 可选，缺省 = cellID
+verify:
+  contract:
+    - contract.event.my.topic.v1.subscribe   # 手写，见下
+```
+
+新增/扩展一个 consumer 只改 slice.yaml（上面）+ handler 本体；新建 slice 时另需在 cell.go 结构体声明 `*<sliceID>.Service`（或 `*<sliceID>.Consumer`）字段。codegen 从这些派生其余：
+
+- **`reg.Subscribe` 调用**：cellgen 从 contractUsages[subscribe] 生成进 `cell_gen.go`；handler 表达式 `c.<field>.<handler>` 的 `<field>` 由 cellgen 按「字段指针类型包名 == sliceID」在 cell.go 结构体解析（0/>1 匹配 fail-fast）。**不再有 `// +slice:subscribe` marker**——残留 marker 是 markergen unknown-marker 编译期错误。
+- **contract.yaml `endpoints.subscribers`**：派生字段（`EndpointsMeta.Subscribers` 为 `yaml:"-"`），parser 从所有订阅 slice 的 `belongsToCell` 计算；**禁止手写 `subscribers:`**（KnownFields 严格解码拒绝）。外部 actor 订阅者（无 slice、不可派生）写在 contract.yaml `actorSubscribers:`，与派生的 cell 集合并入 Subscribers。
+- **slice.yaml `verify.contract` 的 `contract.<id>.subscribe`**：**仍手写**——它断言「该订阅有可执行的 consumer contract 测试」（`gocell verify <slice>` 实跑），非纯冗余；无测试时用 waiver 记录已知缺口。由 VERIFY-01 守闭包。
+
+ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell 订阅者单源派生后漂移结构上不可能；VERIFY-01 保留。守卫见 archtest `SUBSCRIBERS-DERIVED-FIELD-FROZEN-01`（reflect 锁 `yaml:"-"`）/ `CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01` / `SUBSCRIBE-MARKER-RETIRED-01`。
 
 ## 死信路由
 
