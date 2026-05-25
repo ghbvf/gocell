@@ -58,7 +58,9 @@
 //	    keeps typed. No extra archtest beyond guard 2.
 //	(b) reflect-based construction (reflect.Value.Convert on the unexported
 //	    type) — unreachable from outside (type unnameable); in-package reflect is
-//	    the bug under investigation, code review is the backstop.
+//	    the bug under investigation, code review is the backstop. Soft (code
+//	    review) → Hard-upgrade path (in-package reflect-convert reverse archtest)
+//	    tracked in gh issue #999.
 //	(c) package-level GenDecl initializer `var _ = redactedErrorMsg("x")` —
 //	    guard 1 scans GenDecl subtrees, not just FuncDecl bodies.
 //	(d) alias conversion `type r = redactedErrorMsg; r(x)` — types.Unalias
@@ -69,7 +71,9 @@
 //	    string → redactedErrorMsg; isRedactedConversion only intercepts inflow
 //	    conversions TO the newtype. Outflow is safe by construction (the value
 //	    already passed through RedactString before being stored), so guard 1
-//	    deliberately does not flag it.
+//	    deliberately does not flag it. (Freezing the LogValue slog-key literals
+//	    {status,duration_ms,error_msg} is a separate enforcement gap tracked in
+//	    gh issue #998 — out of #947 scope.)
 //	(g) test-file `redactedErrorMsg(...)` literals — guard 1 loads with
 //	    RunTyped(Tests:false), so verbose_shape_test.go's white-box
 //	    redactedErrorMsg("") literals are out of scope by construction.
