@@ -12,6 +12,14 @@
 
 ## Amendment 2026-05-25 (#945): sealed lock-witness
 
+> **Superseded by #972 (next section).** The symbols described in this block —
+> `txlock.Held` / `Holds`, `memTxToken`, `WithTxContext`, `txHoldsLock` — were
+> replaced in #972 by `txlock.Lease` / `Live`, a directly ctx-carried lease (no
+> wrapper), and `inLiveTx`. This block records the #945 *forge-axis* step
+> (bool → un-forgeable witness); read it as history, not as the current design.
+> The live design is §"Amendment 2026-05-25 (#972)" + §Decisions (rewritten to
+> the lease model).
+
 The 238 design (D1 below, as rewritten) replaced the bool sentinel with a typed
 `*memTxToken{store, holdsLock bool}`. That made *out-of-package* forgery
 compile-impossible (Hard) but left the **in-package** "mint a holdsLock=true

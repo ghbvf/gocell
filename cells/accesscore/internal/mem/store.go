@@ -75,6 +75,9 @@
 // locking → the non-holder races the maps. This is the database/sql "*Tx must not
 // be used concurrently by multiple goroutines" boundary and is out of scope for
 // the lease, exactly as ErrTxDone does not make *sql.Tx concurrency-safe.
+// Operational rule: a goroutine spawned inside the closure MUST NOT use the inner
+// ctx to call repository methods — pass context.Background() (or hand results back
+// over a channel) so the goroutine takes its own per-call lock.
 //
 // MEM-STORE-RWMUTEX-READ-CONCURRENCY: store.mu could become sync.RWMutex so
 // outside-tx read methods take RLock (cf. client-go ThreadSafeStore).

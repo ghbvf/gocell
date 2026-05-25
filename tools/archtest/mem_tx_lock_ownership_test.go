@@ -81,6 +81,15 @@ package archtest
 //   - W2 field/method-name anchors ("inLiveTx", "Live", "memTxKey", "mu"): a
 //     rename breaks every call site to compile before archtest runs (build error),
 //     and the txlock.Lease seal is reflect-frozen by TestLeaseSealFrozen.
+//   - W2 type/source matchers are syntactic, not typed: isLeaseTypeExpr matches any
+//     `<pkg>.Lease` or bare `Lease` (NOT resolved to the txlock package via
+//     ResolvePackageRef), and isCtxValueMemTxKeyCall matches
+//     `<anyVar>.Value(memTxKey{})` (the receiver is not pinned to `ctx`). A foreign
+//     Lease type, or a non-ctx receiver calling `.Value(memTxKey{})`, would still
+//     satisfy bindsLeaseFromCtx. Accepted, not closed: package mem imports only
+//     txlock.Lease and has exactly one inLiveTx (canonical `ctx` receiver), and W2
+//     is a Medium regression anchor over the Hard seal — a syntactic match is
+//     sufficient here; tightening to ResolvePackageRef is optional future hardening.
 
 import (
 	"fmt"
@@ -471,7 +480,9 @@ type Store struct{ mu int }
 type memTxRunner struct{ s *Store }
 func (r memTxRunner) runLocked() {
 	direct(&r.s.mu)
-	go func() { nested(&r.s.mu) }()
+	go func() { nested(&r.s.mu) }()      // goroutine closure → excluded
+	g := func() { nestedLocal(&r.s.mu) } // local-assignment closure → excluded
+	g()
 }
 `
 	fset := token.NewFileSet()
@@ -489,11 +500,12 @@ func (r memTxRunner) runLocked() {
 	// Syntactic acquire predicate (no type info): exercises the traversal only.
 	synAcq := func(ce *ast.CallExpr) bool {
 		id, ok := ce.Fun.(*ast.Ident)
-		return ok && (id.Name == "direct" || id.Name == "nested")
+		return ok && (id.Name == "direct" || id.Name == "nested" || id.Name == "nestedLocal")
 	}
 	got := directBodyAcquireCalls(runLocked, synAcq)
 	require.Lenf(t, got, 1,
-		"directBodyAcquireCalls must exclude the nested-closure Acquire (got %d)", len(got))
+		"directBodyAcquireCalls must exclude BOTH the goroutine and local-assignment "+
+			"closure Acquires, keeping only the direct-body call (got %d)", len(got))
 	assert.True(t, isAcquireArgRecvStoreMu(got[0], "r"),
 		"the direct-body direct(&r.s.mu) must satisfy the &recv.s.mu arg pin")
 
