@@ -23,64 +23,8 @@ func (v *Validator) scopedFindings(code RuleCode) []ValidationResult {
 	return []ValidationResult{v.newScopedError(code, IssueForbidden, "project", "f", "m", "fix")}
 }
 
-// TestResolveNext covers the per-finding disposition derivation: severity
-// default (error→block, warning→advisory) with an explicit override winning.
-func TestResolveNext(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, NextBlock, resolveNext("", SeverityError))
-	assert.Equal(t, NextAdvisory, resolveNext("", SeverityWarning))
-	assert.Equal(t, NextAutofix, resolveNext(NextAutofix, SeverityError))
-	assert.Equal(t, NextSuggest, resolveNext(NextSuggest, SeverityWarning))
-}
-
-// TestRuleStamp covers the engine's only post-processing: deriving each
-// finding's Next from its severity (Rule.Next overriding) and passing through
-// any per-finding Metric set by the Detect function.
-func TestRuleStamp(t *testing.T) {
-	t.Parallel()
-	v := newTestValidator(t)
-	base := Rule{Code: codeADV05, Phase: PhaseBase}
-
-	t.Run("Next derived per finding from severity", func(t *testing.T) {
-		got := base.stamp(v, []ValidationResult{
-			v.newScopedError(codeADV05, IssueForbidden, "project", "f", "m", "fix"), // error
-			v.newWarning(codeADV05, IssueForbidden, "", "f", "m", "fix"),            // warning
-		})
-		require.Len(t, got, 2)
-		assert.Equal(t, NextBlock, got[0].Next)    // error → block
-		assert.Equal(t, NextAdvisory, got[1].Next) // warning → advisory
-		assert.Nil(t, got[0].Metric)
-	})
-	t.Run("explicit Next overrides the severity default", func(t *testing.T) {
-		r := Rule{Code: codeADV05, Next: NextSuggest}
-		got := r.stamp(v, v.scopedFindings(codeADV05)) // error finding
-		require.Len(t, got, 1)
-		assert.Equal(t, NextSuggest, got[0].Next) // override beats the block default
-	})
-	t.Run("stamp preserves detect-set per-finding Metric unchanged", func(t *testing.T) {
-		// Detect sets Metric on specific findings; stamp() must pass it through.
-		val := 42.0
-		findings := []ValidationResult{
-			v.newScopedError(codeADV05, IssueForbidden, "project", "f", "m", "fix"),
-		}
-		findings[0].Metric = &val
-		got := base.stamp(v, findings)
-		require.Len(t, got, 1)
-		require.NotNil(t, got[0].Metric, "stamp must preserve detect-set Metric")
-		assert.Equal(t, 42.0, *got[0].Metric, "Metric value must be unchanged after stamp")
-	})
-	t.Run("stamp does not set Metric when detect left it nil", func(t *testing.T) {
-		got := base.stamp(v, v.scopedFindings(codeADV05))
-		require.Len(t, got, 1)
-		assert.Nil(t, got[0].Metric, "stamp must not inject a Metric when detect left it nil")
-	})
-	t.Run("empty findings → empty", func(t *testing.T) {
-		assert.Empty(t, base.stamp(v, nil))
-	})
-}
-
 // TestRunCollectsFindings verifies the single execution loop accumulates every
-// rule's findings in order and stamps Next.
+// rule's findings in order.
 func TestRunCollectsFindings(t *testing.T) {
 	t.Parallel()
 	v := newTestValidator(t)
@@ -100,9 +44,9 @@ func TestRunCollectsFindings(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, codeREF01, got[0].Code)
-	assert.Equal(t, NextBlock, got[0].Next) // error finding → block
+	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, codeADV01, got[1].Code)
-	assert.Equal(t, NextAdvisory, got[1].Next) // warning finding → advisory
+	assert.Equal(t, SeverityWarning, got[1].Severity)
 }
 
 // TestRunFailFast verifies failFast bails at the first SeverityError but a

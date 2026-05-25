@@ -314,23 +314,19 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 
 **时间维度**：CI 期。
 
-**为什么必须**：15 个 rules_*.go 样板违反 DRY；规则需带 5 槽位（detect / evidence / next / level / harvest）才能驱动 harvest。
+**为什么必须**：15 个 rules_*.go 样板违反 DRY；规则统一注册才能单引擎执行。
 
-**怎么做**：
+**怎么做**（#687 实施后最终形态）：
 - `kernel/governance/engine.go`：唯一执行体（`Validator.run` 单循环迭代 `allRules`）
 - `kernel/governance/rules_registry.go`：`allRules []Rule` 单一规则注册表（载体见下方 amendment）
-- `Rule` 承载分类元数据：`Phase`（Base/Strict/Dep/Health，取代 base/strict 两套规则集）+
-  可选 `Next`（next-action 五级覆盖；默认由每条 finding 的 severity 派生 error→block / warning→advisory，
-  使混合 severity 规则的 warning 不会被误标 block）+ 可选 `Metric`（距离函数）+ 编译期检查的 `Detect` 函数值
-- `next-action` 类型：autofix / suggest / advisory / block / escalate
-- 规则带可选 `metric`（距离函数：deprecation 剩余天数 / 覆盖率 / finding 数），不只是 bool
-- 修 ADV-05 SeverityError 错分（一行：`newError` → `newWarning` + `Next: advisory`）
+- `Rule` 承载分类元数据：`Code`（RuleCode 常量）+ `Phase`（Base/Strict/Dep/Health，取代 base/strict 两套规则集）+ 编译期检查的 `Detect` 函数值
+- 修 ADV-05 SeverityError 错分（一行：`newError` → `newWarning`）
+- next-action 类型（`NextAction`）与 per-finding `Metric` 字段：推测性 M5-HARVEST scaffolding，在 #687 中移除，见下方 amendment
 
-**Amendment（2026-05-26，#687 实施）— 载体：Go typed-struct registry，不用 YAML**
+**Amendment（2026-05-26，#687 实施）— 载体：Go typed-struct registry，不用 YAML；next-action + Metric 移除，推迟到 M5**
 
 原 "怎么做" 写 `kernel/governance/rules/*.yaml`（5 槽位 detect/evidence/next/level/harvest 数据化）。
-实施时改为 **Go typed-struct registry**（`var allRules []Rule`），偏离 YAML 载体字面，但满足 P-B2/C2/C3
-的*意图*（单执行体 + 规则即数据 + 结构化 next-action + 距离 metric）。理由：
+实施时改为 **Go typed-struct registry**（`var allRules []Rule`），偏离 YAML 载体字面。理由：
 
 1. **YAML 倒退 detect 绑定**：规则检测体是任意 Go（DFS 环检测、git subprocess、schema 树递归、
    签名匹配），无法声明式表达。YAML 只能以 `detect.fn: <名字>` 字符串引用 Go 函数 —— 把绑定从
@@ -340,40 +336,34 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
    *尚不存在* 的 M5 —— 是推测性收益。需要时由 Go registry 派生序列化（`gocell dump-rules`，
    codegen 单源），而非手编 YAML。
 3. Go-struct registry：单源、编译器绑定、零新缝。detect/evidence/level 保留为现有 rule 方法 +
-   `ValidationResult` 字段（经 `locator` 构造器，`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 不变）；
-   `next` 为 `Rule` 上的 typed 字段，由 engine stamp。`Metric` 是 **per-finding**（见下方
-   Amendment 2026-05-26 #687 round-3）。harvest 槽位是 M5 的消费动作，本里程碑只产出 finding。
+   `ValidationResult` 字段（经 `locator` 构造器，`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 不变）。
+   harvest 槽位是 M5 的消费动作，本里程碑只产出 finding。
 
-**P-B2 / P-C2 / P-C3 重评（per ai-robust ADR amendment 落地必查）**：载体从 YAML 改为 Go-struct
-**不降反升** AI-robust 档 —— 注册由 `rules()`/`strictRules()`/`checks()`/`CheckContractHealth` 四套
-dispatch（散落、可漏注册）收敛为单 `allRules`（`TestAllRulesMatchGolden` golden + 唯一性锁，
-`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁 orphan detect 方法），漂移缝减少。`Metric` 是
-per-finding 距离（Amendment 2026-05-26 #687 round-3）：detect 函数在发出有可排序距离的特定
-finding 上设置 `ValidationResult.Metric`（如 FMT-23 stale warning 的 days-remaining）。
-ADV-05 dead-event count 是仓库聚合（可由 finding 数推导），不是 per-finding 距离，无 Metric。
-其余 finding 无连续距离，Metric 保持 nil。无格子从 ✅ 退化。
+`Rule` 最终结构（#687 实施后）：
 
-**Amendment（2026-05-26，#687 round-3）— Metric per-finding 修正**
+```go
+type Rule struct {
+    Code   RuleCode
+    Phase  Phase
+    Detect func(v *Validator) []ValidationResult
+}
+```
 
-原 "怎么做" 描述 `Metric` 为规则级距离函数 `type Metric func(v *Validator) (float64, bool)`，
-stamp() 把同一值复制到规则发出的所有 finding — 这会"污染"：FMT-23 同时发出超期警告和
-missing/malformed-date 错误，规则级 Metric 会把超期天数错误地贴到错误 finding 上。
+`NextAction` 类型 + 5 常量（block / advisory / autofix / suggest / escalate）、`Rule.Next` 字段、
+`stamp()` / `resolveNext()`、`ValidationResult.Next` / `ValidationResult.Metric` 字段均在 #687
+**从 M3 移除**。这些是推测性 M5-HARVEST scaffolding：无任何消费方（printer 不读、harvester 未构建），
+留在 M3 是零价值 surface area。如 M5-HARVEST 落地，由 M5 PR 对真实消费方定义这两个字段。
 
-修正：
+**P-B2 / P-C2 / P-C3 重评（per ai-robust ADR amendment 落地必查）**：
 
-- 删除 `type Metric` 类型及 `Rule.Metric` 字段；`Rule` 只保留 `Code / Phase / Next / Detect`。
-- `stamp()` 只设置 `Next`，不触碰 `Metric`（pass-through：detect 已设置的 Metric 原样保留）。
-- detect 函数在发出有可排序距离的 **特定 finding** 上设置 `f.Metric = &val`（字段赋值合法；
-  禁止裸 `ValidationResult{}` 字面量的 archtest 不拦截构造后字段赋值）。
-- ADV-05 的 `adv05DeadEventCount` 方法已删除（dead-event count 是仓库聚合，不是 per-finding
-  距离；count 可由 ADV-05 finding 数量推导，无需独立 Metric）。
-- FMT-23 的 `fmt23DeprecationDaysRemaining` 方法已删除；其逻辑内联进
-  `validateContractDeprecatedCleanup01` 的 stale branch：`remaining := graceDays -
-  now.UTC().Sub(ts).Hours()/hoursPerDay; f.Metric = &remaining`（仅 stale warning，
-  missing/malformed-date 错误 Metric 为 nil）。
+| 目标 | M3 实施状态 | 说明 |
+|------|------------|------|
+| P-B2：规则数据驱动 | ✅ 满足 | `allRules` 单注册表替代 4 套 dispatch，`TestAllRulesMatchGolden` golden 锁，`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 守 orphan detect 方法 |
+| P-C2：next-action | ⏭ 推迟 M5 | 无消费方，M3 中移除。M5-HARVEST 定义时对真实 harvester 再设计 |
+| P-C3：per-finding metric | ⏭ 推迟 M5 | 同上，M3 中移除。M5 定义时参考 detect 函数需要哪些距离语义 |
 
-P-C3 仍然满足："finding 带 metric"语义不变，只是从规则级聚合变为 per-finding 精确携带，
-M5-HARVEST 消费的 finding 更准确（stale warning 有距离，错误 finding 无距离）。
+`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁注册到 allRules 的 detect 方法不漏登。AI-robust 档
+载体从 YAML 改为 Go-struct **不降反升**：散落 4 套 dispatch → 单 allRules，漂移缝消除。
 
 ### M4-COVERAGE：双向追溯（满足 P-B1）
 

@@ -28,7 +28,5 @@ func violatePositional() gov.ValidationResult {
 		"",
 		0,
 		0,
-		gov.NextBlock,
-		nil,
 	}
 }

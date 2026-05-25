@@ -3045,7 +3045,7 @@ func TestADV05_ExitCode_Regression(t *testing.T) {
 	assert.False(t, HasErrors(direct),
 		"ADV-05 findings must not contain SeverityError — HasErrors must be false")
 
-	// Path 2: engine stamp — run() stamps NextAdvisory onto the warning.
+	// Path 2: engine loop — run() accumulates the warning findings correctly.
 	adv05Rule := Rule{
 		Code:   codeADV05,
 		Phase:  PhaseBase,
@@ -3055,11 +3055,11 @@ func TestADV05_ExitCode_Regression(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, stamped)
 	for _, r := range stamped {
-		assert.Equal(t, NextAdvisory, r.Next,
-			"engine must stamp NextAdvisory for SeverityWarning ADV-05 (not NextBlock)")
+		assert.Equal(t, SeverityWarning, r.Severity,
+			"engine must accumulate SeverityWarning ADV-05 findings (not error)")
 	}
 	assert.False(t, HasErrors(stamped),
-		"engine-stamped ADV-05 results must not cause HasErrors==true (no CI exit-code 1)")
+		"engine-accumulated ADV-05 results must not cause HasErrors==true (no CI exit-code 1)")
 }
 
 // TestADV06_Removed verifies that ADV-06 no longer exists in the rule pipeline.

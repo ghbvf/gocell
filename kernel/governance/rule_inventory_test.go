@@ -53,7 +53,7 @@ func TestAllRulesMatchGolden(t *testing.T) {
 // kernel/governance/*.go. Update this list whenever a rule is added /
 // renamed / removed.
 //
-// Total: 86 IDs across 12 series.
+// Total: 92 IDs across 12 series.
 func goldenRuleIDs() []string {
 	return []string{
 		// ADV — advisory warnings (rules_misc_advisory.go).

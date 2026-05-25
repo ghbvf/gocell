@@ -20,6 +20,9 @@ import (
 // Camel-case keys per the GoCell JSON convention. Empty results emit
 // "issues": [] (never null) so consumers can safely iterate without
 // nil-checking.
+//
+// note: next/metric fields were removed from M3 as speculative M5-HARVEST
+// scaffolding; they are not emitted here.
 type JSONPrinter struct {
 	w io.Writer
 }
@@ -37,24 +40,17 @@ func NewJSONPrinter(w io.Writer) *JSONPrinter {
 // All scalar fields are emitted unconditionally to keep the consumer-facing
 // shape stable across results — the value will be "" or 0 when unset,
 // rather than the field being absent.
-//
-// Next and Metric carry the M3 metadata stamped by the engine: Next is the
-// remediation disposition (block/advisory/autofix/suggest/escalate); Metric
-// is the optional continuous distance value. Both use omitempty so existing
-// results without M3 metadata keep the same wire shape.
 type resultJSON struct {
-	Code      string   `json:"code"`
-	Severity  string   `json:"severity"`
-	IssueType string   `json:"issueType"`
-	File      string   `json:"file"`
-	Scope     string   `json:"scope"`
-	Field     string   `json:"field"`
-	Message   string   `json:"message"`
-	Fix       string   `json:"fix"`
-	Line      int      `json:"line"`
-	Column    int      `json:"column"`
-	Next      string   `json:"next,omitempty"`
-	Metric    *float64 `json:"metric,omitempty"`
+	Code      string `json:"code"`
+	Severity  string `json:"severity"`
+	IssueType string `json:"issueType"`
+	File      string `json:"file"`
+	Scope     string `json:"scope"`
+	Field     string `json:"field"`
+	Message   string `json:"message"`
+	Fix       string `json:"fix"`
+	Line      int    `json:"line"`
+	Column    int    `json:"column"`
 }
 
 // summaryJSON is the per-document tally. Counted from the same sorted slice
@@ -120,7 +116,5 @@ func toResultJSON(r governance.ValidationResult) resultJSON {
 		Fix:       r.Fix,
 		Line:      r.Line,
 		Column:    r.Column,
-		Next:      string(r.Next),
-		Metric:    r.Metric,
 	}
 }

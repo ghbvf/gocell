@@ -13,9 +13,9 @@ package composite_lit_positional_red
 import gov "github.com/ghbvf/gocell/kernel/governance"
 
 // violatePositional constructs a raw ValidationResult composite literal with
-// positional fields — the forbidden bypass shape. The 12 values match the
+// positional fields — the forbidden bypass shape. The 10 values match the
 // field order Code, Severity, IssueType, File, Scope, Field, Message, Fix,
-// Line, Column, Next, Metric.
+// Line, Column.
 func violatePositional() gov.ValidationResult {
 	return gov.ValidationResult{
 		gov.RuleCode("X-99"),
@@ -28,7 +28,5 @@ func violatePositional() gov.ValidationResult {
 		"",
 		0,
 		0,
-		gov.NextBlock,
-		nil,
 	}
 }

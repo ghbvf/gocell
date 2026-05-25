@@ -133,7 +133,8 @@ var allRules = []Rule{
 	// of each invocation (Step 3 of M3-RULE-ENGINE Batch 2-3).
 	// Must be first in PhaseStrict so fail-fast stops on VERIFY-06 before FMT rules.
 	{
-		Code: codeVERIFY06, Phase: PhaseStrict, Next: NextBlock,
+		Code:   codeVERIFY06,
+		Phase:  PhaseStrict,
 		Detect: func(v *Validator) []ValidationResult { return v.validateVERIFY06(v.runCtx) },
 	},
 

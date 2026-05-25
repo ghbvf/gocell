@@ -1,9 +1,0 @@
-ERRORS (1):
-  [FMT-23] contract "x" has been deprecated for >90d (field: lifecycle)
-         fix: delete the contract or refresh deprecatedAt
-        next: block
-      metric: 12.5
-         at contracts/http/x/v1/contract.yaml:5
-
-
-Validation complete: 1 error(s), 0 warning(s)

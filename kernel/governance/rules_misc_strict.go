@@ -549,17 +549,10 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 // valid deprecatedAt date and are not stale (>90 days since deprecation).
 //
 // Three cases:
-//   - deprecated + empty deprecatedAt → Error, IssueRequired (Metric nil)
-//   - deprecated + malformed date → Error, IssueInvalid (Metric nil)
-//   - deprecated + date >90d ago → Warning, IssueForbidden (Metric = days remaining, negative)
-//
-// Per ADR §M3 P-C3, the stale-warning finding carries a per-finding Metric set
-// to the days remaining in the grace period (negative = overdue). Only the stale
-// branch sets Metric; the missing/malformed-date error branches carry nil because
-// there is no orderable distance when the date itself is absent or invalid.
+//   - deprecated + empty deprecatedAt → Error, IssueRequired
+//   - deprecated + malformed date → Error, IssueInvalid
+//   - deprecated + date >90d ago → Warning, IssueForbidden
 func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
-	const hoursPerDay = 24
-	graceDays := defaultDeprecationGracePeriod.Hours() / hoursPerDay
 	var results []ValidationResult
 	now := v.clk.Now()
 	for _, c := range v.project.Contracts {
@@ -586,7 +579,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 			continue
 		}
 		if now.UTC().Sub(ts) > defaultDeprecationGracePeriod {
-			f := v.newWarning(
+			results = append(results, v.newWarning(
 				codeFMT23, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
@@ -594,10 +587,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 					c.ID, c.DeprecatedAt,
 				),
 				"delete the contract and migrate all consumers, or refresh deprecatedAt to today after re-evaluating the deprecation timeline",
-			)
-			remaining := graceDays - now.UTC().Sub(ts).Hours()/hoursPerDay
-			f.Metric = &remaining
-			results = append(results, f)
+			))
 		}
 	}
 	return results

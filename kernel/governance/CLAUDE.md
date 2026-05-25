@@ -2,13 +2,12 @@
 
 governance/ 实现 GoCell 元数据治理规则。每条规则是一个 detect 方法
 （`validate<RULEID>()` / `checkDEP*` / `checkCH*`，零参返回 `[]ValidationResult`），并在
-`rules_registry.go` 的 `allRules` 注册表以一个 `Rule{}` 条目登记（`Code` + `Phase` + `Next` +
+`rules_registry.go` 的 `allRules` 注册表以一个 `Rule{}` 条目登记（`Code` + `Phase` +
 编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
 （ADR `202605041430` §M3-RULE-ENGINE）。
 
-`ValidationResult.Metric` 是 per-finding 距离：detect 函数在自己发出的特定 finding 上设置
-`f.Metric = &remaining`（仅当该 finding 有可排序距离时，如 FMT-23 的超期天数）。ADV-05
-的死事件数量是仓库聚合（可由 finding 数量推导），不是 per-finding 距离，不设 Metric。
+next-action（NextAction 类型）与 per-finding Metric 已从 M3 移除（推测性 M5-HARVEST
+scaffolding，无消费方）。如 M5-HARVEST 落地，届时对真实消费方定义这两个字段。
 
 ## ValidationResult 构建
 
@@ -85,10 +84,6 @@ func (v *Validator) validateADV05() []ValidationResult {
 
 新规则：写 detect 方法 → 在 `rules_registry.go` 的 `allRules` 加一个 `Rule{}` 条目 →
 在 `rule_inventory_test.go` 的 `goldenRuleIDs()` 加它的 code（`TestAllRulesMatchGolden` 锁集合 + 唯一性）。
-`Next` **不用填**——engine 按每条 finding 的 severity 派生（error→block / warning→advisory），
-只有非默认 M5 处置（autofix/suggest/escalate）才显式覆盖。`Metric` 不在 `Rule` 上声明——
-detect 函数在发出带可排序距离的 finding 时直接设置 `f.Metric = &val`（field assignment on
-constructed value is allowed — only raw `ValidationResult{}` composite literals are banned）。
 
 ```go
 var allRules = []Rule{
@@ -100,8 +95,6 @@ var allRules = []Rule{
 `Phase` 决定何时运行：`PhaseBase`（`gocell validate`）/ `PhaseStrict`（`--strict`）/
 `PhaseDep`（依赖图）/ `PhaseHealth`（`gocell check`）。ctx-bound 规则（仅 VERIFY-06）的 `Detect`
 是读 `v.runCtx` 的闭包。`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁「detect 方法必在 allRules 登记」。
-混合 severity 的规则（如 JOURNEY-STATUS-LIFECYCLE-01 / FMT-23 同时发 error 与 warning）靠 per-finding
-派生各自正确标 next，不会出现 warning 被标 block。
 
 ## 测试写法
 

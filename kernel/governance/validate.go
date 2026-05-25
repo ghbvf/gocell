@@ -74,16 +74,6 @@ type ValidationResult struct {
 	// are always zero when Scope is set.
 	Line   int
 	Column int
-	// Next is the structured remediation disposition (ADR §M3 P-C2): what the
-	// M5-HARVEST layer should DO with this finding (block / advisory / autofix /
-	// suggest / escalate). Stamped by the engine from the owning Rule.
-	Next NextAction
-	// Metric is the evaluated distance for the rules that carry one (ADR §M3
-	// P-C3): deprecation days remaining, coverage gap, dead-event count, etc. It
-	// is nil for the majority of rules — whose findings have no continuous
-	// distance — and for rules whose Metric was not applicable to the current
-	// project state.
-	Metric *float64
 }
 
 // Validator runs all validation rules against a parsed project. It embeds
@@ -162,9 +152,9 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 //
 // The rule pipeline is driven by allRules (rules_registry.go), filtered by
 // phase: base runs PhaseBase+PhaseDep; strict additionally includes
-// PhaseStrict. The engine loop (run) stamps each finding's Next/Metric from
-// the owning Rule, handles ctx cancellation, and implements the fail-fast
-// bailout on the first SeverityError. See engine.go for the loop body.
+// PhaseStrict. The engine loop (run) handles ctx cancellation and implements
+// the fail-fast bailout on the first SeverityError. See engine.go for the
+// loop body.
 //
 // The error return is non-nil only when ctx.Err() != nil at the time the
 // loop is interrupted; it carries the partial findings collected so far so
