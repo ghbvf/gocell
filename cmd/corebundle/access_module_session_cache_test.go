@@ -14,6 +14,7 @@ import (
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/runtime/capability"
 )
 
 // stubSessionStore is a minimal session.Store used only to obtain a stable
@@ -96,7 +97,7 @@ func TestWrapSessionStoreWithCache_TTLNegative_DisablesWithWarn(t *testing.T) {
 }
 
 // TestWrapSessionStoreWithCache_NoRedisClient_DisablesWithWarn — env set but
-// SharedDeps.RedisClient is nil → cache disabled (cannot construct), warn,
+// SharedDeps.Redis is nil → cache disabled (cannot construct), warn,
 // inner returned. Documents that the wiring layer treats Redis-not-configured
 // as a soft disable rather than a fail-fast (consistent with default-off
 // semantics: cache is best-effort, never required).
@@ -122,9 +123,9 @@ func TestWrapSessionStoreWithCache_RedisStubFailsConstruction(t *testing.T) {
 	logger, _ := newDisableTestLogger()
 
 	inner := stubSessionStore{}
-	got, err := wrapSessionStoreWithCache(inner, &SharedDeps{
-		RedisClient: new(adapterredis.Client), // empty Client; cmdable is nil
-	}, logger)
+	shared := &SharedDeps{}
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client)) // empty Client; cmdable is nil
+	got, err := wrapSessionStoreWithCache(inner, shared, logger)
 
 	require.Error(t, err, "stub redis client: NewCache must fail fast")
 	assert.Nil(t, got)

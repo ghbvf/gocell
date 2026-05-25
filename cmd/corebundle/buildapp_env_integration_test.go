@@ -6,11 +6,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -72,12 +70,14 @@ func setRealModeEnv(t *testing.T, dsn string) {
 
 // TestBuildApp_Postgres_UsesConfigCoreDatabaseURL verifies the complete
 // env-to-pool contract: setting GOCELL_CONFIGCORE_DATABASE_URL=<dsn> and
-// running the full LoadSharedDepsFromEnv → BuildApp path results in a
-// successfully wired assembly with a live PostgreSQL connection.
+// running the full LoadSharedDepsFromEnv → provisionCapabilities → BuildApp path
+// results in a successfully wired assembly backed by a live PostgreSQL pool.
 //
 // This test covers F5: the env→pool path had zero automated coverage because
 // all existing integration tests bypassed LoadPGConfig + LoadSharedDepsFromEnv
-// by calling buildConfigCoreOpts directly.
+// by calling buildConfigCoreOpts directly. Post capability-provider refactor the
+// pool is opened by provisionCapabilities (not by ConfigCoreModule.Provide), so
+// the test must run that step before BuildApp.
 func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -88,15 +88,21 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 	defer cancel()
 
 	// Apply migrations so the schema version matches the binary (required by
-	// the schema guard in buildConfigCoreOpts).
+	// verifyPGPreconditions inside provisionCapabilities).
 	applyMigrationsForMain(t, ctx, dsn)
 
-	// Walk the full LoadSharedDepsFromEnv → BuildApp path — this is the
-	// code path under test (env vars → topology → LoadPGConfig → pool).
+	// LoadSharedDepsFromEnv → provisionCapabilities is the code path under test
+	// (env vars → topology → LoadPGConfig → assembly pool → shared.PG).
 	shared, err := LoadSharedDepsFromEnv(ctx)
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed with all required env set")
 
-	cells, cellOpts, err := BuildApp(ctx, shared,
+	require.NoError(t, provisionCapabilities(ctx, shared),
+		"provisionCapabilities must open the assembly pool from GOCELL_CONFIGCORE_DATABASE_URL")
+	require.NotNil(t, shared.PG, "shared.PG must be provisioned from the DSN in postgres mode")
+	require.NotNil(t, shared.poolMR, "shared.poolMR must hold the pool ManagedResource")
+	defer func() { _ = shared.poolMR.Close(ctx) }()
+
+	cells, _, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
 		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
 		// for audit.NewBootstrapAuthFailObserver
@@ -104,23 +110,20 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 		AuditCoreModule{},
 		AccessCoreModule{},
 	)
-	require.NoError(t, err, "BuildApp must succeed: env→pool wiring must complete without error")
+	require.NoError(t, err, "BuildApp must succeed: cell modules consume the injected shared.PG")
 	require.Len(t, cells, 3, "BuildApp must return exactly 3 cells")
-
-	// cellOpts is non-nil and contains at least one WithManagedResource option
-	// (the PoolResource for configcore). We do not type-assert into the opaque
-	// functional option; the non-empty opts slice is the observable proxy.
-	assert.NotEmpty(t, cellOpts, "cellOpts must include at least one PG managed-resource option")
 }
 
-// TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL verifies that
-// ConfigCoreModule.Provide, when called after LoadSharedDepsFromEnv, returns
-// a non-nil provisional ManagedResource whose postgres_ready checker passes.
+// TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL verifies that
+// provisionCapabilities, when called after LoadSharedDepsFromEnv in postgres
+// mode, opens the assembly pool from GOCELL_CONFIGCORE_DATABASE_URL and records
+// it as shared.poolMR with a passing postgres_ready checker.
 //
-// This slim companion test isolates the Provide path so that the PoolResource
-// (adapterpg.Pool) and its health check are verified independently of the full
-// BuildApp assembly.
-func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
+// This slim companion test isolates the pool-provisioning path (formerly
+// ConfigCoreModule.Provide opened the pool; the capability-provider refactor
+// moved it to provisionCapabilities) so the pool ManagedResource + its health
+// check are verified independently of the full BuildApp assembly.
+func TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 
@@ -129,35 +132,30 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D60s)
 	defer cancel()
 
-	// Apply migrations so the schema guard in Provide passes.
+	// Apply migrations so verifyPGPreconditions inside provisionCapabilities passes.
 	applyMigrationsForMain(t, ctx, dsn)
 
 	shared, err := LoadSharedDepsFromEnv(ctx)
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
 
-	// Call Provide directly so we can inspect the provisional ManagedResource.
-	_, _, provisional, err := ConfigCoreModule{}.Provide(ctx, shared)
-	require.NoError(t, err, "ConfigCoreModule.Provide must succeed with GOCELL_CONFIGCORE_DATABASE_URL set")
-	require.NotEmpty(t, provisional, "ConfigCoreModule.Provide must return at least one ManagedResource for postgres topology")
+	// provisionCapabilities opens the pool and records it as shared.poolMR.
+	require.NoError(t, provisionCapabilities(ctx, shared),
+		"provisionCapabilities must succeed with GOCELL_CONFIGCORE_DATABASE_URL set")
+	require.NotNil(t, shared.PG, "shared.PG must be provisioned in postgres mode")
+	require.NotNil(t, shared.poolMR, "provisionCapabilities must record the pool as shared.poolMR")
 
-	pgRes := provisional[0]
+	pgRes := shared.poolMR
 
 	// Verify the ManagedResource exposes a "postgres_ready" checker (the name used by
-	// adapterpg.Pool, which now directly implements ManagedResource) and that it
+	// adapterpg.Pool, which directly implements ManagedResource) and that it
 	// reports healthy against the live container started by setupPostgresForMain.
 	checkers := pgRes.Checkers()
 	pgChecker, ok := checkers["postgres_ready"]
-	require.True(t, ok, "ManagedResource must expose a \"postgres_ready\" checker (adapterpg.Pool)")
+	require.True(t, ok, "pool ManagedResource must expose a \"postgres_ready\" checker (adapterpg.Pool)")
 	require.NoError(t, pgChecker(ctx), "postgres_ready checker must pass for the live container DSN")
 
 	// Close the resource to avoid leaking the connection pool.
 	// Ignore the error — the test has already passed at this point and pool
 	// cleanup errors (e.g. context cancellation) should not fail the assertion.
 	_ = pgRes.Close(ctx)
-	_ = provisional // satisfy linter: ensure we use the variable after nil-check
-
-	// Confirm the interface is satisfied at runtime (compile-time is implicit via
-	// the provisional[0] read above). The conversion documents the expected type
-	// without tripping staticcheck QF1011.
-	_ = kernellifecycle.ManagedResource(pgRes)
 }

@@ -42,6 +42,23 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
+	// Provision assembly-level shared infrastructure (postgres pool / redis
+	// client → cap.*Provider) once, before any module consumes it. Mirrors
+	// fx.New() resolve-before-start ordering.
+	if err := provisionCapabilities(ctx, shared); err != nil {
+		return err
+	}
+	// Close the pool if startup aborts before bootstrap.Run takes ownership of
+	// the ManagedResource (BuildApp / buildAssembly / option wiring failures).
+	// Once bootstrap.Run is reached the pool is managed by bootstrap's LIFO
+	// teardown. Mirrors BuildApp's provisional-rollback for pre-Run resources.
+	handedToBootstrap := false
+	defer func() {
+		if !handedToBootstrap && shared.poolMR != nil {
+			_ = shared.poolMR.Close(ctx)
+		}
+	}()
+
 	modules, err := corebundleModules(assemblyID, assemblyCellIDs)
 	if err != nil {
 		return err
@@ -81,6 +98,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	}
 	opts = append(opts, cellOpts...)
 
+	handedToBootstrap = true
 	return bootstrap.New(opts...).Run(ctx) //archtest:allow:clock-injection:via-slice opts from defaultRuntimeOptions includes WithClock
 }
 

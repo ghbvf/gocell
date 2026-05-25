@@ -82,14 +82,12 @@ func (m ConfigCoreModule) Provide(
 		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
 	}
 
-	// 4. PG pool: read configcore-namespaced env.
-	pgCfg, err := LoadPGConfig("CONFIGCORE")
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
-	}
-	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	// 4. PG storage: consume the assembly's postgres capability provider
+	// (provisionCapabilities opened the pool before BuildApp). In memory mode
+	// shared.PG is nil and buildConfigCoreOpts takes the in-memory path.
+	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         shared.Topology,
-		PGConfig:         pgCfg,
+		PG:               shared.PG,
 		Publisher:        shared.EventBus,
 		MetricsProvider:  shared.PromStack.metricProvider,
 		ValueTransformer: vt,
@@ -102,19 +100,12 @@ func (m ConfigCoreModule) Provide(
 		return nil, nil, nil, err
 	}
 
-	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
-	// can wire their own outbox.Writer + TxManager from the same pool in
-	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
-	// stays nil and the downstream modules skip the postgres outbox path.
-	shared.SharedPGPool = modResult.PGPool
-
 	// CAS protocol: declares the version-field name and conflict policy used by
 	// all 6 CAS write paths in configcore (config Update/Delete/Rollback +
 	// flag Update/Toggle/Delete). NewProtocol is the composition-root-only
 	// constructor (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest enforces this).
 	casProto, err := newConfigCoreCASProtocol()
 	if err != nil {
-		shared.SharedPGPool = nil
 		return nil, nil, nil, err
 	}
 
@@ -163,11 +154,6 @@ func buildConfigCoreResult(
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	var opts []bootstrap.Option
 	var provisional []kernellifecycle.ManagedResource
-
-	if modResult.PoolResource != nil {
-		opts = append(opts, bootstrap.WithManagedResource(modResult.PoolResource))
-		provisional = append(provisional, modResult.PoolResource)
-	}
 
 	// Relay opts: in postgres mode, BootstrapOpts carries WithRelay(relay) which
 	// is the sole sanctioned path that hands the relay to bootstrap's managed-

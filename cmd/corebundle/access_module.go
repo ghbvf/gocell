@@ -205,32 +205,35 @@ func (m AccessCoreModule) Provide(
 // optionally wrap it with AUTH-CACHE-01 Redis cache before binding via
 // accesscore.WithSessionStore.
 func accessPostgresOptions(shared *SharedDeps, sessionProto *session.Protocol) ([]accesscore.Option, session.Store, error) {
-	if shared.SharedPGPool == nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
-			"(ConfigCoreModule must run before AccessCoreModule)")
+	if shared.PG == nil {
+		return nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
+			"(provisionCapabilities must run before BuildApp)")
 	}
-	writer := adapterpg.NewOutboxWriter(shared.Clock)
-	txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
+	db, poolErr := pgxPoolFromProvider(shared.PG)
+	if poolErr != nil {
+		return nil, nil, fmt.Errorf("AccessCoreModule: %w", poolErr)
+	}
+	txMgr := shared.PG.TxManager()
 	// WithPGBundle collapses (UserRepository, RoleRepository, SetupLock,
 	// store-paired TxRunner) into a single typed funnel — the four primitives
 	// are guaranteed to originate from the same (pool, txMgr, clk) triple.
-	pgBundle, err := accesspg.NewBundle(shared.SharedPGPool.DB(), txMgr, shared.Clock)
+	pgBundle, err := accesspg.NewBundle(db, txMgr, shared.Clock)
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGBundle: %w", err)
 	}
-	pgSessionStore, err := adapterpg.NewSessionStore(shared.SharedPGPool.DB(), txMgr, sessionProto, shared.Clock)
+	pgSessionStore, err := adapterpg.NewSessionStore(db, txMgr, sessionProto, shared.Clock)
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGSessionStore: %w", err)
 	}
 	pgRefreshStore, err := adapterpg.NewRefreshStore(
-		shared.SharedPGPool.DB(), txMgr,
+		db, txMgr,
 		accesscore.DefaultRefreshPolicy(), shared.Clock, rand.Reader,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
 	accessOpts := []accesscore.Option{
-		accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(writer)),
+		accesscore.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
 		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithRefreshStore(pgRefreshStore),
 	}
@@ -332,12 +335,17 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 			"accesscore: GOCELL_SESSION_CACHE_TTL exceeds documented maximum",
 			errcode.WithInternal(fmt.Sprintf("GOCELL_SESSION_CACHE_TTL=%s exceeds max %s", ttl, sessionCacheTTLMax)))
 	}
-	if shared.RedisClient == nil {
+	if shared.Redis == nil {
 		logger.Warn("accesscore: session cache disabled — GOCELL_SESSION_CACHE_TTL set but no Redis client " +
 			"configured (set GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS)")
 		return inner, nil
 	}
-	cache, err := adapterredis.NewCache(shared.RedisClient, sessionCacheNamespace)
+	redisClient, ok := shared.Redis.Client().(*adapterredis.Client)
+	if !ok {
+		return nil, fmt.Errorf("accesscore: session cache: redis provider client is not *adapterredis.Client (got %T)",
+			shared.Redis.Client())
+	}
+	cache, err := adapterredis.NewCache(redisClient, sessionCacheNamespace)
 	if err != nil {
 		return nil, fmt.Errorf("accesscore: session cache: %w", err)
 	}

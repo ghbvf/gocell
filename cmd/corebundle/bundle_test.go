@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
@@ -32,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -150,7 +150,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 
 	base, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
-	shared.RedisClient = new(adapterredis.Client)
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
 	withRedis, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
 
@@ -163,29 +163,28 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 // buildConfigCoreOpts: postgres pool-error path
 // ---------------------------------------------------------------------------
 
-// TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError verifies that when the
-// DSN is syntactically invalid (non-empty but unparseable by pgx), the function
-// returns an error containing "PG pool" without leaking a ManagedResource.
-//
-// This exercises the pool-creation failure branch (lines after the empty-DSN
-// guard) without requiring a running Postgres instance.
-func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
-	ctx := context.Background()
+// TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError verifies that when the
+// PGProvider returns a DB() value that is not *pgxpool.Pool, buildConfigCoreOpts
+// returns an error from pgxPoolFromProvider. Pool provisioning has moved to
+// provisionCapabilities (cap_wiring.go); buildConfigCoreOpts now consumes an
+// injected PGProvider rather than opening its own pool.
+func TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	// "not-a-dsn" is not a valid DSN format — pgxpool.ParseConfig or Ping will fail.
-	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+	// Inject a PGProvider whose DB() returns a non-*pgxpool.Pool value to
+	// trigger the pgxPoolFromProvider type-assertion failure branch.
+	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
 		Topology:         topo,
-		PGConfig:         adapterpg.Config{DSN: "not-a-valid-dsn"},
+		PG:               capability.NewPGProvider(nil, nil, "wrong-type"),
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
 		Clock:            clock.Real(),
 	})
 
-	require.Error(t, err, "postgres mode with invalid DSN must return an error")
-	assert.Contains(t, err.Error(), "PG pool",
-		"error must mention 'PG pool' so operators know which subsystem failed")
-	assert.Nil(t, result.PoolResource, "error path must not leak a ManagedResource")
+	require.Error(t, err, "postgres mode with wrong PG DB() type must return an error")
+	assert.Contains(t, err.Error(), "pgxpool.Pool",
+		"error must mention pgxpool.Pool so operators know the provider is misconfigured")
+	assert.Nil(t, result.CellOptions, "error path must not return cell options")
 }
 
 // fakeManagedResource implements lifecycle.ManagedResource for tests.
@@ -493,7 +492,7 @@ func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
 	assert.Equal(t, string(kauth.NonceStoreKindInMemory), info["service_token_nonce_store"])
 	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
 
-	shared.RedisClient = new(adapterredis.Client)
+	shared.redisClient = new(adapterredis.Client)
 	shared.ConsumerClaimerKind = consumerClaimerKindDistributed
 
 	info = adapterInfoForSharedDeps(shared)

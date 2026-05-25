@@ -6,3 +6,6 @@ cells:
 owner:
   team: platform-core
   role: maintainer
+capabilities:
+  - postgres
+  - redis

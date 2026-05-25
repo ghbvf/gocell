@@ -17,7 +17,14 @@ import (
 // fields have a synthesizable spec source. Future additions that genuinely
 // cannot be derived from AssemblyScaffoldSpec should add an entry with a
 // reason before the new field reaches AssemblyMeta.
-var synthesisFieldExemptions = map[string]string{}
+var synthesisFieldExemptions = map[string]string{
+	// capabilities is an opt-in assembly-level declaration added to an existing
+	// assembly.yaml after scaffolding (the operator decides which shared infra
+	// the assembly provisions). A freshly scaffolded assembly declares none, so
+	// synthesizeAssemblyMeta intentionally leaves it nil — the empty-capabilities
+	// path renders modules_gen.go byte-identically to the pre-capabilities form.
+	"capabilities": "opt-in post-scaffold declaration; new assemblies have none",
+}
 
 // TestAssemblyMetaSynthesisFieldGuard uses reflection to assert that
 // synthesizeAssemblyMeta populates every yaml-bearing field on

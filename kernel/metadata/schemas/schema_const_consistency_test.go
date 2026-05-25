@@ -63,6 +63,15 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			"schemas/assembly.schema.json deployTemplate enum drifted from metadata.DeployTemplateEnum: schema=%v const=%v",
 			got, metadata.DeployTemplateEnum)
 	})
+
+	t.Run("assembly.schema.json#CapabilityEnum", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaStringSlice(t, "assembly.schema.json",
+			[]string{"properties", "capabilities", "items", "enum"})
+		require.True(t, reflect.DeepEqual(metadata.CapabilityEnum, got),
+			"schemas/assembly.schema.json capabilities.items.enum drifted from metadata.CapabilityEnum: schema=%v const=%v",
+			got, metadata.CapabilityEnum)
+	})
 }
 
 // readSchemaString walks the JSON path and returns the string at the leaf.

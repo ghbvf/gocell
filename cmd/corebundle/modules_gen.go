@@ -2,10 +2,22 @@
 // Source: assemblies/corebundle/assembly.yaml
 package main
 
+import "github.com/ghbvf/gocell/runtime/capability"
+
 func generatedCellModules() []CellModule {
 	return []CellModule{
 		ConfigCoreModule{},
 		AuditCoreModule{},
 		AccessCoreModule{},
+	}
+}
+
+// generatedCapabilities lists the assembly-level shared infrastructure
+// capabilities declared in assembly.yaml. The composition root provisions each
+// once and injects the resulting runtime/capability provider into consuming modules.
+func generatedCapabilities() []capability.Kind {
+	return []capability.Kind{
+		capability.Postgres,
+		capability.Redis,
 	}
 }

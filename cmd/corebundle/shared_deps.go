@@ -9,13 +9,14 @@ import (
 	"strings"
 	"sync"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -29,7 +30,7 @@ import (
 //
 // Fields are flat (no concern-grouped sub-structs): SharedDeps is a
 // composition-root bag whose fields cross consumer boundaries (Clock /
-// Topology / SharedPGPool consumed by every Cell module). Forcing a sub-struct
+// Topology / PG consumed by every Cell module). Forcing a sub-struct
 // layout would make those cross-cutting consumptions look like boundary
 // violations when in fact they are the natural shape of a composition root.
 // Per-concern *file* split is in shared_deps_build.go (build helpers) and
@@ -93,34 +94,38 @@ type SharedDeps struct {
 	// for the test pattern.
 	BootstrapLedgerStore ledger.Store
 
-	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
-	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule
-	// receive the same pointer to wire their TxManager / OutboxWriter without
-	// double-creating a pool.
+	// PG is the assembly's single postgres capability provider, provisioned once
+	// by provisionCapabilities (cap_wiring.go) before BuildApp. It exposes the
+	// pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle (DB() any).
+	// AccessCoreModule / AuditCoreModule / ConfigCoreModule consume the same
+	// injected provider instead of constructing adapter primitives — the sealed
+	// upstream half of CAPABILITY-PROVIDER-FUNNEL-01.
 	//
-	// Happens-before contract (load-bearing, do not break):
-	//   - The pool is registered as a ManagedResource by ConfigCoreModule.Provide
-	//     before any consumer module reads it.
-	//   - All consumers of this pool (TxManager, OutboxWriter, OutboxRelay,
-	//     EventRouter goroutines, ConsumerBase workers) MUST be registered AFTER
-	//     the pool ManagedResource — i.e. as later WithManagedResource /
-	//     WithWorkers options — so bootstrap's LIFO shutdown order stops them
-	//     before pool.Close() runs.
-	//   - main.go::BuildApp module order locks this for cell modules
-	//     (MODULE-ORDER-CONFIGCORE-FIRST-01 archtest).
-	//   - For new lifecycle hooks added outside cell modules: register them
-	//     after the pool, never before.
+	// Happens-before contract (load-bearing, do not break): the pool is recorded
+	// as poolMR and registered by runtimeBaseOptions as the first ManagedResource,
+	// so bootstrap's LIFO shutdown closes it LAST — after every PG consumer
+	// (relay, EventRouter goroutines, ConsumerBase workers, cell tx) which are
+	// registered later via cell opts. Provisioning before BuildApp (not inside a
+	// cell module) is what dissolves the old MODULE-ORDER-CONFIGCORE-FIRST-01
+	// constraint.
 	//
-	// Violating this contract produces use-after-close errors during shutdown
-	// that are silent in normal runs (Close() returns first, workers' next DB
-	// call fails).
-	//
-	// Nil in non-postgres modes (in-memory).
-	SharedPGPool *adapterpg.Pool
+	// Nil in non-postgres modes (in-memory); cell modules take their memory path.
+	PG capability.PGProvider
 
-	// RedisClient is configured when distributed replay/idempotency state is
-	// required or when the operator explicitly provides Redis env vars.
-	RedisClient *adapterredis.Client
+	// poolMR is the postgres pool as a ManagedResource, set by provisionPostgres
+	// alongside PG. Registered first by runtimeBaseOptions for LIFO last-close.
+	// Nil in non-postgres modes.
+	poolMR kernellifecycle.ManagedResource
+
+	// Redis is the assembly's shared redis capability provider, wrapping the
+	// client built in buildSharedReplayDeps. Consumers obtain the raw
+	// *adapterredis.Client via Redis.Client(). Nil in modes without redis.
+	Redis capability.RedisProvider
+
+	// redisClient holds the raw client constructed in LoadSharedDepsFromEnv
+	// (buildSharedReplayDeps); provisionRedis wraps it into Redis. Unexported
+	// composition-root plumbing — public consumers use Redis.Client().
+	redisClient *adapterredis.Client
 
 	// ConsumerClaimer coordinates outbox consumer idempotency. The separate
 	// kind field is corebundle-local metadata; kernel/idempotency.Claimer stays
@@ -307,7 +312,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		EventBus:               eb,
 		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
 		EventbusCacheCollector: metricsDeps.EventbusCacheCollector,
-		RedisClient:            replay.RedisClient,
+		redisClient:            replay.RedisClient,
 		ConsumerClaimer:        replay.ConsumerClaimer,
 		ConsumerClaimerKind:    replay.ConsumerClaimerKind,
 		InternalGuard:          internalGuard,

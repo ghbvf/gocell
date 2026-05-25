@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -57,10 +58,17 @@ func runtimeBaseOptions(
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
-	if shared.RedisClient != nil {
-		opts = append(opts,
-			bootstrap.WithManagedResource(shared.RedisClient),
-		)
+	// Register the assembly's shared infrastructure as the FIRST ManagedResources
+	// so bootstrap's LIFO teardown closes them LAST — after every consumer
+	// registered later via cell opts (relay, EventRouter goroutines, ConsumerBase
+	// workers, cell tx). Provisioned in provisionCapabilities (cap_wiring.go).
+	if shared.poolMR != nil {
+		opts = append(opts, bootstrap.WithManagedResource(shared.poolMR))
+	}
+	if shared.Redis != nil {
+		if mr, ok := shared.Redis.Client().(kernellifecycle.ManagedResource); ok {
+			opts = append(opts, bootstrap.WithManagedResource(mr))
+		}
 	}
 	return opts
 }

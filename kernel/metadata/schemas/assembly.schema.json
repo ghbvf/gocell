@@ -36,6 +36,15 @@
         }
       }
     },
+    "capabilities": {
+      "type": "array",
+      "description": "Assembly-level shared infrastructure capabilities provisioned once by the composition root and injected into consuming cell modules (runtime/cap). Closed enum; mirrored by runtime/cap.Capability and rejected outside the set by the parser.",
+      "items": {
+        "type": "string",
+        "enum": ["postgres", "redis", "rabbitmq"]
+      },
+      "uniqueItems": true
+    },
     "build": {
       "type": "object",
       "description": "Build configuration for the assembly. All fields optional; defaults are derived.",
