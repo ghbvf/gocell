@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/registry"
 )
 
 // Graph is the cell-level directed dependency graph produced by Graph().
@@ -62,249 +61,9 @@ func rawGraphToGraph(raw map[string]map[string]bool) Graph {
 	}
 }
 
-// DependencyChecker validates structural dependencies between cells. It
-// embeds locator so locate + the typed constructors and the project field are
-// shared with Validator via a single implementation.
-//
-// Deprecated: use Validator directly. DependencyChecker is retained for
-// backward compatibility during the M3 migration; it will be deleted in Batch 4.
-type DependencyChecker struct {
-	locator
-	cells     *registry.CellRegistry
-	contracts *registry.ContractRegistry
-}
-
-// NewDependencyChecker creates a DependencyChecker for the given project metadata.
-//
-// Deprecated: use NewValidator. Retained for backward compatibility.
-func NewDependencyChecker(project *metadata.ProjectMeta) *DependencyChecker {
-	return &DependencyChecker{
-		locator:   locator{project: project},
-		cells:     registry.NewCellRegistry(project),
-		contracts: registry.NewContractRegistry(project),
-	}
-}
-
-// Check runs all dependency checks and returns findings.
-func (dc *DependencyChecker) Check() []ValidationResult {
-	var results []ValidationResult
-	for _, check := range dc.checks() {
-		results = append(results, check()...)
-	}
-	return results
-}
-
-// CheckFailFast runs the same checks as Check but returns as soon as any
-// produces a SeverityError. Warnings do not trigger the bailout.
-func (dc *DependencyChecker) CheckFailFast() []ValidationResult {
-	var results []ValidationResult
-	for _, check := range dc.checks() {
-		r := check()
-		results = append(results, r...)
-		if HasErrors(r) {
-			return results
-		}
-	}
-	return results
-}
-
-// checks returns the list of check methods in execution order. Shared by
-// Check and CheckFailFast so they stay provably in sync.
-func (dc *DependencyChecker) checks() []func() []ValidationResult {
-	if dc.project == nil {
-		return nil
-	}
-	return []func() []ValidationResult{
-		dc.checkDEP01, dc.checkDEP02, dc.checkDEP03,
-	}
-}
-
-// Graph builds the cell dependency graph. Delegates to *Validator.Graph() via
-// a temporary Validator adapter.
-func (dc *DependencyChecker) Graph() (Graph, []ValidationResult) {
-	if dc.project == nil {
-		return Graph{Nodes: []string{}}, nil
-	}
-	raw, errs := dc.buildDependencyGraph()
-	return rawGraphToGraph(raw), errs
-}
-
-// checkDEP01 verifies that each slice's belongsToCell matches the cellID
-// encoded in its map key ("cellID/sliceID").
-func (dc *DependencyChecker) checkDEP01() []ValidationResult {
-	var results []ValidationResult
-	for key, s := range dc.project.Slices {
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		keyCellID := parts[0]
-		if s.BelongsToCell != keyCellID {
-			results = append(results, dc.newError(
-				codeDEP01, IssueMismatch,
-				sliceFile(s),
-				"belongsToCell",
-				fmt.Sprintf(
-					"slice %q declares belongsToCell %q but is registered under cell %q",
-					s.ID, s.BelongsToCell, keyCellID,
-				),
-				"update belongsToCell to match the directory cell id or move the slice to the correct cell directory",
-			))
-		}
-	}
-	return results
-}
-
-// checkDEP02 verifies that the cell dependency graph (derived from contracts)
-// contains no cycles.
-func (dc *DependencyChecker) checkDEP02() []ValidationResult {
-	graph, buildErrs := dc.buildDependencyGraph()
-	if len(buildErrs) > 0 {
-		return buildErrs
-	}
-	cycle := detectCycle(graph)
-	if len(cycle) > 0 {
-		return []ValidationResult{dc.newScopedError(
-			codeDEP02, IssueForbidden,
-			"project",
-			"cells",
-			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
-			"remove the dependency cycle by restructuring cell contracts",
-		)}
-	}
-	return nil
-}
-
-// buildDependencyGraph constructs the adjacency list consumerCell → set of
-// providerCells from the slice contractUsages. All cells (even isolated ones)
-// are added so cycle detection covers the full graph.
-func (dc *DependencyChecker) buildDependencyGraph() (map[string]map[string]bool, []ValidationResult) {
-	graph := make(map[string]map[string]bool)
-	var errs []ValidationResult
-
-	for _, s := range dc.project.Slices {
-		errs = append(errs, dc.addSliceEdges(graph, s)...)
-	}
-	for cellID := range dc.project.Cells {
-		if graph[cellID] == nil {
-			graph[cellID] = make(map[string]bool)
-		}
-	}
-	return graph, errs
-}
-
-// addSliceEdges adds consumer → provider directed edges to graph for every
-// provider-role contractUsage in s.
-func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *metadata.SliceMeta) []ValidationResult {
-	providerCell := s.BelongsToCell
-	var errs []ValidationResult
-	for _, cu := range s.ContractUsages {
-		if !isProviderRole(cu.Role) {
-			continue
-		}
-		consumers, consErr := dc.contracts.Consumers(cu.Contract)
-		if consErr != nil {
-			errs = append(errs, dc.newError(
-				codeDEP02, IssueInvalid,
-				sliceFile(s),
-				"contractUsages",
-				fmt.Sprintf(
-					"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
-					cu.Contract, consErr,
-				),
-				"ensure the contract exists and has valid consumer declarations",
-			))
-			continue
-		}
-		for _, consumerCell := range consumers {
-			dc.addCellEdge(graph, consumerCell, providerCell)
-		}
-	}
-	return errs
-}
-
-// addCellEdge adds a directed edge consumerCell → providerCell to graph,
-// skipping self-edges and non-cell IDs.
-func (dc *DependencyChecker) addCellEdge(graph map[string]map[string]bool, consumerCell, providerCell string) {
-	if consumerCell == providerCell {
-		return
-	}
-	if _, isCell := dc.project.Cells[consumerCell]; !isCell {
-		return
-	}
-	if graph[consumerCell] == nil {
-		graph[consumerCell] = make(map[string]bool)
-	}
-	graph[consumerCell][providerCell] = true
-}
-
-// checkDEP03 verifies that all L0 dependencies of a cell are co-located in
-// the same assembly.
-//
-//nolint:dupl // Mirrors (*Validator).checkDEP03; both needed during M3-RULE-ENGINE transition.
-func (dc *DependencyChecker) checkDEP03() []ValidationResult {
-	if len(dc.project.Assemblies) == 0 {
-		return nil
-	}
-
-	cellToAssembly := make(map[string]string)
-	for _, a := range dc.project.Assemblies {
-		for _, cellRef := range a.Cells {
-			cellToAssembly[cellRef] = a.ID
-		}
-	}
-
-	var results []ValidationResult
-	for _, c := range dc.project.Cells {
-		if len(c.L0Dependencies) == 0 {
-			continue
-		}
-		assemblyID := cellToAssembly[c.ID]
-		if assemblyID == "" {
-			results = append(results, dc.newError(
-				codeDEP03, IssueRequired,
-				cellFile(c),
-				"l0Dependencies",
-				fmt.Sprintf(
-					"cell %q has L0 dependencies but is not assigned to any assembly",
-					c.ID,
-				),
-				"add this cell to an assembly in assemblies/",
-			))
-			continue
-		}
-		for i, dep := range c.L0Dependencies {
-			depAssembly := cellToAssembly[dep.Cell]
-			if depAssembly == "" {
-				results = append(results, dc.newError(
-					codeDEP03, IssueRequired,
-					cellFile(c),
-					fmt.Sprintf("l0Dependencies[%d].cell", i),
-					fmt.Sprintf(
-						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly",
-						c.ID, assemblyID, dep.Cell,
-					),
-					"add the dependency cell to an assembly",
-				))
-			} else if assemblyID != depAssembly {
-				results = append(results, dc.newError(
-					codeDEP03, IssueMismatch,
-					cellFile(c),
-					fmt.Sprintf("l0Dependencies[%d].cell", i),
-					fmt.Sprintf(
-						"cell %q (assembly %q) has L0 dependency on %q (assembly %q); both must be in the same assembly",
-						c.ID, assemblyID, dep.Cell, depAssembly,
-					),
-					"move both cells to the same assembly",
-				))
-			}
-		}
-	}
-	return results
-}
-
 // =============================================================================
-// *Validator DEP methods (PhaseDep)
+// DEP rules (PhaseDep) — run by `gocell validate` via allRules. The cell and
+// contract registries they consult live on *Validator (built in NewValidator).
 // =============================================================================
 
 // checkDEP01 verifies that each slice's belongsToCell matches the cellID
@@ -417,8 +176,6 @@ func (v *Validator) addCellEdge(graph map[string]map[string]bool, consumerCell, 
 
 // checkDEP03 verifies that all L0 dependencies of a cell are co-located in
 // the same assembly.
-//
-//nolint:dupl // Mirrors (*DependencyChecker).checkDEP03; both needed during M3-RULE-ENGINE transition.
 func (v *Validator) checkDEP03() []ValidationResult {
 	if len(v.project.Assemblies) == 0 {
 		return nil
@@ -481,7 +238,7 @@ func (v *Validator) checkDEP03() []ValidationResult {
 }
 
 // =============================================================================
-// Free functions (shared between *DependencyChecker and *Validator methods)
+// Free functions (shared by the *Validator DEP methods)
 // =============================================================================
 
 // detectCycle runs three-color DFS on the directed graph and returns the

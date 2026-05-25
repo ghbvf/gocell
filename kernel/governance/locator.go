@@ -36,11 +36,11 @@ func parentFieldPath(p string) string {
 }
 
 // locator provides position-enriched ValidationResult construction. It is
-// embedded into Validator and DependencyChecker so both share a single
-// implementation of locate/newError/newWarning/newScopedError — one copy, not two.
+// embedded into Validator so every rule shares one implementation of
+// locate/newError/newWarning/newScopedError.
 //
 // The embedded form also promotes the `project` field, which is why existing
-// rule code continues to read `v.project.Cells` / `dc.project.Slices` without
+// rule code continues to read `v.project.Cells` / `v.project.Slices` without
 // changes: the outer struct no longer declares `project` directly; it lifts
 // the value off the embedded locator.
 type locator struct {

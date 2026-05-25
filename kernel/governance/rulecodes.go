@@ -10,11 +10,10 @@ package governance
 // package-scope RuleCode constants rather than an ad-hoc string literal.
 //
 // rulecodes.go is the single source of truth for governance rule code
-// literals emitted by all three registration roots:
-//
-//   - Validator (rules() + strictRules())
-//   - DependencyChecker (Check / CheckFailFast)
-//   - CheckContractHealth (and the CH-aligned rules in rules_http.go)
+// literals. Every rule is registered once in the allRules slice
+// (rules_registry.go) and selected by Phase (Base / Strict / Dep / Health);
+// the engine (engine.go) runs them. Each rule's detect method emits its code
+// through the locator constructors.
 //
 // Every "<SERIES>-<NN>" literal embedded in kernel/governance/*.go must come
 // from one of the codeXxx constants below; archtest
@@ -124,7 +123,7 @@ const (
 	codeADV05 RuleCode = "ADV-05"
 
 	// CH — contract-health (contracthealth.go, rules_http.go).
-	// Registered via Validator.CheckContractHealth, not rules().
+	// Registered in allRules with Phase: PhaseHealth (run by `gocell check`).
 	codeCH01 RuleCode = "CH-01"
 	codeCH02 RuleCode = "CH-02"
 	codeCH03 RuleCode = "CH-03"
@@ -132,8 +131,8 @@ const (
 	codeCH05 RuleCode = "CH-05"
 	codeCH06 RuleCode = "CH-06"
 
-	// DEP — dependency-graph checks (depcheck.go). Registered via
-	// DependencyChecker.Check / CheckFailFast, not rules().
+	// DEP — dependency-graph checks (depcheck.go). Registered in allRules with
+	// Phase: PhaseDep (run by `gocell validate`).
 	codeDEP01 RuleCode = "DEP-01"
 	codeDEP02 RuleCode = "DEP-02"
 	codeDEP03 RuleCode = "DEP-03"

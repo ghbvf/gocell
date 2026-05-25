@@ -88,8 +88,7 @@ type ValidationResult struct {
 
 // Validator runs all validation rules against a parsed project. It embeds
 // locator to share locate + the typed constructors (newError/newWarning/newScopedError)
-// with DependencyChecker and to promote the project field so existing rule code
-// keeps using v.project.* directly.
+// and to promote the project field so rule code reads v.project.* directly.
 //
 // Validator is not safe for concurrent ValidateStrict calls. Build one
 // Validator per concurrent caller.
