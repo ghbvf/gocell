@@ -109,19 +109,21 @@ type modulesContext struct {
 	SourcePath string   // path to the assembly.yaml that drove generation (asm.File)
 	Modules    []string // CellModule struct names, in cells.yaml order
 	// Capabilities are runtime/capability.Kind const names (e.g. "Postgres"),
-	// derived from assembly.yaml `capabilities`. When non-empty the template
-	// emits generatedCapabilities() + the capability import; empty leaves the
-	// file byte-identical to the pre-capabilities form so assemblies that declare
-	// no capabilities are unaffected.
+	// the sorted de-duplicated union of the assembly cells' cell.yaml `requires`
+	// (Design Y, #855). When non-empty the template emits generatedCapabilities()
+	// + the capability import; empty leaves the file byte-identical to the
+	// pre-capabilities form so assemblies whose cells require nothing are unaffected.
 	Capabilities []string
 }
 
-// capabilityConstNames maps assembly.yaml `capabilities` enum values to their
+// capabilityConstNames maps cell.yaml `requires` enum values to their
 // runtime/capability.Kind const identifiers. The enum is closed and mirrored by
-// assembly.schema.json + runtime/capability.Kind; an unknown value here means
-// the schema enum and this map drifted — GenerateModulesGen fails rather than
-// emit an undefined const (the FMT-36 validation in gocell validate is the
-// primary upstream gate).
+// metadata.CapabilityEnum + cell.schema.json + runtime/capability.Kind;
+// TestCapabilityConstNamesMatchCapabilityEnum locks this map's key set to
+// metadata.CapabilityEnum so adding a capability to the enum without a const
+// mapping (or vice versa) fails in CI. An unknown value reaching here means that
+// guard was bypassed — GenerateModulesGen fails rather than emit an undefined
+// const (the FMT-36 validation in gocell validate is the primary upstream gate).
 var capabilityConstNames = map[string]string{
 	"postgres": "Postgres",
 	"redis":    "Redis",
@@ -230,6 +232,11 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 // Each cell must have GoStructName set (cell.yaml schema extension consumed
 // by codegen). The generated factory references {GoStructName}Module by
 // convention; the *Module struct is hand-written in cmd/{assemblyID}/.
+//
+// generatedCapabilities() is the sorted, de-duplicated union of the assembly
+// cells' cell.yaml `requires` (Design Y, #855). Changing a cell's `requires`
+// therefore requires re-running `gocell generate assembly` to refresh
+// modules_gen.go; `--verify` catches stale output in CI.
 func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
@@ -239,6 +246,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	}
 
 	modules := make([]string, 0, len(asm.Cells))
+	capSet := make(map[string]struct{})
 	for _, cellID := range asm.Cells {
 		cm := g.cells.Get(cellID)
 		if cm == nil {
@@ -252,14 +260,26 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
 		}
 		modules = append(modules, cm.GoStructName.String()+"Module")
+		for _, c := range cm.Requires {
+			capSet[c] = struct{}{}
+		}
 	}
 
-	capConsts := make([]string, 0, len(asm.Capabilities))
-	for _, c := range asm.Capabilities {
+	// Design Y (#855): the assembly's provisioned capability set is the sorted,
+	// de-duplicated union of its cells' `requires` — the single source. Sorting
+	// makes generatedCapabilities() deterministic regardless of cell iteration
+	// or per-cell requires declaration order.
+	requiredCaps := make([]string, 0, len(capSet))
+	for c := range capSet {
+		requiredCaps = append(requiredCaps, c)
+	}
+	sort.Strings(requiredCaps)
+	capConsts := make([]string, 0, len(requiredCaps))
+	for _, c := range requiredCaps {
 		name, ok := capabilityConstNames[c]
 		if !ok {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-				"assembly declares an unknown capability",
+				"cell declares an unknown capability in requires",
 				errcode.WithInternal(fmt.Sprintf("assembly=%q capability=%q", assemblyID, c)))
 		}
 		capConsts = append(capConsts, name)

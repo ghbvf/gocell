@@ -135,6 +135,32 @@ func baseOpts() catalog.ExportOptions {
 	}
 }
 
+// ---- TestBuildDocument_CellRequiresProjected ----
+
+// TestBuildDocument_CellRequiresProjected asserts CellMeta.Requires flows into
+// CellSpec.Requires on the catalog wire surface (#855 F1). Without this mapping
+// `gocell export` silently drops the authoritative capability declaration; the
+// CELL-META-DTO-COVERAGE-01 archtest guards the field-set, this guards the value.
+func TestBuildDocument_CellRequiresProjected(t *testing.T) {
+	pm := minimalPM()
+	pm.Cells["accesscore"].Requires = []string{"postgres", "redis"}
+	doc, err := catalog.BuildDocument(pm, baseOpts())
+	require.NoError(t, err)
+
+	var found bool
+	for _, e := range doc.Entities {
+		if e.Kind != "Cell" || e.Metadata.Name != "accesscore" {
+			continue
+		}
+		spec, ok := e.Spec.(catalog.CellSpec)
+		require.True(t, ok, "Cell entity should have CellSpec, got %T", e.Spec)
+		assert.Equal(t, []string{"postgres", "redis"}, spec.Requires,
+			"CellMeta.Requires must project to CellSpec.Requires")
+		found = true
+	}
+	require.True(t, found, "accesscore Cell entity must be present")
+}
+
 // ---- TestBuildDocument_FullSnapshot ----
 
 func TestBuildDocument_FullSnapshot(t *testing.T) {

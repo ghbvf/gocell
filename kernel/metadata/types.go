@@ -30,8 +30,24 @@ type CellMeta struct {
 	// Go type (e.g. "ordercell" → "OrderCell"), which is why explicit
 	// declaration is required.
 	GoStructName GoIdentifier `yaml:"goStructName,omitempty"`
-	Dir          string       `yaml:"-"` // directory segment under cells/, set by parser
-	File         string       `yaml:"-"` // parsed cell.yaml path relative to project root
+	// Requires lists the assembly-level shared infrastructure capabilities this
+	// cell consumes (postgres / redis / rabbitmq). It is the authoritative single
+	// source: the owning assembly's provisioned capability set is the derived
+	// union of its cells' Requires (see kernel/assembly.GenerateModulesGen). The
+	// closed value set is mirrored by CapabilityEnum + runtime/capability.Kind +
+	// cell.schema.json `requires` enum; unknown/duplicate values are rejected by
+	// `gocell validate` governance rule FMT-36 (validation-time, not by ParseFS —
+	// the parser stays lenient, matching Kubernetes admission-layer validation).
+	// "Requires" names what the cell consumes; it declares intent, not a uniform
+	// hardness contract. Whether a listed capability is hard-required or
+	// best-effort is decided per kind by the provisioner (cmd/corebundle
+	// provisionCapabilities): postgres is hard-required in non-memory storage
+	// modes (absence fails fast at the cell's nil-guard); redis is
+	// provision-if-available (absence degrades gracefully — e.g. accesscore's
+	// AUTH-CACHE-01 session cache is skipped when no redis client is configured).
+	Requires []string `yaml:"requires,omitempty"`
+	Dir      string   `yaml:"-"` // directory segment under cells/, set by parser
+	File     string   `yaml:"-"` // parsed cell.yaml path relative to project root
 }
 
 // Clone returns a deep copy of c, independently owning every slice and
@@ -47,6 +63,7 @@ func (c *CellMeta) Clone() *CellMeta {
 	cp := *c
 	cp.L0Dependencies = append([]L0DepMeta(nil), c.L0Dependencies...)
 	cp.Verify.Smoke = append([]string(nil), c.Verify.Smoke...)
+	cp.Requires = append([]string(nil), c.Requires...)
 	return &cp
 }
 
@@ -278,14 +295,11 @@ type AssemblyMeta struct {
 	ID    string    `yaml:"id"`
 	Cells []string  `yaml:"cells"`
 	Owner OwnerMeta `yaml:"owner"`
-	// Capabilities lists assembly-level shared infrastructure capabilities
-	// (postgres / redis / rabbitmq) provisioned once by the composition root
-	// and injected into consuming cell modules via runtime/capability. The closed
-	// value set is mirrored by CapabilityEnum + runtime/capability.Kind +
-	// assembly.schema.json enum. Unknown or duplicate values are rejected by
-	// `gocell validate` governance rule FMT-36 (validation-time, not by ParseFS —
-	// the parser stays lenient, matching Kubernetes admission-layer validation).
-	Capabilities        []string  `yaml:"capabilities,omitempty"`
+	// The assembly's provisioned capability set is NOT declared here — it is the
+	// derived union of its cells' CellMeta.Requires (Design Y, #855). There is no
+	// hand-authored assembly-level `capabilities` field; the single source is
+	// per-cell. kernel/assembly.GenerateModulesGen computes the union when
+	// rendering generatedCapabilities() in modules_gen.go.
 	Build               BuildMeta `yaml:"build,omitempty"`
 	MaxConsistencyLevel string    `yaml:"-"` // derived; yaml occurrence rejected by KnownFields
 	Dir                 string    `yaml:"-"` // assembly directory name (parts[1]); set by parser from path, not YAML

@@ -126,7 +126,7 @@ func goldenRuleIDs() []string {
 		// FMT-35: subscribe CU field placement (handler required for subscribe;
 		// handler/group/field forbidden for non-subscribe roles).
 		"FMT-35",
-		// FMT-36: assembly.capabilities ∈ closed enum {postgres,redis,rabbitmq}, no dups.
+		// FMT-36: cell.requires ∈ closed enum {postgres,redis,rabbitmq}, no dups (Design Y, #855).
 		"FMT-36",
 		"FMT-A1", "FMT-C1",
 

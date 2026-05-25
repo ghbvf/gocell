@@ -41,6 +41,9 @@ var cellMeta = &metadata.CellMeta{
 		"smoke.auditcore.startup",
 	}},
 	GoStructName: metadata.MustNewGoIdentifier("AuditCore"),
+	Requires: []string{
+		"postgres",
+	},
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }

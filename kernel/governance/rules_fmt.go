@@ -1563,50 +1563,54 @@ func (v *Validator) validateFMT34() []ValidationResult {
 	return results
 }
 
-// validateFMT36 enforces that every assembly's capabilities list contains only
-// values from metadata.CapabilityEnum (closed enum: postgres, redis, rabbitmq)
-// and that no value appears more than once (uniqueItems). The schema literal at
-// schemas/assembly.schema.json properties.capabilities.items.enum is kept
-// byte-equal to metadata.CapabilityEnum by TestSchemaConstantsMatchSchemaLiterals;
-// governance is the sole runtime gatekeeper that rejects out-of-enum and
-// duplicate values.
+// validateFMT36 enforces that every cell's `requires` list contains only values
+// from metadata.CapabilityEnum (closed enum: postgres, redis, rabbitmq) and that
+// no value appears more than once (uniqueItems). cell.requires is the
+// authoritative single source from which an assembly's provisioned capability
+// set is derived (Design Y, #855); the schema literal at
+// schemas/cell.schema.json properties.requires.items.enum is kept byte-equal to
+// metadata.CapabilityEnum by TestSchemaConstantsMatchSchemaLiterals; governance
+// is the sole runtime gatekeeper that rejects out-of-enum and duplicate values.
 //
 // Without this rule, schema-aware tooling rejects unknown/duplicate values but
 // `gocell validate` accepts them, leaving CLI users with a different contract
 // than the schema declares. Mirrors the pattern established by validateFMT30
 // for build.deployTemplate.
+//
+// A subset check (requires ⊆ assembly.capabilities) is intentionally absent:
+// the assembly set is the union of cell requires, so subset holds structurally.
 func (v *Validator) validateFMT36() []ValidationResult {
 	var results []ValidationResult
-	for _, asm := range v.project.Assemblies {
-		if asm == nil {
+	for _, c := range v.project.Cells {
+		if c == nil {
 			continue
 		}
-		seen := make(map[string]bool, len(asm.Capabilities))
-		for i, cap := range asm.Capabilities {
-			field := fmt.Sprintf("capabilities[%d]", i)
+		seen := make(map[string]bool, len(c.Requires))
+		for i, cap := range c.Requires {
+			field := fmt.Sprintf("requires[%d]", i)
 			if !metadata.IsKnownCapability(cap) {
 				results = append(results, v.newError(
 					codeFMT36, IssueInvalid,
-					assemblyFile(asm),
+					cellFile(c),
 					field,
 					fmt.Sprintf(
-						"assembly %q capabilities[%d]=%q is not one of %v",
-						asm.ID, i, cap, metadata.CapabilityEnum,
+						"cell %q requires[%d]=%q is not one of %v",
+						c.ID, i, cap, metadata.CapabilityEnum,
 					),
-					"set capabilities items to one of the allowed values: postgres, redis, rabbitmq",
+					"set requires items to one of the allowed values: postgres, redis, rabbitmq",
 				))
 				continue
 			}
 			if seen[cap] {
 				results = append(results, v.newError(
 					codeFMT36, IssueDuplicate,
-					assemblyFile(asm),
+					cellFile(c),
 					field,
 					fmt.Sprintf(
-						"assembly %q capabilities[%d]=%q is a duplicate; each capability may appear at most once",
-						asm.ID, i, cap,
+						"cell %q requires[%d]=%q is a duplicate; each capability may appear at most once",
+						c.ID, i, cap,
 					),
-					"remove the duplicate capability entry",
+					"remove the duplicate requires entry",
 				))
 				continue
 			}

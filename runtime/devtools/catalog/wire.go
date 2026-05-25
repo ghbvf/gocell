@@ -180,7 +180,9 @@ type CellSpec struct {
 	Schema           CellSpecSchema  `json:"schema"           yaml:"schema"`
 	VerifySmoke      []string        `json:"verifySmoke,omitempty"    yaml:"verifySmoke,omitempty"`
 	L0Dependencies   []CellSpecL0Dep `json:"l0Dependencies,omitempty" yaml:"l0Dependencies,omitempty"`
-	Slices           []string        `json:"slices,omitempty"         yaml:"slices,omitempty"` // canonical "cell.slice" IDs
+	// Requires is the assembly capabilities this cell consumes (postgres/redis/rabbitmq).
+	Requires []string `json:"requires,omitempty" yaml:"requires,omitempty"`
+	Slices   []string `json:"slices,omitempty"   yaml:"slices,omitempty"` // canonical "cell.slice" IDs
 }
 
 // CellSpecOwner mirrors OwnerMeta on the wire (camelCase tags).

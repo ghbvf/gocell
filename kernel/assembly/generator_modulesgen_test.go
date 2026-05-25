@@ -2,6 +2,7 @@ package assembly
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -65,20 +66,27 @@ func TestGenerateModulesGen_Corebundle(t *testing.T) {
 	assert.Contains(t, content, "AccessCoreModule{}")
 	assert.Contains(t, content, "AuditCoreModule{}")
 	assert.Contains(t, content, "ConfigCoreModule{}")
-	// Empty-capabilities path is byte-inert: no capability import, no
-	// generatedCapabilities(). Locks the {{- if .Capabilities}} else-branch so
-	// assemblies that declare no capabilities stay identical to the
-	// pre-capabilities form.
+	// Empty union (no cell declares requires) is byte-inert: no capability import,
+	// no generatedCapabilities(). The function is emitted iff the union is
+	// non-empty — an assembly whose cells require nothing has no provisioner to
+	// call it, so emitting a dead generatedCapabilities() (+ unused-looking import)
+	// would only pollute non-provisioning assemblies (e.g. examples). #855 F2.
 	assert.NotContains(t, content, "runtime/capability")
 	assert.NotContains(t, content, "generatedCapabilities")
 }
 
-// TestGenerateModulesGen_Capabilities exercises the non-empty capabilities
-// branch: the template must emit the capability import + generatedCapabilities()
-// with one capability.Kind const per declared capability, in declaration order.
-func TestGenerateModulesGen_Capabilities(t *testing.T) {
+// TestGenerateModulesGen_DerivesCapabilitiesFromCellRequires exercises the
+// non-empty branch under Design Y (#855): the assembly capability set is the
+// sorted, de-duplicated union of its cells' `requires`. Input order is
+// irrelevant (sorted output) and a capability required by multiple cells emits
+// exactly one const (dedup).
+func TestGenerateModulesGen_DerivesCapabilitiesFromCellRequires(t *testing.T) {
 	project := buildModulesTestProject()
-	project.Assemblies["corebundle"].Capabilities = []string{"postgres", "redis"}
+	// Unsorted input + cross-cell duplicate of postgres → output must be the
+	// sorted union {postgres, redis} with postgres emitted once.
+	project.Cells["accesscore"].Requires = []string{"redis", "postgres"}
+	project.Cells["auditcore"].Requires = []string{"postgres"}
+	project.Cells["configcore"].Requires = []string{"postgres"}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateModulesGen("corebundle")
@@ -89,21 +97,65 @@ func TestGenerateModulesGen_Capabilities(t *testing.T) {
 	assert.Contains(t, content, "func generatedCapabilities() []capability.Kind")
 	assert.Contains(t, content, "capability.Postgres")
 	assert.Contains(t, content, "capability.Redis")
-	// Declaration order is preserved (postgres before redis).
+	// Deterministic alphabetical order regardless of per-cell input order.
 	assert.Less(t,
 		indexOfStr(content, "capability.Postgres"),
 		indexOfStr(content, "capability.Redis"),
-		"capabilities must appear in assembly.yaml declaration order")
+		"derived capabilities must be sorted (postgres before redis)")
+	// Dedup: postgres required by all three cells must appear exactly once.
+	assert.Equal(t, 1, strings.Count(content, "capability.Postgres"),
+		"postgres required by multiple cells must emit a single const")
+}
+
+// TestCapabilityConstNamesMatchCapabilityEnum locks the capabilityConstNames
+// map key set to metadata.CapabilityEnum (single source). Adding a capability to
+// the enum without a matching const-name entry (or vice versa) fails here in CI,
+// closing the gap between the codegen const-name table and the
+// governance/schema enum that TestSchemaConstantsMatchSchemaLiterals already
+// pins to cell.schema.json.
+func TestCapabilityConstNamesMatchCapabilityEnum(t *testing.T) {
+	keys := make([]string, 0, len(capabilityConstNames))
+	for k, v := range capabilityConstNames {
+		assert.NotEmpty(t, v, "capabilityConstNames[%q] must map to a non-empty const name", k)
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	want := append([]string(nil), metadata.CapabilityEnum...)
+	sort.Strings(want)
+	assert.Equal(t, want, keys,
+		"capabilityConstNames key set must equal metadata.CapabilityEnum (single source)")
+}
+
+// TestGenerateModulesGen_RabbitMQAndSingle covers the single-capability path
+// (sort/dedup with len 1) and the rabbitmq → capability.RabbitMQ const mapping
+// — the enum member with no provider yet, whose codegen path is otherwise
+// uncovered. The generated const must still emit (provisioning fails later at
+// provisionCapabilities' default branch, by design).
+func TestGenerateModulesGen_RabbitMQAndSingle(t *testing.T) {
+	project := buildModulesTestProject()
+	project.Cells["accesscore"].Requires = []string{"rabbitmq"}
+	// auditcore / configcore leave Requires nil — union is the single {rabbitmq}.
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+
+	content := string(out)
+	assert.Contains(t, content, "func generatedCapabilities() []capability.Kind")
+	assert.Contains(t, content, "capability.RabbitMQ")
+	assert.Equal(t, 1, strings.Count(content, "capability.RabbitMQ"))
+	assert.NotContains(t, content, "capability.Postgres")
+	assert.NotContains(t, content, "capability.Redis")
 }
 
 // TestGenerateModulesGen_UnknownCapability verifies the codegen-time guard:
-// a capability value absent from capabilityConstNames fails with
+// a cell `requires` value absent from capabilityConstNames fails with
 // ErrMetadataInvalid rather than emitting an undefined capability const. The
 // closed enum's validation-time enforcement is FMT-36 (gocell validate); this
 // test only locks the generator's own fail-rather-than-emit-garbage behavior.
 func TestGenerateModulesGen_UnknownCapability(t *testing.T) {
 	project := buildModulesTestProject()
-	project.Assemblies["corebundle"].Capabilities = []string{"bogus-capability"}
+	project.Cells["accesscore"].Requires = []string{"bogus-capability"}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	_, err := gen.GenerateModulesGen("corebundle")
