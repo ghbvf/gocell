@@ -120,7 +120,7 @@ type modulesContext struct {
 // runtime/capability.Kind const identifiers. The enum is closed and mirrored by
 // assembly.schema.json + runtime/capability.Kind; an unknown value here means
 // the schema enum and this map drifted — GenerateModulesGen fails rather than
-// emit an undefined const (the FMT-35 validation in gocell validate is the
+// emit an undefined const (the FMT-36 validation in gocell validate is the
 // primary upstream gate).
 var capabilityConstNames = map[string]string{
 	"postgres": "Postgres",

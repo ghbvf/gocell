@@ -49,7 +49,7 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 		case capability.Redis:
 			provisionRedis(shared)
 		default:
-			// Unreachable: FMT-35 governance + assembly.schema.json enum reject
+			// Unreachable: FMT-36 governance + assembly.schema.json enum reject
 			// unknown capabilities, and generatedCapabilities() is codegen-derived
 			// from the validated set. Defense-in-depth only.
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

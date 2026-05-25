@@ -99,7 +99,7 @@ func TestGenerateModulesGen_Capabilities(t *testing.T) {
 // TestGenerateModulesGen_UnknownCapability verifies the codegen-time guard:
 // a capability value absent from capabilityConstNames fails with
 // ErrMetadataInvalid rather than emitting an undefined capability const. The
-// closed enum's validation-time enforcement is FMT-35 (gocell validate); this
+// closed enum's validation-time enforcement is FMT-36 (gocell validate); this
 // test only locks the generator's own fail-rather-than-emit-garbage behavior.
 func TestGenerateModulesGen_UnknownCapability(t *testing.T) {
 	project := buildModulesTestProject()

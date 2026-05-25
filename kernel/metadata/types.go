@@ -283,7 +283,7 @@ type AssemblyMeta struct {
 	// and injected into consuming cell modules via runtime/capability. The closed
 	// value set is mirrored by CapabilityEnum + runtime/capability.Kind +
 	// assembly.schema.json enum. Unknown or duplicate values are rejected by
-	// `gocell validate` governance rule FMT-35 (validation-time, not by ParseFS —
+	// `gocell validate` governance rule FMT-36 (validation-time, not by ParseFS —
 	// the parser stays lenient, matching Kubernetes admission-layer validation).
 	Capabilities        []string  `yaml:"capabilities,omitempty"`
 	Build               BuildMeta `yaml:"build,omitempty"`

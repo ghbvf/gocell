@@ -10,7 +10,7 @@ import (
 // The closed value set below is the single source mirrored by the
 // assembly.schema.json enum (kept in lockstep by kernel/metadata/schemas
 // TestSchemaConstantsMatchSchemaLiterals). Unknown or duplicate values are
-// rejected by `gocell validate` governance rule FMT-35 at validation time — not
+// rejected by `gocell validate` governance rule FMT-36 at validation time — not
 // at parse time: ParseFS stays lenient, matching Kubernetes admission-layer enum
 // validation rather than parse-time rejection.
 type Kind string
@@ -22,7 +22,7 @@ const (
 	Redis Kind = "redis"
 	// RabbitMQ is recognized by the enum but has NO provider / provisioning path
 	// yet: there is no RabbitMQProvider and cap_wiring's provisionCapabilities has
-	// no rabbitmq case, so declaring `capabilities: [rabbitmq]` passes FMT-35 +
+	// no rabbitmq case, so declaring `capabilities: [rabbitmq]` passes FMT-36 +
 	// codegen but fails fast at provisionCapabilities' default branch. It stays in
 	// the enum as recognized forward vocabulary; a real AMQP-shared-connection
 	// assembly must land the RabbitMQProvider + provisioning atomically.

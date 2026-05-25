@@ -85,7 +85,7 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 
 | # | 约束 | 载体 | 评级 |
 |---|------|------|------|
-| 1 | `assembly.yaml capabilities` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复 | `gocell validate` governance rule **FMT-35** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum 由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐 | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
+| 1 | `assembly.yaml capabilities` ∈ 封闭集 `{postgres,redis,rabbitmq}`、无重复 | `gocell validate` governance rule **FMT-36** + 单源 `metadata.CapabilityEnum` + `IsKnownCapability`；schema enum 由 `TestSchemaConstantsMatchSchemaLiterals` 字节对齐 | **Medium**（governance rule + 测试守卫；3 值封闭集不值得引 codegen funnel——K8s 旧 enum 模式同构，校验落 admission 层而非 parser） |
 | 2 | `modules_gen.go`（含 `generatedCapabilities()`）= `assembly.yaml` 派生 | `gocell verify codegen-assembly` regenerate-and-diff 字节锁 | **Hard**（codegen funnel + golden；既有机制，现覆盖 capabilities 分支） |
 | 3 | cell module 不能伪造 bypass provider | `capability.PGProvider`/`RedisProvider` sealed（unexported marker + 私有 impl + 唯一构造 `capability.NewPGProvider`/`NewRedisProvider`），包外不可表达 | **Hard**（sealed construction，type system） |
 | 4 | `cmd/<id>/*_module.go` 不直接构造**共享基建** | archtest **CAPABILITY-PROVIDER-FUNNEL-01**（`tools/archtest/capability_provider_funnel_test.go`）：ban `adapterpg.NewPool`/`NewTxManager`/`NewOutboxWriter` + `adapterredis.NewClient`，caller allowlist = `cmd/corebundle/cap_wiring.go` + `_test.go`；**不 ban** per-cell 派生（`NewSessionStore`/`NewCache`/`NewRedisDriver`/…，从注入 handle 构造，CLAUDE.md observability §per-cell 资源约定）；镜像 `CAS-PROTOCOL-COMPOSITION-ROOT-01` | **Medium**（type-aware caller-allowlist，非编译期） |
