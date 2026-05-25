@@ -11,8 +11,11 @@
 // makes label-set drift a detectable error rather than a silent mismatch.
 //
 // Counter/Histogram/Gauge 方法都接受 context.Context 首参，对齐 OTel 原生
-// ctx-bearing 形态（exemplar/baggage 由 OTel adapter 透传；Prometheus adapter
-// 不消费 ctx）。
+// ctx-bearing 形态：OTel adapter 把 ctx 转发给底层 instrument 以支持 exemplar /
+// baggage 关联（需传请求级 ctx，含 active span 才有意义）；Prometheus adapter 不
+// 消费 ctx。约定两条：(1) 实现禁止因 ctx 已取消/超时而跳过记录——指标发射是
+// best-effort，ctx 取消不得导致数据丢失；(2) 无请求 ctx 的后台路径（如 hook
+// dispatcher worker）显式传 context.Background() 并就近注释说明。
 package metrics
 
 import (

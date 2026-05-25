@@ -310,6 +310,12 @@ func join(ss []string) string {
 	return out.String() + "]"
 }
 
+// promCounter/promHistogram/promGauge adapt the prometheus/client_golang
+// instruments to the metrics interfaces. ctx is intentionally discarded (`_`):
+// prometheus client_golang's Inc/Add/Observe/Set do not accept a context, so
+// exemplar/baggage correlation is a no-op on this backend (it is realized by
+// the OTel adapter, adapters/otel/metric_provider.go). This is a deliberate
+// drop, not a missing implementation.
 type promCounter struct{ inner prom.Counter }
 
 func (c promCounter) Inc(_ context.Context)            { c.inner.Inc() }
