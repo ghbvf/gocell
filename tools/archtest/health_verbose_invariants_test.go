@@ -27,15 +27,18 @@
 //	must pass through newRedactedErrorMsg → pkg/redaction.RedactString. Four
 //	go/types-resolved guards (RunTyped, not pure AST):
 //	  1. TestHealthRedactedErrorMsgCreationFunnel — every redactedErrorMsg value
-//	     CREATED in the package is created inside newRedactedErrorMsg. A value is
-//	     created by either an explicit conversion redactedErrorMsg(x) (resolved
-//	     via info.Types[fun].IsType() + named-type identity, NOT *ast.Ident name)
-//	     OR an untyped string constant that acquires the redactedErrorMsg type
-//	     from context (isRedactedConstant: info.Types[lit].Value != nil &&
-//	     type == redactedErrorMsg). Both forms, in FuncDecl bodies AND
-//	     package-level GenDecl initializers (blind-spot c), must sit inside the
-//	     funnel (downstream Hard). A typed string is not assignable without a
-//	     conversion, so these two forms are the complete creation set (F1 #947).
+//	     CREATED in the package is created inside newRedactedErrorMsg's body span.
+//	     A value is created by either an explicit conversion redactedErrorMsg(x)
+//	     (info.Types[fun].IsType() + named-type identity, NOT *ast.Ident name) OR
+//	     a constant of type redactedErrorMsg (info.Types[e].Value != nil — an
+//	     untyped string acquiring the type from context: literal, const-ident,
+//	     const concat, paren — ANY AST form). The rule ITERATES info.Types (the
+//	     type checker's complete expr→type record), so it has no per-AST-node-kind
+//	     blind spot — closing the const-ident inflow (#996 review) that a
+//	     BasicLit/CallExpr walk missed. A typed string is not assignable without a
+//	     conversion, so constant-inflow + conversion is the complete creation set.
+//	     Funnel membership is by source-position span, not a func-name skip
+//	     (downstream Hard, F1 #947).
 //	  2. TestHealthRedactedErrorMsgFieldTyped — SlogDependencyEntry.errorMsg is
 //	     typed redactedErrorMsg (linchpin: a plain-string degrade would let raw
 //	     error text populate the field without any redactedErrorMsg creation).
@@ -54,32 +57,37 @@
 //	unexported SlogDependencyEntry fields close the UPSTREAM boundary (external
 //	packages can name neither the type nor the field — the Go compiler is the
 //	gate), but that does NOT stop four in-package regressions: untyped-const
-//	inflow without a conversion CallExpr (guard 1's BasicLit scan), the field
-//	degrading to string (guard 2), the funnel function vanishing (guard 3), the
-//	body dropping RedactString (guard 4), or a same-named local symbol shadowing
-//	the type (guard 1's typed resolution follows the object, not the name).
+//	inflow without a conversion CallExpr (guard 1's info.Types constant scan,
+//	any AST form), the field degrading to string (guard 2), the funnel function
+//	vanishing (guard 3), the body dropping RedactString (guard 4), or a
+//	same-named local symbol shadowing the type (guard 1's typed resolution
+//	follows the object, not the name).
 //	Upstream stays Hard via the type system; downstream is Hard via these four
 //	typed guards. There is NO pure-AST "unexported closes the boundary, no
 //	go/types needed" shortcut for the downstream gate.
 //
 // Blind-spot inventory (charter §载体决策原则 mandatory) for the funnel rule:
 //
-//	(a) composite-literal / var / return / assign untyped-const inflow
-//	    (SlogDependencyEntry{errorMsg: "raw"}, var x redactedErrorMsg = "raw",
-//	    return "raw", e.errorMsg = "raw") — EXTERNAL packages cannot name the
-//	    unexported field/type (compiler gate), but IN-PACKAGE an untyped string
-//	    constant IS implicitly converted to redactedErrorMsg with NO conversion
-//	    CallExpr (this is legal Go — the pre-F1 "cannot be assigned without a
-//	    conversion" claim was WRONG, see #947). Guard 1's BasicLit constant scan
-//	    flags these.
+//	(a) untyped-const inflow in ANY AST form — composite-literal field
+//	    (SlogDependencyEntry{errorMsg: "raw"}), var/const init (var x
+//	    redactedErrorMsg = "raw"), return, assignment, AND const-ident /
+//	    const-concat indirection (const c = "raw"; var _ redactedErrorMsg = c).
+//	    EXTERNAL packages cannot name the unexported field/type (compiler gate),
+//	    but IN-PACKAGE an untyped string constant IS implicitly converted with NO
+//	    conversion CallExpr (legal Go — the pre-F1 "cannot be assigned without a
+//	    conversion" claim was WRONG). Guard 1 iterates info.Types and flags every
+//	    constant of type redactedErrorMsg regardless of AST node kind, so this is
+//	    a CLOSED gap, not a blind spot (the #996 review-reported const-ident
+//	    bypass is caught — the const's use site is a constant redactedErrorMsg
+//	    expr in info.Types).
 //	(b) reflect-based construction (reflect.Value.Convert on the unexported
 //	    type) — unreachable from outside (type unnameable); in-package reflect is
-//	    the bug under investigation, code review is the backstop. Soft (code
-//	    review) → Hard-upgrade path (in-package reflect-convert reverse archtest)
-//	    tracked in gh issue #999.
+//	    a bypass-only construct (no normal code does this), code review is the
+//	    backstop. Soft → Hard-upgrade path tracked in gh issue #999.
 //	(c) package-level GenDecl initializer `var _ = redactedErrorMsg("x")` /
-//	    `var _ redactedErrorMsg = "x"` — guard 1 scans GenDecl subtrees (both
-//	    conversion and constant forms), not just FuncDecl bodies.
+//	    `var _ redactedErrorMsg = "x"` — guard 1's info.Types iteration covers
+//	    package-level decls too (no FuncDecl-body restriction); funnel membership
+//	    is by source-position span.
 //	(d) alias conversion `type r = redactedErrorMsg; r(x)` — types.Unalias
 //	    collapses the alias to the same named type, so guard 1 catches it.
 //	(e) funnel deletion/rename → vacuous green — guard 3 fails instead.
@@ -97,17 +105,12 @@
 //	    Switching to Tests:true would require an allowlist for those sites.
 //	(h) generic conversion laundering — `func g[T ~string](s string) T {
 //	    return T(s) }; g[redactedErrorMsg]("raw")`: inside g the conversion is
-//	    typed as the type parameter T, not redactedErrorMsg, and the call site is
-//	    g[...](...) not a redactedErrorMsg(...) CallExpr, so guard 1 misses it.
-//	    No such generic exists in the health package; adding one to launder is
-//	    itself the bug. Residual blind spot, code-review backstop.
-//	(i) const-ident indirection — `const c = "raw"; var _ redactedErrorMsg = c`:
-//	    the inflow point is the ident c (not a BasicLit) used in redactedErrorMsg
-//	    context. Guard 1 scans BasicLit + CallExpr, not arbitrary const Idents
-//	    (no interface EachInSubtree[ast.Expr]; ast.Inspect banned by
-//	    SCANNER-FRAMEWORK-USAGE-01). The const's own initializer "raw" is a
-//	    BasicLit but typed `untyped string`, not redactedErrorMsg, so it isn't
-//	    flagged. Not present in production; residual, code-review backstop.
+//	    typed as the type parameter T (not redactedErrorMsg), and the call result
+//	    is a non-constant func-call value, so neither guard-1 branch fires. Like
+//	    (b), this is a bypass-only construct — no normal code defines a generic
+//	    string-newtype launderer; adding one is itself the bug. Residual,
+//	    code-review backstop. (Distinct from the former (i) const-ident case,
+//	    which was a NORMAL idiom and is now CLOSED — see (a).)
 //
 // Reverse self-check posture (charter §载体决策原则): the wire-shape detection
 // logic is exercised by synthetic reverse tests (TestHealthVerboseWire*_Detects*)
@@ -435,104 +438,113 @@ func isRedactedConversion(info *types.Info, call *ast.CallExpr) bool {
 	return isHealthRedactedErrorMsgType(tv.Type)
 }
 
-// isRedactedConstant reports whether e is a constant expression of type
-// redactedErrorMsg — i.e. an untyped string constant flowing INTO the newtype
-// (composite-literal field / var or const init / assignment / return / call arg)
-// WITHOUT a conversion CallExpr. go/types records the post-conversion type plus a
-// non-nil constant Value for such literals (verified across all four contexts),
-// so this one typed predicate covers every untyped-const inflow form. A typed
-// string value (e.g. err.Error()) is NOT assignable to redactedErrorMsg without
-// an explicit conversion, so runtime inflow always shows up as isRedactedConversion
-// instead — the two predicates together are the complete creation-point set.
-func isRedactedConstant(info *types.Info, e ast.Expr) bool {
-	tv, ok := info.Types[e]
-	if !ok || tv.Value == nil {
+// isRedactedCreation reports whether expr (carrying TypeAndValue tv) CREATES a
+// redactedErrorMsg value: either a constant of type redactedErrorMsg (untyped
+// string inflow in ANY AST form — literal, const-ident, const concat, paren) or
+// an explicit redactedErrorMsg(x) conversion CallExpr. Reads (field / variable /
+// parameter references of that type) are non-constant non-conversions and are
+// NOT creations. Evaluated off info.Types entries, so there is no per-AST-node-
+// kind blind spot (closes blind-spots a + i: literal AND const-ident inflow).
+func isRedactedCreation(info *types.Info, expr ast.Expr, tv types.TypeAndValue) bool {
+	if !isHealthRedactedErrorMsgType(tv.Type) {
 		return false
 	}
-	return isHealthRedactedErrorMsgType(tv.Type)
+	if tv.Value != nil {
+		return true // constant inflow — any AST form (literal / const-ident / concat)
+	}
+	call, ok := expr.(*ast.CallExpr)
+	return ok && isRedactedConversion(info, call)
 }
 
-// redactedCreationDiags flags every redactedErrorMsg CREATION point inside root:
-// a conversion CallExpr (runtime or constant operand) OR an untyped-string-constant
-// BasicLit that acquires the redactedErrorMsg type from context. ctx names the
-// enclosing site. Walking BasicLit + CallExpr (not a full ast.Expr walk) is forced
-// by SCANNER-FRAMEWORK-USAGE-01 (no ast.Inspect) + the absence of an interface
-// EachInSubtree; it covers the realistic literal/conversion inflows. Residual
-// blind spots (h)/(i)/(b) are code-review-backstopped — see file header.
-func redactedCreationDiags(p *Pass, f *ast.File, root ast.Node, ctx string) []Diagnostic {
-	var ds []Diagnostic
-	EachInSubtree[ast.CallExpr](root, func(call *ast.CallExpr) {
-		if isRedactedConversion(p.TypesInfo, call) {
-			ds = append(ds, redactedCreationDiag(p, f, call.Pos(), "redactedErrorMsg(...) conversion", ctx))
-		}
-	})
-	EachInSubtree[ast.BasicLit](root, func(lit *ast.BasicLit) {
-		if isRedactedConstant(p.TypesInfo, lit) {
-			ds = append(ds, redactedCreationDiag(p, f, lit.Pos(), "untyped-constant inflow to redactedErrorMsg", ctx))
-		}
-	})
-	return ds
+// funnelBodyRange returns the [lo, hi] source span of newRedactedErrorMsg's body
+// (plus whether it was found). Creation points inside the span are the sanctioned
+// funnel; everything else is a violation. Position-based, not a func-name string
+// skip — the only sanctioned creation site is literally the funnel body's source
+// range, so a rename can never silently re-open it (guard 3 also fails on rename).
+func funnelBodyRange(p *Pass) (lo, hi token.Pos, found bool) {
+	for _, f := range p.Files {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Body != nil && fd.Name.Name == healthRedactedErrorMsgFunnelFuncName {
+				lo, hi, found = fd.Body.Pos(), fd.Body.End(), true
+			}
+		})
+	}
+	return lo, hi, found
 }
 
-func redactedCreationDiag(p *Pass, f *ast.File, pos token.Pos, form, ctx string) Diagnostic {
-	return Diagnostic{
-		Rel:  p.Rel(f),
-		Line: p.Fset.Position(pos).Line,
-		Message: fmt.Sprintf("%s in %s; only %s may create redactedErrorMsg values",
-			form, ctx, healthRedactedErrorMsgFunnelFuncName),
+// fileRelIndex maps an absolute filename (as Fset.Position reports) to its
+// module-relative slash path, so map-iterated diagnostics carry rel/line.
+func fileRelIndex(p *Pass) func(string) string {
+	idx := make(map[string]string, len(p.Files))
+	for _, f := range p.Files {
+		idx[p.Fset.Position(f.Pos()).Filename] = p.Rel(f)
+	}
+	return func(filename string) string {
+		if rel, ok := idx[filename]; ok {
+			return rel
+		}
+		return filename
 	}
 }
 
-// scanFuncDeclCreations flags redactedErrorMsg creation points inside every
-// FuncDecl body other than newRedactedErrorMsg's.
-//
-// EachInChildren[ast.FuncDecl] (depth-1) suffices: Go's AST places every
-// top-level function AND method declaration (incl. ones with a Recv) as a direct
-// child of *ast.File; nested FuncLit closures are reached by the inner
-// EachInSubtree. The funnel-skip is a func-name string compare, but it is
-// closed-loop, not a Soft anchor: Go forbids two top-level decls sharing a name
-// within a package, so the name maps 1:1 to the object, and guard 3
-// (TestHealthRedactedErrorMsgFunnelFuncSig) fails first if that name is
-// deleted/renamed — so a rename can never silently re-open this skip.
-func scanFuncDeclCreations(p *Pass, f *ast.File) []Diagnostic {
+// redactedCreationViolations iterates every typed expression in the package and
+// flags each redactedErrorMsg creation point whose source position is outside the
+// funnel body span [lo, hi]. Iterating info.Types (the type checker's complete
+// expr→type record) is exhaustive over AST node kinds — unlike a BasicLit/CallExpr
+// walk it cannot miss const-ident or const-concat inflows. Standard go/types,
+// not ast.Inspect (SCANNER-FRAMEWORK-USAGE-01) nor typeseval helpers
+// (PASS-FUNNEL-RESOLVE-01). Map order is non-deterministic; Report sorts.
+func redactedCreationViolations(p *Pass, lo, hi token.Pos) []Diagnostic {
+	relOf := fileRelIndex(p)
 	var ds []Diagnostic
-	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if fd.Body == nil || fd.Name.Name == healthRedactedErrorMsgFunnelFuncName {
-			return // bodiless decl, or the sanctioned funnel (creation allowed inside)
+	for expr, tv := range p.TypesInfo.Types {
+		if !isRedactedCreation(p.TypesInfo, expr, tv) {
+			continue
 		}
-		ds = append(ds, redactedCreationDiags(p, f, fd.Body, "func "+fd.Name.Name)...)
-	})
+		if lo <= expr.Pos() && expr.Pos() <= hi {
+			continue // inside the funnel body — the sole sanctioned creation site
+		}
+		pos := p.Fset.Position(expr.Pos())
+		ds = append(ds, Diagnostic{
+			Rel:  relOf(pos.Filename),
+			Line: pos.Line,
+			Message: fmt.Sprintf("%s outside %s; only the funnel may create redactedErrorMsg values",
+				redactedCreationForm(tv), healthRedactedErrorMsgFunnelFuncName),
+		})
+	}
 	return ds
 }
 
-func scanGenDeclCreations(p *Pass, f *ast.File) []Diagnostic {
-	var ds []Diagnostic
-	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
-		ds = append(ds, redactedCreationDiags(p, f, gd, "package-level GenDecl initializer")...)
-	})
-	return ds
+func redactedCreationForm(tv types.TypeAndValue) string {
+	if tv.Value != nil {
+		return "untyped-constant inflow to redactedErrorMsg"
+	}
+	return "redactedErrorMsg(...) conversion"
 }
 
 // TestHealthRedactedErrorMsgCreationFunnel enforces guard 1 (downstream Hard):
-// no redactedErrorMsg value is CREATED outside newRedactedErrorMsg — covering
-// both explicit conversions and untyped-constant inflows (F1 #947).
+// every redactedErrorMsg value CREATED in the package is created inside
+// newRedactedErrorMsg — explicit conversions AND untyped-constant inflows in any
+// AST form (F1 #947; const-ident closed via info.Types iteration, #996 review).
 func TestHealthRedactedErrorMsgCreationFunnel(t *testing.T) {
 	t.Parallel()
 
+	var funnelFound bool
 	diags := RunTyped(t, TypedOpts{Tests: false}, []string{healthPackagePattern},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != healthPackageImportPath {
 				return nil
 			}
-			var ds []Diagnostic
-			for _, f := range p.Files {
-				ds = append(ds, scanFuncDeclCreations(p, f)...)
-				ds = append(ds, scanGenDeclCreations(p, f)...)
-			}
-			return ds
+			lo, hi, ok := funnelBodyRange(p)
+			funnelFound = ok
+			return redactedCreationViolations(p, lo, hi)
 		})
 
 	Report(t, ruleHealthRedactedErrorMsgFunnel, diags)
+	if !funnelFound {
+		t.Fatalf("%s: funnel func %s not found in %s — cannot anchor the creation-funnel span",
+			ruleHealthRedactedErrorMsgFunnel, healthRedactedErrorMsgFunnelFuncName, healthPackageImportPath)
+	}
 }
 
 // TestHealthRedactedErrorMsgFunnelBodyRedacts enforces guard 4 (F2 #947): inside
