@@ -648,10 +648,11 @@ func statusToInt16(s saga.Status) int16 {
 }
 
 func statusFromInt16(v int16) (saga.Status, error) {
-	// Range-check before narrowing int16→uint8 so any out-of-band value is
-	// rejected as a schema-shape error rather than silently wrapping.
-	if v < 1 || v > 255 {
-		return 0, fmt.Errorf("status %d out of int8 range", v)
+	// Reject negatives and >255 before narrowing int16→uint8 so out-of-band
+	// values are rejected as a schema-shape error rather than silently
+	// wrapping. v=0 and 8..255 fall through to s.Valid() below.
+	if v < 0 || v > 255 {
+		return 0, fmt.Errorf("status %d out of uint8 range", v)
 	}
 	s := saga.Status(uint8(v))
 	if !s.Valid() {
@@ -668,8 +669,8 @@ func kindToInt16(k journal.EventKind) int16 {
 }
 
 func kindFromInt16(v int16) (journal.EventKind, error) {
-	if v < 1 || v > 255 {
-		return 0, fmt.Errorf("event kind %d out of int8 range", v)
+	if v < 0 || v > 255 {
+		return 0, fmt.Errorf("event kind %d out of uint8 range", v)
 	}
 	k := journal.EventKind(uint8(v))
 	if !k.Valid() {
