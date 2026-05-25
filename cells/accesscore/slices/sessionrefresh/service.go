@@ -146,16 +146,16 @@ func NewService(
 // ErrAuthRefreshUnavailable so clients do not confuse an outage with invalid
 // credentials.
 //
-// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity):
+// 检查顺序 (ADR §A11 重写 + §A12 wire-uniformity + §A13 single-envelope):
 //
 //  1. refreshStore.Peek + verifySession
 //  2. **session-state inline check (RevokedAt)** — revoked → cascadeRevoke +
 //     uniform 401 ErrAuthRefreshFailed; user is never loaded.
-//  3. subject-mismatch check
+//  3. subject-mismatch check → cascadeRevoke + uniform 401
 //  4. fetchUserForRefresh (user lookup)
-//  5. rejectIfUserNotActive — 403 ErrAuthUserNotActive (semantically distinct
-//     from "invalid token")
-//  6. rejectIfStaleEpoch
+//  5. rejectIfUserNotActive — uniform 401 ErrAuthRefreshFailed (ADR §A13
+//     single-envelope: indistinguishable from revoked/stale/reuse to caller)
+//  6. rejectIfStaleEpoch → cascadeRevoke + uniform 401
 //  7. mint + rotate
 //
 // Presenting an access JWT (or any string that does not parse as the opaque
@@ -265,9 +265,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	}
 
 	if sess.SubjectID != presented.SubjectID {
-		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
-			return dto.TokenPair{}, err
-		}
+		s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch")
 		return dto.TokenPair{}, authRefreshRejected()
 	}
 
@@ -277,10 +275,8 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	}
 	// User-bound credentialauthority funnel (ADR §A11 重写后, user-bound
 	// only). Session-revoked already rejected above. Baseline
-	// (CanAuthenticate) failure surfaces as 403 ErrAuthUserNotActive —
-	// distinct from the uniform 401 above because a still-live session
-	// with a now-suspended user is semantically "account state changed,"
-	// not "invalid token." cascadeRevoke clears the refresh chain so
+	// (CanAuthenticate) failure surfaces as uniform 401 ErrAuthRefreshFailed
+	// (ADR §A13 single-envelope). cascadeRevoke clears the refresh chain so
 	// subsequent rotation attempts fail immediately.
 	if err := s.rejectIfUserNotActive(ctx, user, sess.ID); err != nil {
 		return dto.TokenPair{}, err
@@ -320,9 +316,7 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// rotated.SessionID must match the verified session; defend against
 	// concurrent drift between Peek and Rotate.
 	if rotated.SessionID != sess.ID || rotated.SubjectID != sess.SubjectID {
-		if err := s.cascadeRevoke(ctx, sess.ID, "rotated-subject-mismatch"); err != nil {
-			return dto.TokenPair{}, err
-		}
+		s.cascadeRevoke(ctx, sess.ID, "rotated-subject-mismatch")
 		return dto.TokenPair{}, authRefreshRejected()
 	}
 
@@ -467,37 +461,42 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*session
 				slog.Any("error", err), slog.String("session_id", sessionID))
 			return nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session lookup unavailable", err)
 		}
-		// F4: cascade-revoke on not-found; log the revoke error if it fails.
-		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
-			return nil, err
-		}
+		// F4: cascade-revoke on not-found; best-effort, fail-closed to 401.
+		s.cascadeRevoke(ctx, sessionID, "session-not-found")
 		return nil, authRefreshRejected()
 	}
 	return sess, nil
 }
 
 // cascadeRevoke routes security-response revokes (reuse attack,
-// session-not-found, or subject mismatch) through RevokeSessionDetached. Once a
-// cascade path is reached, the store owns the detached, 5-second bounded write
-// policy that lets durable implementations persist the revoke outside the
-// caller's cancellation and ambient transaction boundary.
+// session-not-found, subject mismatch, user-not-active, stale-epoch) through
+// RevokeSessionDetached. It is best-effort and fail-closed to 401: if
+// RevokeSessionDetached fails the error is logged but NOT propagated — the
+// rejection decision has already been made, and leaking the infra error as 503
+// would (a) contradict the ADR §A13 single-envelope contract, and (b) signal
+// cascade-state to the caller.
+//
+// Matches the fail-closed behavior already established by handleReuseDetected
+// (which absorbs invalidator.Apply failures and returns authRefreshRejected()).
 //
 // reason is log-only and never exposed to callers.
 //
 // ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 // ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
-func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) error {
+// ref: ADR §A13 single-envelope: 503 reserved for "cannot evaluate" (infra outage
+//
+//	before the decision); post-decision cascade failure must not promote to 503.
+func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) {
 	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
-		s.logger.Error("session-refresh: cascade revoke failed",
+		s.logger.Error("session-refresh: cascade revoke failed (fail-closed to 401)",
 			slog.String("reason", reason),
 			slog.Any("error", err),
 			slog.String("session_id", sessionID))
-		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+		return
 	}
 	s.logger.Warn("session-refresh: cascade revoked refresh chain",
 		slog.String("reason", reason),
 		slog.String("session_id", sessionID))
-	return nil
 }
 
 // rejectIfRevokedSession runs the session-state inline check (RevokedAt)
@@ -520,9 +519,7 @@ func (s *Service) rejectIfRevokedSession(ctx context.Context, sess *session.Vali
 	if sess.RevokedAt == nil {
 		return nil
 	}
-	if cascadeErr := s.cascadeRevoke(ctx, sess.ID, "revoked-session"); cascadeErr != nil {
-		return cascadeErr
-	}
+	s.cascadeRevoke(ctx, sess.ID, "revoked-session")
 	s.logger.Warn("session-refresh: revoked session rejected",
 		slog.String("session_id", sess.ID),
 		slog.String("subject_id", subjectID))
@@ -531,14 +528,14 @@ func (s *Service) rejectIfRevokedSession(ctx context.Context, sess *session.Vali
 
 // rejectIfUserNotActive routes the baseline (user.CanAuthenticate via the
 // funnel's implicit check) gate. On failure it cascade-revokes the refresh
-// chain and returns the dedicated 403 (ErrAuthUserNotActive) — distinct
-// from the uniform 401 used by the session-revoked path because a refresh
-// call is already authenticated (the caller proved holding a valid refresh
-// token), so the signal "your account is no longer active" is semantically
-// valuable to the admin/UI consumer of /refresh. S4.0 fail-closed: a
-// non-active user must not obtain a fresh access token; the cascade-revoke
-// ensures subsequent rotation attempts immediately fail rather than keep
-// returning new tokens.
+// chain and returns uniform 401 ErrAuthRefreshFailed — aligned with ADR §A13
+// single-envelope: user-not-active is indistinguishable to the wire caller
+// from any other rejection reason (revoked/stale/reuse). OSS precedent:
+// RFC 6749 §5.2 invalid_grant, ory-fosite ErrInvalidGrant, Keycloak
+// invalid_grant — none differentiate account-status from token-invalidity.
+// S4.0 fail-closed: a non-active user must not obtain a fresh access token;
+// the cascade-revoke ensures subsequent rotation attempts immediately fail
+// rather than keep returning new tokens.
 //
 // Ordering note (ADR §A11 重写): session-revoked is now checked INLINE in
 // refreshInTx **before** the user is even loaded, so by the time this
@@ -556,11 +553,8 @@ func (s *Service) rejectIfUserNotActive(ctx context.Context, user *domain.User, 
 	if err := credentialauthority.Assert(user); err == nil {
 		return nil
 	}
-	if err := s.cascadeRevoke(ctx, sessionID, "user-not-active"); err != nil {
-		return err
-	}
-	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
-		"account is not active")
+	s.cascadeRevoke(ctx, sessionID, "user-not-active")
+	return authRefreshRejected()
 }
 
 // rejectIfStaleEpoch detects a stale refresh grant: when
@@ -587,9 +581,7 @@ func (s *Service) rejectIfStaleEpoch(ctx context.Context, rowEpoch, userEpoch in
 		slog.String("subject", subjectID),
 		slog.Int64("row_epoch", rowEpoch),
 		slog.Int64("user_epoch", userEpoch))
-	if err := s.cascadeRevoke(ctx, sessionID, "stale-epoch"); err != nil {
-		return err
-	}
+	s.cascadeRevoke(ctx, sessionID, "stale-epoch")
 	return authRefreshRejected()
 }
 
@@ -605,9 +597,7 @@ func (s *Service) fetchUserForRefresh(ctx context.Context, sessionID, userID str
 		if errcode.IsInfraError(err) {
 			return nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
 		}
-		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
-			return nil, err
-		}
+		s.cascadeRevoke(ctx, sessionID, "user-not-found")
 		return nil, authRefreshRejected()
 	}
 	return user, nil
