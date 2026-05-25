@@ -163,7 +163,8 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 	// closes (e.g. PR #464 reserved 022 → S6 merged → entry removed).
 	// Empty map = contiguous migrations, the steady state.
 	knownGaps := map[int64]string{
-		33: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
+		// 033 landed on develop in PR #1007 (password_version >= 0 CHECK);
+		// 034-039 remain reserved for parallel PRs preceding saga 040.
 		34: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
 		35: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",
 		36: "saga/L3 plan §R2 — reserved for parallel PRs preceding 040 (PR-04 #959)",

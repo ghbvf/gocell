@@ -50,12 +50,13 @@ const (
 // reorder without updating schemas/assembly.schema.json in lockstep.
 var DeployTemplateEnum = []string{"k8s", "compose", "binary"}
 
-// CapabilityEnum lists the canonical values accepted for
-// assembly.capabilities items. Order matches the schema enum order at
-// schemas/assembly.schema.json properties.capabilities.items.enum; do not
-// reorder without updating the schema in lockstep.
-// TestSchemaConstantsMatchSchemaLiterals (kernel/metadata/schemas) asserts
-// byte-level parity between this slice and the schema enum array.
+// CapabilityEnum lists the canonical values accepted for cell.requires items.
+// Order matches the schema enum order at schemas/cell.schema.json
+// properties.requires.items.enum; do not reorder without updating the schema
+// in lockstep. TestSchemaConstantsMatchSchemaLiterals (kernel/metadata/schemas)
+// asserts byte-level parity between this slice and the schema enum array. The
+// assembly's provisioned set is the derived union of its cells' requires
+// (Design Y, #855) — there is no assembly-level capabilities enum.
 var CapabilityEnum = []string{"postgres", "redis", "rabbitmq"}
 
 var goStructNameRe = regexp.MustCompile(GoStructNamePattern)

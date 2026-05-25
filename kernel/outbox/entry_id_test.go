@@ -1,13 +1,31 @@
 package outbox
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
+
+var errEntryIDEntropyFailedForTest = errors.New("outbox_test: entry-id entropy stub failure")
+
+type failingEntryIDReader struct{}
+
+func (failingEntryIDReader) Read([]byte) (int, error) {
+	return 0, errEntryIDEntropyFailedForTest
+}
+
+func TestNewEntryID_RandFailure(t *testing.T) {
+	id, err := newEntryID(failingEntryIDReader{})
+	require.Error(t, err)
+	assert.Empty(t, id)
+	assert.ErrorIs(t, err, errEntryIDEntropyFailedForTest)
+	assert.ErrorContains(t, err, "outbox: read entropy")
+}
 
 func TestNewEntryID_HasPrefix(t *testing.T) {
 	id := MustNewEntryID()

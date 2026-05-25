@@ -31,17 +31,22 @@ type Check interface {
 // CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 sealed-by-name detector守护;
 // combined with the funnel's caller allowlist this closes the read-side
 // loop for user-bound credential checks.)
-type withPasswordVersionPin struct{ expected int64 }
+type withPasswordVersionPin struct {
+	valid    bool
+	expected int64
+}
 
 // Compile-time assertion: withPasswordVersionPin satisfies Check.
 // This is the file-local form of the sealed-interface invariant —
 // SnapshotPasswordVersion's return type is Check (interface), so a
 // signature mismatch surfaces at compile time at the call site; the
 // assertion here is documentation for grep-able audit.
+// Zero value {valid: false, expected: 0} is a valid Check: it represents
+// an invalid pin that never matches any real PasswordVersion — fail-closed.
 var _ Check = withPasswordVersionPin{}
 
 func (w withPasswordVersionPin) apply(u *domain.User) error {
-	if u.PasswordVersion != w.expected {
+	if !w.valid || u.PasswordVersion != w.expected {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"credential not authoritative",
 			errcode.WithInternal("credentialauthority: password version stale"))
@@ -72,13 +77,15 @@ func (withPasswordVersionPin) checkOK() {
 //	// ... run bcrypt outside tx ...
 //	if err := credentialauthority.Assert(user, pin); err != nil { /* race */ }
 //
-// nil user returns a Check with sentinel expected=-1, which cannot match
-// any real PasswordVersion that a real user can hold (NewUser 从 0 开始;
-// -1 < 0 因此不匹配) — fail-closed. Callers should not pass nil; the
-// upstream invariant is that *domain.User was successfully fetched.
+// nil user returns a Check with valid=false, an explicit invalid pin that
+// never matches any real PasswordVersion — fail-closed. No sentinel integer
+// value is required; the valid bool makes the "no snapshot taken" state
+// unambiguous and independent of the PasswordVersion >= 0 invariant.
+// Callers should not pass nil; the upstream invariant is that *domain.User
+// was successfully fetched.
 func SnapshotPasswordVersion(u *domain.User) Check {
 	if u == nil {
-		return withPasswordVersionPin{expected: -1}
+		return withPasswordVersionPin{valid: false}
 	}
-	return withPasswordVersionPin{expected: u.PasswordVersion}
+	return withPasswordVersionPin{valid: true, expected: u.PasswordVersion}
 }

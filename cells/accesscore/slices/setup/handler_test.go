@@ -22,11 +22,11 @@ import (
 )
 
 // testAllowAllLimiter satisfies auth.BootstrapRateLimiter for tests that
-// focus on Basic Auth semantics. AUTH-AUTHTEST-B archtest forbids cells/ from
-// importing runtime/auth/authtest, so this fake stays file-local; the
-// equivalent fake also lives in cmd/corebundle/setup_integration_test.go and
-// cmd/corebundle/outbox_e2e_integration_test.go (per-package duplication is
-// the accepted cost of the layering boundary).
+// focus on Basic Auth semantics. The authtest helper lives under
+// runtime/internal/authtest (Go internal/ rule refuses cells/ imports at
+// compile time, see issue #638), so this fake stays file-local; the
+// equivalent fake also lives in cmd/corebundle/setup_integration_test.go
+// (per-package duplication is the accepted cost of the visibility boundary).
 type testAllowAllLimiter struct{}
 
 func (testAllowAllLimiter) Allow(string) bool { return true }
@@ -259,9 +259,9 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 // wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
 // bootstrap middleware path.
 //
-// The rate limiter is authtest.AllowAllLimiter — the focus is Basic Auth
-// semantics, not throttling. The 429 path is covered by runtime/auth's own
-// bootstrap_test.go via a configurable fake limiter.
+// The rate limiter is testAllowAllLimiter (file-local; see top of file) —
+// the focus is Basic Auth semantics, not throttling. The 429 path is covered
+// by runtime/auth's own bootstrap_test.go via a configurable fake limiter.
 func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
 	t.Helper()
 	creds := auth.BootstrapCredentials{

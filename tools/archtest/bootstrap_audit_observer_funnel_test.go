@@ -69,16 +69,18 @@
 // returns a custom impl): this is reachable only via Go-type-system upstream
 // Hard (sealing auth.BootstrapAuthFailObserver into a marker that only
 // runtime/audit can construct, which forces runtime/auth → runtime/audit,
-// breaking the documented non-dependency). Promotion to Hard is tracked as
-// This archtest defines the Medium ceiling reachable
-// without that refactor.
+// breaking the documented non-dependency). Until that refactor lands, this
+// archtest defines the Medium ceiling reachable without sealing the
+// observer interface.
 //
-// Scope carve-out (must match the F2 plan decision):
-//   - examples/ssobff/app.go intentionally still wires the legacy
-//     slog-only observer; it will be moved through this funnel and widen the scope below.
-//   - cmd/corebundle/*_test.go invocations are mocks for rate-limit /
-//     bootstrap-credential paths and do not represent production wiring;
-//     RunTypedProduction(opts.Tests=false) keeps them out of the Pass set.
+// Scope:
+//   - cmd/corebundle/ (production, non-test): the platform composition root.
+//   - examples/ssobff/ (production, non-test): the in-repo demo composition
+//     root. Migrated through the funnel by ssobff bootstrap-audit-chain wiring;
+//     keeping it in scope guarantees the demo cannot regress to slog-only.
+//   - *_test.go invocations are mocks for rate-limit / bootstrap-credential
+//     paths and do not represent production wiring; RunTypedProduction(
+//     opts.Tests=false) keeps them out of the Pass set in both packages above.
 
 package archtest
 
@@ -101,6 +103,7 @@ const (
 	auditPkgSuffix          = "/runtime/audit"
 	authPkgSuffix           = "/runtime/auth"
 	corebundlePkgSuffix     = "/cmd/corebundle"
+	ssobffPkgSuffix         = "/examples/ssobff"
 	observerFnName          = "NewBootstrapAuthFailObserver"
 	appendFnName            = "AppendBootstrapAuthFail"
 	bootstrapMiddlewareName = "NewBootstrapMiddleware"
@@ -385,10 +388,12 @@ func exprStringForLog(c *ast.CallExpr) string {
 
 // TestBootstrapAuditObserverFunnelUpstreamMedium01 enforces the upstream
 // half: every production call to auth.NewBootstrapMiddleware in cmd/corebundle
-// must hand the funnel-built observer as its third positional argument. The
-// observer may be either the direct CallExpr to
+// or examples/ssobff must hand the funnel-built observer as its third
+// positional argument. The observer may be either the direct CallExpr to
 // audit.NewBootstrapAuthFailObserver or an identifier short-declared from it
-// in the same source file.
+// in the same source file. Both packages share the same upstream Medium
+// posture; the demo composition root is held to the production wiring rule
+// to keep an in-repo regression out of the funnel impossible.
 //
 // Why a small Medium gap exists: a function-level "X = func(ctx, reason){...}"
 // assignment with the same identifier as a legitimate funnel-built observer
@@ -403,13 +408,25 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	auditPkgPath := modPath + auditPkgSuffix
 	authPkgPath := modPath + authPkgSuffix
 	corebundlePkgPath := modPath + corebundlePkgSuffix
+	ssobffPkgPath := modPath + ssobffPkgSuffix
+	scanPaths := map[string]bool{
+		corebundlePkgPath: true,
+		ssobffPkgPath:     true,
+	}
+	// Reverse self-check (ai-robust.md §"工具选定后强制盲区自检"): record
+	// which scope packages were actually visited so we fail loudly if a
+	// future RunTypedProduction loader config silently skips one (e.g. drops
+	// package main binaries under examples/). Without this guard a vacuous
+	// pass would let the demo regress to slog-only undetected.
+	visited := map[string]bool{}
 
 	var upstreamViolations []upstreamViolation
 
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Path() != corebundlePkgPath {
+		if p.Pkg == nil || !scanPaths[p.Pkg.Path()] {
 			return nil
 		}
+		visited[p.Pkg.Path()] = true
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
@@ -453,12 +470,23 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 		return nil
 	})
 
+	// Fail loudly if any scope package was not visited by the loader. A
+	// vacuous pass (no violations because nothing was scanned) would let
+	// the demo or platform composition root regress to slog-only undetected.
+	for path := range scanPaths {
+		require.Truef(t, visited[path],
+			"%s: RunTypedProduction did not visit %q — scope coverage gap, "+
+				"upstream Medium guard would pass vacuously without it",
+			ruleBootstrapAuditObserverFunnelUpstreamMedium01, path)
+	}
+
 	for _, v := range upstreamViolations {
 		t.Logf("%s: %s — %s", ruleBootstrapAuditObserverFunnelUpstreamMedium01, v.location, v.reason)
 	}
 	assert.Empty(t, upstreamViolations,
-		"%s: cmd/corebundle production callers of auth.%s must route through audit.%s; "+
-			"recovering to slog-only observers (the pre-PR shape) is what this rule prevents",
+		"%s: cmd/corebundle and examples/ssobff production callers of auth.%s "+
+			"must route through audit.%s; recovering to slog-only observers "+
+			"(the pre-PR shape) is what this rule prevents",
 		ruleBootstrapAuditObserverFunnelUpstreamMedium01, bootstrapMiddlewareName, observerFnName)
 }
 

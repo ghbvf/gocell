@@ -93,19 +93,6 @@ func (r Refresh401ErrorResponse) visitRefreshResponse(ctx context.Context, w htt
 	return nil
 }
 
-// Refresh403ErrorResponse renders an HTTP 403 error response.
-// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
-// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
-// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type Refresh403ErrorResponse struct {
-	Body errcode.Error
-}
-
-func (r Refresh403ErrorResponse) visitRefreshResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
-	return nil
-}
-
 // Refresh413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json

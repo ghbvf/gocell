@@ -13,8 +13,11 @@ func generatedCellModules() []CellModule {
 }
 
 // generatedCapabilities lists the assembly-level shared infrastructure
-// capabilities declared in assembly.yaml. The composition root provisions each
-// once and injects the resulting runtime/capability provider into consuming modules.
+// capabilities — the sorted union of the assembly cells' cell.yaml `requires`.
+// The composition root provisions each once and injects the resulting
+// runtime/capability provider into consuming modules. Emitted iff the union is
+// non-empty: an assembly whose cells require nothing has no provisioner to call
+// it, so the function (and its capability import) are omitted to avoid dead code.
 func generatedCapabilities() []capability.Kind {
 	return []capability.Kind{
 		capability.Postgres,

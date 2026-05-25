@@ -170,12 +170,13 @@ func TestTestMux_Route_DuplicateMethodPatternPanics(t *testing.T) {
 }
 
 // kernelLocalRequireAuthenticated is a kernel/-local replica of the
-// runtime/auth/authtest.RequireAuthenticated() policy. The tests in this
-// package cannot import runtime/auth/authtest because kernel/ must not
-// depend on runtime/ (CLAUDE.md "kernel/ 不依赖 runtime/"); the archtest
-// AUTH-AUTHTEST-B rule pins this layering. Defined as a package-level
-// helper so its branching does not inflate the cognitive complexity of
-// the table-driven test that uses it.
+// runtime/internal/authtest.RequireAuthenticated() policy. The tests in this
+// package cannot import runtime/internal/authtest because (a) kernel/ must
+// not depend on runtime/ per CLAUDE.md "kernel/ 不依赖 runtime/" layering,
+// and (b) since issue #638 the Go compiler also refuses the import directly
+// (runtime/internal/* is only importable from runtime/**). Defined as a
+// package-level helper so its branching does not inflate the cognitive
+// complexity of the table-driven test that uses it.
 func kernelLocalRequireAuthenticated(r *http.Request) error {
 	p, ok := auth.FromContext(r.Context())
 	if !ok {

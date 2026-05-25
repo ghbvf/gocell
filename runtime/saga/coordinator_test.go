@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
@@ -18,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -695,6 +697,66 @@ func (s *stubRepoProberJournal) RepoReady(_ context.Context) error {
 	return s.repoErr
 }
 
+// TestCoordinator_RepoReadinessConformance enrolls *Coordinator in the shared
+// healthz.RepoProber conformance harness (CELL-REPO-READYZ-PROBE-01). The
+// Coordinator's RepoReady is a lifecycle gate over journal delegation, so both
+// probers must be RUNNING for the harness to exercise the delegation path — a
+// non-running coordinator always reports Unavailable via the lifecycle gate,
+// which TestRepoReady_BeforeStart_NotRunning covers separately:
+//   - healthy: running coordinator backed by a healthy mem journal → nil.
+//   - broken:  running coordinator whose journal reports its relation gone → non-nil.
+//
+// Why a journal stub, not a real DROP TABLE: the Coordinator is NOT a SQL-backed
+// store — it owns no relation. Its differentiated property is *faithful
+// delegation* of the injected journal's readiness, so the "broken" prober is a
+// running coordinator over a journal stub that returns an error. This is the
+// strongest available broken analog (a no-op Coordinator.RepoReady that always
+// returned nil would FAIL this sub-test), and it is stronger than passing a nil
+// broken (which would skip the differentiated check entirely). The real
+// DROP-TABLE conformance for the SQL-backed journal lands with the PG durable
+// journal (#959) in adapters/postgres, which CELL-REPO-READYZ-PROBE-01 will then
+// independently require to enroll.
+func TestCoordinator_RepoReadinessConformance(t *testing.T) {
+	clkHealthy := newFakeClock()
+	healthy := startRunningCoordinator(t, newMemJournal(clkHealthy), clkHealthy)
+
+	clkBroken := newFakeClock()
+	broken := startRunningCoordinator(t, &stubRepoProberJournal{
+		MemJournal: newMemJournal(clkBroken),
+		repoErr:    errors.New("saga journal relation gone"),
+	}, clkBroken)
+
+	celltest.RunRepoReadinessConformance(t, "saga-coordinator", healthy, broken)
+}
+
+// startRunningCoordinator builds a Coordinator backed by j, Starts it, waits for
+// Ready, and registers Stop on cleanup. It returns the running coordinator so
+// RepoReady reflects the journal-delegation path rather than the lifecycle gate.
+func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *Coordinator {
+	t.Helper()
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		cancel()
+		t.Fatal("coordinator did not become ready")
+	}
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer stopCancel()
+		_ = c.Stop(stopCtx)
+		<-startDone
+	})
+	return c
+}
+
 // ---------------------------------------------------------------------------
 // helper: mustCoordinator
 // ---------------------------------------------------------------------------
@@ -1034,6 +1096,30 @@ func TestFailurePayload_NoInternalLeak(t *testing.T) {
 		if strings.Contains(payloadStr, forbidden) {
 			t.Errorf("failurePayload contains forbidden string %q: %s", forbidden, payloadStr)
 		}
+	}
+}
+
+// TestFailurePayload_NonErrcodeRedacted covers the else branch: a plain
+// (non-errcode) error whose text carries a key=value secret must be redacted by
+// pkg/redaction.RedactString before landing in the journal Payload.
+func TestFailurePayload_NonErrcodeRedacted(t *testing.T) {
+	err := errors.New("connect failed dsn=postgres://user:hunter2@db/saga token=abc123")
+
+	var result struct {
+		Reason string `json:"reason"`
+	}
+	if jsonErr := json.Unmarshal(failurePayload(err), &result); jsonErr != nil {
+		t.Fatalf("failurePayload produced invalid JSON: %v", jsonErr)
+	}
+
+	// Secret values must be masked; the <REDACTED> mask must be present.
+	for _, leaked := range []string{"hunter2", "abc123", "postgres://user"} {
+		if strings.Contains(result.Reason, leaked) {
+			t.Errorf("reason leaks %q: %s", leaked, result.Reason)
+		}
+	}
+	if !strings.Contains(result.Reason, redaction.Mask) {
+		t.Errorf("reason missing redaction mask %q: %s", redaction.Mask, result.Reason)
 	}
 }
 

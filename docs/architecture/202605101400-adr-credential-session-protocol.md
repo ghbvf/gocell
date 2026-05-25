@@ -10,7 +10,7 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）；2026-05-25 — §A15 refresh user-not-active 收口 401（回退 post-§A13 漂入的 403）+ cascade fail-closed void 签名升 Hard（issue #940）
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
@@ -535,6 +535,77 @@ FU-1～4 全部 merged。计划 §"完成判据"（`docs/plans/archive/202605082
    `IDENTITYMANAGE-UPDATE-CO-TX-UPGRADE-01` 触发型条目承接，触发条件 = 第 2
    次同模式 split-tx 引发实际部分提交事故，或 authzmutate API 重设计。无
    §3 威胁矩阵格子从 ✅ 退化。
+
+---
+
+### A15 refresh user-not-active 收口 401 + cascade fail-closed 统一化（2026-05-25, issue #940）
+
+**背景漂移**：§A13 table（本节 line 450）一直要求 sessionrefresh 的
+revoked / subject-mismatch / **user-not-active** / stale-epoch / reuse
+**全部** 返回 `KindUnauthenticated` + `ErrAuthRefreshFailed`（401）。但 §A13
+落地后，一个 `403`（`ERR_AUTH_USER_NOT_ACTIVE`）以"refresh caller 已证明持有
+token、非枚举面"为由漂入 `contracts/http/auth/refresh/v1/contract.yaml` +
+`handler.go`（`Refresh403ErrorResponse`）+ `service.go::rejectIfUserNotActive`，
+与 §A13 table 直接矛盾，形成 contract↔ADR 两套真理源（正是 line 440-442 §A11
+首版试图修复的 "revoked + inactive → 403" 漂移的同形复发）。issue #940
+回退该 403。
+
+**决策 1 — user-not-active 收口 401**：`rejectIfUserNotActive` 改返回
+`authRefreshRejected()`（401）；删 contract `403:` 声明、handler 403 分支、
+regenerate 删 `Refresh403ErrorResponse`。**ADR A13 table 无需改动**（本来就是
+401）——本 amendment 使代码对齐 ADR，而非改 ADR。
+
+**OSS 对标佐证**（CLAUDE.md §参考框架 + 单 envelope 防枚举）：refresh/OAuth2
+token-grant 路径的账户失效，主流框架**全部单 envelope、不按账户状态区分状态码**：
+RFC 6749 §5.2（token endpoint 统一 `invalid_grant`，仅 `invalid_client` 例外）、
+ory/fosite `handler/oauth2/flow_refresh.go`（一律 `ErrInvalidGrant`）、Keycloak
+`TokenManager.validateToken`（user disabled → `invalid_grant`）、Spring
+Authorization Server、Okta 同。Auth0 的 403 是已记录 non-conformance。
+`ref: ory/fosite handler/oauth2/flow_refresh.go`；`ref: keycloak TokenManager.java`。
+（GoCell token-rejection envelope 是 401 而非 RFC 的 400，是既有协议选择，本 PR
+不改 401→400——那是跨 validate/refresh/login 的更大变更。）
+
+**与 change-password 的有意区分**：`identitymanage.ChangePassword` /
+`sessionlogin.IssueForUser` **保留 403**（`ErrAuthUserNotActive`）。refresh 是
+bearer-token 端点（token 可被盗，账户状态泄漏是枚举面）；change-password 是
+已认证 admin/self 端点（强身份证明，OSS 单 envelope 对标域是 token endpoint，
+不含已认证账户管理操作）。issue #940 P2-2 仅清理 `IssueForUser` 边界透传的
+jargon message（"credential not authoritative" → 用户可见 "account is not
+active"，原文进 `WithInternal`）+ ChangePassword adapter 显式映射声明的 403 +
+contract 403 description 拓宽覆盖该原因。
+
+**决策 2 — cascade fail-closed 统一化（AI-HARD 升级）**：`cascadeRevoke` 改为
+**best-effort void 签名**（失败只记 `slog.Error`，不返回 error）。全部
+cascadeRevoke 拒绝路径（revoked / subject-mismatch / user-not-active /
+stale-epoch / rotated-subject-mismatch / session-not-found / user-not-found）
+据此 fail-closed 到 401，对齐 `handleReuseDetected` 既有形态。**"cascade 失败 →
+503 漂移" 现在类型系统层不可表达**（调用方拿不到不存在的 error）——§A13 wire
+single-envelope 在这一具体漂移上从 service_test Medium 升为 **Hard**。`503`
+（`ErrAuthRefreshUnavailable`）仅保留给"**无法评估**请求"的 infra outage：
+`verifySession` / `fetchUserForRefresh` 的 `IsInfraError` 分支 +
+`refreshStoreError` 非 reuse store error（这些直接返回 503，不经 cascadeRevoke）。
+
+**§3 威胁矩阵逐行重评**（ai-robust.md §"ADR amendment 落地必查"）：
+
+- 本节 line 481 行「revoked session 后置导致 wire 漂移（P1-A）」✅ **强化不退化**：
+  原 ✅ 由 §A11 重写 + revoke inline check 支撑；本 amendment 追加 (a) cascade-fail
+  → 503 漂移由 void 签名升 Hard，(b) user-not-active 同 revoked/stale/reuse 收口
+  401（不再 403）。新增/翻转回归测试：`TestService_Refresh_CascadeRevokeFailure_FailsClosed401`、
+  `TestCascadeFailClosed_{RevokedSession,SubjectMismatch,UserNotActive,StaleEpoch,RotatedSubjectMismatch}_401`、
+  `TestService_Refresh_UserNotActive_RejectsAndCascadeRevokes`（翻转为 401）、
+  `TestHandleRefresh_UserNotActive_Returns401`。
+- **通用单 envelope**（refreshInTx 每条拒绝 return ⊆ `{authRefreshRejected()}`）
+  仍 **Medium**（service_test），Hard 升级路径仍是既有 backlog
+  `WIRE-UNIFORM-RESPONSE-ARCHTEST-01`（跨 validate/refresh/login 三 slice）；本
+  amendment 是其前置 enabler（入口形态收口后唯一），不在本 PR 立项。
+- **无任何 ✅ 格子退化**；A13 table line 450 与代码现已一致（消除 contract↔ADR
+  两套真理源），line 440-442 指出的漂移彻底闭合。
+
+**P2-1 旁记（不影响威胁矩阵）**：`credentialauthority.SnapshotPasswordVersion(nil)`
+的 `-1` sentinel 改为显式 `valid bool` 无效 pin（不再依赖 `PasswordVersion ≥ 0`
+隐式不变量）；migration `033_users_password_version_non_negative.sql` 补
+`CHECK (password_version >= 0)` 作 defense-in-depth（NewUser 从 0、
+BumpPasswordVersion 只自增）。
 
 ---
 

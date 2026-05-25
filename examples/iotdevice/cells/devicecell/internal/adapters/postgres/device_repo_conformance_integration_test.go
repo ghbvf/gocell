@@ -14,6 +14,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain/conformance"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -94,6 +95,35 @@ func resetDeviceRepoSchema(t *testing.T, pool *adapterpg.Pool) {
 	t.Helper()
 	_, err := pool.DB().Exec(context.Background(), "TRUNCATE TABLE devices RESTART IDENTITY CASCADE")
 	require.NoError(t, err, "truncate devices")
+}
+
+// TestPGDeviceRepository_RepoReadinessConformance wires PGDeviceRepository through
+// the shared RepoHealthProber conformance harness:
+//   - healthy: a fully migrated repo returns nil from RepoReady.
+//   - broken: a repo whose devices table has been dropped returns non-nil.
+//
+// Each instance uses an isolated per-test DB (setupSharedDeviceRepoPG) so the
+// DROP TABLE for the broken scenario does not affect the healthy pool's devices table.
+func TestPGDeviceRepository_RepoReadinessConformance(t *testing.T) {
+	testutil.RequireDocker(t)
+	ctx := context.Background()
+
+	// healthy: per-test DB with full migrations — devices table intact.
+	healthyPool, healthyTxMgr, healthyTerminate := setupSharedDeviceRepoPG(t)
+	t.Cleanup(healthyTerminate)
+	healthy, err := NewPGDeviceRepository(healthyPool.DB(), healthyTxMgr, clock.Real())
+	require.NoError(t, err)
+
+	// broken: per-test DB with migrations applied, then devices table dropped
+	// to simulate schema drift / missing migration.
+	brokenPool, brokenTxMgr, brokenTerminate := setupSharedDeviceRepoPG(t)
+	t.Cleanup(brokenTerminate)
+	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS devices CASCADE")
+	require.NoError(t, dropErr, "drop devices table for broken scenario")
+	broken, err := NewPGDeviceRepository(brokenPool.DB(), brokenTxMgr, clock.Real())
+	require.NoError(t, err)
+
+	celltest.RunRepoReadinessConformance(t, "devicecell-pg", healthy, broken)
 }
 
 // testAdapterMigrationsFS returns the shared adapters/postgres migration FS.

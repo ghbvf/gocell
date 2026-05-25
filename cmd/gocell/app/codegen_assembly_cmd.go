@@ -34,7 +34,7 @@ var assemblyCodegenSpec = codegenSpec[assemblyDriftResult]{
 	GenerateUsage:   "gocell generate assembly --id=<assemblyID> | --all",
 	AllFlagDesc:     "regenerate modules_gen.go for all assemblies (cells>0)",
 	PluralNoun:      "assembly modules_gen.go",
-	SourceArtifacts: "assembly.yaml / cell.yaml goStructName",
+	SourceArtifacts: "assembly.yaml / cell.yaml goStructName + requires",
 	Generate:        generateAssemblyModulesGen,
 }
 

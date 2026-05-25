@@ -859,6 +859,58 @@ func TestVerifyExpectedShape_DetectsMissingFunction(t *testing.T) {
 // DetectInvalidIndexes: in-progress filter tests
 // ---------------------------------------------------------------------------
 
+// TestUsersMigration033_PasswordVersionNonNegative verifies that after
+// migration 033 is applied, inserting a row with password_version = -1 into
+// the users table is rejected by the DB CHECK constraint
+// users_password_version_non_negative, while password_version = 0 is accepted.
+//
+// This locks the defense-in-depth invariant added by issue #940 P2-1: the DB
+// refuses any write that would allow a negative sentinel value to persist —
+// eliminating the silent implicit assumption that PasswordVersion >= 0.
+//
+// RED until migration 033 exists: without the constraint, the -1 INSERT
+// succeeds and require.Error fires.
+func TestUsersMigration033_PasswordVersionNonNegative(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_033_pw_version")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "all migrations must apply cleanly through 033")
+
+	// password_version = 0 must succeed (NewUser baseline).
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO users
+			(id, username, email, password_hash, password_version,
+			 creation_source, status, authz_epoch, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, 0,
+			 'identity', 'active', 1, now(), now())`,
+		"00000000-0000-0000-0033-000000000001",
+		"alice_pw0",
+		"alice_pw0@example.com",
+		"$2a$12$dummy",
+	)
+	require.NoError(t, execErr, "password_version=0 must be accepted by DB")
+
+	// password_version = -1 must be rejected by users_password_version_non_negative.
+	_, execErr = pool.DB().Exec(ctx, `
+		INSERT INTO users
+			(id, username, email, password_hash, password_version,
+			 creation_source, status, authz_epoch, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, -1,
+			 'identity', 'active', 1, now(), now())`,
+		"00000000-0000-0000-0033-000000000002",
+		"alice_pwminus1",
+		"alice_pwminus1@example.com",
+		"$2a$12$dummy",
+	)
+	require.Error(t, execErr, "password_version=-1 must be rejected by DB CHECK constraint")
+	assert.Contains(t, execErr.Error(), "users_password_version_non_negative",
+		"error must surface the constraint name for ops triage")
+}
+
 // TestDetectInvalidIndexes_StillReportsOrphanWithProgressFilterAdded verifies
 // that the LEFT JOIN pg_stat_progress_create_index added to the
 // DetectInvalidIndexes query does not suppress orphan invalid indexes (i.e.,

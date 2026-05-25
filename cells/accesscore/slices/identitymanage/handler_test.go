@@ -814,3 +814,47 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
+
+// TestChangePasswordAdapter_UserNotActive_Returns403 verifies that when
+// IssueForUser returns ErrAuthUserNotActive the adapter maps it to the
+// declared typed ChangePassword403ErrorResponse (issue #940 P2-2).
+// Without the fix the adapter falls through to (nil, err) framework fallback.
+func TestChangePasswordAdapter_UserNotActive_Returns403(t *testing.T) {
+	issuerErr := errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+		"account is not active")
+	stub := &stubTokenIssuer{err: issuerErr}
+
+	repo := mem.NewStore(clock.Real()).UserRepository()
+	userID := "usr-inactive-cp"
+	hash, hashErr := bcrypt.GenerateFromPassword([]byte("oldpass12"), bcrypt.MinCost)
+	require.NoError(t, hashErr)
+	user, userErr := domain.ReconstituteUser(domain.ReconstituteUserParams{
+		ID:           userID,
+		Username:     "inactive-cp",
+		Email:        "inactive-cp@test.com",
+		PasswordHash: string(hash),
+		Status:       domain.StatusSuspended,
+		Source:       domain.UserSourceIdentity,
+		AuthzEpoch:   1,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	})
+	require.NoError(t, userErr)
+	require.NoError(t, repo.Create(context.Background(), user))
+
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newHandlerIdentityRefreshStore()
+	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore),
+		slog.Default(), WithTokenIssuer(stub), WithClock(clock.Real()),
+		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
+	require.NoError(t, err)
+
+	resp, adapterErr := ChangePasswordAdapter{S: svc}.ChangePassword(
+		context.Background(),
+		&changepassgen.Request{ID: userID, OldPassword: "oldpass12", NewPassword: "newpass12"},
+	)
+	require.NoError(t, adapterErr, "adapter must convert ErrAuthUserNotActive to typed 403, not passthrough")
+	typed, ok := resp.(changepassgen.ChangePassword403ErrorResponse)
+	require.True(t, ok, "expected ChangePassword403ErrorResponse, got %T", resp)
+	assert.Equal(t, errcode.ErrAuthUserNotActive, typed.Body.Code)
+}

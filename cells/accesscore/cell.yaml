@@ -12,3 +12,6 @@ verify:
     - smoke.accesscore.startup
 goStructName: AccessCore
 l0Dependencies: []
+requires:
+  - postgres
+  - redis

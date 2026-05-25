@@ -64,12 +64,16 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			got, metadata.DeployTemplateEnum)
 	})
 
-	t.Run("assembly.schema.json#CapabilityEnum", func(t *testing.T) {
+	// CapabilityEnum now lives on cell.schema.json `requires` — the per-cell
+	// declaration is the authoritative single source from which the assembly's
+	// provisioned capability set is derived (Design Y, #855). assembly.schema.json
+	// no longer carries a `capabilities` property.
+	t.Run("cell.schema.json#requires.enum", func(t *testing.T) {
 		t.Parallel()
-		got := readSchemaStringSlice(t, "assembly.schema.json",
-			[]string{"properties", "capabilities", "items", "enum"})
+		got := readSchemaStringSlice(t, "cell.schema.json",
+			[]string{"properties", "requires", "items", "enum"})
 		require.True(t, reflect.DeepEqual(metadata.CapabilityEnum, got),
-			"schemas/assembly.schema.json capabilities.items.enum drifted from metadata.CapabilityEnum: schema=%v const=%v",
+			"schemas/cell.schema.json requires.items.enum drifted from metadata.CapabilityEnum: schema=%v const=%v",
 			got, metadata.CapabilityEnum)
 	})
 }

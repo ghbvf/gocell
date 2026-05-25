@@ -12,3 +12,5 @@ verify:
     - smoke.auditcore.startup
 goStructName: AuditCore
 l0Dependencies: []
+requires:
+  - postgres

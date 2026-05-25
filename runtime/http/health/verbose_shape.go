@@ -17,7 +17,7 @@
 //     `redactedErrorMsg(x)` 只出现在 newRedactedErrorMsg 函数体内（下游 Hard）。
 //
 // 见 docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md
-// §3（四通道映射）§6（enforcement funnel matrix）。
+// §2 D3（四通道字段归属）§4（enforcement funnel matrix）。
 //
 // ref: k8s.io/apiserver/pkg/server/healthz healthz.go:274-275 — wire 不携带
 // error 文本（"reason withheld"），完整 error 落 klog；GoCell 对齐该模式但用

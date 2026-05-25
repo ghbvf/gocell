@@ -10,7 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
+	"github.com/ghbvf/gocell/runtime/internal/authtest"
 )
 
 func TestRequireAuthenticated(t *testing.T) {

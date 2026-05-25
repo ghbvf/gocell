@@ -12,3 +12,5 @@ verify:
     - smoke.configcore.startup
 goStructName: ConfigCore
 l0Dependencies: []
+requires:
+  - postgres

@@ -728,11 +728,13 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // admin/UI to handle. The 401 enumeration-collapse design lives only on the
 // public Login endpoint where any unauthenticated requester can probe.
 //
-// Wire envelope note (#11): after the §A11 funnel rewrite the
-// credentialauthority.Assert returns a unified message string
-// ("credential not authoritative") for both baseline and version-pin
-// failures. The errcode Kind+Code (403 / ErrAuthUserNotActive) is what
-// the admin/UI consumer pattern-matches on — message text is opaque.
+// Wire envelope note (ADR §A15 P2-2): IssueForUser re-wraps any credentialauthority.Assert
+// failure at the boundary into a clean user-visible "account is not active"
+// message (ErrAuthUserNotActive / KindPermissionDenied / 403). The original
+// "credential not authoritative" jargon from credentialauthority is retained
+// server-side via WithInternal for diagnostics but never surfaces to clients.
+// ChangePassword adapter maps this error to the declared typed 403 response
+// (ChangePassword403ErrorResponse).
 //
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
@@ -743,7 +745,9 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 	}
 	if err := credentialauthority.Assert(user); err != nil {
-		return dto.TokenPair{}, err
+		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active",
+			errcode.WithInternal("sessionlogin:IssueForUser credential not authoritative"))
 	}
 
 	sessionID := uuid.NewString()

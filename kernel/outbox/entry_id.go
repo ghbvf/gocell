@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
@@ -21,22 +22,24 @@ const EntryIDPrefix = "evt-"
 // Uses crypto/rand directly (not github.com/google/uuid) because kernel/ may
 // only depend on the Go standard library per CLAUDE.md's layering rule.
 //
-// Returns the wrapped crypto/rand.Read error if the OS entropy source is
+// Returns the wrapped entropy read error if the OS entropy source is
 // broken; callers that prefer fail-fast wiring can use MustNewEntryID.
-func NewEntryID() (string, error) {
+func NewEntryID() (string, error) { return newEntryID(rand.Reader) }
+
+func newEntryID(r io.Reader) (string, error) {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("outbox: crypto/rand.Read failed: %w", err)
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return "", fmt.Errorf("outbox: read entropy: %w", err)
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
 	return EntryIDPrefix + hex.EncodeToString(b[:]), nil
 }
 
-// MustNewEntryID is the panic-on-error variant of NewEntryID. crypto/rand.Read
-// only fails on broken OS entropy, which is non-recoverable, so most call
-// sites use this Must variant; outbox writers that want to surface the error
-// to upstream tx callers should use NewEntryID directly.
+// MustNewEntryID is the panic-on-error variant of NewEntryID. The underlying
+// entropy read only fails on broken OS entropy, which is non-recoverable,
+// so most call sites use this Must variant; outbox writers that want to
+// surface the error to upstream tx callers should use NewEntryID directly.
 func MustNewEntryID() string {
 	id, err := NewEntryID()
 	if err != nil {
