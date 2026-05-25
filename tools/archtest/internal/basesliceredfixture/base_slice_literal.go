@@ -2,7 +2,7 @@
 
 // Package basesliceredfixture contains intentionally-violating forms for the
 // BASESLICE-CTOR-FUNNEL-01 archtest detector. Gated by the archtest_fixture
-// build tag (must agree with the literal value of archtest.FixtureBuildTag
+// build tag (must agree with the literal value of the unexported fixtureBuildTag const
 // declared in tools/archtest/fixture.go; Go build-directive syntax cannot
 // reference a Go constant, so this file hard-codes the tag literal).
 //

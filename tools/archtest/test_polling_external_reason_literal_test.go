@@ -256,11 +256,11 @@ func TestExternalReasonLiteral(t *testing.T) {
 	}
 
 	// Two-load coverage (mirror PANIC-REGISTERED-01 plumbing): Load 1 (tags=nil)
-	// catches reverse build directives; Load 2 (ProductionFlatTags) catches all
+	// catches reverse build directives; Load 2 (FlatNonDefaultTags) catches all
 	// forward-tagged files in one union. Test-variant load (Tests:true) included
 	// in both so *_test.go callers of testwait.External are scanned.
 	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: ProductionFlatTags()}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -418,7 +418,7 @@ func TestExternalReasonLiteral_NoIndirectReferences(t *testing.T) {
 	}
 
 	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: ProductionFlatTags()}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {

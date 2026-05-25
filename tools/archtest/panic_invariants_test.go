@@ -395,16 +395,16 @@ func TestPanicRegistered(t *testing.T) {
 
 	// 两次 Load 覆盖全 build directive 文件集（含反向 //go:build !X）：
 	// Load 1 (tags=nil) 覆盖默认 build + 反向 directive 文件；
-	// Load 2 (ProductionFlatTags) 覆盖所有正向 tag 激活文件 union。
+	// Load 2 (FlatNonDefaultTags) 覆盖所有正向 tag 激活文件 union。
 	// 两次 Load 文件集有重合，seen map dedup 保证 violations 唯一。
 	// 单次 union Load 设计被拒绝：go/build matchTag 语义下 //go:build !X 在
 	// -tags=...,X,... 模式下静默排除（详见 ADR 202605190000 §Alternatives）。
-	// 残留盲区（F2）：复合形态 //go:build a && !b（a,b 均 ∈ ProductionFlatTags）
+	// 残留盲区（F2）：复合形态 //go:build a && !b（a,b 均 ∈ FlatNonDefaultTags）
 	// 在 union load（a∧b → !b 假）与 nil load（a 未置）下均被排除。GoCell
 	// 当前无此形态文件；新增此类文件时必须回到 ADR §Alternatives 重评两次
 	// Load 覆盖完整性，不能假定 nil+union 二次 Load 自动兜底。
 	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: ProductionFlatTags()}, []string{"./..."}, scan)
+	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
