@@ -73,6 +73,16 @@ type ValidationResult struct {
 	// are always zero when Scope is set.
 	Line   int
 	Column int
+	// Next is the structured remediation disposition (ADR §M3 P-C2): what the
+	// M5-HARVEST layer should DO with this finding (block / advisory / autofix /
+	// suggest / escalate). Stamped by the engine from the owning Rule.
+	Next NextAction
+	// Metric is the evaluated distance for the rules that carry one (ADR §M3
+	// P-C3): deprecation days remaining, coverage gap, dead-event count, etc. It
+	// is nil for the majority of rules — whose findings have no continuous
+	// distance — and for rules whose Metric was not applicable to the current
+	// project state.
+	Metric *float64
 }
 
 // Validator runs all validation rules against a parsed project. It embeds
