@@ -30,7 +30,7 @@ import (
 //
 // Fields are flat (no concern-grouped sub-structs): SharedDeps is a
 // composition-root bag whose fields cross consumer boundaries (Clock /
-// Topology / SharedPGPool consumed by every Cell module). Forcing a sub-struct
+// Topology / PG consumed by every Cell module). Forcing a sub-struct
 // layout would make those cross-cutting consumptions look like boundary
 // violations when in fact they are the natural shape of a composition root.
 // Per-concern *file* split is in shared_deps_build.go (build helpers) and

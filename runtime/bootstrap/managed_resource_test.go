@@ -830,7 +830,7 @@ func (r *orderedCloseResource) Close(ctx context.Context) error {
 // invoked. Used by TestManagedResource_LIFOCloseBySequence to assert that the
 // last-registered resource closes before the first-registered resource,
 // satisfying the MODULE-ORDER-CLOSE-LIFO contract documented in
-// cmd/corebundle/shared_deps.go (SharedPGPool happens-before contract).
+// cmd/corebundle/shared_deps.go (PG/poolMR happens-before contract).
 //
 // A shared counter is incremented on each Close(); the sequence number
 // captured by each resource reflects call order without relying on wall-clock
@@ -859,14 +859,14 @@ func (r *sequencedResource) Close(_ context.Context) error {
 // TestManagedResource_LIFOCloseBySequence asserts the MODULE-ORDER-CLOSE-LIFO
 // contract using monotonic sequence numbers: the resource registered last
 // (worker, simulating a ConsumerBase / OutboxRelay) must have its Close()
-// invoked before the resource registered first (pgRes, simulating SharedPGPool).
+// invoked before the resource registered first (pgRes, simulating PG/poolMR).
 //
 // This locks in the bootstrap LIFO guarantee that protects against
 // use-after-close DB calls: if a consumer worker still holds an open DB
 // transaction when pool.Close() is called, the next DB call will fail or panic.
 // LIFO order ensures all consumer workers are stopped before the pool is closed.
 //
-// Ref: cmd/corebundle/shared_deps.go SharedPGPool "Happens-before contract".
+// Ref: cmd/corebundle/shared_deps.go PG/poolMR "Happens-before contract".
 func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 	var counter atomic.Int64
 	pgRes := &sequencedResource{name: "fake-pg-pool", counter: &counter}
@@ -877,7 +877,8 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		// pgRes registered FIRST (simulating ConfigCoreModule.Provide).
+		// pgRes registered FIRST (simulating the assembly pool MR that
+		// runtimeBaseOptions registers ahead of cell opts; see provisionCapabilities).
 		WithManagedResource(pgRes),
 		// worker registered SECOND (simulating a later consumer module / WithWorkers).
 		WithManagedResource(worker),
@@ -913,7 +914,7 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 			"MODULE-ORDER-CLOSE-LIFO contract violated: worker.Close (registered last, seq=%d) "+
 				"must execute BEFORE pgRes.Close (registered first, seq=%d). "+
 				"LIFO ordering is the bootstrap's only guarantee that consumer workers "+
-				"don't see a closed pool. See cmd/corebundle/shared_deps.go SharedPGPool "+
+				"don't see a closed pool. See cmd/corebundle/shared_deps.go PG/poolMR "+
 				"happens-before contract.",
 			workerSeq, pgSeq,
 		)
