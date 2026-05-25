@@ -94,7 +94,6 @@ func TestPhase0_HealthListenerDeclared_NoHealthError(t *testing.T) {
 		WithListener(cell.HealthListener, "127.0.0.1:9091", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	err := b.phase0ValidateOptions()
-
 	if err != nil {
 		assert.NotContains(t, err.Error(), "HealthListener",
 			"declaring a HealthListener must satisfy the health-routes requirement")
