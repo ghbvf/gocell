@@ -40,7 +40,7 @@ type Service struct {
 // Reasons emitted: "threshold_locked" (auto-lock triggered) /
 // "lazy_unlocked" (TTL expired, user logged in).
 type MetricsRecorder interface {
-	IncAccountLockout(reason string)
+	IncAccountLockout(ctx context.Context, reason string)
 }
 
 // noopMetrics is the default no-op MetricsRecorder used when the caller does
@@ -50,7 +50,7 @@ type noopMetrics struct{}
 
 // IncAccountLockout is intentionally empty — noopMetrics discards all metric
 // increments. See noopMetrics godoc for when this is wired.
-func (noopMetrics) IncAccountLockout(string) {}
+func (noopMetrics) IncAccountLockout(context.Context, string) {}
 
 // Option configures the Service at construction time.
 type Option func(*Service)
@@ -156,7 +156,7 @@ func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user
 	if err := s.publishLocked(txCtx, user.ID); err != nil {
 		return fmt.Errorf("accountlockout.RecordFailure: emit locked event: %w", err)
 	}
-	s.metrics.IncAccountLockout("threshold_locked")
+	s.metrics.IncAccountLockout(ctx, "threshold_locked")
 	s.logger.Warn("account auto-locked",
 		slog.String("user_id", user.ID),
 		slog.Int("failed_count", user.FailedLoginCount()),
@@ -232,7 +232,7 @@ func (s *Service) TryLazyUnlock(ctx context.Context, txCtx context.Context, user
 	if err := s.publishUnlocked(txCtx, user.ID); err != nil {
 		return false, fmt.Errorf("accountlockout.TryLazyUnlock: emit unlocked event: %w", err)
 	}
-	s.metrics.IncAccountLockout("lazy_unlocked")
+	s.metrics.IncAccountLockout(ctx, "lazy_unlocked")
 	s.logger.Info("account lazy-unlocked",
 		slog.String("user_id", user.ID),
 		slog.Time("locked_until", *until),

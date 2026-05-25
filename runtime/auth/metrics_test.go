@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -49,12 +50,12 @@ type lockoutSpyCounter struct {
 	reason string
 }
 
-func (c *lockoutSpyCounter) Inc() {
+func (c *lockoutSpyCounter) Inc(_ context.Context) {
 	c.vec.mu.Lock()
 	defer c.vec.mu.Unlock()
 	c.vec.byLabel[c.reason]++
 }
-func (c *lockoutSpyCounter) Add(_ float64) {}
+func (c *lockoutSpyCounter) Add(_ context.Context, _ float64) {}
 
 // lockoutSpyProvider wraps metrics.NopProvider but intercepts
 // auth_account_lockout_total registrations, returning the spy vec.
@@ -98,23 +99,26 @@ func TestNewAuthMetrics_NilProvider(t *testing.T) {
 func TestAuthMetrics_RecordTokenVerify_NoPanic(t *testing.T) {
 	am, err := NewAuthMetrics(metrics.NopProvider{})
 	require.NoError(t, err)
+	ctx := context.Background()
 	// Should not panic with valid labels.
-	am.recordTokenVerify("success", "ok", testtime.FastPoll)
-	am.recordTokenVerify("failure", "expired", testtime.D1ms)
+	am.recordTokenVerify(ctx, "success", "ok", testtime.FastPoll)
+	am.recordTokenVerify(ctx, "failure", "expired", testtime.D1ms)
 }
 
 func TestAuthMetrics_RecordServiceVerify_NoPanic(t *testing.T) {
 	am, err := NewAuthMetrics(metrics.NopProvider{})
 	require.NoError(t, err)
-	am.recordServiceVerify("success", "ok")
-	am.recordServiceVerify("failure", "expired")
+	ctx := context.Background()
+	am.recordServiceVerify(ctx, "success", "ok")
+	am.recordServiceVerify(ctx, "failure", "expired")
 }
 
 func TestAuthMetrics_NilSafe(t *testing.T) {
 	// nil AuthMetrics should not panic.
+	ctx := context.Background()
 	var am *AuthMetrics
-	am.recordTokenVerify("success", "ok", testtime.D1ms)
-	am.recordServiceVerify("success", "ok")
+	am.recordTokenVerify(ctx, "success", "ok", testtime.D1ms)
+	am.recordServiceVerify(ctx, "success", "ok")
 }
 
 // ─── AccountLockoutMetrics tests (F6) ────────────────────────────────────────
@@ -140,8 +144,9 @@ func TestNewAccountLockoutMetrics_NopProvider(t *testing.T) {
 // when the composition root omits metrics wiring (e.g., tests).
 func TestAccountLockoutMetrics_NilSafe(t *testing.T) {
 	var m *AccountLockoutMetrics
+	ctx := context.Background()
 	require.NotPanics(t, func() {
-		m.IncAccountLockout("threshold_locked")
+		m.IncAccountLockout(ctx, "threshold_locked")
 	}, "nil *AccountLockoutMetrics.IncAccountLockout must not panic")
 }
 
@@ -152,10 +157,11 @@ func TestAccountLockoutMetrics_IncAccountLockout_EmitsLabel(t *testing.T) {
 	spy := newLockoutSpyProvider()
 	m, err := NewAccountLockoutMetrics(spy)
 	require.NoError(t, err)
+	ctx := context.Background()
 
-	m.IncAccountLockout("threshold_locked")
-	m.IncAccountLockout("threshold_locked")
-	m.IncAccountLockout("lazy_unlocked")
+	m.IncAccountLockout(ctx, "threshold_locked")
+	m.IncAccountLockout(ctx, "threshold_locked")
+	m.IncAccountLockout(ctx, "lazy_unlocked")
 
 	assert.Equal(t, 2, spy.lockoutVec.count("threshold_locked"),
 		`IncAccountLockout("threshold_locked") must increment the "threshold_locked" label`)

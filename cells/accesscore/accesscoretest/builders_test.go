@@ -273,11 +273,11 @@ type recordingCollector struct {
 	processCount int
 }
 
-func (r *recordingCollector) RecordEventProcess(string, string, obmetrics.ConfigEventProcessReason) {
+func (r *recordingCollector) RecordEventProcess(_ context.Context, _, _ string, _ obmetrics.ConfigEventProcessReason) {
 	r.processCount++
 }
 
-func (recordingCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+func (recordingCollector) RecordEventSettlement(_ context.Context, _, _, _ string, _ outbox.SettlementResult) {
 }
 
 // TestBuildIdentityManageService_AllOptions exercises every public With*

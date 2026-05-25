@@ -38,11 +38,11 @@ type configEventRecord struct {
 	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+func (c *recordingConfigEventCollector) RecordEventProcess(_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
 	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, reason: reason})
 }
 
-func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+func (c *recordingConfigEventCollector) RecordEventSettlement(_ context.Context, _, _, _ string, _ outbox.SettlementResult) {
 }
 
 // callWithConfigEventOwner runs handler through ConfigEventMiddleware and returns

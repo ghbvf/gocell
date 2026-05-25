@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -826,10 +827,10 @@ type spyCounter struct {
 	reason string
 }
 
-func (c *spyCounter) Inc() {
+func (c *spyCounter) Inc(_ context.Context) {
 	c.vec.recorded = append(c.vec.recorded, spyRecord{result: c.result, reason: c.reason})
 }
-func (c *spyCounter) Add(_ float64) {}
+func (c *spyCounter) Add(_ context.Context, _ float64) {}
 
 // spyProvider is a metrics.Provider that returns a spyCounterVec for the
 // service-token counter and no-ops for everything else.

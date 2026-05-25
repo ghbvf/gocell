@@ -56,7 +56,7 @@ type fakeMetrics struct {
 
 func newFakeMetrics() *fakeMetrics { return &fakeMetrics{byReason: map[string]int{}} }
 
-func (m *fakeMetrics) IncAccountLockout(reason string) {
+func (m *fakeMetrics) IncAccountLockout(_ context.Context, reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.byReason[reason]++
@@ -572,7 +572,7 @@ func TestWithMetrics_TypedNil_KeepsNoopDefault(t *testing.T) {
 	}
 	// Must not panic: noopMetrics swallows the call; a stored typed-nil would
 	// deref nil here.
-	s.metrics.IncAccountLockout("threshold_locked")
+	s.metrics.IncAccountLockout(context.Background(), "threshold_locked")
 }
 
 // Sanity: make sure fakeUserRepo conforms to the ports.UserRepository surface
