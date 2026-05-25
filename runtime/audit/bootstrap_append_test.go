@@ -70,7 +70,7 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP(t *testing.T) 
 
 			entries, err := store.Query(context.Background(),
 				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-				query.ListParams{Limit: 10, Sort: ledger.QuerySort})
+				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 			require.NoError(t, err, "ledger query")
 			require.Len(t, entries, 1, "exactly one bootstrap.auth.fail entry expected")
 
@@ -143,7 +143,7 @@ func TestAppendBootstrapAuthFail_DuplicateFingerprintRejected(t *testing.T) {
 
 	entries, qerr := store.Query(ctx,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-		query.ListParams{Limit: 10, Sort: ledger.QuerySort})
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
 	assert.Len(t, entries, 2, "both Appends should produce distinct ledger entries due to unique EventIDs")
 }

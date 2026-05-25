@@ -569,7 +569,7 @@ func TestMemStore_Query_ByFilters(t *testing.T) {
 	}
 
 	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.A"},
-		query.ListParams{Limit: 100, Sort: ledger.QuerySort})
+		query.ListParams{Limit: 100, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

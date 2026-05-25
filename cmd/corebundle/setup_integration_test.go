@@ -229,7 +229,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		entries, err := auditStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-			query.ListParams{Limit: 10, Sort: ledger.QuerySort})
+			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(entries), 1, "401 missing-header path must write a bootstrap.auth.fail ledger entry")
 		var payloadStruct struct {
@@ -259,7 +259,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		entries, err := auditStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-			query.ListParams{Limit: 10, Sort: ledger.QuerySort})
+			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(entries), 2,
 			"wrong-credentials path must add a second bootstrap.auth.fail entry (missing_header from 2a is first)")
@@ -523,7 +523,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	// above, the ledger Append has already completed — no Eventually needed.
 	entries, qerr := auditStore.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-		query.ListParams{Limit: 10, Sort: ledger.QuerySort})
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
 	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
 

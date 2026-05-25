@@ -54,7 +54,7 @@ func (s *Service) Query(
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*ledger.Entry]{
 		Codec:      s.codec,
 		PageParams: pageReq,
-		Sort:       ledger.QuerySort,
+		Sort:       ledger.QuerySort(),
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*ledger.Entry, error) {
 			// Keyset pagination is pushed into the store (PG: SQL keyset via

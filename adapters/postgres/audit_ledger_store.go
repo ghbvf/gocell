@@ -418,6 +418,11 @@ FROM audit_entries WHERE namespace = `, ns)
 // / filters.To bindings above already do — but cannot encode a bare string for
 // a timestamptz parameter. Non-timestamp columns (id, a text column) are left
 // untouched. Returns params unchanged on the first page (no cursor).
+//
+// When ledger.QuerySort gains another non-text keyset column (e.g. another
+// timestamptz or a numeric column), add a matching conversion case here: pgx
+// cannot bind the RFC3339Nano/JSON string wire form to a non-text column.
+// Audit is currently the only non-text keyset consumer in the codebase.
 func bindTimestampCursor(params query.ListParams) (query.ListParams, error) {
 	if params.CursorValues == nil {
 		return params, nil

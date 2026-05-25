@@ -39,14 +39,19 @@ type AuditFilters struct {
 	To time.Time
 }
 
-// QuerySort is the canonical ordering for audit ledger listings: newest first
-// (timestamp DESC) with the store-assigned id as a stable ASC tie-breaker. It
-// is the single source of truth shared by every Store.Query caller and matches
-// the idx_audit_namespace_ts_id composite index, so PG keyset pagination is an
-// index scan. Store.Query requires a non-empty Sort — callers pass this.
-var QuerySort = []query.SortColumn{
-	{Name: "timestamp", Direction: query.SortDESC},
-	{Name: "id", Direction: query.SortASC},
+// QuerySort returns the canonical ordering for audit ledger listings: newest
+// first (timestamp DESC) with the store-assigned id as a stable ASC tie-breaker.
+// It is the single source of truth shared by every Store.Query caller and
+// matches the idx_audit_namespace_ts_id composite index, so PG keyset pagination
+// is an index scan. Store.Query requires a non-empty Sort — callers pass this.
+//
+// A fresh slice is returned on each call so callers cannot mutate shared package
+// state (the exported value would otherwise be an aliasable mutable global).
+func QuerySort() []query.SortColumn {
+	return []query.SortColumn{
+		{Name: "timestamp", Direction: query.SortDESC},
+		{Name: "id", Direction: query.SortASC},
+	}
 }
 
 // Store persists audit entries in a tamper-evident hash chain. Implementations
