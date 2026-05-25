@@ -15,11 +15,23 @@
 --     level (cf. migration 032 users_failed_login_count_positive).
 --
 -- Deploy runbook:
---   ADD CONSTRAINT only; ALTER TABLE validates existing rows before adding.
---   All current rows have password_version >= 0 (set by migration 022
---   DEFAULT 0 + application-only increments), so the constraint is
---   satisfied immediately. Standard rolling deploy — no traffic drain
---   required.
+--   In-place ADD CONSTRAINT (NOT VALID is intentionally NOT used — same
+--   decision as migration 028). PostgreSQL's NOT VALID + VALIDATE CONSTRAINT
+--   pattern (https://www.postgresql.org/docs/17/sql-altertable.html) reduces
+--   the ACCESS EXCLUSIVE lock window of the full-table validation scan on
+--   LARGE / non-empty tables. It does not apply here:
+--     1. Project invariant (cf. 028): no deployed environment, no historical
+--        data — the users table is provably empty at deploy outside CI, so the
+--        validation scan is instant and the lock window is negligible.
+--     2. goose runs each migration in a single transaction; ADD CONSTRAINT
+--        NOT VALID + VALIDATE CONSTRAINT in the same file/tx would not release
+--        the ACCESS EXCLUSIVE lock between the two steps, so it would buy no
+--        concurrency benefit without also splitting into separate NO
+--        TRANSACTION migrations — overkill for a provably-empty table.
+--   All current rows satisfy password_version >= 0 (migration 022 DEFAULT 0 +
+--   application-only increments). Standard rolling deploy — no traffic drain.
+--   Non-empty-DB upgrade concerns are tracked by backlog
+--   MIGRATION-NONEMPTY-DB-UPGRADE-GUIDE-01 (shared with the 026/027/028 chain).
 --
 -- ref: dotnet/aspnetcore Identity ConcurrencyStamp / SecurityStamp semantics
 -- ref: migration 032 users_failed_login_count_positive (same pattern)
