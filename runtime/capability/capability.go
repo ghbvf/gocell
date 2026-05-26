@@ -64,7 +64,9 @@ type pgProvider struct {
 func (p pgProvider) TxManager() persistence.TxRunner { return p.tx }
 func (p pgProvider) OutboxWriter() outbox.Writer     { return p.writer }
 func (p pgProvider) DB() any                         { return p.db }
-func (pgProvider) isPGProvider()                     {}
+func (pgProvider) isPGProvider() {
+	// Sealed-interface marker: no behavior; blocks external PGProvider impls.
+}
 
 // NewPGProvider wraps the composition-root-constructed postgres primitives into
 // the sealed PGProvider. tx and writer are kernel-typed; db is the raw
@@ -78,8 +80,10 @@ type redisProvider struct {
 	client any
 }
 
-func (p redisProvider) Client() any    { return p.client }
-func (redisProvider) isRedisProvider() {}
+func (p redisProvider) Client() any { return p.client }
+func (redisProvider) isRedisProvider() {
+	// Sealed-interface marker: no behavior; blocks external RedisProvider impls.
+}
 
 // NewRedisProvider wraps the composition-root-constructed redis client into the
 // sealed RedisProvider. client is the raw *adapterredis.Client passed as any.

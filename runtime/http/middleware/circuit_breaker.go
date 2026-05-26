@@ -92,7 +92,7 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 	// and log an Error so the operator can detect the broken implementation.
 	if done == nil {
 		slog.ErrorContext(r.Context(), "circuitbreaker: Allow returned nil done, contract violation; failing open")
-		done = func(error) {} // no-op: fail open — breaker contract violation, request served without reporting
+		done = func(error) { /* no-op: fail open — breaker contract violation, request served without reporting */ }
 	}
 
 	state, w, r := ensureRecorder(w, r)

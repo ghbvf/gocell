@@ -32,11 +32,12 @@ type Factory func(t *testing.T) (j journal.Journal, clk *clockmock.FakeClock, cl
 
 // Package-level string constants extracted per SonarQube duplication rules.
 const (
-	stepOne         = "step-one"
-	anyLease        = "any-lease"
-	neverEnqueuedID = "never-enqueued-id"
-	fmtLoadErr      = "Load: %v"
-	fmtClaimErr     = "ClaimPending: err=%v len=%d"
+	stepOne          = "step-one"
+	anyLease         = "any-lease"
+	neverEnqueuedID  = "never-enqueued-id"
+	fmtLoadErr       = "Load: %v"
+	fmtClaimErr      = "ClaimPending: err=%v len=%d"
+	fmtAppendCompErr = "Append(KindCompensationStarted): %v"
 )
 
 // RunConformanceSuite runs the full Journal conformance suite against the
@@ -1046,7 +1047,7 @@ func conformCompensationPath(t *testing.T, factory Factory) {
 		Kind: journal.KindCompensationStarted, // Running → Compensating (no StepName needed)
 	})
 	if err != nil {
-		t.Fatalf("Append(KindCompensationStarted): %v", err)
+		t.Fatalf(fmtAppendCompErr, err)
 	}
 	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // legal while Compensating
 
@@ -1547,7 +1548,7 @@ func driveToCompensating(t *testing.T, j journal.Journal, clk *clockmock.FakeClo
 		Kind: journal.KindCompensationStarted, // Running → Compensating
 	})
 	if err != nil {
-		t.Fatalf("Append(KindCompensationStarted): %v", err)
+		t.Fatalf(fmtAppendCompErr, err)
 	}
 	return ci
 }
@@ -1607,7 +1608,7 @@ func conformMarkTerminalCompensatingToSucceededIllegal(t *testing.T, factory Fac
 		Kind: journal.KindCompensationStarted, // Running → Compensating
 	})
 	if err != nil {
-		t.Fatalf("Append(KindCompensationStarted): %v", err)
+		t.Fatalf(fmtAppendCompErr, err)
 	}
 
 	_, err = j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
@@ -1719,7 +1720,7 @@ func conformAppendForwardStepWhileCompensatingRejected(t *testing.T, factory Fac
 		Kind: journal.KindCompensationStarted, // Running → Compensating
 	})
 	if err != nil {
-		t.Fatalf("Append(KindCompensationStarted): %v", err)
+		t.Fatalf(fmtAppendCompErr, err)
 	}
 
 	// Now in Compensating — a forward step must be rejected.
@@ -1760,7 +1761,7 @@ func conformLeaderHandoffReadsCompensatingPhase(t *testing.T, factory Factory) {
 		Kind: journal.KindCompensationStarted, // Running → Compensating
 	})
 	if err != nil {
-		t.Fatalf("Append(KindCompensationStarted): %v", err)
+		t.Fatalf(fmtAppendCompErr, err)
 	}
 
 	// A's lease expires.

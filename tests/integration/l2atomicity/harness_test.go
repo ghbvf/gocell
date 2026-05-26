@@ -256,7 +256,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	runBootstrap(t, asm, primaryLn, internalLn, healthLn, eb, authDeps, relayWorker)
+	runBootstrap(t, asm, listenerSet{primary: primaryLn, internal: internalLn, health: healthLn}, eb, authDeps, relayWorker)
 	base := "http://" + primaryLn.Addr().String()
 	healthBase := "http://" + healthLn.Addr().String()
 	waitForHealthz(t, healthBase, base)
@@ -434,13 +434,21 @@ func buildCells(
 	return ac, cc, auc, auditStore
 }
 
+// listenerSet bundles the three bootstrap listeners so runBootstrap stays
+// within the 7-parameter limit (go:S107).
+type listenerSet struct {
+	primary  net.Listener
+	internal net.Listener
+	health   net.Listener
+}
+
 // runBootstrap launches bootstrap.App on the supplied listeners and registers
 // the LIFO cleanup that drains it gracefully. The relay is registered as a
 // ManagedResource so bootstrap drives its Start/Close lifecycle.
 func runBootstrap(
 	t *testing.T,
 	asm *assembly.CoreAssembly,
-	primaryLn, internalLn, healthLn net.Listener,
+	lns listenerSet,
 	eb *eventbus.InMemoryEventBus,
 	a *authLayer,
 	relayWorker *outboxruntime.Relay,
@@ -449,15 +457,15 @@ func runBootstrap(
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
+		bootstrap.WithListener(cell.PrimaryListener, lns.primary.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
-			bootstrap.WithListenerNet(primaryLn)),
-		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
+			bootstrap.WithListenerNet(lns.primary)),
+		bootstrap.WithListener(cell.InternalListener, lns.internal.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(a.nonceStore, a.ring)},
-			bootstrap.WithListenerNet(internalLn)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(),
+			bootstrap.WithListenerNet(lns.internal)),
+		bootstrap.WithListener(cell.HealthListener, lns.health.Addr().String(),
 			[]kauth.ListenerAuth{kauth.AuthNone{}},
-			bootstrap.WithListenerNet(healthLn)),
+			bootstrap.WithListenerNet(lns.health)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
 		bootstrap.WithRelay(relayWorker),

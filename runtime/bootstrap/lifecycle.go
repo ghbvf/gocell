@@ -483,7 +483,7 @@ func hookIdentityAttrs(h Hook) []slog.Attr {
 // The returned cancel func must always be called by the caller.
 func (lc *lifecycle) applyTimeout(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if d < 0 {
-		return parent, func() {} // no-op cancel: negative timeout means no deadline applied
+		return parent, func() { /* no-op cancel: negative timeout means no deadline applied */ }
 	}
 	return context.WithTimeout(parent, d)
 }
