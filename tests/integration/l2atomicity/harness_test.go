@@ -251,7 +251,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	// DurabilityDemo only describes the assembly construction mode; the
 	// relay above is the durable bridge between PG outbox_entries and the
 	// in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

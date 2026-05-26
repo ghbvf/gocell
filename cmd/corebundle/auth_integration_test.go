@@ -117,7 +117,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "auth-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -337,7 +337,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -569,7 +569,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "health-listener-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

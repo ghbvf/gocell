@@ -77,7 +77,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	healthAddr := healthLn.Addr().String()
 	const preDelay = barrierPreDelay
 
-	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -186,7 +186,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 		},
 	}
 
-	asm := assembly.New(assembly.Config{ID: "test-ctx-sep", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-ctx-sep", DurabilityMode: outbox.DurabilityDemo})
 
 	// preShutdownDelay creates a reliable assertion window: after extCancel(),
 	// phase10ReadinessFlip blocks for the delay duration before LIFO teardown
@@ -256,7 +256,7 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	workerErr := errors.New("worker exploded")
 	errorWorker := &errorAfterStartWorker{err: workerErr, startDelay: barrierWorkerStartDelay}
 
-	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-worker-err", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -284,7 +284,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	const preDelay = barrierPreDelayShorter
 
 	healthLn := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo})
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	b := New(
 		WithClock(clock.Real()),

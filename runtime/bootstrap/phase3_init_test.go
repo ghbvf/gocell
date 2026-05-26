@@ -160,11 +160,8 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registrar) er
 // buildStartedAsm builds and starts an assembly with the given cells.
 func buildStartedAsm(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{
-		ID:             "test-phase3-asm",
-		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
-	})
+	asm := assembly.New(clock.Real(), assembly.Config{ID:             "test-phase3-asm",
+		DurabilityMode: outbox.DurabilityDemo})
 	for _, c := range cells {
 		require.NoError(t, asm.Register(c))
 	}
@@ -207,11 +204,8 @@ func TestPhase3_InitErrorAbortsBeforeStart(t *testing.T) {
 	goodCell := newSnapshotCheckCell("good")
 	badCell := newInitFailCell("bad", errors.New("init exploded"))
 
-	asm := assembly.New(assembly.Config{
-		ID:             "abort-test",
-		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
-	})
+	asm := assembly.New(clock.Real(), assembly.Config{ID:             "abort-test",
+		DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(goodCell))
 	require.NoError(t, asm.Register(badCell))
 

@@ -251,7 +251,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
-	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "e2e-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
@@ -583,7 +583,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
-	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "e2e-refetch-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))

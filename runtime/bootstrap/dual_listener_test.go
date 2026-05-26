@@ -166,7 +166,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "dual-primary-404", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -271,7 +271,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "dual-nojwt-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -332,7 +332,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 // PR-A14b: duplicate address detection is no longer a phase0 check — it
 // surfaces as an OS-level EADDRINUSE error when the second socket is bound.
 func TestDualListener_EqualAddrsBindFails(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "equal-addr-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "equal-addr-test", DurabilityMode: outbox.DurabilityDemo})
 	// Pre-bind primary to ensure port is held; use the same port for internal.
 	primaryLn := newLocalListener(t)
 	collidingAddr := primaryLn.Addr().String()
@@ -363,7 +363,7 @@ func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(clock.Real(), assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: outbox.DurabilityDemo})
 			b := New(WithClock(clock.Real()), WithAssembly(asm), tc.l)
 
 			ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -392,7 +392,7 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 	callerLn := newLocalListener(t)
 	collidingAddr := callerLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "bind-fail-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "bind-fail-test", DurabilityMode: outbox.DurabilityDemo})
 
 	b := New(
 		WithClock(clock.Real()),
@@ -439,7 +439,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "shutdown-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -509,7 +509,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "triple-shutdown-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -580,7 +580,7 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	collidingAddr := collideLn.Addr().String()
 	// collideLn stays open so bootstrap's primary bind collides with EADDRINUSE.
 
-	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: outbox.DurabilityDemo})
 
 	b := New(
 		WithClock(clock.Real()),
@@ -649,7 +649,7 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 	// Keep collideLn open so the port stays reserved; bootstrap's internal
 	// bind will fail with EADDRINUSE on this port.
 
-	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: outbox.DurabilityDemo})
 
 	b := New(
 		WithClock(clock.Real()),
@@ -710,7 +710,7 @@ func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registrar) error 
 // returns an error when the same (method, path) pair is mounted twice on the
 // primary listener — protecting configuration cleanliness (FinalizeAuth invariant).
 func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "dup-meta-test", DurabilityMode: outbox.DurabilityDemo})
 	c := &duplicateMetaCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-meta-cell", Type: "core"}),
 	}
@@ -902,7 +902,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "race-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -979,7 +979,7 @@ func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
 	holdLn := newLocalListener(t)
 	collidingAddr := holdLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "owned-sibling-fail", DurabilityMode: outbox.DurabilityDemo})
 
 	b := New(
 		WithClock(clock.Real()),
@@ -1049,7 +1049,7 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "mw-order-cell", Type: "core"}),
 		order:    &order,
 	}
-	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "mw-order-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 
 	primaryLn := newLocalListener(t)
@@ -1107,7 +1107,7 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "auth-wiring-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -1166,7 +1166,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 

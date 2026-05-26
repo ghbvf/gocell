@@ -467,7 +467,7 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: koutbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	relay := newManagedResourceTestRelay()
@@ -519,7 +519,7 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 // The relay is registered via WithRelay → relayAdapter.
 func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: koutbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	store := &managedResourceFailingStore{FakeStore: outboxtest.NewFakeStore()}
@@ -621,7 +621,7 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 // checker. The relay is registered via WithRelay → relayAdapter.
 func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: koutbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	// Poll budget disabled (=0), others enabled.

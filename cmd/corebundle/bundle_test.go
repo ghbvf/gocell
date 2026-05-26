@@ -144,7 +144,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.InternalGuard = newTestInternalGuard(t)
-	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 

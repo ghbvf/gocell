@@ -133,7 +133,7 @@ func TestRouterClientErrorLogSamplingOption(t *testing.T) {
 func TestHealthEndpoints(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router.
 	// They are registered directly on the router, not via WithHealthHandler.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1167,7 +1167,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no rate limiter configured. Physical isolation guarantees bypass — the primary
 	// router (with the rejecting rate limiter) never even sees /healthz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1203,7 +1203,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no circuit breaker configured. Physical isolation guarantees bypass — the
 	// primary router (with the open circuit breaker) never sees /readyz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -1364,7 +1364,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no auth middleware. Physical isolation guarantees bypass — the primary router
 	// (with auth middleware that would reject all requests) never sees /healthz.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))

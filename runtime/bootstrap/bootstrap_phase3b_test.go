@@ -116,7 +116,7 @@ type plainCellForLC struct{ cell.BaseCell }
 // started, populating cellSnapshots. The assembly is stopped on test cleanup.
 func buildAsmStarted(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "testasm", DurabilityMode: outbox.DurabilityDemo})
 	for _, c := range cells {
 		require.NoErrorf(t, asm.Register(c), "buildAsmStarted: registering cell %q", c.ID())
 	}

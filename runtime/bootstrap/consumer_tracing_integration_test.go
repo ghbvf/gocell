@@ -131,7 +131,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	asm := assembly.New(assembly.Config{ID: "consumer-trace-int", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "consumer-trace-int", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(cellImpl))
 
 	primaryLn := newLocalListener(t)

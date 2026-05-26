@@ -91,7 +91,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		return next
 	}
 
-	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-mw-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.mw.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -153,7 +153,7 @@ func (neverReadySubscriber) Close(_ context.Context) error { return nil }
 func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	t.Parallel()
 
-	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-rt-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.rt.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -202,7 +202,7 @@ func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) 
 	t.Parallel()
 
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-drift-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-drift-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.drift.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -254,7 +254,7 @@ func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testin
 	t.Parallel()
 
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-missing-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-missing-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.no-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -298,7 +298,7 @@ func TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
 	t.Parallel()
 
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-zero-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-zero-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.zero-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -332,7 +332,7 @@ func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 	t.Parallel()
 
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-with-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-with-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.with-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))

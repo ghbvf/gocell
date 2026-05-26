@@ -51,7 +51,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-workers", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-workers", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	w := &countWorker{}

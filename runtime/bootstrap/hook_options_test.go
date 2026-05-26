@@ -18,11 +18,8 @@ import (
 // bootstrap clock and the pre-built assembly clock are the same instance.
 func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
 	clk := clockmock.New(time.Now())
-	asm := assembly.New(assembly.Config{
-		ID:             "test",
-		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clk,
-	})
+	asm := assembly.New(clk, assembly.Config{ID:             "test",
+		DurabilityMode: outbox.DurabilityDemo})
 	b := &Bootstrap{
 		clock:        clk,
 		assemblyCore: asm,
@@ -36,11 +33,8 @@ func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
 func TestValidateAssemblyClockAlignment_DifferentClocks(t *testing.T) {
 	clkBootstrap := clockmock.New(time.Now())
 	clkAssembly := clockmock.New(time.Now())
-	asm := assembly.New(assembly.Config{
-		ID:             "test",
-		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clkAssembly,
-	})
+	asm := assembly.New(clkAssembly, assembly.Config{ID:             "test",
+		DurabilityMode: outbox.DurabilityDemo})
 	b := &Bootstrap{
 		clock:        clkBootstrap,
 		assemblyCore: asm,

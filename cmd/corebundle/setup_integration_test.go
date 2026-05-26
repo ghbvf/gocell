@@ -150,7 +150,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		auditcore.WithLedgerStore(auditStore),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -456,7 +456,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		auditcore.WithLedgerStore(auditStore),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

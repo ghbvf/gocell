@@ -48,7 +48,7 @@ func errFullPhases(t *testing.T, err error) string {
 // map. The asm is started so health.Handler.aggregateCellHealth works.
 func buildPhase5State(t *testing.T) *phaseState {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase5-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
@@ -290,8 +290,8 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 // instance as WithAssembly. A mismatch would silently discover the verifier
 // in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
 func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
-	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asmA := assembly.New(clock.Real(), assembly.Config{ID: "asm-a", DurabilityMode: outbox.DurabilityDemo})
+	asmB := assembly.New(clock.Real(), assembly.Config{ID: "asm-b", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asmA),
@@ -306,7 +306,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 }
 
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "asm-match", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -566,7 +566,7 @@ func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T)
 }
 
 func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "pre", DurabilityMode: outbox.DurabilityDemo})
 	b := New(WithClock(clock.Real()), WithAssembly(asm))
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))

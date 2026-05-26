@@ -94,7 +94,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	dc.RegisterCommandQueue(commandQueue)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: assemblyID, DurabilityMode: durabilityMode, Clock: clk})
+	asm := assembly.New(clk, assembly.Config{ID: assemblyID, DurabilityMode: durabilityMode})
 	if err := asm.Register(dc); err != nil {
 		return fmt.Errorf("register devicecell: %w", err)
 	}

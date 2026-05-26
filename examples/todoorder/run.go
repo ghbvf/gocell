@@ -90,7 +90,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
 		return fmt.Errorf("register ordercell: %w", err)
 	}

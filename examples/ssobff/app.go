@@ -432,7 +432,7 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)...)
 
-	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable})
 	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
 		return nil, nil, nil, err
 	}

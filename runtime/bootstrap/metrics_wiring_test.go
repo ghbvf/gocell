@@ -136,11 +136,8 @@ func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
 		ID:   "fail-start",
 		Type: "core",
 	})}
-	asm := assembly.New(assembly.Config{
-		ID:             "t-fail",
-		DurabilityMode: kerneloutbox.DurabilityDemo,
-		Clock:          clock.Real(),
-	})
+	asm := assembly.New(clock.Real(), assembly.Config{ID:             "t-fail",
+		DurabilityMode: kerneloutbox.DurabilityDemo})
 	require.NoError(t, asm.Register(failing))
 
 	err := asm.Start(context.Background())
