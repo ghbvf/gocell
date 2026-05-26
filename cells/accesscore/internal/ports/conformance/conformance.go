@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // concurrencyDeadlineBudget bounds the Concurrent_NoDeadlock sub-test so a
@@ -444,7 +445,7 @@ func conformBumpAuthzEpochSucceeds(t *testing.T, factory UserRepoFactory) {
 	var newEpoch int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		newEpoch, err = repo.BumpAuthzEpoch(ctx, u.ID)
+		newEpoch, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_Succeeds: %v", err)
@@ -469,7 +470,7 @@ func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	var epoch1 int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		epoch1, err = repo.BumpAuthzEpoch(ctx, u.ID)
+		epoch1, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: first bump: %v", err)
@@ -478,7 +479,7 @@ func conformBumpAuthzEpochMonotonic(t *testing.T, factory UserRepoFactory) {
 	var epoch2 int64
 	if err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
 		var err error
-		epoch2, err = repo.BumpAuthzEpoch(ctx, u.ID)
+		epoch2, err = repo.BumpAuthzEpoch(ctx, u.ID, credentialfence.Mint())
 		return err
 	}); err != nil {
 		t.Fatalf("BumpAuthzEpoch_MonotonicIncrement: second bump: %v", err)
@@ -554,7 +555,7 @@ func conformConcurrentNoDeadlock(t *testing.T, factory UserRepoFactory) {
 				_, err = repo.UpdatePassword(ctx, u.ID, "$2a$12$concurrent", false, 0)
 			case 2:
 				err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-					_, e := repo.BumpAuthzEpoch(txCtx, u.ID)
+					_, e := repo.BumpAuthzEpoch(txCtx, u.ID, credentialfence.Mint())
 					return e
 				})
 			}

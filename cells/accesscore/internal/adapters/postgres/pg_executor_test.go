@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // TestAssertAmbientTx_NoTx verifies that assertAmbientTx returns an
@@ -76,7 +77,7 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 func TestBumpAuthzEpoch_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgExecutor{pool: nil}}
 
-	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001")
+	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001", credentialfence.Mint())
 	require.Error(t, err, "BumpAuthzEpoch must error without ambient tx")
 
 	var ec *errcode.Error
