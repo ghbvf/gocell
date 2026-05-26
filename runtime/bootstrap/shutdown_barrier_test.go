@@ -71,8 +71,10 @@ const barrierBudgetHardLimit = barrierShutdownTimeout + testtime.D500ms
 func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newLocalListener(t)
 
-	addr := ln.Addr().String()
+	primaryAddr := ln.Addr().String()
+	healthAddr := healthLn.Addr().String()
 	const preDelay = barrierPreDelay
 
 	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
@@ -81,6 +83,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithPreShutdownDelay(preDelay),
 	)
@@ -89,7 +92,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthAddr)
 
 	cancel()
 
@@ -97,7 +100,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	// phase10 before preShutdownDelay). This replaces a fixed sleep so the
 	// test is robust on slow CI runners.
 	testwait.External(t, "bootstrap-readyz-unhealthy", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthAddr))
 		if err != nil {
 			return false
 		}
@@ -109,13 +112,13 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	// Within the preShutdownDelay window: HTTP main listener must still accept
 	// connections. Strong assertion — a dropped connection is a regression
 	// (before this fix, err was silently swallowed and the assertion skipped).
-	resp, err2 := testHTTPClient.Get(fmt.Sprintf("http://%s/", addr))
+	resp, err2 := testHTTPClient.Get(fmt.Sprintf("http://%s/", primaryAddr))
 	require.NoError(t, err2, "HTTP must still accept connections during preShutdownDelay")
 	closeBody(t, resp)
 	assert.NotEqual(t, 0, resp.StatusCode, "HTTP server must serve a response")
 
 	// Confirm /readyz continues to return 503 throughout the window.
-	respZ, err3 := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	respZ, err3 := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthAddr))
 	require.NoError(t, err3, "/readyz must still respond during preShutdownDelay")
 	assert.Equal(t, http.StatusServiceUnavailable, respZ.StatusCode,
 		"/readyz must return 503 during preShutdownDelay")
@@ -190,11 +193,13 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	// (which calls workerCancel) runs. This guarantees the worker ctx stays
 	// alive for at least that window — enough to assert temporal separation.
 	const assertionDelay = barrierAssertionDelay
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithPreShutdownDelay(assertionDelay),
 		WithWorkers(trackWorker),
@@ -204,7 +209,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(extCtx) }()
 
-	waitForHealthy(t, ln.Addr().String())
+	waitForHealthy(t, healthLn.Addr().String())
 	<-workerStarted
 
 	extCancelledAt := time.Now()
@@ -257,6 +262,7 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(errorWorker),
 	)
@@ -277,6 +283,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	const shutdownTimeout = barrierShutdownTimeout
 	const preDelay = barrierPreDelayShorter
 
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	b := New(
@@ -284,6 +291,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(shutdownTimeout),
@@ -295,7 +303,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	start := time.Now()
 	go func() { done <- b.Run(ctx) }()
 
-	waitForHealthy(t, ln.Addr().String())
+	waitForHealthy(t, healthLn.Addr().String())
 	cancel()
 
 	select {

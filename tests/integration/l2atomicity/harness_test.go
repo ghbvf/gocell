@@ -114,7 +114,7 @@ var httpClient = &http.Client{
 }
 
 // l2Harness boots a full PG-backed assembly (accesscore + configcore + auditcore)
-// with three listeners (primary + internal + health-via-fallback). Provisions
+// with three listeners (primary + internal + dedicated health). Provisions
 // a seed admin so login can be exercised immediately.
 type l2Harness struct {
 	pool         *adapterpg.Pool
@@ -232,6 +232,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	authDeps := buildAuthLayer(t)
 	primaryLn := localListener(t)
 	internalLn := localListener(t)
+	healthLn := localListener(t)
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	pgOutboxWriter := pickOutboxWriter(pgOutboxOverride)
 
@@ -255,9 +256,10 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	runBootstrap(t, asm, primaryLn, internalLn, eb, authDeps, relayWorker)
+	runBootstrap(t, asm, primaryLn, internalLn, healthLn, eb, authDeps, relayWorker)
 	base := "http://" + primaryLn.Addr().String()
-	waitForHealthz(t, base)
+	healthBase := "http://" + healthLn.Addr().String()
+	waitForHealthz(t, healthBase, base)
 
 	return &l2Harness{
 		pool:         pg.pool,
@@ -438,7 +440,7 @@ func buildCells(
 func runBootstrap(
 	t *testing.T,
 	asm *assembly.CoreAssembly,
-	primaryLn, internalLn net.Listener,
+	primaryLn, internalLn, healthLn net.Listener,
 	eb *eventbus.InMemoryEventBus,
 	a *authLayer,
 	relayWorker *outboxruntime.Relay,
@@ -453,6 +455,9 @@ func runBootstrap(
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(a.nonceStore, a.ring)},
 			bootstrap.WithListenerNet(internalLn)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(),
+			[]kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
 		bootstrap.WithRelay(relayWorker),
@@ -486,20 +491,20 @@ func runBootstrap(
 	})
 }
 
-// waitForHealthz polls the primary listener until both /healthz and the
-// accesscore setup-status route return 200. Probing the setup-status route
-// (not just /healthz) ensures the bootstrap has completed phase5 route
-// mount + FinalizeAuth, so the subsequent setup/admin POST is guaranteed
-// to land on a wired handler rather than racing against mux finalization
-// (race-detector + concurrent load occasionally surfaced "EOF" responses
-// when only /healthz was probed).
-func waitForHealthz(t *testing.T, base string) {
+// waitForHealthz polls until both /healthz (on healthBase, the dedicated health
+// listener) and the accesscore setup-status route (on primaryBase) return 200.
+// Probing the setup-status route (not just /healthz) ensures bootstrap has
+// completed phase5 route mount + FinalizeAuth, so the subsequent setup/admin
+// POST is guaranteed to land on a wired handler rather than racing against mux
+// finalization (race-detector + concurrent load occasionally surfaced "EOF"
+// responses when only /healthz was probed).
+func waitForHealthz(t *testing.T, healthBase, primaryBase string) {
 	t.Helper()
 	testwait.External(t, "l2-harness-server-ready", func() bool {
-		if !httpGetOK(base + "/healthz") {
+		if !httpGetOK(healthBase + "/healthz") {
 			return false
 		}
-		return httpGetOK(base + "/api/v1/access/setup/status")
+		return httpGetOK(primaryBase + "/api/v1/access/setup/status")
 	}, testtime.EventuallyLong, testtime.MediumPoll, "HTTP server did not become ready")
 }
 

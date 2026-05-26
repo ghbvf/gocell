@@ -170,11 +170,13 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -184,15 +186,15 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	// Wait for primary to accept. Health endpoints fall back to primary when no HealthListener.
+	healthAddr := healthLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	t.Run("primary_404s_internal_prefix", func(t *testing.T) {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", primaryAddr))
@@ -273,11 +275,13 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -288,13 +292,13 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Internal endpoint is reachable with a ServiceToken and without a JWT
 	// bearer. The internal listener must not install the public JWT verifier.
@@ -395,6 +399,7 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, callerLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(callerLn)),
 		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}), // guaranteed to collide
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -438,11 +443,13 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -452,14 +459,15 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
+	healthAddr := healthLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
 	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
@@ -650,6 +658,7 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		// Internal: same colliding address → EADDRINUSE.
 		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -897,11 +906,13 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		// noCloseRaceShutdownBudget is now a defense-in-depth ceiling: with
 		// noCloseRaceHTTPClient disabling keep-alive and phase10 stage 3
 		// owning an independent tearCtx, HTTP drain in this test exits in
@@ -917,13 +928,13 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := noCloseRaceHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := noCloseRaceHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Fire concurrent requests while shutting down to exercise the race window.
 	// WaitGroup ensures all in-flight goroutines have exited before the test
@@ -976,6 +987,7 @@ func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
 		// bootstrap-owned; should succeed then be released
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.InternalListener, collidingAddr, []kauth.ListenerAuth{kauth.AuthNone{}}), // collides
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -1041,10 +1053,12 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 
 	primaryLn := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1054,13 +1068,13 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/mwtest/ping", primaryAddr))
 	require.NoError(t, err)
@@ -1097,11 +1111,13 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1109,17 +1125,16 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	// Wait for primary healthy.
+	// Wait for health listener ready.
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Internal listener must also be reachable by the time primary is healthy.
 	resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
@@ -1155,11 +1170,13 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1167,15 +1184,14 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	primaryAddr := primaryLn.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "primary listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Baseline is taken AFTER the server is confirmed stable (healthz 200 returned
 	// above). Taking it here ensures that all bootstrap-internal goroutines (HTTP
@@ -1232,13 +1248,8 @@ func TestPhase0_DuplicateListenerRefs(t *testing.T) {
 
 // TestPhase0_MetricsRequiresHealthListener verifies that configuring a metrics
 // handler without a dedicated HealthListener is rejected at phase0 (B2 rule).
-func TestPhase0_MetricsRequiresHealthListener(t *testing.T) {
-	b := New(
-		WithClock(clock.Real()),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
-		WithHealthRoutes(WithMetricsHandler(http.NewServeMux())),
-	)
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "WithHealthRoutes(WithMetricsHandler")
-}
+// TestPhase0_MetricsRequiresHealthListener was removed in #673: the
+// metrics-specific B2 check is subsumed by the general health-listener
+// fail-fast. Coverage moved to
+// TestPhase0_MetricsHandler_NoHealthListener_FailsFast in
+// health_listener_required_test.go.

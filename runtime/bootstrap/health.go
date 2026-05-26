@@ -3,8 +3,9 @@ package bootstrap
 // health.go — HealthRouteGroups factory for the PR-A14b per-listener model.
 //
 // /healthz, /readyz, and /metrics live as framework-owned RouteGroups on the
-// HealthListener (with phase5 fall-back to PrimaryListener when no
-// HealthListener is declared — see docs/ops/listener-topology.md). Each
+// HealthListener, which must be declared via WithListener — #673 removed the
+// silent phase5 fall-back onto PrimaryListener; phase0 fails fast when no
+// HealthListener is present (see docs/ops/listener-topology.md). Each
 // route inherits its listener's auth chain — there is no per-route auth
 // plan (PR269 round-3: auth scheme is a listener-scope concern; verbose-mode
 // disclosure on /readyz is a separate concern handled by the health handler
@@ -105,9 +106,10 @@ func WithReadyzVerboseDisabled() HealthRouteGroupOption {
 
 // HealthRouteGroups returns one RouteGroup per framework-owned health route
 // (/healthz, /readyz, optional /metrics) on the HealthListener. The HealthListener
-// is wired with no listener auth (cmd/corebundle pattern), so health probes are
-// reachable without a token; the verbose disclosure on /readyz is gated by
-// WithReadyzVerboseToken at the handler layer.
+// is wired with an explicit no-auth chain ([]auth.ListenerAuth{auth.AuthNone{}};
+// phase0 rejects a nil chain), so health probes are reachable without a token;
+// the verbose disclosure on /readyz is gated by WithReadyzVerboseToken at the
+// handler layer.
 //
 // A nil/zero metrics handler omits the /metrics route entirely.
 func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell.RouteGroup {

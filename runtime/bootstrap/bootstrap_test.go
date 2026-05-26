@@ -302,6 +302,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
 
@@ -336,6 +337,7 @@ func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 		WithClock(clock.Real()),
 		WithConfig("/nonexistent/config.yaml", "APP"),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
@@ -537,6 +539,7 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 		WithPublisher(eb), WithSubscriber(eb),
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -559,6 +562,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -567,6 +571,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -574,9 +579,8 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -615,6 +619,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		},
 	}}
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -622,6 +627,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -638,9 +644,8 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		t.Fatal("timed out waiting for restored consumer context")
 	}
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -666,6 +671,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -695,11 +701,13 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-healthy", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -710,9 +718,8 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for the HTTP server to be ready.
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -721,7 +728,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as healthy.
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -751,11 +758,13 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
@@ -770,9 +779,8 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for the HTTP server to be ready.
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -781,7 +789,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as unhealthy.
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -813,11 +821,13 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-adapter-info", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithAdapterInfo(map[string]string{
 			"mode":    "in-memory",
@@ -830,9 +840,8 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -840,7 +849,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -874,11 +883,13 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("accesscore")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 		// WithHealthChecker is the composition-root path that drainProbes wires
@@ -890,9 +901,8 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -900,7 +910,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -937,11 +947,13 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 	// snapshotCheckCell.Init registers healthz probe "probe.<id>" via reg.Healthz().
 	require.NoError(t, asm.Register(newSnapshotCheckCell("widget")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -950,9 +962,8 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -960,7 +971,7 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -995,11 +1006,13 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-a")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		// Two WithHealthChecker calls with the same name trigger duplicate detection
 		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
@@ -1100,11 +1113,13 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-multi-hc", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
@@ -1117,9 +1132,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1128,7 +1142,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose — one unhealthy checker should make the whole response 503.
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -1167,11 +1181,13 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	// Atomic flag to simulate connection health transitions at runtime.
 	var unhealthy atomic.Bool
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			if unhealthy.Load() {
@@ -1185,9 +1201,8 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1196,7 +1211,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// Phase 1: healthy state → 200.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "should be ready when checker is healthy")
 	closeBody(t, resp)
@@ -1204,7 +1219,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	// Phase 2: flip to unhealthy → 503.
 	unhealthy.Store(true)
 
-	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"should be unready after health state transition")
@@ -1213,7 +1228,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	// Phase 3: recover → 200.
 	unhealthy.Store(false)
 
-	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "should recover after health state restores")
 	closeBody(t, resp)
@@ -1238,12 +1253,14 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -1252,9 +1269,8 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1263,7 +1279,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	testwait.External(t, "bootstrap-watcher-ready", func() bool {
-		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1306,12 +1322,14 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -1320,9 +1338,8 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-watcher-ready", func() bool {
-		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1439,12 +1456,14 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-drift-http-503", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(failCell))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -1455,10 +1474,9 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	// Wait for server to be ready (healthy initially — no drift yet).
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1475,7 +1493,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	// driftSlogCapture installed above. configDriftCheckerName must appear
 	// unhealthy in the captured breakdown.
 	testwait.External(t, "bootstrap-drift-detected", func() bool {
-		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1508,6 +1526,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
@@ -1534,6 +1553,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithHealthChecker("config_watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(testtime.D1s),
 	)
@@ -1554,6 +1574,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -1562,6 +1583,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		WithConsumerBase(newTestConsumerBase(t)),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -1570,9 +1592,8 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -1580,7 +1601,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
-	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 
@@ -1781,12 +1802,14 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	slow := newSlowReloaderCell("slow-cell", slowReloaderDelay)
 	require.NoError(t, asm.Register(slow))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D5s),
 	)
 
@@ -1795,9 +1818,8 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -1840,12 +1862,14 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	rc := newReloaderCell("auth-core")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1855,9 +1879,8 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for HTTP ready.
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -1901,12 +1924,14 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	rc.err = errors.New("reload callback failed")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1915,9 +1940,8 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -1956,12 +1980,14 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	rc.doPanic = true
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -1970,9 +1996,8 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2015,12 +2040,14 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		require.NoError(t, asm.Register(cells[i]))
 	}
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2029,9 +2056,8 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2073,12 +2099,14 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2087,9 +2115,8 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2130,12 +2157,14 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	rc := newReloaderCell("noop-cell")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2144,9 +2173,8 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2233,12 +2261,14 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	require.NoError(t, asm.Register(mutator))
 	require.NoError(t, asm.Register(observer))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2247,9 +2277,8 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2295,12 +2324,14 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	rc := newReloaderCell("shutdown-race-cell")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2309,9 +2340,8 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2357,12 +2387,14 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	require.NoError(t, asm.Register(rc))
 
 	blocker := newBlockingStopWorker()
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(blocker),
 	)
@@ -2372,9 +2404,8 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2422,12 +2453,14 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	rc := newReloaderCell("gen-cell")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2436,9 +2469,8 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if e != nil {
 			return false
 		}
@@ -2584,11 +2616,13 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2598,7 +2632,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 
 	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -2683,11 +2717,13 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		err: fmt.Errorf("should not verify for public route"),
 	}
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2697,7 +2733,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 
 	addr := ln.Addr().String()
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -2741,11 +2777,13 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-health-override", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -2753,11 +2791,10 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// The framework-managed handler (backed by started asm) responds with 200.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
 	require.NoError(t, err)
 	defer closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -2776,18 +2813,19 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 
 func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 	ln := newLocalListener(t)
-	addr := ln.Addr().String()
+	healthLn := newLocalListener(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 	)
 	go func() { errCh <- b.Run(ctx) }()
 
 	// Wait for server to be ready.
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Trigger shutdown.
 	cancel()
@@ -2795,7 +2833,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 	// Poll /readyz — it should become 503.
 	deadline := time.After(testtime.SelectShutdown)
 	for {
-		resp, err := testHTTPClient.Get("http://" + addr + "/readyz")
+		resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/readyz")
 		if err != nil {
 			break // server already closed, that's fine
 		}
@@ -2872,11 +2910,13 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2885,7 +2925,7 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/trace-test")
 	require.NoError(t, err)
@@ -2916,11 +2956,13 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2929,7 +2971,7 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Send request with upstream traceparent header.
 	upstreamTraceID := "0af7651916cd43dd8448eb211c80319c"
@@ -2962,11 +3004,13 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2975,7 +3019,7 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/boom")
 	require.NoError(t, err)
@@ -3003,20 +3047,21 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("bootstrap-infra-e2e")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(tracer),
 	)
 
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
-	resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
+	resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
 	require.NoError(t, err)
 	closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -3093,11 +3138,13 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3106,7 +3153,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Protected route without token -> 401.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
@@ -3141,11 +3188,13 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes are declared via mustMount(Public:true) in the cell.
 	)
@@ -3155,7 +3204,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Public login route without token -> should pass auth.
 	resp, err := testHTTPClient.Post(
@@ -3205,6 +3254,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		claims: kauth.Claims{Subject: "explicit-user", Roles: []string{"admin"}},
 	}
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
@@ -3212,6 +3262,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 			[]kauth.ListenerAuth{kauthtest.MustAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3220,7 +3271,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Send request WITH Authorization header — explicit verifier should handle it.
 	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/v1/data", addr), nil)
@@ -3256,11 +3307,13 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	hc := newHTTPCell("plain-cell")
 	require.NoError(t, asm.Register(hc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3288,11 +3341,13 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
 	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3321,11 +3376,13 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes declared via mustMount(Public:true) in authProviderCell.
 	)
@@ -3335,7 +3392,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// --- Public endpoint: client-supplied X-Request-Id must be ignored ---
 	t.Run("public endpoint ignores client-supplied request ID", func(t *testing.T) {
@@ -3389,11 +3446,13 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	tc := newTestCell("hsts-cell")
 	require.NoError(t, asm.Register(tc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
@@ -3405,10 +3464,9 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
-	resp, reqErr := testHTTPClient.Get("http://" + addr + "/healthz")
+	resp, reqErr := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
 	require.NoError(t, reqErr)
 	closeBody(t, resp)
 
@@ -3474,12 +3532,14 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3488,8 +3548,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Change only a db.* key — server. cell must NOT be notified.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
@@ -3524,12 +3583,14 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3538,8 +3599,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Change a server.* key — server. cell MUST be notified.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\ndb:\n  host: localhost\n"), 0o644))
@@ -3581,12 +3641,14 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	rc := newReloaderCell("plain-reloader")
 	require.NoError(t, asm.Register(rc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3595,8 +3657,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Change any key — plain reloader must receive notification.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
@@ -3689,11 +3750,13 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(tc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(tracer),
 		WithShutdownTimeout(testtime.D2s),
 		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
@@ -3705,7 +3768,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	upstreamTraceID := "aabbccddeeff00112233445566778899"
 	traceparentHeader := "00-" + upstreamTraceID + "-b7ad6b7169203331-01"
@@ -3837,11 +3900,13 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	hc := newPublicPingAuthCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 	)
 
@@ -3850,7 +3915,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// HEAD request to the GET-declared public endpoint must bypass auth.
 	headReq, err := http.NewRequest(http.MethodHead,
@@ -3882,13 +3947,14 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 	require.NoError(t, asm.Register(newTestCell("lc-cell-1")))
 
 	ln := newLocalListener(t)
-	addr := ln.Addr().String()
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3909,7 +3975,7 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- b.Run(ctx) }()
 
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	require.True(t, startCalled.Load(), "OnStart should have been called before HTTP server is ready")
 
@@ -3926,11 +3992,13 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 
 	ln := newLocalListener(t)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3976,17 +4044,19 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithManagedCloser(resource),
 	)
 	go func() { errCh <- b.Run(ctx) }()
 
-	waitForHealthy(t, ln.Addr().String())
+	waitForHealthy(t, healthLn.Addr().String())
 	cancel()
 	require.NoError(t, <-errCh)
 
@@ -4146,6 +4216,7 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -4172,6 +4243,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
 		// before the listener is actually bound, so no connection is ever served.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -4200,6 +4272,7 @@ func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 		WithClock(clock.Real()),
 		// Two declarations for PrimaryListener — second one is the duplicate.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithShutdownTimeout(testtime.D1s),
 	)
@@ -4227,6 +4300,7 @@ func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -4297,6 +4371,7 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]kauth.ListenerAuth{kauthtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -4316,16 +4391,18 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 	}
 }
 
-// duplicateHealthCell declares the same (method, path) twice on HealthListener,
-// triggering FinalizeAuth failure on the health router.
-// Note: health routes are usually registered by the framework, not by cells —
-// but a cell can still target HealthListener via RouteGroups().
-type duplicateHealthCell struct {
+// healthListenerTargetingCell declares a business RouteGroup on
+// cell.HealthListener — forbidden since #673: the health listener is reserved
+// for framework-owned /healthz, /readyz, /metrics (CellID==""), so
+// phase5MountRouteGroups rejects a cell-owned route there fail-fast. Before #673
+// a cell could silently mount on HealthListener (exposing business endpoints on
+// the unauthenticated probe port); that gap is exactly what the guard closes.
+type healthListenerTargetingCell struct {
 	*cell.BaseCell
 }
 
-func newDuplicateHealthCell(id string) *duplicateHealthCell {
-	return &duplicateHealthCell{
+func newHealthListenerTargetingCell(id string) *healthListenerTargetingCell {
+	return &healthListenerTargetingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   id,
 			Type: "core",
@@ -4333,26 +4410,17 @@ func newDuplicateHealthCell(id string) *duplicateHealthCell {
 	}
 }
 
-func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registrar) error {
+func (c *healthListenerTargetingCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.HealthListener,
+		Listener: cell.HealthListener, // reserved for framework — #673 rejects cell routes here
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
 			mustMount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
-				Public:   true,
-			})
-			// Duplicate declaration — must trigger FinalizeAuth error.
-			mustMount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
+				Contract: testHTTPContract("GET", "/api/v1/rogue-health"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
 				Public:   true,
 			})
 			return nil
@@ -4361,12 +4429,20 @@ func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registrar) erro
 	return nil
 }
 
-// TestBootstrap_Phase5_FinalizeFailure_OnHealthListener verifies that a
-// FinalizeAuth failure on the HealthListener is propagated as a Bootstrap.Run
-// error and triggers assembly rollback (TEST-13).
-func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-health", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	require.NoError(t, asm.Register(newDuplicateHealthCell("dup-health-cell")))
+// TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack verifies the #673
+// reserved-boundary guard end-to-end: a cell that declares a RouteGroup on
+// cell.HealthListener makes Bootstrap.Run fail with ERR_CELL_INVALID_CONFIG
+// (phase5MountRouteGroups rejects it before any server starts) and triggers
+// assembly rollback. The unit-level guard is covered by
+// TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener; this is the
+// Run-path + rollback proof. (Pre-#673 this test injected a duplicate auth
+// declaration via a cell-owned health RouteGroup to exercise FinalizeAuth
+// failure on the health router — that path is now structurally impossible, and
+// finalize-failure propagation on a non-primary listener stays covered by
+// TestBootstrap_Phase5_FinalizeFailure_OnInternalListener.)
+func TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-rogue-health", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Register(newHealthListenerTargetingCell("rogue-health-cell")))
 
 	b := New(
 		WithClock(clock.Real()),
@@ -4380,9 +4456,13 @@ func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
 	defer cancel()
 
 	err := b.Run(ctx)
-	require.Error(t, err, "Bootstrap.Run must return error when HealthListener FinalizeAuth fails")
-	assert.Contains(t, err.Error(), "duplicate auth declaration",
-		"error must identify the duplicate declaration")
+	require.Error(t, err, "Bootstrap.Run must fail when a cell targets cell.HealthListener")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "guard error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"reserved-boundary violation must surface ERR_CELL_INVALID_CONFIG")
+	assert.Contains(t, ecErr.Message, "cell.HealthListener",
+		"error must name cell.HealthListener so operators know the fix")
 
 	// After rollback, cells must be stopped.
 	h := asm.Health()
@@ -4439,6 +4519,7 @@ func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		// Only PrimaryListener declared; cell uses zero-value ref.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 

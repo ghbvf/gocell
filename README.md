@@ -34,11 +34,11 @@ export GOCELL_TODOORDER_SERVICE_SECRET="$(openssl rand -base64 32)"
 # reads $GOCELL_JWT_PRIVATE_KEY/$GOCELL_JWT_ISSUER/$GOCELL_JWT_AUDIENCE from env
 export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 
-# Step 4 — start the server (primary :8082, internal :9082)
+# Step 4 — start the server (primary :8082, internal :9082, health 127.0.0.1:9092)
 go run ./examples/todoorder &
 
-# Step 5 — wait for readiness
-until curl -fsS http://localhost:8082/readyz >/dev/null; do sleep 0.2; done
+# Step 5 — wait for readiness (#673: /healthz and /readyz live on the health listener)
+until curl -fsS http://127.0.0.1:9092/readyz >/dev/null; do sleep 0.2; done
 
 # Step 6 — exercise the API
 curl -s -X POST http://localhost:8082/api/v1/orders/ \

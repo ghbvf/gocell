@@ -53,7 +53,7 @@ func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error
 	if err != nil {
 		return err
 	}
-	groups := b.phase5CollectRouteGroups(s, routers)
+	groups := b.phase5CollectRouteGroups(s)
 	// defense-in-depth: phase0 already validated; re-check after phase4 resolved verifiers
 	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
@@ -122,24 +122,13 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 // phase5CollectRouteGroups collects RouteGroups from health and cell snapshots.
 // Each RouteGroup is annotated with the contributing cell ID (OPS-02).
 //
-// Health-listener fallback: when no HealthListener is declared, /healthz and
-// /readyz RouteGroups (which target cell.HealthListener) are remapped to the
-// PrimaryListener so the probes remain reachable. The /metrics route is excluded
-// from this fallback — B2 enforces a dedicated HealthListener when a metrics
-// handler is configured (phase0 rejects that combination at startup).
-func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.ListenerRef]*router.Router) []cell.RouteGroup {
-	_, hasHealthListener := routers[cell.HealthListener]
+// Framework health groups (/healthz, /readyz, /metrics) always target
+// cell.HealthListener. There is no fallback remap onto PrimaryListener — #673
+// removed the silent relocation that collapsed port-level isolation. phase0
+// (validateHTTPListenerConfigs) guarantees a HealthListener is declared, so
+// the routers map below always contains it.
+func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	groups := HealthRouteGroups(s.hh, s.healthRouteGroupOpts...)
-	if !hasHealthListener {
-		// Remap livez/readyz health groups to PrimaryListener so /healthz and /readyz
-		// are served even when no dedicated HealthListener was declared.
-		// (B2 has already blocked the metrics-without-HealthListener case at phase0.)
-		for i := range groups {
-			if groups[i].Listener == cell.HealthListener {
-				groups[i].Listener = cell.PrimaryListener
-			}
-		}
-	}
 	if s.devtoolsHandler != nil {
 		groups = append(groups, devtools.RouteGroup(s.devtoolsHandler))
 	}
@@ -161,6 +150,18 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 // OPS-02: wraps registration errors with cell ID, group index, listener, and prefix context.
 func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.Router, groups []cell.RouteGroup) error {
 	for i, rg := range groups {
+		// #673: cell.HealthListener is reserved for framework-owned health routes
+		// (/healthz, /readyz, /metrics; CellID==""). A cell-owned RouteGroup
+		// (CellID!="") targeting it would expose business endpoints on the
+		// unauthenticated loopback probe port — reject at mount time, mirroring
+		// the InternalListener boundary (validateInternalGuardForDeclaredRoutes).
+		if rg.Listener == cell.HealthListener && rg.CellID != "" {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"bootstrap: cell-owned RouteGroup must not target cell.HealthListener "+
+					"(reserved for framework /healthz, /readyz, /metrics); declare it on "+
+					"cell.PrimaryListener or cell.InternalListener instead",
+				errcode.WithInternal(fmt.Sprintf("cellID=%q prefix=%q", rg.CellID, rg.Prefix)))
+		}
 		rtr, ok := routers[rg.Listener]
 		if !ok {
 			return fmt.Errorf("bootstrap: RouteGroup references undeclared listener %q; add WithListener(%s,...) to bootstrap options",

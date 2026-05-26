@@ -141,11 +141,18 @@ func defaultRuntimeOptions(
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}
-	opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain))
-	if shared.HealthHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}))
-	}
-	opts = append(opts, devtoolsOption(shared))
+	// #673: the HealthListener is mandatory (unlike PrimaryListener, which a
+	// worker-only binary may omit). resolveListenerAddrs always defaults
+	// HealthHTTPAddr to 127.0.0.1:9091, so it is never empty on the env path;
+	// declaring it unconditionally removes the dead `!= ""` gate and the
+	// "Validate passes but the listener is silently skipped" gap. A directly
+	// constructed SharedDeps with an empty addr now fails fast at bootstrap
+	// phase0 (validateListenerConfig: no address) instead of being skipped.
+	opts = append(opts,
+		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain),
+		bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}),
+		devtoolsOption(shared),
+	)
 	return opts, nil
 }
 
