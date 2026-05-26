@@ -93,7 +93,7 @@ func leaderElectLockKey(definitionID, instanceID idutil.SafeID) string {
 // is false.
 func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstance) (release func(), lead bool) {
 	if c.locker == nil {
-		return func() {}, true
+		return func() { /* no-op release: no distributed locker configured, single-coordinator mode */ }, true
 	}
 	key := leaderElectLockKey(ci.Instance.DefinitionID, ci.Instance.ID)
 	lock, err := c.locker.Acquire(ctx, key, c.cfg.LeaseDuration)

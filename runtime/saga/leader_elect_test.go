@@ -759,7 +759,7 @@ func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
 	case <-time.After(testtime.D2s):
 		t.Fatal("wedged step did not start")
 	}
-	if got := len(fd.Snapshot()); got != 1 {
+	if len(fd.Snapshot()) != 1 {
 		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
 	}
 
@@ -770,7 +770,7 @@ func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
 	defer stopCancel()
 	_ = c.Stop(stopCtx)
 
-	if got := len(fd.Snapshot()); got != 0 {
+	if len(fd.Snapshot()) != 0 {
 		t.Errorf("distlock still held after Stop with a wedged step; F1: Stop must release in-flight locks. snapshot=%v", fd.Snapshot())
 	}
 
