@@ -3,9 +3,9 @@
 //   - CLI-TOPLEVEL-HELP-REGISTRY-01
 //
 // No `gocell` command — at any level — may be visible in help while being
-// unimplemented. The four help-bearing verb trees
-// (generate / verify / scaffold / check) AND the top-level command set each
-// own a single typed registry (cmd/gocell/app/subcommand.go's
+// unimplemented. The five help-bearing verb trees
+// (generate / verify / scaffold / check / export) AND the top-level command
+// set each own a single typed registry (cmd/gocell/app/subcommand.go's
 // subcommand[H]); dispatch and help BOTH derive from that one slice, so a
 // command cannot appear in one truth and not the other.
 //
@@ -13,13 +13,16 @@
 // than convention. It binds four structural facts in cmd/gocell/app
 // production code:
 //
-//   - Upstream Hard: the dispatch functions — the four verb-tree
-//     dispatchers (runGenerate, runVerify, runScaffoldWithRoot, runCheck)
-//     plus the top-level Dispatch — contain NO `switch` statement and DO
-//     call findSub — i.e. dispatch is registry lookup, never a
-//     string-literal `case "name":` ladder (verb trees) nor a name→handler
-//     map index (top level). Re-introducing a switch (the pre-PR shape that
-//     let `generate indexes` exist) fails CI.
+//   - Upstream Hard (form-unique): the dispatch functions — the five
+//     verb-tree dispatchers (runGenerate, runVerify, runScaffoldWithRoot,
+//     runCheck, runExport) plus the top-level Dispatch — contain NO `switch`
+//     statement AND resolve the handler via `h, ok := findSub(<registry>, …)`
+//     over the dispatcher's own registry AND actually invoke that resolved
+//     `h`. This defeats not only a string-literal `case "name":` ladder but
+//     also a dummy findSub call paired with a real name→handler map-index /
+//     if-ladder dispatch (the resolved handler must be the one called). The
+//     expected registry per dispatcher is pinned in dispatchFuncs, so
+//     findSub over a parallel/wrong slice is rejected too.
 //   - Downstream Hard (verb trees): no `helpEntry{…}` composite literal
 //     anywhere in production code carries a string-literal `name`. The only
 //     path from a registry to a helpEntry is buildHelpEntries (via
@@ -49,16 +52,17 @@
 //     archtest-bound (the Go ceiling for "what a func prints"); form
 //     uniqueness is the highest grade reachable for this rule shape (charter
 //     §Hard 范本 "typed marker funnel for unbounded ops").
-//   - Upstream = the SAME closed-loop archtest funnel as the verb trees:
-//     Dispatch ∈ dispatchFuncs → no-switch + must-call-findSub. Enforcement
-//     is archtest-AST (Go cannot type-force "resolution must go through
-//     findSub"); this is the identical mechanism and identical ceiling as
-//     the four already-shipped verb dispatchers. This PR does NOT fork a
-//     divergent grade for one of two identical mechanisms in the same file
-//     (concept-model consistency); whether the CLI single-source funnel's
-//     upstream is "truly Hard vs Medium" is a framing question that applies
-//     equally to the sibling — recorded here as a known meta-question, not
-//     silently decided nor unilaterally re-graded.
+//   - Upstream = Hard (form-unique), SHARED with the verb trees:
+//     Dispatch ∈ dispatchFuncs → no-switch AND `h,ok := findSub(commands,…)`
+//     AND `h` is invoked. The form-uniqueness (handler bound by findSub over
+//     the pinned registry, then that exact handler dispatched) closes the
+//     weaker "findSub appears somewhere" shape: a dummy findSub paired with a
+//     name→handler map-index/if-ladder dispatch fails, as does findSub over a
+//     wrong/parallel slice. Enforcement is archtest-AST (Go cannot type-force
+//     control flow), so form-uniqueness — no "like-but-not" gray zone — is
+//     the highest grade reachable for this rule shape (charter §Hard 范本
+//     "typed marker funnel for unbounded ops"); identical mechanism and
+//     ceiling for all six dispatchers, graded uniformly (no fork).
 //
 // Reverse-fixture self-checks below prove each detector actually
 // fires (a detector that silently passes everything would itself be the
@@ -93,11 +97,14 @@
 //     `placeholder` asserts the literal form is caught, and the absence
 //     of any indirection is guaranteed by the no-switch + findSub facts
 //     (an unregistered type cannot reach a handler at all).
-//  4. runExport's two-value `catalog|metadata` alias switch is
-//     intentionally OUT of scope: export has no helpEntry surface, so it
-//     cannot drift help vs dispatch. dispatchFuncs lists the four
-//     help-bearing verb trees plus the top-level Dispatch — runExport is
-//     deliberately absent.
+//  4. export is now a registry-backed verb tree, not an excluded alias
+//     switch: runExport resolves catalog/metadata via
+//     findSub(exportSubcommands, …) and derives `export -h` via renderSubHelp,
+//     so it is in dispatchFuncs like the other four. (Previously it was an
+//     OUT-of-scope plain alias switch with no helpEntry surface; once it grew
+//     a `-h` help surface that exclusion no longer held, so it was folded into
+//     the funnel rather than left as a hand-written second source.) There is
+//     no remaining excluded dispatcher.
 //  5. scanPrintUsageDerived keys on the FuncDecl name "PrintUsage" (a name
 //     convention for the single sanctioned entry point) but its match is
 //     form-complete: it accepts ONLY the sole-renderTopHelp(commands) body
@@ -122,19 +129,20 @@ import (
 	"testing"
 )
 
-// dispatchFuncs are the registry-backed dispatchers: the four help-bearing
-// verb-tree dispatchers plus the top-level Dispatch
-// (CLI-TOPLEVEL-HELP-REGISTRY-01). Each must route through a subcommand
-// registry (findSub) and contain no switch — a string-literal `case`
-// ladder (verb trees) or a name→handler map index (top level) would let
-// dispatch drift from help. runExport is deliberately absent (no helpEntry
-// surface — see ledger §4).
-var dispatchFuncs = map[string]bool{
-	"runGenerate":         true,
-	"runVerify":           true,
-	"runScaffoldWithRoot": true,
-	"runCheck":            true,
-	"Dispatch":            true,
+// dispatchFuncs maps each registry-backed dispatcher to the registry-slice
+// identifier it MUST resolve handlers from: the five help-bearing verb-tree
+// dispatchers plus the top-level Dispatch (CLI-TOPLEVEL-HELP-REGISTRY-01).
+// scanDispatchViaRegistry pins the form `h, ok := findSub(<registry>, …)`
+// followed by an invocation of `h` — so dispatch is a registry lookup whose
+// resolved handler is the one called, never a switch ladder nor a dummy
+// findSub paired with a parallel map-index/if-ladder dispatch.
+var dispatchFuncs = map[string]string{
+	"runGenerate":         "generateSubcommands",
+	"runVerify":           "verifySubcommands",
+	"runScaffoldWithRoot": "scaffoldSubcommands",
+	"runCheck":            "checkSubcommands",
+	"runExport":           "exportSubcommands",
+	"Dispatch":            "commands",
 }
 
 // TestCLIUnimplHide01 binds the structural single-source facts in
@@ -151,7 +159,7 @@ func TestCLIUnimplHide01(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue // production-only invariant
 				}
-				d = append(d, scanDispatchSwitchFree(p, f, rel)...)
+				d = append(d, scanDispatchViaRegistry(p, f, rel)...)
 				d = append(d, scanHelpEntryNoLiteralName(p, f, rel)...)
 				d = append(d, scanNoNotImplementedLiteral(p, f, rel)...)
 			}
@@ -160,40 +168,97 @@ func TestCLIUnimplHide01(t *testing.T) {
 	Report(t, "CLI-UNIMPL-HIDE-01", diags)
 }
 
-// scanDispatchSwitchFree enforces the upstream-Hard fact: each dispatch
-// function has zero SwitchStmt and at least one findSub call.
-func scanDispatchSwitchFree(p *Pass, f *ast.File, rel string) []Diagnostic {
+// scanDispatchViaRegistry enforces the upstream form-uniqueness fact: each
+// dispatcher has zero SwitchStmt, binds its handler via
+// `h, ok := findSub(<its registry>, …)`, and invokes that exact `h`. The
+// findSub-result-must-be-invoked rule is what defeats a dummy findSub call
+// paired with a real map-index/if-ladder dispatch (the weaker "findSub
+// appears somewhere" check could not). The registry identifier is pinned per
+// dispatcher (dispatchFuncs), so resolving over a parallel/wrong slice fails.
+func scanDispatchViaRegistry(p *Pass, f *ast.File, rel string) []Diagnostic {
 	var d []Diagnostic
 	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
-		if fn.Name == nil || !dispatchFuncs[fn.Name.Name] || fn.Body == nil {
+		if fn.Name == nil || fn.Body == nil {
 			return
 		}
-		var hasSwitch, callsFindSub bool
+		reg, ok := dispatchFuncs[fn.Name.Name]
+		if !ok {
+			return
+		}
+		line := p.Fset.Position(fn.Pos()).Line
+		var hasSwitch bool
 		EachInSubtree[ast.SwitchStmt](fn.Body, func(*ast.SwitchStmt) { hasSwitch = true })
-		EachInSubtree[ast.CallExpr](fn.Body, func(c *ast.CallExpr) {
-			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "findSub" {
-				callsFindSub = true
-			}
-		})
 		if hasSwitch {
 			d = append(d, Diagnostic{
 				Rel:  rel,
-				Line: p.Fset.Position(fn.Pos()).Line,
-				Message: fn.Name.Name + " dispatches via switch; the four verb " +
-					"trees must dispatch through the subcommand registry (findSub) " +
-					"so help and dispatch cannot drift",
+				Line: line,
+				Message: fn.Name.Name + " dispatches via switch; a registry-backed " +
+					"dispatcher must resolve the handler through findSub so help and " +
+					"dispatch cannot drift",
 			})
 		}
-		if !callsFindSub {
+		handler := findSubHandlerIdent(fn.Body, reg)
+		if handler == "" {
 			d = append(d, Diagnostic{
 				Rel:  rel,
-				Line: p.Fset.Position(fn.Pos()).Line,
-				Message: fn.Name.Name + " does not call findSub; dispatch must " +
-					"resolve the handler through its subcommand registry",
+				Line: line,
+				Message: fn.Name.Name + " does not resolve the handler via findSub(" +
+					reg + ", …); dispatch must look the handler up in its registry, " +
+					"not a switch/map/if-ladder",
+			})
+			return // no handler binding to verify invocation against
+		}
+		if !identIsCalled(fn.Body, handler) {
+			d = append(d, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fn.Name.Name + " resolves a handler via findSub but never " +
+					"dispatches it; the findSub result must be the invoked handler " +
+					"(guards a dummy findSub paired with a parallel map-index dispatch)",
 			})
 		}
 	})
 	return d
+}
+
+// findSubHandlerIdent returns the name of the handler variable bound by an
+// assignment `<h>, <ok> := findSub(<reg>, …)` whose first argument is the
+// identifier regName. Returns "" when no such assignment exists.
+func findSubHandlerIdent(body *ast.BlockStmt, regName string) string {
+	var name string
+	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
+		if name != "" || len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+			return
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		fun, ok := call.Fun.(*ast.Ident)
+		if !ok || fun.Name != "findSub" || len(call.Args) < 1 {
+			return
+		}
+		arg0, ok := call.Args[0].(*ast.Ident)
+		if !ok || arg0.Name != regName {
+			return
+		}
+		if h, ok := as.Lhs[0].(*ast.Ident); ok {
+			name = h.Name
+		}
+	})
+	return name
+}
+
+// identIsCalled reports whether the identifier name is invoked as `name(…)`
+// anywhere in body.
+func identIsCalled(body *ast.BlockStmt, name string) bool {
+	called := false
+	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
+		if id, ok := c.Fun.(*ast.Ident); ok && id.Name == name {
+			called = true
+		}
+	})
+	return called
 }
 
 // scanHelpEntryNoLiteralName enforces the downstream-Hard fact: no
@@ -304,20 +369,36 @@ func parseFixture(t *testing.T, name string) (*Pass, *ast.File, string) {
 func TestCLIUnimplHide01_DetectsSwitchDispatch(t *testing.T) {
 	t.Parallel()
 	p, f, rel := parseFixture(t, "switch_dispatch.go")
-	got := scanDispatchSwitchFree(p, f, rel)
-	// The fixture's runGenerate both has a switch AND never calls findSub,
-	// so the detector must emit exactly two distinct diagnostics. Asserting
-	// only "len > 0" would let the detector silently regress to reporting a
-	// single condition.
+	got := scanDispatchViaRegistry(p, f, rel)
+	// The fixture's runGenerate both has a switch AND never resolves via
+	// findSub(generateSubcommands, …), so the detector must emit exactly two
+	// distinct diagnostics. Asserting only "len > 0" would let the detector
+	// silently regress to reporting a single condition.
 	if len(got) != 2 {
 		t.Fatalf("expected exactly 2 diagnostics (switch present + findSub "+
-			"absent), got %d: %v", len(got), got)
+			"resolution absent), got %d: %v", len(got), got)
 	}
 	if !containsMsg(got, "dispatches via switch") {
 		t.Errorf("missing the switch-present diagnostic; got %v", got)
 	}
-	if !containsMsg(got, "does not call findSub") {
-		t.Errorf("missing the findSub-absent diagnostic; got %v", got)
+	if !containsMsg(got, "does not resolve the handler via findSub") {
+		t.Errorf("missing the findSub-resolution-absent diagnostic; got %v", got)
+	}
+}
+
+// TestCLIUnimplHide01_DetectsDummyFindSubMapIndex proves the form-unique
+// upstream check catches the bypass the old "findSub appears somewhere" shape
+// could not: a dispatcher that calls findSub(<registry>, …) but discards the
+// result and dispatches via a name→handler map index instead.
+func TestCLIUnimplHide01_DetectsDummyFindSubMapIndex(t *testing.T) {
+	t.Parallel()
+	p, f, rel := parseFixture(t, "dummy_findsub_mapindex.go")
+	got := scanDispatchViaRegistry(p, f, rel)
+	if len(got) == 0 {
+		t.Fatal("expected dummy-findSub + map-index dispatch fixture to be flagged, got 0")
+	}
+	if !containsMsg(got, "never dispatches it") {
+		t.Errorf("missing the findSub-result-not-invoked diagnostic; got %v", got)
 	}
 }
 
