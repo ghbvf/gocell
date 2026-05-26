@@ -1,6 +1,7 @@
 id: configcore
 type: core
 consistencyLevel: L3
+lifecycle: asset
 durabilityMode: durable
 owner:
   team: platform

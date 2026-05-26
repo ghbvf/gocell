@@ -1,6 +1,7 @@
 id: orderquery
 belongsToCell: ordercell
 consistencyLevel: L0
+lifecycle: experimental
 contractUsages:
   - contract: http.order.get.v1
     role: serve

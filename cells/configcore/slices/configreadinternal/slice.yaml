@@ -1,6 +1,7 @@
 id: configreadinternal
 belongsToCell: configcore
 consistencyLevel: L0
+lifecycle: asset
 contractUsages:
   - contract: http.config.internal.get.v1
     role: serve

@@ -1,6 +1,7 @@
 id: orderprojection
 belongsToCell: ordercell
 consistencyLevel: L3
+lifecycle: experimental
 
 contractUsages:
   - contract: event.order-created.v1

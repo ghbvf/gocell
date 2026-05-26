@@ -1,6 +1,7 @@
 id: auditappendrole
 belongsToCell: auditcore
 consistencyLevel: L2
+lifecycle: asset
 contractUsages:
   - contract: event.audit.appended.v1
     role: publish

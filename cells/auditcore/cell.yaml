@@ -1,6 +1,7 @@
 id: auditcore
 type: core
 consistencyLevel: L2
+lifecycle: asset
 durabilityMode: durable
 owner:
   team: platform

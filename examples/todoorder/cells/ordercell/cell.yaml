@@ -1,6 +1,7 @@
 id: ordercell
 type: core
 consistencyLevel: L3
+lifecycle: experimental
 durabilityMode: durable
 owner:
   team: examples

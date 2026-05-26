@@ -1,6 +1,7 @@
 id: flagwrite
 belongsToCell: configcore
 consistencyLevel: L1
+lifecycle: asset
 contractUsages:
   - contract: http.config.flags.create.v1
     role: serve

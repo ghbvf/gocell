@@ -1,6 +1,7 @@
 id: devicecommandinternal
 belongsToCell: devicecell
 consistencyLevel: L4
+lifecycle: experimental
 contractUsages:
   - contract: http.internal.devicecommands.list.v1
     role: serve
