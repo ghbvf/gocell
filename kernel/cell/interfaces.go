@@ -42,6 +42,10 @@ type CellIdentity interface {
 	Type() cellvocab.CellType
 	// ConsistencyLevel reports the cell's declared consistency tier (cellvocab.L0–cellvocab.L4).
 	ConsistencyLevel() cellvocab.Level
+	// Phase reports the cell's declared governance maturity phase
+	// (experimental → candidate → asset → maintenance → retired); empty in
+	// cell.yaml defaults to experimental. Consumed by runtime/lifecycle.PhaseAggregator.
+	Phase() cellvocab.Phase
 }
 
 // CellLifecycle drives the cell through Init → Start → Stop transitions. All

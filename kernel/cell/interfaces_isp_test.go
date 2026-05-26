@@ -15,16 +15,18 @@ import (
 //
 // ref: docs/architecture/202605101800-adr-cell-interface-isp-split.md D1/D2/D3
 
-// idMock 仅实现 CellIdentity 三方法。
+// idMock 仅实现 CellIdentity 四方法。
 type idMock struct {
 	id    string
 	ctype cellvocab.CellType
 	level cellvocab.Level
+	phase cellvocab.Phase
 }
 
 func (m idMock) ID() string                        { return m.id }
 func (m idMock) Type() cellvocab.CellType          { return m.ctype }
 func (m idMock) ConsistencyLevel() cellvocab.Level { return m.level }
+func (m idMock) Phase() cellvocab.Phase            { return m.phase }
 
 var _ CellIdentity = (*idMock)(nil)
 

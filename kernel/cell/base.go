@@ -62,6 +62,7 @@ type BaseCell struct {
 	meta     *metadata.CellMeta
 	cellType cellvocab.CellType
 	level    cellvocab.Level
+	phase    cellvocab.Phase
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
@@ -111,10 +112,22 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 		}
 		level = lv
 	}
+	// Empty lifecycle defaults to the least-mature phase (mirrors
+	// NewBaseContract defaulting an empty contract lifecycle to active); a
+	// non-empty but unrecognized value is a construction error.
+	phase := cellvocab.PhaseExperimental
+	if meta.Lifecycle != "" {
+		ph, err := cellvocab.ParsePhase(meta.Lifecycle)
+		if err != nil {
+			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+		}
+		phase = ph
+	}
 	return &BaseCell{
 		meta:     meta.Clone(),
 		cellType: cellType,
 		level:    level,
+		phase:    phase,
 	}, nil
 }
 
@@ -135,6 +148,7 @@ func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 func (b *BaseCell) ID() string                        { return b.meta.ID }
 func (b *BaseCell) Type() cellvocab.CellType          { return b.cellType }
 func (b *BaseCell) ConsistencyLevel() cellvocab.Level { return b.level }
+func (b *BaseCell) Phase() cellvocab.Phase            { return b.phase }
 
 // Metadata returns an independent deep copy of the cell's declarative
 // metadata. Callers may freely mutate the returned value without
