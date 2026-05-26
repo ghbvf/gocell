@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -91,12 +92,11 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 // This simulates an application restart where the new process opens a fresh
 // connection pool to the same DB.
 //
-// F26: Current limitation — both pool A and pool B share the same *pgxpool.Pool
-// from migratedPool. This simulates application restart by constructing a fresh
-// TxManager + Store on the same DB; true cross-pool restart (separate pgxpool.New
-// calls to the same DSN) needs testcontainer-level DSN access which is not exposed
-// by the current migratedPool helper. The Tail-consistency invariant is verified
-// by constructing a second LedgerStore on the same underlying pool.
+// Pool A and pool B are TWO independent *pgxpool.Pool instances opened against
+// the SAME database DSN (sharedPG.CloneDSN → openPerTestPool twice). This is
+// true cross-pool / process-restart semantics — pool B shares no connection,
+// prepared-statement cache, or session state with pool A — not merely a fresh
+// TxManager over one shared pool.
 func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	ctx := context.Background()
 	ns, err := ledger.ParseNamespaceID("auditcore")
@@ -104,7 +104,8 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	protocol := newTestLedgerProtocol(t, ns)
 
 	// Pool A: write 5 entries.
-	pA := migratedPool(t)
+	dsn := sharedPG.CloneDSN(t)
+	pA := openPerTestPool(t, dsn)
 
 	fcA := clockmock.New(storetest.EpochAnchor())
 	txmA := NewTxManager(pA)
@@ -123,10 +124,11 @@ func TestAuditLedgerStore_RestartRecovery_AcrossPool(t *testing.T) {
 	assert.Equal(t, int64(nFirst), tailA.SeqNo)
 	assert.Equal(t, int64(nFirst), tailA.EntryCount)
 
-	// Simulate restart: construct storeB from the same pool (same DB state)
+	// Simulate restart: open an INDEPENDENT second pool to the same DB DSN.
+	pB := openPerTestPool(t, dsn)
 	fcB := clockmock.New(storetest.EpochAnchor())
-	txmB := NewTxManager(pA) // same pool, different TxManager instance
-	storeB, err := NewLedgerStore(pA.DB(), txmB, protocol, fcB)
+	txmB := NewTxManager(pB)
+	storeB, err := NewLedgerStore(pB.DB(), txmB, protocol, fcB)
 	require.NoError(t, err)
 
 	// storeB must see the tail from storeA's writes.
@@ -219,6 +221,61 @@ func TestPGVerify_SubRange_Tampered(t *testing.T) {
 	assert.False(t, valid, "Verify(2,5) after hash tamper at seq=3 must return valid=false")
 	assert.Equal(t, int64(3), firstInvalid,
 		"firstInvalid must be 3 (the tampered entry); got %d", firstInvalid)
+}
+
+// ---------------------------------------------------------------------------
+// TestAuditLedgerStore_HashFormatConstraint (ck_audit_hash_format)
+// ---------------------------------------------------------------------------
+
+// TestAuditLedgerStore_HashFormatConstraint asserts the DB-level CHECK
+// constraint ck_audit_hash_format on audit_entries: prev_hash/hash must be
+// 64-char lowercase hex (HMAC-SHA256 hex.EncodeToString output), with the
+// genesis exception that seq_no=1 carries an empty prev_hash. The constraint is
+// seq_no-coupled so an empty prev_hash on a non-genesis row (seq_no>1) is
+// rejected, and a non-empty prev_hash on a genesis row (seq_no=1) is rejected.
+// This is the secondary DB guard for the tamper-evident chain, alongside
+// uq_audit_namespace_seq (020) and the namespace+event_id UNIQUE index (021).
+func TestAuditLedgerStore_HashFormatConstraint(t *testing.T) {
+	ctx := context.Background()
+	p := migratedPool(t)
+
+	// insertRow inserts directly (bypassing the store) so we exercise the DB
+	// constraint in isolation. Distinct namespaces avoid uq_audit_namespace_seq
+	// collisions across cases.
+	insertRow := func(ns string, seq int64, prevHash, hash string) error {
+		// event_id is gen_random_uuid()::text so the 021 (namespace, event_id)
+		// UNIQUE index never collides — this test isolates ck_audit_hash_format.
+		_, err := p.DB().Exec(ctx,
+			`INSERT INTO audit_entries
+			   (id, namespace, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash)
+			 VALUES (gen_random_uuid(), $1, $2, gen_random_uuid()::text, 'type', 'actor', now(), '\x7b7d'::bytea, $3, $4)`,
+			ns, seq, prevHash, hash)
+		return err
+	}
+
+	hexA := strings.Repeat("a", 64) // valid 64-char lowercase hex
+	hexB := strings.Repeat("b", 64)
+
+	// Valid: genesis (seq_no=1, empty prev_hash, 64-hex hash).
+	require.NoError(t, insertRow("ck-ok-genesis", 1, "", hexA),
+		"genesis row (seq_no=1, prev_hash='', 64-hex hash) must satisfy the constraint")
+	// Valid: non-genesis chain link (seq_no>1, 64-hex prev_hash + hash).
+	require.NoError(t, insertRow("ck-ok-chain", 1, "", hexA))
+	require.NoError(t, insertRow("ck-ok-chain", 2, hexA, hexB),
+		"non-genesis row with 64-hex prev_hash and hash must satisfy the constraint")
+
+	// Invalid: hash not 64-char hex.
+	require.Error(t, insertRow("ck-bad-hashlen", 1, "", "deadbeef"),
+		"short hash must violate ck_audit_hash_format")
+	require.Error(t, insertRow("ck-bad-hashfmt", 1, "", strings.Repeat("Z", 64)),
+		"non-hex (uppercase Z) hash must violate ck_audit_hash_format")
+	// Invalid: non-genesis row (seq_no>1) with empty prev_hash.
+	require.NoError(t, insertRow("ck-bad-prev", 1, "", hexA))
+	require.Error(t, insertRow("ck-bad-prev", 2, "", hexB),
+		"empty prev_hash on a non-genesis row (seq_no>1) must violate ck_audit_hash_format")
+	// Invalid: genesis row (seq_no=1) with a non-empty prev_hash.
+	require.Error(t, insertRow("ck-bad-genesis", 1, hexA, hexB),
+		"non-empty prev_hash on a genesis row (seq_no=1) must violate ck_audit_hash_format")
 }
 
 // ---------------------------------------------------------------------------
