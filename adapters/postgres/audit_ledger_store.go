@@ -416,8 +416,9 @@ FROM audit_entries WHERE namespace = `, ns)
 // RFC3339Nano, and the cursor codec round-trips values through JSON. pgx binds
 // time.Time into the timestamptz keyset predicate — exactly as the filters.From
 // / filters.To bindings above already do — but cannot encode a bare string for
-// a timestamptz parameter. Non-timestamp columns (id, a text column) are left
-// untouched. Returns params unchanged on the first page (no cursor).
+// a timestamptz parameter. The id UUID tie-breaker already uses the cursor's
+// string form and is left untouched. Returns params unchanged on the first page
+// (no cursor).
 //
 // When ledger.QuerySort gains another non-text keyset column (e.g. another
 // timestamptz or a numeric column), add a matching conversion case here: pgx

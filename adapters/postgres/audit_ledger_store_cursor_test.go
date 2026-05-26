@@ -41,7 +41,7 @@ func TestBindTimestampCursor(t *testing.T) {
 		ts, ok := out.CursorValues[0].(time.Time)
 		require.True(t, ok, "timestamp cursor value must be converted to time.Time, got %T", out.CursorValues[0])
 		require.True(t, ts.Equal(wantTS), "converted timestamp mismatch: got %v want %v", ts, wantTS)
-		require.Equal(t, "id-7", out.CursorValues[1], "id (text column) must be left untouched")
+		require.Equal(t, "id-7", out.CursorValues[1], "id UUID tie-breaker must be left untouched")
 
 		// Caller's slice must not be mutated (slices.Clone defensiveness).
 		require.Equal(t, tsStr, in.CursorValues[0], "input CursorValues must not be mutated")
