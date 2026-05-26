@@ -15,7 +15,66 @@ import (
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
 )
+
+// promNamespace mirrors newTestProvider's MetricProviderConfig.Namespace; the
+// registered metric name is "<namespace>_<opts.Name>".
+const promNamespace = "gocelltest_"
+
+// TestMetricProvider_CancelledCtxConformance enrolls prometheus.MetricProvider
+// in the no-skip-on-cancel conformance harness (METRICS-CANCEL-CTX-CONFORMANCE-01).
+// The Prometheus adapter discards ctx entirely, so a cancelled ctx can never
+// suppress a write; the readback confirms the measured values regardless.
+//
+// The provider is constructed concretely (not via newTestProvider, which widens
+// to metrics.Provider) so the archtest's per-impl enrollment scan can resolve
+// the argument to *prometheus.MetricProvider.
+func TestMetricProvider_CancelledCtxConformance(t *testing.T) {
+	reg := prom.NewRegistry()
+	provider, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{
+		Registry:  reg,
+		Namespace: "gocelltest",
+	})
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+	labels := prom.Labels(metricstest.Labels())
+	metricstest.RunCancelledCtxConformance(t, provider, metricstest.Readback{
+		Counter: func() float64 {
+			return testutil.ToFloat64(collect(t, reg, promNamespace+metricstest.CounterName, labels))
+		},
+		Histogram: func() uint64 {
+			return histogramSampleCount(t, reg, promNamespace+metricstest.HistogramName, labels)
+		},
+		Gauge: func() float64 {
+			return testutil.ToFloat64(collectGauge(t, reg, promNamespace+metricstest.GaugeName, labels))
+		},
+	})
+}
+
+// histogramSampleCount gathers reg and returns the observation count for the
+// histogram series matching name+labels. The shared collect helper only reads
+// counters, so the cancel-ctx conformance needs this histogram-specific reader.
+func histogramSampleCount(t *testing.T, reg *prom.Registry, name string, labels prom.Labels) uint64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			if promLabelsMatch(labels, m.GetLabel()) {
+				return m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	t.Fatalf("no histogram %s with labels %v", name, labels)
+	return 0
+}
 
 // raceConcurrency mirrors the constant in hook_observer_test (50). Kept as
 // a separate const here because the two test files live in different

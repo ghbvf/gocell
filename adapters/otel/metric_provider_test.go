@@ -12,7 +12,48 @@ import (
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
 )
+
+// TestOTelMetricProvider_CancelledCtxConformance enrolls otel.MetricProvider in
+// the no-skip-on-cancel conformance harness (METRICS-CANCEL-CTX-CONFORMANCE-01).
+// Readback reads measured values back through the ManualReader, proving the
+// cancelled-ctx writes landed (otelCounter/Histogram/Gauge forward ctx to the
+// SDK without an Err() gate).
+//
+// The provider is constructed concretely (not via newTestProvider, which widens
+// to metrics.Provider) so the archtest's per-impl enrollment scan can resolve
+// the argument to *otel.MetricProvider.
+func TestOTelMetricProvider_CancelledCtxConformance(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	provider, err := gcotel.NewMetricProvider(mp.Meter("gocell.test"))
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+	collect := func() metricdata.ResourceMetrics {
+		var rm metricdata.ResourceMetrics
+		if err := reader.Collect(context.Background(), &rm); err != nil {
+			t.Fatalf("reader.Collect: %v", err)
+		}
+		return rm
+	}
+	metricstest.RunCancelledCtxConformance(t, provider, metricstest.Readback{
+		Counter: func() float64 {
+			sum, _ := extractCounterSum(t, collect(), metricstest.CounterName)
+			return sum
+		},
+		Histogram: func() uint64 {
+			count, _ := extractHistogram(t, collect(), metricstest.HistogramName)
+			return count
+		},
+		Gauge: func() float64 {
+			val, _ := extractGauge(t, collect(), metricstest.GaugeName)
+			return val
+		},
+	})
+}
 
 // newTestProvider wires the SUT's NewMetricProvider to a fresh ManualReader.
 //
