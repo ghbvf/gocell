@@ -1,3 +1,4 @@
+// INVARIANT: MEM-TX-LOCK-OWNERSHIP-01
 package archtest
 
 import (

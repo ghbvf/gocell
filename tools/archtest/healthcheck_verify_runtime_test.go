@@ -1,3 +1,4 @@
+// INVARIANT: HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01
 //go:build !windows
 
 package archtest

@@ -65,6 +65,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const (
@@ -223,13 +225,7 @@ func bannedReceiverLabel(info *types.Info, sel *ast.SelectorExpr, ifaces []banne
 }
 
 func implementsBannedIface(t types.Type, iface *types.Interface) bool {
-	if types.Implements(t, iface) {
-		return true
-	}
-	if _, isPtr := t.(*types.Pointer); !isPtr {
-		return types.Implements(types.NewPointer(t), iface)
-	}
-	return false
+	return typesutil.ImplementsInterface(t, iface)
 }
 
 // packageFuncDecls maps unexported package-level func name → its FuncDecl across
