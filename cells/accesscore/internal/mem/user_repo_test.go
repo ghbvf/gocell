@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {
@@ -140,12 +141,12 @@ func TestUserRepo_BumpAuthzEpoch_IncrementsAndReturns(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, user))
 
 	// First bump: 1 → 2 (initial epoch is 1 per S4d design).
-	epoch1, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
+	epoch1, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001", credentialfence.Mint())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), epoch1, "first BumpAuthzEpoch must return 2 (initial=1)")
 
 	// Second bump: 2 → 3.
-	epoch2, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001")
+	epoch2, err := repo.BumpAuthzEpoch(ctx, "usr-epoch-001", credentialfence.Mint())
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), epoch2, "second BumpAuthzEpoch must return 3")
 
@@ -159,7 +160,7 @@ func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
 	ctx := context.Background()
 	repo := NewStore(clock.Real()).UserRepository()
 
-	_, err := repo.BumpAuthzEpoch(ctx, "usr-nonexistent")
+	_, err := repo.BumpAuthzEpoch(ctx, "usr-nonexistent", credentialfence.Mint())
 	errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	var ce *errcode.Error
 	require.True(t, errors.As(err, &ce))
@@ -181,7 +182,7 @@ func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			_, _ = repo.BumpAuthzEpoch(ctx, "usr-concurrent-001")
+			_, _ = repo.BumpAuthzEpoch(ctx, "usr-concurrent-001", credentialfence.Mint())
 		}()
 	}
 	wg.Wait()
@@ -344,7 +345,7 @@ func TestRunInTx_BumpAuthzEpoch_InsideTx(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		newEpoch, err = repo.BumpAuthzEpoch(txCtx, "usr-epoch-intx-001")
+		newEpoch, err = repo.BumpAuthzEpoch(txCtx, "usr-epoch-intx-001", credentialfence.Mint())
 		return err
 	})
 	require.NoError(t, txErr)
@@ -385,8 +386,8 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	// tx-1: hold the lock, bump epoch to 2, then signal.
 	go func() {
 		_ = store.TxRunner().RunInTx(context.Background(), func(txCtx context.Context) error {
-			_, _ = repo.BumpAuthzEpoch(txCtx, "usr-serial-001") // epoch: 1 → 2
-			close(locked)                                       // signal: lock held, proceed
+			_, _ = repo.BumpAuthzEpoch(txCtx, "usr-serial-001", credentialfence.Mint()) // epoch: 1 → 2
+			close(locked)                                                               // signal: lock held, proceed
 			// Hold the lock for a short duration to let tx-2 start blocking.
 			time.Sleep(testtime.D20ms) //archtest:allow:test-sleep hold lock so tx-2 blocks (serialization proof)
 			return nil
@@ -398,7 +399,7 @@ func TestRunInTx_Serialization_ConcurrentBumpEpochBlocked(t *testing.T) {
 	<-locked
 
 	// tx-2 (outside RunInTx) calls BumpAuthzEpoch — must block until tx-1 releases.
-	epoch2, err := repo.BumpAuthzEpoch(context.Background(), "usr-serial-001")
+	epoch2, err := repo.BumpAuthzEpoch(context.Background(), "usr-serial-001", credentialfence.Mint())
 	<-done // tx-1 must have finished before us or concurrently with us
 
 	require.NoError(t, err)
@@ -428,7 +429,7 @@ func TestRunInTx_NoDeadlock_GetByUsernameForUpdateAndBump(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			_, err = repo.BumpAuthzEpoch(txCtx, "usr-nodeadlock-001")
+			_, err = repo.BumpAuthzEpoch(txCtx, "usr-nodeadlock-001", credentialfence.Mint())
 			return err
 		})
 		done <- err

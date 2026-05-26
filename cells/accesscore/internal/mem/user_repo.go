@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -461,7 +462,8 @@ func (r *UserRepository) UpdatePassword(
 // RunInTx closure; see UserRepository lock contract.
 //
 // Returns ErrAuthUserNotFound when no user matches userID.
-func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string, tok credentialfence.FenceToken) (int64, error) {
+	credentialfence.MustHave(tok, "ports.UserRepository.BumpAuthzEpoch")
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
 		defer r.store.mu.Unlock()

@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // Session is the canonical server-side session record exchanged between
@@ -122,7 +124,10 @@ type ValidateView struct {
 //   - Revoke: mark a single session dead. Idempotent: already-revoked or
 //     missing IDs are no-ops returning nil (防枚举 — must not leak existence).
 //     RevokedAt is set exactly once; subsequent Revoke calls do not re-stamp.
-//   - RevokeForSubject: mark every active session for SubjectID dead. Empty
+//   - RevokeForSubject: mark every active session for SubjectID dead. tok is
+//     a credentialfence.FenceToken — a sealed capability proof minted only by
+//     credentialinvalidate.Invalidator via credentialfence.Mint; passing nil
+//     panics via MustHave (B-class programmer error, surfaces as 500). Empty
 //     subjectID returns ErrValidationFailed; an event value not declared in
 //     the CredentialEvent enum returns ErrValidationFailed. With valid
 //     arguments, returns nil even when the subject has no sessions; pre-
@@ -140,7 +145,7 @@ type Store interface {
 	Create(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*ValidateView, error)
 	Revoke(ctx context.Context, id string) error
-	RevokeForSubject(ctx context.Context, subjectID string, event CredentialEvent) error
+	RevokeForSubject(ctx context.Context, subjectID string, event CredentialEvent, tok credentialfence.FenceToken) error
 	// RepoReady is a differentiated readiness check for the sessions relation.
 	// See Store godoc for full semantics.
 	RepoReady(ctx context.Context) error

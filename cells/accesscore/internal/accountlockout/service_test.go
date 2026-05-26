@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -202,7 +203,7 @@ func (r *fakeUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ b
 	return 0, errors.New("not used in accountlockout tests")
 }
 
-func (r *fakeUserRepo) BumpAuthzEpoch(_ context.Context, id string) (int64, error) {
+func (r *fakeUserRepo) BumpAuthzEpoch(_ context.Context, id string, _ credentialfence.FenceToken) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	u, ok := r.byID[id]
@@ -270,7 +271,7 @@ func (s *stubSessionStore) Get(_ context.Context, _ string) (*session.ValidateVi
 	return nil, errors.New("stubSessionStore: Get unused")
 }
 func (s *stubSessionStore) Revoke(_ context.Context, _ string) error { return nil }
-func (s *stubSessionStore) RevokeForSubject(_ context.Context, _ string, ev session.CredentialEvent) error {
+func (s *stubSessionStore) RevokeForSubject(_ context.Context, _ string, ev session.CredentialEvent, _ credentialfence.FenceToken) error {
 	s.revokeForSubjectCalls++
 	s.revokedEvents = append(s.revokedEvents, ev)
 	return nil
@@ -298,7 +299,7 @@ func (s *stubRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh
 }
 func (s *stubRefreshStore) RevokeSession(_ context.Context, _ string) error         { return nil }
 func (s *stubRefreshStore) RevokeSessionDetached(_ context.Context, _ string) error { return nil }
-func (s *stubRefreshStore) RevokeUser(_ context.Context, _ string) error {
+func (s *stubRefreshStore) RevokeUser(_ context.Context, _ string, _ credentialfence.FenceToken) error {
 	s.revokeUserCalls++
 	return nil
 }

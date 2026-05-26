@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -642,7 +643,7 @@ func (refreshUnavailableUserRepo) UpdatePassword(_ context.Context, _ string, _ 
 	return 0, nil
 }
 
-func (refreshUnavailableUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+func (refreshUnavailableUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 
@@ -1584,7 +1585,7 @@ func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 	// Bump epoch 4 times so it reaches 5 (initial=1).
 	for range 4 {
-		_, _ = userRepo.BumpAuthzEpoch(context.Background(), "usr-epoch-ref")
+		_, _ = userRepo.BumpAuthzEpoch(context.Background(), "usr-epoch-ref", credentialfence.Mint())
 	}
 	u, _ = userRepo.GetByID(context.Background(), "usr-epoch-ref")
 
@@ -1673,7 +1674,7 @@ func TestRefresh_StaleEpoch_CascadeRevokesSessionOnly(t *testing.T) {
 		require.NoError(t, err)
 		u.ID = "usr-stale-epoch"
 		require.NoError(t, userRepo.Create(context.Background(), u))
-		_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), "usr-stale-epoch")
+		_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), "usr-stale-epoch", credentialfence.Mint())
 		require.NoError(t, bumpErr)
 		// Reload so u.AuthzEpoch() == 2.
 		u, err = userRepo.GetByID(context.Background(), "usr-stale-epoch")
@@ -2230,7 +2231,7 @@ func TestCascadeFailClosed_StaleEpoch_401(t *testing.T) {
 	u.ID = "usr-cfr-stale"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 	// Bump epoch so user is at epoch=2; the token is issued at epoch=1 (stale).
-	_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), u.ID)
+	_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), u.ID, credentialfence.Mint())
 	require.NoError(t, bumpErr)
 
 	innerStore := newTestRefreshStore()

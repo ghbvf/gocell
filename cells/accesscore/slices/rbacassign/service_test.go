@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -405,7 +406,7 @@ type failingSessionStore struct {
 	session.Store
 }
 
-func (failingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+func (failingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent, _ credentialfence.FenceToken) error {
 	return errors.New("session store unavailable")
 }
 

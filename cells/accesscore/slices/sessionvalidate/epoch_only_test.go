@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -84,7 +85,7 @@ func TestEnforceSessionState_EpochMismatch_RejectsWithoutSessionRevoke(t *testin
 
 	// Bump epoch via the repo directly — funnel intentionally bypassed so the
 	// session row remains active and only the epoch predicate can reject.
-	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID)
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID, credentialfence.Mint())
 	require.NoError(t, err)
 	require.Equal(t, int64(2), newEpoch, "first bump must advance epoch from 1 to 2")
 

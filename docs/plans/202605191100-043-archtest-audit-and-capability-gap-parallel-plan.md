@@ -20,7 +20,7 @@
 | §4#4 HandleResult unexport | sealed struct 字段全私有 + 包内 builder | **W0 envelope**：Entry.Headers 信封字段集 sealed + codegen 单源 |
 | §4#3 errcode sealed Public/Internal | sealed newtype 分公开/内部诊断 | W0 envelope 内 Principal/Correlation/Time 公开 vs 内部分层 |
 | §4#1 ProbeName sealed funnel | typed concept + 构造期 Validate + 注册面只收 typed | **[7] health dep**：cell.yaml 声明式依赖 + typed probe funnel |
-| §4#2 fenceToken 未导出 token | 上游封口 token，包外不可表达跳过 | W3 command bus / W4 in-proc 的 dispatch/transport 上游封口 |
+| §4#2 fenceToken 未导出 token ✅ **DONE 2026-05-26 #1033** — sealed `credentialfence.FenceToken` interface + FENCE-TOKEN-MINT-FUNNEL-01 archtest + runtime nil-guard；ADR §A16 关闭 | 上游封口 token，包外不可表达跳过 | W3 command bus / W4 in-proc 的 dispatch/transport 上游封口 |
 | §4#6 façade 单 Run + typeseval 跨文件 | 关系验证工具面 | **W5 schema registry** contract↔impl↔test 三方一致 / W0 字段集单源 archtest |
 | §2c 声明式 boundary（depguard） | 声明式单源替命令式 | W4 assembly 拓扑 transport bind |
 

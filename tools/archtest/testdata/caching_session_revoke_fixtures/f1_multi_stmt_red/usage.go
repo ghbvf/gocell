@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -16,7 +17,7 @@ type fakeInner struct{}
 func (fakeInner) Create(context.Context, *session.Session) error             { return nil }
 func (fakeInner) Get(context.Context, string) (*session.ValidateView, error) { return nil, nil }
 func (fakeInner) Revoke(context.Context, string) error                       { return nil }
-func (fakeInner) RevokeForSubject(context.Context, string, session.CredentialEvent) error {
+func (fakeInner) RevokeForSubject(context.Context, string, session.CredentialEvent, credentialfence.FenceToken) error {
 	return nil
 }
 func (fakeInner) RepoReady(context.Context) error { return nil }
@@ -33,6 +34,6 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 }
 
 // RevokeForSubject is conformant (single return delegate) — archtest must NOT flag this.
-func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
-	return s.inner.RevokeForSubject(ctx, subjectID, event)
+func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken) error {
+	return s.inner.RevokeForSubject(ctx, subjectID, event, tok)
 }
