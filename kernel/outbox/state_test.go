@@ -177,17 +177,17 @@ func TestState_ValidTransitions_DefensiveCopy(t *testing.T) {
 		"mutating a returned slice must not corrupt the internal transition table")
 }
 
-func TestTransitionState_Legal(t *testing.T) {
+func TestTransition_Legal(t *testing.T) {
 	t.Parallel()
 	for _, e := range legalStateEdges {
 		t.Run(e.from.String()+"->"+e.to.String(), func(t *testing.T) {
 			t.Parallel()
-			assert.NoError(t, TransitionState(e.from, e.to))
+			assert.NoError(t, Transition(e.from, e.to))
 		})
 	}
 }
 
-func TestTransitionState_Illegal(t *testing.T) {
+func TestTransition_Illegal(t *testing.T) {
 	t.Parallel()
 	for _, from := range allStates() {
 		for _, to := range allStates() {
@@ -196,12 +196,36 @@ func TestTransitionState_Illegal(t *testing.T) {
 			}
 			t.Run(from.String()+"->"+to.String(), func(t *testing.T) {
 				t.Parallel()
-				err := TransitionState(from, to)
+				err := Transition(from, to)
 				require.Error(t, err)
 				var ecErr *errcode.Error
 				require.True(t, errors.As(err, &ecErr))
 				assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
 			})
 		}
+	}
+}
+
+// TestStateTransitions_TerminalAsKey verifies that terminal states are explicit
+// keys in stateTransitions with empty slices. This documents that their absence
+// from outgoing edges is intentional, not an oversight. The fsm helpers treat
+// empty-slice and absent identically (both deny all transitions), so the
+// behavioral contract is unchanged — only the documentation is made explicit.
+func TestStateTransitions_TerminalAsKey(t *testing.T) {
+	t.Parallel()
+	for _, s := range []State{StatePublished, StateDead} {
+		t.Run(s.String(), func(t *testing.T) {
+			t.Parallel()
+			targets, exists := stateTransitions[s]
+			assert.True(t, exists, "terminal state %s must be an explicit key in stateTransitions", s)
+			assert.Empty(t, targets, "terminal state %s must have no outgoing transitions", s)
+			// Behavioral contract: CanTransitionTo still returns false for all targets.
+			for _, other := range allStates() {
+				assert.False(t, s.CanTransitionTo(other),
+					"terminal %s must not transition to %s", s, other)
+			}
+			// ValidTransitions returns nil (len==0 path in AllowedTargets).
+			assert.Nil(t, s.ValidTransitions(), "terminal %s must return nil from ValidTransitions", s)
+		})
 	}
 }

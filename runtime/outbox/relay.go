@@ -603,7 +603,7 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 	if res.err != nil {
 		return r.handleFailedEntry(ctx, res, stats)
 	}
-	if err := kout.TransitionState(kout.StateClaiming, kout.StatePublished); err != nil {
+	if err := kout.Transition(kout.StateClaiming, kout.StatePublished); err != nil {
 		return err
 	}
 	updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
@@ -634,7 +634,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
 	if newAttempts >= r.cfg.MaxAttempts {
-		if err := kout.TransitionState(kout.StateClaiming, kout.StateDead); err != nil {
+		if err := kout.Transition(kout.StateClaiming, kout.StateDead); err != nil {
 			return err
 		}
 		updated, err := r.store.MarkDead(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, errMsg)
@@ -665,7 +665,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 
 	// Retry: back to pending with exponential backoff + jitter,
 	// preventing thundering herd in multi-relay-instance deployments.
-	if err := kout.TransitionState(kout.StateClaiming, kout.StatePending); err != nil {
+	if err := kout.Transition(kout.StateClaiming, kout.StatePending); err != nil {
 		return err
 	}
 	delay := r.retryDelay(newAttempts)

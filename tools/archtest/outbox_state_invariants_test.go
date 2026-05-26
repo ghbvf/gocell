@@ -7,13 +7,13 @@
 // single source of truth for the outbox entry state machine and its wire/DB
 // status strings.
 //
-//   - COMPLETENESS: every State const is a key in the stateTransitions map or a
-//     documented terminal (published/dead), so a new state cannot be added as a
-//     silent dead end.
+//   - COMPLETENESS: every State const is a key in the stateTransitions map.
+//     Terminal states (StatePublished, StateDead) are explicit keys with empty
+//     slices, so a new state cannot be added as a silent dead end.
 //   - LITERAL-BAN: the adapters/postgres outbox SQL files must not bind bare
 //     status string literals — State.String() is the sole sanctioned producer.
 //   - TRANSITION-GUARD: the relay's settlement decision points (functions that
-//     call MarkPublished/MarkDead/MarkRetry) must also call TransitionState, so
+//     call MarkPublished/MarkDead/MarkRetry) must also call Transition, so
 //     the Go state machine actually guards the real runtime transitions rather
 //     than being a decorative table.
 //
@@ -69,14 +69,16 @@ func containsQuotedStatusLiteral(s string) (string, bool) {
 	return "", false
 }
 
-// outboxTerminalStates are the State consts that legitimately have no outgoing
-// transitions (absent from stateTransitions). Hardcoded by name — blind spot:
-// renaming a terminal must update this set. Reverse-checked by the round-trip
-// test in kernel/outbox/state_test.go (IsTerminal) and the completeness test.
-var outboxTerminalStates = map[string]struct{}{
-	"StatePublished": {}, "StateDead": {},
-}
-
+// TestOutboxStateTransitionCompleteness verifies that every State const is an
+// explicit key in stateTransitions. Terminal states (StatePublished, StateDead)
+// are expected to be present with empty slices — the explicit empty-slice form
+// documents intent and is machine-verifiable without a separate terminal
+// hardcode list.
+//
+// Blind spots:
+//   - collectMapKeyIdents reads composite literal keys from the AST; a
+//     runtime-built map (make + store) would yield empty keys and silently pass.
+//     TestOutboxStateTransitionCompleteness_BlindSpotShape guards against this.
 func TestOutboxStateTransitionCompleteness(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -101,14 +103,12 @@ func TestOutboxStateTransitionCompleteness(t *testing.T) {
 			if _, ok := covered[name]; ok {
 				continue
 			}
-			if _, term := outboxTerminalStates[name]; term {
-				continue
-			}
 			d = append(d, Diagnostic{
 				Rel:  p.Rel(declFile),
 				Line: p.Fset.Position(pos).Line,
-				Message: "outbox.State const " + name + " is neither a key in stateTransitions nor a " +
-					"documented terminal (published/dead); it is a silent dead state",
+				Message: "outbox.State const " + name + " is not a key in stateTransitions; " +
+					"add it with an empty slice if terminal (StatePublished/StateDead) or " +
+					"with its valid targets if non-terminal",
 			})
 		}
 		return d
@@ -116,6 +116,24 @@ func TestOutboxStateTransitionCompleteness(t *testing.T) {
 	Report(t, "OUTBOX-STATE-TRANSITION-COMPLETENESS-01", diags)
 }
 
+// TestOutboxStateLiteralBan checks that adapters/postgres outbox files do not
+// bind bare status string literals.
+//
+// Blind spots (documented — true Medium ceiling, not Soft):
+//  1. Scope filter `!strings.Contains(rel, "outbox")` excludes adapters/postgres
+//     files whose names do not contain "outbox". A file binding status literals
+//     under a different name (e.g. a migration helper) would evade this check.
+//     Mitigation: migration SQL files do not go through Go string literals; they
+//     use parameterised queries via the store layer.
+//  2. Tokens 'dead'/'pending' could collide with same-named local concepts in
+//     session/command/saga packages. The scope filter (adapters/postgres + outbox
+//     filename) narrows this to the outbox store, where these values are
+//     exclusively outbox status strings.
+//
+// These blind spots arise from SQL args being `...any` — the wire string cannot
+// be type-constrained at the binding site. This is a true Medium ceiling;
+// TestOutboxStateLiteralBan_ReverseSelfCheck verifies the matching logic is
+// correct within the covered scope.
 func TestOutboxStateLiteralBan(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -166,10 +184,10 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 }
 
 // outboxSettlementMarks are the store mutations that move an entry out of
-// claiming. A function calling any of them must also call TransitionState.
+// claiming. A function calling any of them must also call Transition.
 //
 // Blind spots (documented):
-//   - TransitionState placed in a different function than the Mark call would
+//   - Transition placed in a different function than the Mark call would
 //     evade per-FuncDecl co-location; acceptable since the guard's purpose is to
 //     keep the assertion adjacent to the mutation.
 //   - The guard is scoped to relay.go — the production settlement loop. A new
@@ -181,17 +199,16 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 // Intentional scope boundary: this guard covers only relay.go's Go-side
 // settlement decisions (claiming→published/dead/pending via Mark*). The
 // store's ClaimPending (pending→claiming) and ReclaimStale
-// (claiming→pending/dead) are also real transitions, but their target is
-// computed by SQL CAS (WHERE status='claiming'/'pending'), not a Go decision
-// point — wiring TransitionState there would be a tautological assertion that
-// cannot fail in practice. Those transitions are instead validated by
-// OUTBOX-STATE-TRANSITION-COMPLETENESS-01, which checks the full legal graph.
+// (claiming→pending/dead) have no Mark* pairing to cross-check — their
+// correctness is enforced by SQL CAS predicates, conformance behaviour tests,
+// and LITERAL-BAN. Adding Transition calls there would provide no
+// pairing-check value and would be misleading.
 var outboxSettlementMarks = map[string]struct{}{
 	"MarkPublished": {}, "MarkDead": {}, "MarkRetry": {},
 }
 
 // markToTransitionTarget maps each settlement Mark method to the expected
-// TransitionState second-argument (target state name) that must appear in
+// Transition second-argument (target state name) that must appear in
 // the same function body. A function that calls MarkPublished but passes
 // StatePending as the target would be a Go-level logical error; this check
 // catches such mismatches at CI time.
@@ -226,27 +243,27 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 				if len(marks) == 0 {
 					return
 				}
-				// Check 1: the function must call TransitionState at all.
-				if !funcCallsSelector(fn.Body, "TransitionState") {
+				// Check 1: the function must call Transition at all.
+				if !funcCallsSelector(fn.Body, "Transition") {
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: p.Fset.Position(fn.Pos()).Line,
 						Message: "function " + fn.Name.Name + " settles outbox entries (" + strings.Join(marks, ",") +
-							") but does not call TransitionState; settlement must assert the claiming→target transition",
+							") but does not call Transition; settlement must assert the claiming→target transition",
 					})
 					return
 				}
 				// Check 2: for each Mark called, verify that the expected
-				// TransitionState target state appears as the second argument of
-				// a TransitionState call in the same function body.
+				// Transition target state appears as the second argument of
+				// a Transition call in the same function body.
 				//
-				// We collect all second-arg .Sel.Name values from TransitionState
-				// CallExprs (e.g. kout.TransitionState(StateClaiming, kout.StatePublished)
+				// We collect all second-arg .Sel.Name values from Transition
+				// CallExprs (e.g. kout.Transition(StateClaiming, kout.StatePublished)
 				// → "StatePublished"). Each Mark must have its expected target present.
 				transitionTargets := map[string]struct{}{}
 				EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
 					se, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || se.Sel.Name != "TransitionState" {
+					if !ok || se.Sel.Name != "Transition" {
 						return
 					}
 					if len(call.Args) < 2 {
@@ -269,7 +286,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 							Rel:  rel,
 							Line: p.Fset.Position(fn.Pos()).Line,
 							Message: "function " + fn.Name.Name + " calls " + markName +
-								" but TransitionState does not target " + expectedTarget +
+								" but Transition does not target " + expectedTarget +
 								"; the Mark↔target pairing must match (MarkPublished↔StatePublished," +
 								" MarkDead↔StateDead, MarkRetry↔StatePending)",
 						})
@@ -372,9 +389,9 @@ func missingKeys(declared, covered map[string]struct{}) []string {
 }
 
 // funcCallsSelector reports whether body contains a call whose function is a
-// selector with the given method name (e.g. kout.TransitionState).
+// selector with the given method name (e.g. kout.Transition).
 //
-//nolint:unparam // general helper; all callers currently pass "TransitionState"
+//nolint:unparam // general helper; all callers currently pass "Transition"
 func funcCallsSelector(body *ast.BlockStmt, sel string) bool {
 	found := false
 	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
@@ -458,7 +475,7 @@ func TestOutboxStateLiteralBan_ReverseSelfCheck(t *testing.T) {
 // non-empty key set — a runtime-built map would yield empty keys and silently
 // pass the completeness invariant without actually checking anything.
 //
-// Mirrors TestCellPhaseRankCompleteness_BlindSpotShape in lifecycle_phase_test.go.
+// Mirrors TestCellLifecycleRankCompleteness_BlindSpotShape in lifecycle_phase_test.go.
 func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -485,12 +502,12 @@ func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
 }
 
 // TestOutboxStateTransitionGuard_ReverseSelfCheck proves funcCallsSelector and
-// callSelectorsIn correctly distinguish functions that call TransitionState from
+// callSelectorsIn correctly distinguish functions that call Transition from
 // those that do not. It also verifies the Mark↔target pairing logic:
 //
-//   - bothFunc: calls MarkPublished + TransitionState(_, StatePublished) → passes all checks.
-//   - markOnlyFunc: calls only MarkPublished → guard fires (no TransitionState).
-//   - wrongTargetFunc: calls MarkPublished + TransitionState(_, StatePending) → pairing check fires.
+//   - bothFunc: calls MarkPublished + Transition(_, StatePublished) → passes all checks.
+//   - markOnlyFunc: calls only MarkPublished → guard fires (no Transition).
+//   - wrongTargetFunc: calls MarkPublished + Transition(_, StatePending) → pairing check fires.
 //   - multiMarkFunc: calls MarkDead+MarkRetry + matching targets → passes.
 func TestOutboxStateTransitionGuard_ReverseSelfCheck(t *testing.T) {
 	t.Parallel()
@@ -499,19 +516,19 @@ func TestOutboxStateTransitionGuard_ReverseSelfCheck(t *testing.T) {
 import kout "github.com/ghbvf/gocell/kernel/outbox"
 
 func bothFunc() {
-	kout.TransitionState(kout.StateClaiming, kout.StatePublished)
+	kout.Transition(kout.StateClaiming, kout.StatePublished)
 	store.MarkPublished(ctx, id, lease)
 }
 func markOnlyFunc() {
 	store.MarkPublished(ctx, id, lease)
 }
 func wrongTargetFunc() {
-	kout.TransitionState(kout.StateClaiming, kout.StatePending)
+	kout.Transition(kout.StateClaiming, kout.StatePending)
 	store.MarkPublished(ctx, id, lease)
 }
 func multiMarkFunc() {
-	kout.TransitionState(kout.StateClaiming, kout.StateDead)
-	kout.TransitionState(kout.StateClaiming, kout.StatePending)
+	kout.Transition(kout.StateClaiming, kout.StateDead)
+	kout.Transition(kout.StateClaiming, kout.StatePending)
 	store.MarkDead(ctx, id, lease, 5, "err")
 	store.MarkRetry(ctx, id, lease, 1, retryAt, "err")
 }
@@ -534,27 +551,27 @@ func multiMarkFunc() {
 	wrongTarget := funcs["wrongTargetFunc"]
 	multi := funcs["multiMarkFunc"]
 
-	// bothFunc: has MarkPublished AND TransitionState(_, StatePublished) → passes.
+	// bothFunc: has MarkPublished AND Transition(_, StatePublished) → passes.
 	bothMarks := callSelectorsIn(both.Body, outboxSettlementMarks)
 	assert.NotEmpty(t, bothMarks, "bothFunc must call at least one settlement mark")
-	assert.True(t, funcCallsSelector(both.Body, "TransitionState"),
-		"bothFunc must call TransitionState")
+	assert.True(t, funcCallsSelector(both.Body, "Transition"),
+		"bothFunc must call Transition")
 	// Verify pairing: StatePublished target is present.
 	bothTargets := collectTransitionTargets(both.Body)
 	assert.Contains(t, bothTargets, "StatePublished",
-		"bothFunc must have StatePublished as a TransitionState target")
+		"bothFunc must have StatePublished as a Transition target")
 
-	// markOnlyFunc: has a settlement mark but does NOT call TransitionState → would diagnose.
+	// markOnlyFunc: has a settlement mark but does NOT call Transition → would diagnose.
 	markOnlyMarks := callSelectorsIn(markOnly.Body, outboxSettlementMarks)
 	assert.NotEmpty(t, markOnlyMarks, "markOnlyFunc must call at least one settlement mark")
-	assert.False(t, funcCallsSelector(markOnly.Body, "TransitionState"),
-		"markOnlyFunc must NOT call TransitionState (guard would fire)")
+	assert.False(t, funcCallsSelector(markOnly.Body, "Transition"),
+		"markOnlyFunc must NOT call Transition (guard would fire)")
 
-	// wrongTargetFunc: calls MarkPublished + TransitionState(_, StatePending) → pairing mismatch.
+	// wrongTargetFunc: calls MarkPublished + Transition(_, StatePending) → pairing mismatch.
 	wrongMarks := callSelectorsIn(wrongTarget.Body, outboxSettlementMarks)
 	assert.NotEmpty(t, wrongMarks, "wrongTargetFunc must call MarkPublished")
-	assert.True(t, funcCallsSelector(wrongTarget.Body, "TransitionState"),
-		"wrongTargetFunc calls TransitionState (check 1 passes)")
+	assert.True(t, funcCallsSelector(wrongTarget.Body, "Transition"),
+		"wrongTargetFunc calls Transition (check 1 passes)")
 	wrongTargets := collectTransitionTargets(wrongTarget.Body)
 	assert.NotContains(t, wrongTargets, "StatePublished",
 		"wrongTargetFunc must NOT have StatePublished target (pairing check would fire)")
@@ -569,14 +586,14 @@ func multiMarkFunc() {
 }
 
 // collectTransitionTargets is a test helper that extracts the second-argument
-// selector names from all TransitionState calls in body. Used by
+// selector names from all Transition calls in body. Used by
 // TestOutboxStateTransitionGuard_ReverseSelfCheck to verify the pairing logic
 // without duplicating the production guard's inner loop.
 func collectTransitionTargets(body *ast.BlockStmt) map[string]struct{} {
 	targets := map[string]struct{}{}
 	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
 		se, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || se.Sel.Name != "TransitionState" {
+		if !ok || se.Sel.Name != "Transition" {
 			return
 		}
 		if len(call.Args) < 2 {

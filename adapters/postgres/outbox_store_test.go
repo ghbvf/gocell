@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -547,4 +548,85 @@ func TestPGOutboxStore_CountPending_ScanError(t *testing.T) {
 	_, err := store.CountPending(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CountPending failed")
+}
+
+// ---------------------------------------------------------------------------
+// OldestEligibleAt unit tests
+// ---------------------------------------------------------------------------
+
+func TestPGOutboxStore_OldestEligibleAt_Found(t *testing.T) {
+	t.Parallel()
+	want := time.Now().UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name   string
+		status kout.State
+		colSub string // substring expected in the generated SQL column name
+	}{
+		{"published", kout.StatePublished, "published_at"},
+		{"dead", kout.StateDead, "dead_at"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := &mockDBTX{}
+			db.queryRowFn = func(_ string, _ ...any) pgx.Row {
+				return &mockTimeRow{val: &want}
+			}
+			store := NewOutboxStore(db, clock.Real())
+
+			got, found, err := store.OldestEligibleAt(context.Background(), tc.status)
+			require.NoError(t, err)
+			assert.True(t, found, "should report found when row present")
+			assert.Equal(t, want, got)
+
+			require.Len(t, db.queryRowSQLs, 1)
+			qc := db.queryRowSQLs[0]
+			assert.Contains(t, qc.sql, tc.colSub, "SQL must select the right column for %s", tc.name)
+			assert.Contains(t, qc.sql, "status = $1", "SQL must filter by status parameter")
+			assert.Equal(t, tc.status.String(), qc.args[0], "status arg must be the wire string")
+		})
+	}
+}
+
+func TestPGOutboxStore_OldestEligibleAt_Empty(t *testing.T) {
+	t.Parallel()
+	// mockDBTX.QueryRow default returns mockNullTimeRow which scans nil into *time.Time.
+	db := &mockDBTX{}
+	store := NewOutboxStore(db, clock.Real())
+
+	got, found, err := store.OldestEligibleAt(context.Background(), kout.StatePublished)
+	require.NoError(t, err)
+	assert.False(t, found, "nil row pointer should report not-found")
+	assert.True(t, got.IsZero(), "should return zero Time when no rows")
+}
+
+func TestPGOutboxStore_OldestEligibleAt_InvalidState(t *testing.T) {
+	t.Parallel()
+	store := NewOutboxStore(&mockDBTX{}, clock.Real())
+
+	for _, bad := range []kout.State{kout.StatePending, kout.StateClaiming, kout.State(99)} {
+		bad := bad
+		t.Run(bad.String(), func(t *testing.T) {
+			t.Parallel()
+			_, _, err := store.OldestEligibleAt(context.Background(), bad)
+			require.Error(t, err, "state %s must return an error", bad)
+		})
+	}
+}
+
+// mockTimeRow is a pgx.Row that scans a *time.Time into a **time.Time dest.
+// Used by OldestEligibleAt tests to simulate a non-NULL result row.
+type mockTimeRow struct {
+	val *time.Time
+}
+
+func (r *mockTimeRow) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return fmt.Errorf("mockTimeRow.Scan: expected 1 dest, got %d", len(dest))
+	}
+	if pp, ok := dest[0].(**time.Time); ok {
+		*pp = r.val
+		return nil
+	}
+	return fmt.Errorf("mockTimeRow.Scan: unsupported dest type %T", dest[0])
 }

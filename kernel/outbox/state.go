@@ -7,19 +7,43 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// State is the publication state of a transactional-outbox entry. It is the
-// single Go-side source of truth for the wire/DB status strings: String()
+// State is the publication state of a transactional-outbox entry.
+//
+// # Single-source role
+//
+// State is the single Go-side source of the wire/DB status strings: String()
 // produces the exact value bound into the `status` column, so adapters/postgres
 // and runtime/outbox must use the enum rather than bare string literals
 // (enforced by the OUTBOX-STATE-LITERAL-BAN-01 archtest).
 //
-// Unlike the maturity Phase in cellvocab, outbox entries genuinely transition
-// at runtime: the relay claims a pending entry, then settles it to published,
-// dead, or back to pending (retry). The transition table + TransitionState
-// model that real machine, mirroring kernel/saga/status.go and
-// kernel/command/status.go.
+// # Transition table
 //
-// ref: kernel/saga/status.go (transition-table pattern).
+// stateTransitions documents the complete legal state graph and is validated by
+// the OUTBOX-STATE-TRANSITION-COMPLETENESS-01 archtest (every State const must
+// be a key). It is NOT the runtime enforcement source for SQL operations:
+//
+//   - relay settlement (writeBackOne / handleFailedEntry): three paths where the
+//     relay explicitly decides claiming→published, claiming→dead, or
+//     claiming→pending. Each calls Transition as a Mark↔target cross-check:
+//     a function that calls MarkPublished must also Transition to StatePublished,
+//     catching copy-paste mismatches at CI time (OUTBOX-STATE-TRANSITION-GUARD-01).
+//     These calls are not correctness guards — the constant arguments mean they
+//     can never fail at runtime — but they serve as machine-readable pairing
+//     assertions.
+//
+//   - store ClaimPending (pending→claiming) and ReclaimStale
+//     (claiming→pending/dead): no Mark* pairing exists for these transitions.
+//     Their correctness is enforced by SQL CAS predicates
+//     (WHERE status='claiming'/'pending'), conformance behavior tests, and
+//     LITERAL-BAN. Duplicating Transition calls there would add no
+//     pairing-check value and would be misleading.
+//
+//   - SQL-text ↔ table-edge machine binding: SQL args are ...any, so the wire
+//     string cannot be type-constrained at the binding site. This is a true
+//     Medium ceiling, explicitly accepted; no fragile static SQL↔edge parser
+//     is attempted.
+//
+// ref: kernel/saga/status.go (transition-table + Transition pattern).
 type State uint8
 
 const (
@@ -91,18 +115,25 @@ func ParseState(s string) (State, error) {
 // Transition table
 // ---------------------------------------------------------------------------
 
-// stateTransitions maps each non-terminal state to its valid target states.
+// stateTransitions maps every State to its valid target states. Terminal states
+// are explicit keys with empty slices — their absence of outgoing edges is
+// intentional, not an oversight. The fsm helpers treat empty-slice and absent
+// identically (both deny all transitions), so the behavioral contract is the
+// same; the explicit keys make the documentation machine-verifiable by
+// OUTBOX-STATE-TRANSITION-COMPLETENESS-01.
 //
 //   - Pending → Claiming: the relay's ClaimPending atomically locks the entry.
 //   - Claiming → Published: publish succeeded (MarkPublished).
 //   - Claiming → Dead: attempts exhausted (MarkDead / ReclaimStale terminal).
 //   - Claiming → Pending: transient failure / stale-lease reclaim, back to the
 //     queue with back-off (MarkRetry / ReclaimStale).
-//
-// Terminal states (Published, Dead) are absent → fsm yields nil → deny all.
+//   - Published: terminal — no outgoing transitions.
+//   - Dead: terminal — no outgoing transitions.
 var stateTransitions = map[State][]State{
-	StatePending:  {StateClaiming},
-	StateClaiming: {StatePublished, StateDead, StatePending},
+	StatePending:   {StateClaiming},
+	StateClaiming:  {StatePublished, StateDead, StatePending},
+	StatePublished: {}, // terminal — no outgoing transitions
+	StateDead:      {}, // terminal — no outgoing transitions
 }
 
 // CanTransitionTo reports whether s can transition to target.
@@ -116,23 +147,27 @@ func (s State) ValidTransitions() []State {
 	return fsm.AllowedTargets(stateTransitions, s)
 }
 
-// TransitionState validates a state transition from → to and returns an error
-// if it is not allowed. Pure validation; it does NOT mutate any state.
-// Callers invoke the corresponding store mutation (MarkPublished / MarkDead /
-// MarkRetry) after a successful return; the relay calls this at its settlement
-// decision points so an illegal target fails loudly.
+// Transition validates a state transition from → to and returns an error if it
+// is not allowed. Pure validation; it does NOT mutate any state.
 //
-// Scope: this guard validates the relay's Go-side settlement decisions —
-// the three paths where the relay explicitly decides claiming→published,
-// claiming→dead, or claiming→pending. The store's ClaimPending
-// (pending→claiming) and ReclaimStale (claiming→pending/dead) transitions are
-// enforced by SQL CAS on the status column (WHERE status='claiming' / 'pending'),
-// not by a Go-side decision point. Wiring TransitionState at those SQL sites
-// would be a tautological assertion that cannot fail in practice. The complete
-// legal transition graph is instead validated statically by the
-// OUTBOX-STATE-TRANSITION-COMPLETENESS-01 archtest, which verifies that every
-// State const is present in stateTransitions or documented as terminal.
-func TransitionState(from, to State) error {
+// # Usage in the relay settlement loop
+//
+// The relay calls Transition at its three settlement decision points as a
+// Mark↔target cross-check: a function that calls MarkPublished must also call
+// Transition(_, StatePublished), and similarly for MarkDead/StateDead and
+// MarkRetry/StatePending. This pairing is enforced statically by
+// OUTBOX-STATE-TRANSITION-GUARD-01. Because the arguments are constants, these
+// calls cannot fail at runtime — their purpose is machine-readable pairing
+// documentation, not runtime correctness.
+//
+// # Store transitions without Transition calls
+//
+// ClaimPending (pending→claiming) and ReclaimStale (claiming→pending/dead) have
+// no Mark* pairing to cross-check. Their correctness is enforced by SQL CAS
+// predicates, conformance behavior tests, and LITERAL-BAN.
+//
+// ref: kernel/saga/status.go::Transition (same pattern and name).
+func Transition(from, to State) error {
 	if from.CanTransitionTo(to) {
 		return nil
 	}
