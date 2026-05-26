@@ -133,10 +133,17 @@ func (v *Validator) validateADV05() []ValidationResult {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {
-			results = append(results, v.newError(
+			// Field anchors at lifecycle, a real contract.yaml field that locates:
+			// endpoints.subscribers is a DERIVED field (yaml:"-", hand-write
+			// forbidden), so pointing there yields no position and misleads the
+			// user toward a field they cannot edit. The remediation (add a
+			// subscribing slice / actorSubscribers / deprecate) lives in the
+			// message + fix; lifecycle is the locatable anchor (and the deprecate
+			// path's target).
+			results = append(results, v.newWarning(
 				codeADV05, IssueForbidden,
 				contractFile(c),
-				"endpoints.subscribers",
+				"lifecycle",
 				fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
 				advHintADV05EmptySubscribersFix,
 			))
@@ -586,6 +593,11 @@ const (
 	// consumed by DOC-NAME-01.
 	docNamingGuardRelPath = "docs/architecture/naming-guard.yaml"
 
+	// docNamingMaxFileBytes caps the size of a DOC-NAME-01 scan target. Larger
+	// include targets are skipped to bound memory use (the scanner reads the
+	// whole file). 10 MiB comfortably covers any real documentation file.
+	docNamingMaxFileBytes = 10 << 20
+
 	// durabilityModeHintSuffix is user-facing guidance appended to OUTGUARD-01
 	// error messages to steer authors toward the correct durabilityMode value.
 	durabilityModeHintSuffix = "(use demo for examples/tests, durable for production assemblies)"
@@ -739,6 +751,12 @@ func (v *Validator) collectDocNamingInclude(include string, exclude []string, se
 func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen map[string]struct{}) []ValidationResult {
 	baseRel := strings.TrimSuffix(include, "/**")
 	baseAbs := filepath.Join(v.root, filepath.FromSlash(baseRel))
+	// Don't walk a tree rooted outside the project (addDocNamingTarget would
+	// reject each escaping file anyway, but skipping the walk avoids
+	// enumerating directories outside the root).
+	if !IsWithinRoot(v.root, baseAbs) {
+		return nil
+	}
 	info, statErr := os.Stat(baseAbs)
 	if statErr != nil || !info.IsDir() {
 		return nil
@@ -777,14 +795,32 @@ func (v *Validator) globDocNamingInclude(include string, exclude []string, seen 
 		)}
 	}
 	for _, match := range matches {
+		// Defense-in-depth symmetric with walkDocNamingInclude: skip matches
+		// outside the root before addDocNamingTarget (which also guards). A glob
+		// pattern containing `..` can match parent-dir entries.
+		if !IsWithinRoot(v.root, match) {
+			continue
+		}
 		v.addDocNamingTarget(match, exclude, seen)
 	}
 	return nil
 }
 
 func (v *Validator) addDocNamingTarget(abs string, exclude []string, seen map[string]struct{}) {
+	// Single choke point for read-eligibility. Reject include targets that
+	// escape the project root (a hostile naming-guard.yaml could otherwise read
+	// arbitrary files on the CI worker via `include: ../../...`). Mirrors the
+	// IsWithinRoot guard already used by resolveCrossFileSchemaRef and rules_ref.go.
+	if !IsWithinRoot(v.root, abs) {
+		return
+	}
 	info, err := os.Stat(abs)
 	if err != nil || info.IsDir() {
+		return
+	}
+	// Skip oversize targets: scanDocNamingLiterals reads the whole file, so an
+	// include pointing at a multi-GB file would exhaust memory (DoS).
+	if info.Size() > docNamingMaxFileBytes {
 		return
 	}
 	rel, err := filepath.Rel(v.root, abs)
@@ -801,7 +837,10 @@ func (v *Validator) addDocNamingTarget(abs string, exclude []string, seen map[st
 func (v *Validator) scanDocNamingLiterals(file, content string, replacements []docNamingReplacement) []ValidationResult {
 	var results []ValidationResult
 	sc := bufio.NewScanner(strings.NewReader(content))
-	sc.Buffer(make([]byte, 1024), 1024*1024)
+	// Max token aligned with the file-size cap (docNamingMaxFileBytes): a target
+	// is already bounded to that size, so a single long line within it must not
+	// trip bufio.ErrTooLong and turn a best-effort scan into an IssueInvalid error.
+	sc.Buffer(make([]byte, 1024), docNamingMaxFileBytes)
 
 	lineNo := 0
 	for sc.Scan() {

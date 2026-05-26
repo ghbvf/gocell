@@ -50,11 +50,42 @@ const (
 		" pattern with a resolvable spec var or inline ContractSpec literal"
 	advHintCH04CorrelationFailedFix = "ensure routes are registered via auth.Mount with a resolvable contract spec"
 
+	// CH-04: handler file could not be parsed; alignment cannot be verified.
+	// Fail-closed — an unparseable handler is a finding, not a silent skip.
+	advHintCH04ParseFailed = "CH-04: contract %s — handler file %s could not be parsed (%v);" +
+		" cannot verify response-status alignment"
+	advHintCH04ParseFailedFix = "fix the handler file so it parses (gofmt/go build), " +
+		"or remove the contract's in-repo handler reference"
+
+	// CH-04: a response write whose emitted status cannot be resolved statically.
+	// Fail-closed (F9) — leaving it silent would let an undeclared status slip
+	// past the alignment check. %s holds the per-write reason (below).
+	advHintCH04DynamicWrite = "CH-04: contract %s — handler %s has a response write whose status" +
+		" cannot be statically resolved (%s); response-status alignment cannot be verified"
+	advHintCH04DynamicWriteFix = "use a static errcode.KindXxx selector / a known httputil writer" +
+		" so the emitted status is analyzable, or declare the status in the contract's responses[]"
+	// Per-write reason *sub-strings*: each is fmt.Sprintf'd at the collect site
+	// (advHintCH04DynamicKind takes the constructor name; the others are plain),
+	// then the fully-expanded result is itself interpolated into
+	// advHintCH04DynamicWrite's third %s. They are NOT Message/Fix consts and
+	// must never be passed to a constructor directly without that expansion.
+	advHintCH04DynamicKind            = "errcode.%s called with a non-static Kind argument"
+	advHintCH04UnknownHelper          = "unknown httputil helper %q that may write a response"
+	advHintCH04WritePublicNoKind      = "httputil.WritePublic called without a Kind argument"
+	advHintCH04WritePublicDynamicKind = "httputil.WritePublic called with a non-static Kind argument"
+
 	// CH-05: auth.Mount correlation failed for UUID pathParam.
 	advHintCH05CorrelationFailed = "CH-05: contract %s with `pathParams.{name}.format: uuid`" +
 		" — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function." +
 		" Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern"
 	advHintCH05CorrelationFailedFix = "register routes via auth.Mount with a resolvable contract spec"
+
+	// CH-05: handler file could not be parsed; UUID-param check cannot run.
+	// Fail-closed, symmetric with CH-04 (both share parseHandlerFile).
+	advHintCH05ParseFailed = "CH-05: contract %s — handler file %s could not be parsed (%v);" +
+		" cannot verify ParseUUIDPathParam usage"
+	advHintCH05ParseFailedFix = "fix the handler file so it parses (gofmt/go build), " +
+		"or remove the contract's in-repo handler reference"
 
 	// CH-05: pathParam with format:uuid missing ParseUUIDPathParam call.
 	advHintCH05MissingParseCall    = "%s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q)"

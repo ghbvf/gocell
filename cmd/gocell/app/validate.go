@@ -15,7 +15,8 @@ import (
 )
 
 // runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]
-// Parses all metadata, runs validate-meta and depcheck.
+// Parses all metadata, then runs the base + dependency-graph rules (plus the
+// strict-only rules under --strict) through the single governance engine pass.
 // exit 0 = pass, exit 1 = errors found.
 //
 // --fail-fast: short-circuits at the first SeverityError. Output is trimmed
@@ -30,10 +31,7 @@ func runValidate(ctx context.Context, args []string) error {
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
-	strict := fs.Bool("strict", false,
-		"enforce strict-only governance rules"+
-			" (VERIFY-06 executable journey auto checks, FMT-16 slice/cell/assembly dirs,"+
-			" FMT-17 allowedFiles)")
+	strict := fs.Bool("strict", false, strictFlagUsage())
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {
@@ -62,21 +60,35 @@ func runValidate(ctx context.Context, args []string) error {
 	}
 
 	validator := governance.NewValidator(project, rootDir, clock.Real())
-	depChecker := governance.NewDependencyChecker(project)
 
 	// ctx is the signal-aware context wired in main.go
 	// (signal.NotifyContext) and threaded through Dispatch → runValidate.
 	// It is the cancellation source the entire validate path honors —
 	// runGit subprocesses and verifyJourneyRef both consume it.
 	if *failFast {
-		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)
+		return runValidateFailFast(ctx, printer, *format, validator, *strict)
 	}
-	return runValidateFull(ctx, printer, validator, depChecker, *strict)
+	return runValidateFull(ctx, printer, validator, *strict)
 }
 
-// runValidateFailFast runs validation in short-circuit mode: the validator
-// and the dependency checker stop at the first SeverityError. When strict is
-// true, FMT-16/17 are appended only if the base pass finds no errors.
+// strictFlagUsage derives the --strict help text from the PhaseStrict registry
+// (governance.StrictRuleCodes) so the flag description is a pure projection of
+// the rules that actually run under --strict and can never drift from them.
+func strictFlagUsage() string {
+	codes := governance.StrictRuleCodes()
+	parts := make([]string, len(codes))
+	for i, c := range codes {
+		parts[i] = string(c)
+	}
+	return "enforce strict-only governance rules (" + strings.Join(parts, ", ") + ")"
+}
+
+// runValidateFailFast runs validation in short-circuit mode: the single engine
+// pass (governance.ValidateStrict) stops at the first SeverityError. The rule
+// set is one phase-filtered allRules slice — base + dep, plus the PhaseStrict
+// rules (governance.StrictRuleCodes) when strict is true — all run in
+// declaration order by the same loop; there is no separate DependencyChecker
+// and no second "strict pass" gated on the base pass.
 //
 // Output rendering depends on the --format and the run's outcome:
 //
@@ -84,10 +96,9 @@ func runValidate(ctx context.Context, args []string) error {
 //     error in text mode (single line, no banner, no summary); in
 //     json/sarif emit a full document containing that one issue.
 //   - no errors but warnings present: emit the full warning set via the
-//     printer's standard Print path. `ValidateFailFast` and `CheckFailFast`
-//     in kernel/governance explicitly preserve warnings on the clean-error
-//     path; dropping them at the command layer would silently hide
-//     warning-only repos.
+//     printer's standard Print path. The fail-fast path preserves warnings
+//     on the clean-error path; dropping them at the command layer would
+//     silently hide warning-only repos.
 //   - no errors, no warnings: text emits the legacy "OK: no errors." line;
 //     json/sarif emit an empty document so consumers can always parse a
 //     result regardless of outcome.
@@ -100,7 +111,6 @@ func runValidateFailFast(
 	printer printers.Printer,
 	format string,
 	validator *governance.Validator,
-	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
 	valResults, valErr := runValidatorFailFast(ctx, validator, strict)
@@ -113,17 +123,6 @@ func runValidateFailFast(
 		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
-	depResults := depChecker.CheckFailFast()
-	if firstErr := firstError(depResults); firstErr != nil {
-		if err := emitFailFast(printer, format, depResults); err != nil {
-			return fmt.Errorf(errEmitResultsFmt, err)
-		}
-		return fmt.Errorf("validation failed: %s", firstErr.Code)
-	}
-
-	// No errors. Combine the validator and depcheck results so warnings from
-	// either accumulator are preserved.
-	valResults = append(valResults, depResults...)
 
 	if len(valResults) == 0 {
 		// Truly clean run. Text mode keeps the legacy single-line "OK"
@@ -179,15 +178,12 @@ func runValidateFull(
 	ctx context.Context,
 	printer printers.Printer,
 	validator *governance.Validator,
-	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
 	valResults, valErr := runValidatorFull(ctx, validator, strict)
 	if valErr != nil {
 		return fmt.Errorf("validation interrupted: %w", valErr)
 	}
-	depResults := depChecker.Check()
-	valResults = append(valResults, depResults...)
 
 	if err := printer.Print(valResults); err != nil {
 		return fmt.Errorf(errEmitResultsFmt, err)

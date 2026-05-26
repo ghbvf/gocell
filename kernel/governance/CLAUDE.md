@@ -1,20 +1,28 @@
 # kernel/governance/ 层规则
 
-governance/ 实现 GoCell 元数据治理规则，每条规则对应一个 `validate<RULEID>()` 方法。
+governance/ 实现 GoCell 元数据治理规则。每条规则是一个 detect 方法
+（`validate<RULEID>()` / `checkDEP*` / `checkCH*`，零参返回 `[]ValidationResult`），并在
+`rules_registry.go` 的 `allRules` 注册表以一个 `Rule{}` 条目登记（`Code` + `Phase` +
+编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
+（ADR `202605041430` §M3-RULE-ENGINE）。
+
+next-action（NextAction 类型）与 per-finding Metric 已从 M3 和当前 M0-M4 路线移除
+（推测性仓库收敛 scaffolding，无消费方；M5-HARVEST 已取消）。未来若恢复仓库收敛能力，
+必须先通过新 ADR 定义真实 consumer，再重新设计这些字段。
 
 ## ValidationResult 构建
 
-findings 一律经类型化构造函数（locator 方法 / `newErrorAt` 包级函数），**禁止**手写 `ValidationResult{}` 字面量（locator.go 外）。选 error 语义 = 调用强制带 `fix`（remediation guidance）参数的 API；warning 无 `fix`。由 archtest `GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 守卫（fix 非空 + 禁裸字面量）+ `...CODE-CONST-SINGLE-SOURCE-01`（code 必为 `rulecodes.go` 的 `RuleCode` const）。
+findings 一律经类型化构造函数（locator 方法 / `newErrorAt` 包级函数），**禁止**手写 `ValidationResult{}` 字面量（locator.go 外）。`newError` 产 error、`newWarning` 产 warning——`fix`（remediation guidance）对两者都是必填参数（typed-Fix 契约 **severity-agnostic**，见下文）。severity 只决定 blocking(error) vs advisory(warning)，不决定"怎么改"是否结构化。由 archtest `GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 守卫（四个构造函数 fix 非空 + 禁裸字面量）+ `...CODE-CONST-SINGLE-SOURCE-01`（code 必为 `rulecodes.go` 的 `RuleCode` const）。
 
 ```go
 // error：fix 必填（最后一个位置参数）
 v.newError(
-    codeADV05,          // RuleCode const（rulecodes.go）
+    codeREF01,          // RuleCode const（rulecodes.go）
     IssueForbidden,     // required | invalid | referenceNotFound | mismatch | forbidden | duplicate
-    contractFile(c),    // 文件路径
-    "endpoints.subscribers", // 字段路径
-    fmt.Sprintf("active event contract %q has no subscribers", c.ID), // 问题陈述
-    "add subscribers to endpoints.subscribers or set lifecycle: deprecated", // 修复指导 → Fix 字段
+    sliceFile(s),       // 文件路径
+    "belongsToCell",    // 字段路径
+    fmt.Sprintf("slice %q references unknown cell %q", s.ID, s.BelongsToCell), // 问题陈述
+    "add the cell declaration or fix the belongsToCell value", // 修复指导 → Fix 字段
 )
 
 // warning：fix 同样必填（advisory，但"怎么改"也进 Fix，不留 Message）
@@ -44,10 +52,14 @@ newErrorAt(codeDOCNAME01, IssueForbidden,
 | TOPO | TOPO-01 ~ TOPO-09 | 拓扑合法性（assembly、journey 结构） |
 | VERIFY | VERIFY-01 ~ VERIFY-06 | 验证闭包（verify.smoke/unit/contract 命令存在） |
 | FMT | FMT-01 ~ FMT-34 | 格式合规（YAML 结构、HTTP 契约、路径参数；FMT-18 已退役） |
-| ADV | ADV-01 ~ ADV-06 | 建议警告（dead event、journey 覆盖等） |
-| OUTGARD | OUTGARD-01 | Outbox 约束 |
+| ADV | ADV-01 ~ ADV-05 | 建议警告（dead event、journey 覆盖等；ADV-02/ADV-06 已退役） |
+| OUTGUARD | OUTGUARD-01 | Outbox 约束 |
 
 ## 完整规则示例（ADV-05）
+
+detect 方法只检测 + 经 `locator` 构造器产出 finding（severity 由 `newError`/`newWarning` 决定）。
+ADV-05 使用 `"lifecycle"` 字段锚点（`endpoints.subscribers` 是 derived field，`yaml:"-"`，
+用户不可编辑，指向它会误导用户）：
 
 ```go
 func (v *Validator) validateADV05() []ValidationResult {
@@ -57,11 +69,11 @@ func (v *Validator) validateADV05() []ValidationResult {
             continue
         }
         if len(c.Endpoints.Subscribers) == 0 {
-            results = append(results, v.newError(
+            results = append(results, v.newWarning( // ADV-05 是 advisory（dead event 不阻断 CI）
                 codeADV05, IssueForbidden,
-                contractFile(c), "endpoints.subscribers",
-                fmt.Sprintf("active event contract %q has no subscribers (dead event)", c.ID),
-                "add subscribers to endpoints.subscribers or set lifecycle: deprecated",
+                contractFile(c), "lifecycle",
+                fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
+                advHintADV05EmptySubscribersFix,
             ))
         }
     }
@@ -71,17 +83,19 @@ func (v *Validator) validateADV05() []ValidationResult {
 
 ## 规则注册
 
-新规则在 `rules()` 方法末尾追加闭包：
+新规则：写 detect 方法 → 在 `rules_registry.go` 的 `allRules` 加一个 `Rule{}` 条目 →
+在 `rule_inventory_test.go` 的 `goldenRuleIDs()` 加它的 code（`TestAllRulesMatchGolden` 锁集合 + 唯一性）。
 
 ```go
-func (v *Validator) rules() []func() []ValidationResult {
-    return []func() []ValidationResult{
-        // ... 已有规则 ...
-        v.validateADV05,
-        v.validateMyNewRule, // 追加在这里
-    }
+var allRules = []Rule{
+    // ... 已有规则 ...
+    {Code: codeADV05, Phase: PhaseBase, Detect: (*Validator).validateADV05},
 }
 ```
+
+`Phase` 决定何时运行：`PhaseBase`（`gocell validate`）/ `PhaseStrict`（`--strict`）/
+`PhaseDep`（依赖图）/ `PhaseHealth`（`gocell check`）。ctx-bound 规则（仅 VERIFY-06）的 `Detect`
+是读 `v.runCtx` 的闭包。`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁「detect 方法必在 allRules 登记」。
 
 ## 测试写法
 
@@ -93,9 +107,9 @@ func TestADV05_NoSubscribers(t *testing.T) {
         Endpoints: metadata.EndpointsMeta{Subscribers: nil},
         File: "contracts/event/dead/v1/contract.yaml",
     }
-    results := NewValidator(project, "").validateADV05()
-    requireError(t, results, "ADV-05", "endpoints.subscribers")
+    results := NewValidator(project, "", clock.Real()).validateADV05()
+    requireWarning(t, results, "ADV-05", "lifecycle") // advisory, not error
 }
 ```
 
-`minimalProject(t)` 返回最小化 `*metadata.ProjectMeta`；`requireError` 过滤并断言规则编号 + 字段路径。
+`minimalProject(t)` 返回最小化 `*metadata.ProjectMeta`；`requireWarning`/`requireError` 过滤并断言规则编号 + 字段路径。

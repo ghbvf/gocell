@@ -946,8 +946,8 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			// and that FMT-21 already covers as the bijective inverse rule.
 			//
 			// INTEGRATION ANCHOR — DO NOT DELETE WITHOUT REPLACEMENT.
-			// This case calls v.ValidateStrict(t.Context(), false, false) (the full rules() chain),
-			// so removing FMT-21 from rules() makes wantCount:1 fail. The case
+			// This case calls v.ValidateStrict(t.Context(), false, false) (the full allRules chain),
+			// so removing FMT-21 from allRules makes wantCount:1 fail. The case
 			// therefore pins both the rule logic AND the rule's membership in
 			// the default validator slice. Removing it (or downgrading wantCount
 			// to 0) silently weakens the PATH-ID-MAPPING governance contract.

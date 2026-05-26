@@ -160,7 +160,7 @@ func TestJOURNEYSTATUSLIFECYCLE01_OrphanEntrySkipped(t *testing.T) {
 
 // TestValidateStrict_JourneyRulesIntegrated guards against silent
 // de-registration: a future refactor that moves either JOURNEY rule
-// out of rules() would let the per-method unit tests still pass while
+// out of allRules would let the per-method unit tests still pass while
 // the rule no longer fires in any real validate pipeline. This end-to-end
 // assertion catches that drift even before INV-1 (which only checks the
 // reflection ↔ registration sets match) would surface it.

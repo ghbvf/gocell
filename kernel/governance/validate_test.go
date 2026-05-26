@@ -2873,7 +2873,7 @@ func TestADV05(t *testing.T) {
 		wantSev   Severity
 	}{
 		{
-			name: "event contract active with empty subscribers → 1 error",
+			name: "event contract active with empty subscribers → 1 warning",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.dead.nosubscribers.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nosubscribers.v1",
@@ -2888,10 +2888,10 @@ func TestADV05(t *testing.T) {
 				}
 			},
 			wantCount: 1,
-			wantSev:   SeverityError,
+			wantSev:   SeverityWarning,
 		},
 		{
-			name: "event contract active with nil subscribers → 1 error",
+			name: "event contract active with nil subscribers → 1 warning",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.dead.nilsubs.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nilsubs.v1",
@@ -2906,7 +2906,7 @@ func TestADV05(t *testing.T) {
 				}
 			},
 			wantCount: 1,
-			wantSev:   SeverityError,
+			wantSev:   SeverityWarning,
 		},
 		{
 			name: "event contract active with subscribers → 0 findings",
@@ -2999,17 +2999,81 @@ func TestADV05(t *testing.T) {
 	}
 }
 
+// TestADV05_ExitCode_Regression proves that ADV-05 (dead event) does NOT
+// produce a SeverityError and therefore must not cause `gocell validate` to
+// exit non-zero.  ADV-05 was reclassified from SeverityError to
+// SeverityWarning in M3 (ADR §M3-RULE-ENGINE); this test locks the regression
+// to prevent accidental re-elevation.
+//
+// Two paths are exercised:
+//  1. Direct detect (validateADV05): verifies the finding is SeverityWarning
+//     and that HasErrors is false on those findings alone.
+//  2. Engine loop path (run): verifies the engine accumulates the ADV-05
+//     finding as SeverityWarning and that HasErrors stays false, so the
+//     reclassified rule never drives a CI exit-code 1.
+func TestADV05_ExitCode_Regression(t *testing.T) {
+	t.Parallel()
+	pm := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"event.dead.regression.v1": {
+				ID:               "event.dead.regression.v1",
+				Kind:             "event",
+				OwnerCell:        "",
+				ConsistencyLevel: "L2",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Subscribers: nil,
+				},
+				File: "contracts/event/dead/regression/v1/contract.yaml",
+			},
+		},
+	}
+
+	val := NewValidator(pm, "", clock.Real())
+
+	// Path 1: direct detect — ADV-05 fires as SeverityWarning.
+	direct := findByCode(val.validateADV05(), "ADV-05")
+	require.NotEmpty(t, direct, "expected at least one ADV-05 finding from validateADV05")
+	for _, r := range direct {
+		assert.Equal(t, SeverityWarning, r.Severity,
+			"ADV-05 must be SeverityWarning (reclassified from error in M3)")
+	}
+	assert.False(t, HasErrors(direct),
+		"ADV-05 findings must not contain SeverityError — HasErrors must be false")
+
+	// Path 2: engine loop — run() accumulates the warning findings correctly.
+	adv05Rule := Rule{
+		Code:   codeADV05,
+		Phase:  PhaseBase,
+		Detect: (*Validator).validateADV05,
+	}
+	stamped, err := val.run(context.Background(), []Rule{adv05Rule}, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, stamped)
+	for _, r := range stamped {
+		assert.Equal(t, SeverityWarning, r.Severity,
+			"engine must accumulate SeverityWarning ADV-05 findings (not error)")
+	}
+	assert.False(t, HasErrors(stamped),
+		"engine-accumulated ADV-05 results must not cause HasErrors==true (no CI exit-code 1)")
+}
+
 // TestADV06_Removed verifies that ADV-06 no longer exists in the rule pipeline.
 // Subscribers are derived from slice contractUsages + actorSubscribers, so drift
 // between contract.yaml and slice.yaml is impossible by construction.
 func TestADV06_Removed(t *testing.T) {
 	pm := validProject()
 	val := NewValidator(pm, "", clock.Real())
-	allRules := val.rules()
-	for _, rule := range allRules {
-		for _, r := range rule() {
+	// Only iterate non-Strict/non-Health rules: PhaseStrict rules (e.g. VERIFY-06)
+	// require v.runCtx to be set via run(); PhaseHealth rules require a full project.
+	for _, rule := range rulesForPhases(PhaseBase, PhaseDep) {
+		for _, r := range rule.Detect(val) {
 			if r.Code == "ADV-06" {
-				t.Errorf("ADV-06 must not be emitted by rules(): found result %v", r)
+				t.Errorf("ADV-06 must not be emitted by allRules: found result %v", r)
 			}
 		}
 	}

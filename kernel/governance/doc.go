@@ -8,5 +8,5 @@
 // during the parse phase.
 //
 // Rule numbering: see kernel/governance/CLAUDE.md for the REF / TOPO /
-// VERIFY / FMT / ADV / OUTGARD series and the ValidationResult schema.
+// VERIFY / FMT / ADV / OUTGUARD series and the ValidationResult schema.
 package governance

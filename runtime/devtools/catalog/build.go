@@ -21,8 +21,8 @@ type ExportOptions struct {
 	// Filter projects entities and dependencies. Zero value = full snapshot.
 	Filter Filter
 	// CellDeps, when non-nil, populates Document.Dependencies.Cells. Caller
-	// constructs by invoking governance.DependencyChecker.Graph() and
-	// translating to *CellDepGraph.
+	// constructs by invoking governance.Validator.Graph() and translating to
+	// *CellDepGraph.
 	CellDeps *CellDepGraph
 	// Packages, when non-nil, populates Document.Dependencies.Packages. The
 	// pointer carries its own error field so HTTP lazy loading and CLI

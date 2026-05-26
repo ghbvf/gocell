@@ -36,11 +36,11 @@ func parentFieldPath(p string) string {
 }
 
 // locator provides position-enriched ValidationResult construction. It is
-// embedded into Validator and DependencyChecker so both share a single
-// implementation of locate/newError/newWarning/newScopedError — one copy, not two.
+// embedded into Validator so every rule shares one implementation of
+// locate/newError/newWarning/newScopedError.
 //
 // The embedded form also promotes the `project` field, which is why existing
-// rule code continues to read `v.project.Cells` / `dc.project.Slices` without
+// rule code continues to read `v.project.Cells` / `v.project.Slices` without
 // changes: the outer struct no longer declares `project` directly; it lifts
 // the value off the embedded locator.
 type locator struct {
@@ -269,6 +269,8 @@ func canonicalAssemblyID(file string) (string, bool) {
 // users do not mistake the scope label for a jumpable path. fix is REQUIRED
 // (same funnel as newError). There is no newScopedWarning — no scoped warning
 // site exists, and the absence is itself part of the funnel.
+//
+//nolint:unparam // scope is always "project" today; kept as explicit param for future scoped errors.
 func (l *locator) newScopedError(code RuleCode, typ IssueType, scope, field, msg, fix string) ValidationResult {
 	return ValidationResult{
 		Code:      code,

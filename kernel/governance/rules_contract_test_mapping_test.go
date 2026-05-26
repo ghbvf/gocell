@@ -350,7 +350,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint(t *testing.T) {
 }
 
 // TestCONTRACTENDPOINTTESTMAPPING01_Integrated guards against silent de-registration:
-// a refactor that removes the rule from rules() would let per-method tests still pass
+// a refactor that removes the rule from allRules would let per-method tests still pass
 // while the rule no longer fires in the real validate pipeline.
 func TestCONTRACTENDPOINTTESTMAPPING01_Integrated(t *testing.T) {
 	pm := minimalHTTPProject()

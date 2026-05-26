@@ -57,7 +57,7 @@ func (t *textWriter) writeln(s string) {
 //   - Empty input: "No issues found.\n" + blank line + "Validation complete: ...".
 //   - Non-empty:   "ERRORS (N):" / "WARNINGS (M):" blocks then summary.
 //
-// **Input order is preserved** within each severity group. Validator.rules()
+// **Input order is preserved** within each severity group. The allRules registry
 // in kernel/governance emits results in a deterministic rule sequence
 // (REF → TOPO → VERIFY → FMT → ...), and downstream tooling has come to
 // rely on that ordering. JSON / SARIF apply sortResults for stable
@@ -161,9 +161,8 @@ func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
 		tw.writelnf("%s\n", rest)
 	}
 
-	// Fix is the typed remediation guidance (error findings only; empty for
-	// warnings). Render it on its own line, aligned with the location anchor,
-	// rather than re-concatenating into Message.
+	// Fix is the typed remediation guidance. Render it on its own line,
+	// aligned with the location anchor, rather than re-concatenating into Message.
 	if r.Fix != "" {
 		tw.writelnf("         fix: %s\n", r.Fix)
 	}

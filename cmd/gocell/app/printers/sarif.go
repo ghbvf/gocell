@@ -212,7 +212,9 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 		Message: sarifMessage{Text: composeSARIFMessage(r)},
 	}
 	if r.Fix != "" {
-		res.Properties = &sarifResultProperties{Fix: r.Fix}
+		res.Properties = &sarifResultProperties{
+			Fix: r.Fix,
+		}
 	}
 	if r.File != "" {
 		loc := sarifLocation{
