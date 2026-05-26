@@ -38,23 +38,19 @@
 //
 // # Not in this package (deferred, with their consumers)
 //
-//   - Definition / Step / StepFunc / Resolver / InMemoryRegistry live in this
-//     same package (kernel/saga). The Coordinator engine that executes them
-//     lives in runtime/saga. (CompensateFunc + Step.Compensate were removed
-//     in PR-03 round-2 and re-introduced in PR-06 alongside the compensation
-//     executor.)
-//   - RetryPolicy and per-step / overall timeout execution land in
-//     runtime/saga/executor, alongside backoff, jitter, and the sweeper —
-//     following kernel/command, which ships its Timeouts config with the
-//     sweeper that consumes it, never ahead of it.
+//   - Definition / Step / StepFunc / CompensateFunc / RetryPolicy / Resolver /
+//     InMemoryRegistry live in this same package (kernel/saga). The Coordinator
+//     engine and the per-step Executor that execute them live in runtime/saga
+//     and runtime/saga/executor.
+//   - The backoff / jitter algorithm that consumes RetryPolicy, the per-step
+//     context.WithTimeout enforcement, and the heartbeat goroutine live in
+//     runtime/saga/executor; this package carries only the static config
+//     (RetryPolicy value + Step.Timeout / Definition.Timeout).
 //   - The durable append-only Journal lands in kernel/saga/journal.
 //   - Instance.LogValue (slog.LogValuer for redacted logging) lands in
-//     runtime/saga together with the State payload it needs to redact; PR-01's
+//     runtime/saga together with the State payload it needs to redact;
 //     Instance carries only IDs / status / timestamps (no sensitive fields),
 //     so the default slog reflection is safe in the interim.
-//
-// This skeleton declares only what its own state machine exercises: there are
-// no config fields awaiting a future executor.
 //
 // # References
 //
