@@ -128,6 +128,9 @@ func goldenRuleIDs() []string {
 		"SLICE-CONSISTENCY-01",
 		"SLICE-CONSISTENCY-02",
 
+		// LIFECYCLE-PHASE — cell/slice maturity phase membership + slice≤cell (rules_lifecycle.go)
+		"LIFECYCLE-PHASE-01",
+
 		// TOPO — topology (rules_topo.go)
 		"TOPO-01", "TOPO-02", "TOPO-03", "TOPO-04", "TOPO-05",
 		"TOPO-06", "TOPO-07", "TOPO-08", "TOPO-09",
