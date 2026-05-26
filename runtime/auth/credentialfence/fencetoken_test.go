@@ -121,16 +121,15 @@ func TestMustHave_NilPanics(t *testing.T) {
 	credentialfence.MustHave(nilTok, "test.callsite.nil")
 }
 
-// TestMustHave_TypedNilPanics asserts MustHave catches the typed-nil
-// interface form (var x credentialfence.FenceToken = (*someConcrete)(nil)).
-// IsNilInterface's whole purpose is to catch this case where bare-nil
-// comparison misses.
-//
-// Cannot construct a typed-nil FenceToken externally (FenceToken's only
-// impl is unexported), so this test uses a bare-nil var; the typed-nil
-// path is exercised transitively through validation.IsNilInterface, which
-// is unit-tested in pkg/validation.
-func TestMustHave_TypedNilPanics(t *testing.T) {
+// TestValidationIsNilInterface_TypedNilForFenceToken asserts the upstream
+// pkg/validation invariant that MustHave relies on: validation.IsNilInterface
+// must return true for a bare-nil FenceToken interface value. This test
+// exercises the external (package credentialfence_test) scope, where the
+// concrete fenceToken impl is unexported and a true typed-nil cannot be
+// constructed. The companion internal test (fencetoken_internal_test.go,
+// package credentialfence) constructs a true typed-nil and verifies
+// MustHave panics through the panic-taxonomy funnel.
+func TestValidationIsNilInterface_TypedNilForFenceToken(t *testing.T) {
 	t.Parallel()
 
 	// Sanity-check the upstream invariant we rely on.

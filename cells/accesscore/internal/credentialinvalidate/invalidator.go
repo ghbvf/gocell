@@ -8,7 +8,8 @@
 //   - CREDENTIAL-INVALIDATE-FUNNEL-01:    session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
 //   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:    UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, conformance, *_test.go}
 //   - REFRESH-REVOKE-USER-FUNNEL-01:      refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
-//   - CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: Invalidator.Apply callers ⊆ {this pkg, authzmutate, identitymanage, sessionrefresh, rbacassign, *_test.go}
+//   - CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: Invalidator.Apply callers ⊆
+//     {this pkg, authzmutate, identitymanage, sessionrefresh, rbacassign, *_test.go}
 //   - FENCE-TOKEN-MINT-FUNNEL-01:         credentialfence.Mint callers ⊆ {this pkg, storetest/conformance, *_test.go}
 //
 // The three mutation methods take a credentialfence.FenceToken capability
@@ -30,6 +31,7 @@ package credentialinvalidate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -77,6 +79,9 @@ func New(users ports.UserRepository, sessions session.Store, refreshStore refres
 // Order is defined only for short-circuit predictability; correctness does not
 // depend on the order.
 func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event session.CredentialEvent) error {
+	slog.DebugContext(txCtx, "credentialinvalidate: apply",
+		slog.String("subject_id", subjectID),
+		slog.String("event", event.String()))
 	// Mint the FenceToken once and pass the same value through all three
 	// mutations. The token is identity-less (any non-nil FenceToken is
 	// equally valid), so sharing it across the three calls is

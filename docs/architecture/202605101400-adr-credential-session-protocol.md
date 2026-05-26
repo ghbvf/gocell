@@ -641,6 +641,14 @@ BumpPasswordVersion 只自增）。
 三者组合 = 上游 Hard。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` godoc
 正式升 Medium → Hard。
 
+**test-file Mint() caller 豁免**：`FENCE-TOKEN-MINT-FUNNEL-01` 的
+`isFenceTokenMintAllowlisted` helper 对所有 `*_test.go` 文件返回 true，使测试
+代码不受 allowlist 约束。这与 `credential_invalidate_funnel_invariants_test.go`
+的 `isAllowlisted` 惯例一致，也与 `PANIC-REGISTERED-01` 对 test-file 的豁免
+对称——测试用途必须能直接调用 Mint() 构造 FenceToken 来驱动存储层 conformance
+和单元测试；把测试路径加进 allowlist 会把 funnel 紧密度扩散到测试代码，得不偿失。
+此豁免是有意为之的 test ergonomics 决策，不是安全盲区。
+
 **与 §A10 co-tx atomicity 的关系**：§A10 的 Medium 天花板论证（"authzmutate
 接受外部 tx 上下文被 PR #501 以 Go 类型天花板拒绝"）已被本 amendment 绕开
 ——不需要让 authzmutate 接外部 tx 才能 Hard，而是让 mutation 方法本身要求

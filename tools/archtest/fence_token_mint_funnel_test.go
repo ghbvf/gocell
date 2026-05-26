@@ -163,10 +163,15 @@ func TestFenceTokenMintFunnel_AllowlistEnforced(t *testing.T) {
 // blindspot self-check for function-value capture: `fn := credentialfence.Mint;
 // fn()`. The right-hand side of the assignment is a *ast.SelectorExpr whose
 // Sel is "Mint", but the subsequent CallExpr has Fun = *ast.Ident, which
-// ResolveMethodCall cannot match against credentialfence.Mint. This test
+// ResolvePackageRef cannot match against credentialfence.Mint. This test
 // asserts the form does NOT appear in production code, keeping the
 // FENCE-TOKEN-MINT-FUNNEL-01 rule complete under the "blindspot is absent"
 // premise.
+//
+// Detection is alias-immune: the AssignStmt RHS SelectorExpr is resolved via
+// ResolvePackageRef (types.Info.Uses), which returns the canonical package
+// path regardless of any import alias (e.g. `import cf "...credentialfence"`).
+// Name-based xIdent.Name == "credentialfence" matching is NOT used here.
 //
 // Mirrors TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment in
 // credential_invalidate_funnel_invariants_test.go.
@@ -179,7 +184,7 @@ func TestFenceTokenMintFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
 
 	var violations []string
 	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
+		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -195,10 +200,14 @@ func TestFenceTokenMintFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
 					if sel.Sel.Name != fenceTokenMintFunc {
 						return
 					}
-					// Require sel.X == "credentialfence" identifier to reduce
-					// false positives from same-name methods on unrelated types.
-					xIdent, ok := sel.X.(*ast.Ident)
-					if !ok || xIdent.Name != "credentialfence" {
+					// Use ResolvePackageRef to resolve via types.Info.Uses to the
+					// canonical package path — immune to import aliases such as
+					// `import cf "...credentialfence"`.
+					pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
+					if !ok {
+						return
+					}
+					if pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
 						return
 					}
 					line := p.Fset.Position(assign.Pos()).Line
@@ -226,7 +235,15 @@ func TestFenceTokenMintFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
 // TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation is the reverse
 // blindspot self-check for reflect-based invocation. Production code must
 // never use reflect.ValueOf to fetch / call Mint — such forms are
-// AST-invisible to ResolveMethodCall. Asserts the form is absent.
+// AST-invisible to the main A1 ResolvePackageRef scanner. Asserts the form
+// is absent.
+//
+// Detection for the inner argument is alias-immune: the credentialfence.Mint
+// SelectorExpr passed as reflect.ValueOf's argument is resolved via
+// ResolvePackageRef (types.Info.Uses) to the canonical package path, not via
+// the local identifier name. The outer reflect.ValueOf identification uses
+// name-based matching ("reflect"/"ValueOf") which is safe because reflect is
+// a stdlib package that is never aliased in this codebase.
 //
 // Mirrors TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName.
 func TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation(t *testing.T) {
@@ -238,7 +255,7 @@ func TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation(t *testing.T) {
 
 	var violations []string
 	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
+		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -253,6 +270,8 @@ func TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation(t *testing.T) {
 				}
 				// reflect.ValueOf(credentialfence.Mint) — argument is the
 				// SelectorExpr we care about.
+				// Outer reflect.ValueOf identification is name-based (reflect is
+				// stdlib, never aliased in this codebase).
 				if sel.Sel.Name != "ValueOf" || len(call.Args) != 1 {
 					return
 				}
@@ -264,11 +283,13 @@ func TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation(t *testing.T) {
 				if !ok {
 					return
 				}
-				argIdent, ok := argSel.X.(*ast.Ident)
-				if !ok || argIdent.Name != "credentialfence" {
+				// Use ResolvePackageRef on the inner argument SelectorExpr to
+				// resolve via types.Info.Uses — alias-immune.
+				pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, argSel)
+				if !ok {
 					return
 				}
-				if argSel.Sel.Name != fenceTokenMintFunc {
+				if pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
 					return
 				}
 				line := p.Fset.Position(call.Pos()).Line

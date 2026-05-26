@@ -44,7 +44,7 @@
 //   - Implementation seal — Hard (Go type system; unimplementable outside
 //     this package due to unexported marker method)
 //   - Mint callsite seal — Hard via call-site form-uniqueness (archtest
-//     A1 ResolveMethodCall resolves the call to a unique *types.Func;
+//     A1 ResolvePackageRef resolves the SelectorExpr X to a *types.PkgName;
 //     A2/A3 blindspot self-checks reject function-value and reflect forms)
 //   - nil-FenceToken hole — closed via runtime guard in the three mutation
 //     methods (pkg/validation.IsNilInterface → errcode.Assertion through
@@ -69,7 +69,7 @@
 //     §4 ROI row 2
 //   - docs/plans/202605191100-043-archtest-audit-and-capability-gap-parallel-plan.md
 //     §1 row 4
-//   - docs/architecture/202605101400-adr-credential-session-protocol.md §A16
+//   - docs/architecture/202605101400-adr-credential-session-protocol.md §A16 (credential-invalidate sealed FenceToken — 上游 funnel 闭环)
 //
 // Open-source comparison: HashiCorp Vault audit broker sealed token,
 // crypto/tls.Config sealed fields.

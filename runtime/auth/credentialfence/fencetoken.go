@@ -45,7 +45,9 @@ func Mint() FenceToken {
 // (e.g. "session.Store.RevokeForSubject"), supplied at the call site as a
 // runtime argument. Assertion is allowed to format runtime context into
 // Message per its documented exception (see pkg/errcode godoc).
-const fenceTokenRequiredMessage = "%s: FenceToken required; call must route through credentialinvalidate.Invalidator"
+//
+//nolint:gosec // G101 false positive: format template, not a credential value
+const fenceTokenRequiredMessage = "%s: FenceToken required; must route through credentialinvalidate.Invalidator"
 
 // MustHave panics through the panic-taxonomy funnel
 // (panicregister.Approved + errcode.Assertion, B-class) when tok is nil or
