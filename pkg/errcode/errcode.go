@@ -7,13 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
-	"math"
 	"reflect"
 	"strconv"
 	"strings"
-
-	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // Code is a typed error code string.
@@ -718,16 +714,10 @@ const (
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
 )
 
-// PublicDetail is the wire-safe key/value shape used in public error
-// projections. Values are limited to JSON scalar types by WithDetails and by
-// the defensive MarshalJSON path.
-type PublicDetail struct {
-	Key   string `json:"key"`
-	Value any    `json:"value"`
-}
-
 // PublicError is the structured projection shared by HTTP responses, CLI text
-// rendering, and machine-readable command output.
+// rendering, and machine-readable command output. Details is the sealed
+// PublicDetail slice (see details.go); each entry serializes to {"key": ..., "value": ...}
+// per the v1 wire schema.
 type PublicError struct {
 	Code    Code           `json:"code"`
 	Message string         `json:"message"`
@@ -735,7 +725,7 @@ type PublicError struct {
 
 	// Operator-only fields. They are omitted from HTTP/public projections but
 	// let local CLI and CI output preserve a routeable source code for 5xx
-	// failures without exposing InternalMessage, Cause, or server-side Details.
+	// failures without exposing InternalDetails, Cause, or server-side Details.
 	SourceCode Code `json:"sourceCode,omitempty"`
 	Status     int  `json:"status,omitempty"`
 }
@@ -762,100 +752,60 @@ func WithCategory(category Category) Option {
 	}
 }
 
-// WithInternal sets diagnostic detail that must never be exposed to clients.
-func WithInternal(message string) Option {
+// WithInternal attaches structured server-only diagnostic key/value pairs.
+// InternalDetails never appear in wire responses (4xx or 5xx); they surface
+// in server-side slog records via the HTTP error-logging middleware and in
+// Error.Error() string formatting. Runtime data (fmt.Sprintf output, IDs,
+// stack summaries) may flow through this channel.
+//
+// Multiple WithInternal calls accumulate; entries append in call order.
+//
+// Example:
+//
+//	errcode.New(KindInternal, ErrInternal, "config load failed",
+//	    errcode.WithInternal(errcode.InternalAttr("path", path)))
+func WithInternal(details ...InternalDetail) Option {
 	return func(e *Error) {
-		e.InternalMessage = message
+		if len(details) == 0 {
+			return
+		}
+		e.InternalDetails = append(e.InternalDetails, details...)
 	}
 }
 
-// WithDetails attaches structured, client-visible details as typed slog.Attr
-// values. The framework's HTTP response writer renders 4xx errors with the
-// attribute list as a JSON array of {"key","value"} objects, and strips the
-// list from 5xx errors so server-side runtime context never leaks to clients.
+// WithDetails attaches structured, client-visible details to the error.
+// The framework's HTTP response writer renders 4xx errors with the detail
+// list as a JSON array of {"key","value"} objects, and strips the list
+// from 5xx errors so server-side runtime context never leaks to clients.
 //
-// Allowed kinds (JSON-safe scalar): KindString, KindInt64, KindUint64,
-// KindFloat64 with finite values only, KindBool, KindDuration, KindTime. Any
-// other kind — KindAny, KindGroup, KindLogValuer — panics via
-// MustValidateDetailsKinds: those carry arbitrary Go values or nested
-// structures whose Value.Any() output is handler-dependent (per stdlib
-// log/slog docs, slog.Attr is a logging carrier, not a wire DTO). go-kratos
-// errors.Metadata uses map<string,string> for the same reason; this is the
-// static-by-construction analog.
+// Construction goes exclusively through errcode.PublicAttr. The sealed
+// PublicDetail newtype (see details.go) makes the prior DETAILS-SLOG-ATTR-01
+// archtest unnecessary: map literals and slog.Any/slog.Group constructors
+// no longer compile through this signature.
 //
-// Multiple WithDetails calls accumulate; attributes are appended in call order.
+// Multiple WithDetails calls accumulate; entries append in call order.
 //
 // Example:
 //
 //	errcode.New(KindNotFound, ErrCellNotFound, "cell not found",
-//	    errcode.WithDetails(slog.String("cellId", id)))
-func WithDetails(attrs ...slog.Attr) Option {
-	MustValidateDetailsKinds(attrs)
+//	    errcode.WithDetails(errcode.PublicAttr("cellId", id)))
+func WithDetails(details ...PublicDetail) Option {
 	return func(e *Error) {
-		if len(attrs) == 0 {
+		if len(details) == 0 {
 			return
 		}
-		e.Details = append(e.Details, attrs...)
+		e.Details = append(e.Details, details...)
 	}
-}
-
-// MustValidateDetailsKinds panics with errcode.Assertion when any attr in
-// attrs has a wire-unsafe kind. This is a programmer-error fail-fast site
-// (panic wrapped with panicregister.Approved per PANIC-REGISTERED-01).
-//
-// Exposed so callers that build *Error values directly (test fixtures,
-// future builders) can validate at construction time the same way
-// WithDetails does.
-func MustValidateDetailsKinds(attrs []slog.Attr) {
-	for _, attr := range attrs {
-		if !isWireSafeAttrKind(attr.Value.Kind()) {
-			panic(panicregister.Approved("errcode-redact-attr-self", Assertion(
-				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
-					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
-				attr.Key, attr.Value.Kind(),
-			)))
-		}
-		if !isWireSafeAttrValue(attr) {
-			panic(panicregister.Approved("errcode-redact-message-self", Assertion(
-				"errcode.WithDetails: attr %q has non-finite float64 value; "+
-					"use a finite number or string sentinel",
-				attr.Key,
-			)))
-		}
-	}
-}
-
-// isWireSafeAttrKind reports whether kind is a JSON-safe scalar that can
-// appear in a public Details wire payload. Scalar kinds round-trip through
-// encoding/json without invoking handler-specific behavior; composite kinds
-// (Any, Group, LogValuer) carry arbitrary or handler-dependent payloads and
-// are rejected at construction time.
-func isWireSafeAttrKind(k slog.Kind) bool {
-	switch k {
-	case slog.KindString, slog.KindInt64, slog.KindUint64,
-		slog.KindFloat64, slog.KindBool,
-		slog.KindDuration, slog.KindTime:
-		return true
-	default:
-		return false
-	}
-}
-
-func isWireSafeAttrValue(attr slog.Attr) bool {
-	if attr.Value.Kind() != slog.KindFloat64 {
-		return true
-	}
-	f := attr.Value.Float64()
-	return !math.IsNaN(f) && !math.IsInf(f, 0)
 }
 
 // Error is a structured error that carries a machine-readable Code, a
 // Kind-derived HTTP status, a human-readable Message, optional Details, and an
 // optional wrapped Cause.
 //
-// InternalMessage holds diagnostic detail that must never be exposed to
-// API consumers. When present, Error() uses it (for logs/traces); HTTP
-// response writers use Message (safe for clients).
+// InternalDetails holds diagnostic key/value attributes that must never be
+// exposed to API consumers. When non-empty, Error() formats them inline (for
+// logs/traces); HTTP response writers use Message (safe for clients) and never
+// serialize InternalDetails.
 //
 // Category classifies the error origin for infra/domain triage. The zero value
 // CategoryUnspecified is treated as infra (fail-closed).
@@ -863,8 +813,8 @@ type Error struct {
 	Kind            Kind
 	Code            Code
 	Message         string
-	InternalMessage string
-	Details         []slog.Attr
+	InternalDetails []InternalDetail
+	Details         []PublicDetail
 	Cause           error
 	Category        Category
 
@@ -877,21 +827,23 @@ type Error struct {
 	transient bool
 }
 
-// FindAttr returns the first detail attribute whose Key matches key, or the
-// zero slog.Attr and false when no such attribute exists. It is intended for
-// callers that need to read back a single typed detail (for example,
-// ctxcancel.ReasonFromDetails) without exposing the raw attr slice across
-// package boundaries.
-func (e *Error) FindAttr(key string) (slog.Attr, bool) {
+// FindAttr returns the first detail entry whose key matches the given key,
+// or the zero PublicDetail and false when no such entry exists. Callers
+// access the value via PublicDetail.Value(), which is typed any.
+//
+// Used by ctxcancel.ReasonFromDetails and similar helpers that need to read
+// back a single typed detail without exposing the raw slice across package
+// boundaries.
+func (e *Error) FindAttr(key string) (PublicDetail, bool) {
 	if e == nil {
-		return slog.Attr{}, false
+		return PublicDetail{}, false
 	}
-	for _, attr := range e.Details {
-		if attr.Key == key {
-			return attr, true
+	for _, d := range e.Details {
+		if d.key == key {
+			return d, true
 		}
 	}
-	return slog.Attr{}, false
+	return PublicDetail{}, false
 }
 
 // MarshalJSON renders e in the wire form expected by
@@ -900,53 +852,53 @@ func (e *Error) FindAttr(key string) (slog.Attr, bool) {
 //	{"code":"ERR_X","message":"...","details":[{"key":"k","value":v}, ...]}
 //
 // Server-side errors (Kind.IsClient() == false, i.e. HTTP 5xx) emit an empty
-// details array regardless of attached attributes — this is the single
+// details array regardless of attached entries — this is the single
 // source-of-truth strip rule for runtime context that must never reach a
-// client. InternalMessage and Cause are never marshaled because they may
+// client. InternalDetails and Cause are never marshaled because they may
 // contain sensitive runtime data.
 //
-// Defense-in-depth: WithDetails already rejects wire-unsafe kinds at
-// construction time, but a hand-built *Error (e.g. test fixture, future
-// code path that bypasses the option) might still attach KindAny / Group /
-// LogValuer. A direct KindFloat64 with NaN/Inf is also JSON-unsafe because
-// encoding/json rejects non-finite floats. In those cases we substitute the
-// value with a stable sentinel so the wire payload stays JSON-safe and
-// operators see the substitution in their logs.
+// Wire safety is enforced upstream by the sealed PublicDetail newtype:
+// callers can only construct PublicDetail via PublicAttr (see details.go),
+// so the wire-unsafe slog.Attr kinds the prior MustValidateDetailsKinds
+// validator rejected are no longer expressible through this entry point.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.PublicProjection())
 }
 
-func publicDetailWireValue(attr slog.Attr) (any, string) {
-	if !isWireSafeAttrKind(attr.Value.Kind()) {
-		return unsafeKindMarker, unsafeKindMarker
-	}
-	if !isWireSafeAttrValue(attr) {
-		return unsafeValueMarker, unsafeValueMarker
-	}
-	return attr.Value.Any(), ""
-}
-
-// unsafeKindMarker is the sentinel value substituted in MarshalJSON when a
-// Details attribute escapes the WithDetails kind whitelist. The marker is
-// fixed (not formatted with the actual kind) so that wire payloads remain
-// stable and tests can assert on it.
-const unsafeKindMarker = "<UNSUPPORTED_KIND>"
-
-const unsafeValueMarker = "<UNSUPPORTED_VALUE>"
-
 // Error returns a formatted string representation for logging/diagnostics.
-// When InternalMessage is set it is preferred over Message, because Error()
-// is consumed by logs and traces — not by API clients.
+// When InternalDetails is non-empty its key=value pairs are appended, because
+// Error() is consumed by logs and traces — not by API clients.
 // Format: "[CODE] msg" or "[CODE] msg: cause" when a Cause is present.
 func (e *Error) Error() string {
 	msg := e.Message
-	if e.InternalMessage != "" {
-		msg = e.InternalMessage
+	if internal := e.internalString(); internal != "" {
+		msg = internal
 	}
 	if e.Cause != nil {
 		return fmt.Sprintf("[%s] %s: %s", e.Code, msg, e.Cause.Error())
 	}
 	return fmt.Sprintf("[%s] %s", e.Code, msg)
+}
+
+// internalString formats the InternalDetails slice as "k1=v1, k2=v2" for
+// inclusion in Error() / slog server-side records. Returns "" when no
+// internal details are attached so Error() falls back to Message.
+//
+// Single-entry detail with key "_" is rendered as the bare value (no key=
+// prefix) — convenience for the most common case of a free-form diagnostic
+// string carried through InternalAttr("_", fmt.Sprintf(...)).
+func (e *Error) internalString() string {
+	if len(e.InternalDetails) == 0 {
+		return ""
+	}
+	if len(e.InternalDetails) == 1 && e.InternalDetails[0].key == "_" {
+		return fmt.Sprint(e.InternalDetails[0].value)
+	}
+	parts := make([]string, 0, len(e.InternalDetails))
+	for _, d := range e.InternalDetails {
+		parts = append(parts, fmt.Sprintf("%s=%v", d.key, d.value))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // PublicProjection returns the HTTP/public structured projection for e.
@@ -976,7 +928,7 @@ func (e *Error) project(surface projectionSurface) PublicError {
 	out := PublicError{
 		Code:    e.Code,
 		Message: e.Message,
-		Details: publicDetails(e.Details),
+		Details: copyDetails(e.Details),
 	}
 	if !e.Kind.IsClient() {
 		out.Code = e.PublicCode()
@@ -990,30 +942,18 @@ func (e *Error) project(surface projectionSurface) PublicError {
 	return out
 }
 
-func publicDetails(attrs []slog.Attr) []PublicDetail {
-	if len(attrs) == 0 {
+// copyDetails returns a defensive copy of the Details slice. Used by the
+// projection helpers so callers (operator surface, public surface) cannot
+// mutate the original Error.Details through the returned PublicError.
+// Always returns a non-nil slice (possibly length 0) so the wire shape
+// stays stable.
+func copyDetails(details []PublicDetail) []PublicDetail {
+	if len(details) == 0 {
 		return []PublicDetail{}
 	}
-	details := make([]PublicDetail, 0, len(attrs))
-	for _, attr := range attrs {
-		value, substitute := publicDetailWireValue(attr)
-		switch substitute {
-		case unsafeKindMarker:
-			slog.Error(
-				"errcode: details attr bypassed WithDetails kind whitelist; substituting wire value",
-				slog.String("key", attr.Key),
-				slog.String("kind", attr.Value.Kind().String()),
-			)
-		case unsafeValueMarker:
-			slog.Error(
-				"errcode: details attr bypassed WithDetails value whitelist; substituting wire value",
-				slog.String("key", attr.Key),
-				slog.String("kind", attr.Value.Kind().String()),
-			)
-		}
-		details = append(details, PublicDetail{Key: attr.Key, Value: value})
-	}
-	return details
+	out := make([]PublicDetail, len(details))
+	copy(out, details)
+	return out
 }
 
 // PublicProjection returns the public structured projections for err. Joined
@@ -1208,10 +1148,10 @@ func formatPublicDetails(details []PublicDetail) string {
 	}
 	parts := make([]string, 0, len(details))
 	for _, detail := range details {
-		if detail.Key == "" {
+		if detail.key == "" {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s=%s", detail.Key, formatPublicDetailValue(detail.Value)))
+		parts = append(parts, fmt.Sprintf("%s=%s", detail.key, formatPublicDetailValue(detail.value)))
 	}
 	return strings.Join(parts, ", ")
 }

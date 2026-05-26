@@ -6,8 +6,11 @@ package archtest
 //   - INVARIANT: MESSAGE-CONST-LITERAL-01
 //   - INVARIANT: ERROR-FIRST-API-01
 //   - INVARIANT: ERROR-FIRST-TYPED-NIL-01
-//   - INVARIANT: DETAILS-SLOG-ATTR-01
 //   - INVARIANT: EXPORTED-ERROR-NEW-01
+//
+// DETAILS-SLOG-ATTR-01 retired by PR #1035: sealed PublicDetail newtype
+// (pkg/errcode/details.go) makes wire-unsafe construction inexpressible
+// in Go's type system. See ADR docs/architecture/202605051730-adr-errcode-message-pii-safety.md.
 
 import (
 	"bufio"
@@ -172,37 +175,6 @@ type carveOut struct{ rel, fn string }
 var errcodeKindLiteralCarveOuts = map[carveOut]struct{}{
 	{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {},
 	{rel: "pkg/httputil/response.go", fn: "WritePublic"}:   {},
-}
-
-// ─── details_slog_attr constants ─────────────────────────────────────────────
-
-const ruleDetailsSlogAttr01 = "DETAILS-SLOG-ATTR-01"
-
-// errcodeImportPathLit is the quoted import path emitted by the parser in
-// ast.ImportSpec.Path.Value (literal form, including the surrounding
-// double quotes). Distinct from errcodeImportPath above which stores the
-// unquoted form for strconv.Unquote-based comparison.
-const errcodeImportPathLit = `"github.com/ghbvf/gocell/pkg/errcode"`
-
-// detailsSlogAttrScanRoots are the top-level directories whose non-test .go
-// files are scanned. Adding a new top-level directory under module root
-// requires explicit registration here.
-var detailsSlogAttrScanRoots = []string{
-	"adapters",
-	"cells",
-	"cmd",
-	"examples",
-	"kernel",
-	"pkg",
-	"runtime",
-	"tools",
-}
-
-// detailsSlogAttrAllowlist lists path prefixes that are exempt from the
-// gate. Entries are matched against the module-relative path.
-var detailsSlogAttrAllowlist = []string{
-	"pkg/errcode/",
-	"tools/archtest/testdata/",
 }
 
 // ─── exported_error_new constants ────────────────────────────────────────────
@@ -1625,204 +1597,6 @@ func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
 			onPanic(call.Pos())
 		}
 	})
-}
-
-// INVARIANT: DETAILS-SLOG-ATTR-01
-//
-// TestDetailsSlogAttr enforces DETAILS-SLOG-ATTR-01 across production code.
-//
-// DETAILS-SLOG-ATTR-01 — every call to `errcode.WithDetails(...)` in
-// production code must pass typed slog.Attr arguments, not the legacy
-// `map[string]any{...}` literal form. The signature change is a hard cutover
-// (see ADR docs/architecture/202605051730-adr-errcode-message-pii-safety.md);
-// this archtest prevents regression by flagging map-literal arguments at
-// build time.
-//
-// ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
-func TestDetailsSlogAttr(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-
-	var allDiags []Diagnostic
-	for _, dir := range detailsSlogAttrScanRoots {
-		diags := Run(t, DirsScope(root, []string{dir}), func(p *Pass) []Diagnostic {
-			var out []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if isInDetailsSlogAttrAllowlist(rel) {
-					continue
-				}
-				out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
-			}
-			return out
-		})
-		allDiags = append(allDiags, diags...)
-	}
-
-	// Re-sort across all dirs since each Run returns its own diagnostic slice.
-	sort.Slice(allDiags, func(i, j int) bool {
-		if allDiags[i].Rel != allDiags[j].Rel {
-			return allDiags[i].Rel < allDiags[j].Rel
-		}
-		return allDiags[i].Line < allDiags[j].Line
-	})
-
-	Report(t, ruleDetailsSlogAttr01, allDiags)
-}
-
-// isInDetailsSlogAttrAllowlist reports whether rel matches any allowlist prefix.
-func isInDetailsSlogAttrAllowlist(rel string) bool {
-	for _, prefix := range detailsSlogAttrAllowlist {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// TestDetailsSlogAttrFixtures verifies the AST scanner via static
-// regression cases.
-//
-// Each fixture dir owns a diag.golden capturing the rule's real output
-// (Rel:Line: Message). GREEN fixtures have an empty golden. Line numbers
-// live in the regenerated golden, never in this table — adding an import
-// to a fixture and re-running with -update produces a clean positional
-// delta. See ADR
-// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
-func TestDetailsSlogAttrFixtures(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	base := filepath.Join(root, "tools", "archtest", "testdata", "details_slog_attr")
-
-	// RED cases expect violations; GREEN cases expect empty golden.
-	dirs := []string{
-		"compliant", // GREEN
-		"violates",  // RED: map literal + slog.Any + slog.Group
-	}
-
-	for _, dir := range dirs {
-		dir := dir
-		t.Run(dir, func(t *testing.T) {
-			t.Parallel()
-			fixtureDir := filepath.Join(base, dir)
-			diags := Run(t, DirsScope(fixtureDir, []string{"."}), func(p *Pass) []Diagnostic {
-				var out []Diagnostic
-				for _, file := range p.Files {
-					rel := p.Rel(file)
-					out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
-				}
-				return out
-			})
-			goldenPath := filepath.Join(base, dir, "diag.golden")
-			AssertGolden(t, goldenPath, diags)
-		})
-	}
-}
-
-// errcodeLocalName returns the local identifier used in file to refer to
-// pkg/errcode (default "errcode" for an unnamed import; alias otherwise).
-// Returns "" when the file does not import errcode at all — in that case
-// any "WithDetails" selector cannot resolve to errcode.WithDetails.
-func errcodeLocalName(file *ast.File) string {
-	for _, imp := range file.Imports {
-		if imp.Path == nil || imp.Path.Value != errcodeImportPathLit {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		return "errcode"
-	}
-	return ""
-}
-
-// argHasMapLiteral reports whether expr is or contains a *ast.CompositeLit
-// whose Type is a *ast.MapType (excluding struct/slice composite literals).
-// We only flag the outermost arg shape; nested map literals inside a typed
-// slog.Group / slog.Any are caller-controlled and out of scope.
-func argHasMapLiteral(expr ast.Expr) bool {
-	cl, ok := expr.(*ast.CompositeLit)
-	if !ok {
-		return false
-	}
-	_, isMap := cl.Type.(*ast.MapType)
-	return isMap
-}
-
-// scanWithDetailsFile walks file and reports every
-// `<errcodeLocal>.WithDetails(map[...]{...})` call whose argument is a map
-// literal.
-func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
-	local := errcodeLocalName(file)
-	if local == "" {
-		return nil
-	}
-
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "WithDetails" {
-			return
-		}
-		x, ok := sel.X.(*ast.Ident)
-		if !ok || x.Name != local {
-			return
-		}
-		for _, arg := range call.Args {
-			if argHasMapLiteral(arg) {
-				line := fset.Position(call.Pos()).Line
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: line,
-					Message: "errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr " +
-						"values instead. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-				})
-				continue
-			}
-			if name, ok := unsafeSlogAttrConstructor(arg); ok {
-				line := fset.Position(call.Pos()).Line
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: line,
-					Message: fmt.Sprintf(
-						"errcode.WithDetails(slog.%s(...)) — wire-unsafe kind; "+
-							"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. "+
-							"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-						name),
-				})
-			}
-		}
-	})
-	return out
-}
-
-// unsafeSlogAttrConstructor reports whether expr is a slog constructor whose
-// resulting Attr.Value carries a wire-unsafe kind (KindAny / KindGroup).
-// Detection is purely syntactic — selector match on "slog.Any" / "slog.Group"
-// — to keep this archtest free of go/types loads.
-//
-// Note: KindLogValuer Attrs are constructed via slog.Any(key, logValuerImpl),
-// not via a top-level slog.LogValue function (the stdlib has no such symbol;
-// LogValue is a method on slog.Value, not a constructor). The "Any" branch
-// already covers that path.
-func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
-	call, ok := expr.(*ast.CallExpr)
-	if !ok {
-		return "", false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.X == nil || sel.Sel == nil {
-		return "", false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != "slog" {
-		return "", false
-	}
-	switch sel.Sel.Name {
-	case "Any", "Group":
-		return sel.Sel.Name, true
-	}
-	return "", false
 }
 
 // INVARIANT: EXPORTED-ERROR-NEW-01
