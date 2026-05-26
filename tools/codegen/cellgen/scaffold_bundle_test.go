@@ -534,12 +534,13 @@ func TestPlanBundleFiles_ErrorCarriesKindLabelInDetails(t *testing.T) {
 			if !errors.As(err, &ec) {
 				t.Fatalf("err is not *errcode.Error: %T (%v)", err, err)
 			}
-			attr, ok := ec.FindAttr("kind")
+			detail, ok := ec.FindAttr("kind")
 			if !ok {
 				t.Fatalf("planBundleFiles wrap must carry 'kind' detail; got details=%v", ec.Details)
 			}
-			if got := attr.Value.String(); got != tc.kindLabel {
-				t.Errorf("kind detail = %q, want %q", got, tc.kindLabel)
+			got, ok := detail.Value().(string)
+			if !ok || got != tc.kindLabel {
+				t.Errorf("kind detail = %v, want %q", detail.Value(), tc.kindLabel)
 			}
 			// Message must remain neutral (no slice/contract leakage) so that
 			// kind disambiguation lives in structured details only.
