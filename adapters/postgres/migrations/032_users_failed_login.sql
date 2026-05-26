@@ -32,8 +32,6 @@
 -- default). Standard rolling deploy — no traffic drain required.
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 ALTER TABLE users
     ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0
         CONSTRAINT users_failed_login_count_positive CHECK (failed_login_count >= 0),
@@ -57,12 +55,6 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-
--- lock_timeout is set AFTER the GUC gate by design (same convention as
--- migration 028): the fail-closed path (RAISE EXCEPTION above) does not
--- reach any DDL, so a timeout is only needed once we know the rollback is
--- authorized.
-SET LOCAL lock_timeout = '5s';
 
 -- Drop the CHECK constraint explicitly before the columns. PG would
 -- cascade-drop it with the column, but writing it out keeps the Down path

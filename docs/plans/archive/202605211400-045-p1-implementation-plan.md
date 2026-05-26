@@ -1,3 +1,24 @@
+# [SUPERSEDED] 045 — P1 任务实施计划（2026-05-21）
+
+> **2026-05-25 归档**：本 plan 是 point-in-time 执行视图（§8 已声明不滚动同步，真值走 Project v2 / GitHub Issues）。主线 21 项中 **15 已 close**，剩 6 项继续在 GitHub Issues 跟踪，归档不丢失。
+>
+> **Wave 完成度**：W1 6/6 ✅ / W2 5/5 ✅ / W3 3/4（#613 open）/ W4 部分（#823 ✅、#618-CELLEMITTER 随 commit `6f3834ece` ship、#699/#836 open）/ W5（#676 已关，见下）。
+>
+> **⚠️ 仍在飞的 6 项 P1 主线（归档后走 GitHub Issues,勿丢）**：
+>
+> | Issue | 标题 | Wave |
+> |---|---|---|
+> | #613 | C-04 CELLS-INIT-TEMPLATE-CONVERGE | W3 |
+> | #699 | RepoReadyz upstream Hard | W4 |
+> | #836 | Interface 出口表面闭环 bundle | W4 |
+> | #687 | M3 Governance Rule Engine 数据化（Cx4） | W5 |
+> | #686 | M2 Cell/Slice lifecycle state machine（Cx4） | W5 |
+> | #782 | M4 反向 coverage archtest | W5 |
+>
+> **#676（W5 ContractSpec/ContractMeta 合一）已于 2026-05-25 关闭**（completed）：dual-**source** 早经 codegen + 包拆分闭环，issue body 引用的 `wrapper.ContractSpec` 已搬到 `kernel/contractspec`，前提失效。W5 该行作废。
+>
+> §6 Hold（条件触发）项均为 flag-cond/triggered backlog issue，与本 plan 归档无关，各自独立等触发。以下为归档前原文。
+
 # 045 — P1 任务实施计划（2026-05-21）
 
 > 源：GitHub Project v2 #3 `priority=P1 status!=Done` 共 35 条（2026-05-21 快照）。

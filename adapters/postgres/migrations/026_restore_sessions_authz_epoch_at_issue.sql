@@ -30,7 +30,6 @@
 -- predates 026 would fail-fast on startup if 026's Down runs.
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE sessions ADD COLUMN authz_epoch_at_issue BIGINT NOT NULL DEFAULT 0;
 
 -- +goose Down
@@ -43,5 +42,4 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE sessions DROP COLUMN authz_epoch_at_issue;

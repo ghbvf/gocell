@@ -50,8 +50,6 @@
 -- ref: ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A8
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 -- users.authz_epoch
 ALTER TABLE users ALTER COLUMN authz_epoch DROP DEFAULT;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
@@ -77,10 +75,6 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
--- lock_timeout is set AFTER the GUC gate by design: the fail-closed path
--- (RAISE EXCEPTION above) does not reach any DDL, so a timeout is only
--- needed once we know the rollback is authorized.
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
 ALTER TABLE users ALTER COLUMN authz_epoch SET DEFAULT 0;
 ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_authz_epoch_at_issue_positive;

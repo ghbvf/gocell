@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 type staticClock struct {
@@ -71,7 +72,7 @@ func (s *gcStoreSpy) RevokeSessionDetached(context.Context, string) error {
 	return errors.New("not implemented")
 }
 
-func (s *gcStoreSpy) RevokeUser(context.Context, string) error {
+func (s *gcStoreSpy) RevokeUser(context.Context, string, credentialfence.FenceToken) error {
 	return errors.New("not implemented")
 }
 

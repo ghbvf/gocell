@@ -240,7 +240,7 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 	RunTyped(t, TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/...", "./cmd/..."},
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Fset == nil {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Fset == nil {
 				return nil
 			}
 			var diags []Diagnostic
@@ -253,7 +253,8 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 				// Blind spot 1: SelectorExpr with Sel.Name == "ReconstituteUser" that is
 				// NOT in a CallExpr.Fun position. We collect all CallExpr.Fun selectors
 				// first, then flag any SelectorExpr with the target name that is absent
-				// from that set.
+				// from that set. Soft (name-only, not typed); typed-resolver upgrade
+				// tracked in #1118 (method-value name-only detection across sites).
 				callFunPositions := map[ast.Node]bool{}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
@@ -278,33 +279,19 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 					})
 				})
 
-				// Blind spot 2: MethodByName("ReconstituteUser")
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-						return
-					}
-					if len(call.Args) != 1 {
-						return
-					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
-					if !ok {
-						return
-					}
-					name := strings.Trim(lit.Value, `"`)
-					if name == reconstituteUserName {
-						line := p.Fset.Position(call.Pos()).Line
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: line,
-							Message: fmt.Sprintf(
-								"reflect.MethodByName(%q) detected — "+
-									"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
-								name,
-							),
-						})
-					}
-				})
+				// Blind spot 2: reflect.MethodByName("ReconstituteUser")
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return n == reconstituteUserName }) {
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: hit.Line,
+						Message: fmt.Sprintf(
+							"reflect.MethodByName(%q) detected — "+
+								"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
+							hit.Name,
+						),
+					})
+				}
 			}
 			allDiags = append(allDiags, diags...)
 			return nil

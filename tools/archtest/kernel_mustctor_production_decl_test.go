@@ -107,6 +107,16 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	"kernel/outbox": {
 		"MustNewEntryID": {},
 	},
+	// (a) assertion guard — credential-invalidate FenceToken nil-token check,
+	// surfaces the programmer error as a 500 via panicregister.Approved +
+	// errcode.Assertion (B-class). Called from the three mutation impls
+	// (session.Store / refresh.Store / ports.UserRepository) to defend against
+	// archtest blindspots (function-value capture, reflect.MethodByName).
+	// See FENCE-TOKEN-MINT-FUNNEL-01 godoc + ADR
+	// docs/architecture/202605101400-adr-credential-session-protocol.md §A16.
+	"runtime/auth/credentialfence": {
+		"MustHave": {},
+	},
 	"pkg/errcode": {
 		"MustValidateDetailsKinds": {},
 	},

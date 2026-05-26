@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -423,10 +423,10 @@ func readModulePath(root string) (string, error) {
 // "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
 // "http.internal.foo.v1" → "<module>/generated/contracts/http/internalapi/foo/v1"
 //
-// Delegates internal→internalapi rewriting to pathx.ContractIDToPackagePath —
-// single source of truth shared with contractgen and archtest.
+// Delegates internal→internalapi rewriting to pkg/contractpath —
+// single source of truth shared with contractgen, kernel/governance, and archtest.
 func contractIDToImportPath(modulePath, contractID string) string {
-	return modulePath + "/" + pathx.ContractIDToPackagePath(contractID)
+	return modulePath + "/" + contractpath.ContractIDToPackagePath(contractID)
 }
 
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and

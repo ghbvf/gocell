@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // errStubUnused surfaces accidental calls to fake-repo stub methods that the
@@ -410,7 +411,7 @@ func (r *duplicateUserRepo) UpdatePassword(_ context.Context, _ string, _ string
 	return 0, nil
 }
 
-func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 
@@ -600,7 +601,7 @@ func (r *errUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ bo
 	return 0, nil
 }
 
-func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 

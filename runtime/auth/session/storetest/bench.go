@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -79,7 +80,7 @@ func benchRevokeForSubject(b *testing.B, factory BenchFactory, perRun int) {
 
 		b.ReportAllocs()
 		b.StartTimer()
-		err := store.RevokeForSubject(context.Background(), benchSubject, session.CredentialEventPasswordReset)
+		err := store.RevokeForSubject(context.Background(), benchSubject, session.CredentialEventPasswordReset, credentialfence.Mint())
 		b.StopTimer()
 		cleanup()
 

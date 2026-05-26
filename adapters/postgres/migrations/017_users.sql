@@ -18,8 +18,6 @@
 -- ref: ory/kratos persistence/sql/migrations user identity layout
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS users (
     id                       UUID        PRIMARY KEY,
     username                 TEXT        NOT NULL,

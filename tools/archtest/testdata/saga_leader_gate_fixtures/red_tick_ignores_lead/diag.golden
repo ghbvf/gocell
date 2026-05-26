@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_leader_gate_fixtures/red_tick_ignores_lead/violator.go:17: SAGA-DRIVE-BEHIND-LEADER-GATE-01-A3: tickOnce calls acquireLead but its lead result does not gate driveOne — the gate verdict must guard the drive (e.g. `if !lead { continue }`)

@@ -782,7 +782,7 @@ func startCoordinatorForResume(
 		cancel()
 		t.Fatalf("%s not ready", name)
 	}
-	testwait.External(t, name+"-tickers-registered",
+	testwait.External(t, "coordinator-tickers-registered",
 		func() bool { return clk.PendingTickers() >= 2 },
 		testtime.D2s, testtime.D1ms)
 	return c, resumeCoordinatorHandles{cancel: cancel, done: done}

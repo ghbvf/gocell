@@ -8,6 +8,7 @@ package f7_cache_in_arg_red
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -32,6 +33,6 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 }
 
 // RevokeForSubject is conformant (single return delegate).
-func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
-	return s.inner.RevokeForSubject(ctx, subjectID, event)
+func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken) error {
+	return s.inner.RevokeForSubject(ctx, subjectID, event, tok)
 }

@@ -13,8 +13,6 @@
 -- ref: dexidp/dex storage/sql credential state column pattern
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 ALTER TABLE users
     ADD COLUMN password_version BIGINT NOT NULL DEFAULT 0;
 

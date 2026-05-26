@@ -3,14 +3,10 @@ package main
 import (
 	"io"
 	"log/slog"
-	"net"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 func TestNewSSOBFFAppFailsFastWithoutServiceSecret(t *testing.T) {
@@ -34,36 +30,10 @@ func TestNewSSOBFFAppFailsFastWithoutDatabaseURL(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), ssobffDatabaseURLEnv), "error must name missing env var: %v", err)
 }
 
-func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {
-	if os.Getenv(ssobffDatabaseURLEnv) == "" {
-		const skipMsg = "walkthrough test requires %s (PG DSN). " +
-			"Start PG via `docker compose -f examples/ssobff/docker-compose.yml up -d` " +
-			"and export %s=postgres://gocell:$GOCELL_EXAMPLE_POSTGRES_PASSWORD" +
-			"@localhost:5432/sso_bff?sslmode=disable."
-		t.Skipf(skipMsg, ssobffDatabaseURLEnv, ssobffDatabaseURLEnv)
-	}
-	primary := newTestListener(t)
-	internal := newTestListener(t)
-	health := newTestListener(t)
-
-	app, err := NewSSOBFFApp(
-		WithSSOBFFLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
-		WithSSOBFFInternalServiceSecret("ssobff-test-service-secret-32b!!!"),
-		WithSSOBFFListener(cell.PrimaryListener, primary),
-		WithSSOBFFListener(cell.InternalListener, internal),
-		WithSSOBFFListener(cell.HealthListener, health),
-	)
-	require.NoError(t, err)
-	require.NotNil(t, app)
-	require.Equal(t, primary.Addr().String(), app.PrimaryListenAddr())
-	require.Equal(t, internal.Addr().String(), app.InternalListenAddr())
-	require.Equal(t, health.Addr().String(), app.HealthListenAddr())
-}
-
-func newTestListener(t *testing.T) net.Listener {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
-	return ln
-}
+// NOTE: TestNewSSOBFFApp_AcceptsInjectedListeners was removed in the #941
+// un-skip PR. It silently skipped without DATABASE_URL (the same anti-pattern
+// this PR eliminates for smoke/walkthrough) and only asserted the three
+// listen-addr getters echo the injected listeners — a path TestWalkthrough
+// already covers strictly (it injects all three listeners via WithSSOBFFListener
+// and boots+serves on them, dialing via the same getters). Re-adding a
+// container-spinning getter test would be redundant.

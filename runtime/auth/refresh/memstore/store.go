@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -299,7 +300,8 @@ func (s *store) RevokeSessionDetached(ctx context.Context, sessionID string) err
 }
 
 // RevokeUser marks every row owned by subjectID as revoked.
-func (s *store) RevokeUser(_ context.Context, subjectID string) error {
+func (s *store) RevokeUser(_ context.Context, subjectID string, tok credentialfence.FenceToken) error {
+	credentialfence.MustHave(tok, "refresh.Store.RevokeUser")
 	now := s.clock.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()

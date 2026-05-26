@@ -29,8 +29,6 @@
 -- ref: docs/plans/202605082145-034-pg-corecell-b-route-plan.md §B2.B
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_idempotency_key
     ON commands ((metadata->>'_idempotency_key'))
     WHERE metadata->>'_idempotency_key' IS NOT NULL;
@@ -45,5 +43,4 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-SET LOCAL lock_timeout = '5s';
 DROP INDEX IF EXISTS idx_commands_idempotency_key;

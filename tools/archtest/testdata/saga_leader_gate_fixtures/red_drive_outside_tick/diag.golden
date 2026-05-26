@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_leader_gate_fixtures/red_drive_outside_tick/violator.go:22: SAGA-DRIVE-BEHIND-LEADER-GATE-01-A1: driveOne CallExpr outside tickOnce body — driveOne must only be called from tickOnce so the leader-elect gate guards every drive

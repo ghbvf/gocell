@@ -8,18 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestPGRoleRepo_Constructor_FailFast verifies that NewPGRoleRepo rejects nil
 // dependencies at construction time, without requiring a real PG connection.
-// Uses new(pgxpool.Pool) / new(adapterpg.TxManager) (non-nil zero values) to
-// reach the later guards — mirroring the session_store_uuid_test.go pattern.
+// Uses new(pgxpool.Pool) / outbox.DemoTxRunner{} (non-nil values) to reach the
+// later guards — outbox.DemoTxRunner is the canonical in-mem persistence.TxRunner
+// (no need to import the real adapters/postgres; CELL-TEST-NO-ADAPTER-IMPORT-01).
 func TestPGRoleRepo_Constructor_FailFast(t *testing.T) {
-	fakePool := new(pgxpool.Pool)       // non-nil zero value, no real PG needed
-	fakeTxm := new(adapterpg.TxManager) // non-nil zero value, reaches clock guard
+	fakePool := new(pgxpool.Pool)    // non-nil zero value, no real PG needed
+	fakeTxm := outbox.DemoTxRunner{} // non-nil TxRunner, reaches clock guard
 
 	assertValidationFailed := func(t *testing.T, err error) {
 		t.Helper()
@@ -35,7 +36,7 @@ func TestPGRoleRepo_Constructor_FailFast(t *testing.T) {
 	})
 
 	t.Run("nil_txRunner_typed_nil", func(t *testing.T) {
-		var nilTxm *adapterpg.TxManager // typed-nil caught by validation.IsNilInterface
+		var nilTxm *outbox.DemoTxRunner // typed-nil caught by validation.IsNilInterface
 		_, err := NewPGRoleRepo(fakePool, nilTxm, clock.Real())
 		assertValidationFailed(t, err)
 	})

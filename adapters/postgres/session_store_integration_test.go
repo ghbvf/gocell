@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
@@ -102,13 +103,13 @@ func (w *pgSessionStoreWrapper) Revoke(ctx context.Context, id string) error {
 	return w.inner.Revoke(ctx, id)
 }
 
-func (w *pgSessionStoreWrapper) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
+func (w *pgSessionStoreWrapper) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken) error {
 	if subjectID == "" {
 		// Let the inner store return ErrValidationFailed.
-		return w.inner.RevokeForSubject(ctx, subjectID, event)
+		return w.inner.RevokeForSubject(ctx, subjectID, event, tok)
 	}
 	uid := subjectUUID(subjectID)
-	return w.inner.RevokeForSubject(ctx, uid.String(), event)
+	return w.inner.RevokeForSubject(ctx, uid.String(), event, tok)
 }
 
 // RepoReady delegates to the inner PGSessionStore. The wrapper does not add

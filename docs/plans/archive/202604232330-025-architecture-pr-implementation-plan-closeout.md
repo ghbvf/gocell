@@ -1,3 +1,20 @@
+# [SUPERSEDED] 架构项 PR 实施计划（剩余开放项）
+
+> **2026-05-25 归档**：本 plan 的全部剩余 OPEN 项已 ship 或迁入 GitHub Issues，使命结束。完整历史见 `docs/plans/archive/202604232330-025-architecture-pr-implementation-plan.md`；新工作走 GitHub Issues（`docs/backlog.md`）。
+>
+> **5 个 OPEN PR 最终处置**：
+>
+> | PR | 子项 | 终态 |
+> |---|---|---|
+> | A33 | X12 IDLE-EXPIRE / X14 GRACE-COUNTER | ✅ **已 ship**（migration 016 + PR#388） |
+> | A33 | X13 PARTITION | → #642（flag-cond，trigger=生产流量） |
+> | A15 | KERNEL/WEBHOOK / WM-32 mTLS | → #831 / #631 |
+> | A16 | KERNEL/RECONCILE / L3 示例 | → #661（**被 cap-15 saga #969 supersede**）/ #834 |
+> | A17 | RUNTIME/SCHEDULER / WM-18 | → #832 / #662 |
+> | A24 | DURABLE-TYPE / G-6 BOUNDARY / REPLAY / ROLLBACK | → #679 / ✅ **G-6 已 ship**（boundary.yaml codegen + generatedverify gate，机制优于原设想的 governance rule）/ #660 / #833（**被 cap-15 saga supersede**） |
+>
+> 以下为归档前原文。
+
 # 架构项 PR 实施计划（剩余开放项）
 
 > 基线: `develop @ 34499ef5`（2026-04-28）

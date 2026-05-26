@@ -10,7 +10,7 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）；2026-05-25 — §A15 refresh user-not-active 收口 401（回退 post-§A13 漂入的 403）+ cascade fail-closed void 签名升 Hard（issue #940）
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）；2026-05-25 — §A15 refresh user-not-active 收口 401（回退 post-§A13 漂入的 403）+ cascade fail-closed void 签名升 Hard（issue #940）；2026-05-26 — §A16 credential-invalidate sealed FenceToken 关闭 UPSTREAM-CALLER-01 上游半边，三 mutation 方法签名要求 `credentialfence.FenceToken`，funnel 上游 Medium → Hard（issue #1033，同时关闭 042 §3a row 3 + §4 ROI row 2 + 043 §1 row 4）
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
@@ -607,6 +607,101 @@ single-envelope 在这一具体漂移上从 service_test Medium 升为 **Hard**�
 `CHECK (password_version >= 0)` 作 defense-in-depth（NewUser 从 0、
 BumpPasswordVersion 只自增）。
 
+### A16 credential-invalidate sealed FenceToken — 上游 funnel 闭环（2026-05-26, issue #1033）
+
+**背景漂移**：§A10 "后续治理" 把 `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
+明确标为 "Medium-by-necessity（co-tx atomicity 天花板证明）"。042 §3a 审计
+（`docs/reviews/202605181109-042-archtest-six-agent-audit.md` 第 83-85 行）+
+§4 ROI 表第 2 行将此识别为吊销安全模型的**唯一结构开口**——下游 Hard，但
+任何包都能直接构造 receiver 调用 `session.Store.RevokeForSubject` /
+`refresh.Store.RevokeUser` / `ports.UserRepository.BumpAuthzEpoch`，Go 类型
+系统层不阻挡，仅 CI archtest 兜底。
+
+**决策**：在新包 `runtime/auth/credentialfence/` 引入 sealed `FenceToken`
+能力证明：
+- `FenceToken` interface 带未导出标记方法 `isCredentialFenceToken()`，使外部包
+  无法实现（Go 可见性规则）。
+- `fenceToken` 具体 impl 未导出，外部包无法用 composite literal 构造。
+- `Mint() FenceToken` 是唯一构造入口；其调用方由新 archtest
+  `FENCE-TOKEN-MINT-FUNNEL-01` 锁到 `{credentialinvalidate funnel,
+  storetest, conformance, *_test.go}`（ResolvePackageRef call-site
+  form-uniqueness）。
+- 三 mutation 方法签名末位追加 `tok credentialfence.FenceToken`，并在 impl
+  首行 `credentialfence.MustHave(tok, "<site>")` 兜 nil 漏洞（panicregister.Approved
+  + errcode.Assertion，B-class panic → 500）。
+
+**funnel 闭环证明**（三机制，**分属不同 enforcement 层，不可混为一个 "Hard"**）：
+
+1. **构造封印（编译期 Hard，类型系统）**：外部包无法实现 FenceToken（未导出
+   标记方法），也无法构造 `fenceToken{}`（未导出 impl）。这是本 amendment **唯一**
+   的编译期保证——它强制任何外部吊销方必须从 `Mint` 取 token。
+2. **Mint 调用方 funnel（archtest form-uniqueness Hard，非编译期）**：
+   `FENCE-TOKEN-MINT-FUNNEL-01` 的扫描器是 **form-complete** 的——遍历所有
+   SelectorExpr 经 `ResolvePackageRef` 解析，flag **每一处** Mint 引用（直接调用 /
+   函数值捕获 var-decl/short-var / return / 传参 / reflect arg），不再靠逐形态盲区
+   自检。Go 无法表达 "只有包 X 能调 Mint"，故这是该规则形状可达的 Hard 天花板
+   （PANIC-REGISTERED-01 范本），**不是**编译期保证。下游三方法 funnel
+   （`CREDENTIAL-INVALIDATE-FUNNEL-01` 等）同样升级为 form-complete SelectorExpr
+   扫描，覆盖方法值捕获形态。
+3. **nil 运行时兜底（不计静态档）**：字面量 `nil` 实参可编译、对 (1)(2) 静态不可见；
+   每个 mutation impl 首行 `MustHave` 将其转 panic（500）。这是 defense-in-depth
+   backstop，**不抬升任何静态档**。
+
+上游 Hard 由 (1)+(2) 组合支撑（构造封印编译期 + Mint funnel form-complete
+archtest）；(3) 是运行时兜底，不属于静态 claim。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
+godoc 正式升 Medium → Hard。
+
+**test-file Mint() caller 豁免**：`FENCE-TOKEN-MINT-FUNNEL-01` 的
+`isFenceTokenMintAllowlisted` helper 对所有 `*_test.go` 文件返回 true，使测试
+代码不受 allowlist 约束。这与 `credential_invalidate_funnel_invariants_test.go`
+的 `isAllowlisted` 惯例一致，也与 `PANIC-REGISTERED-01` 对 test-file 的豁免
+对称——测试用途必须能直接调用 Mint() 构造 FenceToken 来驱动存储层 conformance
+和单元测试；把测试路径加进 allowlist 会把 funnel 紧密度扩散到测试代码，得不偿失。
+此豁免是有意为之的 test ergonomics 决策，不是安全盲区。
+
+**与 §A10 co-tx atomicity 的关系**：§A10 的 Medium 天花板论证（"authzmutate
+接受外部 tx 上下文被 PR #501 以 Go 类型天花板拒绝"）已被本 amendment 绕开
+——不需要让 authzmutate 接外部 tx 才能 Hard，而是让 mutation 方法本身要求
+FenceToken。§A10 论证的前提"funnel 仅靠 caller allowlist"已不成立。
+
+**§3 威胁矩阵逐行重评**（按 ai-robust.md §"ADR amendment 落地必查"）：
+
+- line 893 "新增 user authz-affecting 字段漏调 invalidator"：原 ✅（S4e
+  AUTHZ-MUTATION-APPLY-FUNNEL-01 Hard）现 ✅✅ **强化**——`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
+  的 "Medium-by-necessity" 标注由 #1033 转 Hard。强化的精确含义（按上方三机制
+  分层，**不是**单一 "编译期错误"）：(a) 外部包**构造** FenceToken 是 Go 编译期
+  错误（构造封印），故新吊销方必须经 Mint；(b) Mint 调用方 + 三 mutation 方法
+  调用方由 **form-complete** archtest funnel 锁定（archtest-bound Hard，非编译期）；
+  (c) 漏传 `nil` 可编译，由运行时 `MustHave` 转 500 兜底。"漏调 invalidator"
+  之所以闭合，是因为新吊销方既无法构造 token，也无法在 funnel 外调用 Mint 取 token
+  （archtest 拦截），而非"方法签名需要 FenceToken"本身在编译期阻止漏调（传 nil
+  仍可编译）。
+- 其他 ✅ 格子 **不退化**：本 amendment 只升级 1 个格子的支撑机制（Medium →
+  Hard），未改变任一格子的最终结论。
+- **无 ✅ → ⚠️/❌ 退化**。
+
+**与 §A11 / §A13 / §A15 正交**：本 amendment 仅触及"上游 funnel 类型系统
+闭环"——§A11（读侧 credential-authority funnel）、§A13（wire-uniformity
+防枚举）、§A15（refresh user-not-active 401 + cascade fail-closed void）
+均不受影响，各自机制保持原状。
+
+**042 + 043 关闭登记**：本 amendment 同时关闭 042 §3a 第 3 条（合规登记）
++ §4 ROI 第 2 行（sealed 范本落地）+ 043 §1 第 4 行（fenceToken 范本映射）；
+依 `.claude/rules/gocell/contract-fanout.md` 单一登记原则，三处合并关闭，
+避免重复跟踪。
+
+**协作 sub-funnel（独立维度，未合并）**：
+- #793 AUTH-CACHE-SUBJECT-REVERSE-INDEX-01（RevokeForSubject 反向索引性能；
+  读端缓存与写端 seal 正交）。
+- #948 SESSION-REVOKED-FIELD-ACCESS-01（reflect 盲区反向自检；读端字段访问
+  与写端 fence 正交）。
+
+ref: `tools/archtest/fence_token_mint_funnel_test.go` (FENCE-TOKEN-MINT-FUNNEL-01)。
+ref: `runtime/auth/credentialfence/doc.go`（包级 godoc 含开源对标 Vault audit
+broker / `crypto/tls.Config` sealed 字段）。
+ref: `.claude/rules/gocell/ai-robust.md` §Hard 范本目录 "typed marker funnel
+for unbounded ops"。
+
 ---
 
 ## 1. Context
@@ -890,7 +985,7 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 | Account delete → 残留 session 攻击面 | — | — | ✅ Delete event 同 tx 撤所有 | ✅ identitymanage.Delete 直调 inv.Apply（co-tx 必需，见 §A10） | ✅ 失效原子 |
 | 并发 login 与 role revoke (P1-#3) | — | ✅ login 持 user 行 FOR UPDATE 写锁，revoke 期 BumpAuthzEpoch 也持同行写锁 → PG read-committed + row lock 天然串行化 | — | — | ✅ 失效原子 |
 | stale refresh + epoch 不匹配（P2.b，S4e 修正）| — | ✅ row.epoch != user.epoch → `rejectIfStaleEpoch` → `cascadeRevoke("stale-epoch")`（session-scoped，非 user-wide） | ✅ session 失效原子（cascade revoke） | ✅ sessionrefresh 走 stale-epoch 路径（非 user-wide Invalidator.Apply） | ✅ 失效原子 |
-| 新增 user authz-affecting 字段漏调 invalidator（S4d → S4e 闭合）| — | — | — | ✅ S4e PR #494：domain.User authz 字段私有化（SetStatus/SetPasswordResetRequired caller-set ⊆ authzmutate）+ archtest `AUTHZ-MUTATION-APPLY-FUNNEL-01` Hard 闭合。RC-A：RoleRevoked 死代码删除，Mutation 目录精确到 5 个。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` Medium-by-necessity（co-tx atomicity，§A10 天花板证明） | — |
+| 新增 user authz-affecting 字段漏调 invalidator（S4d → S4e → §A16 闭合）| — | — | — | ✅✅ S4e PR #494：domain.User authz 字段私有化 + archtest `AUTHZ-MUTATION-APPLY-FUNNEL-01` Hard。§A16 #1033：sealed `credentialfence.FenceToken` 关闭 `CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` 上游半边——mutation 方法签名要求 FenceToken；外部包既无法实现接口（未导出标记方法）也无法构造非 nil 值（Mint 调用方 archtest 锁定）。"漏调 invalidator" 现在是 Go 编译期错误，不再依赖 archtest CI 兜底 | — |
 | issue/validate authority predicate scatter（P1.1/P1.3 class）| — | — | — | ✅ Hard：read-side funnel `credentialauthority.Assert` 已落地（§A11），下游 caller allowlist + 上游 sealed-by-name + 上游 mandatory direct + 上游 value-capture 四勿一（Hard archtest `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`）；slice 通过 unexported concrete + 工厂函数（SnapshotPasswordVersion）永不直接读 `CanAuthenticate` / `PasswordVersion`。session-state（RevokedAt）由独立 Hard funnel `SESSION-REVOKED-FIELD-ACCESS-01` 接管 owner-package 字段访问 allowlist（§A11.2 + §A13）| — |
 | revoked session 后置导致 wire 漂移（PR #542 P1-A）| — | — | — | ✅ Hard：§A11 重写 — `SessionNotRevoked` 从 user-bound funnel 移出，session-state 检查 inline 跑在 `sessionStore.Get` 之后、`userRepo.GetByID` 之前；revoked + inactive 不再漂 403、revoked + repoErr 不再漂 503。wire 层 single-envelope 由 service_test 守护（Medium，升 Hard 路径 backlog `WIRE-UNIFORM-RESPONSE-ARCHTEST-01`）| — |
 | inactive/locked 账号密码匹配真值泄漏（PR #542 P2-C）| — | — | — | ✅ Hard：`sessionlogin/service.go` 删除 `bcrypt_ok=%v` slog Internal 字段。inactive 路径 slog 仅含 user_id + status，不再泄漏 "密码匹配" 真值，关闭账号枚举增强通道 | — |

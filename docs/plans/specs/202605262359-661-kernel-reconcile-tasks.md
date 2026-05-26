@@ -1,0 +1,511 @@
+# Tasks: kernel/reconcile L4 Desired-State 收敛控制环
+
+**Feature ID**: `661-kernel-reconcile`
+**Status**: **PARKED-ON-TRIGGER**（tasks 冻结，等触发后激活）
+**Input**: [spec.md](./202605262359-661-kernel-reconcile-spec.md) + [plan.md](./202605262359-661-kernel-reconcile-plan.md)
+**Issue**: [#661](https://github.com/ghbvf/gocell/issues/661)
+**Prerequisites**: trigger T1/T2/T3 ≥ 2 个生产 cell 落地（详见 spec.md "Trigger Gate" 段）
+
+---
+
+## ⚠️ 激活前必读
+
+本 tasks 列表在 trigger 满足前是 **冻结设计**。任何修改本文件以"start work"的尝试均视为违反 `flag-cond` 约束。激活方式：开新 implementation plan 文档（`docs/plans/<timestamp>-661-kernel-reconcile-active.md`）引用本文件，然后逐 PR 执行。
+
+---
+
+## Format: `[T-IDx] [P?] [PR] Description`
+
+- **[T-IDx]**: Task ID（T01-T70）
+- **[P]**: 可与同批次其他 [P] 标记 task 并行
+- **[PR]**: 归属 PR（A1-A10）
+- 每条 task 含：改动文件 + 验收信号 + 估算 LoC
+
+## Path Conventions
+
+- kernel: `kernel/reconcile/`（新建）+ `kernel/command/`（改）
+- runtime: `runtime/command/`（删 lifecycle.go）
+- adapters: `adapters/{redis,postgres}/reconcile_leader.go`（新增）
+- examples: `examples/iotdevice/cells/devicecell/`（改 wiring）
+- archtest: `tools/archtest/reconcile_*_test.go`（新增）
+- docs: `docs/architecture/` + `.claude/rules/gocell/`
+
+---
+
+## Phase 1: Setup（B1）
+
+### PR-A1 — docs: ADR kernel/reconcile 设计
+
+**Goal**: 落地架构决策文档，固定对标 controller-runtime 快照与 3 件套最小核决策；后续 PR 引用本 ADR。
+
+**Independent Test**: ADR 在 review 后 merge，不阻塞 build/test；规则文件未引用 ADR 不算 ship。
+
+#### Tasks
+
+- [ ] **T01** [PR-A1] 创建 ADR `docs/architecture/<timestamp>-adr-kernel-reconcile-design.md`：
+  - §0 决策摘要（3 件套最小核 + 删除 K8s 抽象清单）
+  - §1 问题陈述（kernel/command Sweeper 域绑定 → 4 个真消费方需要泛化）
+  - §2 对标 controller-runtime（含 5 个 raw.githubusercontent.com URL + 关键代码片段 + GoCell 适配建议）
+  - §3 接口设计（Reconciler / Request / Result / Trigger / LeaderElector / Builder）
+  - §4 leader-elect 设计（Redis SETNX + PG advisory lock 两种 adapter，lease/token 模型）
+  - §5 与 saga (#969) / projection harness (#1079) 边界
+  - §6 trigger 满足条件 + 激活流程
+  - §7 威胁矩阵（接口被错误泛化 / leader 流转失败 / panic 隔离失败 / 多 cell 并发）
+  - §8 不向后兼容声明（SweeperLifecycle / SweepTicker 完全删除）
+  - 估算：600 LoC（markdown）
+
+**Checkpoint A1**: ADR merge，#661 加 ADR 引用链接
+
+---
+
+## Phase 2: Foundational（B2 + B3）
+
+### PR-A2 — feat: Reconciler interface + Request/Result + PermanentError + archtest frozen
+
+**Goal**: 落地 3 件套最小核：Reconciler interface + Request/Result 字段集 + PermanentError marker；同 PR 含 2 条字段 frozen archtest。
+
+**Independent Test**: `var _ kernel/reconcile.Reconciler = (*fakeReconciler)(nil)` 编译通过；`Result.RequeueAfter = 5s` 不报错；archtest `RECONCILE-INTERFACE-FROZEN-01` 与 `RECONCILE-RESULT-FIELDS-FROZEN-01` 在 nightly 跑过。
+
+#### Tests for PR-A2 (TDD 先写)
+
+- [ ] **T02** [P] [PR-A2] `kernel/reconcile/reconciler_test.go`：
+  - `TestReconciler_RequestEntityIDOnly`：构造 `Request{EntityID: "x"}`，验证字段集只有 EntityID
+  - `TestReconciler_ResultRequeueAfterZeroSemantic`：`Result{}` 零值等价 default tick
+  - 期望先 fail：`undefined: reconcile.Reconciler` / `undefined: reconcile.Request`
+  - 估算：150 LoC
+- [ ] **T03** [P] [PR-A2] `kernel/reconcile/result_test.go`：
+  - `TestPermanentError_IsClassifiedNonRetry`：`PermanentError(errors.New("x"))` 经 `IsPermanent` 返回 true
+  - `TestResult_RequeueAfter_PositiveBound`：负值 RequeueAfter 视为 0（无 panic）
+  - 估算：200 LoC
+
+#### Implementation for PR-A2
+
+- [ ] **T04** [PR-A2] `kernel/reconcile/reconciler.go`：
+  - `type Reconciler interface { Reconcile(ctx context.Context, req Request) (Result, error) }`
+  - `type Request struct { EntityID string }`（注释锁字段集 // INVARIANT: RECONCILE-REQUEST-FIELDS-FROZEN-01）
+  - 估算：80 LoC（含包文档 doc.go 部分）
+- [ ] **T05** [PR-A2] `kernel/reconcile/result.go`：
+  - `type Result struct { RequeueAfter time.Duration }`（注释锁字段集 // INVARIANT: RECONCILE-RESULT-FIELDS-FROZEN-01）
+  - `func PermanentError(err error) error`（marker）
+  - `func IsPermanent(err error) bool`
+  - 估算：120 LoC
+- [ ] **T06** [PR-A2] `tools/archtest/reconcile_interface_frozen_test.go`：
+  - `RECONCILE-INTERFACE-FROZEN-01`：reflect 锁 Reconciler 方法集（仅 Reconcile，签名固定）
+  - `RECONCILE-REQUEST-FIELDS-FROZEN-01`：reflect 锁 Request 字段集为 {EntityID string}
+  - 估算：100 LoC
+- [ ] **T07** [PR-A2] `tools/archtest/reconcile_result_fields_frozen_test.go`：
+  - `RECONCILE-RESULT-FIELDS-FROZEN-01`：reflect 锁 Result 字段集为 {RequeueAfter time.Duration}
+  - 拒绝 Requeue bool / Priority int 等 K8s 残留字段
+  - 估算：与 T06 合并到同文件（计入 T06 LoC）
+
+**Checkpoint A2**: 接口与字段集冻结；后续 PR 不可改 Reconciler/Request/Result 字段
+
+---
+
+### PR-A3 — feat: Loop 调度骨架 + metrics 4 件
+
+**Goal**: 把 `runtime/command.SweeperLifecycle` 调度骨架（451 LoC）平移到 `kernel/reconcile.Loop`，去掉命令实体耦合；wiring 4 个 metric。
+
+**Independent Test**: `Loop` 在 fake Reconciler + fake Trigger 下 Start/Stop 不泄漏 goroutine（goroutine leak detector）；metric counter/histogram 在 Reconcile 调用后值增。
+
+#### Tests for PR-A3 (TDD)
+
+- [ ] **T08** [P] [PR-A3] `kernel/reconcile/loop_test.go`：
+  - `TestLoop_StartTickerStopGraceful`：Start + ctx cancel + Stop 无 goroutine 泄漏
+  - `TestLoop_AwaitProbeUnblocksOnStart`：probe channel 在 Start 后释放
+  - `TestLoop_StopTimeoutKillsRunningReconcile`：长时 Reconcile 在 StopTimeout 内被切断
+  - `TestLoop_MaxConcurrencyRespected`：MaxConcurrentReconciles=2 时只 2 个并行
+  - `TestLoop_SameEntityIDSerial`：同 ID 串行（不重入）
+  - 期望先 fail：`undefined: reconcile.Loop`
+  - 估算：500 LoC（table-driven）
+- [ ] **T09** [P] [PR-A3] `kernel/reconcile/metrics_test.go`：
+  - 4 个 metric wiring 验证（counter/histogram/gauge with label = reconcilerID）
+  - `TestMetrics_PreflightValidate`：参考 `runtime/command.preflightSweepErrorCounter`
+  - 估算：200 LoC
+
+#### Implementation for PR-A3
+
+- [ ] **T10** [PR-A3] `kernel/reconcile/loop.go`：
+  - 平移 `runtime/command.SweeperLifecycle` 的 Start/Stop/runLoop/awaitProbe（≈ 360 LoC 平移）
+  - 改名 `SweepTick` → `Reconcile`、`SweepErrorCounter` → `reconcileErrorCounter`
+  - 注入 Reconciler + Trigger + LeaderElector + Backoff 配置
+  - 同 ID 串行用 sync.Map[entityID]struct{} 标记
+  - MaxConcurrentReconciles semaphore
+  - 估算：500 LoC
+- [ ] **T11** [PR-A3] `kernel/reconcile/metrics.go`：
+  - 4 个 metric：`reconcile_total{reconciler,result}` / `reconcile_duration_seconds{reconciler}` / `reconcile_in_flight{reconciler}` / `reconcile_leader{reconciler}`
+  - PreflightValidate helper
+  - 估算：100 LoC
+- [ ] **T12** [PR-A3] `kernel/reconcile/doc.go`：
+  - 包文档 INVARIANT 锚点（覆盖 5+ archtest）
+  - Reconciler 实现模式示例
+  - 估算：100 LoC
+
+**Checkpoint A3**: Loop 可在 fake 注入下跑通 Start/Stop；metric 可观测
+
+---
+
+## Phase 3: Triggers + Backoff（B4 — 并行）
+
+### PR-A4 — feat: Trigger interface + TickerTrigger + ChannelTrigger + clock carve-out archtest
+
+**Goal**: 抽象触发源（最小 2 种实现）；Loop clock 走 carve-out 等同 `PROD-CLOCK-INJECTION-01`。
+
+**Independent Test**: `TickerTrigger(1*time.Second)` 在 1s 内触发 1 次（业务时钟可注入测试不依赖 wall-clock）；`ChannelTrigger(ch)` 在 ch 写入 Request 后立即调度。
+
+#### Tests for PR-A4 (TDD)
+
+- [ ] **T13** [P] [PR-A4] `kernel/reconcile/trigger_test.go`：
+  - `TestTickerTrigger_EmitsAtInterval`：使用注入业务时钟
+  - `TestTickerTrigger_RespectsCtxCancel`
+  - `TestChannelTrigger_PassesRequest`：写 ch → reconciler 收 EntityID
+  - `TestChannelTrigger_BlockedOnFull`：channel full 时 backpressure 不丢
+  - 估算：500 LoC
+
+#### Implementation for PR-A4
+
+- [ ] **T14** [PR-A4] `kernel/reconcile/trigger.go`：
+  - `type Trigger interface { Start(ctx context.Context, queue chan<- Request) error }`
+  - `func TickerTrigger(interval time.Duration) Trigger`
+  - `func ChannelTrigger(in <-chan Request) Trigger`
+  - 估算：250 LoC
+- [ ] **T15** [PR-A4] `tools/archtest/reconcile_loop_clock_carveout_test.go`：
+  - `RECONCILE-LOOP-CLOCK-CARVEOUT-01`：mirror `PROD-CLOCK-INJECTION-01`，把 kernel/reconcile.Loop 的 control-plane ticker 加入白名单
+  - 估算：100 LoC
+- [ ] **T16** [PR-A4] `tools/archtest/reconcile_trigger_interface_frozen_test.go`：
+  - `RECONCILE-TRIGGER-INTERFACE-FROZEN-01`：reflect 锁 Trigger 接口
+  - 估算：50 LoC（合并到 T15 文件可选）
+
+**Checkpoint A4**: Trigger 接口 frozen；Loop 业务时钟可注入
+
+---
+
+### PR-A5 — feat: Backoff + panic recovery + 错误分类
+
+**Goal**: 指数退避（baseDelay=5ms, maxDelay=1000s）+ panic recovery + 错误分类（transient/permanent）。
+
+**Independent Test**: 20 次连续 transient error 触发指数退避 → 第 20 次延迟达 maxDelay；panic 转 transient error 在 metric 可见，不杀进程。
+
+#### Tests for PR-A5 (TDD)
+
+- [ ] **T17** [P] [PR-A5] `kernel/reconcile/backoff_test.go`：
+  - `TestBackoff_ExponentialBounded`：第 N 次延迟 = min(baseDelay * 2^N, maxDelay)
+  - `TestBackoff_ResetOnSuccess`：success 后下次退避归零
+  - 估算：200 LoC
+- [ ] **T18** [P] [PR-A5] `kernel/reconcile/recovery_test.go`：
+  - `TestRecovery_PanicConvertsToError`：reconciler panic 被 catch + 转 error
+  - `TestRecovery_PanicMetricRecorded`：panic 计入 reconcile_total{result="panic"}
+  - `TestRecovery_OtherEntityNotAffected`：单 entity panic 不影响其他 entity 串行处理
+  - 估算：250 LoC
+
+#### Implementation for PR-A5
+
+- [ ] **T19** [PR-A5] `kernel/reconcile/backoff.go`：
+  - 指数退避实现（与 controller-runtime client-go workqueue 形态对齐）
+  - 注入式 baseDelay/maxDelay（默认 5ms / 1000s）
+  - 估算：150 LoC
+- [ ] **T20** [PR-A5] `kernel/reconcile/recovery.go`：
+  - panic recover wrapper（与 `kernel/wrapper.WrapConsumer` 形态对齐）
+  - 错误分类 dispatcher：err == nil → success / errors.Is(err, PermanentError) → permanent / else → transient
+  - 估算：200 LoC
+
+**Checkpoint A5**: 退避收敛 + panic 隔离验证通过
+
+---
+
+## Phase 4: Leader Election（B5）
+
+### PR-A6 — feat: LeaderElector interface + Redis 实现 + PG advisory lock 实现 + archtest frozen
+
+**Goal**: 在 kernel/ 声明接口；adapters/{redis,postgres} 各提供一个实现；接口字段 frozen。
+
+**Independent Test**: 在 fake adapter 实现 LeaderElector：两个 Loop 实例并起，验证只一个调 Reconcile；leader 实例 ctx cancel 后 follower 在 LeaseDuration + 1s 内接管。
+
+#### Tests for PR-A6 (TDD)
+
+- [ ] **T21** [P] [PR-A6] `kernel/reconcile/leader_test.go`：
+  - `TestLeaderElector_AcquireExclusive`：两个 fake 实例只一个获得 lease
+  - `TestLeaderElector_ReleaseUnblocksFollower`：leader release → follower acquire
+  - `TestLeaderElector_RenewKeepsLease`：renew 周期 < LeaseDuration 不丢 lease
+  - `TestLeaderElector_StaleFollowerAcquiresOnExpiry`：leader 不 renew → follower 超时接管
+  - 估算：400 LoC
+- [ ] **T22** [P] [PR-A6] `adapters/redis/reconcile_leader_test.go`：
+  - 用 miniredis 跑 SETNX 实现的 leader 接口契约（同 conformance test 集）
+  - 估算：150 LoC
+- [ ] **T23** [P] [PR-A6] `adapters/postgres/reconcile_leader_test.go`：
+  - 用真 PG（integration tag）跑 advisory lock 实现的 leader 接口契约
+  - 估算：150 LoC
+
+#### Implementation for PR-A6
+
+- [ ] **T24** [PR-A6] `kernel/reconcile/leader.go`：
+  - `type LeaderElector interface { AcquireLease / ReleaseLease / RenewLease }`
+  - `type LeaseToken struct { ReconcilerID string; AcquiredAt time.Time; ExpiresAt time.Time; HolderID string }`
+  - 估算：150 LoC（接口 + 类型 + 文档）
+- [ ] **T25** [PR-A6] `adapters/redis/reconcile_leader.go`：
+  - SETNX + EXPIRE 实现 + 续约 goroutine
+  - 复用 adapters/redis Cache 命名空间约定（cell-namespaced key）
+  - 估算：250 LoC
+- [ ] **T26** [PR-A6] `adapters/postgres/reconcile_leader.go`：
+  - pg_try_advisory_lock 实现
+  - 续约通过 transaction-scoped lock + heartbeat goroutine
+  - 估算：250 LoC
+- [ ] **T27** [PR-A6] `tools/archtest/reconcile_leader_interface_frozen_test.go`：
+  - `RECONCILE-LEADER-INTERFACE-FROZEN-01`：reflect 锁 LeaderElector 三方法
+  - `RECONCILE-LEADER-IMPL-FUNNEL-01`：消费方使用 LeaderElector 必经 Builder（不可裸构造 Loop）
+  - 估算：100 LoC
+
+**Checkpoint A6**: leader 流转可测；2 个 adapter 通过 conformance
+
+---
+
+## Phase 5: Builder + Conformance（B6）
+
+### PR-A7 — feat: Builder DSL + reconciletest.ConformanceFactory + funnel archtest
+
+**Goal**: Builder 是消费方构造 Loop 的唯一公开入口（Loop 构造函数私有化，Builder 是 funnel 上游 Hard）；conformance harness 让消费方一次跑过所有契约。
+
+**Independent Test**: 消费方代码 `reconcile.New(myReconciler).WithTrigger(...).WithLeader(...).Build()` 编译通过；`var _ = reconcile.NewLoop(...)` 编译失败（私有化）。
+
+#### Tests for PR-A7 (TDD)
+
+- [ ] **T28** [P] [PR-A7] `kernel/reconcile/builder_test.go`：
+  - `TestBuilder_RequiresReconcilerAndTrigger`：缺 reconciler 或 trigger 返回 err
+  - `TestBuilder_DefaultsLeaderAsNoop`：无 LeaderElector 时 single-process 模式（in-process mutex）
+  - `TestBuilder_DefaultsConcurrencyTo1`：MaxConcurrentReconciles 默认 1
+  - 估算：300 LoC
+- [ ] **T29** [P] [PR-A7] `kernel/reconcile/reconciletest/conformance_test.go`：
+  - 自检：fakeReconciler 跑过所有 conformance test 集
+  - 估算：200 LoC
+
+#### Implementation for PR-A7
+
+- [ ] **T30** [PR-A7] `kernel/reconcile/builder.go`：
+  - `func New(reconciler Reconciler) *Builder`
+  - `WithTrigger / WithLeader / WithConcurrency / WithBackoff / WithMetrics / WithStartTimeout / WithStopTimeout`
+  - `Build() (*Loop, error)`（私有化 Loop 构造）
+  - 估算：250 LoC
+- [ ] **T31** [PR-A7] `kernel/reconcile/reconciletest/conformance.go`：
+  - `type ReconcilerFactory func(*testing.T) (Reconciler, Trigger, LeaderElector, cleanup)`
+  - `RunConformance(t, factory)` 跑遍：basic Reconcile / RequeueAfter / PermanentError / panic recovery / leader 流转 / MaxConcurrentReconciles
+  - 估算：400 LoC
+- [ ] **T32** [PR-A7] `kernel/reconcile/reconciletest/fake.go`：
+  - `FakeLeaderElector` / `FakeTrigger` / `FakeReconciler`
+  - 估算：200 LoC
+- [ ] **T33** [PR-A7] `tools/archtest/reconcile_builder_funnel_test.go`：
+  - `RECONCILE-BUILDER-FUNNEL-01`：消费方构造 Loop callsite ⊆ Builder.Build()（funnel 上游 Hard：Loop 构造函数私有化）
+  - 估算：100 LoC
+
+**Checkpoint A7**: Builder funnel 上游 Hard；消费方可跑 conformance
+
+---
+
+## Phase 6: kernel/command + examples 迁移（B7）
+
+### PR-A8 — refactor: kernel/command.Sweeper 实现 reconcile.Reconciler + runtime/command/lifecycle.go 删除
+
+**Goal**: 删除 SweeperLifecycle / SweepTicker 命名，kernel/command.Sweeper 改为实现 reconcile.Reconciler；archtest 守 frozen 命名。
+
+**Independent Test**: `var _ reconcile.Reconciler = (*command.Sweeper)(nil)` 编译通过；`grep -r SweeperLifecycle` 在 production 0 命中；archtest `RECONCILE-NAMING-FROZEN-01` 在 nightly 跑过。
+
+#### Tests for PR-A8 (TDD)
+
+- [ ] **T34** [P] [PR-A8] `kernel/command/sweeper_reconcile_test.go`：
+  - `TestCommandSweeper_ImplementsReconciler`：type assertion 编译期通过
+  - `TestCommandSweeper_ReconcileBehaviorPreserved`：现有 SweepOnce 行为不变（StatusExpired 转换）
+  - 估算：250 LoC
+- [ ] **T35** [P] [PR-A8] `runtime/command/lifecycle_removed_test.go`：
+  - `TestSweeperLifecycle_Removed`：archtest 验证 type 不存在
+  - 估算：50 LoC
+
+#### Implementation for PR-A8
+
+- [ ] **T36** [PR-A8] `kernel/command/sweeper.go`：
+  - 改 `SweepOnce` 接口让其实现 `reconcile.Reconciler.Reconcile`
+  - 或新增 `SweeperAsReconciler` adapter wrapper
+  - 估算：150 LoC
+- [ ] **T37** [PR-A8] **删除** `runtime/command/lifecycle.go`（451 LoC）+ 调用方迁移：
+  - `runtime/command/bootstrap_phase.go` 改引用 `reconcile.Builder` 代替 `NewSweeperLifecycle`
+  - 估算：300 LoC（删除 + 替换）
+- [ ] **T38** [PR-A8] `tools/archtest/reconcile_naming_frozen_test.go`：
+  - `RECONCILE-NAMING-FROZEN-01`：grep production 不得出现 SweeperLifecycle / SweepTicker
+  - 估算：80 LoC
+- [ ] **T39** [PR-A8] 更新 `tools/archtest/command_projection_explicit_test.go`：
+  - 加 reconcile contract kind 枚举到 `COMMAND-PROJECTION-EXPLICIT-01`
+  - 估算：50 LoC（diff）
+- [ ] **T40** [PR-A8] 更新 `tools/archtest/clock_invariants_test.go`：
+  - 删除 `controlPlaneTicker` / `controlPlaneProbeTimer` 在 runtime/command 的 carve-out（已迁出）
+  - kernel/reconcile.Loop 的 carve-out 在 PR-A4 已加
+  - 估算：30 LoC（diff）
+
+**Checkpoint A8**: SweeperLifecycle 命名完全删除；kernel/command.Sweeper 成为 reconcile 首个示例消费方
+
+---
+
+### PR-A9 — refactor: examples/iotdevice 切换 + e2e 验证
+
+**Goal**: examples/iotdevice/cells/devicecell 改为 wiring `kernel/reconcile.Loop`；e2e 跑通命令超时重发场景。
+
+**Independent Test**: `go test ./examples/iotdevice/...` 全绿；`devicecell.commandSweeper` 字段类型为 `*reconcile.Loop` 而非 `*kcommand.SweeperLifecycle`。
+
+#### Tests for PR-A9 (TDD)
+
+- [ ] **T41** [P] [PR-A9] `examples/iotdevice/cells/devicecell/cell_reconcile_test.go`：
+  - `TestDevicecell_ReconcileLoopWiring`：cell.Init 后 commandSweeper 字段是 *reconcile.Loop
+  - 估算：100 LoC
+- [ ] **T42** [P] [PR-A9] `examples/iotdevice/e2e_test.go`：
+  - `TestIotDevice_E2EReconcileCommand`：完整流程（Enqueue 命令 → 超时 → Loop 触发 Reconcile → 状态推进 Expired）
+  - 估算：300 LoC
+
+#### Implementation for PR-A9
+
+- [ ] **T43** [PR-A9] `examples/iotdevice/cells/devicecell/cell.go`：
+  - 从 `runtime/command.NewSweeperLifecycle(...)` 切换到 `reconcile.New(sweeper).WithTrigger(reconcile.TickerTrigger(30*time.Second)).Build()`
+  - 估算：200 LoC（含 wiring 重写）
+- [ ] **T44** [PR-A9] `examples/iotdevice/cells/devicecell/sweeper_lifecycle_test.go`：
+  - 删除（被 cell_reconcile_test.go 取代）
+  - 估算：-100 LoC
+- [ ] **T45** [PR-A9] `examples/iotdevice/run.go`：
+  - 如需 wiring leader（多副本测试），加 fake LeaderElector wiring
+  - 估算：100 LoC
+
+**Checkpoint A9**: examples/iotdevice 全绿；reconcile 端到端验证
+
+---
+
+## Phase 7: Polish & Docs（B8）
+
+### PR-A10 — docs: `.claude/rules/gocell/reconcile.md` + ADR amendment + CLAUDE.md 引用
+
+**Goal**: 规则文件落地单源治理文档；现有相关 ADR 加 amendment 反映 reconcile 落地。
+
+**Independent Test**: `.claude/rules/gocell/reconcile.md` 在 CLAUDE.md 章程引用链中可达；现有 ADR amendment 写入威胁矩阵的"满足"标记。
+
+#### Tasks
+
+- [ ] **T46** [PR-A10] 新建 `.claude/rules/gocell/reconcile.md`：
+  - § 适用范围（cell 治理 / 设备收敛，不做业务编排）
+  - § Reconciler 实现要点（PermanentError 何时用 / RequeueAfter 计算 / panic 处理）
+  - § Builder 强制约束（消费方禁止裸构造 Loop）
+  - § leader-elect adapter 选型（Redis vs PG）
+  - § 与 saga / projection 边界
+  - § 现有 archtest invariants 引用（5+ 条）
+  - 估算：350 LoC（markdown）
+- [ ] **T47** [PR-A10] 现有 ADR amendment：
+  - `docs/architecture/202605120000-adr-archtest-process-isolation.md` 加 §Amendment：reconcile 新 archtest 加入 shard matrix
+  - `docs/architecture/202605170000-*` 加 §Amendment：reconcile.Loop 共用 control-plane ticker carve-out
+  - 估算：100 LoC（diff）
+- [ ] **T48** [PR-A10] CLAUDE.md 章程引用更新：
+  - 第 "AI-robust 治理章程" 段补充 reconcile 规则链接
+  - 估算：30 LoC（diff）
+- [ ] **T49** [PR-A10] `docs/references/framework-comparison.md` 加 reconcile 对标行：
+  - 表加一行：`L4 控制环 | controller-runtime Reconciler`
+  - 估算：20 LoC（diff）
+
+**Checkpoint A10**: 文档闭环；本计划满足"激活前 checklist"全部勾选；issue #661 关闭
+
+---
+
+## Dependencies & Execution Order
+
+### PR-level Dependencies
+
+```text
+A1 (ADR) ──→ A2 (interface) ──→ A3 (Loop) ──┬→ A4 (Trigger) ──┐
+                                              │                  │
+                                              ├→ A5 (Backoff) ──┘
+                                              │                  │
+                                              └──────────────────┴→ A6 (Leader)
+                                                                       │
+                                                                       └→ A7 (Builder/Conformance)
+                                                                              │
+                                                                              ├→ A8 (command 迁移)
+                                                                              │       │
+                                                                              │       └→ A9 (examples 迁移)
+                                                                              │
+                                                                              └────→ A10 (docs)
+```
+
+- **B1**: A1 单独（ADR 必须先 merge）
+- **B2**: A2（接口 frozen）
+- **B3**: A3（Loop 调度骨架）
+- **B4**: A4 ∥ A5（Trigger 与 Backoff 不交叠）
+- **B5**: A6（LeaderElector，依赖 A3 Loop）
+- **B6**: A7（Builder 是 A4+A5+A6 的 funnel）
+- **B7**: A8 → A9（A9 依赖 A8 已 merge 的 Reconciler 实现，串行）
+- **B8**: A10（最后文档收尾）
+
+### Task-level Parallel Opportunities
+
+- **Within PR**: tests + impl 严格 TDD 顺序（先 [P] 测试 fail，再 impl 通过）
+- **Across [P] tests in same PR**: 不同文件可并行写
+- **Across PRs in same batch (B4)**: A4 / A5 各自 developer agent 并行实施（不改同一文件）
+
+---
+
+## Parallel Example: Batch B4 (PR-A4 + PR-A5)
+
+```text
+worktrees/661-04-trigger     ← developer A: PR-A4 任务集（T13-T16）
+worktrees/661-05-backoff     ← developer B: PR-A5 任务集（T17-T20）
+```
+
+两个 worktree 基于 A3 merge 后的 develop；A4 与 A5 同 PR 各 ~1000 LoC，单 reviewer per PR。
+
+---
+
+## Implementation Strategy
+
+### MVP First (PR-A1 → PR-A7)
+
+1. 完成 Phase 1-5（B1-B6）= PR-A1 → PR-A7
+2. **STOP and VALIDATE**: kernel/reconcile 公开 API 与 conformance harness 就绪；可被新消费方（pkicell.rotation 等）开始 wiring
+3. 此时 kernel/command 仍走 SweeperLifecycle 路径（旧路径），不破坏现有
+
+### Incremental Migration (PR-A8 + PR-A9)
+
+4. PR-A8: kernel/command.Sweeper 迁为 reconcile.Reconciler；删除 SweeperLifecycle
+5. PR-A9: examples/iotdevice 切换到 reconcile.Loop 端到端
+6. 此时只有 reconcile 一个 control loop 抽象，无双轨
+
+### Documentation Closure (PR-A10)
+
+7. PR-A10: 规则文件 + ADR amendment + CLAUDE.md 引用收口
+8. **关闭 issue #661**
+
+### Parallel Team Strategy
+
+- **B1 / B2 / B3**: 单 developer 串行（ADR → 接口 → Loop）
+- **B4**: 2 developer 并行（A4 Trigger / A5 Backoff）
+- **B5 / B6**: 单 developer
+- **B7**: A8 + A9 视复杂度可串行（推荐）或并行（A9 依赖 A8 接口稳定）
+- **B8**: 单 developer
+
+---
+
+## Notes
+
+- [P] = 同 PR 内不同文件可并行写测试
+- 所有 TDD 测试必须先 fail 再 impl
+- 每 PR commit message 必须含 `Refs: #661` + `ref: <framework> <file>`
+- 每 PR review 走 ship skill 阶段 7 自动 reviewer 数（按 diff 行数 1/2/3/6）
+- 每 PR merge 前跑 `make verify`（含 archtest 全集）
+- 不留 follow-up：单 PR 内 Cx1/Cx2 finding 同 PR 修；Cx3+ 走人工确认（不延期到下 PR）
+- 不向后兼容：SweeperLifecycle / SweepTicker 命名完全删除（archtest 守 frozen），不留 deprecation 别名
+
+---
+
+## Tracking Matrix（trigger 满足时填）
+
+| PR | Branch | Worktree | Owner | Start | Merge | Closes |
+|----|--------|----------|-------|-------|-------|--------|
+| A1 | `661-adr-reconcile-design` | `worktrees/661-01-adr` | — | — | — | — |
+| A2 | `661-reconciler-interface` | `worktrees/661-02-interface` | — | — | — | — |
+| A3 | `661-loop-skeleton` | `worktrees/661-03-loop` | — | — | — | — |
+| A4 | `661-trigger` | `worktrees/661-04-trigger` | — | — | — | — |
+| A5 | `661-backoff` | `worktrees/661-05-backoff` | — | — | — | — |
+| A6 | `661-leader-elector` | `worktrees/661-06-leader` | — | — | — | — |
+| A7 | `661-builder-conformance` | `worktrees/661-07-builder` | — | — | — | — |
+| A8 | `661-command-migration` | `worktrees/661-08-command` | — | — | — | — |
+| A9 | `661-examples-migration` | `worktrees/661-09-examples` | — | — | — | — |
+| A10 | `661-docs-closure` | `worktrees/661-10-docs` | — | — | — | #661 |

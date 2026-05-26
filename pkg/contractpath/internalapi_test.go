@@ -1,9 +1,10 @@
-package pathx_test
+package contractpath_test
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 )
 
 func TestContractIDToPackagePath(t *testing.T) {
@@ -53,10 +54,32 @@ func TestContractIDToPackagePath(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := pathx.ContractIDToPackagePath(tc.contractID)
+			got := contractpath.ContractIDToPackagePath(tc.contractID)
 			if got != tc.want {
 				t.Errorf("ContractIDToPackagePath(%q) = %q, want %q", tc.contractID, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSegments asserts the segments helper agrees with ContractIDToPackagePath
+// by inversion: joining the segments with "/" under "generated/contracts/"
+// must reproduce the joined-string output, so the two callsites (joined-string
+// importers in tools/codegen vs []string importer in kernel/governance) cannot
+// diverge on internal→internalapi rewriting.
+func TestSegmentsAgreesWithJoined(t *testing.T) {
+	t.Parallel()
+	ids := []string{
+		"event.session.created.v1",
+		"http.order.create.v1",
+		"http.config.internal.get.v1",
+		"http.internal.devicecommands.list.v1",
+		"http.internal.foo.internal.v1",
+	}
+	for _, id := range ids {
+		joined := "generated/contracts/" + strings.Join(contractpath.Segments(id), "/")
+		if got := contractpath.ContractIDToPackagePath(id); got != joined {
+			t.Errorf("Segments/ContractIDToPackagePath disagree for %q: joined=%q vs path=%q", id, joined, got)
+		}
 	}
 }

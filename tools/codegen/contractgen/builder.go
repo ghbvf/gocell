@@ -12,8 +12,8 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
-	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
 // buildContractSpec projects a single contract.yaml + its schemaRefs into a
@@ -853,10 +853,10 @@ func isRequired(name string, required []string) bool {
 }
 
 // contractIDToPackagePath converts a contract id to a module-relative generated path.
-// Delegates to pathx.ContractIDToPackagePath — single source of truth shared
-// with cellgen and archtest.
+// Delegates to pkg/contractpath.ContractIDToPackagePath — single source of truth
+// shared with cellgen, kernel/governance, and archtest.
 func contractIDToPackagePath(id string) string {
-	return pathx.ContractIDToPackagePath(id)
+	return contractpath.ContractIDToPackagePath(id)
 }
 
 // contractIDToKebab converts a contract id to a kebab-case string by replacing

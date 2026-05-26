@@ -743,7 +743,7 @@ func TestHealthzInvariants_ReverseBlindSpot_NoReflectHealthz(t *testing.T) {
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{"./cells/..."},
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
+			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -751,25 +751,15 @@ func TestHealthzInvariants_ReverseBlindSpot_NoReflectHealthz(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel.Name != "MethodByName" || len(call.Args) != 1 {
-						return
-					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
-					if !ok {
-						return
-					}
-					if strings.Trim(lit.Value, `"`) == "Healthz" {
-						line := p.Fset.Position(call.Pos()).Line
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: line,
-							Message: "reflect MethodByName(\"Healthz\") in cells/ bypasses " +
-								"HEALTHZ-TYPED-REGISTER-01 (blind spot B1)",
-						})
-					}
-				})
+				for _, hit := range scanReflectStringArgCalls(p, f, reflectMethodByName,
+					func(n string) bool { return n == "Healthz" }) {
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: hit.Line,
+						Message: "reflect MethodByName(\"Healthz\") in cells/ bypasses " +
+							"HEALTHZ-TYPED-REGISTER-01 (blind spot B1)",
+					})
+				}
 			}
 			return nil
 		})

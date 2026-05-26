@@ -27,8 +27,6 @@
 -- ref: adapters/postgres/outbox_store.go (FOR UPDATE SKIP LOCKED Dequeue template)
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS commands (
     -- id is TEXT (not UUID) so it stays in lock-step with kernel/command.Entry.ID,
     -- which is declared as `string` in kernel/command/entry.go. Calling code (and

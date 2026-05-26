@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -397,8 +398,7 @@ func findHandlerFile(project *metadata.ProjectMeta, contractID, projectRoot stri
 // another package or escaping the repo (F1) — or when the file is absent
 // (Codegen=true is the single source of truth; no legacy fallback).
 func findCodegenHandlerFile(projectRoot, contractID string) string {
-	// "http.order.create.v1" → ["http","order","create","v1"]
-	segments := strings.Split(contractID, ".")
+	segments := contractpath.Segments(contractID)
 	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
 	if !safe {
 		return ""
@@ -1206,30 +1206,15 @@ func typedEnvelopeDeclaredStatuses(c *metadata.ContractMeta) map[int]struct{} {
 }
 
 // typedEnvelopeTypesGenPath resolves the absolute path to the generated
-// types_gen.go file for the given contract. Mirrors
-// tools/codegen/internal/pathx.ContractIDToPackagePath: every "internal"
-// segment in the contract ID is rewritten to "internalapi" so generated
-// packages remain importable from cells/ and examples/ (Go internal package
-// rule).
-//
-// The mapping is duplicated here (10 lines) rather than imported from the
-// contractgen-internal pathx package to keep kernel/governance free of any
-// tools/codegen dependency. If a second consumer outside tools/ ever needs
-// the same mapping, promote pathx to pkg/contractpath.
+// types_gen.go file for the given contract. Path segments come from
+// pkg/contractpath.Segments so CH-04/05 and CH-06 share the same internal→
+// internalapi rewrite source-of-truth as contractgen / cellgen.
 //
 // Returns "" when the contract ID yields an unsafe path segment or the
 // assembled path would escape projectRoot (F1); scanTypedResponseStructs treats
 // "" as a missing file and CH-06 skips the contract.
 func typedEnvelopeTypesGenPath(projectRoot, contractID string) string {
-	parts := strings.Split(contractID, ".")
-	segments := make([]string, len(parts))
-	for i, p := range parts {
-		if p == "internal" {
-			segments[i] = "internalapi"
-		} else {
-			segments[i] = p
-		}
-	}
+	segments := contractpath.Segments(contractID)
 	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
 	if !safe {
 		return ""

@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // TestWithMemBundle_WiresFourPrimitives verifies that WithMemBundle copies the
@@ -40,7 +40,7 @@ func TestWithMemBundle_WiresFourPrimitives(t *testing.T) {
 // needed because inner constructors only store the references.
 func TestWithPGBundle_WiresFourPrimitives(t *testing.T) {
 	fakePool := new(pgxpool.Pool)
-	fakeTxm := new(adapterpg.TxManager)
+	fakeTxm := outbox.DemoTxRunner{}
 
 	b, err := accesspg.NewBundle(fakePool, fakeTxm, clock.Real())
 	require.NoError(t, err)

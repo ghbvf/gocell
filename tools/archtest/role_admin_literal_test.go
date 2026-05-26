@@ -48,12 +48,9 @@ const (
 //   - runtime/auth/roles.go: canonical definition of RoleAdmin.
 //   - runtime/http/devtools/catalog.go: local copy (roleAdmin) kept in sync
 //     until runtime/ gains an internal-only reference to runtime/auth.
-//   - cells/accesscore/initialadmin/bootstrap.go: defaultAdminUsername is the
-//     default account username at provisioning time, not a role name.
 var roleAdminAllowRels = []string{
 	"runtime/auth/roles.go",
 	"runtime/http/devtools/catalog.go",
-	"cells/accesscore/initialadmin/bootstrap.go",
 }
 
 // searchDirsRoleAdmin are the directories scanned by both ROLE-ADMIN-LITERAL rules.

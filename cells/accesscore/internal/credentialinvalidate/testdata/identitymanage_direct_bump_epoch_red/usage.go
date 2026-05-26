@@ -20,10 +20,11 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // badBump directly calls BumpAuthzEpoch on a ports.UserRepository — bypassing
 // the credentialinvalidate funnel. This is the pattern the archtest bans.
-func badBump(ctx context.Context, repo ports.UserRepository, userID string) (int64, error) {
-	return repo.BumpAuthzEpoch(ctx, userID)
+func badBump(ctx context.Context, repo ports.UserRepository, userID string, tok credentialfence.FenceToken) (int64, error) {
+	return repo.BumpAuthzEpoch(ctx, userID, tok)
 }

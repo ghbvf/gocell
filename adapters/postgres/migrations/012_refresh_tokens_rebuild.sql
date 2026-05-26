@@ -30,8 +30,6 @@
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (revoke-on-use baseline)
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 -- Pre-flight row-count guard: fresh DBs proceed automatically, but an existing
 -- refresh_tokens table with rows requires an explicit operator confirmation
 -- because every active refresh session will be invalidated.
