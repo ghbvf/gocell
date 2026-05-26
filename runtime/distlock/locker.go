@@ -13,6 +13,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// MinTTL is the smallest lock TTL Acquire accepts. Redis SetNX/PEXPIRE take TTL
+// in integer milliseconds; sub-millisecond values truncate to 0, which go-redis
+// v9 documents as "no expiration" — a permanent lock that survives process
+// death. Callers that derive a distlock TTL from their own config (e.g.
+// runtime/saga.Coordinator's LeaseDuration) reference this const to fail fast at
+// construction instead of at the first Acquire.
+const MinTTL = time.Millisecond
+
 // Locker acquires named distributed locks.
 //
 // # Lock-as-Resource design
@@ -190,11 +198,9 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"distlock: key must not be empty")
 	}
-	// Redis SetNX/PEXPIRE take TTL in integer milliseconds; sub-millisecond
-	// values truncate to 0, which go-redis v9 documents as "no expiration"
-	// (string_commands.go SetNX). Enforce a 1ms minimum so a misconfigured
-	// caller cannot create a permanent lock that survives process death.
-	if ttl < time.Millisecond {
+	// Enforce MinTTL so a misconfigured caller cannot create a permanent lock
+	// that survives process death (see MinTTL godoc).
+	if ttl < MinTTL {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"distlock: ttl must be ≥ 1ms; sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock",
 			errcode.WithInternal(fmt.Sprintf("ttl=%s", ttl)))
