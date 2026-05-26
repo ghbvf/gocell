@@ -580,14 +580,23 @@ func (e *errHeartbeatJournal) Heartbeat(context.Context, idutil.SafeID, idutil.S
 // guard the coordinator would construct fine but every acquireLead would fail
 // at runtime → silently never drive). Single-process mode (no locker) must
 // still accept a sub-ms lease since distlock is not involved.
+// Sub-ms durations for the leader-elect fail-fast test, below distlock.MinTTL
+// (1ms). Site-specific (no cross-cutting testtime const is sub-ms), declared as
+// package-level consts per TEST-TIME-LITERAL-01. They satisfy Config.Validate
+// (all > 0, HeartbeatInterval*2 < LeaseDuration: 200µs < 500µs).
+const (
+	subMsLease     = 500 * time.Microsecond
+	subMsHeartbeat = 100 * time.Microsecond
+	subMsPoll      = 200 * time.Microsecond
+)
+
 func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 	t.Parallel()
-	// Sub-ms lease that still satisfies Config.Validate (all >0, hb*2 < lease).
 	subMsCfg := Config{
-		PollInterval:      200 * time.Microsecond,
+		PollInterval:      subMsPoll,
 		ClaimBatchSize:    16,
-		LeaseDuration:     500 * time.Microsecond,
-		HeartbeatInterval: 100 * time.Microsecond,
+		LeaseDuration:     subMsLease,
+		HeartbeatInterval: subMsHeartbeat,
 	}
 	if err := subMsCfg.Validate(); err != nil {
 		t.Fatalf("precondition: sub-ms cfg must pass Config.Validate, got %v", err)
