@@ -114,7 +114,7 @@ var httpClient = &http.Client{
 }
 
 // l2Harness boots a full PG-backed assembly (accesscore + configcore + auditcore)
-// with three listeners (primary + internal + health-via-fallback). Provisions
+// with three listeners (primary + internal + dedicated health). Provisions
 // a seed admin so login can be exercised immediately.
 type l2Harness struct {
 	pool         *adapterpg.Pool
