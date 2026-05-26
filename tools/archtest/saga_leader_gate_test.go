@@ -20,6 +20,15 @@
 //	   driveOne caller (per A1) must therefore consult the gate.
 //	   AI-robust: Medium (pure-AST presence check).
 //
+//	A3 [TestSagaLeaderGate_A3_LeadGatesDriveOne]
+//	   The acquireLead boolean result (lead) MUST gate driveOne: there must be an
+//	   IfStmt referencing lead that either early-exits the claim loop (the
+//	   `if !lead { continue }` shape) or encloses the drive (`if lead { … }`). A
+//	   blank/missing lead binding is an immediate violation. Closes the bypass
+//	   A2 alone misses — call acquireLead, ignore lead, drive unconditionally.
+//	   AI-robust: Medium (pure-AST control-dependency gate; same ceiling as
+//	   A1/A2 — see below).
+//
 // # Why ship in PR-05 (not deferred to PR-08 governance)
 //
 // Same logic the plan applies to SAGA-JOURNAL-HOLDER-SEAL-01 /
@@ -41,11 +50,19 @@
 //     named driveOne on a *different* type in runtime/saga would also be checked.
 //     runtime/saga has exactly one driveOne (Coordinator); over-firing is
 //     safe-side (would force a future second driveOne into tickOnce or a rename).
-//   - B2 (semantic depth): A2 asserts acquireLead is *called* in tickOnce, not
-//     that its boolean result actually short-circuits driveOne (the
-//     `if !lead { continue }` shape). That semantic is covered by the
-//     deterministic unit tests in runtime/saga/leader_elect_test.go
-//     (TestTickOnce_SkipsWhenLockHeld). Documented residual.
+//   - B2 (semantic depth): formerly an open residual (A2 only proved acquireLead
+//     was *called*). A3 now structurally requires the lead result to gate
+//     driveOne, with red_tick_ignores_lead as the reverse self-test. The
+//     deterministic unit test runtime/saga/leader_elect_test.go
+//     (TestTickOnce_SkipsWhenLockHeld) remains as runtime corroboration.
+//   - B3 (A3 indirection / partial gating, safe-side or unit-covered): A3
+//     references lead directly, so an aliased guard (`ok := lead; if !ok {…}`)
+//     would false-fire — safe-side, forces the canonical shape that production
+//     uses. A3 is also satisfied by *one* lead-referencing guard, so a second,
+//     unguarded driveOne in the same tickOnce would slip A3 (but A1 already
+//     pins driveOne to exactly one site, and TestTickOnce_SkipsWhenLockHeld
+//     exercises the real path). The compile-time-Hard closure of both remains
+//     gh #1110 (typed gate token).
 //
 // ref: tools/archtest/saga_step_run_outside_tx_test.go (callsite-discipline pattern)
 // ref: .claude/rules/gocell/ai-robust.md §"Funnel 双向锁评级"
@@ -79,6 +96,10 @@ const (
 	violSagaLeaderA2TickMissingGate = "SAGA-DRIVE-BEHIND-LEADER-GATE-01-A2: " +
 		"tickOnce body does not call acquireLead — " +
 		"the sole driveOne caller must pass the leader-elect gate"
+
+	violSagaLeaderA3LeadIgnored = "SAGA-DRIVE-BEHIND-LEADER-GATE-01-A3: " +
+		"tickOnce calls acquireLead but its lead result does not gate driveOne — " +
+		"the gate verdict must guard the drive (e.g. `if !lead { continue }`)"
 )
 
 // callIsMethodNamed reports whether call is `<expr>.<name>(...)` — selector
@@ -184,6 +205,133 @@ func checkLeaderGateA2(p *Pass, file *ast.File) []Diagnostic {
 	return ds
 }
 
+// --- A3: acquireLead's lead result must gate driveOne ---
+
+// TestSagaLeaderGate_A3_LeadGatesDriveOne asserts that in each tickOnce, the
+// boolean result of acquireLead actually gates driveOne — closing the B2 gap
+// that A2 (presence-only) leaves open: a tickOnce could call acquireLead,
+// discard or ignore lead, and drive unconditionally (split-brain) while passing
+// both A1 and A2.
+func TestSagaLeaderGate_A3_LeadGatesDriveOne(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	scope := DirsScope(root, []string{"runtime/saga"})
+	diags := Run(t, scope, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if !isRuntimeSagaProductionFile(rel) {
+				continue
+			}
+			ds = append(ds, checkLeaderGateA3(p, file)...)
+		}
+		return ds
+	})
+	Report(t, sagaLeaderGateRule+"-A3", diags)
+}
+
+// checkLeaderGateA3 emits a diagnostic for any tickOnce that calls driveOne and
+// acquireLead but does not let the acquireLead boolean result (lead) gate the
+// drive. "Gate" is approximated structurally: there must be an IfStmt in
+// tickOnce whose condition references the lead variable and whose body either
+// early-exits the claim loop (a BranchStmt / ReturnStmt — the `if !lead {
+// continue }` shape) or directly encloses a driveOne call (the `if lead { …
+// driveOne … }` shape). A blank/missing lead binding is an immediate violation
+// (a discarded verdict cannot gate anything).
+func checkLeaderGateA3(p *Pass, file *ast.File) []Diagnostic {
+	var ds []Diagnostic
+	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil || fd.Name.Name != tickOnceFuncName || fd.Body == nil {
+			return
+		}
+		// If this tickOnce never drives, A3 is vacuous (A1 governs drive sites).
+		if !bodyCallsMethodNamed(fd.Body, driveOneMethodName) {
+			return
+		}
+		leadVar, ok := acquireLeadResultVar(fd.Body)
+		if !ok || !leadGatesDrive(fd.Body, leadVar) {
+			pos := p.Fset.Position(fd.Pos())
+			ds = append(ds, Diagnostic{
+				Rel:     filepath.ToSlash(p.Rel(file)),
+				Line:    pos.Line,
+				Message: violSagaLeaderA3LeadIgnored,
+			})
+		}
+	})
+	return ds
+}
+
+// bodyCallsMethodNamed reports whether body contains a `<expr>.<name>(...)` call.
+func bodyCallsMethodNamed(body *ast.BlockStmt, name string) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		if callIsMethodNamed(call, name) {
+			found = true
+		}
+	})
+	return found
+}
+
+// acquireLeadResultVar finds the assignment whose RHS is `<expr>.acquireLead(...)`
+// and returns the identifier bound to the second LHS (the lead bool). ok is
+// false when acquireLead is not assigned to a 2-element tuple or the lead slot
+// is blank (`_`) — a discarded verdict cannot gate the drive.
+func acquireLeadResultVar(body *ast.BlockStmt) (name string, ok bool) {
+	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
+		if ok || len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+			return
+		}
+		call, isCall := as.Rhs[0].(*ast.CallExpr)
+		if !isCall || !callIsMethodNamed(call, acquireLeadMethodName) {
+			return
+		}
+		if id, isID := as.Lhs[1].(*ast.Ident); isID && id.Name != "_" {
+			name, ok = id.Name, true
+		}
+	})
+	return name, ok
+}
+
+// leadGatesDrive reports whether some IfStmt in body has a condition referencing
+// leadVar and a body that either early-exits (BranchStmt/ReturnStmt) or contains
+// a driveOne call — the two sanctioned gate shapes.
+func leadGatesDrive(body *ast.BlockStmt, leadVar string) bool {
+	gated := false
+	EachInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) {
+		if gated || ifs.Cond == nil || !condReferences(ifs.Cond, leadVar) {
+			return
+		}
+		if ifBodyEarlyExits(ifs.Body) || bodyCallsMethodNamed(ifs.Body, driveOneMethodName) {
+			gated = true
+		}
+	})
+	return gated
+}
+
+// condReferences reports whether expr contains an identifier named want.
+func condReferences(expr ast.Expr, want string) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, isID := n.(*ast.Ident); isID && id.Name == want {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// ifBodyEarlyExits reports whether body contains a continue/break/return that
+// skips the rest of the claim-loop iteration before driveOne runs.
+func ifBodyEarlyExits(body *ast.BlockStmt) bool {
+	exits := false
+	EachInSubtree[ast.BranchStmt](body, func(*ast.BranchStmt) { exits = true })
+	if exits {
+		return true
+	}
+	EachInSubtree[ast.ReturnStmt](body, func(*ast.ReturnStmt) { exits = true })
+	return exits
+}
+
 // --- reverse self-tests (red fixtures) ---
 
 // sagaLeaderGateFixturePattern returns (relDir, pattern) for a fixture case.
@@ -216,6 +364,22 @@ func TestSagaLeaderGate_Detector_RedTickMissingGate(t *testing.T) {
 		var ds []Diagnostic
 		for _, file := range p.Files {
 			ds = append(ds, checkLeaderGateA2(p, file)...)
+		}
+		return ds
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaLeaderGate_Detector_RedTickIgnoresLead proves A3 fires when tickOnce
+// calls acquireLead but ignores the lead result and drives unconditionally —
+// the bypass A2 (presence-only) cannot catch.
+func TestSagaLeaderGate_Detector_RedTickIgnoresLead(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaLeaderGateFixturePattern("red_tick_ignores_lead")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		var ds []Diagnostic
+		for _, file := range p.Files {
+			ds = append(ds, checkLeaderGateA3(p, file)...)
 		}
 		return ds
 	})
