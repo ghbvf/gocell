@@ -20,17 +20,18 @@ import "context"
 // golden-locks the rule-code set + uniqueness. The per-rule unit tests
 // additionally assert each method emits its own code.
 //
-// next-action and per-finding metric were removed from M3 as speculative
-// M5-HARVEST scaffolding (no consumer exists). M3 ships the engine refactor
-// only: single allRules registry + engine + Phase + ADV-05 fix. If/when
-// M5-HARVEST is pursued, it defines next-action/metric against a real consumer.
+// next-action and per-finding metric were removed from M3 and from the current
+// M0-M4 roadmap as speculative repository-convergence scaffolding (no consumer
+// exists; M5-HARVEST is cancelled). M3 ships the engine refactor only: single
+// allRules registry + engine + Phase + ADV-05 fix. Future repository
+// convergence must start with a new ADR and a real consumer.
 // See ADR §M3 amendment (2026-05-26 #687 round-3).
 //
 // Carrier decision: rules are Go typed-struct values, not YAML. A YAML carrier
 // would demote the detect binding from compiler-checked (Hard) to a string→
 // registry lookup (archtest Medium) and introduce a YAML↔Go drift seam; its only
-// unique benefit (non-Go external consumption) serves M5-HARVEST, which does not
-// yet exist. See ADR §M3 amendment.
+// unique benefit (non-Go external consumption) has no consumer in the current
+// M0-M4 roadmap. See ADR §M3 amendment.
 //
 // ref: golang/tools go/analysis/analysis.go (Analyzer struct{Name,Doc,Run,...} +
 // driver loop); golangci-lint pkg/lint/linter/config.go + lintersdb/manager.go

@@ -6,8 +6,9 @@ governance/ 实现 GoCell 元数据治理规则。每条规则是一个 detect �
 编译期检查的 `Detect` 方法表达式），由 `engine.go` 的 `Validator.run` 单循环执行
 （ADR `202605041430` §M3-RULE-ENGINE）。
 
-next-action（NextAction 类型）与 per-finding Metric 已从 M3 移除（推测性 M5-HARVEST
-scaffolding，无消费方）。如 M5-HARVEST 落地，届时对真实消费方定义这两个字段。
+next-action（NextAction 类型）与 per-finding Metric 已从 M3 和当前 M0-M4 路线移除
+（推测性仓库收敛 scaffolding，无消费方；M5-HARVEST 已取消）。未来若恢复仓库收敛能力，
+必须先通过新 ADR 定义真实 consumer，再重新设计这些字段。
 
 ## ValidationResult 构建
 
