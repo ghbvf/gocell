@@ -76,6 +76,7 @@ paths:
 - DB 字段 `snake_case`，JSON 字段 `camelCase`，Query/Path 参数 `camelCase`
 - 错误用 `errcode.New(code, message)`，包装上下文用 `fmt.Errorf("context: %w", err)`
 - mock 定义在测试文件中（`*_test.go` 同包）
+- cell 单测不 import 平台 `adapters/`，用 canonical in-mem fake；由 archtest `CELL-TEST-NO-ADAPTER-IMPORT-01` 守（fake 清单、豁免语义与理由见其 package godoc 单一真值源），build-tag 门控的集成测试豁免
 
 ## 测试覆盖率
 
