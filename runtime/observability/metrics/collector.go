@@ -7,6 +7,7 @@
 package metrics
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -29,7 +30,7 @@ type Collector interface {
 	// Use the owning cell ID for cell-owned RouteGroups, or "_runtime" for
 	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
 	// with no business RouteGroup attached).
-	RecordRequest(cellID, method, route string, status int, durationSeconds float64)
+	RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64)
 }
 
 // RequestKey identifies one low-cardinality HTTP request metric series.
@@ -67,7 +68,7 @@ func metricKey(cellID, method, route string, status int) RequestKey {
 }
 
 // RecordRequest records a completed HTTP request.
-func (c *InMemoryCollector) RecordRequest(cellID, method, route string, status int, durationSeconds float64) {
+func (c *InMemoryCollector) RecordRequest(_ context.Context, cellID, method, route string, status int, durationSeconds float64) {
 	key := metricKey(cellID, method, route, status)
 
 	c.mu.RLock()

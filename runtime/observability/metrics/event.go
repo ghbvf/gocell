@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -112,19 +113,19 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 }
 
 // IncSubscriptionActive increments the active subscription gauge for cellID.
-func (c *EventRouterCollector) IncSubscriptionActive(cellID string) {
+func (c *EventRouterCollector) IncSubscriptionActive(ctx context.Context, cellID string) {
 	if c == nil {
 		return
 	}
-	c.active.With(kernelmetrics.Labels{"cell": cellID}).Inc()
+	c.active.With(kernelmetrics.Labels{"cell": cellID}).Inc(ctx)
 }
 
 // DecSubscriptionActive decrements the active subscription gauge for cellID.
-func (c *EventRouterCollector) DecSubscriptionActive(cellID string) {
+func (c *EventRouterCollector) DecSubscriptionActive(ctx context.Context, cellID string) {
 	if c == nil {
 		return
 	}
-	c.active.With(kernelmetrics.Labels{"cell": cellID}).Dec()
+	c.active.With(kernelmetrics.Labels{"cell": cellID}).Dec(ctx)
 }
 
 // RecordSetupError increments the setup error counter for the given cell, topic
@@ -134,7 +135,7 @@ func (c *EventRouterCollector) DecSubscriptionActive(cellID string) {
 //   - eventrouter.SetupErrorReasonPanic ("panic"): subscription goroutine panicked (Phase 2)
 //   - eventrouter.SetupErrorReasonReadyTimeout ("ready_timeout"): Ready not signaled within timeout (Phase 3)
 //   - eventrouter.SetupErrorReasonSubscribeFailure ("subscribe_failure"): SubscribeEntry failed before Running() (Phase 3)
-func (c *EventRouterCollector) RecordSetupError(cellID, topic, reason string) {
+func (c *EventRouterCollector) RecordSetupError(ctx context.Context, cellID, topic, reason string) {
 	if c == nil {
 		return
 	}
@@ -142,22 +143,22 @@ func (c *EventRouterCollector) RecordSetupError(cellID, topic, reason string) {
 		"cell":   cellID,
 		"topic":  topic,
 		"reason": reason,
-	}).Inc()
+	}).Inc(ctx)
 }
 
 // ObserveReadyWait records the duration waited for the Ready signal on cellID.
-func (c *EventRouterCollector) ObserveReadyWait(cellID string, d time.Duration) {
+func (c *EventRouterCollector) ObserveReadyWait(ctx context.Context, cellID string, d time.Duration) {
 	if c == nil {
 		return
 	}
-	c.readyWait.With(kernelmetrics.Labels{"cell": cellID}).Observe(d.Seconds())
+	c.readyWait.With(kernelmetrics.Labels{"cell": cellID}).Observe(ctx, d.Seconds())
 }
 
 // RecordRuntimeError increments the runtime error counter for the given cell,
 // topic, and reason. The reason argument is drawn from the closed set defined
 // by the eventrouter package constants:
 //   - eventrouter.RuntimeErrorReasonRuntimeFault ("runtime_fault"): any fault detected in Phase 4
-func (c *EventRouterCollector) RecordRuntimeError(cellID, topic string, reason eventrouter.RuntimeErrorReason) {
+func (c *EventRouterCollector) RecordRuntimeError(ctx context.Context, cellID, topic string, reason eventrouter.RuntimeErrorReason) {
 	if c == nil {
 		return
 	}
@@ -165,5 +166,5 @@ func (c *EventRouterCollector) RecordRuntimeError(cellID, topic string, reason e
 		"cell":   cellID,
 		"topic":  topic,
 		"reason": string(reason),
-	}).Inc()
+	}).Inc(ctx)
 }

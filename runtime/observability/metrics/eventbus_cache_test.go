@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,10 +18,11 @@ func TestProviderEventbusCacheCollector_RejectsNilProvider(t *testing.T) {
 }
 
 func TestProviderEventbusCacheCollector_NopProviderNoPanic(t *testing.T) {
+	ctx := context.Background()
 	collector, err := obmetrics.NewProviderEventbusCacheCollector(kernelmetrics.NopProvider{})
 	require.NoError(t, err)
 
-	collector.RecordTombstoneEvicted("configcore", "configsubscribe")
+	collector.RecordTombstoneEvicted(ctx, "configcore", "configsubscribe")
 }
 
 func TestProviderEventbusCacheCollector_ReturnsRegistrationError(t *testing.T) {
@@ -31,18 +33,19 @@ func TestProviderEventbusCacheCollector_ReturnsRegistrationError(t *testing.T) {
 }
 
 func TestProviderEventbusCacheCollector_EmitsExpectedMetricAndLabels(t *testing.T) {
+	ctx := context.Background()
 	p := newSpyProvider()
 	collector, err := obmetrics.NewProviderEventbusCacheCollector(p)
 	require.NoError(t, err)
 
-	collector.RecordTombstoneEvicted("configcore", "configsubscribe")
+	collector.RecordTombstoneEvicted(ctx, "configcore", "configsubscribe")
 
 	ops := p.counterOps["eventbus_cache_tombstone_evicted_total"]
 	require.Len(t, ops, 1)
 	assert.Equal(t, kernelmetrics.Labels{"cell": "configcore", "slice": "configsubscribe"}, ops[0].labels)
 	assert.Equal(t, 1.0, ops[0].value)
 
-	collector.RecordTombstoneEvicted("configcore", "configsubscribe")
+	collector.RecordTombstoneEvicted(ctx, "configcore", "configsubscribe")
 
 	ops = p.counterOps["eventbus_cache_tombstone_evicted_total"]
 	require.Len(t, ops, 2)
@@ -50,5 +53,5 @@ func TestProviderEventbusCacheCollector_EmitsExpectedMetricAndLabels(t *testing.
 }
 
 func TestNoopEventbusCacheCollector_NoPanic(t *testing.T) {
-	obmetrics.NoopEventbusCacheCollector{}.RecordTombstoneEvicted("a", "b")
+	obmetrics.NoopEventbusCacheCollector{}.RecordTombstoneEvicted(context.Background(), "a", "b")
 }

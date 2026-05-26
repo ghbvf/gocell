@@ -373,7 +373,7 @@ func (r *Router) Run(ctx context.Context) error {
 			slog.String("topic", sf.topic),
 			slog.Any("error", sf.err))
 		observability.SafeObserve(slog.Default(), func() {
-			r.collector.RecordRuntimeError(sf.cellID, sf.topic, RuntimeErrorReasonRuntimeFault)
+			r.collector.RecordRuntimeError(runCtx, sf.cellID, sf.topic, RuntimeErrorReasonRuntimeFault)
 		})
 		cancel()
 		r.wg.Wait()
@@ -398,7 +398,7 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 				slog.String("cell_id", sub.CellID),
 				slog.Any("error", err))
 			observability.SafeObserve(slog.Default(), func() {
-				r.collector.RecordSetupError(sub.CellID, sub.Topic, SetupErrorReasonSetupError)
+				r.collector.RecordSetupError(ctx, sub.CellID, sub.Topic, SetupErrorReasonSetupError)
 			})
 			cancel()
 			return wrapped
@@ -500,7 +500,7 @@ func (r *Router) runAwaitReady(
 			slog.String("reason", sf.reason),
 			slog.Any("error", sf.err))
 		observability.SafeObserve(slog.Default(), func() {
-			r.collector.RecordSetupError(sf.cellID, sf.topic, sf.reason)
+			r.collector.RecordSetupError(ctx, sf.cellID, sf.topic, sf.reason)
 		})
 		cancel()
 		r.wg.Wait()
@@ -516,7 +516,7 @@ func (r *Router) runAwaitReady(
 			notReady[i] = fmt.Sprintf("%s/%s/%s", h.cellID, h.consumerGroup, h.topic)
 			hCopy := h
 			observability.SafeObserve(slog.Default(), func() {
-				r.collector.RecordSetupError(hCopy.cellID, hCopy.topic, SetupErrorReasonReadyTimeout)
+				r.collector.RecordSetupError(ctx, hCopy.cellID, hCopy.topic, SetupErrorReasonReadyTimeout)
 			})
 		}
 		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
@@ -567,10 +567,10 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 			case <-r.subscriber.Ready(sub):
 				elapsed := r.clock.Since(start)
 				observability.SafeObserve(slog.Default(), func() {
-					r.collector.ObserveReadyWait(sub.CellID, elapsed)
+					r.collector.ObserveReadyWait(ctx, sub.CellID, elapsed)
 				})
 				observability.SafeObserve(slog.Default(), func() {
-					r.collector.IncSubscriptionActive(sub.CellID)
+					r.collector.IncSubscriptionActive(ctx, sub.CellID)
 				})
 				r.activeMu.Lock()
 				r.activeCells = append(r.activeCells, sub.CellID)
@@ -727,7 +727,7 @@ func (r *Router) Close(ctx context.Context) error {
 	for _, cellID := range activeCells {
 		cid := cellID
 		observability.SafeObserve(slog.Default(), func() {
-			r.collector.DecSubscriptionActive(cid)
+			r.collector.DecSubscriptionActive(ctx, cid)
 		})
 	}
 

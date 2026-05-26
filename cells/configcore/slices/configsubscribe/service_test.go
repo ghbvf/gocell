@@ -90,11 +90,13 @@ type configEventRecord struct {
 	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+func (c *recordingConfigEventCollector) RecordEventProcess(
+	_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason,
+) {
 	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, reason: reason})
 }
 
-func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+func (c *recordingConfigEventCollector) RecordEventSettlement(_ context.Context, _, _, _ string, _ outbox.SettlementResult) {
 }
 
 func callWithConfigEventOwner(
@@ -627,7 +629,7 @@ type recordingEventbusCacheCollector struct {
 	mu    sync.Mutex
 }
 
-func (r *recordingEventbusCacheCollector) RecordTombstoneEvicted(cellID, sliceID string) {
+func (r *recordingEventbusCacheCollector) RecordTombstoneEvicted(_ context.Context, cellID, sliceID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.count.Add(1)
@@ -646,7 +648,8 @@ func (r *recordingEventbusCacheCollector) total() int64 { return r.count.Load() 
 func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -658,7 +661,7 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 
 	// Advance only 12h — tombstone not yet expired.
 	fc.Advance(testHalfTTL)
-	svc.cache.sweepTombstones(fc.Now())
+	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyA still present as tombstone.
 	v, present := svc.Cache().GetVersion("keyA")
@@ -675,7 +678,7 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 
 	// Advance 13h more (total 25h > 24h TTL) then sweep.
 	fc.Advance(testOverTTL)
-	svc.cache.sweepTombstones(fc.Now())
+	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyA is now gone.
 	v, present = svc.Cache().GetVersion("keyA")
@@ -696,7 +699,8 @@ func TestCache_SweepTombstones_RemovesExpiredOnly(t *testing.T) {
 func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -706,7 +710,7 @@ func TestCache_SweepTombstones_NeverTouchesActive(t *testing.T) {
 
 	// Advance far beyond TTL.
 	fc.Advance(testFarFuture)
-	svc.cache.sweepTombstones(fc.Now())
+	svc.cache.sweepTombstones(context.Background(), fc.Now())
 
 	// keyB must still be present at v5.
 	v, present := svc.Cache().GetVersion("keyB")
@@ -730,7 +734,8 @@ func TestService_TombstoneGC_GoroutineLifecycle(t *testing.T) {
 
 	fc := clockmock.New(time.Unix(0, 0))
 	spy := &recordingEventbusCacheCollector{}
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 		WithEventbusCacheCollector(spy),
@@ -818,7 +823,8 @@ func TestNewService_TombstoneTTLDefaultAndWarn(t *testing.T) {
 // subsequent StopTombstoneGC(context.Background()) clears the state.
 func TestStopTombstoneGC_CtxTimeout(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 	)
@@ -867,7 +873,8 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	svc := mustNewService(t, logger,
+	svc := mustNewService(
+		t, logger,
 		WithClock(fc),
 		WithTombstoneTTL(testSubWindowTTL), // 1h, below the 24h window → clamp
 	)
@@ -889,7 +896,7 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 	fc.Advance(testSubWindowTTL + time.Second) // 1h+1s — would have expired if clamp hadn't fired
 
 	// Sweep: tombstone must still be present (not GC'd).
-	svc.cache.sweepTombstones(fc.Now())
+	svc.cache.sweepTombstones(context.Background(), fc.Now())
 	v, present := svc.Cache().GetVersion("k")
 	assert.False(t, present, "tombstone must survive past sub-window; clamped TTL holds")
 	assert.Equal(t, 5, v, "tombstone version must be preserved")
@@ -906,7 +913,8 @@ func TestTombstoneTTL_SubWindowClampedPreventsResurrection(t *testing.T) {
 // a subsequent Stop with a background ctx drains the original goroutine.
 func TestStopTombstoneGC_TimeoutThenNoRestartThenDrains(t *testing.T) {
 	fc := clockmock.New(time.Unix(0, 0))
-	svc := mustNewService(t, slog.Default(),
+	svc := mustNewService(
+		t, slog.Default(),
 		WithClock(fc),
 		WithTombstoneTTL(testTTL),
 	)

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -75,13 +76,13 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 // http_request_duration_seconds, labeled identically. Status is stringified
 // once per call because Provider.CounterVec/HistogramVec expect string
 // labels uniformly (avoids adapter-specific type conversions).
-func (c *providerCollector) RecordRequest(cellID, method, route string, status int, durationSeconds float64) {
+func (c *providerCollector) RecordRequest(ctx context.Context, cellID, method, route string, status int, durationSeconds float64) {
 	labels := kernelmetrics.Labels{
 		"method": method,
 		"route":  route,
 		"status": strconv.Itoa(status),
 		"cell":   cellID,
 	}
-	c.requests.With(labels).Inc()
-	c.duration.With(labels).Observe(durationSeconds)
+	c.requests.With(labels).Inc(ctx)
+	c.duration.With(labels).Observe(ctx, durationSeconds)
 }

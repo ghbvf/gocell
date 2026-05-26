@@ -54,7 +54,7 @@ func metricsWithClock(collector metrics.Collector, clk clock.Clock) func(http.Ha
 				if v, ok := ctxkeys.CellIDFrom(r.Context()); ok && v != "" {
 					cellID = v
 				}
-				collector.RecordRequest(cellID, r.Method, route, state.Status(), clk.Since(start).Seconds())
+				collector.RecordRequest(r.Context(), cellID, r.Method, route, state.Status(), clk.Since(start).Seconds())
 			})
 		})
 	}

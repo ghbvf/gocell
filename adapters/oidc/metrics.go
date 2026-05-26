@@ -1,6 +1,8 @@
 package oidc
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -15,7 +17,7 @@ type RefreshCollector interface {
 	// RecordRefresh increments the refresh counter.
 	// success=true means discovery succeeded and a.provider was updated;
 	// success=false means discovery failed (fail-open: old provider kept).
-	RecordRefresh(success bool)
+	RecordRefresh(ctx context.Context, success bool)
 }
 
 // NoopRefreshCollector is the default collector used when no observability is
@@ -24,7 +26,7 @@ type RefreshCollector interface {
 type NoopRefreshCollector struct{}
 
 // RecordRefresh is a no-op.
-func (NoopRefreshCollector) RecordRefresh(_ bool) { /* no-op: metrics disabled */ }
+func (NoopRefreshCollector) RecordRefresh(_ context.Context, _ bool) { /* no-op: metrics disabled */ }
 
 // Compile-time interface check.
 var _ RefreshCollector = NoopRefreshCollector{}
@@ -80,10 +82,10 @@ func NewProviderRefreshCollector(p metrics.Provider, cellID string) (RefreshColl
 }
 
 // RecordRefresh increments oidc_jwks_refresh_total{cell, result}.
-func (c *providerRefreshCollector) RecordRefresh(success bool) {
+func (c *providerRefreshCollector) RecordRefresh(ctx context.Context, success bool) {
 	result := "failure"
 	if success {
 		result = "success"
 	}
-	c.refresh.With(metrics.Labels{"cell": c.cellID, "result": result}).Inc()
+	c.refresh.With(metrics.Labels{"cell": c.cellID, "result": result}).Inc(ctx)
 }

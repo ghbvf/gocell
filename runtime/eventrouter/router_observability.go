@@ -1,6 +1,9 @@
 package eventrouter
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // RuntimeErrorReason is the type-safe closed-set for RecordRuntimeError's
 // reason argument. Using a named type prevents callers from passing arbitrary
@@ -15,17 +18,17 @@ type RuntimeErrorReason string
 // ref: ThreeDotsLabs/watermill router metrics middleware — subscription lifecycle
 // counters and gauges matching router_messages_processed_total / router_handler_active.
 type EventCollector interface {
-	IncSubscriptionActive(cellID string)
-	DecSubscriptionActive(cellID string)
-	RecordSetupError(cellID, topic, reason string)
-	ObserveReadyWait(cellID string, d time.Duration)
+	IncSubscriptionActive(ctx context.Context, cellID string)
+	DecSubscriptionActive(ctx context.Context, cellID string)
+	RecordSetupError(ctx context.Context, cellID, topic, reason string)
+	ObserveReadyWait(ctx context.Context, cellID string, d time.Duration)
 	// RecordRuntimeError records a runtime-phase fault for the given cell+topic.
 	// reason is a closed-set value drawn from RuntimeErrorReason* constants;
 	// the typed parameter prevents callers from drifting to free-form strings.
 	// Phase 4 owner — any failure detected after Running() closes is recorded
 	// here as runtime_fault. Phase 1–3 failures live on the setup metric via
 	// RecordSetupError (PR #593 review fix-up P2#3).
-	RecordRuntimeError(cellID, topic string, reason RuntimeErrorReason)
+	RecordRuntimeError(ctx context.Context, cellID, topic string, reason RuntimeErrorReason)
 }
 
 // SetupErrorReason* are the closed-set values passed to
@@ -81,26 +84,26 @@ const (
 type NopEventCollector struct{}
 
 // IncSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) IncSubscriptionActive(string) {
+func (NopEventCollector) IncSubscriptionActive(_ context.Context, _ string) {
 	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
 }
 
 // DecSubscriptionActive is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) DecSubscriptionActive(string) {
+func (NopEventCollector) DecSubscriptionActive(_ context.Context, _ string) {
 	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
 }
 
 // RecordSetupError is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) RecordSetupError(string, string, string) {
+func (NopEventCollector) RecordSetupError(_ context.Context, _, _, _ string) {
 	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
 }
 
 // ObserveReadyWait is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) ObserveReadyWait(string, time.Duration) {
+func (NopEventCollector) ObserveReadyWait(_ context.Context, _ string, _ time.Duration) {
 	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
 }
 
 // RecordRuntimeError is a no-op for NopEventCollector (default when no metrics backend is wired).
-func (NopEventCollector) RecordRuntimeError(string, string, RuntimeErrorReason) {
+func (NopEventCollector) RecordRuntimeError(_ context.Context, _, _ string, _ RuntimeErrorReason) {
 	// intentional no-op: null-object pattern (Sonar S1186 — explicit body comment).
 }

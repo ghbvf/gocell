@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,10 +13,13 @@ import (
 // panicRelayCollector is a test collector that panics on every call.
 type panicRelayCollector struct{}
 
-func (panicRelayCollector) RecordPollCycle(_ kout.PollCycleResult) { panic("boom: poll cycle") }
-func (panicRelayCollector) RecordBatchSize(_ int)                  { panic("boom: batch size") }
-func (panicRelayCollector) RecordReclaim(_ int64)                  { panic("boom: reclaim") }
-func (panicRelayCollector) RecordCleanup(_, _ int64)               { panic("boom: cleanup") }
+func (panicRelayCollector) RecordPollCycle(_ context.Context, _ kout.PollCycleResult) {
+	panic("boom: poll cycle")
+}
+
+func (panicRelayCollector) RecordBatchSize(_ context.Context, _ int)    { panic("boom: batch size") }
+func (panicRelayCollector) RecordReclaim(_ context.Context, _ int64)    { panic("boom: reclaim") }
+func (panicRelayCollector) RecordCleanup(_ context.Context, _, _ int64) { panic("boom: cleanup") }
 
 // mockCollector is a test collector that records calls without panicking.
 type mockCollector struct {
@@ -27,78 +31,90 @@ type mockCollector struct {
 
 type mockCleanupEntry struct{ publishedDeleted, deadDeleted int64 }
 
-func (m *mockCollector) RecordPollCycle(r kout.PollCycleResult) {
+func (m *mockCollector) RecordPollCycle(_ context.Context, r kout.PollCycleResult) {
 	m.pollCycles = append(m.pollCycles, r)
 }
-func (m *mockCollector) RecordBatchSize(size int) { m.batchSizes = append(m.batchSizes, size) }
-func (m *mockCollector) RecordReclaim(count int64) {
+
+func (m *mockCollector) RecordBatchSize(_ context.Context, size int) {
+	m.batchSizes = append(m.batchSizes, size)
+}
+
+func (m *mockCollector) RecordReclaim(_ context.Context, count int64) {
 	m.reclaimCounts = append(m.reclaimCounts, count)
 }
 
-func (m *mockCollector) RecordCleanup(p, d int64) {
+func (m *mockCollector) RecordCleanup(_ context.Context, p, d int64) {
 	m.cleanupCalls = append(m.cleanupCalls, mockCleanupEntry{p, d})
 }
 
 // typedNilCollector is a typed nil pointer for nil-dereference panic testing.
 type typedNilCollector struct{}
 
-func (t *typedNilCollector) RecordPollCycle(_ kout.PollCycleResult) { panic("nil method called") }
-func (t *typedNilCollector) RecordBatchSize(_ int)                  { panic("nil method called") }
-func (t *typedNilCollector) RecordReclaim(_ int64)                  { panic("nil method called") }
-func (t *typedNilCollector) RecordCleanup(_, _ int64)               { panic("nil method called") }
+func (t *typedNilCollector) RecordPollCycle(_ context.Context, _ kout.PollCycleResult) {
+	panic("nil method called")
+}
+
+func (t *typedNilCollector) RecordBatchSize(_ context.Context, _ int) { panic("nil method called") }
+
+func (t *typedNilCollector) RecordReclaim(_ context.Context, _ int64) { panic("nil method called") }
+
+func (t *typedNilCollector) RecordCleanup(_ context.Context, _, _ int64) { panic("nil method called") }
 
 func TestSafeRelayCollector_PanickingCollector_DoesNotCrash(t *testing.T) {
+	ctx := context.Background()
 	s := &safeRelayCollector{inner: panicRelayCollector{}}
 
 	assert.NotPanics(t, func() {
-		s.RecordPollCycle(kout.PollCycleResult{
+		s.RecordPollCycle(ctx, kout.PollCycleResult{
 			Published: 1, ClaimDur: time.Millisecond,
 			PublishDur: time.Millisecond, WriteBackDur: time.Millisecond,
 		})
 	}, "RecordPollCycle panic must be recovered")
 
 	assert.NotPanics(t, func() {
-		s.RecordBatchSize(10)
+		s.RecordBatchSize(ctx, 10)
 	}, "RecordBatchSize panic must be recovered")
 
 	assert.NotPanics(t, func() {
-		s.RecordReclaim(5)
+		s.RecordReclaim(ctx, 5)
 	}, "RecordReclaim panic must be recovered")
 
 	assert.NotPanics(t, func() {
-		s.RecordCleanup(10, 3)
+		s.RecordCleanup(ctx, 10, 3)
 	}, "RecordCleanup panic must be recovered")
 }
 
 func TestSafeRelayCollector_TypedNil_DoesNotCrash(t *testing.T) {
+	ctx := context.Background()
 	var nilCollector *typedNilCollector // typed nil
 	s := &safeRelayCollector{inner: nilCollector}
 
 	assert.NotPanics(t, func() {
-		s.RecordPollCycle(kout.PollCycleResult{Published: 1})
+		s.RecordPollCycle(ctx, kout.PollCycleResult{Published: 1})
 	}, "typed-nil collector must not crash")
 
 	assert.NotPanics(t, func() {
-		s.RecordBatchSize(5)
+		s.RecordBatchSize(ctx, 5)
 	}, "typed-nil collector must not crash")
 
 	assert.NotPanics(t, func() {
-		s.RecordReclaim(1)
+		s.RecordReclaim(ctx, 1)
 	}, "typed-nil collector must not crash")
 
 	assert.NotPanics(t, func() {
-		s.RecordCleanup(1, 0)
+		s.RecordCleanup(ctx, 1, 0)
 	}, "typed-nil collector must not crash")
 }
 
 func TestSafeRelayCollector_DelegatesCorrectly(t *testing.T) {
+	ctx := context.Background()
 	mc := &mockCollector{}
 	s := &safeRelayCollector{inner: mc}
 
-	s.RecordPollCycle(kout.PollCycleResult{Published: 3})
-	s.RecordBatchSize(42)
-	s.RecordReclaim(7)
-	s.RecordCleanup(10, 2)
+	s.RecordPollCycle(ctx, kout.PollCycleResult{Published: 3})
+	s.RecordBatchSize(ctx, 42)
+	s.RecordReclaim(ctx, 7)
+	s.RecordCleanup(ctx, 10, 2)
 
 	assert.Len(t, mc.pollCycles, 1)
 	assert.Equal(t, 3, mc.pollCycles[0].Published)

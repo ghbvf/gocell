@@ -68,8 +68,8 @@ type spyCounter struct {
 	reason string
 }
 
-func (c *spyCounter) Inc() { c.Add(1) }
-func (c *spyCounter) Add(d float64) {
+func (c *spyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *spyCounter) Add(_ context.Context, d float64) {
 	c.parent.mu.Lock()
 	c.parent.v[c.reason] += int(d)
 	c.parent.mu.Unlock()

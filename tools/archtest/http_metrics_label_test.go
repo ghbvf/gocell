@@ -56,10 +56,17 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		}
 	})
 
+	// reqVarName is the *http.Request parameter of the handler funcLit (which
+	// encloses the SafeObserve closure that actually calls RecordRequest), bound
+	// to the formal param list so the arg0 check below asserts `<req>.Context()`
+	// rather than any-ident.Context() (ai-robust: bind to FuncDecl formal).
+	reqVarName := requestParamName(fn.Body)
+
 	var (
 		readsCtxCellID      bool
 		usesRuntimeSentinel bool
 		recordUsesCellIDArg bool
+		recordUsesReqCtxArg bool
 		ctxCellIDPos        token.Pos
 		runtimeSentinelPos  token.Pos
 		recordRequestPos    token.Pos
@@ -71,8 +78,13 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 		}
 		if isSelectorCall(v, "collector", "RecordRequest") {
 			recordRequestPos = v.Pos()
-			if len(v.Args) > 0 {
-				if id, ok := v.Args[0].(*ast.Ident); ok && id.Name == "cellID" {
+			// Arg 0 is the ctx (METRICS-CTX-FUNNEL-01 ctx-bearing signature);
+			// the ctx-derived cellID label is arg 1.
+			if len(v.Args) > 0 && isRequestContextCall(v.Args[0], reqVarName) {
+				recordUsesReqCtxArg = true
+			}
+			if len(v.Args) > 1 {
+				if id, ok := v.Args[1].(*ast.Ident); ok && id.Name == "cellID" {
 					recordUsesCellIDArg = true
 				}
 			}
@@ -94,6 +106,10 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	assert.Truef(t, recordUsesCellIDArg,
 		"%s: %s — collector.RecordRequest must receive the ctx-derived cellID variable, not a constructor/config value",
 		rel, ruleHTTPMetricsLabelCtxSource01)
+	assert.Truef(t, recordUsesReqCtxArg,
+		"%s: %s — collector.RecordRequest arg0 must be the request ctx (%s.Context()), not "+
+			"context.Background()/TODO; the ctx-bearing funnel carries cell attribution + exemplar/baggage",
+		rel, ruleHTTPMetricsLabelCtxSource01, reqVarName)
 	assert.Truef(t, ctxCellIDPos.IsValid() && recordRequestPos.IsValid() && ctxCellIDPos < recordRequestPos,
 		"%s: %s — ctxkeys.CellIDFrom must feed the metrics path before collector.RecordRequest",
 		rel, ruleHTTPMetricsLabelCtxSource01)
@@ -103,6 +119,58 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	assert.Falsef(t, callsOldState,
 		"%s: %s — old mutable cell helper is deleted; cell attribution must happen at router root",
 		rel, ruleHTTPMetricsLabelCtxSource01)
+}
+
+// requestParamName walks root for the handler funcLit whose param list includes
+// an `*http.Request`, returning that param's name (or "" if none). Matched by the
+// type expression `*http.Request` (no type info under parser.ParseFile), so the
+// arg0 check binds to the handler's actual request formal rather than any
+// identifier named "r". The RecordRequest call lives in a nested no-param
+// closure, so the request formal must be found in the enclosing handler funcLit.
+func requestParamName(root ast.Node) string {
+	var found string
+	scanner.EachInSubtree[ast.FuncLit](root, func(fl *ast.FuncLit) {
+		if found != "" || fl.Type == nil || fl.Type.Params == nil {
+			return
+		}
+		for _, field := range fl.Type.Params.List {
+			star, ok := field.Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			sel, ok := star.X.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "Request" {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "http" {
+				continue
+			}
+			if len(field.Names) > 0 {
+				found = field.Names[0].Name
+				return
+			}
+		}
+	})
+	return found
+}
+
+// isRequestContextCall reports whether expr is `<reqVar>.Context()` — a no-arg
+// method call on the request identifier. Returns false when reqVar is empty
+// (fail-closed: an unresolved request param must not silently pass).
+func isRequestContextCall(expr ast.Expr, reqVar string) bool {
+	if reqVar == "" {
+		return false
+	}
+	call, ok := expr.(*ast.CallExpr)
+	if !ok || len(call.Args) != 0 {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "Context" {
+		return false
+	}
+	recv, ok := sel.X.(*ast.Ident)
+	return ok && recv.Name == reqVar
 }
 
 func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {

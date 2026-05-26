@@ -78,12 +78,12 @@ func (gcHistogramVec) With(metrics.Labels) metrics.Histogram { return gcHistogra
 
 type gcCounter struct{}
 
-func (gcCounter) Inc()              {}
-func (gcCounter) Add(delta float64) {}
+func (gcCounter) Inc(_ context.Context)            {}
+func (gcCounter) Add(_ context.Context, _ float64) {}
 
 type gcHistogram struct{}
 
-func (gcHistogram) Observe(float64) {}
+func (gcHistogram) Observe(_ context.Context, _ float64) {}
 
 type gcGaugeVec struct {
 	name string
@@ -94,10 +94,10 @@ func (gcGaugeVec) With(metrics.Labels) metrics.Gauge { return gcGauge{} }
 
 type gcGauge struct{}
 
-func (gcGauge) Set(float64) {}
-func (gcGauge) Inc()        {}
-func (gcGauge) Dec()        {}
-func (gcGauge) Add(float64) {}
+func (gcGauge) Set(_ context.Context, _ float64) {}
+func (gcGauge) Inc(_ context.Context)            {}
+func (gcGauge) Dec(_ context.Context)            {}
+func (gcGauge) Add(_ context.Context, _ float64) {}
 
 func TestNewProviderGCCollector_CleansUpPartialRegistration(t *testing.T) {
 	p := newGCMetricProvider("auth_refresh_gc_removed_total")

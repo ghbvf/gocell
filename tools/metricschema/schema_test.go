@@ -338,7 +338,8 @@ func TestBuild_EmptyKnownWrapperBucketsUseDefaults(t *testing.T) {
 		require.NoError(t, err)
 		buckets, err := sp.configBuckets(
 			cfgExpr.(*ast.CompositeLit), "DurationBuckets",
-			runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
+			runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go",
+		)
 		require.NoError(t, err)
 		assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, buckets)
 	}
@@ -349,6 +350,7 @@ func TestCheckOBS01DetectsDirectLocalAndHelperParamClassifiers(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -357,16 +359,16 @@ import (
 )
 
 func direct(v metrics.CounterVec, err error) {
-	v.With(metrics.Labels{"reason": fmt.Sprint(ec.IsInfraError(err))}).Inc()
+	v.With(metrics.Labels{"reason": fmt.Sprint(ec.IsInfraError(err))}).Inc(context.Background())
 }
 
 func local(v metrics.CounterVec, err error) {
 	reason := fmt.Sprint(ec.IsInfraError(err))
-	v.With(metrics.Labels{"reason": reason}).Inc()
+	v.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func helper(v metrics.CounterVec, reason string) {
-	v.With(metrics.Labels{"reason": reason}).Inc()
+	v.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func viaHelper(v metrics.CounterVec, err error) {
@@ -375,7 +377,7 @@ func viaHelper(v metrics.CounterVec, err error) {
 
 func negative(v metrics.CounterVec, err error) {
 	if errors.Is(err, errors.ErrUnsupported) {
-		v.With(metrics.Labels{"reason": "unsupported"}).Inc()
+		v.With(metrics.Labels{"reason": "unsupported"}).Inc(context.Background())
 	}
 }
 `)
@@ -395,6 +397,7 @@ func TestCheckOBS01DetectsHelperReturnClassifiers(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -412,7 +415,7 @@ func classify(err error) string {
 }
 
 func direct(err error) {
-	counter.With(metrics.Labels{"reason": classify(err)}).Inc()
+	counter.With(metrics.Labels{"reason": classify(err)}).Inc(context.Background())
 }
 `)
 
@@ -429,6 +432,7 @@ func TestCheckOBS01DetectsNamedAndMultiReturnHelperClassifiers(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -451,22 +455,22 @@ func multi(err error) (bool, string) {
 }
 
 func useNamed(err error) {
-	counter.With(metrics.Labels{"reason": named(err)}).Inc()
+	counter.With(metrics.Labels{"reason": named(err)}).Inc(context.Background())
 }
 
 func useMulti(err error) {
 	_, reason := multi(err)
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func useVarMulti(err error) {
 	var _, reason = multi(err)
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func useMultiFlag(err error) {
 	flag, _ := multi(err)
-	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc(context.Background())
 }
 `)
 
@@ -480,6 +484,7 @@ func TestCheckOBS01DetectsExpandedMultiReturnHelperArgsByPosition(t *testing.T) 
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -497,11 +502,11 @@ func multi(err error) (bool, string) {
 }
 
 func helperReason(_ bool, reason string) {
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func helperFlag(flag bool, _ string) {
-	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc(context.Background())
 }
 
 func useReason(err error) {
@@ -525,6 +530,7 @@ func TestCheckOBS01DetectsBranchTaintBeforeSink(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -544,7 +550,7 @@ func branched(err error, safe bool) {
 	} else {
 		reason = fmt.Sprint(errcode.IsInfraError(err))
 	}
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 `)
 
@@ -560,6 +566,7 @@ func TestCheckOBS01DetectsCommaOKTupleExpressionTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -574,7 +581,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func commaOK(err error) {
 	_, ok := map[string]string{}[fmt.Sprint(errcode.IsInfraError(err))]
-	counter.With(metrics.Labels{"reason": fmt.Sprint(ok)}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(ok)}).Inc(context.Background())
 }
 `)
 
@@ -590,6 +597,7 @@ func TestCheckOBS01DoesNotMergeTerminatedBranchTaintIntoLaterSink(t *testing.T) 
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -608,7 +616,7 @@ func terminated(err error, unsafe bool) {
 		reason = fmt.Sprint(errcode.IsInfraError(err))
 		return
 	}
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 `)
 
@@ -622,6 +630,7 @@ func TestCheckOBS01DetectsSwitchFallthroughTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -641,7 +650,7 @@ func fallthroughTaint(err error, code int) {
 		reason = fmt.Sprint(errcode.IsInfraError(err))
 		fallthrough
 	case 2:
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -658,6 +667,7 @@ func TestCheckOBS01DetectsRangeValueTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -672,7 +682,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func rangeValue(err error) {
 	for _, reason := range []string{fmt.Sprint(errcode.IsInfraError(err))} {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -689,6 +699,7 @@ func TestCheckOBS01DetectsFuncLiteralLocalTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -704,7 +715,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func literal(err error) {
 	func() {
 		reason := fmt.Sprint(errcode.IsInfraError(err))
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}()
 }
 `)
@@ -720,7 +731,11 @@ func TestCheckOBS01DetectsGlobalTransitiveHelperSinkParams(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "shared/obs.go", `package shared
 
-import "github.com/ghbvf/gocell/kernel/observability/metrics"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+)
 
 var provider = metrics.NopProvider{}
 var counter, _ = provider.CounterVec(metrics.CounterOpts{
@@ -729,7 +744,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 })
 
 func Record(reason string) {
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func Forward(reason string) {
@@ -774,6 +789,8 @@ func Reason(err error) string {
 	writeFile(t, root, "cmd/app/obs.go", `package main
 
 import (
+	"context"
+
 	"example.com/metricsfixture/pkg/obsreason"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
@@ -785,7 +802,7 @@ var obsCounter, _ = obsProvider.CounterVec(metrics.CounterOpts{
 })
 
 func viaPkgHelper(err error) {
-	obsCounter.With(metrics.Labels{"reason": obsreason.Reason(err)}).Inc()
+	obsCounter.With(metrics.Labels{"reason": obsreason.Reason(err)}).Inc(context.Background())
 }
 `)
 
@@ -814,6 +831,7 @@ func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -828,7 +846,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func iife(err error) {
 	func(reason string) {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}(fmt.Sprint(errcode.IsInfraError(err)))
 }
 `)
@@ -845,6 +863,7 @@ func TestCheckOBS01DoesNotScanUncalledFuncLiteral(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -860,7 +879,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func uncalled(err error) {
 	reason := fmt.Sprint(errcode.IsInfraError(err))
 	_ = func() {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -875,6 +894,7 @@ func TestCheckOBS01DetectsCalledFuncLiteralVariable(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -890,7 +910,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func called(err error) {
 	reason := fmt.Sprint(errcode.IsInfraError(err))
 	f := func() {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 	f()
 }
@@ -908,6 +928,7 @@ func TestCheckOBS01DetectsCompoundAssignmentPreservesTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -923,7 +944,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func compound(err error) {
 	reason := fmt.Sprint(errcode.IsInfraError(err))
 	reason += ""
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 `)
 
@@ -939,6 +960,7 @@ func TestCheckOBS01DoesNotTaintRangeIndexFromSliceValue(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -953,7 +975,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func rangeIndex(err error) {
 	for i := range []string{fmt.Sprint(errcode.IsInfraError(err))} {
-		counter.With(metrics.Labels{"reason": fmt.Sprint(i)}).Inc()
+		counter.With(metrics.Labels{"reason": fmt.Sprint(i)}).Inc(context.Background())
 	}
 }
 `)
@@ -968,6 +990,7 @@ func TestCheckOBS01DetectsMapLabelMutation(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -983,7 +1006,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func mapMutation(err error) {
 	labels := metrics.Labels{}
 	labels["reason"] = fmt.Sprint(errcode.IsInfraError(err))
-	counter.With(labels).Inc()
+	counter.With(labels).Inc(context.Background())
 }
 `)
 
@@ -1063,6 +1086,7 @@ func TestCheckOBS01DetectsBreakTaintAfterSwitch(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1082,7 +1106,7 @@ func breakTaint(err error, code int) {
 		reason = fmt.Sprint(errcode.IsInfraError(err))
 		break
 	}
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 `)
 
@@ -1098,6 +1122,7 @@ func TestCheckOBS01DoesNotCollectSinkParamsFromUncalledLiteral(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1112,7 +1137,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func wrapper(reason string) {
 	_ = func() {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 
@@ -1131,6 +1156,7 @@ func TestCheckOBS01DetectsIIFEReturnTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1151,7 +1177,7 @@ func helper(err error) (reason string) {
 }
 
 func direct(err error) {
-	counter.With(metrics.Labels{"reason": helper(err)}).Inc()
+	counter.With(metrics.Labels{"reason": helper(err)}).Inc(context.Background())
 }
 `)
 
@@ -1195,6 +1221,7 @@ func TestCheckOBS01DetectsAssignedMapKeyRangeTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1210,7 +1237,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func rangeMapKey(err error) {
 	values := map[string]string{fmt.Sprint(errcode.IsInfraError(err)): "x"}
 	for reason := range values {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -1227,6 +1254,7 @@ func TestCheckOBS01BranchClosureBindingsMerge(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1244,7 +1272,7 @@ func branchClosure(err error, safe bool) {
 	f := func() {}
 	if safe {
 		f = func() {
-			counter.With(metrics.Labels{"reason": reason}).Inc()
+			counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 		}
 	} else {
 		f = func() {}
@@ -1265,6 +1293,7 @@ func TestCheckOBS01ClosureCallCanClearCapturedTaint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1283,7 +1312,7 @@ func clearInClosure(err error) {
 		reason = "ok"
 	}
 	f()
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 `)
 
@@ -1358,6 +1387,7 @@ func TestCheckOBS01DoesNotTaintAssignedMapKeyFromValue(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1373,7 +1403,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func rangeMapValue(err error) {
 	values := map[string]string{"safe": fmt.Sprint(errcode.IsInfraError(err))}
 	for reason := range values {
-		counter.With(metrics.Labels{"reason": reason}).Inc()
+		counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -1388,6 +1418,7 @@ func TestCheckOBS01DoesNotScanFunctionLiteralExpressionBody(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1404,7 +1435,7 @@ func literalValue(err error) {
 	f := func() string {
 		return fmt.Sprint(errcode.IsInfraError(err))
 	}
-	counter.With(metrics.Labels{"reason": fmt.Sprint(f)}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(f)}).Inc(context.Background())
 }
 `)
 
@@ -1418,6 +1449,7 @@ func TestCheckOBS01DetectsControlFlowAndMutationEdges(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1457,7 +1489,7 @@ func record(vals ...string) {
 func loopCarried(err error) {
 	reason := "ok"
 	for i := 0; i < 2; i++ {
-		loopCounter.With(metrics.Labels{"reason": reason}).Inc()
+		loopCounter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 		reason = fmt.Sprint(errcode.IsInfraError(err))
 	}
 }
@@ -1473,13 +1505,13 @@ func closureAlternatives(err error, clear bool) {
 		f = func() {}
 	}
 	f()
-	closureCounter.With(metrics.Labels{"reason": reason}).Inc()
+	closureCounter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func switchClosure(err error, mode int) {
 	reason := fmt.Sprint(errcode.IsInfraError(err))
 	f := func() {
-		switchCounter.With(metrics.Labels{"reason": reason}).Inc()
+		switchCounter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 	switch mode {
 	case 1:
@@ -1492,7 +1524,7 @@ func continuePost(err error) {
 	reason := "ok"
 	i := 0
 	for ; i < 2; reason = fmt.Sprint(errcode.IsInfraError(err)) {
-		continueCounter.With(metrics.Labels{"reason": reason}).Inc()
+		continueCounter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 		i++
 		continue
 	}
@@ -1506,7 +1538,7 @@ func mapKeyMutation(err error) {
 	values := map[string]string{}
 	values[fmt.Sprint(errcode.IsInfraError(err))] = "x"
 	for reason := range values {
-		mapCounter.With(metrics.Labels{"reason": reason}).Inc()
+		mapCounter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 	}
 }
 `)
@@ -1534,6 +1566,7 @@ func TestCheckOBS01DoesNotReportClearedTaintOrCategoryConstants(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1549,11 +1582,11 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 func cleared(err error) {
 	reason := fmt.Sprint(errcode.IsInfraError(err))
 	reason = "ok"
-	counter.With(metrics.Labels{"reason": reason}).Inc()
+	counter.With(metrics.Labels{"reason": reason}).Inc(context.Background())
 }
 
 func constantCategory() {
-	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.CategoryDomain)}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.CategoryDomain)}).Inc(context.Background())
 }
 `)
 
@@ -1594,6 +1627,7 @@ func TestCheckOBS01RequiresStrictAckFields(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1601,7 +1635,7 @@ import (
 )
 
 func direct(v metrics.CounterVec, err error) {
-	v.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+	v.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
 }
 `)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
@@ -1620,6 +1654,7 @@ func TestCheckOBS01AckSuppressesMatchingFingerprint(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1633,7 +1668,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 })
 
 func direct(err error) {
-	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
 }
 `)
 
@@ -1671,6 +1706,7 @@ func TestCheckOBS01AckSuppressesMatchingFingerprintWithTrackedDashboard(t *testi
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1684,7 +1720,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 })
 
 func direct(err error) {
-	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
 }
 `)
 
@@ -1716,6 +1752,7 @@ func TestCheckOBS01AckMustMatchMetricAndLabel(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -1729,7 +1766,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 })
 
 func direct(err error) {
-	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
 }
 `)
 
@@ -1782,6 +1819,7 @@ func TestCheckOBS01AckCannotSuppressDynamicLabelKey(t *testing.T) {
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -1797,7 +1835,7 @@ var counter, _ = provider.CounterVec(metrics.CounterOpts{
 
 func direct(err error) {
 	label := os.Getenv("LABEL")
-	counter.With(metrics.Labels{label: fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+	counter.With(metrics.Labels{label: fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
 }
 `)
 

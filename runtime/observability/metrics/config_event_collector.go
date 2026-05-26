@@ -22,19 +22,19 @@ const (
 
 // ConfigEventCollector records config event process and settlement metrics.
 type ConfigEventCollector interface {
-	RecordEventProcess(cellID, sliceID string, reason ConfigEventProcessReason)
-	RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult)
+	RecordEventProcess(ctx context.Context, cellID, sliceID string, reason ConfigEventProcessReason)
+	RecordEventSettlement(ctx context.Context, cellID, sliceID, disposition string, result outbox.SettlementResult)
 }
 
 // NoopConfigEventCollector drops config event observations.
 type NoopConfigEventCollector struct{}
 
-func (NoopConfigEventCollector) RecordEventProcess(string, string, ConfigEventProcessReason) {
+func (NoopConfigEventCollector) RecordEventProcess(_ context.Context, _, _ string, _ ConfigEventProcessReason) {
 	// Intentionally empty: callers can inject this collector when config-event
 	// metrics are disabled while keeping service code free of nil checks.
 }
 
-func (NoopConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+func (NoopConfigEventCollector) RecordEventSettlement(_ context.Context, _, _, _ string, _ outbox.SettlementResult) {
 	// Intentionally empty: callers can inject this collector when config-event
 	// metrics are disabled while keeping service code free of nil checks.
 }
@@ -72,7 +72,7 @@ func NewProviderConfigEventCollector(p kernelmetrics.Provider) (ConfigEventColle
 	return &providerConfigEventCollector{process: process, settlement: settlement}, nil
 }
 
-func (c *providerConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason ConfigEventProcessReason) {
+func (c *providerConfigEventCollector) RecordEventProcess(ctx context.Context, cellID, sliceID string, reason ConfigEventProcessReason) {
 	if c == nil {
 		return
 	}
@@ -80,10 +80,12 @@ func (c *providerConfigEventCollector) RecordEventProcess(cellID, sliceID string
 		"cell":   cellID,
 		"slice":  sliceID,
 		"reason": string(reason),
-	}).Inc()
+	}).Inc(ctx)
 }
 
-func (c *providerConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
+func (c *providerConfigEventCollector) RecordEventSettlement(
+	ctx context.Context, cellID, sliceID, disposition string, result outbox.SettlementResult,
+) {
 	if c == nil {
 		return
 	}
@@ -92,7 +94,7 @@ func (c *providerConfigEventCollector) RecordEventSettlement(cellID, sliceID, di
 		"slice":       sliceID,
 		"disposition": disposition,
 		"result":      string(result),
-	}).Inc()
+	}).Inc(ctx)
 }
 
 type configEventOwner struct {
@@ -112,7 +114,7 @@ func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollecto
 	if !ok || owner.cellID == "" || owner.sliceID == "" {
 		return
 	}
-	collector.RecordEventProcess(owner.cellID, owner.sliceID, reason)
+	collector.RecordEventProcess(ctx, owner.cellID, owner.sliceID, reason)
 }
 
 // ConfigEventMiddleware installs config-event owner metadata for process
@@ -182,6 +184,6 @@ type configEventSettlementObserver struct {
 	owner     configEventOwner
 }
 
-func (o configEventSettlementObserver) ObserveSettlement(_ context.Context, obs outbox.SettlementObservation) {
-	o.collector.RecordEventSettlement(o.owner.cellID, o.owner.sliceID, obs.Disposition.String(), obs.Result)
+func (o configEventSettlementObserver) ObserveSettlement(ctx context.Context, obs outbox.SettlementObservation) {
+	o.collector.RecordEventSettlement(ctx, o.owner.cellID, o.owner.sliceID, obs.Disposition.String(), obs.Result)
 }

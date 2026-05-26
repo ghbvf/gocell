@@ -69,7 +69,7 @@ func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.
 func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier IntentTokenVerifier, cfg authConfig) {
 	token, reason := extractBearerTokenWithReason(r)
 	if token == "" {
-		cfg.metrics.recordTokenVerifyCounter("failure", reason)
+		cfg.metrics.recordTokenVerifyCounter(r.Context(), "failure", reason)
 		httputil.WriteError(r.Context(), w,
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing or invalid authorization header"))
 		return
@@ -78,17 +78,19 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	start := cfg.clock.Now()
 	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
 	if err != nil {
-		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), cfg.clock.Since(start))
+		cfg.metrics.recordTokenVerify(r.Context(), "failure", classifyTokenError(err), cfg.clock.Since(start))
 		// S43: expected 4xx (invalid/expired token, unauthorized) → Warn;
 		// infra errors (key load failure, verifier init error) → Error.
 		if errcode.IsExpected4xx(err) {
-			cfg.logger.Warn("token verification failed",
+			cfg.logger.Warn(
+				"token verification failed",
 				slog.Any("error", err),
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
 			)
 		} else {
-			cfg.logger.Error("token verification failed",
+			cfg.logger.Error(
+				"token verification failed",
 				slog.Any("error", err),
 				slog.String("path", r.URL.Path),
 				slog.String("remote_addr", r.RemoteAddr),
@@ -107,7 +109,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token"))
 		return
 	}
-	cfg.metrics.recordTokenVerify("success", "ok", cfg.clock.Since(start))
+	cfg.metrics.recordTokenVerify(r.Context(), "success", "ok", cfg.clock.Since(start))
 
 	// Password-reset enforcement: when the token carries password_reset_required=true,
 	// only exempt endpoints (supplied by the composition root via
@@ -116,7 +118,8 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// their password and obtains a new token without the claim. If no matcher
 	// is wired, the gate rejects every request — fail-closed default.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
-		cfg.logger.Info("auth: password reset required gate blocked request",
+		cfg.logger.Info(
+			"auth: password reset required gate blocked request",
 			slog.String("subject", claims.Subject),
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
@@ -245,7 +248,8 @@ func handleRequireRole(
 	if authorizer != nil {
 		allowed, err := checkAuthorizer(authorizer, r, p.Subject, roles)
 		if err != nil {
-			loggerFrom(r.Context()).Error("authorization check failed",
+			loggerFrom(r.Context()).Error(
+				"authorization check failed",
 				slog.Any("error", err),
 				slog.String("subject", p.Subject),
 			)
@@ -259,7 +263,8 @@ func handleRequireRole(
 		}
 	}
 
-	loggerFrom(r.Context()).Info("authorization role check failed",
+	loggerFrom(r.Context()).Info(
+		"authorization role check failed",
 		slog.String("subject", p.Subject),
 		slog.String("path", r.URL.Path),
 		slog.Any("required_roles", roles),

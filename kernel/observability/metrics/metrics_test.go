@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -101,8 +102,8 @@ func TestNopProvider_CounterAndHistogram(t *testing.T) {
 		t.Fatalf("CounterVec: %v", err)
 	}
 	c := cv.With(metrics.Labels{"phase": "start"})
-	c.Inc()
-	c.Add(2.5) // must not panic
+	c.Inc(context.Background())
+	c.Add(context.Background(), 2.5) // must not panic
 
 	hv, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "nop_hist_seconds",
@@ -114,7 +115,7 @@ func TestNopProvider_CounterAndHistogram(t *testing.T) {
 		t.Fatalf("HistogramVec: %v", err)
 	}
 	h := hv.With(metrics.Labels{"phase": "stop"})
-	h.Observe(0.5)
+	h.Observe(context.Background(), 0.5)
 }
 
 func TestNopProvider_PanicsOnLabelMismatch(t *testing.T) {
@@ -161,8 +162,8 @@ func TestNopProvider_AcceptsEmptyLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CounterVec: %v", err)
 	}
-	cv.With(nil).Inc()               // nil labels OK
-	cv.With(metrics.Labels{}).Add(1) // empty map OK
+	cv.With(nil).Inc(context.Background())                 // nil labels OK
+	cv.With(metrics.Labels{}).Add(context.Background(), 1) // empty map OK
 }
 
 // TestNopProvider_Unregister_IdempotentReturnsNil verifies that
@@ -230,10 +231,10 @@ func TestNopProvider_Gauge(t *testing.T) {
 	}
 	g := gv.With(metrics.Labels{"cell": "outbox"})
 	// All four methods must not panic on the no-op gauge.
-	g.Set(42)
-	g.Inc()
-	g.Dec()
-	g.Add(-1.5)
+	g.Set(context.Background(), 42)
+	g.Inc(context.Background())
+	g.Dec(context.Background())
+	g.Add(context.Background(), -1.5)
 }
 
 func TestNopProvider_GaugeVec_PanicsOnLabelMismatch(t *testing.T) {
@@ -267,8 +268,8 @@ func TestNopProvider_GaugeVec_AcceptsEmptyLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GaugeVec: %v", err)
 	}
-	gv.With(nil).Set(0)
-	gv.With(metrics.Labels{}).Inc()
+	gv.With(nil).Set(context.Background(), 0)
+	gv.With(metrics.Labels{}).Inc(context.Background())
 }
 
 func TestNopGaugeVec_Registered_ReturnsTrue(t *testing.T) {

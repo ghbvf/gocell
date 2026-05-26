@@ -280,7 +280,7 @@ func ServiceTokenMiddleware(ring kauth.HMACKeyring, clk clock.Clock, opts ...Ser
 func errorMiddlewareInternal(cfg serviceTokenConfig, reason string) func(http.Handler) http.Handler {
 	return func(_ http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cfg.metrics.recordServiceVerify("failure", "internal")
+			cfg.metrics.recordServiceVerify(r.Context(), "failure", "internal")
 			cfg.logger.Error("service token middleware misconfigured",
 				slog.String("reason", reason),
 				slog.String("path", r.URL.Path))
@@ -299,7 +299,7 @@ func errorMiddlewareInternal(cfg serviceTokenConfig, reason string) func(http.Ha
 func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	token := extractServiceToken(r)
 	if token == "" {
-		cfg.metrics.recordServiceVerify("failure", "missing")
+		cfg.metrics.recordServiceVerify(r.Context(), "failure", "missing")
 		httputil.WriteError(r.Context(), w,
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing service token"))
 		return
@@ -320,13 +320,13 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 	if !ok {
 		// Absent: no ServiceToken header (already handled by extractServiceToken
 		// above, so this branch is a safety net for unexpected absent outcomes).
-		cfg.metrics.recordServiceVerify("failure", "missing")
+		cfg.metrics.recordServiceVerify(r.Context(), "failure", "missing")
 		httputil.WriteError(r.Context(), w,
 			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing service token"))
 		return
 	}
 
-	cfg.metrics.recordServiceVerify("success", "ok")
+	cfg.metrics.recordServiceVerify(r.Context(), "success", "ok")
 	ctx := WithPrincipal(r.Context(), p)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
@@ -348,12 +348,13 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string, w http.ResponseWriter, r *http.Request) {
 	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
-		cfg.metrics.recordServiceVerify("failure", "replay")
+		cfg.metrics.recordServiceVerify(r.Context(), "failure", "replay")
 		// httputil.WriteError only logs at 5xx, but replay is a security signal
 		// that operators must be able to attribute back to caller IP / path /
 		// request_id. Emit a structured Warn here so the alerting-rules.md
 		// triage step "grep slog code=ERR_AUTH_REPLAY_DETECTED" produces hits.
-		cfg.logger.WarnContext(r.Context(), "service token replay detected",
+		cfg.logger.WarnContext(
+			r.Context(), "service token replay detected",
 			slog.String("code", string(errcode.ErrAuthReplayDetected)),
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
@@ -367,7 +368,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 	// ErrNonceStoreFull: store is at capacity with no expired entries to reclaim.
 	// Return 503 (transient; not a replay signal, not a permanent auth failure).
 	if errors.Is(err, ErrNonceStoreFull) {
-		cfg.metrics.recordServiceVerify("failure", "nonce_store_full")
+		cfg.metrics.recordServiceVerify(r.Context(), "failure", "nonce_store_full")
 		cfg.logger.Error("nonce store full; rejecting request",
 			slog.String("path", r.URL.Path))
 		httputil.WriteError(r.Context(), w,
@@ -380,7 +381,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 	// infrastructure failure.
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Cause != nil {
-		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
+		cfg.metrics.recordServiceVerify(r.Context(), "failure", "nonce_store_error")
 		cfg.logger.Error("nonce store check failed", slog.Any("error", ec.Cause))
 		httputil.WriteError(r.Context(), w,
 			errcode.New(errcode.KindInternal, errcode.ErrInternal, msgInternalServerError))
@@ -391,30 +392,34 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 	reason := classifyServiceTokenVerifyError(err)
 	switch reason {
 	case "legacy_format":
-		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
+		cfg.logger.WarnContext(
+			r.Context(), "legacy service token format rejected",
 			slog.String("path", r.URL.Path),
 			slog.String("format", "2-part"),
 		)
 	case "missing_caller_cell":
-		cfg.logger.WarnContext(r.Context(), "service token missing caller cell",
+		cfg.logger.WarnContext(
+			r.Context(), "service token missing caller cell",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
 	case "invalid_caller_cell":
-		cfg.logger.WarnContext(r.Context(), "service token invalid caller cell",
+		cfg.logger.WarnContext(
+			r.Context(), "service token invalid caller cell",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
 	case "invalid_format":
-		cfg.logger.WarnContext(r.Context(), "service token invalid format",
+		cfg.logger.WarnContext(
+			r.Context(), "service token invalid format",
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
 	}
-	cfg.metrics.recordServiceVerify("failure", reason)
+	cfg.metrics.recordServiceVerify(r.Context(), "failure", reason)
 	httputil.WriteError(r.Context(), w,
 		errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token"))
 }

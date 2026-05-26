@@ -1,6 +1,8 @@
 package rabbitmq
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -53,7 +55,7 @@ type PublisherCollector interface {
 	// RecordPublishFailure increments the failure counter for the given reason.
 	// Implementations MUST NOT panic on any reason value; the closed set is
 	// enforced by the call site, not the collector.
-	RecordPublishFailure(reason PublishFailureReason)
+	RecordPublishFailure(ctx context.Context, reason PublishFailureReason)
 }
 
 // NoopPublisherCollector is the default collector used when no observability
@@ -62,7 +64,7 @@ type PublisherCollector interface {
 type NoopPublisherCollector struct{}
 
 // RecordPublishFailure is a no-op.
-func (NoopPublisherCollector) RecordPublishFailure(_ PublishFailureReason) { /* no-op: metrics disabled */
+func (NoopPublisherCollector) RecordPublishFailure(_ context.Context, _ PublishFailureReason) { /* no-op: metrics disabled */
 }
 
 // Compile-time interface check.
@@ -122,6 +124,6 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 }
 
 // RecordPublishFailure increments rabbitmq_publish_failed_total{cell, reason}.
-func (c *providerPublisherCollector) RecordPublishFailure(reason PublishFailureReason) {
-	c.failed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc()
+func (c *providerPublisherCollector) RecordPublishFailure(ctx context.Context, reason PublishFailureReason) {
+	c.failed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
 }

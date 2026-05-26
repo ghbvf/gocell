@@ -72,12 +72,12 @@ func NewProviderGCCollector(p metrics.Provider) (*ProviderGCCollector, error) {
 	return &ProviderGCCollector{runs: runs, removed: removed, duration: duration}, nil
 }
 
-func (c *ProviderGCCollector) ObserveRefreshGC(_ context.Context, result string, removed int, duration time.Duration) {
+func (c *ProviderGCCollector) ObserveRefreshGC(ctx context.Context, result string, removed int, duration time.Duration) {
 	if c == nil {
 		return
 	}
 	labels := metrics.Labels{"result": result}
-	c.runs.With(labels).Inc()
-	c.removed.With(labels).Add(float64(removed))
-	c.duration.With(labels).Observe(duration.Seconds())
+	c.runs.With(labels).Inc(ctx)
+	c.removed.With(labels).Add(ctx, float64(removed))
+	c.duration.With(labels).Observe(ctx, duration.Seconds())
 }

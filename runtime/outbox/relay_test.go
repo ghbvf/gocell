@@ -1086,7 +1086,7 @@ func newSpyDepthObserver() *spyDepthObserver {
 	return &spyDepthObserver{notify: make(chan struct{})}
 }
 
-func (s *spyDepthObserver) ObservePendingDepth(n int64) {
+func (s *spyDepthObserver) ObservePendingDepth(_ context.Context, n int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.values = append(s.values, n)
@@ -1243,17 +1243,17 @@ type testCollector struct {
 	batchSizes []int
 }
 
-func (c *testCollector) RecordPollCycle(r kout.PollCycleResult) {
+func (c *testCollector) RecordPollCycle(_ context.Context, r kout.PollCycleResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pollCycles = append(c.pollCycles, r)
 }
 
-func (c *testCollector) RecordBatchSize(s int) {
+func (c *testCollector) RecordBatchSize(_ context.Context, s int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.batchSizes = append(c.batchSizes, s)
 }
 
-func (c *testCollector) RecordReclaim(_ int64)    {}
-func (c *testCollector) RecordCleanup(_, _ int64) {}
+func (c *testCollector) RecordReclaim(_ context.Context, _ int64)    {}
+func (c *testCollector) RecordCleanup(_ context.Context, _, _ int64) {}

@@ -43,31 +43,31 @@ type spyEventCollector struct {
 	readyWaits    []spyDuration
 }
 
-func (s *spyEventCollector) IncSubscriptionActive(cellID string) {
+func (s *spyEventCollector) IncSubscriptionActive(_ context.Context, cellID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inc = append(s.inc, cellID)
 }
 
-func (s *spyEventCollector) DecSubscriptionActive(cellID string) {
+func (s *spyEventCollector) DecSubscriptionActive(_ context.Context, cellID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dec = append(s.dec, cellID)
 }
 
-func (s *spyEventCollector) RecordSetupError(cellID, topic, reason string) {
+func (s *spyEventCollector) RecordSetupError(_ context.Context, cellID, topic, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setupErrors = append(s.setupErrors, spyEvent{cellID: cellID, topic: topic, reason: reason})
 }
 
-func (s *spyEventCollector) RecordRuntimeError(cellID, topic string, reason RuntimeErrorReason) {
+func (s *spyEventCollector) RecordRuntimeError(_ context.Context, cellID, topic string, reason RuntimeErrorReason) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtimeErrors = append(s.runtimeErrors, spyEvent{cellID: cellID, topic: topic, reason: string(reason)})
 }
 
-func (s *spyEventCollector) ObserveReadyWait(cellID string, d time.Duration) {
+func (s *spyEventCollector) ObserveReadyWait(_ context.Context, cellID string, d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.readyWaits = append(s.readyWaits, spyDuration{cellID: cellID, duration: d})
@@ -431,23 +431,23 @@ func TestRouter_RecordRuntimeError_RuntimeFault(t *testing.T) {
 // panicEventCollector panics on every method call.
 type panicEventCollector struct{}
 
-func (panicEventCollector) IncSubscriptionActive(_ string) {
+func (panicEventCollector) IncSubscriptionActive(_ context.Context, _ string) {
 	panic("panicEventCollector: IncSubscriptionActive panics")
 }
 
-func (panicEventCollector) DecSubscriptionActive(_ string) {
+func (panicEventCollector) DecSubscriptionActive(_ context.Context, _ string) {
 	panic("panicEventCollector: DecSubscriptionActive panics")
 }
 
-func (panicEventCollector) RecordSetupError(_, _, _ string) {
+func (panicEventCollector) RecordSetupError(_ context.Context, _, _, _ string) {
 	panic("panicEventCollector: RecordSetupError panics")
 }
 
-func (panicEventCollector) ObserveReadyWait(_ string, _ time.Duration) {
+func (panicEventCollector) ObserveReadyWait(_ context.Context, _ string, _ time.Duration) {
 	panic("panicEventCollector: ObserveReadyWait panics")
 }
 
-func (panicEventCollector) RecordRuntimeError(_, _ string, _ RuntimeErrorReason) {
+func (panicEventCollector) RecordRuntimeError(_ context.Context, _, _ string, _ RuntimeErrorReason) {
 	panic("panicEventCollector: RecordRuntimeError panics")
 }
 

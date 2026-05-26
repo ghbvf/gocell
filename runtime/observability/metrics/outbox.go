@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -59,7 +60,7 @@ func NewOutboxRejectCollector(p kernelmetrics.Provider) (*OutboxRejectCollector,
 //
 // Caller contract: topic MUST be a static contract identifier (ContractSpec.Topic).
 // Passing runtime-derived values (message IDs, tenant IDs) causes unbounded cardinality.
-func (c *OutboxRejectCollector) ObserveReject(cellID, topic, _ /* consumerGroup */, reason string) {
+func (c *OutboxRejectCollector) ObserveReject(ctx context.Context, cellID, topic, _ /* consumerGroup */, reason string) {
 	if c == nil {
 		return // nil-receiver safe: observability must never panic on startup
 	}
@@ -67,7 +68,7 @@ func (c *OutboxRejectCollector) ObserveReject(cellID, topic, _ /* consumerGroup 
 		"cell":   cellID,
 		"topic":  topic,
 		"reason": reason,
-	}).Inc()
+	}).Inc(ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -135,9 +136,9 @@ func NewOutboxPendingDepthCollector(p kernelmetrics.Provider, cellID string) (*O
 
 // ObservePendingDepth implements runtimeoutbox.PendingDepthObserver.
 // Records the current pending outbox depth for the owner cell.
-func (c *OutboxPendingDepthCollector) ObservePendingDepth(n int64) {
+func (c *OutboxPendingDepthCollector) ObservePendingDepth(ctx context.Context, n int64) {
 	if c == nil {
 		return
 	}
-	c.pending.With(kernelmetrics.Labels{"cell": c.cellID}).Set(float64(n))
+	c.pending.With(kernelmetrics.Labels{"cell": c.cellID}).Set(ctx, float64(n))
 }

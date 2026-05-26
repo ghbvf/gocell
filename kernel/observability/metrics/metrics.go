@@ -10,14 +10,16 @@
 // attribute.KeyValue because a map makes callers name their dimensions and
 // makes label-set drift a detectable error rather than a silent mismatch.
 //
-// The Prom-shape rationale covers label binding only. Counter.Inc / Add and
-// Histogram.Observe also deliberately omit context.Context — adapters/otel
-// emits with context.Background(). Aligning to OTel's ctx-bearing form
-// (which enables exemplar / baggage propagation) is open work; see
-// METRICS-CTX-FUNNEL-01.
+// Counter/Histogram/Gauge 方法都接受 context.Context 首参，对齐 OTel 原生
+// ctx-bearing 形态：OTel adapter 把 ctx 转发给底层 instrument 以支持 exemplar /
+// baggage 关联（需传请求级 ctx，含 active span 才有意义）；Prometheus adapter 不
+// 消费 ctx。约定两条：(1) 实现禁止因 ctx 已取消/超时而跳过记录——指标发射是
+// best-effort，ctx 取消不得导致数据丢失；(2) 无请求 ctx 的后台路径（如 hook
+// dispatcher worker）显式传 context.Background() 并就近注释说明。
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -26,16 +28,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
-// Collector is a handle to a registered metric family (counter or histogram
-// vec). It is returned by CounterVec/HistogramVec and accepted by Unregister.
+// Collector is a handle to a registered metric family (counter, histogram, or
+// gauge vec). It is returned by CounterVec/HistogramVec/GaugeVec and accepted by
+// Unregister.
 //
 // Callers obtain Collector values only via Provider.CounterVec and
 // Provider.HistogramVec; passing other values to Unregister is undefined
 // behavior (implementations may silently no-op or return an error).
 //
-// Both CounterVec and HistogramVec embed Collector so that the return values
-// of CounterVec/HistogramVec can be passed directly to Unregister without
-// explicit type assertions.
+// CounterVec, HistogramVec, and GaugeVec all embed Collector so that the return
+// values of CounterVec/HistogramVec/GaugeVec can be passed directly to
+// Unregister without explicit type assertions.
 //
 // ref: prometheus/client_golang prometheus/collector.go — Collector is the
 // registration unit. GoCell's Collector is a thinner typed handle that keeps
@@ -161,14 +164,14 @@ type GaugeVec interface {
 
 // Counter is a monotonically increasing counter, pre-bound to a label set.
 type Counter interface {
-	Inc()
-	Add(delta float64)
+	Inc(ctx context.Context)
+	Add(ctx context.Context, delta float64)
 }
 
 // Histogram records observations into predeclared buckets, pre-bound to a
 // label set.
 type Histogram interface {
-	Observe(value float64)
+	Observe(ctx context.Context, value float64)
 }
 
 // Gauge is an arbitrary-valued instrument that can move up or down,
@@ -180,10 +183,10 @@ type Histogram interface {
 //
 // ref: prometheus/client_golang prometheus/gauge.go — Gauge interface.
 type Gauge interface {
-	Set(value float64)
-	Inc()
-	Dec()
-	Add(delta float64)
+	Set(ctx context.Context, value float64)
+	Inc(ctx context.Context)
+	Dec(ctx context.Context)
+	Add(ctx context.Context, delta float64)
 }
 
 // ErrLabelMismatch is returned / panic-wrapped by ValidateLabels /

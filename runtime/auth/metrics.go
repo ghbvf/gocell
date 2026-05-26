@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,36 +107,36 @@ func NewAccountLockoutMetrics(p metrics.Provider) (*AccountLockoutMetrics, error
 // one of {"threshold_locked", "lazy_unlocked"}; arbitrary strings are
 // recorded as-is, but the accountlockout package only emits the two values
 // listed.
-func (m *AccountLockoutMetrics) IncAccountLockout(reason string) {
+func (m *AccountLockoutMetrics) IncAccountLockout(ctx context.Context, reason string) {
 	if m == nil {
 		return
 	}
-	m.total.With(metrics.Labels{"reason": reason}).Inc()
+	m.total.With(metrics.Labels{"reason": reason}).Inc(ctx)
 }
 
-func (m *AuthMetrics) recordTokenVerify(result, reason string, duration time.Duration) {
+func (m *AuthMetrics) recordTokenVerify(ctx context.Context, result, reason string, duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.tokenVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc()
-	m.tokenVerifyDuration.With(metrics.Labels{"result": result}).Observe(duration.Seconds())
+	m.tokenVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc(ctx)
+	m.tokenVerifyDuration.With(metrics.Labels{"result": result}).Observe(ctx, duration.Seconds())
 }
 
 // recordTokenVerifyCounter increments the token verify counter without recording
 // a duration. Used for early-exit paths (e.g. missing token) where no
 // verification work was performed and a 0 duration would pollute the histogram.
-func (m *AuthMetrics) recordTokenVerifyCounter(result, reason string) {
+func (m *AuthMetrics) recordTokenVerifyCounter(ctx context.Context, result, reason string) {
 	if m == nil {
 		return
 	}
-	m.tokenVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc()
+	m.tokenVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc(ctx)
 }
 
-func (m *AuthMetrics) recordServiceVerify(result, reason string) {
+func (m *AuthMetrics) recordServiceVerify(ctx context.Context, result, reason string) {
 	if m == nil {
 		return
 	}
-	m.serviceVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc()
+	m.serviceVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc(ctx)
 }
 
 // classifyTokenError maps a token verification error to a short reason label.

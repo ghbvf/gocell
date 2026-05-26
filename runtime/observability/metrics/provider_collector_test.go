@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -20,8 +21,9 @@ func TestProviderCollector_NopProviderNoPanic(t *testing.T) {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
 	// Recording through the Nop provider must not panic.
-	c.RecordRequest("dev", "GET", "/api/v1/users", 200, 0.05)
-	c.RecordRequest("dev", "POST", "/api/v1/users", 201, 0.12)
+	ctx := context.Background()
+	c.RecordRequest(ctx, "dev", "GET", "/api/v1/users", 200, 0.05)
+	c.RecordRequest(ctx, "dev", "POST", "/api/v1/users", 201, 0.12)
 }
 
 func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
@@ -30,7 +32,7 @@ func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(context.Background(), "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 1 {
@@ -50,6 +52,41 @@ func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
 	}
 }
 
+// ctxKey is a private type for the sentinel ctx value used to prove the middle
+// layer forwards the caller's ctx (not context.Background()) to the instruments.
+type ctxKey struct{}
+
+// TestProviderCollector_ForwardsCallerCtx asserts RecordRequest threads its ctx
+// argument into both the counter (Inc) and histogram (Observe) calls — F5: the
+// provider_collector middle layer must not substitute context.Background(),
+// otherwise OTel exemplar/baggage correlation is silently lost.
+func TestProviderCollector_ForwardsCallerCtx(t *testing.T) {
+	p := newSpyProvider()
+	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{})
+	if err != nil {
+		t.Fatalf("NewProviderCollector: %v", err)
+	}
+
+	want := "sentinel-ctx-value"
+	ctx := context.WithValue(context.Background(), ctxKey{}, want)
+	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+
+	assertForwardedCtx := func(label string, ops []spyOp) {
+		if len(ops) != 1 {
+			t.Fatalf("%s: want 1 op, got %d", label, len(ops))
+		}
+		if ops[0].ctx == nil {
+			t.Fatalf("%s: forwarded ctx is nil (middle layer dropped it)", label)
+		}
+		if got, _ := ops[0].ctx.Value(ctxKey{}).(string); got != want {
+			t.Errorf("%s: forwarded ctx value = %q, want %q "+
+				"(provider_collector substituted a different ctx — exemplar/baggage lost)", label, got, want)
+		}
+	}
+	assertForwardedCtx("http_requests_total", p.counterOps["http_requests_total"])
+	assertForwardedCtx("http_request_duration_seconds", p.histogramOps["http_request_duration_seconds"])
+}
+
 func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	// Two calls with different cellID values must yield two distinct label sets;
 	// no global / cached cellID can leak between calls.
@@ -58,9 +95,10 @@ func TestProviderCollector_PerCallCellLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
-	c.RecordRequest("auditcore", "GET", "/api/v1/audit", 200, 0.02)
-	c.RecordRequest("_runtime", "GET", "/healthz", 200, 0.001)
+	ctx := context.Background()
+	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest(ctx, "auditcore", "GET", "/api/v1/audit", 200, 0.02)
+	c.RecordRequest(ctx, "_runtime", "GET", "/healthz", 200, 0.001)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 3 {
@@ -90,6 +128,7 @@ type spyProvider struct {
 type spyOp struct {
 	labels kernelmetrics.Labels
 	value  float64
+	ctx    context.Context //nolint:containedctx // test spy captures the ctx the middle layer forwarded, to assert ctx passthrough (F5)
 }
 
 func newSpyProvider() *spyProvider {
@@ -144,9 +183,9 @@ type spyCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c spyCounter) Inc() { c.Add(1) }
-func (c spyCounter) Add(d float64) {
-	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyOp{labels: c.labels, value: d})
+func (c spyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c spyCounter) Add(ctx context.Context, d float64) {
+	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyOp{labels: c.labels, value: d, ctx: ctx})
 }
 
 type spyHistogram struct {
@@ -155,8 +194,8 @@ type spyHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h spyHistogram) Observe(v float64) {
-	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], spyOp{labels: h.labels, value: v})
+func (h spyHistogram) Observe(ctx context.Context, v float64) {
+	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], spyOp{labels: h.labels, value: v, ctx: ctx})
 }
 
 type spyGaugeVec struct {
@@ -177,13 +216,13 @@ type spyGauge struct {
 	labels kernelmetrics.Labels
 }
 
-func (g spyGauge) Set(v float64) {
-	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: v})
+func (g spyGauge) Set(ctx context.Context, v float64) {
+	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: v, ctx: ctx})
 }
-func (g spyGauge) Inc() { g.Add(1) }
-func (g spyGauge) Dec() { g.Add(-1) }
-func (g spyGauge) Add(d float64) {
-	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: d})
+func (g spyGauge) Inc(ctx context.Context) { g.Add(ctx, 1) }
+func (g spyGauge) Dec(ctx context.Context) { g.Add(ctx, -1) }
+func (g spyGauge) Add(ctx context.Context, d float64) {
+	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], spyOp{labels: g.labels, value: d, ctx: ctx})
 }
 
 // silence unused import if toolchain introduces new helpers during refactors.
