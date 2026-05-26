@@ -6,7 +6,6 @@ package update
 import (
 	"bytes"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -82,13 +81,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		req.Key = v

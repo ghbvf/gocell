@@ -4,7 +4,6 @@
 package configdelete
 
 import (
-	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -70,13 +69,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		req.Key = v
@@ -87,26 +86,26 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if rawExpectedVersion == "" {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: required field missing",
-				errcode.WithDetails(slog.String("field", "expectedVersion"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "expectedVersion"))))
 			return
 		}
 		v, err := strconv.ParseInt(rawExpectedVersion, 10, 64)
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "must be an integer"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "expectedVersion"), errcode.PublicAttr("reason", "must be an integer"))))
 			return
 		}
 		if v < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "expectedVersion"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		if v > 99999 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "expectedVersion"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicAttr("field", "expectedVersion"), errcode.PublicAttr("reason", "invalid"))))
 			return
 		}
 		req.ExpectedVersion = v

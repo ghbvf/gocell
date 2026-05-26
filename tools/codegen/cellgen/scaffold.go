@@ -3,7 +3,6 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -196,7 +195,7 @@ func validateIdentifierFields(spec ScaffoldSpec) error {
 	if spec.CellID.IsZero() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: required field missing",
-			errcode.WithDetails(slog.String("field", "CellID")))
+			errcode.WithDetails(errcode.PublicAttr("field", "CellID")))
 	}
 	idents := []struct {
 		name  string
@@ -209,12 +208,12 @@ func validateIdentifierFields(spec ScaffoldSpec) error {
 		if f.value == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold cell: required field missing",
-				errcode.WithDetails(slog.String("field", f.name)))
+				errcode.WithDetails(errcode.PublicAttr("field", f.name)))
 		}
 		if strings.ContainsAny(f.value, `/\`) || strings.Contains(f.value, "..") {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold cell: field contains path traversal or separator",
-				errcode.WithDetails(slog.String("field", f.name)))
+				errcode.WithDetails(errcode.PublicAttr("field", f.name)))
 		}
 	}
 	return nil
@@ -233,7 +232,7 @@ func validateModulePath(spec ScaffoldSpec) error {
 	if len(spec.ModulePath) > 1 && !modulePathPattern.MatchString(spec.ModulePath) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: ModulePath is not a valid Go module path",
-			errcode.WithDetails(slog.String("modulePath", spec.ModulePath)))
+			errcode.WithDetails(errcode.PublicAttr("modulePath", spec.ModulePath)))
 	}
 	return nil
 }
@@ -247,7 +246,7 @@ func validateOwnerFields(spec ScaffoldSpec) error {
 	if !ownerTeamPattern.MatchString(spec.OwnerTeam) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: OwnerTeam contains invalid characters (allowed: [a-zA-Z0-9_-])",
-			errcode.WithDetails(slog.String("ownerTeam", spec.OwnerTeam)))
+			errcode.WithDetails(errcode.PublicAttr("ownerTeam", spec.OwnerTeam)))
 	}
 	if spec.OwnerRole == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -256,7 +255,7 @@ func validateOwnerFields(spec ScaffoldSpec) error {
 	if !ownerRolePattern.MatchString(spec.OwnerRole) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: OwnerRole contains invalid characters (allowed: [a-zA-Z0-9_-])",
-			errcode.WithDetails(slog.String("ownerRole", spec.OwnerRole)))
+			errcode.WithDetails(errcode.PublicAttr("ownerRole", spec.OwnerRole)))
 	}
 	return nil
 }
@@ -268,8 +267,8 @@ func validateEnumFields(spec ScaffoldSpec) error {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold cell: --type must be one of validCellTypes",
 				errcode.WithDetails(
-					slog.String("type", spec.Type),
-					slog.String("allowed", fmt.Sprintf("%v", validCellTypes)),
+					errcode.PublicAttr("type", spec.Type),
+					errcode.PublicAttr("allowed", fmt.Sprintf("%v", validCellTypes)),
 				))
 		}
 	}
@@ -278,8 +277,8 @@ func validateEnumFields(spec ScaffoldSpec) error {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold cell: --level must be one of validConsistencyLevels",
 				errcode.WithDetails(
-					slog.String("level", spec.ConsistencyLevel),
-					slog.String("allowed", fmt.Sprintf("%v", validConsistencyLevels)),
+					errcode.PublicAttr("level", spec.ConsistencyLevel),
+					errcode.PublicAttr("allowed", fmt.Sprintf("%v", validConsistencyLevels)),
 				))
 		}
 	}

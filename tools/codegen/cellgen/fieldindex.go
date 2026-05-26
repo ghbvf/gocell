@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -154,7 +153,7 @@ func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID stri
 	if idx == nil {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: fieldIndex is nil; IndexCellStructFields must run before BuildCellSpec when subscriptions exist",
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)))
 	}
 	if explicitField != "" {
 		pkg, ok := idx.byField[explicitField]
@@ -163,9 +162,9 @@ func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID stri
 				"cellgen build: subscribe field: names no *<pkg>.T pointer field on the cell struct; "+
 					"field: must reference a declared cell-struct field whose type is *<sliceID>.T",
 				errcode.WithDetails(
-					slog.String("sliceID", sliceID),
-					slog.String("cellID", cellID),
-					slog.String("field", explicitField),
+					errcode.PublicAttr("sliceID", sliceID),
+					errcode.PublicAttr("cellID", cellID),
+					errcode.PublicAttr("field", explicitField),
 				))
 		}
 		if pkg != sliceID {
@@ -173,10 +172,10 @@ func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID stri
 				"cellgen build: subscribe field: points to a different slice's package, not the subscribing slice; "+
 					"the generated c.<field>.<handler> would bind the subscription to the wrong slice",
 				errcode.WithDetails(
-					slog.String("sliceID", sliceID),
-					slog.String("cellID", cellID),
-					slog.String("field", explicitField),
-					slog.String("fieldPackage", pkg),
+					errcode.PublicAttr("sliceID", sliceID),
+					errcode.PublicAttr("cellID", cellID),
+					errcode.PublicAttr("field", explicitField),
+					errcode.PublicAttr("fieldPackage", pkg),
 				))
 		}
 		return explicitField, nil
@@ -187,16 +186,16 @@ func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID stri
 			"cellgen build: no cell.go struct field for subscribing slice; "+
 				"cell struct must declare a *<sliceID>.T pointer field, or set field: on the subscribe CU",
 			errcode.WithDetails(
-				slog.String("sliceID", sliceID),
-				slog.String("cellID", cellID),
+				errcode.PublicAttr("sliceID", sliceID),
+				errcode.PublicAttr("cellID", cellID),
 			))
 	}
 	if field == ambiguousField {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: subscribing slice has multiple *<sliceID>.T cell-struct fields; set field: on the subscribe CU to disambiguate",
 			errcode.WithDetails(
-				slog.String("sliceID", sliceID),
-				slog.String("cellID", cellID),
+				errcode.PublicAttr("sliceID", sliceID),
+				errcode.PublicAttr("cellID", cellID),
 			))
 	}
 	return field, nil

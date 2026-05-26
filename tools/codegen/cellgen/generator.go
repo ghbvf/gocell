@@ -91,7 +91,7 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 	if opts.OnlyCell != "" && len(cellIDs) == 0 {
 		return res, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			"cellgen generate: cell not found",
-			errcode.WithDetails(slog.String("cellID", opts.OnlyCell)))
+			errcode.WithDetails(errcode.PublicAttr("cellID", opts.OnlyCell)))
 	}
 
 	// K#05 W2: read wire declarations directly from cell.go marker comments
@@ -235,7 +235,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			"cellgen render artifacts: cell not found",
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)))
 	}
 	if cell.GoStructName.IsZero() {
 		return nil, nil
@@ -281,7 +281,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"cellgen render artifacts: cell render failed",
 			err,
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)))
 	}
 	cellRel, err := relFromRoot(root, cellAbs)
 	if err != nil {
@@ -305,7 +305,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"cellgen render artifacts: healthz render failed",
 			err,
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)))
 	}
 	healthzRel, err := relFromRoot(root, healthzAbs)
 	if err != nil {
@@ -331,8 +331,8 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 				"cellgen render artifacts: slice render failed",
 				err,
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("sliceID", sid),
+					errcode.PublicAttr("cellID", cellID),
+					errcode.PublicAttr("sliceID", sid),
 				))
 		}
 		sliceRel, err := relFromRoot(root, sliceAbs)
@@ -352,7 +352,7 @@ func relFromRoot(root, abs string) (string, error) {
 		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"cellgen: compute relative path failed",
 			err,
-			errcode.WithInternal(fmt.Sprintf("abs=%s root=%s", abs, root)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("abs=%s root=%s", abs, root))))
 	}
 	return filepath.ToSlash(rel), nil
 }
@@ -370,7 +370,7 @@ func renderAndWrite(root, tmpl string, data any, path string, opts Options, res 
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"cellgen: render failed",
 			err,
-			errcode.WithInternal(errPrefix))
+			errcode.WithInternal(errcode.InternalAttr("_", errPrefix)))
 	}
 	writeRes, err := codegen.Write(codegen.WriteOptions{
 		Path:     path,
