@@ -1,6 +1,6 @@
 //go:build examples_smoke
 
-// Package main_test holds the ssobff startup smoke regression guard.
+// Package main holds the ssobff startup smoke regression guard.
 //
 // Build tag `examples_smoke` keeps this isolated from:
 //   - the `integration` tag, whose tests assume DB/RMQ testcontainers and
@@ -14,7 +14,12 @@
 // and integration-test (no `needs:` dependency).
 //
 // ref: kubernetes/test/e2e_node — subprocess-driven node smoke pattern.
-package main_test
+//
+// package main (not main_test): shares startEphemeralPostgres with
+// walkthrough_test.go via pgfixture_test.go (//go:build integration ||
+// examples_smoke). The smoke test uses only exported surface, so internal-vs-
+// external test package makes no behavioral difference here.
+package main
 
 import (
 	"context"
@@ -38,6 +43,10 @@ import (
 // runner job env — from crossing into the child binary. The kept variables
 // cover Go toolchain plumbing and PATH/HOME-style basics needed by `go run`
 // or any future helper command we shell out to.
+//
+// Keys MUST be UPPER_CASE: filteredEnv looks them up after strings.ToUpper
+// normalization, so a lower-case entry here would never match and silently
+// drop the variable.
 var smokeEnvAllowlist = map[string]struct{}{
 	"PATH":            {},
 	"HOME":            {},
@@ -71,10 +80,12 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		t.Skip("smoke test relies on POSIX signals; ssobff has no Windows production target")
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("smoke test requires DATABASE_URL; set when running examples-smoke against a PG fixture (CI sets this automatically)")
-	}
+	// Self-provision an empty postgres (shared pgclone container) so the smoke
+	// guard RUNS wherever Docker is available (CI + local), never silently
+	// SKIPs on a missing DATABASE_URL. pgclone calls RequireDocker, so this
+	// self-skips locally without Docker but FAILS under
+	// GOCELL_TEST_DOCKER_REQUIRED=1. The per-test DB is dropped via t.Cleanup.
+	dbURL := startEphemeralPostgres(t)
 
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "ssobff-smoke")
