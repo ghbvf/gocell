@@ -72,7 +72,7 @@
     },
     "lifecycle": {
       "type": "string",
-      "description": "Governance maturity phase of the cell. Optional; empty defaults to experimental at runtime (kernel/cellvocab.Phase). Distinct from a Contract's draft/active/deprecated lifecycle. Validated by governance rule LIFECYCLE-PHASE-01 (membership + slice≤cell).",
+      "description": "Governance maturity phase of the cell. Optional; empty defaults to experimental at runtime (kernel/cellvocab.CellLifecycle). Distinct from a Contract's draft/active/deprecated lifecycle. Validated by governance rule CELL-LIFECYCLE-01 (membership + slice≤cell).",
       "enum": ["experimental", "candidate", "asset", "maintenance", "retired"],
       "default": "experimental"
     },

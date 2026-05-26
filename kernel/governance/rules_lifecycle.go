@@ -12,7 +12,7 @@ import (
 // to keep them in sync.
 const cellLifecycleFix = "set lifecycle to one of: experimental, candidate, asset, maintenance, retired"
 
-// validateLifecyclePhase implements CELL-LIFECYCLE-01.
+// validateCELLLIFECYCLE01 implements CELL-LIFECYCLE-01.
 //
 // Two checks on the cell.yaml / slice.yaml `lifecycle` maturity lifecycle:
 //
@@ -31,7 +31,7 @@ const cellLifecycleFix = "set lifecycle to one of: experimental, candidate, asse
 // Note there is no runtime "lifecycle transition" to validate — a declarative
 // single-value field only admits static legality (membership + slice≤cell),
 // which is exactly what this rule covers.
-func (v *Validator) validateLifecyclePhase() []ValidationResult {
+func (v *Validator) validateCELLLIFECYCLE01() []ValidationResult {
 	var results []ValidationResult
 
 	for _, c := range v.project.Cells {

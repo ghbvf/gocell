@@ -30,11 +30,11 @@ issue 文字要求两者都建「state enum + transition map」。本 ADR 在落
 
 outbox entry **确实在运行时转移**（relay 在 Go 侧据 attempts 决定 claiming→published/pending/dead，SQL UPDATE 即转移），与 command/saga 同形 → 建完整状态机：
 
-`kernel/outbox.State`（`uint8` + `iota+1`，零值非法）+ `String()`（wire/DB status 字符串**唯一来源**）+ `ParseState` + 转移表 `stateTransitions` + `TransitionState`，镜像 `kernel/saga/status.go`。
+`kernel/outbox.State`（`uint8` + `iota+1`，零值非法）+ `String()`（wire/DB status 字符串**唯一来源**）+ `ParseState` + 转移表 `stateTransitions`（终态作空 slice key 自表达）+ `Transition`，镜像 `kernel/saga/status.go`。`State` 是 status **字符串**的单源；`stateTransitions` 是**文档化 + COMPLETENESS 守全的合法图**，不是运行时 SQL 的绑定源。
 
-**单源全量改写**（删旧无 shim）：删 `adapters/postgres/outbox_db.go` 的 4 个 `statusXxx` 常量 + `runtime/outbox/outboxtest` 的 `rowStatus` 并行常量；`runtime/outbox.Store.OldestEligibleAt` 签名改 typed `State`；adapters/postgres + runtime/outbox 全部经 `State.String()` / typed `State`。relay 的 3 个 Go 侧 settlement 决策点（writeBackOne / handleFailedEntry）调 `TransitionState(StateClaiming, target)` 作防御断言——非法 target 响亮失败，给状态机一个真实运行时 consumer。
+**单源全量改写**（删旧无 shim）：删 `adapters/postgres/outbox_db.go` 的 4 个 `statusXxx` 常量 + `runtime/outbox/outboxtest` 的 `rowStatus` 并行常量；`runtime/outbox.Store.OldestEligibleAt` 签名改 typed `State`；adapters/postgres + runtime/outbox 全部经 `State.String()` / typed `State`。relay 的 3 个 Go 侧 settlement 决策点（writeBackOne / handleFailedEntry）调 `Transition(StateClaiming, target)`——其运行期价值是 `OUTBOX-STATE-TRANSITION-GUARD-01` 的 **Mark↔target 配对交叉校验**（确保调 `MarkPublished` 的函数体里 target 恰为 `StatePublished`，防复制粘贴错配），**而非**合法性校验（常量实参恒过，本身 tautological）。
 
-**重要边界说明**：`TransitionState` 仅守护 relay 的 Go 侧 settlement 决策（claiming→published / dead / pending）。store 的 `ClaimPending`（pending→claiming）与 `ReclaimStale`（claiming→pending/dead）同样是真实转移，但其目标在 SQL CAS（`WHERE status='claiming'`）中决定，而非 Go 决策点——在那里接入 `TransitionState` 会是同义反复断言（SQL 已经做了校验，Go 断言不可能失败）。这两处转移由 `OUTBOX-STATE-TRANSITION-COMPLETENESS-01` archtest 守卫整张合法图，不由 GUARD 覆盖。
+**重要边界说明（诚实模型）**：relay 的 `Transition` 之所以留存，是因为存在 `Mark*` 调用可供配对交叉校验。store 的 `ClaimPending`（pending→claiming）与 `ReclaimStale`（claiming→pending/dead）同样是真实转移，但**没有 `Mark*` 配对**——在那里接入 `Transition` 既无合法性价值（与 relay 一样常量恒过）也无配对价值，故 Go 侧不重复。其正确性由 **SQL CAS 谓词（`WHERE status='claiming'/'pending'`）+ conformance 行为测试 + `OUTBOX-STATE-LITERAL-BAN-01`（无裸字面量）** 三层守；SQL-text↔table-edge 的机器绑定受 SQL 实参 `...any` 限制，是**明确接受的 Medium 天花板**，不做脆弱的静态 SQL↔边解析。整张合法图由 `OUTBOX-STATE-TRANSITION-COMPLETENESS-01`（每个 State const 必须是 `stateTransitions` 的 key）守卫。
 
 ### C. Governance CELL-LIFECYCLE-01（合法性，lifecycle base / error）
 
@@ -61,7 +61,7 @@ outbox entry **确实在运行时转移**（relay 在 Go 侧据 attempts 决定 
 | `CELL-LIFECYCLE-01`（成员 + slice≤cell） | Medium | governance 引擎规则 + `goldenRuleIDs` 锁 + `GOVERNANCE-RULES-REGISTRATION-GUARD-01` |
 | `CELL-LIFECYCLE-RANK-COMPLETENESS-01` | Medium | AST set-difference：每个 `CellLifecycle` 常量 ∈ 有序 `AllCellLifecycles()`（守 `CellLifecycleRank` 真实消费链） |
 | outbox enum 单源（wire 字符串） | Medium | 删常量 + typed `OldestEligibleAt` 签名 + `OUTBOX-STATE-LITERAL-BAN-01`（adapters/postgres outbox 文件禁裸 status 字面量，`String()` 唯一 producer；scope 内零误报，列名 `*_at` 不 exact-match） |
-| outbox 状态机转移 | Medium | `TransitionState` 接进 relay Go 侧 settlement 决策点（真实 caller）+ `OUTBOX-STATE-TRANSITION-GUARD-01`（relay.go settlement 函数必须调，且 Mark↔目标状态对应正确）+ `OUTBOX-STATE-TRANSITION-COMPLETENESS-01`（State ∈ 转移表或终态）。ClaimPending / ReclaimStale 的 pending→claiming / claiming→pending/dead 由 SQL CAS 守卫，COMPLETENESS 全图验证 |
+| outbox 状态机转移 | Medium | `OUTBOX-STATE-TRANSITION-GUARD-01`（relay.go settlement 函数调 `Mark*` 时必须有匹配的 `Transition(_, target)`，Mark↔target 配对交叉校验）+ `OUTBOX-STATE-TRANSITION-COMPLETENESS-01`（每个 State const 必须是 `stateTransitions` 的 key，终态以空 slice key 自表达）。ClaimPending / ReclaimStale 无 `Mark*` 配对，由 SQL CAS 谓词 + conformance + LITERAL-BAN 守；SQL-text↔table-edge 绑定是 `...any` 天花板，明确接受 |
 
 4 条新 archtest 各含盲区清单 + 反向自检（`missingKeys` / literal matcher 单元测试 + blind-spot shape 断言），活在各 archtest 的 godoc。LITERAL-BAN 是 SQL `...any` 实参形态下「status 来自 String()」可达的最高档（无法 type-constrain）。
 
@@ -87,7 +87,7 @@ outbox entry **确实在运行时转移**（relay 在 Go 侧据 attempts 决定 
 | 未来加 `CellLifecycle` 枚举漏配 `AllCellLifecycles()` 数组 → `CellLifecycleRank`=-1 静默破坏排序 | CELL-LIFECYCLE-RANK-COMPLETENESS-01（CI 红） |
 | 未来加 outbox `State` 漏配转移表 → 静默死状态 | OUTBOX-STATE-TRANSITION-COMPLETENESS-01（CI 红） |
 | 未来在 PG outbox SQL 写裸 `"published"` 而非 `State.String()` | OUTBOX-STATE-LITERAL-BAN-01（CI 红）。盲区：非 outbox-命名的新 SQL 文件（已记 godoc） |
-| relay 新增 Go 侧 settlement 路径漏 TransitionState 断言 | OUTBOX-STATE-TRANSITION-GUARD-01。盲区：断言放在非 relay.go 文件（已记 godoc）。注：ClaimPending / ReclaimStale 的 SQL-CAS 转移不在 GUARD 覆盖范围，由 COMPLETENESS 全图守卫 |
+| relay 新增 Go 侧 settlement 路径漏 `Transition` 配对断言 | OUTBOX-STATE-TRANSITION-GUARD-01。盲区：断言放在非 relay.go 文件（已记 godoc，真·Medium 天花板）。注：ClaimPending / ReclaimStale 无 `Mark*` 配对，不在 GUARD 覆盖范围，由 SQL CAS + conformance + LITERAL-BAN + COMPLETENESS 守卫 |
 
 ## Consequences
 

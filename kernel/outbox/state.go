@@ -157,8 +157,11 @@ func (s State) ValidTransitions() []State {
 // Transition(_, StatePublished), and similarly for MarkDead/StateDead and
 // MarkRetry/StatePending. This pairing is enforced statically by
 // OUTBOX-STATE-TRANSITION-GUARD-01. Because the arguments are constants, these
-// calls cannot fail at runtime — their purpose is machine-readable pairing
-// documentation, not runtime correctness.
+// calls cannot fail at runtime against the current transition table — their
+// purpose is machine-readable pairing documentation, not runtime correctness.
+// The relay still propagates the returned error as a drift safety net: if a
+// legal edge is later removed from stateTransitions, the mismatch surfaces
+// loudly (relay returns the error) instead of silently diverging.
 //
 // # Store transitions without Transition calls
 //

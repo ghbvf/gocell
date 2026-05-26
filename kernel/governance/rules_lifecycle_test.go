@@ -59,7 +59,7 @@ func TestValidateLifecyclePhase(t *testing.T) {
 				Assemblies: map[string]*metadata.AssemblyMeta{},
 			}
 			v := NewValidator(project, ".", clock.Real())
-			results := v.validateLifecyclePhase()
+			results := v.validateCELLLIFECYCLE01()
 
 			var errCount int
 			for _, r := range results {
@@ -88,7 +88,7 @@ func TestValidateLifecyclePhase_MissingParentCell(t *testing.T) {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	results := NewValidator(project, ".", clock.Real()).validateLifecyclePhase()
+	results := NewValidator(project, ".", clock.Real()).validateCELLLIFECYCLE01()
 	// valid lifecycle + missing parent → no findings from this rule
 	for _, r := range results {
 		assert.NotEqual(t, SeverityError, r.Severity, "orphan slice with valid lifecycle must not error here")
@@ -109,7 +109,7 @@ func TestValidateLifecyclePhase_OrphanSliceInvalidLifecycle(t *testing.T) {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	results := NewValidator(project, ".", clock.Real()).validateLifecyclePhase()
+	results := NewValidator(project, ".", clock.Real()).validateCELLLIFECYCLE01()
 	var errCount int
 	for _, r := range results {
 		if r.Severity == SeverityError {
