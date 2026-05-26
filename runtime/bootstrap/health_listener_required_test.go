@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestPhase0_NoHealthListener_FailsFast pins the #673 fail-closed invariant:
@@ -58,7 +59,12 @@ func TestPhase0_NoHealthListener_FailsFast(t *testing.T) {
 			err := b.phase0ValidateOptions()
 
 			require.Error(t, err, "phase0 must fail-fast when no HealthListener is declared")
-			assert.Contains(t, err.Error(), "HealthListener",
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr, "fail-fast error must be a typed *errcode.Error")
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+				"missing HealthListener must surface ERR_CELL_INVALID_CONFIG (not just a message substring)")
+			assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+			assert.Contains(t, ecErr.Message, "HealthListener",
 				"error must name cell.HealthListener so operators know the fix")
 		})
 	}
@@ -78,7 +84,12 @@ func TestPhase0_MetricsHandler_NoHealthListener_FailsFast(t *testing.T) {
 	err := b.phase0ValidateOptions()
 
 	require.Error(t, err, "metrics handler without a HealthListener must fail-fast")
-	assert.Contains(t, err.Error(), "HealthListener")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "fail-fast error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"metrics-without-health must surface ERR_CELL_INVALID_CONFIG")
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "HealthListener")
 }
 
 // TestPhase0_HealthListenerDeclared_NoHealthError verifies the positive path:

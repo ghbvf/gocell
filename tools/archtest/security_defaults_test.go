@@ -123,8 +123,8 @@ func TestSecurityDefaults(t *testing.T) {
 		testSEC10HealthListenerRequiredInMain(t)
 	})
 
-	t.Run(secFailClosed10+"_no_dynamic_listenerref_in_main", func(t *testing.T) {
-		testSEC10NoDynamicListenerRefBlindSpotInProduction(t)
+	t.Run(secFailClosed10+"_no_dotimport_kernelcell_in_main", func(t *testing.T) {
+		testSEC10NoDotImportKernelCellBlindSpotInProduction(t)
 	})
 
 	t.Run(secFailClosed10+"_fixture_catches_primary_without_health", func(t *testing.T) {
@@ -1175,17 +1175,16 @@ func findAllProductionMainPackageFiles(root string) ([]string, error) {
 // import path, so an aliased `import kcell ".../kernel/cell"` is handled and a
 // bare `.Sel.Name == "HealthListener"` (Soft name-convention) match is avoided.
 //
-// Tool blind spot (ResolvePackageRef on package-symbol references): two shapes
-// are invisible —
-//  1. a ListenerRef fabricated by converting a dynamic string,
-//     `cell.ListenerRef(s)`, never references a named const. Closed by
-//     testSEC10NoDynamicListenerRefBlindSpotInProduction, which asserts no
-//     production main package contains that conversion.
-//  2. a dot-import `import . ".../kernel/cell"` referencing `PrimaryListener`
-//     as a bare ident, which walking *ast.SelectorExpr below would miss.
-//     Closed by testSEC10NoDynamicListenerRefBlindSpotInProduction, which also
-//     asserts no production main package dot-imports kernel/cell (so every
-//     listener-ref reference is a qualified selector this scan sees).
+// cell.ListenerRef is `type ListenerRef struct{ name string }` with an
+// unexported field. Outside kernel/cell a ListenerRef value can ONLY be obtained
+// by referencing one of the exported consts (PrimaryListener / InternalListener /
+// HealthListener): `cell.ListenerRef(s)` is not a valid conversion (string→struct)
+// and the struct literal is unconstructable (unexported field). Fabricating a
+// listener ref from a dynamic string is therefore type-system unexpressable in any
+// composition root and needs no archtest self-check. The one shape this
+// *ast.SelectorExpr walk would still miss is a dot-import `import . ".../kernel/cell"`
+// referencing the consts as bare idents; that is closed by
+// testSEC10NoDotImportKernelCellBlindSpotInProduction.
 func listenerRefsInPass(p *Pass) (primary, health bool, primaryLine int) {
 	for _, file := range p.Files {
 		if strings.HasSuffix(p.Rel(file), "_test.go") {
@@ -1210,25 +1209,28 @@ func listenerRefsInPass(p *Pass) (primary, health bool, primaryLine int) {
 	return primary, health, primaryLine
 }
 
-// dynamicListenerRefHits reports `cell.ListenerRef(...)` conversion CallExprs in
-// p — the only way to obtain a ListenerRef value without referencing a named
-// kernel/cell const, and therefore the blind spot of listenerRefsInPass.
-// Production composition roots use the named consts, so this must be empty.
-func dynamicListenerRefHits(p *Pass) []string {
-	var hits []string
-	for _, file := range p.Files {
-		if strings.HasSuffix(p.Rel(file), "_test.go") {
-			continue
-		}
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-			if !ok || pkgPath != kernelCellPkgPath || name != "ListenerRef" {
-				return
-			}
-			hits = append(hits, fmt.Sprintf("%s:%d", p.Rel(file), p.Fset.Position(call.Pos()).Line))
-		})
+// sec10Violations runs the full SEC-FAIL-CLOSED-10 rule against a single typed
+// pass: a `package main` that references cell.PrimaryListener (wires the public
+// listener) must also reference cell.HealthListener. It returns one diagnostic
+// string per violating package (nil for compliant or non-main packages).
+//
+// Both the production scan (testSEC10HealthListenerRequiredInMain) and the
+// positive-coverage fixture test (testSEC10FixtureCatchesPrimaryWithoutHealth)
+// drive this one function, so the fixture exercises the real rule path — the
+// package-main gate AND the primary-without-health detection — not merely the
+// listenerRefsInPass helper. A regression in the gate or the violation
+// construction is caught by the fixture's "exactly one violation" assertion.
+func sec10Violations(p *Pass) []string {
+	if p.Pkg == nil || p.Pkg.Name() != "main" {
+		return nil
 	}
-	return hits
+	primary, health, line := listenerRefsInPass(p)
+	if primary && !health {
+		return []string{
+			fmt.Sprintf("%s (references cell.PrimaryListener at line %d but never cell.HealthListener)", p.Pkg.Path(), line),
+		}
+	}
+	return nil
 }
 
 // testSEC10HealthListenerRequiredInMain enforces #673 at the composition-root
@@ -1240,14 +1242,7 @@ func testSEC10HealthListenerRequiredInMain(t *testing.T) {
 	t.Helper()
 	var violations []string
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.Pkg.Name() != "main" {
-			return nil
-		}
-		primary, health, line := listenerRefsInPass(p)
-		if primary && !health {
-			violations = append(violations,
-				fmt.Sprintf("%s (references cell.PrimaryListener at line %d but never cell.HealthListener)", p.Pkg.Path(), line))
-		}
+		violations = append(violations, sec10Violations(p)...)
 		return nil
 	})
 	for _, v := range violations {
@@ -1281,20 +1276,20 @@ func dotImportKernelCellHits(p *Pass) []string {
 	return hits
 }
 
-// testSEC10NoDynamicListenerRefBlindSpotInProduction closes both blind spots of
-// listenerRefsInPass: a `cell.ListenerRef(dynamicString)` conversion would
-// fabricate a listener ref invisible to the named-const scan, and a dot-import
-// of kernel/cell would make listener-ref references bare idents the
-// *ast.SelectorExpr walk misses. Production main packages must contain neither
-// shape (composition roots use the named consts via qualified imports).
-func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
+// testSEC10NoDotImportKernelCellBlindSpotInProduction closes the only blind spot
+// of listenerRefsInPass that is type-system expressable: a dot-import of
+// kernel/cell would make listener-ref references bare idents the *ast.SelectorExpr
+// walk misses. (The dynamic `cell.ListenerRef(string)` shape is unconstructable —
+// ListenerRef is a struct with an unexported field — so it needs no self-check;
+// see listenerRefsInPass godoc.) Production main packages must not dot-import
+// kernel/cell; composition roots use the named consts via qualified imports.
+func testSEC10NoDotImportKernelCellBlindSpotInProduction(t *testing.T) {
 	t.Helper()
 	var blindspots []string
 	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Name() != "main" {
 			return nil
 		}
-		blindspots = append(blindspots, dynamicListenerRefHits(p)...)
 		blindspots = append(blindspots, dotImportKernelCellHits(p)...)
 		return nil
 	})
@@ -1302,31 +1297,31 @@ func testSEC10NoDynamicListenerRefBlindSpotInProduction(t *testing.T) {
 		t.Logf("%s blind spot: %s", secFailClosed10, b)
 	}
 	assert.Empty(t, blindspots,
-		"SEC-FAIL-CLOSED-10: package main must not build a cell.ListenerRef via dynamic "+
-			"string conversion (cell.ListenerRef(x)) nor dot-import kernel/cell; use the named "+
-			"consts via a qualified import so the listener topology stays statically analyzable")
+		"SEC-FAIL-CLOSED-10: package main must not dot-import kernel/cell; use the named consts "+
+			"via a qualified import so the listener topology stays statically analyzable")
 }
 
 // testSEC10FixtureCatchesPrimaryWithoutHealth is the positive-coverage proof
-// that the rule fires. The build-tag-gated healthlistenerfixture references
-// cell.PrimaryListener (through a non-default alias, proving canonical-path
-// resolution) and never cell.HealthListener — the exact shape SEC-FAIL-CLOSED-10
-// must flag.
+// that the rule fires end-to-end. The build-tag-gated healthlistenerfixture is a
+// `package main` that references cell.PrimaryListener (through a non-default
+// alias, proving canonical-path resolution) and never cell.HealthListener — the
+// exact shape SEC-FAIL-CLOSED-10 must flag. Driving sec10Violations (not just the
+// listenerRefsInPass helper) proves the real rule path — the package-main gate
+// plus the primary-without-health detection — fires, so a regression in either
+// is caught.
 func testSEC10FixtureCatchesPrimaryWithoutHealth(t *testing.T) {
 	t.Helper()
-	var primary, health bool
+	var violations []string
 	_ = RunTypedFixture(t, FixtureOpts{Tests: false},
 		[]string{"./tools/archtest/internal/healthlistenerfixture"},
 		func(p *Pass) []Diagnostic {
-			gotPrimary, gotHealth, _ := listenerRefsInPass(p)
-			primary = primary || gotPrimary
-			health = health || gotHealth
+			violations = append(violations, sec10Violations(p)...)
 			return nil
 		})
-	require.True(t, primary,
-		"fixture must reference cell.PrimaryListener (through its kcell alias) so the rule's "+
-			"PrimaryListener detection is exercised")
-	assert.False(t, health,
-		"fixture must NOT reference cell.HealthListener — primary-without-health is the violating "+
-			"shape SEC-FAIL-CLOSED-10 catches")
+	require.Len(t, violations, 1,
+		"the primary-without-health fixture must produce exactly one SEC-FAIL-CLOSED-10 violation; "+
+			"this exercises the full rule path (package-main gate + primary-without-health detection), "+
+			"not just the listenerRefsInPass helper")
+	assert.Contains(t, violations[0], "cell.PrimaryListener",
+		"the violation message must name the offending listener ref")
 }

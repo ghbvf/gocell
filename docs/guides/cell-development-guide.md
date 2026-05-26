@@ -313,7 +313,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 - 所有 `/internal/v1/*` 路由必须挂在 `cell.InternalListener`；`FinalizeAuth()` 会在启动期校验内部前缀与 listener 归属一致。
 - 禁止在 `Route` / `Group` / `With` 嵌套子作用域里再次进入 `/internal/v1/*`——会触发 `chiRouterAdapter.guardNestedInternalRegistration` panic（顶层 Router 是内外 mux 分流的唯一入口）。
-- `/healthz` / `/readyz` / `/metrics` 只在 health listener；未声明 health listener 时才 fallback 到 primary。
+- `/healthz` / `/readyz` / `/metrics` 只在 health listener（`cell.HealthListener`）；未声明 health listener 时 bootstrap phase0 fail-fast（#673 起不再回退到 primary，也没有 opt-in 逃生口）。
 
 ### 7. 注册事件订阅（可选）
 

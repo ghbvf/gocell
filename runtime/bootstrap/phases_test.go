@@ -199,6 +199,48 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	}
 }
 
+// TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener pins the #673
+// reserved-boundary invariant: cell.HealthListener is framework-owned (it serves
+// only /healthz, /readyz, /metrics under CellID==""). A cell-owned RouteGroup
+// (CellID!="") targeting it would expose a business endpoint on the
+// unauthenticated loopback probe port, so phase5MountRouteGroups must fail-fast —
+// symmetric with the InternalListener guard. The check precedes the router
+// lookup, so the violation is rejected even when a HealthListener router exists.
+func TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener(t *testing.T) {
+	t.Parallel()
+	healthRtr, err := router.NewForListener(cell.HealthListener, router.WithRouterClock(clock.Real()))
+	require.NoError(t, err)
+
+	b := New(WithClock(clock.Real()))
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.HealthListener,
+			Prefix:   "/api/v1/rogue",
+			CellID:   "roguecell",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/leak", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+	}
+
+	err = b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.HealthListener: healthRtr,
+	}, groups)
+
+	require.Error(t, err, "cell-owned RouteGroup on cell.HealthListener must fail-fast")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"reserved-boundary violation must surface ERR_CELL_INVALID_CONFIG")
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "cell.HealthListener",
+		"message must name cell.HealthListener so operators know the fix")
+}
+
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {

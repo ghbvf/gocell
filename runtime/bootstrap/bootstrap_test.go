@@ -4391,16 +4391,18 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 	}
 }
 
-// duplicateHealthCell declares the same (method, path) twice on HealthListener,
-// triggering FinalizeAuth failure on the health router.
-// Note: health routes are usually registered by the framework, not by cells —
-// but a cell can still target HealthListener via RouteGroups().
-type duplicateHealthCell struct {
+// healthListenerTargetingCell declares a business RouteGroup on
+// cell.HealthListener — forbidden since #673: the health listener is reserved
+// for framework-owned /healthz, /readyz, /metrics (CellID==""), so
+// phase5MountRouteGroups rejects a cell-owned route there fail-fast. Before #673
+// a cell could silently mount on HealthListener (exposing business endpoints on
+// the unauthenticated probe port); that gap is exactly what the guard closes.
+type healthListenerTargetingCell struct {
 	*cell.BaseCell
 }
 
-func newDuplicateHealthCell(id string) *duplicateHealthCell {
-	return &duplicateHealthCell{
+func newHealthListenerTargetingCell(id string) *healthListenerTargetingCell {
+	return &healthListenerTargetingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   id,
 			Type: "core",
@@ -4408,26 +4410,17 @@ func newDuplicateHealthCell(id string) *duplicateHealthCell {
 	}
 }
 
-func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registrar) error {
+func (c *healthListenerTargetingCell) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
 	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.HealthListener,
+		Listener: cell.HealthListener, // reserved for framework — #673 rejects cell routes here
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
 			mustMount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
-				Public:   true,
-			})
-			// Duplicate declaration — must trigger FinalizeAuth error.
-			mustMount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
+				Contract: testHTTPContract("GET", "/api/v1/rogue-health"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
 				Public:   true,
 			})
 			return nil
@@ -4436,12 +4429,20 @@ func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registrar) erro
 	return nil
 }
 
-// TestBootstrap_Phase5_FinalizeFailure_OnHealthListener verifies that a
-// FinalizeAuth failure on the HealthListener is propagated as a Bootstrap.Run
-// error and triggers assembly rollback (TEST-13).
-func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-health", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	require.NoError(t, asm.Register(newDuplicateHealthCell("dup-health-cell")))
+// TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack verifies the #673
+// reserved-boundary guard end-to-end: a cell that declares a RouteGroup on
+// cell.HealthListener makes Bootstrap.Run fail with ERR_CELL_INVALID_CONFIG
+// (phase5MountRouteGroups rejects it before any server starts) and triggers
+// assembly rollback. The unit-level guard is covered by
+// TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener; this is the
+// Run-path + rollback proof. (Pre-#673 this test injected a duplicate auth
+// declaration via a cell-owned health RouteGroup to exercise FinalizeAuth
+// failure on the health router — that path is now structurally impossible, and
+// finalize-failure propagation on a non-primary listener stays covered by
+// TestBootstrap_Phase5_FinalizeFailure_OnInternalListener.)
+func TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-rogue-health", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Register(newHealthListenerTargetingCell("rogue-health-cell")))
 
 	b := New(
 		WithClock(clock.Real()),
@@ -4455,9 +4456,13 @@ func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
 	defer cancel()
 
 	err := b.Run(ctx)
-	require.Error(t, err, "Bootstrap.Run must return error when HealthListener FinalizeAuth fails")
-	assert.Contains(t, err.Error(), "duplicate auth declaration",
-		"error must identify the duplicate declaration")
+	require.Error(t, err, "Bootstrap.Run must fail when a cell targets cell.HealthListener")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "guard error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"reserved-boundary violation must surface ERR_CELL_INVALID_CONFIG")
+	assert.Contains(t, ecErr.Message, "cell.HealthListener",
+		"error must name cell.HealthListener so operators know the fix")
 
 	// After rollback, cells must be stopped.
 	h := asm.Health()

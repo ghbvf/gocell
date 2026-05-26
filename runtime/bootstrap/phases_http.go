@@ -150,6 +150,18 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 // OPS-02: wraps registration errors with cell ID, group index, listener, and prefix context.
 func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.Router, groups []cell.RouteGroup) error {
 	for i, rg := range groups {
+		// #673: cell.HealthListener is reserved for framework-owned health routes
+		// (/healthz, /readyz, /metrics; CellID==""). A cell-owned RouteGroup
+		// (CellID!="") targeting it would expose business endpoints on the
+		// unauthenticated loopback probe port — reject at mount time, mirroring
+		// the InternalListener boundary (validateInternalGuardForDeclaredRoutes).
+		if rg.Listener == cell.HealthListener && rg.CellID != "" {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"bootstrap: cell-owned RouteGroup must not target cell.HealthListener "+
+					"(reserved for framework /healthz, /readyz, /metrics); declare it on "+
+					"cell.PrimaryListener or cell.InternalListener instead",
+				errcode.WithInternal(fmt.Sprintf("cellID=%q prefix=%q", rg.CellID, rg.Prefix)))
+		}
 		rtr, ok := routers[rg.Listener]
 		if !ok {
 			return fmt.Errorf("bootstrap: RouteGroup references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
