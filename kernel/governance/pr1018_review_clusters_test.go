@@ -118,8 +118,10 @@ func TestCheckCH04_CanceledRunCtx_ShortCircuits(t *testing.T) {
 
 	v := NewValidator(project, root, clock.Real())
 
-	// Sanity: without cancellation the rule produces a finding (non-vacuous).
-	require.NotEmpty(t, v.checkCH04(), "control: CH-04 must produce a finding when not canceled")
+	// Sanity: without cancellation the rule produces a CH-04 finding (non-vacuous).
+	sanity := v.checkCH04()
+	require.NotEmpty(t, sanity, "control: CH-04 must produce a finding when not canceled")
+	assert.Equal(t, codeCH04, sanity[0].Code, "control finding must be CH-04, not a side effect")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -148,6 +150,146 @@ func TestCheckCH04_ParseFailureMessage_NoAbsolutePath(t *testing.T) {
 	require.NotEmpty(t, results)
 	assert.NotContains(t, results[0].Message, root,
 		"parse-failure message must not leak the absolute CI-worker path")
+	assert.NotContains(t, results[0].Fix, root,
+		"parse-failure Fix must not leak the absolute CI-worker path either")
+}
+
+// C1/F8 (round-2) — CH-05 parse-failure message must also redact the absolute
+// path; F8 round-1 only covered CH-04.
+func TestCheckCH05_ParseFailureMessage_NoAbsolutePath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sliceAbsDir, "handler.go"),
+		[]byte("package x\n\nfunc broken( {\n"), 0o644))
+
+	project := makeProject(contractID, sliceRelDir)
+	c := makeContract(contractID, "contracts/http/test/v1/contract.yaml", nil)
+	c.Endpoints.HTTP.PathParams = map[string]metadata.ParamSchema{"id": {Format: "uuid"}}
+	project.Contracts[contractID] = c
+
+	results := NewValidator(project, root, clock.Real()).checkCH05()
+	require.NotEmpty(t, results)
+	assert.NotContains(t, results[0].Message, root,
+		"CH-05 parse-failure message must not leak the absolute path (symmetric with CH-04)")
+}
+
+// C5/F9 (round-2) — two identical dynamic-Kind writes must yield exactly one
+// (deduplicated) CH-04 finding.
+func TestCheckCH04_DynamicWrite_Deduped(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	writeHandlerFile(t, sliceAbsDir, contractID, `
+var dynKind = errcode.KindInvalid
+
+func h(w http.ResponseWriter, r *http.Request) {
+	_ = errcode.New(dynKind, errcode.ErrValidationFailed, "a")
+	_ = errcode.New(dynKind, errcode.ErrValidationFailed, "b")
+}
+`)
+	project := makeProject(contractID, sliceRelDir)
+	project.Contracts[contractID] = makeContract(contractID,
+		"contracts/http/test/v1/contract.yaml", nil)
+
+	results := NewValidator(project, root, clock.Real()).checkCH04()
+	ch04 := 0
+	for _, r := range results {
+		if r.Code == codeCH04 {
+			ch04++
+		}
+	}
+	assert.Equal(t, 1, ch04,
+		"two identical dynamic-Kind writes must produce exactly one deduped CH-04 finding")
+}
+
+// C5/F9 (round-2) — an unknown httputil writer fails closed (CH-04 finding).
+func TestCheckCH04_UnknownHttputilHelper_FailsClosed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	writeHandlerFileWithHTTPUtil(t, sliceAbsDir, contractID, `
+func h(w http.ResponseWriter, r *http.Request) {
+	httputil.TotallyUnknownWriter(w, r)
+}
+`)
+	project := makeProject(contractID, sliceRelDir)
+	project.Contracts[contractID] = makeContract(contractID,
+		"contracts/http/test/v1/contract.yaml", nil)
+
+	results := NewValidator(project, root, clock.Real()).checkCH04()
+	require.NotEmpty(t, results,
+		"an unknown httputil writer must fail closed (CH-04 finding), not silent-skip")
+	assert.Equal(t, codeCH04, results[0].Code)
+}
+
+// C5/F9 (round-2) — httputil.WritePublic with a non-static Kind fails closed.
+func TestCheckCH04_WritePublicDynamicKind_FailsClosed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	writeHandlerFileWithHTTPUtil(t, sliceAbsDir, contractID, `
+func h(w http.ResponseWriter, r *http.Request) {
+	k := errcode.KindInvalid
+	httputil.WritePublic(w, r, k)
+}
+`)
+	project := makeProject(contractID, sliceRelDir)
+	project.Contracts[contractID] = makeContract(contractID,
+		"contracts/http/test/v1/contract.yaml", nil)
+
+	results := NewValidator(project, root, clock.Real()).checkCH04()
+	require.NotEmpty(t, results,
+		"WritePublic with a non-static Kind must fail closed (CH-04 finding)")
+	assert.Equal(t, codeCH04, results[0].Code)
+}
+
+// C5/F9 (round-2) — a generated handler whose canonical Handler.handle delegate
+// is absent must fail closed rather than fall back to a whole-file scan that
+// silently drops unresolved dynamic-write reasons.
+func TestCheckCH04_GeneratedHandlerMissingHandleMethod_FailsClosed(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const contractID = "http.test.v1"
+	genDir := filepath.Join(root, "generated", "contracts", "http", "test", "v1")
+	require.NoError(t, os.MkdirAll(genDir, 0o755))
+	src := "// Code generated by gocell generate contract. DO NOT EDIT.\n\n" +
+		"package x\n\n" +
+		`var spec = contractspec.ContractSpec{ID: "` + contractID + `"}` + "\n\n" +
+		"func someOtherMethod(w http.ResponseWriter, r *http.Request) {\n" +
+		"\tw.WriteHeader(http.StatusNotFound)\n}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(genDir, "handler_gen.go"), []byte(src), 0o644))
+
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	c := makeContract(contractID, "contracts/http/test/v1/contract.yaml",
+		map[int]metadata.HTTPResponseMeta{404: {}})
+	c.Codegen = true
+	project.Contracts[contractID] = c
+
+	results := NewValidator(project, root, clock.Real()).checkCH04()
+	require.NotEmpty(t, results,
+		"a generated handler missing its Handler.handle delegate must fail closed "+
+			"(correlation finding), not fall back to a whole-file scan that drops "+
+			"unresolved dynamic-write reasons")
+	assert.Equal(t, codeCH04, results[0].Code)
 }
 
 // C5/F9 — a handler writing a response via errcode.New with a non-static Kind
