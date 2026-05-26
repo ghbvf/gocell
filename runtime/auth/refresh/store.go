@@ -3,6 +3,8 @@ package refresh
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // Store persists refresh token chains with CAS-protected Rotate and
@@ -124,8 +126,14 @@ type Store interface {
 	// level cascade revoke is split because it also serves security responses
 	// to token reuse and compensating cleanup.
 	//
+	// tok is a capability proof minted exclusively by
+	// credentialinvalidate.Invalidator via credentialfence.Mint. Passing a
+	// nil FenceToken triggers a MustHave panic (B-class programmer error)
+	// in every implementation; callers outside the Invalidator must not
+	// call this method directly.
+	//
 	// Consistency: L1 LocalTx — single UPDATE.
-	RevokeUser(ctx context.Context, subjectID string) error
+	RevokeUser(ctx context.Context, subjectID string, tok credentialfence.FenceToken) error
 
 	// GC removes rows whose effective expiry has passed olderThan. Effective
 	// expiry is the earlier of expires_at (hard cap) and idle_expires_at

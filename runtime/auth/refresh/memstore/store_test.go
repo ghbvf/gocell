@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -173,4 +174,35 @@ func TestNewRejectsEmptyPolicy(t *testing.T) {
 	fakeClock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	_, err := memstore.New(refresh.Policy{}, fakeClock, nil)
 	require.Error(t, err, "New with empty Policy must return error")
+}
+
+// TestRevokeUserNilFenceTokenPanics verifies that passing a nil FenceToken to
+// RevokeUser triggers MustHave's B-class panic with errcode.Assertion payload.
+func TestRevokeUserNilFenceTokenPanics(t *testing.T) {
+	t.Parallel()
+	clk := storetest.NewFakeClock(baseTime)
+	store, err := memstore.New(
+		refresh.Policy{
+			ReuseInterval:  time.Second,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
+		clk,
+		nil,
+	)
+	require.NoError(t, err)
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = store.RevokeUser(context.Background(), "subject-1", nil)
+	}()
+
+	require.NotNil(t, recovered, "nil FenceToken must cause MustHave to panic")
+	// The panic payload must be an errcode.Assertion (*errcode.Error).
+	errcodeErr, ok := recovered.(*errcode.Error)
+	require.True(t, ok, "panic payload must be *errcode.Error, got %T", recovered)
+	require.Equal(t, errcode.KindInternal, errcodeErr.Kind,
+		"assertion panic must carry KindInternal")
 }

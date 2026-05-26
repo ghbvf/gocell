@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -445,7 +446,7 @@ func runT15AfterRevokeUser(t *testing.T, factory Factory) {
 	userAWire2, _ := mustIssue(t, store, "sess-a2", t15TargetSubject)
 	userBWire, _ := mustIssue(t, store, "sess-b1", t15OtherSubject)
 
-	require.NoError(t, store.RevokeUser(ctx, t15TargetSubject))
+	require.NoError(t, store.RevokeUser(ctx, t15TargetSubject, credentialfence.Mint()))
 
 	_, _, err := store.Rotate(ctx, userAWire1)
 	assert.ErrorIs(t, err, refresh.ErrRejected)
@@ -516,8 +517,8 @@ func runT18RevokeUser(t *testing.T, factory Factory) {
 	aWire, _ := mustIssue(t, store, "sess-18a", t18TargetSubject)
 	bWire, _ := mustIssue(t, store, "sess-18b", t18OtherSubject)
 
-	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject))
-	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject)) // idempotent
+	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject, credentialfence.Mint()))
+	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject, credentialfence.Mint())) // idempotent
 
 	_, _, err := store.Rotate(ctx, aWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected)
@@ -526,7 +527,7 @@ func runT18RevokeUser(t *testing.T, factory Factory) {
 	assert.NoError(t, err, "user-18B chain must survive RevokeUser(user-18A)")
 
 	// Unknown subject is a no-op.
-	require.NoError(t, store.RevokeUser(ctx, "nobody"))
+	require.NoError(t, store.RevokeUser(ctx, "nobody", credentialfence.Mint()))
 }
 
 func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {

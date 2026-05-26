@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -606,7 +607,8 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 
 // RevokeUser marks every row owned by subjectID as revoked.
 // Uses the ambient transaction from ctx when present (F1).
-func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string) error {
+func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string, tok credentialfence.FenceToken) error {
+	credentialfence.MustHave(tok, "refresh.Store.RevokeUser")
 	now := s.clock.Now()
 	if _, err := s.db.Exec(ctx, revokeUserSQL, now, subjectID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke user", err)
