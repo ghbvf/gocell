@@ -39,8 +39,6 @@
 -- ref: adapters/postgres/refresh_store.go — pg_advisory_xact_lock advisory lock pattern
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS audit_entries (
     id           UUID        PRIMARY KEY,
     namespace    TEXT        NOT NULL,

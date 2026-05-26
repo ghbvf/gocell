@@ -48,7 +48,6 @@
 -- additional security beyond the JWT claim comparison, so the column is removed.
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE sessions DROP COLUMN authz_epoch_at_issue;
 
 -- +goose Down
@@ -61,5 +60,4 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE sessions ADD COLUMN authz_epoch_at_issue BIGINT NOT NULL DEFAULT 0;

@@ -24,7 +24,6 @@
 -- Store.Issue requires non-zero epoch; storetest conformance enforces.
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE refresh_tokens ADD COLUMN authz_epoch_at_issue BIGINT NOT NULL DEFAULT 0;
 
 -- +goose Down
@@ -37,5 +36,4 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-SET LOCAL lock_timeout = '5s';
 ALTER TABLE refresh_tokens DROP COLUMN authz_epoch_at_issue;

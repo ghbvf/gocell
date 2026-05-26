@@ -26,8 +26,6 @@
 -- ref: dexidp/dex storage/sql identity-role join schema
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS roles (
     id           TEXT        PRIMARY KEY,
     name         TEXT        NOT NULL,

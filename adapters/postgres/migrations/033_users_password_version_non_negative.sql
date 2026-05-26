@@ -37,8 +37,6 @@
 -- ref: migration 032 users_failed_login_count_positive (same pattern)
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 ALTER TABLE users
     ADD CONSTRAINT users_password_version_non_negative CHECK (password_version >= 0);
 
@@ -55,7 +53,5 @@ BEGIN
     END IF;
 END $$;
 -- +goose StatementEnd
-
-SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_password_version_non_negative;

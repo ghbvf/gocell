@@ -42,15 +42,16 @@ DROP INDEX CONCURRENTLY IF EXISTS <index_name>;
 
 以保证回滚同样不阻塞写入，且支持 `IF EXISTS` 的幂等性。
 
-## 规则 4：事务型 migration 首行建议 `SET LOCAL lock_timeout = '5s'`
+## 规则 4：lock_timeout 由 migrator 在 session 级别自动注入
 
-不含 CONCURRENTLY 的事务型 migration（001/002/003 模式）应在 `-- +goose Up` 之后第一行写：
+`lock_timeout` 现在由 `adapters/postgres/migrator.go` 中的 `lockTimeoutSessionLocker` 在
+session 级别注入，并通过 `newGooseProvider` wiring 覆盖所有 applied migration（Up 和 Down，
+事务型和 `-- +goose no transaction` 均包含）。每次 migration 执行前 migrator 会以 session
+scope 设置 `lock_timeout = '5s'`，将 ACCESS EXCLUSIVE 锁的等待时间限制在 5 秒内，
+避免长时间阻塞生产写入。
 
-```sql
-SET LOCAL lock_timeout = '5s';
-```
-
-这将访问排他锁（ACCESS EXCLUSIVE）的等待时间限制在 5 秒内，避免长时间阻塞生产写入。
+**migration .sql 文件禁止自行写 `SET LOCAL lock_timeout`**——migrator 已在 session 层保证，
+per-file 重复设置是冗余的双重机制，应删除。
 
 ## 规则 5：INVALID 索引 pre-check 与启动期防线
 
@@ -88,7 +89,7 @@ DROP INDEX CONCURRENTLY <index_name>;
 
 - 必须在文件顶部注释块写明 Up 部署 runbook：drain traffic → goose up → deploy 新二进制 → 恢复 traffic。
 - 必须同时写明 Down 的 GUC（`gocell.allow_destructive_down=true`）与回退顺序。
-- 必须加 `SET LOCAL lock_timeout = '5s'`（规则 4）。
+- lock_timeout 由 migrator session 级别自动注入（规则 4），.sql 文件无需自行设置。
 - 如果未来运行时拓扑需要无停机滚动 DDL，按"两阶段 migration"拆：(a) 先放宽约束 / 让二进制停止写该列；
   (b) 等新二进制全量部署后再 DROP 列。当前 GoCell 仅 ship 自身，无外部 schema 消费方，单 PR + 计划停机更简单。
 

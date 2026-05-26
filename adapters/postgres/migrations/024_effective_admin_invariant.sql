@@ -31,8 +31,6 @@
 -- ref: dexidp/dex storage/sql — identity status guard composition
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 -- Pre-flight invariant check (S4.0 sanity gate): refuse to install the
 -- effective-admin trigger family on a database whose pre-existing state
 -- already violates the post-S4.0 invariant. Specifically: at least one
