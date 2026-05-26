@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -362,7 +363,10 @@ func TestStart_LeaderElect_EmitsLeaderElectMode(t *testing.T) {
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry()
 
-	var buf bytes.Buffer
+	// syncBuffer (not bare bytes.Buffer): the testwait closure below reads the
+	// buffer from this goroutine while the Start() goroutine writes the start
+	// log via slog — bytes.Buffer is not concurrency-safe (go test -race race).
+	var buf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger))
@@ -528,5 +532,245 @@ func TestAcquireLead_ReleaseFail_LogsWarn(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"definition_id":"def1"`) {
 		t.Errorf("release-failed log missing definition_id; logs=%s", logs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// test infra (PR #1108 review fixes)
+// ---------------------------------------------------------------------------
+
+// syncBuffer is a mutex-guarded io.Writer + String() for tests that read the
+// log buffer from one goroutine while a Coordinator goroutine writes slog
+// records to it. bytes.Buffer is NOT safe for concurrent Write/String
+// (go test -race data race) — see TestStart_LeaderElect_EmitsLeaderElectMode.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// errHeartbeatJournal wraps MemJournal and forces Heartbeat to return an error,
+// exercising heartbeatOnce's failure-logging path (C2).
+type errHeartbeatJournal struct {
+	*journal.MemJournal
+	err error
+}
+
+func (e *errHeartbeatJournal) Heartbeat(context.Context, idutil.SafeID, idutil.SafeID, time.Duration) (bool, error) {
+	return false, e.err
+}
+
+// ---------------------------------------------------------------------------
+// F5 — leader-elect rejects sub-millisecond LeaseDuration (distlock TTL floor)
+// ---------------------------------------------------------------------------
+
+// TestNewCoordinator_LeaderElect_RejectsSubMillisLease asserts that enabling
+// leader election with a sub-millisecond LeaseDuration fails fast at
+// construction (distlock.Acquire requires TTL >= distlock.MinTTL; without the
+// guard the coordinator would construct fine but every acquireLead would fail
+// at runtime → silently never drive). Single-process mode (no locker) must
+// still accept a sub-ms lease since distlock is not involved.
+func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
+	t.Parallel()
+	// Sub-ms lease that still satisfies Config.Validate (all >0, hb*2 < lease).
+	subMsCfg := Config{
+		PollInterval:      200 * time.Microsecond,
+		ClaimBatchSize:    16,
+		LeaseDuration:     500 * time.Microsecond,
+		HeartbeatInterval: 100 * time.Microsecond,
+	}
+	if err := subMsCfg.Validate(); err != nil {
+		t.Fatalf("precondition: sub-ms cfg must pass Config.Validate, got %v", err)
+	}
+
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	locker, _ := distlock.New(fd, clk)
+	j, _ := journal.NewMemJournal(clk)
+	reg, _ := ksaga.NewInMemoryRegistry()
+
+	// Leader-elect mode → must fail fast.
+	if _, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(subMsCfg), WithLeaderElect(locker)); err == nil {
+		t.Error("NewCoordinator(leader-elect, sub-ms lease) = nil error, want fail-fast")
+	} else if !strings.Contains(err.Error(), "LeaseDuration") {
+		t.Errorf("error = %q, want mention of LeaseDuration", err.Error())
+	}
+
+	// Single-process mode → sub-ms lease is fine (distlock not used).
+	if _, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(subMsCfg)); err != nil {
+		t.Errorf("NewCoordinator(single-process, sub-ms lease) = %v, want nil (distlock floor must not apply)", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F2 — lock key must be injective over SafeID's full charset
+// ---------------------------------------------------------------------------
+
+// TestLeaderElectLockKey_Injective asserts the lock-key builder is injective:
+// distinct (definitionID, instanceID) pairs must never collide. idutil.SafeID
+// permits ':' and '/' (id.go IsSafeID), so a naive "saga:{def}:{inst}" join is
+// ambiguous — (def="a:b", inst="c") and (def="a", inst="b:c") both yield the
+// same string. instance IDs are caller-supplied SafeIDs (NewInstance), so the
+// key must be injective over the full charset, not the current generator output.
+func TestLeaderElectLockKey_Injective(t *testing.T) {
+	t.Parallel()
+	collisionPairs := []struct {
+		defA, instA, defB, instB idutil.SafeID
+	}{
+		{"a:b", "c", "a", "b:c"},
+		{"x:y:z", "w", "x", "y:z:w"},
+		{"def:1", "inst", "def", "1:inst"},
+	}
+	for _, p := range collisionPairs {
+		ka := leaderElectLockKey(p.defA, p.instA)
+		kb := leaderElectLockKey(p.defB, p.instB)
+		if ka == kb {
+			t.Errorf("lock key collision: (%q,%q) and (%q,%q) both → %q; key builder must be injective over SafeID's full charset (':' and '/' are valid)",
+				p.defA, p.instA, p.defB, p.instB, ka)
+		}
+	}
+	// Distinct instances of the same definition still differ.
+	if leaderElectLockKey("d", "i1") == leaderElectLockKey("d", "i2") {
+		t.Error("distinct instance IDs produced the same lock key")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// C2 — heartbeat failure log includes definition_id
+// ---------------------------------------------------------------------------
+
+// TestHeartbeatOnce_FailureLogIncludesDefinitionID asserts the heartbeat-failed
+// log line carries definition_id (so multi-definition deployments can attribute
+// a failing heartbeat). definition_id is sourced from the activeLeases entry.
+func TestHeartbeatOnce_FailureLogIncludesDefinitionID(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	mem, _ := journal.NewMemJournal(clk)
+	j := &errHeartbeatJournal{MemJournal: mem, err: errors.New("simulated heartbeat I/O failure")}
+	reg, _ := ksaga.NewInMemoryRegistry()
+	var buf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	c.activeLeases.Store(idutil.SafeID("inst-x"), inflightDrive{
+		leaseID: "lease-x",
+		defID:   "def-x",
+		release: func() {},
+	})
+	c.heartbeatOnce(context.Background())
+
+	logs := buf.String()
+	if !strings.Contains(logs, "heartbeat failed") {
+		t.Fatalf("no heartbeat-failed log emitted; logs=%s", logs)
+	}
+	if !strings.Contains(logs, `"definition_id":"def-x"`) {
+		t.Errorf("heartbeat-failed log missing definition_id; logs=%s", logs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F1 — Stop releases in-flight distlocks so takeover is not blocked by a
+//      wedged (non-cooperative) step
+// ---------------------------------------------------------------------------
+
+// TestStop_ReleasesInflightLockOnShutdown asserts that when Stop's drain budget
+// is exhausted by a non-cooperative step (one that ignores ctx.Done()), the
+// in-flight distlock is explicitly released so another coordinator can take
+// over (journal lease_id CAS fences the orphaned step at commit). Without the
+// fix the distlock auto-renews until the step returns or the process dies,
+// blocking takeover indefinitely (vs the bounded-TTL takeover etcd/redsync
+// guarantee).
+func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
+	t.Parallel()
+	const defID idutil.SafeID = "stopdef"
+
+	stepEntered := make(chan struct{})
+	stepBlockCh := make(chan struct{})
+	var enterOnce sync.Once
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{{
+			Name: "wedgedstep",
+			// Non-cooperative: blocks ONLY on stepBlockCh, never selects on
+			// ctx.Done(). A cooperative step would return on cancel and release
+			// the lock the normal way — not exercising the F1 fix.
+			Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+				enterOnce.Do(func() { close(stepEntered) })
+				<-stepBlockCh
+				return []byte(`{}`), nil
+			},
+		}},
+	}
+
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	locker, _ := distlock.New(fd, clk)
+	j, _ := journal.NewMemJournal(clk)
+	reg, _ := ksaga.NewInMemoryRegistry(def)
+	c, _ := newLeaderElectCoordinator(t, j, clk, reg, locker)
+
+	inst := ksaga.NewInstance("stopinst", defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startDone := make(chan error, 1)
+	go func() { startDone <- c.Start(ctx) }()
+	select {
+	case <-c.Ready():
+	case <-time.After(testtime.D2s):
+		t.Fatal("coordinator not ready")
+	}
+
+	testwait.External(t, "tickers-registered",
+		func() bool { return clk.PendingTickers() >= 2 },
+		testtime.D2s, testtime.D1ms)
+	clk.Advance(leaderElectCfg().PollInterval) // fire a tick → claim + wedge
+
+	select {
+	case <-stepEntered:
+	case <-time.After(testtime.D2s):
+		t.Fatal("wedged step did not start")
+	}
+	if got := len(fd.Snapshot()); got != 1 {
+		t.Fatalf("distlock not held while drive in-flight; snapshot=%v", fd.Snapshot())
+	}
+
+	// Short Stop budget: the wedged step outlives drain, forcing the explicit
+	// release path. Stop returns a drain-timeout error; the lock release is
+	// what we assert.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D200ms)
+	defer stopCancel()
+	_ = c.Stop(stopCtx)
+
+	if got := len(fd.Snapshot()); got != 0 {
+		t.Errorf("distlock still held after Stop with a wedged step; F1: Stop must release in-flight locks. snapshot=%v", fd.Snapshot())
+	}
+
+	// Cleanup: unblock the step + cancel so goroutines drain (goleak TestMain).
+	close(stepBlockCh)
+	cancel()
+	select {
+	case <-startDone:
+	case <-time.After(testtime.D3s):
+		t.Error("coordinator goroutine did not exit after unblocking step")
 	}
 }
