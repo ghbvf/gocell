@@ -49,7 +49,7 @@ import (
 // Adding/removing methods OR changing any signature here is a contract change
 // that must be paired with an ADR amendment (ADR 202605222309).
 var expectedUserRepoMethodSignatures = map[string]string{
-	"BumpAuthzEpoch":   "(ctx context.Context, userID string) (newEpoch int64, err error)",
+	"BumpAuthzEpoch":   "(ctx context.Context, userID string, tok credentialfence.FenceToken) (newEpoch int64, err error)",
 	"Create":           "(ctx context.Context, user *domain.User) error",
 	"Delete":           "(ctx context.Context, id string) error",
 	"GetByID":          "(ctx context.Context, id string) (*domain.User, error)",
