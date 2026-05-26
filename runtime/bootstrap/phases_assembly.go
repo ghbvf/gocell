@@ -166,9 +166,10 @@ func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 
 // validateAssemblyClockAlignment ensures that when a pre-built assembly is
 // supplied via WithAssembly, its internal clock matches the bootstrap clock
-// set via WithClock. A mismatch means lifecycle / shutdown timers and cell
-// Dependencies.Clock would disagree on the current time — a subtle source of
-// flakiness in tests and incorrect timeout behavior in production.
+// passed as the first param to bootstrap.New(clk, ...). A mismatch means
+// lifecycle / shutdown timers and cell Dependencies.Clock would disagree on
+// the current time — a subtle source of flakiness in tests and incorrect
+// timeout behavior in production.
 //
 // Callers must pass the same clock.Clock instance to both:
 //

@@ -506,7 +506,7 @@ func buildAccessCoreMemOptions(tb testing.TB, clk clock.Clock) []accesscore.Opti
 
 ```go
 func TestMyCell_Lifecycle(t *testing.T) {
-    c := NewMyCell(WithInMemoryDefaults(), WithClock(clock.Real()))
+    c := NewMyCell(clock.Real(), WithInMemoryDefaults()) // clock is the first required positional parameter; WithClock option is removed.
     ctx := context.Background()
     rec := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 
@@ -560,8 +560,8 @@ func TestIntegration_MyCellSmoke(t *testing.T) {
 
     repo := newPostgresRepo(dsn)
     c := NewMyCell(
+        clock.Real(), // clock is the first required positional parameter; WithClock option is removed.
         WithPostgresRepo(repo),
-        WithClock(clock.Real()),
     )
     rec := cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)
 

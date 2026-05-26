@@ -283,12 +283,12 @@ func main() {
     defer cancel()
 
     clk := clock.Real()
-    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo, Clock: clk})
+    asm := assembly.New(clk, assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
     asm.Register(mycell.New())
 
     app := bootstrap.New(
+        clk,
         bootstrap.WithAssembly(asm),
-        bootstrap.WithClock(clk),
         // QUICKSTART ONLY — auth.AuthNone disables JWT entirely on the public
         // listener. Production wires `auth.NewAuthJWTFromAssembly(asm)` here
         // (PrimaryListener) and `auth.NewAuthServiceToken(store, ring)` on
@@ -417,7 +417,7 @@ CI (`make verify`) and can be reproduced locally:
 | `PROD-CLOCK-INJECTION-01` | `tools/archtest TestProdClockInjection` | Production code must inject `kernel/clock.Clock`; stdlib `time.Now / Since / Until / NewTimer / NewTicker / After / AfterFunc / Tick / Sleep` are forbidden outside leaf adapters |
 | `KERNEL-CLOCK-LEAF-FALLBACK-01` | `tools/archtest TestKernelClockLeafFallback` | Leaf code must not silently default to `clock.Real()` — composition root must inject explicitly |
 | `KERNEL-CLOCK-RESET-RELATIVE-PROD-01` | `tools/archtest TestKernelClockResetRelativeProd` | Production code must use `Timer.ResetAt(deadline)` rather than `Timer.Reset(d duration)` to eliminate read-then-act race |
-| `CLOCK-INJECTION-TEST-CALLSITE-01` | `tools/archtest TestClockInjectionCallsite` | Every `*_test.go` callsite of a constructor whose package exports `WithClock(Clock)` and accepts variadic Options must include `WithClock(...)` among the options. v1 covers option-pattern only; positional Clock parameters are out of scope. |
+| `CLOCK-POSITIONAL-INJECTION-01` | `tools/archtest TestClockPositionalInjection` | Downstream Hard: bans `MustHaveClock` selector args and clock option-injectors (any exported `With*Clock` function). Clock is a mandatory first positional parameter; the compiler enforces its presence. |
 | `PROD-CLOCKMOCK-IMPORT-01` | `.golangci.yml depguard rule clockmock-test-only` | Production code must not import `kernel/clock/clockmock` (test-helper packages under `**/testutil/` and `**/storetest/` are exempt) |
 | `LAYER-01..04` | `.golangci.yml depguard rules kernel/pkg/runtime/adapters-isolation` | Layered import boundaries (kernel ⇏ runtime/adapters/cells, etc.) |
 | `SUPPLY-CHAIN-VULN` | `hack/verify-supply-chain-clean.sh`, `govulncheck`, `gosec`, Semgrep, CodeQL | Vulnerable dependencies + insecure code patterns |

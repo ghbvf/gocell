@@ -16,7 +16,7 @@ import (
 
 // testEpoch is a fixed deterministic time used by test callsites that need
 // a clock but do not exercise time-sensitive logic. Using a named constant
-// avoids magic literals and satisfies CLOCK-INJECTION-TEST-CALLSITE-01.
+// avoids magic literals.
 var testEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // Compile-time assertion: Adapter satisfies ManagedResource.

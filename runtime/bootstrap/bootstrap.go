@@ -154,7 +154,7 @@ type Bootstrap struct {
 	runOnce sync.Once // Run() single-execution guard
 
 	// --- time source ---
-	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
+	clock clock.Clock // required: first positional param of bootstrap.New(clk, opts...); MustHaveClock guards typed-nil
 
 	// --- owner ctx: long-lived worker context (controller-runtime pattern) ---
 	// Derived from runCtx (background-derived assembly runtime ctx) in Run(),

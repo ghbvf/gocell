@@ -132,10 +132,8 @@ func mustNewService(
 	opts ...Option,
 ) *Service {
 	lockoutSvc := newTestLockout(userRepo, sessionStore, refreshStore)
-	// CLOCK-INJECTION-TEST-CALLSITE-01 scans the NewService argument tree for
-	// a WithClock literal; the slice-literal form here keeps the call site
-	// statically detectable (caller opts are spread on top as in the original
-	// mustNewService).
+	// clk is the first required positional param; pass clockmock.New() (tests)
+	// or clock.Real() (production).
 	s, err := NewService(clock.Real(), userRepo, sessionStore, roleRepo, refreshStore, issuer, logger,
 		append([]Option{WithAccountLockout(lockoutSvc)}, opts...)...)
 	if err != nil {
