@@ -271,7 +271,10 @@ func TestDefinition_Validate(t *testing.T) {
 				return &Definition{
 					ID: idutil.SafeID("saga-step-retry-ok"),
 					Steps: []Step{
-						{Name: idutil.SafeID("s1"), Run: noopStepFunc, RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D1s, MaxInterval: testtime.D30s}},
+						{
+							Name: idutil.SafeID("s1"), Run: noopStepFunc,
+							RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D1s, MaxInterval: testtime.D30s},
+						},
 					},
 				}
 			},
@@ -305,7 +308,10 @@ func TestDefinition_Validate(t *testing.T) {
 				return &Definition{
 					ID: idutil.SafeID("saga-step-retry-inv"),
 					Steps: []Step{
-						{Name: idutil.SafeID("s1"), Run: noopStepFunc, RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D30s, MaxInterval: testtime.D1s}},
+						{
+							Name: idutil.SafeID("s1"), Run: noopStepFunc,
+							RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D30s, MaxInterval: testtime.D1s},
+						},
 					},
 				}
 			},

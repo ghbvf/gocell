@@ -178,56 +178,8 @@ func (d *Definition) Validate() error {
 	}
 	seen := make(map[idutil.SafeID]int, len(d.Steps))
 	for i, step := range d.Steps {
-		if step.Name == "" {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"saga definition: step missing Name",
-				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.Int("stepIndex", i),
-				),
-			)
-		}
-		if err := step.Name.Validate(); err != nil {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"saga definition: invalid step Name",
-				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.Int("stepIndex", i),
-					slog.String("stepName", string(step.Name)),
-				),
-				errcode.WithInternal(err.Error()),
-			)
-		}
-		if step.Run == nil {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"saga definition: step Run must not be nil",
-				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.Int("stepIndex", i),
-					slog.String("stepName", string(step.Name)),
-				),
-			)
-		}
-		if step.Timeout < 0 {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"saga definition: step Timeout must be >= 0",
-				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.Int("stepIndex", i),
-					slog.String("stepName", string(step.Name)),
-				),
-			)
-		}
-		if err := step.RetryPolicy.Validate(); err != nil {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"saga definition: invalid step RetryPolicy",
-				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.Int("stepIndex", i),
-					slog.String("stepName", string(step.Name)),
-				),
-				errcode.WithInternal(err.Error()),
-			)
+		if err := d.validateStep(i, step); err != nil {
+			return err
 		}
 		if prev, dup := seen[step.Name]; dup {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
@@ -241,6 +193,56 @@ func (d *Definition) Validate() error {
 			)
 		}
 		seen[step.Name] = i
+	}
+	return nil
+}
+
+// validateStep validates a single step's fields (Name / Run / Timeout /
+// RetryPolicy). Duplicate-name detection stays in Validate, which owns the
+// per-Definition seen map. Split out to keep Validate's cognitive complexity
+// within budget.
+func (d *Definition) validateStep(i int, step Step) error {
+	stepDetails := func() []slog.Attr {
+		return []slog.Attr{
+			slog.String("definitionId", string(d.ID)),
+			slog.Int("stepIndex", i),
+			slog.String("stepName", string(step.Name)),
+		}
+	}
+	if step.Name == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga definition: step missing Name",
+			errcode.WithDetails(
+				slog.String("definitionId", string(d.ID)),
+				slog.Int("stepIndex", i),
+			),
+		)
+	}
+	if err := step.Name.Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga definition: invalid step Name",
+			errcode.WithDetails(stepDetails()...),
+			errcode.WithInternal(err.Error()),
+		)
+	}
+	if step.Run == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga definition: step Run must not be nil",
+			errcode.WithDetails(stepDetails()...),
+		)
+	}
+	if step.Timeout < 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga definition: step Timeout must be >= 0",
+			errcode.WithDetails(stepDetails()...),
+		)
+	}
+	if err := step.RetryPolicy.Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga definition: invalid step RetryPolicy",
+			errcode.WithDetails(stepDetails()...),
+			errcode.WithInternal(err.Error()),
+		)
 	}
 	return nil
 }
