@@ -56,24 +56,37 @@ C 类 re-throw（框架生命周期）保留 bare panic，需在注释中声明�
 
 archtest `PANIC-REGISTERED-01` 拦截非豁免文件中出现的裸 `panic`（recover 块内 re-throw 需在 `architecturalPanicWhitelist` 中显式注册）。
 
-### Decision 2 — `Error.Details` 改 `[]slog.Attr`，`WithDetails(...slog.Attr)`
+### Decision 2 — sealed PublicDetail / InternalDetail newtypes (revised 2026-05-27, see §Amendment)
 
 ```go
-// 新签名
-func WithDetails(attrs ...slog.Attr) Option
+// pkg/errcode/details.go — sealed (unexported fields)
+type PublicDetail   struct { key string; value any }
+type InternalDetail struct { key string; value any }
 
-// 调用示例
+func PublicAttr(key string, value any) PublicDetail
+func InternalAttr(key string, value any) InternalDetail
+
+// pkg/errcode/errcode.go
+func WithDetails(details ...PublicDetail) Option
+func WithInternal(details ...InternalDetail) Option
+
+// Call sites
 errcode.New(ErrNotFound, "device not found",
     errcode.WithDetails(
-        slog.String("deviceId", id),
-        slog.Int("retryCount", n),
+        errcode.PublicAttr("deviceId", id),
+        errcode.PublicAttr("retryCount", n),
     ))
 ```
 
-删除 `attrsToMap` helper（单源治理）。`[]slog.Attr` 是 `log/slog` 标准类型，编译器保证
-key 为 `string`，value 为 `slog.Value`（类型安全）。
+Outside-package construction of `PublicDetail` / `InternalDetail` is a Go
+compile error (unexported fields). Same-field-set re-shape and type-alias
+re-export are also rejected by Go's nominal type system. `attrsToMap` was
+removed in this ADR's original landing; `MustValidateDetailsKinds` was removed
+in the 2026-05-27 amendment after sealing made the bypass paths inexpressible.
 
-archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]any` 形式调用 `WithDetails` 的旧式代码。
+Original Decision 2 used `WithDetails(...slog.Attr)` guarded by archtest
+DETAILS-SLOG-ATTR-01 (Medium); see §Amendment 2026-05-27 for the upgrade
+rationale and details.
 
 ### Decision 3 — `Error.MarshalJSON()` 输出 wire `details: array<{key,value}>`
 
@@ -116,13 +129,13 @@ wire schema 不向后兼容（`object` → `array`）。GoCell 宪法保证无�
 
 ### Decision 4 — `errcode.New/Wrap` message 必须 const literal
 
-message 参数语义收窄为"固定的、程序员写死的描述性文本"。runtime 数据通道：
+message 参数语义收窄为"固定的、程序员写死的描述性文本"。runtime 数据通道（revised 2026-05-27 to match the sealed types from §Amendment）：
 
 | 通道 | API | 4xx 客户端可见 | 5xx 客户端可见 | 服务端日志 |
 |------|-----|--------------|--------------|-----------|
 | message | const literal | 是 | 是 | 是 |
-| details | `WithDetails(slog.Attr...)` | 是 | 否（框架 strip） | 是 |
-| internal | `WithInternal(string)` | 否 | 否 | 是 |
+| details | `WithDetails(errcode.PublicAttr(k, v))` | 是 | 否（框架 strip） | 是 |
+| internal | `WithInternal(errcode.InternalAttr(k, v))` | 否 | 否 | 是 |
 
 archtest `MESSAGE-CONST-LITERAL-01` 静态检查：`errcode.New` / `errcode.Wrap` 第三参数位置
 （message 位置）出现 `fmt.Sprintf` 调用或字符串 `+` 拼接时报错。`errcode.Assertion` 和
@@ -183,4 +196,117 @@ var-string，archtest 只能在 helper 自身处豁免。后续工作见 backlog
 - PR #368 errcode 残留收口审计
 - `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8（Span Error Redaction）
 - `docs/architecture/202605031600-adr-v1-schema-evolution.md` §5（error envelope 保持 strict）
-- `.claude/rules/gocell/error-handling.md` §4-6（MESSAGE-CONST-LITERAL-01 / PANIC-REGISTERED-01 / DETAILS-SLOG-ATTR-01）
+- `.claude/rules/gocell/error-handling.md` §"Details 类型安全：PublicDetail" / §"Message PII 静态字面量约束"
+
+## Amendment 2026-05-27 — sealed PublicDetail / InternalDetail newtype (#1035)
+
+> Status: Accepted
+> Date: 2026-05-27
+> PR: #1035
+
+### Trigger
+
+DETAILS-SLOG-ATTR-01 archtest was AI-robust **Medium** — AST scanner rejecting
+`WithDetails(map[string]any{...})` / `WithDetails(slog.Any(...))` / `WithDetails(slog.Group(...))`
+after the fact. A misconfigured archtest entry, a hand-built `*errcode.Error`
+literal bypassing `WithDetails`, or a future AI co-author silently broadening the
+input type would all reintroduce the wire-shape risk this ADR closed. The
+matching rule MESSAGE-CONST-LITERAL-01 covers the `message` parameter and stays
+Medium because Go cannot express "const literal only" at the type level; the
+Details / Internal channels, however, have an expressible upgrade.
+
+### Amendment
+
+Replace Decision 2's signature with the sealed-construction Hard pattern from
+`.claude/rules/gocell/ai-robust.md` §Hard 范本目录 "sealed construction":
+
+```go
+// pkg/errcode/details.go — unexported fields prevent outside-package construction
+type PublicDetail   struct { key string; value any }
+type InternalDetail struct { key string; value any }
+
+func PublicAttr(key string, value any) PublicDetail   { return PublicDetail{key, value} }
+func InternalAttr(key string, value any) InternalDetail { return InternalDetail{key, value} }
+
+func (d PublicDetail)  MarshalJSON() ([]byte, error) // preserves wire schema {"key":...,"value":...}
+func (d PublicDetail)  Key() string                  // accessor
+func (d PublicDetail)  Value() any                   // accessor
+func (d PublicDetail)  AsSlogAttr() slog.Attr        // for slog forwarding
+
+// errcode.go
+func WithDetails(details ...PublicDetail) Option
+func WithInternal(details ...InternalDetail) Option
+
+type Error struct {
+    ...
+    Details         []PublicDetail
+    InternalDetails []InternalDetail
+    ...
+}
+```
+
+`MustValidateDetailsKinds` / `isWireSafeAttrKind` / wire-unsafe sentinels (`<UNSUPPORTED_KIND>`
+/ `<UNSUPPORTED_VALUE>`) are deleted: outside-package construction of `PublicDetail`
+is impossible in Go's type system, so the bypass paths the validators guarded no
+longer exist. JSON-marshalability remains enforced by `json.Marshal` at the wire
+boundary (errors surface as `Error.MarshalJSON` failures, caught by
+`pkg/httputil.writeErrorBody`'s sentinel fallback).
+
+### Three-layer table revision
+
+The Decision 4 channel table is restated for the new types:
+
+| 通道 | API | 4xx wire | 5xx wire | server-side slog |
+|------|-----|---------|---------|------------------|
+| Message | `errcode.New(kind, code, "literal", ...)` — const literal | ✓ | ✓ | ✓ |
+| Details | `WithDetails(errcode.PublicAttr("k", v))` — sealed `[]PublicDetail` | ✓ | strip → `[]` | ✓ |
+| Internal | `WithInternal(errcode.InternalAttr("k", v))` — sealed `[]InternalDetail` | ✗ | ✗ | ✓ |
+
+`InternalAttr` accepts arbitrary key/value pairs (the channel is server-only;
+runtime data including `fmt.Sprintf` output flows here). For free-form
+diagnostic strings, callers may use the conventional `_` sentinel key
+(`InternalAttr("_", fmt.Sprintf(...))`) — `Error.Error()` renders a single
+`_`-keyed entry as the bare value, preserving the pre-amendment Error() output
+format.
+
+### Archtest fate
+
+| Archtest | Before | After | Rationale |
+|----------|--------|-------|-----------|
+| `DETAILS-SLOG-ATTR-01` | Medium AST scanner | **retired** | Compile-time check via sealed `WithDetails(...PublicDetail)`; wire-unsafe inputs are not expressible |
+| `MESSAGE-CONST-LITERAL-01` | Medium (typed) | Medium (unchanged) | Guards `errcode.New/Wrap` `message string` parameter — Go cannot express "const literal only" at type level; archtest remains the only enforcement |
+| `errcodeKindLiteralCarveOuts` registry + `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` | Hard | Hard (unchanged) | Carve-outs target `Message` channel, not Details / Internal |
+
+The Decision-2 sentence "archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]any`
+形式调用 `WithDetails` 的旧式代码" is **superseded by this amendment**;
+references to that archtest in `.claude/rules/gocell/error-handling.md` and
+`.claude/rules/gocell/observability.md` are updated in the same PR.
+
+### Why MESSAGE-CONST-LITERAL-01 does not retire
+
+Sealing the `message` parameter (e.g. `type MessageLiteral string` newtype)
+would not buy additional safety: any `string` can wrap into the newtype at
+runtime (`MessageLiteral("dynamic")`), so the const-literal restriction remains
+expressible only at the AST level. The archtest stays Medium with the existing
+carveout registry; no scope change in this amendment.
+
+### Consequences delta
+
+Positive (new):
+- **Hard sealing**: outside-package construction of `PublicDetail` /
+  `InternalDetail` is a Go compile error; one Hard type-system invariant
+  replaces one Medium AST archtest.
+- **`MustValidateDetailsKinds` deleted**: ~30 LOC of runtime validation gone,
+  no behavior change at the wire boundary (json.Marshal errors continue to
+  trigger `sentinelInternalErrorBody`).
+
+Negative (new, accepted):
+- **`Error.InternalMessage` field renamed to `Error.InternalDetails`** with
+  type change `string` → `[]InternalDetail`. Server-side slog log shape
+  changes from `"internal_message": "..."` to per-entry attrs (or a
+  formatted multi-key string via `Error.Error()`). No external consumers
+  (GoCell is single-consumer per CLAUDE.md); 680+ callsites migrated mechanically.
+- **`InternalAttr(key, value)` ergonomic cost**: free-form diagnostic
+  strings now require a sentinel key. Convention is `_`; future PRs may
+  introduce semantic keys (`op`, `query`, `reason`) where structure aids
+  triage.
