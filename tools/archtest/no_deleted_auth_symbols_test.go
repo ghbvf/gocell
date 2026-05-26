@@ -26,45 +26,40 @@
 //
 // # Detection
 //
-// Two AST forms cover every callable shape ResolvePackageRef resolves:
+// Two AST forms together cover every cross-package reference to a banned
+// identifier — qualified or dot-imported, const / var / func / typename:
 //   - (A) qualified SelectorExpr `pkg.X` — alias-transparent via
 //     info.Uses[sel.X].(*types.PkgName).Imported().Path() (covers consts +
 //     funcs at any expression position, including value-capture
-//     `var fn = auth.BuiltinServiceRoles`)
-//   - (B) bare *ast.Ident from dot-import — info.Uses[id].(*types.Func) for
-//     dot-imported function references (call or value position)
+//     `var fn = auth.BuiltinServiceRoles`). Resolution delegates to
+//     ResolvePackageRef typed façade.
+//   - (B) bare *ast.Ident — covers dot-imported references (`import .
+//     "...runtime/auth"; _ = RoleInternalAdmin / _ = ServiceNameInternal /
+//     BuiltinServiceRoles(...)`). Uses info.Uses[id] directly with type
+//     switch over {*types.Const, *types.Var, *types.Func, *types.TypeName},
+//     bypassing ResolvePackageRef's typed-callable filter (which intentionally
+//     rejects Const/Var per its godoc). Same-package self-references inside
+//     authImportPath are excluded by the pass-level filter at function entry.
 //
 // # Blind spots
 //
-//   - BS-1 Reflection via string literal (e.g. reflect.ValueOf
-//     ("BuiltinServiceRoles")): NOT a Go identifier, so neither
-//     ResolvePackageRef branch sees it. Reverse self-check
-//     TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess asserts production
-//     AST has zero such references; TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect
-//     pins the scanner-logic-verified contract by asserting the fixture's
-//     red case is caught.
-//   - BS-1a (accepted) Chained reflect form (`reflect.TypeOf(x).MethodByName
-//     ("BuiltinServiceRoles")`): the outer CallExpr's Fun is a SelectorExpr
-//     whose .X is itself a CallExpr, not an *ast.Ident, so the BS-1 scanner's
-//     direct-call check skips it. Realistic threat surface is bounded — the
-//     symbols are physically deleted; any reflective lookup link-errors at
-//     build time on `reflect.TypeOf(x).MethodByName(name)` when the underlying
-//     declaration is absent. Not extended in this PR.
+//   - BS-1 Reflection via reflect.Value.{Field,Method}ByName with constant
+//     string argument: NOT a Go identifier, so neither (A) nor (B) sees it.
+//     Reverse self-check TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess
+//     reuses the shared scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01)
+//     to assert production AST has zero such references; companion
+//     TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect pins the
+//     scanner-logic-verified contract via a fixture exercising both method-value
+//     and method-expression call forms. Covers chained shapes like
+//     `reflect.ValueOf(x).MethodByName(...)` and
+//     `reflect.Value.FieldByName(recv, ...)` uniformly.
 //   - BS-2 (accepted) `//go:linkname` directive: AST scanners do not parse
 //     compiler directives, so `//go:linkname myLocal
 //     github.com/.../runtime/auth.BuiltinServiceRoles` would not be detected
 //     by either (A) or (B). The symbols are physically deleted, so a
 //     linkname reference fails at link time (LINKLOAD does not resolve);
-//     this is a build-time guard rather than a CI archtest gap.
-//   - BS-A (accepted) Dot-imported const/var bare-Ident (e.g.
-//     `import . "...runtime/auth"; _ = RoleInternalAdmin`):
-//     ResolvePackageRef returns false for bare-Ident → *types.Const /
-//     *types.Var per its typed-callable filter. Extending the resolver to
-//     cover Const/Var bare Idents is tracked by #1037 (archtest façade
-//     收缩); not in scope for this PR. Re-introducing the symbol inside
-//     runtime/auth and using it cross-package via the qualified
-//     `auth.RoleInternalAdmin` form IS caught by (A); only the dot-import
-//     const/var bare-Ident form is missed.
+//     this is a build-time guard rather than a CI archtest gap. Sole
+//     accepted residual.
 //
 // # Hard is unattainable for this rule shape
 //
@@ -106,14 +101,22 @@ var deletedAuthSymbols = map[string]bool{
 }
 
 // scanDeletedAuthSymbolsAgainst walks a typed Pass and records every
-// reference to a banned identifier whose owning package resolves (via
-// *types.PkgName.Imported().Path() or *types.Func.Pkg().Path()) to
-// authImportPath. The function is parametrized over authImportPath so the
-// production invariant test and the fixture-self-check test share a single
-// implementation; production passes authRuntimeImportPath, the fixture
-// passes fixtureAuthImportPath.
+// reference to a banned identifier whose owning package resolves to
+// authImportPath. Parametrized over authImportPath so the production
+// invariant test (authRuntimeImportPath) and the fixture self-check
+// (fixtureAuthImportPath) share one implementation.
+//
+// Passes whose own package IS authImportPath are skipped — the canonical
+// definition site is allowed to use its own symbols (the rule guards
+// external references, not the def site's own scope).
 func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic {
 	if p.TypesInfo == nil {
+		return nil
+	}
+	if p.Pkg != nil && p.Pkg.Path() == authImportPath {
+		// Canonical definition site — same-package self-references are
+		// in-scope by design (e.g. auth.go's `return []string{
+		// RoleInternalAdmin}` inside BuiltinServiceRoles).
 		return nil
 	}
 	var diags []Diagnostic
@@ -134,7 +137,7 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 			}
 		})
 
-		// (A) Qualified SelectorExpr — consts + funcs, alias-transparent.
+		// (A) Qualified SelectorExpr — alias-transparent via ResolvePackageRef.
 		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
 			if !ok || pkgPath != authImportPath {
@@ -150,8 +153,13 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 			})
 		})
 
-		// (B) Bare *ast.Ident — dot-imported func references. const / var
-		// bare-Ident is BS-A accepted (see package godoc).
+		// (B) Bare *ast.Ident — dot-imported Const / Var / Func / TypeName.
+		// Uses info.Uses[id] directly with type switch over the four
+		// package-level object kinds so dot-imported const/var bare refs are
+		// detected (ResolvePackageRef intentionally rejects Const/Var per
+		// its typed-callable filter; that limitation is bypassed at caller
+		// site here, keeping the façade unchanged — façade extension is
+		// tracked separately by #1037).
 		EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 			if selSelPositions[id.Pos()] {
 				return
@@ -159,14 +167,20 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 			if !deletedAuthSymbols[id.Name] {
 				return
 			}
-			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, id)
-			if !ok || pkgPath != authImportPath {
+			obj := p.TypesInfo.Uses[id]
+			if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != authImportPath {
+				return
+			}
+			switch obj.(type) {
+			case *types.Func, *types.Const, *types.Var, *types.TypeName:
+				// covered
+			default:
 				return
 			}
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    p.Fset.Position(id.Pos()).Line,
-				Message: formatBannedSymbolDiag(authImportPath, name, true),
+				Message: formatBannedSymbolDiag(authImportPath, obj.Name(), true),
 			})
 		})
 	}
@@ -228,7 +242,8 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 //
 //   - caller_default_alias.go      → 3 hits (2 consts + 1 func, default alias)
 //   - caller_custom_alias.go       → 3 hits (2 consts + 1 func, custom alias)
-//   - caller_dot_import.go         → 1 hit  (func only; const dot-import is BS-A)
+//   - caller_dot_import.go         → 3 hits (2 consts + 1 func, dot-imported;
+//     covered by (B) info.Uses type switch — Const/Var/Func/TypeName)
 //   - caller_negative_other_pkg.go → 0 hits (same names, different package)
 //   - caller_reflect_bs1.go        → 0 hits (BS-1 fixture; main scan ignores
 //     string literals; verified by sibling BS-1 fixture test)
@@ -253,8 +268,8 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 		t.Logf("fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
 
-	require.Len(t, diags, 7,
-		"fixture must yield exactly 7 hits (3 default + 3 custom-alias + 1 dot-import + 0 negative + 0 reflect-bs1 + 0 doc); "+
+	require.Len(t, diags, 9,
+		"fixture must yield exactly 9 hits (3 default + 3 custom-alias + 3 dot-import + 0 negative + 0 reflect-bs1 + 0 doc); "+
 			"any change in the fixture must update the expected count")
 
 	// Per-file breakdown so a re-shuffled fixture cannot silently keep the
@@ -268,7 +283,7 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 	expectations := []expect{
 		{"caller_default_alias.go", 3},
 		{"caller_custom_alias.go", 3},
-		{"caller_dot_import.go", 1},
+		{"caller_dot_import.go", 3},
 		{"caller_negative_other_pkg.go", 0},
 		{"caller_reflect_bs1.go", 0},
 		{"doc.go", 0},
@@ -323,64 +338,56 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect(t *testing.T) {
 		[]string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."},
 		scanDeletedAuthSymbolsReflectBypass)
 
-	require.Len(t, diags, 1,
-		"BS-1 fixture must yield exactly 1 hit (the reflect.ValueOf call in caller_reflect_bs1.go); "+
-			"got %d", len(diags))
-	got := diags[0]
-	assert.Contains(t, got.Rel, "caller_reflect_bs1.go",
-		"BS-1 fixture hit must originate in caller_reflect_bs1.go")
-	assert.Contains(t, got.Message, "BuiltinServiceRoles",
-		"BS-1 fixture diagnostic must name the banned symbol triggering the match")
+	require.Len(t, diags, 2,
+		"BS-1 fixture must yield exactly 2 hits (FieldByName + MethodByName chained off reflect.ValueOf "+
+			"in caller_reflect_bs1.go); got %d", len(diags))
+	for _, d := range diags {
+		assert.Contains(t, d.Rel, "caller_reflect_bs1.go",
+			"BS-1 fixture hit must originate in caller_reflect_bs1.go")
+	}
+	var sawField, sawMethod bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, reflectFieldByName) {
+			sawField = true
+		}
+		if strings.Contains(d.Message, reflectMethodByName) {
+			sawMethod = true
+		}
+	}
+	assert.True(t, sawField, "BS-1 fixture must produce a FieldByName diagnostic")
+	assert.True(t, sawMethod, "BS-1 fixture must produce a MethodByName diagnostic")
 }
 
-// scanDeletedAuthSymbolsReflectBypass walks reflect package call sites and
-// reports any whose string-literal argument contains a banned symbol name.
-//
-// Package identification uses info.Uses[xIdent].(*types.PkgName).Imported()
-// .Path() rather than the syntactic identifier name, so `import r "reflect";
-// r.ValueOf(...)` does not bypass the check. Chained forms like
-// `reflect.TypeOf(x).MethodByName("...")` are an accepted BS-1a residual
-// (see package godoc).
+// scanDeletedAuthSymbolsReflectBypass delegates to the shared
+// scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01) which
+// type-checks the receiver to reflect.Value and folds constant string
+// arguments. Covers both call forms (method-value `v.MethodByName(name)` +
+// method-expression `reflect.Value.MethodByName(v, name)`) and both methods
+// (FieldByName for value reads, MethodByName for method lookup), so chained
+// shapes like `reflect.ValueOf(x).MethodByName("BuiltinServiceRoles")` are
+// caught — closing what would otherwise be the BS-1a chained-reflect
+// residual.
 func scanDeletedAuthSymbolsReflectBypass(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil {
 		return nil
 	}
+	banned := func(n string) bool { return deletedAuthSymbols[n] }
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil {
-				return
+		for _, method := range []string{reflectFieldByName, reflectMethodByName} {
+			for _, hit := range scanReflectStringArgCalls(p, file, method, banned) {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: hit.Line,
+					Message: fmt.Sprintf(
+						"NO-DELETED-AUTH-SYMBOLS-01 BS-1: reflect.Value.%s called with %q — banned symbol; "+
+							"replace with auth.RequireCallerCell (authz) or auth.TestServiceContext (test principals); "+
+							"see PR #362 SVCTOKEN-CALLER-IDENTITY",
+						method, hit.Name),
+				})
 			}
-			xIdent, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return
-			}
-			pkgName, ok := p.TypesInfo.Uses[xIdent].(*types.PkgName)
-			if !ok || pkgName.Imported().Path() != "reflect" {
-				return
-			}
-			for _, arg := range call.Args {
-				s, ok := EvaluateConstString(p.TypesInfo, arg)
-				if !ok {
-					continue
-				}
-				for name := range deletedAuthSymbols {
-					if !strings.Contains(s, name) {
-						continue
-					}
-					diags = append(diags, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(call.Pos()).Line,
-						Message: fmt.Sprintf(
-							"NO-DELETED-AUTH-SYMBOLS-01 BS-1: reflect.%s called with %q containing banned symbol %q",
-							sel.Sel.Name, s, name),
-					})
-					break
-				}
-			}
-		})
+		}
 	}
 	return diags
 }
