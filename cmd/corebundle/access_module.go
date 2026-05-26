@@ -193,7 +193,7 @@ func (m AccessCoreModule) Provide(
 	)
 	accessOpts = append(accessOpts, accesscore.WithBootstrapAuth(bootstrapMW))
 
-	c := accesscore.NewAccessCore(accessOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to accessOpts above
+	c := accesscore.NewAccessCore(accessOpts...)
 	// Bootstrap phase3b auto-discovers c.LifecycleHooks() — no WithWorkers needed.
 	// rlLimiter owns a cleanup goroutine that exits on Close(); bind it to a
 	// ManagedResource so phase10 LIFO teardown stops the goroutine cleanly.

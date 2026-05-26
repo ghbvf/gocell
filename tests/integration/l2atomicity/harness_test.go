@@ -410,7 +410,7 @@ func buildCells(
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
 		accesscoretest.MinCostPasswordHasherOption(),
-	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -422,7 +422,6 @@ func buildCells(
 	)
 	auditHMACKey := mustRandom32Bytes()
 	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
-	//archtest:allow:clock-injection:via-slice WithClock in first slice arg
 	auc := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),

@@ -182,7 +182,7 @@ func mustNewServiceWithInvalidator(
 	realInv := newTestInvalidator(deps.userRepo, deps.sessionStore, deps.refreshStore)
 	allOpts := append([]Option{WithInvalidator(realInv)}, opts...)
 	svc, err := NewService(deps.sessionStore, deps.roleRepo, deps.userRepo, deps.refreshStore, deps.issuer, deps.logger,
-		append(allOpts, WithClock(clock.Real()))...) //archtest:allow:clock-injection:via-slice opts built dynamically for spy injection
+		append(allOpts, WithClock(clock.Real()))...)
 	if err != nil {
 		panic("MustNewServiceWithInvalidator: " + err.Error())
 	}

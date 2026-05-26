@@ -129,7 +129,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -148,7 +148,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProto),
 		auditcore.WithLedgerStore(auditStore),
-	) //archtest:allow:clock-injection:via-slice WithClock prepended to positional opts
+	)
 
 	asm := assembly.New(assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -435,7 +435,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
@@ -454,7 +454,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProtocol),
 		auditcore.WithLedgerStore(auditStore),
-	) //archtest:allow:clock-injection:via-slice WithClock at the front; positional spread avoided
+	)
 
 	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))

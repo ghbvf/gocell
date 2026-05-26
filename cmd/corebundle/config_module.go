@@ -119,7 +119,7 @@ func (m ConfigCoreModule) Provide(
 		configcore.WithEventbusCacheCollector(shared.EventbusCacheCollector),
 		configcore.WithCASProtocol(casProto),
 	}
-	baseOpts = append(baseOpts, modResult.CellOptions...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
+	baseOpts = append(baseOpts, modResult.CellOptions...)
 	c := configcore.NewConfigCore(baseOpts...)
 
 	return buildConfigCoreResult(c, kp, modResult)

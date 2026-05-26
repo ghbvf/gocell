@@ -5,18 +5,22 @@
 // testdata/prod_clock_injection_fixtures/ exercises one bypass path
 // (alias / dot-import / function-value reference / struct field assign /
 // each forbidden time symbol), the canonical injected-Clock pass shape, or
-// the function-level control-plane marker carve-out.
+// the control-plane receiver-type confinement carve-out.
 //
-// Control-plane marker self-checks (per ai-robust.md §"盲区自检"):
-//   - control_plane_marker_passes: GREEN — FuncDecls with doc-comment marker
-//     produce 0 violations.
-//   - control_plane_no_marker_violates: RED — inline body comment (not doc)
-//     is NOT recognized; time.NewTicker is still flagged (1 violation).
+// Control-plane receiver-type confinement self-checks (per ai-robust.md §"盲区自检"):
+//   - control_plane_method_passes: GREEN — FuncDecls that are methods of
+//     controlPlaneClock in runtime/command/ produce 0 violations.
+//   - control_plane_wrong_path_violates: RED — same controlPlaneClock receiver
+//     type but file outside runtime/command/; the path gate must still flag it.
+//   - control_plane_wrong_receiver_type_violates: RED — method of otherClock
+//     (not controlPlaneClock) in runtime/command/ is NOT exempt.
+//   - control_plane_no_marker_violates: RED (repurposed) — free function in
+//     runtime/command/ (no receiver) calling time.NewTicker is flagged.
 //   - control_plane_closure_violates: RED — a non-exempt function containing
 //     a closure that calls time.NewTicker is still flagged (1 violation).
 //   - control_plane_exempt_func_closure_violates: RED — blind-spot-A closure
-//     self-check: time.* inside a FuncLit within an exempt (marked) FuncDecl
-//     is NOT exempt; still flagged (1 violation).
+//     self-check: time.* inside a FuncLit within an exempt (controlPlaneClock)
+//     method is NOT exempt; still flagged (1 violation).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 package archtest
@@ -76,14 +80,14 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		"until_violates",
 		"newtimer_violates",
 
-		// Function-level control-plane marker carve-out self-checks
+		// Control-plane receiver-type confinement self-checks
 		// (per ai-robust.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
-		"control_plane_marker_passes",
-		"control_plane_marker_wrong_path_violates",
-		"control_plane_marker_wrong_func_violates",
-		"control_plane_no_marker_violates",
-		"control_plane_closure_violates",
-		"control_plane_exempt_func_closure_violates",
+		"control_plane_method_passes",          // GREEN: controlPlaneClock method in runtime/command/
+		"control_plane_wrong_path_violates",    // RED: controlPlaneClock method outside runtime/command/
+		"control_plane_wrong_receiver_type_violates", // RED: wrong receiver type in runtime/command/
+		"control_plane_no_marker_violates",     // RED: free function in runtime/command/ (no receiver)
+		"control_plane_closure_violates",       // RED: closure inside non-exempt func
+		"control_plane_exempt_func_closure_violates", // RED: closure inside exempt controlPlaneClock method
 	}
 
 	for _, dir := range dirs {

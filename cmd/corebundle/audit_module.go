@@ -136,7 +136,7 @@ func (AuditCoreModule) Provide(
 	// AuditCoreModule.Provide populates it.
 	shared.BootstrapLedgerStore = ledgerStore
 
-	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above
+	c := auditcore.NewAuditCore(auditOpts...)
 	return c, nil, nil, nil
 }
 

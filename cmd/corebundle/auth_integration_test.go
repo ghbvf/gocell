@@ -115,7 +115,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...)
 
 	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -335,7 +335,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...)
 
 	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
@@ -567,7 +567,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...)
 
 	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))

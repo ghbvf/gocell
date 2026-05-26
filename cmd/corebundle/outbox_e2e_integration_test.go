@@ -222,7 +222,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
+	configCell := configcore.NewConfigCore(cellAdapterOpts...)
 
 	// Wire accesscore with WithBootstrapAuth. The operator calls POST /setup/admin
 	// with Basic Auth to provision the first admin (interactive mode, ADR §D5).
@@ -243,13 +243,13 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...)
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
 	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
@@ -552,7 +552,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
+	configCell := configcore.NewConfigCore(cellAdapterOpts...)
 
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
@@ -575,13 +575,13 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
+	)...)
 	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
 		auditcore.WithClock(clock.Real()),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, hmacKey)...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
 	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(configCell))
