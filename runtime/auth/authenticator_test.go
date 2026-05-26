@@ -346,9 +346,9 @@ func mustNewInMemoryNonceStore(t *testing.T) NonceStore {
 
 // mustNewServiceTokenAuthenticator is a test helper that constructs a
 // NewServiceTokenAuthenticator, failing the test on construction error.
-func mustNewServiceTokenAuthenticator(t *testing.T, ring *HMACKeyRing, opts ...ServiceTokenOption) Authenticator {
+func mustNewServiceTokenAuthenticator(t *testing.T, ring *HMACKeyRing, clk clock.Clock, opts ...ServiceTokenOption) Authenticator {
 	t.Helper()
-	a, err := NewServiceTokenAuthenticator(ring, clock.Real(), opts...)
+	a, err := NewServiceTokenAuthenticator(ring, clk, opts...)
 	if err != nil {
 		t.Fatalf("NewServiceTokenAuthenticator: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestNewServiceTokenAuthenticator_InMemoryNonceStore_OK(t *testing.T) {
 
 func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	a := mustNewServiceTokenAuthenticator(t, ring,
+	a := mustNewServiceTokenAuthenticator(t, ring, clock.Real(),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	p, ok, err := a.Authenticate(req)
@@ -453,7 +453,7 @@ func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 
 func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	a := mustNewServiceTokenAuthenticator(t, ring,
+	a := mustNewServiceTokenAuthenticator(t, ring, clock.Real(),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "Bearer some-jwt-token")
@@ -472,8 +472,7 @@ func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	// Construct a token with wrong HMAC. Do not replace with a fixed suffix:
@@ -512,8 +511,7 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 	oldTime := now.Add(authnDNeg6min)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -533,7 +531,8 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	store := mustNewInMemoryNonceStore(t)
-	a, err := NewServiceTokenAuthenticator(ring, clockmock.New(now),
+	a, err := NewServiceTokenAuthenticator(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(store),
 	)
 	if err != nil {
@@ -573,8 +572,7 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
@@ -663,8 +661,7 @@ func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
 	trackingVerifier := &trackingIntentVerifier{onVerify: func() { verifierCalled = true }}
 
 	jwtAuth := NewJWTAuthenticator(trackingVerifier)
-	svcAuth := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	svcAuth := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	union := NewUnionAuthenticator(jwtAuth, svcAuth)
 
@@ -711,8 +708,7 @@ func (v *trackingIntentVerifier) VerifyIntent(_ context.Context, _ string, _ Tok
 func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
 	// Build a 2-part token: {timestamp}:{hex_hmac} (no nonce).
@@ -743,8 +739,7 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	futureTime := now.Add(ServiceTokenClockSkew + time.Second)
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
 
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -767,8 +762,7 @@ func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T
 	farFuture := time.Unix(math.MaxInt64/2, 0)
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", farFuture)
 
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -791,8 +785,7 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	futureTime := now.Add(ServiceTokenClockSkew)
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
 
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -821,8 +814,7 @@ func TestNewServiceTokenAuthenticator_PrincipalCallerCell(t *testing.T) {
 	// Spec: 4-part signature: GenerateServiceToken(ring, callerCell, method, path, query, ts)
 	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
 
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -858,8 +850,7 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	oldTime := now.Add(-ServiceTokenMaxAge)
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
 
-	a := mustNewServiceTokenAuthenticator(t, ring,
-		WithServiceTokenClock(clockmock.New(now)),
+	a := mustNewServiceTokenAuthenticator(t, ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)

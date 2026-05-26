@@ -62,7 +62,7 @@ const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
@@ -301,7 +301,7 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
@@ -324,7 +324,7 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 
@@ -338,7 +338,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(tx)))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
@@ -351,7 +351,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, ow))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
@@ -536,7 +536,7 @@ func newConfigwriteAdapterUnderTest(t *testing.T, updateErr, deleteErr error) (U
 		updateErr:        updateErr,
 		deleteErr:        deleteErr,
 	}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 	return UpdateAdapter{S: svc}, DeleteAdapter{S: svc}
 }

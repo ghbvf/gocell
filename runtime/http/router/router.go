@@ -330,13 +330,6 @@ func WithSuppressNoAuthVerifierWarn() Option {
 	}
 }
 
-// WithRouterClock sets the clock used by the router's auth middleware for
-// latency metric recording. Required when WithAuthMiddleware is also supplied;
-// auth.AuthMiddleware panics on nil clock.
-func WithRouterClock(clk clock.Clock) Option {
-	return func(r *Router) { r.clock = clk }
-}
-
 // WithDefaultMiddleware appends middleware functions to the router's default
 // middleware chain. These are installed AFTER the early-responder layer and
 // BEFORE the per-router protections (rate-limiter, circuit-breaker, auth).
@@ -495,8 +488,8 @@ const internalPathPrefix = cellvocab.InternalPathPrefix
 //
 // ref: gin-gonic/gin — SetTrustedProxies returns error at config time
 // ref: uber-go/fx — startup failures return error, trigger rollback
-func New(opts ...Option) (*Router, error) {
-	return NewForListener(kcell.ListenerRef{}, opts...)
+func New(clk clock.Clock, opts ...Option) (*Router, error) {
+	return NewForListener(clk, kcell.ListenerRef{}, opts...)
 }
 
 // NewForListener builds a Router for a specific listener. Listener-level
@@ -505,6 +498,9 @@ func New(opts ...Option) (*Router, error) {
 // converts the ListenerAuth chain; there is no longer a separate defaultPolicy
 // parameter. JWT auth is wired via WithAuthMiddleware (a separate Option) so
 // the router-aware Public/PasswordResetExempt matchers are available.
+//
+// clk is a mandatory positional parameter; passing a nil clock panics at
+// construction time via clock.MustHaveClock (programmer error).
 //
 // The middleware chain is:
 //
@@ -515,12 +511,14 @@ func New(opts ...Option) (*Router, error) {
 // ref: go-kratos/kratos app.go WithServer + errgroup (adopted)
 // ref: net/http.ServeMux (one ServeMux per listener)
 // ref: kubernetes/kubernetes apiserver/server/genericapiserver.go (rejected single-listener)
-func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
+func NewForListener(clk clock.Clock, ref kcell.ListenerRef, opts ...Option) (*Router, error) {
+	clock.MustHaveClock(clk, "router.NewForListener")
 	r := &Router{
 		ref:                         ref,
 		mux:                         http.NewServeMux(),
 		bodyLimit:                   middleware.DefaultBodyLimit,
 		clientErrorLogSamplingEvery: httputil.DefaultClientErrorLogSamplingEvery,
+		clock:                       clk,
 	}
 	for _, o := range opts {
 		o(r)
@@ -541,9 +539,6 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	realIPMW, err := r.buildRealIPMiddleware()
 	if err != nil {
 		return nil, err
-	}
-	if r.clock == nil {
-		return nil, fmt.Errorf("router: clock required — use WithRouterClock(clk)")
 	}
 
 	if err := r.buildMux(realIPMW); err != nil {
@@ -778,7 +773,8 @@ func (r *Router) markMuxHandler(method, routePath string) bool {
 		r.muxHandlers = make(map[string]bool)
 	}
 	if r.muxHandlers[key] {
-		slog.Warn("router: duplicate ServeMux registration skipped",
+		slog.Warn(
+			"router: duplicate ServeMux registration skipped",
 			"method", strings.ToUpper(method),
 			"path", cleanRoutePath(routePath),
 		)
@@ -948,7 +944,8 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 	if r.authFinalized {
 		return fmt.Errorf(
 			"router: DeclareAuthMeta called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
-			m.Method, m.Path)
+			m.Method, m.Path,
+		)
 	}
 	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
 	return nil
@@ -961,7 +958,8 @@ func (r *Router) DeclareHTTPContract(spec contractspec.ContractSpec) error {
 	if r.authFinalized {
 		return fmt.Errorf(
 			"router: DeclareHTTPContract called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
-			spec.Method, spec.Path)
+			spec.Method, spec.Path,
+		)
 	}
 	r.declaredHTTPContracts = append(r.declaredHTTPContracts, spec)
 	return nil
@@ -1056,12 +1054,14 @@ func (r *Router) verifyInternalRouteAffinity() error {
 			return fmt.Errorf(
 				"router: route %s %s (internal path) must be mounted on InternalListener (got %q); "+
 					"check the RouteGroup.Listener field",
-				m.Method, m.Path, r.ref.String())
+				m.Method, m.Path, r.ref.String(),
+			)
 		}
 		if !m.IsInternal() && isInternal {
 			return fmt.Errorf(
 				"router %q: route %s %s mounted on internal listener but path lacks %s prefix",
-				r.ref, m.Method, m.Path, cellvocab.InternalPathPrefix)
+				r.ref, m.Method, m.Path, cellvocab.InternalPathPrefix,
+			)
 		}
 	}
 	return nil
@@ -1181,7 +1181,8 @@ func (r *Router) recordOwnedPrefix(cellID, prefix string) error {
 		}
 		return fmt.Errorf(
 			"router: duplicate route ownership for path %q: cell %q already owns it, cell %q cannot also own it",
-			prefix, owned.cellID, cellID)
+			prefix, owned.cellID, cellID,
+		)
 	}
 	r.ownedPrefixes = append(r.ownedPrefixes, ownedRoutePrefix{prefix: prefix, cellID: cellID})
 	return nil
@@ -1201,7 +1202,8 @@ func (r *Router) recordOwnedRoutePath(cellID, routePath string) error {
 		}
 		return fmt.Errorf(
 			"router: duplicate route ownership for path %q: cell %q already owns it, cell %q cannot also own it",
-			routePath, owned.cellID, cellID)
+			routePath, owned.cellID, cellID,
+		)
 	}
 	r.ownedRoutes = append(r.ownedRoutes, ownedRoutePath{path: routePath, cellID: cellID})
 	return nil

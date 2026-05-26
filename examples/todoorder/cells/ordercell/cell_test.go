@@ -485,7 +485,7 @@ func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
 
 func mustNewRouter(t *testing.T) *router.Router {
 	t.Helper()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
 	}

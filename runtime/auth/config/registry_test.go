@@ -138,7 +138,7 @@ func TestFromEnv_ReadsIssuerAndAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "https://auth.example")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "my-service")
 
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()))
+	reg, err := config.FromEnv(clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, "https://auth.example", reg.Issuer())
 	assert.Equal(t, []string{"my-service"}, reg.Audiences())
@@ -151,7 +151,7 @@ func TestFromEnv_MissingIssuer_RealMode_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	_, err := config.FromEnv(config.WithRealMode(true))
+	_, err := config.FromEnv(clock.Real(), config.WithRealMode(true))
 	require.Error(t, err, "missing GOCELL_JWT_ISSUER in real mode must return error")
 }
 
@@ -160,7 +160,7 @@ func TestFromEnv_MissingAudience_RealMode_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "https://auth.example")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
 
-	_, err := config.FromEnv(config.WithRealMode(true))
+	_, err := config.FromEnv(clock.Real(), config.WithRealMode(true))
 	require.Error(t, err, "missing GOCELL_JWT_AUDIENCE in real mode must return error")
 }
 
@@ -196,7 +196,7 @@ func TestFromEnv_IgnoresUnsetVars(t *testing.T) {
 		t.Logf("Unsetenv GOCELL_JWT_AUDIENCE: %v", err)
 	}
 
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()))
+	reg, err := config.FromEnv(clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, "", reg.Issuer())
 	assert.Empty(t, reg.Audiences())
@@ -209,7 +209,7 @@ func TestFromEnv_WithKeys(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	ks, _, _ := keystest.MustNewKeySet(clock.Real())
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(ks))
+	reg, err := config.FromEnv(clock.Real(), config.WithKeys(ks))
 	require.NoError(t, err)
 	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set via WithKeys")
 	assert.NotNil(t, reg.VerificationKeyStore(), "VerificationKeyStore must be set via WithKeys")
@@ -223,23 +223,23 @@ func TestFromEnv_WithKeySeparate(t *testing.T) {
 	prov := &stubKeySet{}
 	store := &stubKeySet{}
 
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeySeparate(prov, store))
+	reg, err := config.FromEnv(clock.Real(), config.WithKeySeparate(prov, store))
 	require.NoError(t, err)
 	assert.Same(t, prov, reg.SigningKeyProvider())
 	assert.Same(t, store, reg.VerificationKeyStore())
 }
 
-// TestFromEnv_WithEnvClock verifies WithEnvClock overrides the clock.
-func TestFromEnv_WithEnvClock(t *testing.T) {
+// TestFromEnv_PositionalClock verifies that the positional clk param is used by FromEnv.
+func TestFromEnv_PositionalClock(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	fixed := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(fixed)
 
-	reg, err := config.FromEnv(config.WithEnvClock(fc))
+	reg, err := config.FromEnv(fc)
 	require.NoError(t, err)
-	assert.Equal(t, fixed, reg.Clock().Now(), "custom clock must be used")
+	assert.Equal(t, fixed, reg.Clock().Now(), "positional clock must be used")
 }
 
 // TestNewJWTIssuerFromRegistry_Success verifies that a Registry with valid keys
@@ -399,7 +399,7 @@ func TestWithKeys_SigningOnly_LeavesVerificationStoreNil(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	prov := &stubSigningOnlyProvider{}
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
+	reg, err := config.FromEnv(clock.Real(), config.WithKeys(prov))
 	require.NoError(t, err)
 
 	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set")
@@ -414,7 +414,7 @@ func TestWithKeys_SigningOnly_VerifierReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	prov := &stubSigningOnlyProvider{}
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
+	reg, err := config.FromEnv(clock.Real(), config.WithKeys(prov))
 	require.NoError(t, err)
 
 	_, err = config.NewJWTVerifierFromRegistry(reg)
@@ -475,7 +475,7 @@ func TestWithKeys_TypedNilProvider(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	var prov auth.SigningKeyProvider = (*auth.KeySet)(nil)
-	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
+	reg, err := config.FromEnv(clock.Real(), config.WithKeys(prov))
 	require.NoError(t, err)
 	assert.Nil(t, reg.SigningKeyProvider(),
 		"typed-nil provider must NOT be stored (would panic downstream)")
@@ -495,7 +495,7 @@ func TestFromEnv_MissingIssuer_RealMode_ErrorCode(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	_, err := config.FromEnv(config.WithRealMode(true))
+	_, err := config.FromEnv(clock.Real(), config.WithRealMode(true))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
@@ -506,7 +506,7 @@ func TestFromEnv_MissingAudience_RealMode_ErrorCode(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "https://auth.example")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
 
-	_, err := config.FromEnv(config.WithRealMode(true))
+	_, err := config.FromEnv(clock.Real(), config.WithRealMode(true))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)

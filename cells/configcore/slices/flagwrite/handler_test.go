@@ -64,7 +64,7 @@ func newFlagAdapters(t *testing.T, updateErr, toggleErr, deleteErr error) (Updat
 		toggleErr:      toggleErr,
 		deleteErr:      deleteErr,
 	}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(stubFlagTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(stubFlagTxRunner{})))
 	require.NoError(t, err)
 	return UpdateAdapter{S: svc}, ToggleAdapter{S: svc}, FlagDeleteAdapter{S: svc}
 }

@@ -70,9 +70,9 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 
 	rec := outboxtest.NewRecorder()
 	svc, err := configwrite.NewService(
+		cfg.clk,
 		repo,
 		cfg.logger,
-		cfg.clk,
 		configwrite.WithTxManager(outbox.DemoCellTxManager()),
 		configwrite.WithEmitter(rec.CellEmitter()),
 	)

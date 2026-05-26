@@ -39,7 +39,7 @@ var _ persistence.TxRunner = (*failingTxRunner)(nil)
 func newTestService(t *testing.T) (*Service, *mem.FlagRepository) {
 	t.Helper()
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	if err != nil {
 		t.Fatal(err)
@@ -70,12 +70,12 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) {
 // rather than relying on a silent nil fallback.
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	t.Run("with_tx_runner_succeeds", func(t *testing.T) {
-		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real(),
+		_, err := NewService(clock.Real(), mem.NewFlagRepository(clock.Real()), slog.Default(),
 			WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 		require.NoError(t, err)
 	})
 	t.Run("without_tx_runner_fails_fast", func(t *testing.T) {
-		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real())
+		_, err := NewService(clock.Real(), mem.NewFlagRepository(clock.Real()), slog.Default())
 		require.Error(t, err)
 	})
 }
@@ -87,7 +87,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(tx)))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
@@ -108,7 +108,7 @@ func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 func TestFlagWrite_Create_RepoFails(t *testing.T) {
 	repo := mem.NewFlagRepository(clock.Real())
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(tx)))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
@@ -192,7 +192,7 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 	// Behavioral assertion: Create/Update/Toggle/Delete must succeed without
 	// any outbox writer being injected, confirming no emit attempt is made.
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})
@@ -223,7 +223,7 @@ func TestConcurrentToggle_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	seedFlag(t, repo, "cas-toggle-flag")
 
@@ -264,7 +264,7 @@ func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	seedFlag(t, repo, "cas-update-flag")
 
@@ -313,7 +313,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	seedFlag(t, repo, "cas-delete-flag")
 

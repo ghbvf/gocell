@@ -112,7 +112,8 @@ func newTestRefreshStore() refresh.Store {
 
 func newTestCell(t testing.TB) *AccessCore {
 	t.Helper()
-	return NewAccessCore(clock.Real(),
+	return NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -131,7 +132,8 @@ func newTestCell(t testing.TB) *AccessCore {
 
 func newDurableTestCell(t testing.TB) *AccessCore {
 	t.Helper()
-	return NewAccessCore(clock.Real(),
+	return NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -149,7 +151,8 @@ func newDurableTestCell(t testing.TB) *AccessCore {
 }
 
 func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -168,7 +171,8 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 }
 
 func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -187,7 +191,8 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 }
 
 func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -207,7 +212,8 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 }
 
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -231,7 +237,8 @@ func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
 	// Publisher-only mode with txRunner: txRunner is for slice services (required
 	// since B-1 deleted NoopTxRunner); it is not passed to the emitter resolver
 	// so the writer/txRunner pairing invariant is not violated. Init must succeed.
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
@@ -257,7 +264,8 @@ func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 }
 
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -277,7 +285,8 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	// L2 cell, both nil, but publisher present → OK (demo mode with warning)
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -296,7 +305,8 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 }
 
 func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -380,7 +390,8 @@ func TestAccessCore_RefreshGCHookStartPropagatesWorkerConfigError(t *testing.T) 
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 	emitter := outbox.DemoCellEmitter()
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -403,7 +414,8 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 // TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards against wiring
 // mistakes where a composition root accidentally sets both paths.
 func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -428,7 +440,8 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 // be durable. Injecting a NoopEmitter (non-durable) in durable mode is a
 // wiring mistake that would silently downgrade L2 atomicity.
 func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -500,7 +513,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	require.NoError(t, c.Init(ctx, reg))
 
 	snap := reg.Snapshot()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
@@ -589,9 +602,9 @@ func initCellWithRouters(t *testing.T) *cellTestRouters {
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
-	primary, err := router.New(router.WithRouterClock(clock.Real()))
+	primary, err := router.New(clock.Real())
 	require.NoError(t, err)
-	internal, err := router.New(router.WithRouterClock(clock.Real()))
+	internal, err := router.New(clock.Real())
 	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
@@ -829,7 +842,8 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(userRepo),
 		WithSessionStore(sessionRepo),
 		withRoleRepository(roleRepo),
@@ -858,7 +872,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP handler to simulate real flow.
 	snap := reg.Snapshot()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
@@ -916,7 +930,8 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(userRepo),
 		WithSessionStore(sessionRepo),
 		withRoleRepository(roleRepo),
@@ -945,7 +960,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP.
 	snap := reg.Snapshot()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg
@@ -1052,7 +1067,8 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 
 	seedAdminUser(t, ctx, userRepo, roleRepo, "admin", "admin-pass-123")
 
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(userRepo),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(roleRepo),
@@ -1102,7 +1118,8 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 // The test uses DeclaredAuthMetas() which returns metadata accumulated during
 // RegisterRoutes, prior to FinalizeAuth compiling the matchers.
 func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
-	c := NewAccessCore(clock.Real(),
+	c := NewAccessCore(
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -1122,7 +1139,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	require.NoError(t, c.Init(ctx, rec))
 
 	snap := rec.Snapshot()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	require.NoError(t, err)
 	for _, rg := range snap.RouteGroups {
 		rg := rg

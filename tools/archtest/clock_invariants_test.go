@@ -797,7 +797,8 @@ const mustHaveClockFuncName = "MustHaveClock"
 //
 // TestClockPositionalInjection enforces CLOCK-POSITIONAL-INJECTION-01:
 // two sub-checks over production code (excludes _test.go, generated/,
-// testdata/).
+// testdata/, and recognized test-helper packages such as configcoretest/,
+// auditcoretest/, accesscoretest/).
 //
 // Sub-check A: MustHaveClock positional-param enforcement.
 // Every production call to clock.MustHaveClock(arg0, ...) must have arg0
@@ -810,31 +811,41 @@ const mustHaveClockFuncName = "MustHaveClock"
 // The callee is resolved to kernel/clock.MustHaveClock via go/types so import
 // aliases do not allow bypass.
 //
-// Sub-check B: exported WithClock ban.
-// Any exported function named "WithClock" in a production package (a
-// *ast.FuncDecl with Name.Name == "WithClock", exported, receiverless, in
-// non-test non-generated files) is a violation. WithClock functions are option
-// injectors that make clock injection optional/omittable. The positional
-// injection pattern makes the clock a mandatory parameter instead.
+// Sub-check B: clock option-injector ban (broadened).
+// Any exported free function (no receiver) in a production package is a
+// violation if it satisfies ALL of the following precise typed predicates:
 //
-// Both sub-checks are EXPECTED TO FAIL against the current tree (RED state):
-//   - Sub-check A: ~24 violations where constructors still use
-//     option/struct-field clock injection via MustHaveClock(cfg.Clock, ...) or
-//     MustHaveClock(s.clk, ...) forms.
-//   - Sub-check B: ~14 exported WithClock functions that have not yet been
-//     deleted as part of the positional-param migration.
+//	(1) name contains "Clock" (catches WithClock, WithEnvClock, WithRouterClock,
+//	    WithServiceTokenClock, etc. — any suffixed variant)
+//	(2) parameter list includes a kernel/clock.Clock-typed parameter (resolved
+//	    via go/types so aliases cannot bypass; the clock param need not be
+//	    first — the check scans the full parameter list)
+//	(3) return type is a function type OR a named type whose underlying type is a
+//	    function (the functional-option shape, e.g. Option = func(*T), EnvOption
+//	    = func(*cfg)) — this prevents false-flagging constructors and helpers
+//	    that also contain "Clock" in their name.
 //
-// These RED violations are the conversion worklist for the subsequent migration
-// waves. The archtest is written correctly to report violations — do NOT
-// suppress them. The violations will be driven to zero as each constructor is
-// migrated to accept a positional clock.Clock parameter.
+// All three predicates must hold simultaneously. Non-receiver functions that
+// contain "Clock" but do NOT take clock.Clock and return an option are NOT
+// flagged (e.g. clock.MustHaveClock itself, utility functions).
+//
+// Test-helper packages (configcoretest/, auditcoretest/, accesscoretest/, etc.)
+// are classified as test code by fileroles.IsProductionCode and are therefore
+// excluded. Their With*Clock builders (e.g. configcoretest.WithWriteClock,
+// auditcoretest.WithChainClock, accesscoretest.WithIdentityClock) intentionally
+// use the option pattern for test-infra ergonomics; the production constructors
+// they wrap are already positional.
+//
+// Both sub-checks are now GREEN against the current tree (zero violations).
+// The archtest is the downstream-Hard gate: any regression to the old pattern
+// (option injector or non-param arg0) is caught immediately at PR time.
 //
 // AI-robust grading:
 //
 //   - Downstream Hard: this archtest locks the form (any MustHaveClock call
-//     with a non-param arg0 is a violation; any exported WithClock function is
-//     a violation). Once the migration is complete, regression to the old pattern
-//     is caught immediately.
+//     with a non-param arg0 is a violation; any exported clock-option-injector
+//     function is a violation). Once the migration is complete, regression to
+//     the old pattern is caught immediately.
 //
 //   - Upstream Hard: the Go compiler is the upstream enforcement. A mandatory
 //     positional `clk clock.Clock` parameter makes omission a compile error —
@@ -848,8 +859,9 @@ const mustHaveClockFuncName = "MustHaveClock"
 //     resolve to the canonical *types.Func. In practice MustHaveClock is always
 //     called as clock.MustHaveClock (or aliased import). The callee is checked
 //     via types.Info.ObjectOf on the call's Fun Sel, so aliases are handled.
-//     Reverse self-check: fixture uses aliased import and confirms it is still
-//     detected.
+//     Reverse self-check: aliased_import_selector_violates fixture confirms
+//     that `import clk "...kernel/clock"; clk.MustHaveClock(cfg.Clock, ...)`
+//     is still detected as a violation.
 //  2. Multi-return enclosing function: param lookup scans all params in the
 //     enclosing FuncDecl's type including variadic params. A *types.Var that
 //     IS a param but is being passed via a selector expression (e.g. params.Clock
@@ -862,6 +874,18 @@ const mustHaveClockFuncName = "MustHaveClock"
 //     closure parameter (not a top-level FuncDecl param) passing its own local
 //     clock would be flagged. Accepted: closures wrapping constructors must pass
 //     the param down explicitly.
+//  4. Sub-check B relies on go/types for clock.Clock param resolution. A
+//     function that takes an interface type with the same method set as
+//     clock.Clock but defined in a different package would not be flagged —
+//     the check is exact package-path comparison. Accepted: all production
+//     clock injection must use kernel/clock.Clock per architecture rules.
+//  5. Sub-check B return-type check uses types.Signature.Results().At(0) and
+//     inspects the underlying type. A multi-return function is not a functional
+//     option and is not flagged — multi-return clock constructors are intentional
+//     (error-first pattern). A function returning (Option, error) is checked only
+//     on the first return: if the first return is a function type the check fires.
+//     Accepted: (Option, error) constructors are banned for the same reason as
+//     single-return options — they still make clock injection omittable.
 //
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D
@@ -921,17 +945,33 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 		}
 	})
 
-	// Sub-check B: ban exported WithClock free functions.
+	// Sub-check B: ban exported clock option-injector free functions.
+	// Predicate (all three must hold):
+	//   (1) name contains "Clock" (catches WithClock, WithEnvClock, WithRouterClock, etc.)
+	//   (2) parameter list includes a kernel/clock.Clock-typed param (type-resolved)
+	//   (3) return type is a function/option type (functional-option shape)
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Name == nil || fd.Name.Name != "WithClock" {
+		if fd.Name == nil {
 			return
 		}
-		// Must be exported (WithClock is uppercase — always exported by Go rules).
+		// (1) name must contain "Clock"
+		if !strings.Contains(fd.Name.Name, "Clock") {
+			return
+		}
+		// Must be exported.
 		if !fd.Name.IsExported() {
 			return
 		}
 		// Must be a free function (no receiver).
 		if fd.Recv != nil && len(fd.Recv.List) > 0 {
+			return
+		}
+		// (2) parameter list must include a kernel/clock.Clock-typed param.
+		if !clockOptionInjectorHasClockParam(fd, info) {
+			return
+		}
+		// (3) return type must be a function/option type (functional-option shape).
+		if !clockOptionInjectorReturnsOption(fd, info) {
 			return
 		}
 		line := fset.Position(fd.Name.Pos()).Line
@@ -941,9 +981,12 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 			out = append(out, Diagnostic{
 				Rel:  rel,
 				Line: line,
-				Message: "exported WithClock function found — WithClock option injectors are banned by " +
-					"CLOCK-POSITIONAL-INJECTION-01; migrate to a mandatory positional clock.Clock parameter. " +
-					"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
+				Message: fmt.Sprintf(
+					"exported clock option-injector %q found — With*Clock option injectors are banned by "+
+						"CLOCK-POSITIONAL-INJECTION-01; migrate to a mandatory positional clock.Clock parameter. "+
+						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
+					fd.Name.Name,
+				),
 			})
 		}
 	})
@@ -1045,6 +1088,115 @@ func funcDeclHasParam(fd *ast.FuncDecl, obj *types.Var, info *types.Info) bool {
 	return false
 }
 
+// clockOptionInjectorHasClockParam reports whether fd's parameter list includes
+// a parameter of type kernel/clock.Clock (resolved via go/types). This is
+// predicate (2) of sub-check B in CLOCK-POSITIONAL-INJECTION-01.
+//
+// The check scans all parameters in the FuncDecl's parameter list (including
+// multi-parameter functions). A parameter is considered clock.Clock-typed if
+// its go/types resolved type is the named type in kernelClockPkgPath.
+//
+// Blind spot: if info is nil (untyped scan), returns false conservatively.
+func clockOptionInjectorHasClockParam(fd *ast.FuncDecl, info *types.Info) bool {
+	if info == nil || fd.Type == nil || fd.Type.Params == nil {
+		return false
+	}
+	for _, field := range fd.Type.Params.List {
+		for _, nameIdent := range field.Names {
+			obj, ok := info.ObjectOf(nameIdent).(*types.Var)
+			if !ok {
+				continue
+			}
+			if isKernelClockType(obj.Type()) {
+				return true
+			}
+		}
+		// Handle anonymous parameters (no name) — check the field type directly.
+		if len(field.Names) == 0 {
+			if ident, ok := typeExprToIdent(field.Type); ok {
+				if obj, ok2 := info.ObjectOf(ident).(*types.TypeName); ok2 {
+					if isKernelClockType(obj.Type()) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// typeExprToIdent extracts the terminal *ast.Ident from a potentially qualified
+// type expression (SelectorExpr or Ident). Returns (nil, false) for other forms.
+func typeExprToIdent(expr ast.Expr) (*ast.Ident, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e, true
+	case *ast.SelectorExpr:
+		return e.Sel, true
+	}
+	return nil, false
+}
+
+// isKernelClockType reports whether t is the kernel/clock.Clock named interface type.
+func isKernelClockType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == kernelClockPkgPath && obj.Name() == "Clock"
+}
+
+// clockOptionInjectorReturnsOption reports whether fd's return type is a
+// function/option type — i.e. the functional-option shape. This is predicate (3)
+// of sub-check B in CLOCK-POSITIONAL-INJECTION-01.
+//
+// A return type qualifies if its underlying type (after resolving named types)
+// is a *types.Signature (function type). This covers both direct `func(*T)`
+// returns and named types like `type Option func(*T)` and `type EnvOption func(*cfg)`.
+//
+// Multi-return functions: checks only the first return value — a function
+// returning (Option, error) still makes clock injection omittable.
+func clockOptionInjectorReturnsOption(fd *ast.FuncDecl, info *types.Info) bool {
+	if info == nil || fd.Type == nil || fd.Type.Results == nil {
+		return false
+	}
+	// Collect all result type expressions from the AST.
+	results := fd.Type.Results.List
+	if len(results) == 0 {
+		return false
+	}
+	// Check the first return type.
+	firstField := results[0]
+	return isOptionTypeExpr(firstField.Type, info)
+}
+
+// isOptionTypeExpr reports whether the AST type expression resolves to a
+// function type (or named type with function underlying type) via go/types.
+func isOptionTypeExpr(expr ast.Expr, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok {
+		return false
+	}
+	t := tv.Type
+	if t == nil {
+		return false
+	}
+	return isUnderlyingFunc(t)
+}
+
+// isUnderlyingFunc reports whether t's underlying type is a *types.Signature.
+func isUnderlyingFunc(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, isSig := t.Underlying().(*types.Signature)
+	return isSig
+}
+
 // runClockPositionalInjectionFixtureScan loads the fixture package at fixtureDir
 // and returns the sorted slice of violation Diagnostics using the same predicate
 // as TestClockPositionalInjection.
@@ -1073,12 +1225,15 @@ func TestClockPositionalInjectionFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_positional_injection_fixtures")
 
-	// GREEN: compliant (arg0 is a param; no WithClock).
-	// RED: violations (selector arg0; exported WithClock).
+	// GREEN: compliant (arg0 is a param; no clock option-injector).
+	// RED: violations (selector arg0; exported With*Clock option-injector).
 	dirs := []string{
-		"param_passes",       // GREEN: MustHaveClock(clk, ...) where clk is a param
-		"selector_violates",  // RED: MustHaveClock(cfg.Clock, ...) — selector arg0
-		"withclock_violates", // RED: exported func WithClock(...)
+		"param_passes",                     // GREEN: MustHaveClock(clk, ...) where clk is a param
+		"selector_violates",                // RED: MustHaveClock(cfg.Clock, ...) — selector arg0
+		"withclock_violates",               // RED: exported func WithClock(...) — exact name
+		"withfooclock_violates",            // RED: exported func WithFooClock(...) — suffixed name (broadened predicate)
+		"aliased_import_selector_violates", // RED: aliased import + selector arg0
+		"ctx_param_passes",                 // GREEN: (ctx, clk) two-param form — clk is a param
 	}
 
 	for _, dir := range dirs {

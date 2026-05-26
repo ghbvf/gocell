@@ -91,15 +91,6 @@ type serviceTokenConfig struct {
 // ServiceTokenOption configures ServiceTokenMiddleware behavior.
 type ServiceTokenOption func(*serviceTokenConfig)
 
-// WithServiceTokenClock overrides the clock for timestamp validation.
-func WithServiceTokenClock(clk clock.Clock) ServiceTokenOption {
-	return func(c *serviceTokenConfig) {
-		if clk != nil {
-			c.clk = clk
-		}
-	}
-}
-
 // WithServiceTokenNonceStore configures the replay-defense store. The
 // middleware rejects nonces already consumed within the store's TTL window.
 // Replay protection is mandatory — both ServiceTokenMiddleware and

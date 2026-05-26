@@ -36,9 +36,9 @@ func buildJWTDeps(adapterMode string, clk clock.Clock) (jwtDeps, error) {
 	// them in real mode. Config errors use ErrAuthVerifierConfig so operators
 	// can distinguish startup misconfigurations from runtime key errors.
 	reg, err := authconfig.FromEnv(
+		clk,
 		authconfig.WithKeys(keySet),
 		authconfig.WithRealMode(true),
-		authconfig.WithEnvClock(clk),
 	)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("build JWT registry: %w", err)

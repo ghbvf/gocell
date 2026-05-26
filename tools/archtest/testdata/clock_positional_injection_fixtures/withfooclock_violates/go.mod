@@ -1,4 +1,4 @@
-module fixturetest/clock_positional_injection/withclock_violates
+module fixturetest/clock_positional_injection/withfooclock_violates
 
 go 1.25.10
 

@@ -7,6 +7,10 @@
 > Amended: 2026-05-17 — PR #531 second-round review remediation
 >   (P1-1/P1-2/P1-3/P1-4/P2-1/P2-2/P2-3). See §Amendment A1; §D-A/§D-B and
 >   the 威胁分析 matrix are rewritten in place (no dual truth source).
+> Amended: 2026-05-27 — PR #1136 clock positional injection: broaden form-lock
+>   sub-check B (any With*Clock option injector banned, not just exact WithClock);
+>   delete all existing With*Clock injectors; migrate controlPlaneClockCarveOut
+>   map to receiver-type confinement (controlPlaneClock struct). See §Amendment A2.
 > Backlog: `BOOTSTRAP-CONTROL-PLANE-DECOUPLE-BUNDLE` (cap-01)
 > Source: PR #441 second/third-round review 聚合，3 子条 C.1/C.2/C.3 同根因
 > Supersedes: `202605102000-adr-lifecycle-hook-ctx-semantics.md` §D1/§D3/§Consequences
@@ -73,6 +77,38 @@ Deltas (each pinned by a regression test):
   `DefaultStartTimeout` / `Hook.OnStart` godoc rewritten to state StartTimeout
   is informational; the backstop is `WithStartupTimeout` + caller ctx.
 
+## Amendment A2 (PR #1136 clock positional injection)
+
+Two changes shipped together; both are documented here because they touch the §D-A
+carve-out mechanism described in this ADR.
+
+**A2-1 — form-lock sub-check B broadened**: `CLOCK-POSITIONAL-INJECTION-01` sub-check
+B previously banned only the exact name `WithClock`; it now bans any exported free
+function whose name *contains* "Clock", has a `kernel/clock.Clock`-typed parameter,
+and returns a functional-option type. Existing `With*Clock` injectors (`WithRouterClock`,
+`WithEnvClock`, `WithServiceTokenClock`, and the three configcore slice clock options)
+are deleted; their constructors gain a mandatory positional `clk clock.Clock` first
+parameter instead. This closes the loophole where a suffixed name like `WithRouterClock`
+survived the prior exact-match check.
+
+**A2-2 — control-plane carve-out migrated to receiver-type confinement**: The
+`controlPlaneClockCarveOut` map + `//archtest:allow:clock-injection:control-plane`
+comment-marker mechanism (A1-6, previously Medium) is eliminated. In its place, the
+control-plane real-time clock calls (`time.NewTicker`, `time.NewTimer`) are confined
+to methods on the unexported `controlPlaneClock` struct in `runtime/command/lifecycle.go`.
+The archtest now grants the exemption only to methods whose receiver type is
+`controlPlaneClock` and whose file is under `runtime/command/` — removing the
+AI-abusable comment-marker from production source. The AI-robust grade of the
+runtime-side carve-out remains **Medium** (Go cannot prevent `time.*` calls
+statically; receiver-type confinement is the permanent ceiling for this shape).
+
+§D-A AI-robust 评级 table row for "C.1 runtime 侧" is updated in-place below; the
+威胁分析 table rows for "fake clock 注入控制面 scheduling" and "carve-out marker
+被任意函数添加绕过 PROD-CLOCK-INJECTION-01" are updated in-place below. No dual
+truth source is retained (per ai-robust.md「ADR amendment 落地必查」).
+
+---
+
 ## Context
 
 PR #441 review 聚合识别出三个表面不同但同根因的问题，统一登记为
@@ -135,51 +171,49 @@ P2-2）。修复前 `now` 取自实时 ticker.C 的 tick 值，与 cell 注入�
 fake）产生的命令创建时间错配，污染 fake-clock assembly 的过期决策。
 `kernel/command.Sweeper` 仍无任何时钟字段（本节 Hard 不变量不受影响）。
 
-控制面时间源（ticker + 50 ms 启动探针）由两个私有函数收敛：
+控制面时间源（ticker + 50 ms 启动探针）收敛在 `controlPlaneClock` struct 的方法上
+（A2-2，`runtime/command/lifecycle.go`）：
 
 ```go
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
-func controlPlaneTicker(interval time.Duration) *time.Ticker {
+// controlPlaneClock is the sealed real-time source for all control-plane
+// scheduling in SweeperLifecycle. Confining time.NewTicker / time.NewTimer
+// here — rather than calling them from free functions — satisfies the
+// receiver-type confinement gate of PROD-CLOCK-INJECTION-01.
+// (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
+type controlPlaneClock struct{}
+
+func (controlPlaneClock) newTicker(interval time.Duration) *time.Ticker {
     return time.NewTicker(interval)
 }
 
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1 (CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)
-func controlPlaneProbeTimer(d time.Duration) *time.Timer {
+func (controlPlaneClock) newProbeTimer(d time.Duration) *time.Timer {
     return time.NewTimer(d)
 }
 ```
 
-这两个函数携带函数级 comment-guard `//archtest:allow:clock-injection:control-plane`，
-是 `PROD-CLOCK-INJECTION-01` archtest 在 `runtime/command` 包内认可的唯一真实时钟
-使用点（允许 allowMarker）。trailing `(CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01)`
-是内联 backlog 引用，属于 marker 语法的一部分，非可选注释。
+`PROD-CLOCK-INJECTION-01` archtest 的 `clockControlPlaneAllowedMethods` 函数通过
+receiver 类型名 `controlPlaneClock` + 文件路径 `runtime/command/` 识别豁免方法，
+不依赖 comment-marker 或 hand-maintained map。
 
 **AI-robust 评级（双栏）**：
 
 | 维度 | 评级 | 根据 |
 |---|---|---|
 | C.1 下游：kernel Sweeper 无时钟字段 | **Hard** | 类型不可表达 — 字段不存在，无论何种 AI 实现变体均无法合法引入 fake clock |
-| C.1 runtime 侧：控制面真实时间 carve-out | **Medium**（A1-6 锚定后） | 函数级 comment-guard **+** archtest 内 `controlPlaneClockCarveOut` `{rel → 函数名}` allowlist 双重门：marker 单独不再豁免任意函数（修复前等效 Soft，review P1-3）。allowlist 外的 `runtime/command` 真实时钟调用、第三个加 marker 的函数、其他文件/包加 marker，均被 RED 反向 fixture 捕获 |
+| C.1 runtime 侧：控制面真实时间 carve-out | **Medium**（A2-2 升级后） | Receiver-type confinement：`time.NewTicker` / `time.NewTimer` 仅允许出现在 `runtime/command/` 下以 `controlPlaneClock` 为 receiver 类型的方法体内（gate: 文件路径前缀 + receiver 类型名 `controlPlaneClock`）。`//archtest:allow:clock-injection:control-plane` comment-marker 与 `controlPlaneClockCarveOut` map 已删除（A2-2）。新增控制面真实时钟调用需在 `controlPlaneClock` struct 上新增方法，是可审查的代码变更，不是一行注释。Go 无法静态禁止 `time.*` 调用，receiver-type confinement 是该形态的永久上限，评级维持 Medium |
 
-**carve-out 唯一真值（A1-6 修订）**：carve-out 的权威登记处是 archtest
-`tools/archtest/clock_invariants_test.go` 内的 `controlPlaneClockCarveOut`
-allowlist（`{"runtime/command/lifecycle.go": {controlPlaneTicker,
-controlPlaneProbeTimer}}`）**配合**函数自身的
-`//archtest:allow:clock-injection:control-plane` marker——两者皆满足方豁免。
-allowlist 与 marker 同属 enforcement 侧（archtest），不构成"代码 vs ADR"两份
-真值源；**本 ADR 仍是文档，不是 enforcement 来源**。allowlist 是 archtest
-内部数据（非业务 PR 一行注释可塞入），新增条目是显式可审查的 archtest 变更，
-因此**不需要 `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 式的双向 consistency
-archtest**（不同于 `errcodeKindLiteralCarveOuts` 与 ADR registry 表的双真值源
-场景）。
+**carve-out 唯一真值（A2-2 修订）**：carve-out 的权威载体是 archtest
+`tools/archtest/clock_invariants_test.go::clockControlPlaneAllowedMethods`，
+它通过三重 gate（(a) 文件路径前缀 `runtime/command/`；(b) 有 receiver；
+(c) receiver 类型名 = `controlPlaneClock`）判定是否豁免，无 hand-maintained map，
+无 comment-marker 依赖。**本 ADR 仍是文档，不是 enforcement 来源**。
 
-**carve-out 盲区已关闭（L4 review 修复）**：`enclosingFuncDeclKey` 已通过
-`EachInSubtree[ast.FuncLit]` 递归排除所有嵌套 FuncLit body，确保闭包内
-`time.*` 调用不被豁免。反向自检：fixture
-`control_plane_exempt_func_closure_violates` 断言 exempt 函数内闭包的
-`time.NewTicker` 仍被 flag（RED）。
+**carve-out 盲区保持关闭**：`enclosingFuncDeclKey` 通过 `EachInSubtree[ast.FuncLit]`
+递归排除嵌套 FuncLit body，确保 `controlPlaneClock` 方法内的闭包中 `time.*` 调用
+不被豁免。反向自检：fixture `control_plane_exempt_func_closure_violates` 断言
+exempt 方法内闭包的 `time.NewTicker` 仍被 flag（RED）。
 
-ref: `tools/archtest/clock_invariants_test.go::enclosingFuncDeclKey`（盲区修复实现）
+ref: `tools/archtest/clock_invariants_test.go::clockControlPlaneAllowedMethods`（A2-2 实现）
 ref: `tools/archtest/prod_clock_injection_fixtures_test.go`（反向自检 fixture 列表）
 
 **本 clock carve-out 不登记于 `202605121800-adr-archtest-carveout-narrow.md`**：该 ADR 的 `CARVEOUT-REGISTRY` 仅定义 `ERRCODE-KIND-LITERAL-01` 规则的豁免，`ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` archtest 的解析锚点限定在该规则范围内。将 clock carve-out 插入该 registry 会破坏 `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 的严格等价断言，导致 CI 误报。
@@ -188,10 +222,8 @@ ref: `tools/archtest/prod_clock_injection_fixtures_test.go`（反向自检 fixtu
 
 `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` — Hard 路径 = 引入 sealed typed
 real-only 控制面时钟 funnel（让调用方连 `time.NewTicker`/`time.NewTimer` 都无法
-绕过 funnel）。受豁免函数清单（截至本 PR）：
-
-- `controlPlaneTicker` — `runtime/command/lifecycle.go`
-- `controlPlaneProbeTimer` — `runtime/command/lifecycle.go`
+绕过 funnel）。A2-2 将 receiver-type confinement 作为过渡形态落地；Hard 升级方向
+是进一步封装，使 `controlPlaneClock` 的方法成为唯一可达路径（type system seal）。
 
 该 backlog 条目同步维护在 `docs/backlog.md` cap-01 章节。
 
@@ -340,7 +372,7 @@ worker goroutine（sweeper loop、refresh GC loop）在 `lifecycle.Stop` 执行�
 
 | 威胁 | 状态 | 说明 |
 |---|---|---|
-| fake clock 注入控制面 scheduling | 消除 | kernel Sweeper 无时钟字段（Hard，A1-3 后仍无）；runtime 层控制面 ticker/probe carve-out 现由 marker + `controlPlaneClockCarveOut` allowlist 双重锚定（Medium，A1-6）。`BusinessClock` 仅供业务 `now`，不驱动 scheduling |
+| fake clock 注入控制面 scheduling | 消除 | kernel Sweeper 无时钟字段（Hard，A1-3 后仍无）；runtime 层控制面 ticker/probe carve-out 由 receiver-type confinement（`controlPlaneClock` struct，Medium，A2-2）守卫，已删除 comment-marker 与 `controlPlaneClockCarveOut` map。`BusinessClock` 仅供业务 `now`，不驱动 scheduling |
 | 启动探针 frozen-clock deadlock | 消除 | controlPlaneProbeTimer 使用真实时间（A1-3 未改控制面时间源）|
 | worker goroutine 在 assembly 关停后仍存活 | 消除 | ownerCancel 先行，worker 响应 ownerCtx.Done() |
 | sweep 错误静默 | 消除 | SweepTick 返回聚合错误；runLoop slog.Error + counter |
@@ -350,7 +382,7 @@ worker goroutine（sweeper loop、refresh GC loop）在 `lifecycle.Stop` 执行�
 | 控制面 real-now 当业务过期时间，fake-clock assembly 时间域错配 | 消除（A1-3） | `SweepTick` 的 `now` = `BusinessClock.Now()`，不再取自实时 ticker.C |
 | 零值 `&command.Sweeper{}` 启动成功、首 tick 才静默错 | 消除（A1-4） | OnStart 调 `Sweeper.Validate()`（无副作用），失败即 fail-fast，bootstrap rollback |
 | `SweepErrorCounter` label 不匹配 → `With` panic crashloop | 消除（A1-5） | OnStart 在 recover 下 preflight `.With({"cell":…})`，label 错配转 fail-fast wiring error |
-| carve-out marker 被任意函数添加绕过 PROD-CLOCK-INJECTION-01 | 缓解（A1-6，Medium） | marker + `{rel,name}` allowlist 双门；marker 单独不豁免（修复前等效 Soft）。Hard 升级 backlog `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` 已登记 |
+| carve-out marker 被任意函数添加绕过 PROD-CLOCK-INJECTION-01 | 消除（A2-2） | comment-marker `//archtest:allow:clock-injection:control-plane` 与 `controlPlaneClockCarveOut` map 已完全删除；carve-out 现由 receiver-type confinement 实现，新增真实时钟调用需在 `controlPlaneClock` struct 上增加方法（可审查代码变更，非注释添加）。Hard 升级 backlog `CONTROL-PLANE-CLOCK-TYPED-FUNNEL-HARD-UPGRADE-01` 已登记 |
 | StartTimeout 强制 OnStart 超时 | 消除（语义变更 + A1-1 backstop） | StartTimeout 仅 informational（slow-start 警告）；deadlock 防线移至编排层 supervise，非 per-hook deadline |
 
 ### ref

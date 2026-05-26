@@ -63,7 +63,7 @@ func buildPhase5State(t *testing.T) *phaseState {
 // real router map to iterate.
 func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
 	t.Helper()
-	r, err := router.NewForListener(ref, router.WithRouterClock(clock.Real()))
+	r, err := router.NewForListener(clock.Real(), ref)
 	require.NoError(t, err)
 	return r
 }
@@ -99,8 +99,8 @@ func TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener(t *testing.T)
 func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	t.Parallel()
 	mc := metrics.NewInMemoryCollector()
-	rtr, err := router.NewForListener(cell.PrimaryListener,
-		router.WithRouterClock(clock.Real()),
+	rtr, err := router.NewForListener(
+		clock.Real(), cell.PrimaryListener,
 		router.WithMetricsCollector(mc),
 	)
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 // lookup, so the violation is rejected even when a HealthListener router exists.
 func TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener(t *testing.T) {
 	t.Parallel()
-	healthRtr, err := router.NewForListener(cell.HealthListener, router.WithRouterClock(clock.Real()))
+	healthRtr, err := router.NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 
 	b := New(clock.Real())

@@ -32,7 +32,8 @@ import (
 )
 
 func newTestCell() *ConfigCore {
-	return NewConfigCore(clock.Real(),
+	return NewConfigCore(
+		clock.Real(),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
@@ -109,7 +110,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	}
 
 	t.Run("writer without tx manager", func(t *testing.T) {
-		c := NewConfigCore(clock.Real(),
+		c := NewConfigCore(
+			clock.Real(),
 			WithInMemoryDefaults(),
 			WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 			WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -118,7 +120,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	})
 
 	t.Run("tx manager without writer", func(t *testing.T) {
-		c := NewConfigCore(clock.Real(),
+		c := NewConfigCore(
+			clock.Real(),
 			WithInMemoryDefaults(),
 			WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 			WithTxManager(persistence.WrapForCell(durableTxRunner{})),
@@ -128,7 +131,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 }
 
 func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -153,7 +157,8 @@ func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 }
 
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -163,7 +168,8 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 }
 
 func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
@@ -176,7 +182,8 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 // WithEmitter test: a pre-composed emitter skips outbox.ResolveEmitter.
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.DemoCellEmitter()),
 	)
@@ -189,7 +196,8 @@ func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 // TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards
 // against setting both paths at once.
 func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.DemoCellEmitter()),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
@@ -207,7 +215,8 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	cursorCodec, err := query.NewCursorCodec([]byte("cfg-wrapper-durable-test-key!!!!"))
 	require.NoError(t, err)
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.DemoCellEmitter()), // non-durable
@@ -552,7 +561,8 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 // to inject a production cursor codec must not silently fall back to the
 // public demo key baked into the source tree.
 func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
@@ -605,7 +615,8 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 //  2. Init() succeeds when repositories are injected via port-level options.
 func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	writer := &recordingConfigWriter{}
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})), // non-Nooper; durable-gated CheckNotNoop passes
@@ -650,7 +661,8 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 	)
@@ -698,7 +710,8 @@ func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
 // The repo probe is always present (unconditionally via RegisterRepoReady).
 // ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.DemoCellEmitter()), // WriterEmitter — no ProbeSet method
 	)
@@ -722,7 +735,8 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 // phase0 rejects with ErrCellInvalidConfig.
 func TestConfigCore_WithCASProtocol_TypedNil_RejectedAtInit(t *testing.T) {
 	var typedNil *cas.Protocol // typed-nil
-	c := NewConfigCore(clock.Real(),
+	c := NewConfigCore(
+		clock.Real(),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(durableTxRunner{})),
@@ -754,7 +768,7 @@ func TestConfigCore_DurableMode_MissingCASProtocol_FailsFast(t *testing.T) {
 
 func mustNewRouter(t *testing.T) *router.Router {
 	t.Helper()
-	r, err := router.New(router.WithRouterClock(clock.Real()))
+	r, err := router.New(clock.Real())
 	if err != nil {
 		t.Fatalf("router.New: %v", err)
 	}

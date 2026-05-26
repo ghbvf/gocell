@@ -46,7 +46,7 @@ type Service struct {
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
 // TxRunner must be provided via WithTxManager; nil txRunner is rejected to
 // prevent silent loss of L1 atomicity guarantees on flag writes.
-func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "flagwrite.NewService")
 	s := &Service{
 		repo:   repo,
@@ -81,7 +81,8 @@ type UpdateInput struct {
 
 // Create creates a new feature flag (L1 LocalTx).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrFlagInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -116,7 +117,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 // The repo UPDATE uses version=version+1 RETURNING to eliminate the read-modify-write
 // TOCTOU race: two concurrent Updates both see the same DB-authoritative version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrFlagInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -145,7 +147,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 // Toggle does not overwrite rollout_percentage or description.
 // Returns ErrVersionConflict (409) if expectedVersion does not match.
 func (s *Service) Toggle(ctx context.Context, key string, expectedVersion int, enabled bool) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err
@@ -176,7 +179,8 @@ func (s *Service) Toggle(ctx context.Context, key string, expectedVersion int, e
 // flag between GetByKey and DELETE.
 // Returns ErrVersionConflict (409) if expectedVersion does not match.
 func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) error {
-	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return err

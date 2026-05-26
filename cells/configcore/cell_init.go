@@ -185,7 +185,7 @@ func (c *ConfigCore) ensureCursorCodec(reg cell.Registrar) error {
 
 func (c *ConfigCore) initWriteSlice() error {
 	opts := []configwrite.Option{configwrite.WithEmitter(c.emitter), configwrite.WithTxManager(c.txRunner)}
-	writeSvc, err := configwrite.NewService(c.configRepo, c.logger, c.clk, opts...)
+	writeSvc, err := configwrite.NewService(c.clk, c.configRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init write slice: %w", err)
 	}
@@ -221,7 +221,7 @@ func (c *ConfigCore) initPublishSlice() error {
 		configpublish.WithEmitter(c.emitter),
 		configpublish.WithTxManager(c.txRunner),
 	}
-	publishSvc, err := configpublish.NewService(c.configRepo, c.logger, c.clk, opts...)
+	publishSvc, err := configpublish.NewService(c.clk, c.configRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init publish slice: %w", err)
 	}
@@ -260,7 +260,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 // with local transaction only (no outbox emission).
 func (c *ConfigCore) initFlagWriteSlice() error {
 	opts := []flagwrite.Option{flagwrite.WithTxManager(c.txRunner)}
-	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, c.clk, opts...)
+	flagWriteSvc, err := flagwrite.NewService(c.clk, c.flagRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}
