@@ -54,6 +54,7 @@ var wellKnownDemoKeys = []string{
 
 	// Service token HMAC (shipped as test fixture; never use in production)
 	"service-secret-32-bytes-xxxxxx!!",
+	"walkthrough-service-token-secret-32b", // examples/ssobff walkthrough test fixture
 
 	// AES master key (hex-encoded, 64 chars) shipped as test fixture in
 	// cmd/corebundle and CI; real mode must refuse this value.

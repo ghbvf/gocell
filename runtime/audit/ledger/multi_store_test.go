@@ -190,6 +190,76 @@ func TestMultiStore_Query_HonorsFetchLimit(t *testing.T) {
 	require.GreaterOrEqual(t, len(got), 3, "MultiStore must return enough rows for N+1 hasMore detection")
 }
 
+// TestMultiStore_Query_OneEmptyOneNonEmpty asserts the aggregator returns the
+// non-empty store's entries when one backing store has no rows. Empty stores
+// must contribute zero rows, not propagate an error.
+func TestMultiStore_Query_OneEmptyOneNonEmpty(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(base))
+	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(base))
+
+	appendAt(t, a, "evt-a1", "event.user.created.v1", "user:1", base.Add(10*time.Second))
+
+	ms, err := ledger.NewMultiStore(a, b)
+	require.NoError(t, err)
+	got, err := ms.Query(context.Background(), ledger.AuditFilters{}, query.ListParams{
+		Limit: 10,
+		Sort:  ledger.QuerySort(),
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "non-empty chain's single entry must surface even when sibling chain is empty")
+	assert.Equal(t, "evt-a1", got[0].EventID)
+}
+
+// TestMultiStore_Query_BothEmpty asserts an all-empty fan-out returns the
+// canonical zero-rows shape (empty non-nil slice + no error), matching what
+// query.ExecutePagedQuery expects from a single empty Store.
+func TestMultiStore_Query_BothEmpty(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	a := buildMemStore(t, mustNamespace(t, "auditcore"), clk)
+	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clk)
+	ms, err := ledger.NewMultiStore(a, b)
+	require.NoError(t, err)
+
+	got, err := ms.Query(context.Background(), ledger.AuditFilters{}, query.ListParams{
+		Limit: 10,
+		Sort:  ledger.QuerySort(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got, "empty result must be a non-nil slice for parity with single-store Query")
+	assert.Len(t, got, 0)
+}
+
+// TestMultiStore_Query_TiedTimestamps_TieBreakedByID asserts the id-ASC
+// tie-break works across stores. Two entries with identical Timestamps but
+// different IDs must order by id ascending — load-bearing for cursor
+// stability across the fan-out boundary.
+func TestMultiStore_Query_TiedTimestamps_TieBreakedByID(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(ts))
+	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(ts))
+
+	// MemStore assigns ID = EventID. Pick IDs that lexicographically sort
+	// "evt-a" < "evt-z" so the tie-break is observable.
+	appendAt(t, a, "evt-a", "event.x.v1", "actor", ts)
+	appendAt(t, b, "evt-z", "event.y.v1", "actor", ts)
+
+	ms, err := ledger.NewMultiStore(a, b)
+	require.NoError(t, err)
+	got, err := ms.Query(context.Background(), ledger.AuditFilters{}, query.ListParams{
+		Limit: 10,
+		Sort:  ledger.QuerySort(),
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	// QuerySort = (timestamp DESC, id ASC). Equal timestamps → id ASC: evt-a < evt-z.
+	assert.Equal(t, "evt-a", got[0].EventID, "tie-break must be id ASC across stores")
+	assert.Equal(t, "evt-z", got[1].EventID)
+}
+
 // TestMultiStore_Query_AppliesCursor exercises the cross-store cursor
 // behavior: page 2 must skip the page-1 results from every backing store.
 func TestMultiStore_Query_AppliesCursor(t *testing.T) {

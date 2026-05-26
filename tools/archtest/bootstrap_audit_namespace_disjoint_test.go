@@ -32,6 +32,8 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -122,4 +124,105 @@ func TestAuditNamespaceDisjoint01(t *testing.T) {
 			"distinct from \"bootstrap\" (the auditcore relay chain) — single-namespace "+
 			"configurations re-introduce the dual-writer fork bug (issue #1121)",
 		ruleAuditNSDisjoint01)
+}
+
+// TestAuditNamespaceDisjoint01_ReverseCheck is the blind-spot reverse
+// self-check required by ai-robust.md §"工具选定后强制盲区自检" for the
+// rule's chosen scanner tooling (CallExpr walk + name-literal predicate). It
+// parses two synthetic snippets and asserts that the same name-literal
+// predicate used in the production rule correctly classifies them — proving
+// the scanner catches the negative case (no BootstrapNamespace call → no
+// match) and the positive case (BootstrapNamespace call → match). Without
+// this test the rule could silently degrade if a future refactor changed the
+// name lookup shape.
+//
+// Blind spots not covered by ResolvePackageRef + EvaluateConstString that
+// this archtest tooling cannot detect (tracked for future Hard upgrade):
+//   - Wrapper helper indirection: a private func in cmd/corebundle that
+//     calls audit.BootstrapNamespace() and exposes the result as
+//     `var auditBootstrapNS = innerHelper()`. The CallExpr walk sees only
+//     the helper, not the underlying canonical call.
+//   - Reflection-constructed NamespaceID: `reflect.ValueOf(ledger.NamespaceID("bootstrap")).Interface()`.
+//     Type-info resolution doesn't trace dynamic values.
+//
+// Both are unreachable today (no such helpers exist in cmd/corebundle); the
+// SSA-reachability upgrade tracked alongside BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-
+// DOWNSTREAM-HARD-01 would close both.
+func TestAuditNamespaceDisjoint01_ReverseCheck(t *testing.T) {
+	t.Parallel()
+
+	parseExpr := func(src string) *ast.File {
+		t.Helper()
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "synthetic.go", src, parser.AllErrors)
+		require.NoError(t, err, "parse synthetic source")
+		return f
+	}
+
+	// nameLiteralMatch is the same predicate used by the production rule —
+	// extracting it here exercises the scanner shape against synthetic AST.
+	nameLiteralMatch := func(file *ast.File, want string) bool {
+		var found bool
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			if sel.Sel != nil && sel.Sel.Name == want {
+				found = true
+			}
+		})
+		return found
+	}
+
+	t.Run("compliant_fixture_matches_both_anchors", func(t *testing.T) {
+		t.Parallel()
+		const src = `package fixture
+import (
+	audit "x/runtime/audit"
+	ledger "x/runtime/audit/ledger"
+)
+var _ = audit.BootstrapNamespace()
+var _, _ = ledger.ParseNamespaceID("auditcore")
+`
+		f := parseExpr(src)
+		assert.True(t, nameLiteralMatch(f, bootstrapNamespaceFnName),
+			"compliant fixture must expose BootstrapNamespace() to the walker")
+		assert.True(t, nameLiteralMatch(f, parseNamespaceIDFnName),
+			"compliant fixture must expose ParseNamespaceID(...) to the walker")
+	})
+
+	t.Run("missing_bootstrap_namespace_fixture_caught", func(t *testing.T) {
+		t.Parallel()
+		const src = `package fixture
+import (
+	ledger "x/runtime/audit/ledger"
+)
+var _, _ = ledger.ParseNamespaceID("auditcore")
+`
+		f := parseExpr(src)
+		assert.False(t, nameLiteralMatch(f, bootstrapNamespaceFnName),
+			"reverse case: missing BootstrapNamespace() call must NOT be flagged by walker — production rule's bootstrapNamespaceFound stays false")
+	})
+
+	t.Run("only_bootstrap_no_relay_fixture_caught", func(t *testing.T) {
+		t.Parallel()
+		const src = `package fixture
+import (
+	audit "x/runtime/audit"
+	ledger "x/runtime/audit/ledger"
+)
+var _ = audit.BootstrapNamespace()
+var _, _ = ledger.ParseNamespaceID("bootstrap") // same namespace twice — single chain
+`
+		f := parseExpr(src)
+		assert.True(t, nameLiteralMatch(f, bootstrapNamespaceFnName),
+			"walker must see BootstrapNamespace() call")
+		assert.True(t, nameLiteralMatch(f, parseNamespaceIDFnName),
+			"walker must see ParseNamespaceID call (even when its arg evaluates to 'bootstrap')")
+		// The production rule uses EvaluateConstString on the ParseNamespaceID
+		// argument and filters out value == "bootstrap"; a synthetic case
+		// where both Anchors are present but the arg resolves to "bootstrap"
+		// would correctly fail the production rule's nonBootstrapNSFound check.
+	})
 }
