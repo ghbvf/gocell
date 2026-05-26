@@ -503,8 +503,9 @@ func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) 
 // ("RevokeUser") does NOT appear in production code, confirming the reflect
 // blind spot is not exercised (which would be scanner-invisible).
 //
-// Scanner: AST-only search for ast.BasicLit STRING containing the banned names
-// as arguments to MethodByName calls.
+// Scanner: shared scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01) —
+// typed reflect.Value receiver gate + EvaluateConstString arg folding (covers
+// raw-string / const / concat banned names passed to MethodByName).
 func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) {
 	t.Parallel()
 
@@ -518,7 +519,7 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	_ = RunTyped(t, TypedOpts{Tests: false},
 		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."},
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
+			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
 			}
 			for _, file := range p.Files {
@@ -526,28 +527,14 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel.Name != "MethodByName" {
-						return
-					}
-					if len(call.Args) != 1 {
-						return
-					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
-					if !ok {
-						return
-					}
-					// Strip surrounding quotes from the string literal.
-					name := strings.Trim(lit.Value, `"`)
-					if bannedNames[name] {
-						line := p.Fset.Position(call.Pos()).Line
-						violations = append(violations, fmt.Sprintf(
-							"%s:%d: reflect.MethodByName(%q) blind spot detected — archtest would miss this",
-							rel, line, name,
-						))
-					}
-				})
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return bannedNames[n] }) {
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: CREDENTIAL-INVALIDATE-FUNNEL-01: reflect.MethodByName(%q) blind spot "+
+							"detected — archtest cannot see reflect-based invocations",
+						rel, hit.Line, hit.Name,
+					))
+				}
 			}
 			return nil
 		})
