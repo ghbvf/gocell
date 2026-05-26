@@ -146,7 +146,7 @@ func NewDirectEmitter(
 	}
 	probeName, err := healthz.EmitterFailOpenProbeName(cellID)
 	if err != nil {
-		return nil, fmt.Errorf("outbox: build fail-open probe name: %w", err)
+		return nil, fmt.Errorf("outbox: build fail-open probe name for cellID %q: %w", cellID, err)
 	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_emit_failopen_dropped_total",

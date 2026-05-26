@@ -58,13 +58,19 @@
 //     expected absent except in cellgen healthz_gen.go and kernel/cell/healthz.go.
 //   - B3 (string-cast bypass): healthz.ProbeName(callExpr) where the argument
 //     is a function call (Sprintf, Join, etc.) — expected absent in production AST.
+//   - B4 (MustProbeName production bypass): healthz.MustProbeName(runtimeStr) calls
+//     in non-allowlist production files — availability risk since MustProbeName
+//     panics on invalid input, and adapter Checkers() map keys are runtime-supplied.
+//     Covered by A4b scanner (caller allowlist). Post-F1A/F1B, zero production
+//     callers outside kernel/healthz/probename.go + healthztest/conformance.go.
 //
 // ref: kernel/healthz.ProbeName — typed concept type
 // ref: kernel/healthz.NewProbeName — sole validated entry point
+// ref: kernel/healthz.MustProbeName — kernel-internal + test-only panic variant
 // ref: kernel/healthz.EmitterFailOpenProbeName — sole composed-name constructor
 // ref: HEALTHZ-WRITE-01 (healthz_invariants_test.go) — A1 HTTP ban + A3 holder allowlist (orthogonal)
 // ref: CELL-REPO-READYZ-PROBE-01 (cell_repo_readyz_probe_test.go) — enrollment backstop (orthogonal)
-// ref: ADR docs/architecture/202605271000-adr-probename-sealed-funnel.md
+// ref: ADR docs/architecture/202605271100-adr-probename-sealed-funnel.md
 package archtest
 
 import (
@@ -170,11 +176,35 @@ var aggregatorRegisterAllowlist = map[string]bool{
 
 // newProbeNameAllowlist is the set of module-relative path suffixes that are
 // allowed to call healthz.NewProbeName directly in production code (non-test).
-// The only production callsite is the probename.go constructor itself.
-// All other callers (tests, cellgen golden-lock tests) are handled by the
-// _test.go suffix exemption in the scanner.
+// kernel/healthz/probename.go is the validator implementation; the bootstrap
+// managed_resource.go is the single composition-root callsite that converts
+// runtime-supplied ManagedResource.Checkers() map keys (bare strings from
+// adapter implementations) into typed ProbeName values at the funnel boundary
+// (A4 allowlist; see F1A fix in PR #1034).
 var newProbeNameAllowlist = map[string]bool{
+	"kernel/healthz/probename.go":           true,
+	"runtime/bootstrap/managed_resource.go": true,
+}
+
+// mustProbeNameAllowlist is the set of module-relative path suffixes that are
+// allowed to call healthz.MustProbeName in production code (non-test).
+// MustProbeName is the panic variant for programmer-error sites. The only
+// sanctioned production sites are the declaration file itself (kernel/healthz)
+// and conformance test fixtures — all test files (*_test.go suffix) are
+// globally exempt. All other production callers fail A4b.
+//
+// B4 blind-spot: `healthz.MustProbeName(runtimeStr)` calls in non-allowlist
+// production files where the arg is a runtime variable rather than a literal
+// — detected by A4b caller allowlist; the runtime-string case collapses to the
+// same scan since MustProbeName itself is the call to reject regardless of
+// argument form.
+var mustProbeNameAllowlist = map[string]bool{
+	// Declaration site — MustProbeName is defined here.
 	"kernel/healthz/probename.go": true,
+	// Conformance test infrastructure that calls MustProbeName with literals
+	// to set up probe fixtures. The file is production-path (no _test.go
+	// suffix) but is explicitly test-infrastructure, not business logic.
+	"runtime/observability/healthz/healthztest/conformance.go": true,
 }
 
 // ─── Golden inventory ─────────────────────────────────────────────────────────
@@ -190,6 +220,7 @@ func goldenProbeNames() []string {
 		// kernel/healthz — framework constants
 		"kernel/healthz.ConfigDriftProbeName=config_drift",
 		"kernel/healthz.ConfigWatcherProbeName=config_watcher",
+		"kernel/healthz.EventRouterProbeName=event_router",
 		// adapter probes (all _ready suffix)
 		"adapters/oidc.ProbeReady=oidc_ready",
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
@@ -319,6 +350,13 @@ func firstArgResolvesToConst(call *ast.CallExpr, info *types.Info) bool {
 func isNewProbeNameCall(call *ast.CallExpr, info *types.Info) bool {
 	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 	return ok && pkgPath == healthzPkgPath && name == "NewProbeName"
+}
+
+// isMustProbeNameCall reports whether call is a direct call to
+// healthz.MustProbeName.
+func isMustProbeNameCall(call *ast.CallExpr, info *types.Info) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == healthzPkgPath && name == "MustProbeName"
 }
 
 // ─── Scanner functions ────────────────────────────────────────────────────────
@@ -609,6 +647,57 @@ func scanA4NewProbeNameCallerAllowlist(
 	return out
 }
 
+// scanA4bMustProbeNameCallerAllowlist scans file for production (non-test) calls
+// to healthz.MustProbeName outside the sanctioned allowlist.
+//
+// MustProbeName is the panic variant of NewProbeName. After fixing F1A/F1B, it
+// must have zero production callers outside kernel/healthz/probename.go and the
+// healthztest conformance file. All *_test.go callers are globally exempt.
+//
+// B4 blind-spot: a production caller passes a runtime string to MustProbeName
+// (availability risk — panics if the adapter returns a non-snake_case key).
+// A4b closes this by rejecting any MustProbeName call outside the allowlist
+// regardless of the argument form, so even literal callers are locked out.
+func scanA4bMustProbeNameCallerAllowlist(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+
+	relSlash := filepath.ToSlash(rel)
+	for suffix := range mustProbeNameAllowlist {
+		if strings.HasSuffix(relSlash, suffix) {
+			return nil
+		}
+	}
+
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isMustProbeNameCall(call, info) {
+			return
+		}
+		pos := fset.Position(call.Pos())
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"PROBENAME-SEALED-FUNNEL-01/A4b: healthz.MustProbeName called at %s:%d "+
+					"from outside the sanctioned caller set "+
+					"(only kernel/healthz/probename.go and healthztest/conformance.go may "+
+					"call MustProbeName in production code; all test files are exempt)",
+				rel, pos.Line,
+			),
+		})
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
 // scanA5EmitterFailOpenPrefixBypass scans file for bare BinaryExpr string
 // concatenation of the form `"outbox_failopen_rate_" + x` outside
 // kernel/healthz/probename.go — the sole sanctioned site.
@@ -751,7 +840,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 	root := findModuleRoot(t)
 	allPatterns := prodscan.PatternsExtended(root)
 
-	var a1Diags, a2Diags, a3Diags, a4Diags, a5Diags []Diagnostic
+	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags []Diagnostic
 
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
 		func(p *Pass) []Diagnostic {
@@ -777,6 +866,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 				a2Diags = append(a2Diags, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
 				a3Diags = append(a3Diags, scanA3AggregatorRegisterAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a4Diags = append(a4Diags, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
+				a4bDiags = append(a4bDiags, scanA4bMustProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a5Diags = append(a5Diags, scanA5EmitterFailOpenPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
@@ -810,6 +900,11 @@ func TestProbenameSealedFunnel(t *testing.T) {
 	t.Run("A4_NewProbeNameCallerAllowlist", func(t *testing.T) {
 		t.Parallel()
 		Report(t, "PROBENAME-SEALED-FUNNEL-01/A4", a4Diags)
+	})
+
+	t.Run("A4b_MustProbeNameCallerAllowlist", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A4b", a4bDiags)
 	})
 
 	t.Run("A5_EmitterFailOpenPrefixBypass", func(t *testing.T) {

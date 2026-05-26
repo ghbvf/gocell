@@ -710,7 +710,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -767,7 +767,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error {
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
 		}),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -895,7 +895,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 		// WithHealthChecker is the composition-root path that drainProbes wires
 		// into bootstrap's aggregator.
-		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1017,8 +1017,8 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 		WithShutdownTimeout(testtime.D2s),
 		// Two WithHealthChecker calls with the same name trigger duplicate detection
 		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
-		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
-		newDupHealthCheckerOption("accesscore_repo_ready"),
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
+		newDupHealthCheckerOption(healthz.MustProbeName("accesscore_repo_ready")),
 	)
 
 	ctx := t.Context()
@@ -1073,7 +1073,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
 	b := New(
 		clock.Real(),
-		WithHealthChecker("mycheck", nil),
+		WithHealthChecker(healthz.MustProbeName("mycheck"), nil),
 	)
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -1122,8 +1122,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
-		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("postgres"), func(_ context.Context) error { return fmt.Errorf("connection refused") }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1190,7 +1190,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error {
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
 			if unhealthy.Load() {
 				return fmt.Errorf("connection lost")
 			}
@@ -1555,7 +1555,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
-		WithHealthChecker("config_watcher", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("config_watcher"), func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(testtime.D1s),
 	)
 

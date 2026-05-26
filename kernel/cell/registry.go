@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // ---------------------------------------------------------------------------
@@ -134,6 +135,13 @@ type Registrar interface {
 	// archtest PROBENAME-SEALED-FUNNEL-01 locks both directions: A1
 	// declares the sanctioned ProbeName const set; A2 closes the callsite
 	// via type resolution on the ProbeName parameter.
+	//
+	// Example (cell-repo probe — standard path):
+	//
+	//  1. Declare repo in cell.yaml.
+	//  2. Run `gocell generate cell -all` to emit healthz_gen.go.
+	//  3. Call the generated helper from cell Init:
+	//     if err := mycell.RegisterReadiness(reg, c.repo); err != nil { ... }
 	RegisterReadiness(name healthz.ProbeName, prober healthz.Prober) error
 
 	// Lifecycle appends a lifecycle hook. Name must be non-empty; passing an
@@ -504,9 +512,11 @@ func (r *RegistryRecorder) Subscribe(
 func (r *RegistryRecorder) RegisterReadiness(name healthz.ProbeName, prober healthz.Prober) error {
 	r.mustNotBeFinalized("RegisterReadiness")
 	if name == "" {
-		return fmt.Errorf("%w: empty probe name", healthz.ErrInvalidProbeName)
+		const emptyMsg = "registry RegisterReadiness: probe name must not be empty; " +
+			"use a typed const (e.g. postgres.ProbeReady) or healthz.MustProbeName in tests"
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, emptyMsg)
 	}
-	if prober == nil {
+	if validation.IsNilInterface(prober) {
 		return fmt.Errorf("%w: nil prober for probe %q", healthz.ErrInvalidProbeName, name)
 	}
 	if _, dup := r.probeNames[name]; dup {

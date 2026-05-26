@@ -155,12 +155,14 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 // wire adapter health probes (e.g., conn.Health for RabbitMQ) without
 // bootstrap depending on adapter types.
 //
-// The name must be a healthz.ProbeName (snake_case, no hyphens); use
-// healthz.MustProbeName to construct one from a validated literal, or reference
-// a sanctioned const (e.g. postgres.ProbeReady, redis.ProbeReady) that is
-// already typed. This is the sole sanctioned entry point for framework-level
-// readiness probes — raw string literals at this callsite are rejected by
-// archtest PROBENAME-SEALED-FUNNEL-01.
+// The name must be a healthz.ProbeName (snake_case, no hyphens); reference a
+// sanctioned adapter const (e.g. postgres.ProbeReady, rabbitmq.ProbeReady) or
+// use healthz.NewProbeName(s) for runtime-composed names; the value flows
+// through the typed funnel. MustProbeName is restricted to kernel-internal and
+// test-only use (archtest PROBENAME-SEALED-FUNNEL-01/A4b rejects production
+// callers outside kernel/healthz). This is the sole sanctioned entry point for
+// framework-level readiness probes — raw string literals at this callsite are
+// rejected by archtest PROBENAME-SEALED-FUNNEL-01.
 //
 // Accepts func(context.Context) error so callers can honor the /readyz probe
 // deadline. Validation (empty name, nil fn) is deferred to Run() where it fires

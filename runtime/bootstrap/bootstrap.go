@@ -46,7 +46,7 @@ type Option func(*Bootstrap)
 var (
 	configWatcherCheckerName = healthz.ConfigWatcherProbeName
 	configDriftCheckerName   = healthz.ConfigDriftProbeName
-	eventRouterCheckerName   = healthz.MustProbeName("event_router")
+	eventRouterCheckerName   = healthz.EventRouterProbeName
 )
 
 // Bootstrap orchestrates the GoCell application lifecycle.

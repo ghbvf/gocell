@@ -183,6 +183,40 @@ file-identity 守卫可直接在 `*_test.go` 范围内豁免，不需要 API 方
 耦合仍存在；彻底移除比窄化更干净，且 PR-500 已证明写面封堵可独立由 `RegisterReadiness`
 承担。
 
+## Domain collaboration
+
+Sibling healthz funnel issues and their relationship to this ADR (status as of PR #1034):
+
+| Issue | Status this PR |
+|-------|---------------|
+| #893 HEALTHZ-HOLDER-SEAL-01 | won't-do — Go can't express holder axis; Medium archtest remains the ceiling |
+| #891 HEALTHZ-SINK-INTERFACE-NARROW-01 | independent ship — funnel downstream; not subsumed |
+| #892 HEALTHZ-PANIC-RECOVERY-LAYER-01 | independent ship — funnel internal |
+| #894 CELLGEN-MULTI-PROBE-01 | independent ship — funnel upstream派生 path |
+| #633 READYZ-PROBE-FAILURE-METRIC-01 | unblocked — typed ProbeName now flows to metric labels |
+| #712 USER-REPO-READYZ-PROBE-01 | unblocked — RegisterReadiness funnel covers user repo |
+
+### D4 amendment — MustProbeName exists; zero production callers enforced
+
+The original §D4 stated "不引入 MustProbeName". In practice, `MustProbeName` was
+introduced for use in conformance test fixtures and kernel-internal composers where
+an invalid name is a programmer error. The spirit of D4 is preserved as follows:
+
+- `MustProbeName` is defined in `kernel/healthz/probename.go` for use in any
+  `*_test.go` file (any package) and the healthztest conformance infrastructure.
+- Production callers outside the allowlist are rejected by archtest
+  `PROBENAME-SEALED-FUNNEL-01/A4b` (scanner `scanA4bMustProbeNameCallerAllowlist`).
+- After fixing F1A (managed_resource.go) and F1B (bootstrap.go), the production
+  caller count is exactly zero — only the declaration site and conformance.go remain.
+- The B4 blind-spot is documented in the archtest package godoc.
+
+#### Considered alternative — remove MustProbeName entirely
+
+Removing MustProbeName would require every test fixture to call `NewProbeName`
+with error checks or use `ProbeName` cast directly (bypassing validation).
+Both alternatives are worse for test ergonomics and less AI-robust than keeping
+MustProbeName restricted to `*_test.go` with A4b enforcement.
+
 ## Open-source benchmarking
 
 | Framework | File | Form | Validation |

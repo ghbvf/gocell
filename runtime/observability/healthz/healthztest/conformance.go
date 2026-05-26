@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -372,6 +373,11 @@ func (a *FakeAggregator) Evaluate(ctx context.Context) khealthz.Snapshot {
 		overall = khealthz.WorseStatus(overall, pr.Status)
 		results = append(results, pr)
 	}
+	// Sort by name for deterministic output — matches production aggregator behavior
+	// (runtime/observability/healthz.aggregator.Evaluate sorts before returning).
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
 	return khealthz.Snapshot{Overall: overall, Probes: results}
 }
 

@@ -49,6 +49,8 @@ type Prober interface {
 // common cellgen / framework registration pattern where the underlying source
 // (e.g. RepoProber.RepoReady, *sql.DB.PingContext) does not already
 // satisfy Prober and a closure is the simplest bridge.
+//
+// Example: healthz.ProberFunc(store.RepoReady) where store implements RepoProber.
 type ProberFunc func(ctx context.Context) error
 
 // Check satisfies [Prober] by invoking the underlying function.

@@ -112,13 +112,20 @@ func TestRegistry_RegisterReadiness_AfterSnapshot_Panics(t *testing.T) {
 }
 
 // TestRegistry_RegisterReadiness_RejectsNilAndEmptyName verifies that
-// RegisterReadiness rejects a nil prober and an empty name with ErrInvalidProbeName
-// (mirrors the runtime aggregator contract) and does not accumulate the rejected probe.
+// RegisterReadiness rejects a nil prober and an empty name, and does not
+// accumulate the rejected probe. The empty-name error is an errcode.Error
+// (per F11 finding); the nil-prober error still wraps healthz.ErrInvalidProbeName.
 func TestRegistry_RegisterReadiness_RejectsNilAndEmptyName(t *testing.T) {
 	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
-	// empty name (zero ProbeName) must be rejected
-	assert.ErrorIs(t, rec.RegisterReadiness("", healthz.ProberFunc(func(_ context.Context) error { return nil })), healthz.ErrInvalidProbeName)
-	// nil prober must be rejected
+	// empty name (zero ProbeName) must be rejected.
+	emptyErr := rec.RegisterReadiness("", healthz.ProberFunc(func(_ context.Context) error { return nil }))
+	assert.Error(t, emptyErr, "empty name must return error")
+	// Error is an errcode.Error — cast to verify the code.
+	var ecErr *errcode.Error
+	if !errors.As(emptyErr, &ecErr) {
+		t.Errorf("empty name error is %T, want *errcode.Error", emptyErr)
+	}
+	// nil prober must be rejected with ErrInvalidProbeName.
 	assert.ErrorIs(t, rec.RegisterReadiness(healthz.MustProbeName("ok_name"), nil), healthz.ErrInvalidProbeName)
 	assert.Empty(t, rec.Snapshot().Probes, "rejected probes must not be accumulated")
 }

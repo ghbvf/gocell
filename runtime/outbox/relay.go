@@ -192,13 +192,13 @@ func NewRelay(clk clock.Clock, store Store, pub kout.Publisher, cfg RelayConfig)
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {
-		r.pollBudget = NewFailureBudget("outbox-relay-poll", cfg.PollFailureBudget)
+		r.pollBudget = NewFailureBudget("outbox_relay_poll", cfg.PollFailureBudget)
 	}
 	if cfg.ReclaimFailureBudget > 0 {
-		r.reclaimBudget = NewFailureBudget("outbox-relay-reclaim", cfg.ReclaimFailureBudget)
+		r.reclaimBudget = NewFailureBudget("outbox_relay_reclaim", cfg.ReclaimFailureBudget)
 	}
 	if cfg.CleanupFailureBudget > 0 {
-		r.cleanupBudget = NewFailureBudget("outbox-relay-cleanup", cfg.CleanupFailureBudget)
+		r.cleanupBudget = NewFailureBudget("outbox_relay_cleanup", cfg.CleanupFailureBudget)
 	}
 	return r
 }
@@ -849,13 +849,13 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 func (r *Relay) Checkers() map[string]func(context.Context) error {
 	m := make(map[string]func(context.Context) error)
 	if r.pollBudget != nil {
-		m["outbox-relay-poll"] = r.pollBudget.Checker()
+		m["outbox_relay_poll"] = r.pollBudget.Checker()
 	}
 	if r.reclaimBudget != nil {
-		m["outbox-relay-reclaim"] = r.reclaimBudget.Checker()
+		m["outbox_relay_reclaim"] = r.reclaimBudget.Checker()
 	}
 	if r.cleanupBudget != nil {
-		m["outbox-relay-cleanup"] = r.cleanupBudget.Checker()
+		m["outbox_relay_cleanup"] = r.cleanupBudget.Checker()
 	}
 	return m
 }

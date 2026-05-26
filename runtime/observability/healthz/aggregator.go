@@ -19,6 +19,10 @@ const (
 	// defaultDeadline is the per-probe execution budget. Matches the Kubernetes
 	// readiness probe default periodSeconds=10 / timeoutSeconds=5 convention.
 	defaultDeadline = 5 * time.Second
+
+	// probeLogKey is the slog field key used to record the probe name in all
+	// aggregator diagnostic log messages (consolidating 3 occurrences).
+	probeLogKey = "probe"
 )
 
 // Option configures a [aggregator] at construction time.
@@ -184,7 +188,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 		pr.Latency = a.clk.Since(start)
 		if r := recover(); r != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", pr.Name.String()),
+				slog.String(probeLogKey, pr.Name.String()),
 				slog.Any("panic", redaction.RedactAny(r)),
 			)
 			pr.Status = healthz.StatusDown
@@ -265,7 +269,7 @@ func (w *ctxSafeProbe) Check(ctx context.Context) error {
 	case o := <-done:
 		if o.panicV != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", w.inner.Name().String()),
+				slog.String(probeLogKey, w.inner.Name().String()),
 				slog.Any("panic", redaction.RedactAny(o.panicV)),
 			)
 			return fmt.Errorf("panic: %v", redaction.RedactAny(o.panicV))
@@ -284,7 +288,7 @@ func watchLateOutcome(name string, ctxErr error, start, cancelAt time.Time, done
 	switch {
 	case o.panicV != nil:
 		slog.Warn("healthz: probe panicked after ctx cancellation; result discarded",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("panic", redaction.RedactAny(o.panicV)),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
@@ -292,14 +296,14 @@ func watchLateOutcome(name string, ctxErr error, start, cancelAt time.Time, done
 		)
 	case cancelLag > time.Second:
 		slog.Warn("healthz: probe did not honor ctx cancellation promptly",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),
 		)
 	default:
 		slog.Debug("healthz: probe canceled, inner fn returned shortly after",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),

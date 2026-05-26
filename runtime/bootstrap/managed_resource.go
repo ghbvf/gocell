@@ -64,7 +64,10 @@ func (b *Bootstrap) expandManagedResources() error {
 			}
 			seen[name] = struct{}{}
 			fn := fn // capture
-			probeName := healthz.MustProbeName(name)
+			probeName, err := healthz.NewProbeName(name)
+			if err != nil {
+				return fmt.Errorf("bootstrap: invalid probe name %q from %T.Checkers(): %w", name, r, err)
+			}
 			b.healthCheckers = append(b.healthCheckers, namedChecker{name: probeName, fn: fn})
 		}
 		// Expand worker (skip nil).

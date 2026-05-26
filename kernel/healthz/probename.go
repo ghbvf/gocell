@@ -91,13 +91,16 @@ func NewProbeName(s string) (ProbeName, error) {
 }
 
 // MustProbeName is the panic variant of [NewProbeName] for sites where an
-// invalid name is a programmer error rather than a runtime condition: kernel
-// internal composers, conformance test fixtures, and test-only probe stubs.
-// It routes through [panicregister.Approved] so the kernel recovery layer
-// classifies the panic correctly.
+// invalid name is a programmer error rather than a runtime condition. It is
+// intended for use in any *_test.go file (any package) and the kernel/healthz
+// internals; production callers outside kernel/healthz are rejected by archtest
+// PROBENAME-SEALED-FUNNEL-01/A4b (caller allowlist).
 //
-// Production callsites outside `kernel/healthz` + `*_test.go` are rejected
-// by archtest PROBENAME-SEALED-FUNNEL-01/A4 (caller allowlist).
+// It routes through [panicregister.Approved] so the kernel recovery layer
+// classifies the panic correctly. Production code that needs to validate a
+// runtime-supplied string must use [NewProbeName] (returns an error) instead
+// of MustProbeName (panics), to avoid availability risk when adapter Checkers()
+// map keys contain unexpected characters.
 func MustProbeName(s string) ProbeName {
 	name, err := NewProbeName(s)
 	if err != nil {
@@ -115,6 +118,13 @@ const ConfigWatcherProbeName ProbeName = "config_watcher"
 // ConfigDriftProbeName is the framework probe registered when config supports
 // generation-tracked drift detection.
 const ConfigDriftProbeName ProbeName = "config_drift"
+
+// EventRouterProbeName is the framework probe registered by the bootstrap event
+// router, indicating the event routing layer is alive. Declared here so that
+// bootstrap consumes a typed const rather than calling MustProbeName with a
+// literal — archtest PROBENAME-SEALED-FUNNEL-01/A4b enforces that MustProbeName
+// has zero production callers outside kernel/healthz and *_test.go.
+const EventRouterProbeName ProbeName = "event_router"
 
 const emitterFailOpenProbeNamePrefix = "outbox_failopen_rate_"
 

@@ -884,7 +884,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 	// Wait for the poll budget checker to become non-nil (trip).
 	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-poll"]
+		fn, ok := checkers["outbox_relay_poll"]
 		if !ok {
 			return false
 		}
@@ -904,7 +904,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	// Trip first.
 	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-poll"]
+		fn, ok := checkers["outbox_relay_poll"]
 		return ok && fn(context.Background()) != nil
 	}, testtime.D2s, testtime.FastPoll, "budget must trip")
 
@@ -914,7 +914,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	// Checker must recover.
 	testwait.External(t, "outbox-relay-published", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-poll"]
+		fn, ok := checkers["outbox_relay_poll"]
 		return ok && fn(context.Background()) == nil
 	}, testtime.D2s, testtime.FastPoll, "poll budget must reset after success")
 }
@@ -931,14 +931,14 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 
 	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-reclaim"]
+		fn, ok := checkers["outbox_relay_reclaim"]
 		return ok && fn(context.Background()) != nil
 	}, testtime.D2s, testtime.FastPoll, "reclaim budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
 	checkers := relay.Checkers()
-	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered")
-	pollChecker := checkers["outbox-relay-poll"]
+	require.Contains(t, checkers, "outbox_relay_poll", "poll checker must be registered")
+	pollChecker := checkers["outbox_relay_poll"]
 
 	// Poll checker must never become unhealthy while only reclaim fails.
 	assert.Never(t, func() bool {
@@ -958,14 +958,14 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 
 	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-cleanup"]
+		fn, ok := checkers["outbox_relay_cleanup"]
 		return ok && fn(context.Background()) != nil
 	}, testtime.D2s, testtime.FastPoll, "cleanup budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
 	checkers2 := relay.Checkers()
-	require.Contains(t, checkers2, "outbox-relay-poll", "poll checker must be registered")
-	pollChecker2 := checkers2["outbox-relay-poll"]
+	require.Contains(t, checkers2, "outbox_relay_poll", "poll checker must be registered")
+	pollChecker2 := checkers2["outbox_relay_poll"]
 
 	// Poll checker must never become unhealthy while only cleanup fails.
 	assert.Never(t, func() bool {
@@ -977,9 +977,9 @@ func TestRelay_HealthCheckers_RegistersThree(t *testing.T) {
 	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
 	checkers := relay.Checkers()
 
-	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered")
-	require.Contains(t, checkers, "outbox-relay-reclaim", "reclaim checker must be registered")
-	require.Contains(t, checkers, "outbox-relay-cleanup", "cleanup checker must be registered")
+	require.Contains(t, checkers, "outbox_relay_poll", "poll checker must be registered")
+	require.Contains(t, checkers, "outbox_relay_reclaim", "reclaim checker must be registered")
+	require.Contains(t, checkers, "outbox_relay_cleanup", "cleanup checker must be registered")
 	assert.Len(t, checkers, 3)
 }
 
@@ -992,10 +992,10 @@ func TestRelay_FailureBudgetThresholdZero_DisablesChecker(t *testing.T) {
 	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), cfg)
 	checkers := relay.Checkers()
 
-	assert.NotContains(t, checkers, "outbox-relay-poll",
+	assert.NotContains(t, checkers, "outbox_relay_poll",
 		"threshold=0 must not register poll checker")
-	assert.Contains(t, checkers, "outbox-relay-reclaim")
-	assert.Contains(t, checkers, "outbox-relay-cleanup")
+	assert.Contains(t, checkers, "outbox_relay_reclaim")
+	assert.Contains(t, checkers, "outbox_relay_cleanup")
 }
 
 func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
@@ -1012,7 +1012,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 
 	testwait.External(t, "outbox-relay-retry-scheduled", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-poll"]
+		fn, ok := checkers["outbox_relay_poll"]
 		return ok && fn(context.Background()) != nil
 	}, testtime.D2s, testtime.FastPoll, "poll budget must trip during first run")
 
@@ -1021,7 +1021,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// Wait until state is relayStopped so we can restart.
 	testwait.External(t, "outbox-relay-batch-drained", func() bool {
 		checkers := relay.Checkers()
-		fn, ok := checkers["outbox-relay-poll"]
+		fn, ok := checkers["outbox_relay_poll"]
 		// The checker still exists; it reflects state at the time of the last run.
 		// We just need the relay to have fully stopped.
 		_ = fn
@@ -1046,8 +1046,8 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// Immediately after start (before any poll result), poll checker must be
 	// healthy because Reset() cleared the stale trip from the first run.
 	checkers := relay.Checkers()
-	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered on second run")
-	assert.Nil(t, checkers["outbox-relay-poll"](context.Background()),
+	require.Contains(t, checkers, "outbox_relay_poll", "poll checker must be registered on second run")
+	assert.Nil(t, checkers["outbox_relay_poll"](context.Background()),
 		"poll checker must be healthy immediately after restart (Reset cleared stale trip)")
 }
 
