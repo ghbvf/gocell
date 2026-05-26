@@ -1329,6 +1329,22 @@ func nillableParamKind(t types.Type) paramKind {
 	if t == nil {
 		return paramNone
 	}
+	// clock.Clock is governed by its own sanctioned guard funnel —
+	// clock.MustHaveClock, a programmer-error panic (ADR 202605270000 / #883
+	// Option A) — NOT the validation.IsNilInterface error-first funnel this rule
+	// enforces. A clk param is a mandatory positional dependency guarded by
+	// MustHaveClock in the constructor body; double-requiring IsNilInterface
+	// would force a redundant second guard. Exempt it so MustHaveClock-guarded
+	// clk params are not flagged. ref: runtime-api.md §Option 范式分层
+	// (kernel/clock.MustHaveClock 不属于 typed-nil helper 治理范围);
+	// CLOCK-POSITIONAL-INJECTION-01 owns the clk positional-injection funnel.
+	if named, ok := t.(*types.Named); ok {
+		obj := named.Obj()
+		if obj != nil && obj.Pkg() != nil &&
+			obj.Pkg().Path() == kernelClockPkgPath && obj.Name() == "Clock" {
+			return paramNone
+		}
+	}
 	switch t.Underlying().(type) {
 	case *types.Interface:
 		return paramInterface
