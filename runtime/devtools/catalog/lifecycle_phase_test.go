@@ -13,7 +13,7 @@ import (
 )
 
 // TestCellSpec_PhaseRoundTrip verifies CellMeta.Lifecycle / SliceMeta.Lifecycle
-// surface on the catalog wire as CellSpec.Phase / SliceSpec.Phase — the
+// surface on the catalog wire as CellSpec.Lifecycle / SliceSpec.Lifecycle — the
 // real consumer of the lifecycle metadata.
 func TestCellSpec_PhaseRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -39,12 +39,12 @@ func TestCellSpec_PhaseRoundTrip(t *testing.T) {
 		case "Cell":
 			spec, ok := e.Spec.(catalog.CellSpec)
 			require.True(t, ok)
-			assert.Equal(t, "asset", spec.Phase)
+			assert.Equal(t, "asset", spec.Lifecycle)
 			gotCell = true
 		case "Slice":
 			spec, ok := e.Spec.(catalog.SliceSpec)
 			require.True(t, ok)
-			assert.Equal(t, "candidate", spec.Phase)
+			assert.Equal(t, "candidate", spec.Lifecycle)
 			gotSlice = true
 		}
 	}

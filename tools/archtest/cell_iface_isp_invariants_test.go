@@ -46,7 +46,7 @@ var expectedSubInterfaces = []string{
 // sub-interface. Adding/removing methods here is a contract change that
 // must be paired with an ADR amendment.
 var expectedSubInterfaceMethods = map[string][]string{
-	"CellIdentity":  {"ID", "Type", "ConsistencyLevel"},
+	"CellIdentity":  {"ID", "Type", "ConsistencyLevel", "Phase"},
 	"CellLifecycle": {"Init", "Start", "Stop"},
 	"CellStatus":    {"Health", "Ready"},
 	"CellInventory": {"Metadata", "OwnedSlices", "ProducedContracts", "ConsumedContracts"},
@@ -303,7 +303,7 @@ func targetsBaseCellNilPtr(values []ast.Expr) bool {
 // kernel/cell/interfaces.go is impossible without triggering a hash mismatch;
 // prior hand-crafted-data hash only caught drift in the expected tables, not
 // in the source).
-const expectedMethodSetsSHA256 = "a2cf7188a2b0744897b672580bfc4df6e2e37f0ebc904a2428a4a38f829c90c7"
+const expectedMethodSetsSHA256 = "7327521751d6cc9d35f8faf2e4252261abb15bccb840309dea4f56a2face270a"
 
 // INVARIANT: CELL-IFACE-ISP-METHODSETS-01 (hash guard companion)
 //

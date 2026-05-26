@@ -175,10 +175,11 @@ type PackageDepsView struct {
 type CellSpec struct {
 	Type             string `json:"type"             yaml:"type"`
 	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
-	// Phase is the cell's governance maturity phase (cellvocab.Phase). Omitted
-	// when cell.yaml does not declare lifecycle (consumers treat absence as the
+	// Lifecycle is the cell's governance maturity phase (cellvocab.Phase),
+	// projected from CellMeta.Lifecycle. Same wire key as ContractSpec.Lifecycle.
+	// Omitted when cell.yaml does not declare it (consumers treat absence as the
 	// experimental default, matching NewBaseCell).
-	Phase          string          `json:"phase,omitempty" yaml:"phase,omitempty"`
+	Lifecycle      string          `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
 	DurabilityMode string          `json:"durabilityMode,omitempty" yaml:"durabilityMode,omitempty"`
 	Owner          CellSpecOwner   `json:"owner"            yaml:"owner"`
 	Schema         CellSpecSchema  `json:"schema"           yaml:"schema"`
@@ -210,9 +211,9 @@ type CellSpecL0Dep struct {
 type SliceSpec struct {
 	BelongsToCell    string `json:"belongsToCell"   yaml:"belongsToCell"`
 	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
-	// Phase is the slice's governance maturity phase (cellvocab.Phase). Omitted
-	// when slice.yaml does not declare lifecycle.
-	Phase          string                   `json:"phase,omitempty" yaml:"phase,omitempty"`
+	// Lifecycle is the slice's governance maturity phase (cellvocab.Phase),
+	// projected from SliceMeta.Lifecycle. Omitted when slice.yaml does not declare it.
+	Lifecycle      string                   `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
 	ContractUsages []SliceSpecContractUsage `json:"contractUsages,omitempty" yaml:"contractUsages,omitempty"`
 	VerifyUnit     []string                 `json:"verifyUnit,omitempty"     yaml:"verifyUnit,omitempty"`
 	VerifyContract []string                 `json:"verifyContract,omitempty" yaml:"verifyContract,omitempty"`

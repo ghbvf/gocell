@@ -75,27 +75,16 @@ func TestCellPhaseRankCompleteness_BlindSpotShape(t *testing.T) {
 	_ = Run(t, DirsScope(root, []string{"kernel/cellvocab"}), func(p *Pass) []Diagnostic {
 		var sawTypedConst, sawCompositePhases bool
 		for _, f := range p.Files {
+			// Reuse the (USAGE-compliant) collectors: a non-empty typed-const set
+			// proves the `Phase` const block is typed; a non-empty element set
+			// proves `Phases` is a composite literal (forEachVarComposite only
+			// fires on *ast.CompositeLit). A runtime-built slice would yield none.
 			if len(collectConstNamesOfType(f, phaseConstTypeName)) > 0 {
 				sawTypedConst = true
 			}
-			EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
-				if gd.Tok != token.VAR {
-					return
-				}
-				for _, spec := range gd.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-					for i, n := range vs.Names {
-						if n.Name == phasesVarName && i < len(vs.Values) {
-							if _, ok := vs.Values[i].(*ast.CompositeLit); ok {
-								sawCompositePhases = true
-							}
-						}
-					}
-				}
-			})
+			if len(collectCompositeElementIdents(f, phasesVarName)) > 0 {
+				sawCompositePhases = true
+			}
 		}
 		assert.True(t, sawTypedConst, "expected a typed `Phase` const block in cellvocab (blind-spot guard)")
 		assert.True(t, sawCompositePhases, "expected `Phases` to be a composite literal in cellvocab (blind-spot guard)")

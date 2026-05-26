@@ -195,11 +195,7 @@ func collectConstNamesOfType(f *ast.File, typeName string) map[string]token.Pos 
 			return
 		}
 		var lastType string // iota continuation: type carried by the first spec
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			if vs.Type != nil {
 				if id, ok := vs.Type.(*ast.Ident); ok {
 					lastType = id.Name
@@ -212,7 +208,7 @@ func collectConstNamesOfType(f *ast.File, typeName string) map[string]token.Pos 
 					out[n.Name] = n.Pos()
 				}
 			}
-		}
+		})
 	})
 	return out
 }
@@ -222,11 +218,7 @@ func forEachVarComposite(f *ast.File, varName string, fn func(*ast.CompositeLit)
 		if gd.Tok != token.VAR {
 			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for i, n := range vs.Names {
 				if n.Name == varName && i < len(vs.Values) {
 					if cl, ok := vs.Values[i].(*ast.CompositeLit); ok {
@@ -234,20 +226,20 @@ func forEachVarComposite(f *ast.File, varName string, fn func(*ast.CompositeLit)
 					}
 				}
 			}
-		}
+		})
 	})
 }
 
 // collectCompositeElementIdents collects plain-ident elements of a composite
-// (array/slice) literal bound to varName.
+// (array/slice) literal bound to varName. The composite's Type node (e.g. the
+// array element type ident) is nested, not a direct child, so only the literal
+// elements are returned.
 func collectCompositeElementIdents(f *ast.File, varName string) map[string]struct{} {
 	out := map[string]struct{}{}
 	forEachVarComposite(f, varName, func(cl *ast.CompositeLit) {
-		for _, e := range cl.Elts {
-			if id, ok := e.(*ast.Ident); ok {
-				out[id.Name] = struct{}{}
-			}
-		}
+		EachInChildren[ast.Ident](cl, func(id *ast.Ident) {
+			out[id.Name] = struct{}{}
+		})
 	})
 	return out
 }
@@ -257,13 +249,11 @@ func collectCompositeElementIdents(f *ast.File, varName string) map[string]struc
 func collectMapKeyIdents(f *ast.File, varName string) map[string]struct{} {
 	out := map[string]struct{}{}
 	forEachVarComposite(f, varName, func(cl *ast.CompositeLit) {
-		for _, e := range cl.Elts {
-			if kv, ok := e.(*ast.KeyValueExpr); ok {
-				if id, ok := kv.Key.(*ast.Ident); ok {
-					out[id.Name] = struct{}{}
-				}
+		EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
+			if id, ok := kv.Key.(*ast.Ident); ok {
+				out[id.Name] = struct{}{}
 			}
-		}
+		})
 	})
 	return out
 }

@@ -174,7 +174,7 @@ func buildCellEntity(c *metadata.CellMeta, inc IncludeOptions) Entity {
 	spec := CellSpec{
 		Type:             c.Type,
 		ConsistencyLevel: c.ConsistencyLevel,
-		Phase:            c.Lifecycle,
+		Lifecycle:        c.Lifecycle,
 		DurabilityMode:   c.DurabilityMode,
 		Owner:            CellSpecOwner{Team: c.Owner.Team, Role: c.Owner.Role},
 		Schema:           CellSpecSchema{Primary: c.Schema.Primary},
@@ -214,7 +214,7 @@ func buildSliceEntity(s *metadata.SliceMeta, inc IncludeOptions) Entity {
 	spec := SliceSpec{
 		BelongsToCell:    s.BelongsToCell,
 		ConsistencyLevel: s.ConsistencyLevel,
-		Phase:            s.Lifecycle,
+		Lifecycle:        s.Lifecycle,
 		ContractUsages:   usages,
 		VerifyUnit:       s.Verify.Unit,
 		VerifyContract:   s.Verify.Contract,
