@@ -28,8 +28,8 @@ import (
 //     literal would evade collectCompositeElementIdents; reverse check asserts
 //     the production `cellLifecycles` is a single composite literal.
 const (
-	lifecycleConstTypeName  = "CellLifecycle"
-	cellLifecyclesVarName   = "cellLifecycles"
+	lifecycleConstTypeName = "CellLifecycle"
+	cellLifecyclesVarName  = "cellLifecycles"
 )
 
 func TestCellLifecycleRankCompleteness(t *testing.T) {

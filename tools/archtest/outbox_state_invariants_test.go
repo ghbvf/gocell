@@ -200,7 +200,7 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 // settlement decisions (claiming→published/dead/pending via Mark*). The
 // store's ClaimPending (pending→claiming) and ReclaimStale
 // (claiming→pending/dead) have no Mark* pairing to cross-check — their
-// correctness is enforced by SQL CAS predicates, conformance behaviour tests,
+// correctness is enforced by SQL CAS predicates, conformance behavior tests,
 // and LITERAL-BAN. Adding Transition calls there would provide no
 // pairing-check value and would be misleading.
 var outboxSettlementMarks = map[string]struct{}{

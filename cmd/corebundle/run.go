@@ -129,8 +129,7 @@ func logAssemblyMaturity(cells []cell.Cell) {
 	for i, c := range cells {
 		ids[i] = c
 	}
-	all := cellvocab.AllCellLifecycles()
-	dist := make(map[cellvocab.CellLifecycle]int, len(all))
+	dist := make(map[cellvocab.CellLifecycle]int)
 	for _, e := range lifecycle.NewLifecycleAggregator(ids).Snapshot() {
 		dist[e.Lifecycle]++
 	}

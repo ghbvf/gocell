@@ -23,10 +23,10 @@ type idMock struct {
 	lifecycle cellvocab.CellLifecycle
 }
 
-func (m idMock) ID() string                              { return m.id }
-func (m idMock) Type() cellvocab.CellType                { return m.ctype }
-func (m idMock) ConsistencyLevel() cellvocab.Level       { return m.level }
-func (m idMock) Lifecycle() cellvocab.CellLifecycle      { return m.lifecycle }
+func (m idMock) ID() string                         { return m.id }
+func (m idMock) Type() cellvocab.CellType           { return m.ctype }
+func (m idMock) ConsistencyLevel() cellvocab.Level  { return m.level }
+func (m idMock) Lifecycle() cellvocab.CellLifecycle { return m.lifecycle }
 
 var _ CellIdentity = (*idMock)(nil)
 

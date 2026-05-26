@@ -58,15 +58,15 @@ const (
 // leak into the running cell. cellType / level cache the typed enum view
 // computed once at construction (Type / ConsistencyLevel hot-path zero-cost).
 type BaseCell struct {
-	mu       sync.RWMutex
-	meta     *metadata.CellMeta
+	mu        sync.RWMutex
+	meta      *metadata.CellMeta
 	cellType  cellvocab.CellType
 	level     cellvocab.Level
 	lifecycle cellvocab.CellLifecycle
-	slices   []Slice
-	produced []Contract
-	consumed []Contract
-	state    cellState
+	slices    []Slice
+	produced  []Contract
+	consumed  []Contract
+	state     cellState
 
 	// shutdownCtx is created in Start and canceled in Stop.
 	// Goroutines spawned by the cell should use this context instead of
@@ -145,10 +145,10 @@ func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	return c
 }
 
-func (b *BaseCell) ID() string                              { return b.meta.ID }
-func (b *BaseCell) Type() cellvocab.CellType                { return b.cellType }
-func (b *BaseCell) ConsistencyLevel() cellvocab.Level       { return b.level }
-func (b *BaseCell) Lifecycle() cellvocab.CellLifecycle      { return b.lifecycle }
+func (b *BaseCell) ID() string                         { return b.meta.ID }
+func (b *BaseCell) Type() cellvocab.CellType           { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() cellvocab.Level  { return b.level }
+func (b *BaseCell) Lifecycle() cellvocab.CellLifecycle { return b.lifecycle }
 
 // Metadata returns an independent deep copy of the cell's declarative
 // metadata. Callers may freely mutate the returned value without
@@ -464,11 +464,11 @@ func NewBaseContract(id string, kind cellvocab.ContractKind, owner string, level
 	}
 }
 
-func (c *BaseContract) ID() string                              { return c.id }
-func (c *BaseContract) Kind() cellvocab.ContractKind            { return c.kind }
-func (c *BaseContract) OwnerCell() string                       { return c.owner }
-func (c *BaseContract) ConsistencyLevel() cellvocab.Level       { return c.level }
-func (c *BaseContract) Lifecycle() cellvocab.ContractLifecycle  { return c.lc }
+func (c *BaseContract) ID() string                             { return c.id }
+func (c *BaseContract) Kind() cellvocab.ContractKind           { return c.kind }
+func (c *BaseContract) OwnerCell() string                      { return c.owner }
+func (c *BaseContract) ConsistencyLevel() cellvocab.Level      { return c.level }
+func (c *BaseContract) Lifecycle() cellvocab.ContractLifecycle { return c.lc }
 
 // SetLifecycle updates the wire-stability governance lifecycle state of the contract.
 func (c *BaseContract) SetLifecycle(lc cellvocab.ContractLifecycle) { c.lc = lc }
