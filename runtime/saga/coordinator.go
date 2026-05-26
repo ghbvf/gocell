@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
 // Compile-time interface checks.
@@ -126,9 +127,11 @@ func (c Config) Validate() error {
 // body outside any database transaction, then atomically recording the outcome
 // (Append + outbox Emit) inside a short RunInTx call.
 //
-// This implementation runs in a single process with NO distributed leader
-// election (unsafe mode). Start() emits slog.Warn(mode="unsafe_no_leader").
-// PR-05 will add distlock-based leader election.
+// By default it runs in a single process with NO distributed leader election
+// (unsafe mode); Start() emits slog.Warn(mode="unsafe_no_leader"). Pass
+// WithLeaderElect(distlock.Locker) to make it multi-process safe: each claimed
+// instance is driven only after winning a per-instance distributed lock, and
+// Start() emits slog.Info(mode="leader_elect") instead. See leader_elect.go.
 //
 // # Single sanctioned journal holder
 //
@@ -146,6 +149,13 @@ type Coordinator struct {
 	logger     *slog.Logger // default slog.Default()
 	cfg        Config
 	clock      clock.Clock
+
+	// optional leader election (PR-05). nil locker → single-process unsafe
+	// mode. leaderElectNil records a nil locker passed to WithLeaderElect so
+	// NewCoordinator can fail-fast (strong-dependency wiring option). Held here
+	// (NOT a journal.Journal field) so SAGA-JOURNAL-HOLDER-SEAL-01 is unaffected.
+	locker         distlock.Locker
+	leaderElectNil bool
 
 	// lifecycle (mirrors runtime/outbox.Relay)
 	state   atomic.Int32
@@ -203,6 +213,10 @@ func NewCoordinator(
 	for _, o := range opts {
 		o(c)
 	}
+	if c.leaderElectNil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"runtime/saga: WithLeaderElect locker must not be nil")
+	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -233,8 +247,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.state.Store(int32(coordRunning))
 	close(c.readyCh)
 
-	c.logger.WarnContext(ctx, "saga coordinator: started in UNSAFE single-process mode (no leader-elect)",
-		slog.String("mode", UnsafeModeLabel))
+	if c.locker == nil {
+		c.logger.WarnContext(ctx, "saga coordinator: started in UNSAFE single-process mode (no leader-elect)",
+			slog.String("mode", UnsafeModeLabel))
+	} else {
+		c.logger.InfoContext(ctx, "saga coordinator: started with distlock leader election",
+			slog.String("mode", LeaderElectModeLabel))
+	}
 
 	defer func() {
 		c.wg.Wait()
@@ -417,6 +436,14 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		return nil
 	}
 	for _, ci := range claimed {
+		// Leader-elect gate: in multi-process mode only the holder of the
+		// per-instance distlock drives it; others skip this tick (no-lock →
+		// skip). Single-process mode (no WithLeaderElect) always leads. This is
+		// the sole driveOne call site, locked by SAGA-DRIVE-BEHIND-LEADER-GATE-01.
+		release, lead := c.acquireLead(ctx, ci)
+		if !lead {
+			continue
+		}
 		// Use ci.LeaseID (per-instance fencing token) exclusively; the batch-level
 		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
 		// per-instance tokens; using the batch token would break CAS fencing.
@@ -433,6 +460,7 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 				slog.Any("error", err))
 		}
 		c.activeLeases.Delete(ci.Instance.ID)
+		release()
 	}
 	return nil
 }
