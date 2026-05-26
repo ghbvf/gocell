@@ -130,7 +130,7 @@ func NewService(
 //  3. If shouldLock: authzmutator.ApplyInTx(LockUser{}) → SetStatus(Locked) +
 //     epoch bump + session/refresh revoke + repo.Update (status & epoch).
 //  4. If shouldLock: emit event.user.locked.v1 with ActorID=SystemActorID.
-//  5. If shouldLock: metrics.IncAccountLockout("threshold_locked").
+//  5. If shouldLock: metrics.IncAccountLockout(ctx, "threshold_locked").
 func (s *Service) RecordFailure(ctx context.Context, txCtx context.Context, user *domain.User) error {
 	if user == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

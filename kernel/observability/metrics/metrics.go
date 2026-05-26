@@ -28,16 +28,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
-// Collector is a handle to a registered metric family (counter or histogram
-// vec). It is returned by CounterVec/HistogramVec and accepted by Unregister.
+// Collector is a handle to a registered metric family (counter, histogram, or
+// gauge vec). It is returned by CounterVec/HistogramVec/GaugeVec and accepted by
+// Unregister.
 //
 // Callers obtain Collector values only via Provider.CounterVec and
 // Provider.HistogramVec; passing other values to Unregister is undefined
 // behavior (implementations may silently no-op or return an error).
 //
-// Both CounterVec and HistogramVec embed Collector so that the return values
-// of CounterVec/HistogramVec can be passed directly to Unregister without
-// explicit type assertions.
+// CounterVec, HistogramVec, and GaugeVec all embed Collector so that the return
+// values of CounterVec/HistogramVec/GaugeVec can be passed directly to
+// Unregister without explicit type assertions.
 //
 // ref: prometheus/client_golang prometheus/collector.go — Collector is the
 // registration unit. GoCell's Collector is a thinner typed handle that keeps
