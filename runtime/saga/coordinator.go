@@ -165,9 +165,20 @@ type Coordinator struct {
 	readyCh chan struct{}
 	wg      sync.WaitGroup
 
-	// activeLeases maps instanceID → leaseID for instances currently being
-	// driven by driveOne. heartbeatLoop walks this map to extend leases.
+	// activeLeases maps instanceID (idutil.SafeID) → inflightDrive for instances
+	// currently being driven by driveOne. heartbeatLoop walks this map to extend
+	// leases; Stop walks it to release in-flight distlocks on shutdown.
 	activeLeases sync.Map
+}
+
+// inflightDrive is the activeLeases value: everything Stop/heartbeat need about
+// an instance currently being driven. release frees the per-instance distlock
+// (a no-op in single-process mode); it is idempotent (distlock Release is
+// sync.Once-guarded) so calling it from both tickOnce and Stop is safe.
+type inflightDrive struct {
+	leaseID idutil.SafeID
+	defID   idutil.SafeID
+	release func()
 }
 
 // NewCoordinator validates required deps and applies opts. Nil required deps
@@ -219,6 +230,16 @@ func NewCoordinator(
 	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
+	}
+	// Leader-elect uses LeaseDuration as the per-instance distlock TTL, which
+	// distlock.Acquire rejects below distlock.MinTTL (sub-ms TTLs truncate to a
+	// permanent lock in Redis). Fail fast at construction rather than silently
+	// skipping every drive at runtime. Single-process mode (locker == nil) does
+	// not use distlock, so a sub-ms lease is permitted there.
+	if c.locker != nil && c.cfg.LeaseDuration < distlock.MinTTL {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"runtime/saga: leader-elect LeaseDuration must be ≥ distlock.MinTTL; the lease doubles as the distlock TTL",
+			errcode.WithInternal(fmt.Sprintf("LeaseDuration=%s minTTL=%s", c.cfg.LeaseDuration, distlock.MinTTL)))
 	}
 	return c, nil
 }
@@ -286,14 +307,20 @@ func (c *Coordinator) Start(ctx context.Context) error {
 //
 //   - cancel() fires anyway and Stop returns (best-effort).
 //   - The orphaned step goroutine continues until it returns naturally; the
-//     heartbeat goroutine has by then exited, so its lease will eventually
-//     expire and another coordinator may re-claim the instance.
-//   - This is the inherent limit of cooperative cancellation in Go and the
-//     accepted PR-03 single-process unsafe-mode behavior. PR-05/PR-06
-//     leader-elect + executor address the multi-process race.
-//
-// Step authors are responsible for selecting on ctx.Done() inside blocking
-// primitives — see ksaga.StepFunc godoc.
+//     heartbeat goroutine has by then exited, so the journal lease expires.
+//   - In leader-elect mode the per-instance distlock would otherwise keep
+//     auto-renewing (it is decoupled from caller-ctx; see leader_elect.go), so
+//     Stop explicitly releases every in-flight distlock (releaseInflightLocks).
+//     Together with the expiring journal lease this lets another coordinator
+//     re-claim the instance promptly — bounded takeover, matching the
+//     etcd/redsync deadman-switch model — instead of stalling until this
+//     process dies. Releasing while the orphaned step still runs is safe: its
+//     commit is fenced by journal lease_id CAS (the PR-05 efficiency-lock model,
+//     leader_elect.go).
+//   - This is the inherent limit of cooperative cancellation in Go: the step
+//     goroutine itself cannot be killed. Step authors are responsible for
+//     selecting on ctx.Done() inside blocking primitives — see ksaga.StepFunc
+//     godoc.
 func (c *Coordinator) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	state := coordState(c.state.Load())
@@ -345,6 +372,11 @@ drain:
 	if cancel != nil {
 		cancel()
 	}
+	// Release any in-flight distlocks so a wedged (non-cooperative) step cannot
+	// hold its lock until process death. Cooperative steps already released via
+	// tickOnce; this idempotently covers the drain-budget-exhausted case. The
+	// journal lease_id CAS fences the orphaned step at commit.
+	c.releaseInflightLocks()
 	if done == nil {
 		return nil
 	}
@@ -357,6 +389,22 @@ drain:
 		return errcode.Wrap(errcode.KindDeadlineExceeded, errcode.ErrConflict,
 			"saga coordinator stop: timed out", ctx.Err())
 	}
+}
+
+// releaseInflightLocks frees the per-instance distlock for every drive still in
+// activeLeases. Called from Stop after cancel so a non-cooperative step that
+// outlives the drain budget cannot hold its lock until process death. release
+// is idempotent (a no-op in single-process mode; distlock Release is
+// sync.Once-guarded), so the owning tickOnce calling release again when it
+// finally returns is harmless. Entries are left for the owning goroutine to
+// delete from the map.
+func (c *Coordinator) releaseInflightLocks() {
+	c.activeLeases.Range(func(_, val any) bool {
+		if d, ok := val.(inflightDrive); ok {
+			d.release()
+		}
+		return true
+	})
 }
 
 // Ready returns a channel that is closed once Start transitions to running.
@@ -448,7 +496,11 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// Use ci.LeaseID (per-instance fencing token) exclusively; the batch-level
 		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
 		// per-instance tokens; using the batch token would break CAS fencing.
-		c.activeLeases.Store(ci.Instance.ID, ci.LeaseID)
+		c.activeLeases.Store(ci.Instance.ID, inflightDrive{
+			leaseID: ci.LeaseID,
+			defID:   ci.Instance.DefinitionID,
+			release: release,
+		})
 		if err := c.driveOne(ctx, ci); err != nil {
 			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
 			// Info; ErrSagaNotFound (instance gone) → Warn; default → Warn.
@@ -634,11 +686,11 @@ func (c *Coordinator) heartbeatLoop(ctx context.Context) {
 func (c *Coordinator) heartbeatOnce(ctx context.Context) {
 	c.activeLeases.Range(func(key, val any) bool {
 		instanceID, ok1 := key.(idutil.SafeID)
-		leaseID, ok2 := val.(idutil.SafeID)
+		d, ok2 := val.(inflightDrive)
 		if !ok1 || !ok2 {
 			return true
 		}
-		ok, err := c.journal.Heartbeat(ctx, instanceID, leaseID, c.cfg.LeaseDuration)
+		ok, err := c.journal.Heartbeat(ctx, instanceID, d.leaseID, c.cfg.LeaseDuration)
 		if err != nil {
 			// Heartbeat returns (false, nil) on stale lease or missing
 			// instance by contract — any err here is real infra (PG
@@ -647,6 +699,7 @@ func (c *Coordinator) heartbeatOnce(ctx context.Context) {
 			// impl widens the error shape.
 			c.logger.Log(ctx, journalErrLevel(err), "saga: heartbeat failed",
 				slog.String("instance_id", string(instanceID)),
+				slog.String("definition_id", string(d.defID)),
 				slog.Any("error", err))
 			return true
 		}

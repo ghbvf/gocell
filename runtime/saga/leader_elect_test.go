@@ -12,7 +12,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -73,7 +72,7 @@ func newLeaderElectCoordinator(
 }
 
 // claimedFixture returns a ClaimedInstance with deterministic IDs
-// (def1/inst1 → lock key "saga:def1:inst1") for direct acquireLead unit tests.
+// (def1/inst1 → lock key "saga:4:def1:inst1") for direct acquireLead unit tests.
 func claimedFixture(now time.Time) journal.ClaimedInstance {
 	return journal.ClaimedInstance{
 		Instance: ksaga.NewInstance("inst1", "def1", now),
@@ -195,7 +194,7 @@ func TestAcquireLead_MutualExclusion(t *testing.T) {
 	}
 
 	// Key format assertion.
-	wantKey := fmt.Sprintf("saga:%s:%s", ci.Instance.DefinitionID, ci.Instance.ID)
+	wantKey := leaderElectLockKey(ci.Instance.DefinitionID, ci.Instance.ID)
 	if _, ok := fd.Snapshot()[wantKey]; !ok {
 		t.Errorf("FakeDriver key %q not held; snapshot=%v", wantKey, fd.Snapshot())
 	}
@@ -279,7 +278,7 @@ func TestTickOnce_SkipsWhenLockHeld(t *testing.T) {
 	}
 
 	// Another process holds the instance lock.
-	key := fmt.Sprintf("saga:%s:%s", inst.DefinitionID, inst.ID)
+	key := leaderElectLockKey(inst.DefinitionID, inst.ID)
 	held, err := blocker.Acquire(ctx, key, leaderElectCfg().LeaseDuration)
 	if err != nil {
 		t.Fatalf("blocker.Acquire: %v", err)
@@ -638,7 +637,8 @@ func TestLeaderElectLockKey_Injective(t *testing.T) {
 		ka := leaderElectLockKey(p.defA, p.instA)
 		kb := leaderElectLockKey(p.defB, p.instB)
 		if ka == kb {
-			t.Errorf("lock key collision: (%q,%q) and (%q,%q) both → %q; key builder must be injective over SafeID's full charset (':' and '/' are valid)",
+			t.Errorf("lock key collision: (%q,%q) and (%q,%q) both → %q; "+
+				"key builder must be injective over SafeID's full charset",
 				p.defA, p.instA, p.defB, p.instB, ka)
 		}
 	}

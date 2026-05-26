@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
@@ -60,6 +61,21 @@ func WithLeaderElect(locker distlock.Locker) Option {
 	}
 }
 
+// leaderElectLockKey builds the per-instance distlock key for (definitionID,
+// instanceID). idutil.SafeID permits ':' and '/' (idutil.IsSafeID), so a plain
+// "saga:{def}:{inst}" join is NOT injective — (def="a:b", inst="c") and
+// (def="a", inst="b:c") would collide on the same lock and falsely serialize two
+// unrelated instances. Instance IDs are caller-supplied SafeIDs
+// (ksaga.NewInstance), so the key must be injective over the full charset, not
+// the current UUID generator output. Length-prefixing definitionID restores
+// injectivity while staying within the SafeID charset (readable in Redis/logs):
+// the decimal length before the first ':'-delimited segment fixes how many bytes
+// definitionID occupies, so the (def, inst) split is unambiguous regardless of
+// ':' inside either segment.
+func leaderElectLockKey(definitionID, instanceID idutil.SafeID) string {
+	return fmt.Sprintf("saga:%d:%s:%s", len(definitionID), definitionID, instanceID)
+}
+
 // acquireLead decides whether this Coordinator may drive ci this tick and is
 // the sole leader-elect gate guarding driveOne (locked by
 // SAGA-DRIVE-BEHIND-LEADER-GATE-01).
@@ -79,7 +95,7 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 	if c.locker == nil {
 		return func() {}, true
 	}
-	key := fmt.Sprintf("saga:%s:%s", ci.Instance.DefinitionID, ci.Instance.ID)
+	key := leaderElectLockKey(ci.Instance.DefinitionID, ci.Instance.ID)
 	lock, err := c.locker.Acquire(ctx, key, c.cfg.LeaseDuration)
 	if err != nil {
 		c.logLeaderSkip(ctx, ci, key, err)
