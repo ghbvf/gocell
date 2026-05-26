@@ -305,10 +305,10 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 // VerifyExpectedShape tests
 // ---------------------------------------------------------------------------
 
-// attrsContainKV is a helper that checks if any errcode.PublicDetail in attrs
-// has the given key and string value.
-func attrsContainKV(attrs []errcode.PublicDetail, key, value string) bool {
-	for _, d := range attrs {
+// detailsContainKV is a helper that checks if any errcode.PublicDetail in
+// details has the given key and string value.
+func detailsContainKV(details []errcode.PublicDetail, key, value string) bool {
+	for _, d := range details {
 		if d.Key() != key {
 			continue
 		}
@@ -360,9 +360,9 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 		"error code must be ErrAdapterPGSchemaShape")
 	assert.Contains(t, ec.Message, "required column missing",
 		"message must describe the fault")
-	assert.True(t, attrsContainKV(ec.Details, "table", "users"),
+	assert.True(t, detailsContainKV(ec.Details, "table", "users"),
 		"details must contain table=users; got %v", ec.Details)
-	assert.True(t, attrsContainKV(ec.Details, "column", "authz_epoch"),
+	assert.True(t, detailsContainKV(ec.Details, "column", "authz_epoch"),
 		"details must contain column=authz_epoch; got %v", ec.Details)
 }
 
@@ -391,9 +391,9 @@ func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
 		"error code must be ErrAdapterPGSchemaShape")
 	assert.Contains(t, ec.Message, "forbidden legacy column present",
 		"message must describe the fault")
-	assert.True(t, attrsContainKV(ec.Details, "table", "sessions"),
+	assert.True(t, detailsContainKV(ec.Details, "table", "sessions"),
 		"details must contain table=sessions; got %v", ec.Details)
-	assert.True(t, attrsContainKV(ec.Details, "column", "access_token"),
+	assert.True(t, detailsContainKV(ec.Details, "column", "access_token"),
 		"details must contain column=access_token; got %v", ec.Details)
 }
 

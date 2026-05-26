@@ -517,7 +517,9 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 			var gotField string
 			for _, attr := range ec.Details {
 				if attr.Key() == "field" {
-					gotField, _ = attr.Value().(string)
+					s, ok := attr.Value().(string)
+					require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+					gotField = s
 					break
 				}
 			}

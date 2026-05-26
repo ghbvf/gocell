@@ -179,7 +179,8 @@ const cursorInvalidMsg = "invalid cursor; restart from first page (client should
 
 // cursorInvalid returns a standardized cursor error with a stable client-facing
 // message and diagnostic reason in the details field. The reason is also set as
-// InternalMessage so it appears in server-side logs via Error().
+// an InternalDetail under the "_" sentinel key so it appears in server-side
+// logs via Error().
 func cursorInvalid(reason string) error {
 	return errcode.New(
 		errcode.KindInvalid,

@@ -3,6 +3,7 @@ package errcode
 import (
 	"encoding/json"
 	"log/slog"
+	"math"
 	"testing"
 	"time"
 
@@ -242,4 +243,70 @@ func TestSealedSignatureSmoke(t *testing.T) {
 	d := PublicAttr("k", "v")
 	attr := d.AsSlogAttr()
 	assert.IsType(t, slog.Attr{}, attr)
+}
+
+func TestAsSlogAttrKindForStringValue(t *testing.T) {
+	// String values must produce KindString so that
+	// pkg/redaction.RedactSlogAttr's free-form RedactString scan can mask
+	// embedded key=value secrets inside the value text. The pre-#1035
+	// archtest DETAILS-SLOG-ATTR-01 banned slog.Any for the same reason;
+	// after sealing, the equivalent guard is upstream in AsSlogAttr.
+	t.Run("publicDetailStringValueProducesKindString", func(t *testing.T) {
+		attr := PublicAttr("k", "v").AsSlogAttr()
+		assert.Equal(t, slog.KindString, attr.Value.Kind(),
+			"string-valued PublicDetail must surface as slog.KindString for redaction coverage")
+	})
+
+	t.Run("internalDetailStringValueProducesKindString", func(t *testing.T) {
+		attr := InternalAttr("k", "v").AsSlogAttr()
+		assert.Equal(t, slog.KindString, attr.Value.Kind(),
+			"string-valued InternalDetail must surface as slog.KindString for redaction coverage")
+	})
+
+	t.Run("publicDetailNonStringValuePassesAsKindAny", func(t *testing.T) {
+		attr := PublicAttr("count", 42).AsSlogAttr()
+		// slog.Any may resolve int to KindInt64 or KindAny depending on
+		// the value type; the documented contract is "non-string values
+		// pass through as slog.Any". The exact Kind is implementation
+		// detail of slog, but it is never KindString for a non-string.
+		assert.NotEqual(t, slog.KindString, attr.Value.Kind())
+	})
+}
+
+func TestPublicDetailWireUnsafeValues(t *testing.T) {
+	// Wire-unsafe values pre-#1035 were rejected at WithDetails construction
+	// by MustValidateDetailsKinds; post-#1035 they surface as json.Marshal
+	// errors at serialization time. The HTTP error-response writer's
+	// sentinelInternalErrorBody fallback (HTTP 500) is the wire fail-closed.
+	// This test documents the boundary: MarshalJSON errors are the expected
+	// failure mode, not panics or silent corruption.
+	t.Run("nanFloat64ProducesMarshalError", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(PublicAttr("ratio", math.NaN())))
+		_, mErr := json.Marshal(err)
+		require.Error(t, mErr, "json.Marshal must reject NaN float64 in PublicDetail.value")
+		assert.Contains(t, mErr.Error(), "unsupported value",
+			"error must be encoding/json's UnsupportedValueError for NaN/Inf")
+	})
+
+	t.Run("positiveInfProducesMarshalError", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(PublicAttr("ratio", math.Inf(1))))
+		_, mErr := json.Marshal(err)
+		require.Error(t, mErr)
+	})
+
+	t.Run("channelValueProducesMarshalError", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(PublicAttr("ch", make(chan int))))
+		_, mErr := json.Marshal(err)
+		require.Error(t, mErr, "json.Marshal must reject channel value in PublicDetail.value")
+	})
+
+	t.Run("funcValueProducesMarshalError", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(PublicAttr("fn", func() {})))
+		_, mErr := json.Marshal(err)
+		require.Error(t, mErr, "json.Marshal must reject function value in PublicDetail.value")
+	})
 }

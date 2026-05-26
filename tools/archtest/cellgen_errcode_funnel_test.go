@@ -41,8 +41,11 @@
 //   - upstream Hard: this archtest's Ident-scan + .golangci.yml depguard
 //     `cellgen-error-libs` rule (third-party import ban).
 //   - downstream Hard: pkg/errcode funnel content locked by
-//     ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 +
-//     DETAILS-SLOG-ATTR-01.
+//     ERRCODE-KIND-LITERAL-01 + MESSAGE-CONST-LITERAL-01 + sealed
+//     PublicDetail / InternalDetail newtypes (DETAILS-SLOG-ATTR-01 retired
+//     by PR #1035; see pkg/errcode/details.go + ADR
+//     docs/architecture/202605051730-adr-errcode-message-pii-safety.md
+//     §Amendment 2026-05-27).
 //
 // See ADR docs/architecture/202605171200-adr-cellgen-errcode-funnel-mechanism.md
 // §D5 (canonical Ident-scan design).

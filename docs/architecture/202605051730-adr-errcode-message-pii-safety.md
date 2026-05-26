@@ -164,8 +164,9 @@ var-string，archtest 只能在 helper 自身处豁免。后续工作见 backlog
 
 - **wire schema 不向后兼容**：`details` 从 `object` 改为 `array`，任何已部署客户端解析
   `details` 的代码需同步更新。GoCell 宪法明确"无外部调用方，不考虑向后兼容"，接受。
-- **存量调用点批量改造**：全仓库 `WithDetails(map[string]any{...})` 调用需改为
-  `WithDetails(slog.String(...), slog.Int(...), ...)`，工作量集中在一次 batch PR 内。
+- **存量调用点批量改造**：全仓库改为 `WithDetails(errcode.PublicAttr(k, v))` /
+  `WithInternal(errcode.InternalAttr(k, v))`（自 Amendment 2026-05-27 起），
+  680+ callsites 在 PR #1035 单次 batch 内机械迁移完成。
 - **MESSAGE-CONST-LITERAL-01 误报风险**：极少数场景下 message 确实需要包含有限枚举值（如
   `"unsupported kind: %s"`）。archtest 豁免列表维护成本小，接受。
 
@@ -281,6 +282,28 @@ The Decision-2 sentence "archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]a
 形式调用 `WithDetails` 的旧式代码" is **superseded by this amendment**;
 references to that archtest in `.claude/rules/gocell/error-handling.md` and
 `.claude/rules/gocell/observability.md` are updated in the same PR.
+
+### Known bypass: `Error.Details` is an exported field
+
+`errcode.Error.Details` ([]PublicDetail) remains an exported field, so
+external code can write `e.Details = append(e.Details, errcode.PublicAttr("k", v))`
+or replace the slice entirely with PublicDetail values constructed via the
+public PublicAttr constructor. The sealed-construction Hard claim is "no
+outside-package code can construct a non-zero PublicDetail without going
+through PublicAttr", **not** "no outside code can mutate Error.Details".
+
+This bypass surface is **acceptable** because the wire-side 5xx Details-strip
+invariant (Error.MarshalJSON → project() → `Details = []PublicDetail{}`) is
+the canonical defense against runtime data leaking onto the wire — the
+defense is independent of append source. Tests that synthesize stress
+conditions (e.g. `pkg/httputil/response_test.go::TestEncodeErrorEnvelopeTo_*`)
+intentionally exercise this path to verify wire fail-closed.
+
+Future hardening would seal `Error.Details` via an unexported `details
+[]PublicDetail` field + read-only accessor + `addDetails(...)` mutator — but
+that requires reworking the existing field reads (test files, the 2 direct
+`Error{}` literal carve-outs in `pkg/httputil.WritePublic` /
+`pkg/ctxcancel.WrapOrInfra`) and is out of scope for #1035.
 
 ### Why MESSAGE-CONST-LITERAL-01 does not retire
 

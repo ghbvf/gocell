@@ -235,7 +235,7 @@ func RedactPanic(v any) string {
 //  1. Key-aware: if attr.Key names a sensitive field (per IsSensitiveKey),
 //     the value is replaced with Mask regardless of slog.Value kind. This
 //     covers the structured leak where a caller writes
-//     errcode.WithDetails(slog.String("password", userInput)) — the value
+//     errcode.WithDetails(errcode.PublicAttr("password", userInput)) — the value
 //     is a bare string, so the free-form regex in RedactString never
 //     matches, and prior to this branch the password was forwarded to slog
 //     verbatim.
@@ -251,10 +251,13 @@ func RedactPanic(v any) string {
 // # Known limitations
 //
 // KindLogValuer 与 KindAny 走 passthrough 不做递归扫描，是 fail-open 设计：
-// runtime 数据进入 errcode.Error 必须经 WithDetails，而 WithDetails 在
-// 输入是非 slog.Attr 类型时 panic（pkg/errcode/errcode.go DETAILS-SLOG-ATTR-01
-// 守），构成第一道防线。如未来引入直写 slog.Any(callerSuppliedStruct) 路径，
-// 需在此函数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
+// runtime 数据进入 errcode.Error 必须经 WithDetails / WithInternal sealed
+// newtype (errcode.PublicAttr / InternalAttr)，PublicDetail.AsSlogAttr() 与
+// InternalDetail.AsSlogAttr() 对 string value 返回 slog.String（KindString
+// 走 RedactString 扫描），非 string value 才进入 KindAny passthrough。这是
+// 第一道防线（sealed type + AsSlogAttr KindString preference）。如未来直接
+// 注入 slog.Any(callerSuppliedStruct) 走 KindAny / KindLogValuer，需在此函
+// 数补 ValueResolve 并扩展锁定测试（pkg/redaction/redaction_test.go
 // TestRedactSlogAttr_PassthroughKinds）。
 func RedactSlogAttr(attr slog.Attr) slog.Attr {
 	if IsSensitiveKey(attr.Key) {

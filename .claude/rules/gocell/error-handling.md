@@ -102,6 +102,18 @@ errcode.New(ErrNotFound, "device not found",
 
 `PublicDetail` / `InternalDetail` 字段全部 unexported，包外不可结构字面量构造、不可类型 alias 重新可构造（Go nominal typing 同字段集 re-shape 也不接受）。Wire schema `error.details` 仍是 `array<{key: string, value: any}>`（由 `PublicDetail.MarshalJSON` 派生）；5xx wire 强制 strip 为 `[]`（由 `Error.MarshalJSON` 经 `PublicProjection` / `project()` 实现）。`error-response-v1.schema.json` 的 `details` 字段类型不变。
 
-`InternalDetail` 永不进 wire，仅服务端 slog 与 `Error.Error()` 字符串可见；handler 想在 slog 输出每条 InternalDetail 用 `d.AsSlogAttr()` 转 `slog.Attr`。free-form 单字符串场景按约定走 `InternalAttr("_", "...")` —— `Error.Error()` 将单条 `_` 键渲染为 bare value（保留原 `[CODE] msg` 字符串格式）。
+`InternalDetail` 永不进 wire，仅服务端 slog 与 `Error.Error()` 字符串可见；handler 想在 slog 输出每条 InternalDetail 用 `d.AsSlogAttr()` 转 `slog.Attr`。free-form 单字符串场景按约定走 `InternalAttr("_", "...")` —— `Error.Error()` 将单条 `_` 键渲染为 bare value（保留原 `[CODE] msg` 字符串格式）：
+
+```go
+// free-form 单字符串场景（mechanical migration of pre-#1035 WithInternal(string)）
+errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("query=%s page=%d", q, p)))
+
+// 结构化场景（推荐用于新写代码：单独的 key 让 slog 字段可被查询）
+errcode.WithInternal(
+    errcode.InternalAttr("op", "scan"),
+    errcode.InternalAttr("query", q),
+    errcode.InternalAttr("retries", n),
+)
+```
 
 archtest `DETAILS-SLOG-ATTR-01` 已退役（type system 已表达 invariant）；详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §Amendment 2026-05-27。`MustValidateDetailsKinds` 同样退役（sealed type 已使构造点 bypass 不可表达）。

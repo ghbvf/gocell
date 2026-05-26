@@ -58,9 +58,9 @@ func Detect(err error) bool {
 //
 // Parameters:
 //   - op: PascalCase operation label (e.g. "Insert", "ScanRow"); recorded in
-//     InternalMessage for operator triage.
+//     InternalDetails for operator triage.
 //   - identifier: caller-redacted resource locator (e.g. "key=foo",
-//     "configID=…"); recorded in InternalMessage only.
+//     "configID=…"); recorded in InternalDetails only.
 //
 // The wrapped err is preserved as Cause so errors.Is(returned, context.Canceled)
 // or errors.Is(returned, context.DeadlineExceeded) still works for callers
@@ -78,13 +78,13 @@ func Detect(err error) bool {
 //     to "internal server error" and strip Details per the standard pipeline).
 //     The reason enum is intentionally low-cardinality and free of user
 //     identifiers — safe to expose.
-//   - InternalMessage carries the operator-grade op/identifier (key names,
-//     config IDs) and is routed to slog only; pkg/httputil never writes
-//     InternalMessage to the response body, so identifier may freely contain
-//     such detail.
+//   - InternalDetails carries the operator-grade op/identifier (key names,
+//     config IDs) via the sealed InternalAttr constructor and is routed to
+//     slog only; pkg/httputil never writes InternalDetails to the response
+//     body, so identifier may freely contain such detail.
 //
 // Maintainers extending Details MUST keep new fields enum-typed and
-// caller-redacted, otherwise rotate them through InternalMessage instead.
+// caller-redacted, otherwise rotate them through InternalDetails instead.
 func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil
@@ -126,7 +126,7 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 // Use at repository / RPC client / message-bus call sites where the only
 // branching needed is ctx-cancel vs generic infra failure. When the fallback
 // path needs *additional* differentiation (a domain not-found branch, a
-// PascalCase InternalMessage template, a non-Infra Category), keep the
+// PascalCase InternalDetails template, a non-Infra Category), keep the
 // inline pattern — this helper deliberately omits those degrees of freedom
 // to avoid a six-parameter signature.
 //

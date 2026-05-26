@@ -1064,7 +1064,7 @@ func fallbackProjection(err error, surface projectionSurface) PublicError {
 }
 
 // PublicString renders err for user-facing public output. It preserves the
-// public Code, Message, and 4xx Details, but never uses InternalMessage or
+// public Code, Message, and 4xx Details, but never uses InternalDetails or
 // Cause from *Error because those may carry runtime diagnostics.
 func PublicString(err error) string {
 	if err == nil {

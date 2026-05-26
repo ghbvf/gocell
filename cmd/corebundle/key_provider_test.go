@@ -60,7 +60,8 @@ func TestBuildKeyProvider_UnknownProvider_Fails(t *testing.T) {
 	assert.Contains(t, ecErr.Message, "vault-transit")
 	attr, ok := ecErr.FindAttr("provider")
 	assert.True(t, ok, "expected 'provider' detail attr")
-	got, _ := attr.Value().(string)
+	got, ok := attr.Value().(string)
+	require.True(t, ok, "expected string detail value, got %T", attr.Value())
 	assert.Equal(t, "bogus", got)
 }
 

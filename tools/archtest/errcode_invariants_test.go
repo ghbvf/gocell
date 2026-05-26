@@ -859,10 +859,11 @@ func errcodeErrorAliasReexports(f *ast.File) []string {
 // MESSAGE-CONST-LITERAL-01 — every call to `errcode.New(...)` and
 // `errcode.Wrap(...)` in production code must pass a compile-time const
 // literal as the third (`message`) argument. Runtime data (user input, IDs,
-// counts, secrets) belongs in WithDetails (typed slog.Attr) or WithInternal
-// (server-side only). The PII-safe default is enforced statically here so
-// regression cannot reintroduce `fmt.Sprintf` / string-concatenation
-// messages that leak runtime context onto the wire.
+// counts, secrets) belongs in WithDetails (sealed PublicDetail via
+// errcode.PublicAttr) or WithInternal (sealed InternalDetail, server-side
+// only). The PII-safe default is enforced statically here so regression
+// cannot reintroduce `fmt.Sprintf` / string-concatenation messages that
+// leak runtime context onto the wire.
 //
 // ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
 func TestErrcodeMessageConstLiteral(t *testing.T) {
@@ -934,7 +935,8 @@ func scanErrcodeMessageASTDiags(
 			Line: line,
 			Message: fmt.Sprintf(
 				"%s(...) message must be a const literal (got %T) "+
-					"— move runtime data to WithDetails(slog.Attr) or WithInternal",
+					"— move runtime data to WithDetails(errcode.PublicAttr(...)) or "+
+					"WithInternal(errcode.InternalAttr(...))",
 				callee.displayName, msgArg),
 		})
 	})

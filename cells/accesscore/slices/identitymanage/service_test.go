@@ -1531,7 +1531,9 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	var gotField string
 	for _, attr := range ec.Details {
 		if attr.Key() == "field" {
-			gotField, _ = attr.Value().(string)
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotField = s
 			break
 		}
 	}
@@ -1564,7 +1566,9 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	var gotFieldEmail string
 	for _, attr := range ec.Details {
 		if attr.Key() == "field" {
-			gotFieldEmail, _ = attr.Value().(string)
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldEmail = s
 			break
 		}
 	}
@@ -1601,7 +1605,9 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 	var gotFieldPwd string
 	for _, attr := range ec.Details {
 		if attr.Key() == "field" {
-			gotFieldPwd, _ = attr.Value().(string)
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldPwd = s
 			break
 		}
 	}
@@ -1631,7 +1637,9 @@ func TestService_Create_RequireNotEmptyShortCircuitsOnFirstField(t *testing.T) {
 	var gotFieldSC string
 	for _, attr := range ec.Details {
 		if attr.Key() == "field" {
-			gotFieldSC, _ = attr.Value().(string)
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldSC = s
 			break
 		}
 	}

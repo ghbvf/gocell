@@ -8,14 +8,19 @@
 //
 //   - Message: a compile-time const literal describing the failure shape.
 //     Visible to clients in HTTP responses for both 4xx and 5xx.
-//   - Details ([]slog.Attr via WithDetails): typed runtime fields visible
-//     to clients on 4xx responses; stripped from 5xx by Error.MarshalJSON.
-//   - InternalMessage (via WithInternal): server-side runtime context that
-//     never appears in any HTTP response, only in slog records and traces.
+//   - Details ([]PublicDetail via WithDetails(PublicAttr(k, v))): typed
+//     runtime fields visible to clients on 4xx responses; stripped from
+//     5xx by Error.MarshalJSON.
+//   - InternalDetails ([]InternalDetail via WithInternal(InternalAttr(k, v))):
+//     server-side runtime context that never appears in any HTTP response,
+//     only in slog records and traces.
 //
-// The const-literal restriction on New/Wrap message is enforced statically by
-// archtest MESSAGE-CONST-LITERAL-01 outside this package; WithInternal is
-// exempt and may carry fmt.Sprintf-formatted strings.
+// PublicDetail and InternalDetail are sealed newtypes (unexported fields)
+// so outside-package construction of either type is a Go compile error;
+// callers route through PublicAttr / InternalAttr. The const-literal
+// restriction on New/Wrap message is enforced statically by archtest
+// MESSAGE-CONST-LITERAL-01 outside this package; InternalAttr is exempt
+// and may carry fmt.Sprintf-formatted strings.
 //
 // # Assertion ctor for production panics
 //

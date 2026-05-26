@@ -1,7 +1,7 @@
 package credentialauthority
 
 import (
-	"strconv"
+	"fmt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -41,7 +41,7 @@ func Assert(user *domain.User, checks ...Check) error {
 		if c == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"credentialauthority.Assert: nil Check in variadic",
-				errcode.WithInternal(errcode.InternalAttr("_", "credentialauthority: nil check at index "+strconv.Itoa(i))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("credentialauthority: nil check at index %d", i))))
 		}
 		if err := c.apply(user); err != nil {
 			return err
