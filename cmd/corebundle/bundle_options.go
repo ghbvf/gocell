@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -38,12 +39,6 @@ func runtimeBaseOptions(
 	}
 
 	opts := []bootstrap.Option{
-		// Single composition-root clock: the same clock is on the assembly
-		// (see buildAssembly above) and on the bootstrap; it threads through
-		// the lifecycle and default-assembly fallback. The pair is the
-		// load-bearing invariant of PROD-CLOCK-INJECTION-01 — never
-		// default-fallback in adapters or cells.
-		bootstrap.WithClock(shared.Clock),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
@@ -87,11 +82,10 @@ func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) out
 // slice. Tests that need a bootstrap instance must route through this wrapper
 // (it is a production file, not a test file). run.go also calls bootstrap.New
 // directly; startup intentionally lives in run.go for grep-locality.
-//
-// runtimeBaseOptions always includes bootstrap.WithClock so the clock is
-// never missing — this wrapper does not impose any additional contract.
-func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
-	return bootstrap.New(opts...)
+// clk is the single composition-root clock; the same instance must be passed
+// to assembly.New(clk, ...) to satisfy bootstrap's clock-alignment check.
+func newBootstrapFromOptions(clk clock.Clock, opts []bootstrap.Option) *bootstrap.Bootstrap {
+	return bootstrap.New(clk, opts...)
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

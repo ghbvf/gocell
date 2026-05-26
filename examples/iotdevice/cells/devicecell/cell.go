@@ -102,11 +102,6 @@ func WithSweepErrorCounter(cv metrics.CounterVec) Option {
 	}
 }
 
-// WithClock sets the clock used by this cell. Must be called before Init.
-func WithClock(clk clock.Clock) Option {
-	return func(c *DeviceCell) { c.clk = clk }
-}
-
 // DeviceCell is the devicecell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=
 // +cell:listener:ref=cell.InternalListener,prefix=
@@ -151,9 +146,11 @@ func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 }
 
 // NewDeviceCell creates a new DeviceCell with the given options.
-func NewDeviceCell(opts ...Option) *DeviceCell {
+func NewDeviceCell(clk clock.Clock, opts ...Option) *DeviceCell {
+	clock.MustHaveClock(clk, "devicecell.New")
 	c := &DeviceCell{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		clk:      clk,
 		logger:   slog.Default(),
 	}
 	for _, o := range opts {
@@ -198,9 +195,6 @@ func (c *DeviceCell) buildCellEmitter() (outbox.CellEmitter, error) {
 //nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (configcore)
 func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registrar) error {
 	durabilityMode := reg.DurabilityMode()
-
-	// Clock must be injected via WithClock before Init.
-	clock.MustHaveClock(c.clk, "devicecell.initInternal: clock required; use WithClock(clock.Real()) in assembly")
 
 	if err := c.initDeps(durabilityMode); err != nil {
 		return err
@@ -277,9 +271,8 @@ func (c *DeviceCell) initDeps(durabilityMode outbox.DurabilityMode) error {
 func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	// device-register slice
 	registerSvc, err := deviceregister.NewService(
-		c.deviceRepo, c.logger,
+		c.clk, c.deviceRepo, c.logger,
 		deviceregister.WithEmitter(c.emitter),
-		deviceregister.WithClock(c.clk),
 	)
 	if err != nil {
 		return fmt.Errorf("device-register: %w", err)
@@ -301,9 +294,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	runMode := query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 	// Public slice service: sliceName "devicecommand" for observability labels.
 	pubSvc, err := devicecmd.NewService(
-		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		runMode,
-		devicecmd.WithClock(c.clk),
 		devicecmd.WithSliceName("devicecommand"),
 	)
 	if err != nil {
@@ -311,9 +303,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	}
 	// Internal slice service: sliceName "devicecommandinternal" for observability labels.
 	intSvc, err := devicecmd.NewService(
-		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		runMode,
-		devicecmd.WithClock(c.clk),
 		devicecmd.WithSliceName("devicecommandinternal"),
 	)
 	if err != nil {

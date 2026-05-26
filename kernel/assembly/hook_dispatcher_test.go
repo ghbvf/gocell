@@ -587,9 +587,11 @@ func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 // on process exit).
 func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 	obs := &collectObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "drain-test",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "drain-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
 	require.NoError(t, a.Start(context.Background()))
 	require.NoError(t, a.Stop(context.Background()))
@@ -601,9 +603,11 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 
 func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
 	obs := &collectObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "restart-dispatcher-test",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "restart-dispatcher-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
 
 	require.NoError(t, a.Start(context.Background()))
@@ -629,11 +633,13 @@ func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
 func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	obs := newBlockingObserver()
-	a := newTestAssembly(t, clk, Config{ID:                       "ctx-drain-test",
+	a := newTestAssembly(t, clk, Config{
+		ID:                       "ctx-drain-test",
 		DurabilityMode:           outbox.DurabilityDemo,
 		HookObserver:             obs,
 		HookObserverSinkTimeout:  testtime.D10s,
-		HookObserverDrainTimeout: testtime.D10s})
+		HookObserverDrainTimeout: testtime.D10s,
+	})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Start(context.Background()))

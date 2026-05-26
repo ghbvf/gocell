@@ -30,9 +30,9 @@ import (
 
 func newTestCell() *DeviceCell {
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	return c
@@ -98,8 +98,8 @@ func TestDeviceCell_InitNoDeviceRepository_FailsFast(t *testing.T) {
 	// "No soft fallback": devicecell never silently constructs a mem repo. Demo
 	// callers must wire mem.NewDeviceRepository() explicitly via the option.
 	c := NewDeviceCell(
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
+		clock.Real(),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	err := c.Init(context.Background(), newTestRec())
@@ -114,9 +114,9 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 	// Companion of the device-repo case: nil commandQueue is also rejected in
 	// every mode. RegisterCommandQueue is the only sanctioned wiring point.
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
 	)
 	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
@@ -129,8 +129,8 @@ func TestDeviceCell_InitNoCommandQueue_FailsFast(t *testing.T) {
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithClock(clock.Real()),
 	)
 	ctx := context.Background()
 	rec := newTestRec()
@@ -374,9 +374,10 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 // public demo key baked into the source tree.
 func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real())))),
-		WithClock(clock.Real()),
+		WithDirectPublisher(outbox.WrapPublisherForCell(eventbus.New(clock.Real()))),
+
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDurable))
@@ -392,9 +393,10 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 	// demo mode here purely to dodge the cursor-codec durability check, since
 	// the focus is on persistence vs publish separation.
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
-		WithClock(clock.Real()),
+
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
@@ -411,9 +413,9 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 
 func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
+		clock.Real(),
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithDirectPublisher(outbox.WrapPublisherForCell(failingPublisher{})),
-		WithClock(clock.Real()),
 	)
 	c.RegisterCommandQueue(commandtest.NewInMemQueue())
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo)))

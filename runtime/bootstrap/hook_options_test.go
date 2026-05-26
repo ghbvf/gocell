@@ -18,8 +18,10 @@ import (
 // bootstrap clock and the pre-built assembly clock are the same instance.
 func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
 	clk := clockmock.New(time.Now())
-	asm := assembly.New(clk, assembly.Config{ID:             "test",
-		DurabilityMode: outbox.DurabilityDemo})
+	asm := assembly.New(clk, assembly.Config{
+		ID:             "test",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 	b := &Bootstrap{
 		clock:        clk,
 		assemblyCore: asm,
@@ -33,8 +35,10 @@ func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
 func TestValidateAssemblyClockAlignment_DifferentClocks(t *testing.T) {
 	clkBootstrap := clockmock.New(time.Now())
 	clkAssembly := clockmock.New(time.Now())
-	asm := assembly.New(clkAssembly, assembly.Config{ID:             "test",
-		DurabilityMode: outbox.DurabilityDemo})
+	asm := assembly.New(clkAssembly, assembly.Config{
+		ID:             "test",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 	b := &Bootstrap{
 		clock:        clkBootstrap,
 		assemblyCore: asm,
@@ -42,8 +46,8 @@ func TestValidateAssemblyClockAlignment_DifferentClocks(t *testing.T) {
 	err := b.validateAssemblyClockAlignment()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clock mismatch")
-	assert.Contains(t, err.Error(), "bootstrap.WithClock")
-	assert.Contains(t, err.Error(), "assembly.New")
+	assert.Contains(t, err.Error(), "bootstrap.New(clk")
+	assert.Contains(t, err.Error(), "assembly.New(clk")
 }
 
 // TestValidateAssemblyClockAlignment_NoAssembly passes phase0 when no

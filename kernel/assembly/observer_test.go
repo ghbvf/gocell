@@ -48,9 +48,11 @@ func summarize(events []cell.HookEvent) []string {
 
 func TestObserver_HappyPath_SuccessOutcomes(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "obs-happy",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "obs-happy",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Register(newHookOrderCell("B", &calls, "")))

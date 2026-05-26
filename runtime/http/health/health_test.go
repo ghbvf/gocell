@@ -27,12 +27,12 @@ import (
 
 // newAgg constructs a default Aggregator backed by the given clock.
 func newAgg(clk clock.Clock) khealthz.Aggregator {
-	return obshealthz.NewAggregator(obshealthz.WithClock(clk))
+	return obshealthz.NewAggregator(clk)
 }
 
 // newAggWithDeadline constructs an Aggregator with a custom per-probe deadline.
 func newAggWithDeadline(clk clock.Clock, d time.Duration) khealthz.Aggregator {
-	return obshealthz.NewAggregator(obshealthz.WithClock(clk), obshealthz.WithDeadline(d))
+	return obshealthz.NewAggregator(clk, obshealthz.WithDeadline(d))
 }
 
 // captureHandler records every slog event passed to it so tests can assert

@@ -205,7 +205,7 @@ func TestTopologyAdapterInfo_TableDriven(t *testing.T) {
 func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	const topic = "test.fanout.cross-cg.v1"
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)

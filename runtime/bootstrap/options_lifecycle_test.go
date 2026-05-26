@@ -25,7 +25,7 @@ func TestWithLifecycleDefaultStartTimeout_PopulatesField(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(WithClock(clock.Real()), WithLifecycleDefaultStartTimeout(tc.in))
+			b := New(clock.Real(), WithLifecycleDefaultStartTimeout(tc.in))
 			assert.Equal(t, tc.want, b.defaultStartTimeout)
 		})
 	}
@@ -43,14 +43,14 @@ func TestWithLifecycleDefaultStopTimeout_PopulatesField(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(WithClock(clock.Real()), WithLifecycleDefaultStopTimeout(tc.in))
+			b := New(clock.Real(), WithLifecycleDefaultStopTimeout(tc.in))
 			assert.Equal(t, tc.want, b.defaultStopTimeout)
 		})
 	}
 }
 
 func TestWithLifecycleDefaultTimeouts_NotCalled_FieldsZero(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	assert.Equal(t, time.Duration(0), b.defaultStartTimeout,
 		"unset option must leave field zero so NewLifecycle falls back to DefaultStartTimeout constant")
 	assert.Equal(t, time.Duration(0), b.defaultStopTimeout,

@@ -116,7 +116,7 @@ func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registrar) error {
 // contract metadata.
 func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	spyTracer := &endToEndSpyTracer{}
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	bus := eventbus.New(clock.Real())
 
 	spec := contractspec.ContractSpec{
 		ID: "event.integration.test.v1", Kind: cellvocab.ContractEvent, Transport: "inmem",
@@ -137,7 +137,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	primaryLn := newLocalListener(t)
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithSubscriber(bus),
 		WithPublisher(bus),
 		WithConsumerBase(newTestConsumerBase(t)),

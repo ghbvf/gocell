@@ -22,7 +22,7 @@ import (
 // test only needs that early step, so a later no-listeners error is irrelevant
 // to what is asserted.
 func TestPhase0_ReadyzDeadline_AppliedToDefaultAggregator(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithReadyzDeadline(testtime.D50ms))
+	b := New(clock.Real(), WithReadyzDeadline(testtime.D50ms))
 	_ = b.phase0ValidateOptions()
 	require.NotNil(t, b.healthAggregator)
 
@@ -50,8 +50,8 @@ func TestPhase0_ReadyzDeadline_AppliedToDefaultAggregator(t *testing.T) {
 // ineffective. phase0 surfaces the contradictory wiring instead.
 func TestPhase0_ReadyzDeadlineWithCustomAggregator_FailsFast(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
-		WithHealthAggregator(obshealthz.NewAggregator(obshealthz.WithClock(clock.Real()))),
+		clock.Real(),
+		WithHealthAggregator(obshealthz.NewAggregator(clock.Real())),
 		WithReadyzDeadline(testtime.D2s),
 	)
 	err := b.phase0ValidateOptions()

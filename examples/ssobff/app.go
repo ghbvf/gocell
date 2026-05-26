@@ -211,7 +211,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	// Demo only: test keys are generated in-process, so tokens do not survive
 	// restart and cannot be verified by another replica.
 	jwtIssuer, jwtVerifier, err := newSSOBFFJWT()
@@ -271,8 +271,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// acceptable for this demo example; production bundles use per-cell repo probes.
 	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
-	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+	relayWorker := outboxruntime.NewRelay(clock.Real(), pgOutboxStore, eb, relayCfg)
 
 	asm, cb, primaryAuth, err := buildSSOBFFAssembly(ssobffBuildParams{
 		pool: pool, txMgr: txMgr, eb: eb, pgOutboxWriter: pgOutboxWriter,
@@ -286,7 +285,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 
 	b := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
@@ -347,7 +346,7 @@ func buildSSOBFFAuditCore(
 		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
+		clock.Real(),
 		auditcore.WithLedgerProtocol(protocol),
 		auditcore.WithLedgerStore(pgLedgerStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(outboxWriter)),
@@ -397,9 +396,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
 	}
-	ac := accesscore.NewAccessCore(append(
+	ac := accesscore.NewAccessCore(clock.Real(), append(
 		accessStorageOpts,
-		accesscore.WithClock(clock.Real()),
 		accesscore.WithBootstrapAuth(p.bootstrapMW),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
 		accesscore.WithJWTIssuer(p.jwtIssuer),
@@ -422,9 +420,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
 	}
-	cc := configcore.NewConfigCore(append(
+	cc := configcore.NewConfigCore(clock.Real(), append(
 		configStorageOpts,
-		configcore.WithClock(clock.Real()),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
 		configcore.WithTxManager(persistence.WrapForCell(p.txMgr)),
 		configcore.WithCASProtocol(configCAS),

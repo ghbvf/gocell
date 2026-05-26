@@ -690,7 +690,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		r.use(cb)
 	}
 	if r.authVerifier != nil {
-		r.use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
+		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.use(middleware.BodyLimit(r.bodyLimit))
 	r.composeHandler()
@@ -711,7 +711,6 @@ func (r *Router) composeHandler() {
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
 func (r *Router) buildAuthOpts() []auth.AuthOption {
 	opts := []auth.AuthOption{
-		auth.WithAuthClock(r.clock),
 		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
 			if r.authPublicMatcher == nil {
 				return false

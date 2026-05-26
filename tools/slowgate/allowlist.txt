@@ -27,10 +27,10 @@
 # the larger scans.
 # ----------------------------------------------------------------------
 
-# type-graph-load: clock injection callsite scan over module
-github.com/ghbvf/gocell/tools/archtest	TestClockInjectionCallsite
 # type-graph-load: clock injection prod callsite scan over module
 github.com/ghbvf/gocell/tools/archtest	TestClockInjectionProdCallsite
+# type-graph-load: clock positional-injection form-lock scan over module
+github.com/ghbvf/gocell/tools/archtest	TestClockPositionalInjection
 # type-graph-load: errcode message-const-literal scan over module
 github.com/ghbvf/gocell/tools/archtest	TestErrcodeMessageConstLiteral
 # type-graph-load: exported error-new scan over module

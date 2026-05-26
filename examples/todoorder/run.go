@@ -114,7 +114,7 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 
 	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
 			[]auth.ListenerAuth{jwtPlan}),

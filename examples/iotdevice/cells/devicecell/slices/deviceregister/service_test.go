@@ -31,7 +31,7 @@ func (failPublisher) Close(_ context.Context) error { return nil }
 func newTestService(t testing.TB) (*Service, *mem.DeviceRepository) {
 	t.Helper()
 	repo := mem.NewDeviceRepository()
-	svc, err := NewService(repo, slog.Default(), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default())
 	if err != nil {
 		t.Fatalf("newTestService: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestNewService_NilRepo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(tt.repo, slog.Default(), WithClock(clock.Real()))
+			_, err := NewService(clock.Real(), tt.repo, slog.Default())
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
@@ -129,7 +129,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -147,7 +147,7 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
@@ -166,7 +166,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
 	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, logger, WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	require.NoError(t, err)
 
 	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})

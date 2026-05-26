@@ -23,8 +23,8 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
-		WithTxManager(persistence.WrapForCell(&stubTxRunner{})), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
 	h := createv1.NewHandler(svc, allowAllContractPolicy)
 	return h, writer

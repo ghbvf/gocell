@@ -125,7 +125,6 @@ func (m AccessCoreModule) Provide(
 	}
 
 	accessOpts := []accesscore.Option{
-		accesscore.WithClock(shared.Clock),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// outbox.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
 		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
@@ -193,7 +192,7 @@ func (m AccessCoreModule) Provide(
 	)
 	accessOpts = append(accessOpts, accesscore.WithBootstrapAuth(bootstrapMW))
 
-	c := accesscore.NewAccessCore(accessOpts...)
+	c := accesscore.NewAccessCore(shared.Clock, accessOpts...)
 	// Bootstrap phase3b auto-discovers c.LifecycleHooks() — no WithWorkers needed.
 	// rlLimiter owns a cleanup goroutine that exits on Close(); bind it to a
 	// ManagedResource so phase10 LIFO teardown stops the goroutine cleanly.

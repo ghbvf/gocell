@@ -191,7 +191,7 @@ func newTestCell(id string) *testCell {
 }
 
 func TestNew_Defaults(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	// PR-A14b: no default listeners; callers must declare via WithListener.
 	assert.Nil(t, b.listenerConfigs)
 	assert.Nil(t, b.assemblyCore)
@@ -208,10 +208,10 @@ func TestNew_Defaults(t *testing.T) {
 
 func TestNew_WithOptions(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, ":7070", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -237,7 +237,7 @@ func TestNew_WithOptions(t *testing.T) {
 // and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
 func TestNew_WithMetricsProvider(t *testing.T) {
 	custom := struct{ kernelmetrics.NopProvider }{}
-	b := New(WithClock(clock.Real()), WithMetricsProvider(custom))
+	b := New(clock.Real(), WithMetricsProvider(custom))
 	assert.Equal(t, custom, b.MetricsProvider(),
 		"MetricsProvider() must return the provider injected via WithMetricsProvider")
 }
@@ -264,7 +264,7 @@ func optionOriginName(opt router.Option) string {
 
 func TestNew_WithTracer(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("bootstrap-test")
-	b := New(WithClock(clock.Real()), WithTracer(tracer))
+	b := New(clock.Real(), WithTracer(tracer))
 	// WithTracer forwards two router options: router.WithTracer (the tracer
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
 	// so /healthz, /readyz, /metrics skip span creation on the per-listener
@@ -299,7 +299,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -325,7 +325,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 }
 
 func TestNew_WithConfig(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithConfig("/nonexistent.yaml", "APP"))
+	b := New(clock.Real(), WithConfig("/nonexistent.yaml", "APP"))
 	assert.Equal(t, "/nonexistent.yaml", b.configPath)
 	assert.Equal(t, "APP", b.envPrefix)
 	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
@@ -334,7 +334,7 @@ func TestNew_WithConfig(t *testing.T) {
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithConfig("/nonexistent/config.yaml", "APP"),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -383,10 +383,10 @@ func TestBootstrap_CellLookup(t *testing.T) {
 }
 
 func TestNew_WithPublisherAndSubscriber(t *testing.T) {
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 	)
@@ -396,18 +396,18 @@ func TestNew_WithPublisherAndSubscriber(t *testing.T) {
 }
 
 func TestNew_WithPublisherOnly(t *testing.T) {
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
-	b := New(WithClock(clock.Real()), WithPublisher(eb))
+	b := New(clock.Real(), WithPublisher(eb))
 
 	assert.Equal(t, eb, b.publisher)
 	assert.Nil(t, b.subscriber)
 }
 
 func TestNew_WithSubscriberOnly(t *testing.T) {
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
-	b := New(WithClock(clock.Real()), WithSubscriber(eb))
+	b := New(clock.Real(), WithSubscriber(eb))
 
 	assert.Nil(t, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
@@ -503,14 +503,14 @@ func TestBootstrap_MissingSubscriber_WithCellSubscriptions_Fails(t *testing.T) {
 	ec := newEventCell("needs-sub", nil) // registers a handler
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	tl := testListeners{
 		primary:  newLocalListener(t),
 		internal: newLocalListener(t),
 		health:   newLocalListener(t),
 	}
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
@@ -532,9 +532,9 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	ec := newEventCell("fail-cell", errors.New("DLX not configured"))
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithConsumerBase(newTestConsumerBase(t)),
@@ -561,10 +561,10 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	ec := newEventCell("ok-cell", nil) // nil error → registers 1 handler
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
@@ -621,7 +621,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithSubscriber(sub),
 		WithConsumerBase(newTestConsumerBase(t)),
@@ -669,7 +669,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
@@ -686,7 +686,7 @@ func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so first Run exits quickly
 
-	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}))
+	b := New(clock.Real(), WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}))
 	_ = b.Run(ctx) // first call — may error due to canceled ctx or sandbox
 
 	err := b.Run(ctx) // second call — must be rejected
@@ -703,7 +703,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -760,7 +760,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -823,7 +823,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -885,7 +885,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -949,7 +949,7 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1008,7 +1008,7 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1039,7 +1039,7 @@ func newDupHealthCheckerOption(name string) Option {
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithHealthChecker("", func(_ context.Context) error { return nil }),
 	)
 	err := b.Run(context.Background())
@@ -1058,7 +1058,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 	defer slog.SetDefault(oldDefault)
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithHealthChecker("", func(_ context.Context) error { return nil }),
 		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
 	)
@@ -1071,7 +1071,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 
 func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithHealthChecker("mycheck", nil),
 	)
 	err := b.Run(context.Background())
@@ -1089,7 +1089,7 @@ func (m *mockAllowerForBootstrap) Allow() (bool, func(error)) {
 func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
 	// A bare nil interface must cause Run() to fail-fast with a descriptive
 	// error rather than silently leaving the service without CB protection.
-	b := New(WithClock(clock.Real()), WithCircuitBreaker(nil))
+	b := New(clock.Real(), WithCircuitBreaker(nil))
 	err := b.Run(context.Background())
 	require.Error(t, err, "nil interface Allower must return error from Run")
 	assert.Contains(t, err.Error(), "circuit breaker")
@@ -1100,7 +1100,7 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 	// but a nil underlying pointer. Calling Allow() on it would panic at runtime.
 	// Bootstrap must detect and reject it just like a bare nil.
 	var cb *mockAllowerForBootstrap // typed nil
-	b := New(WithClock(clock.Real()), WithCircuitBreaker(cb))
+	b := New(clock.Real(), WithCircuitBreaker(cb))
 	err := b.Run(context.Background())
 	require.Error(t, err, "typed-nil Allower must return error from Run")
 	assert.Contains(t, err.Error(), "circuit breaker")
@@ -1115,7 +1115,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1183,7 +1183,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1255,7 +1255,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1324,7 +1324,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1458,7 +1458,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1522,7 +1522,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -1549,7 +1549,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -1573,10 +1573,10 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-eventrouter-readyz", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(eb),
 		WithSubscriber(eb),
@@ -1804,7 +1804,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1864,7 +1864,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1926,7 +1926,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -1982,7 +1982,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2042,7 +2042,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2101,7 +2101,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2159,7 +2159,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2263,7 +2263,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2326,7 +2326,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2389,7 +2389,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	blocker := newBlockingStopWorker()
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2455,7 +2455,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -2618,7 +2618,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2719,7 +2719,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2779,7 +2779,7 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2818,7 +2818,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 	)
@@ -2912,7 +2912,7 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2958,7 +2958,7 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3006,7 +3006,7 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3049,7 +3049,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
@@ -3140,7 +3140,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3190,7 +3190,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3256,7 +3256,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]kauth.ListenerAuth{kauthtest.MustAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
@@ -3309,7 +3309,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3343,7 +3343,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3378,7 +3378,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3448,7 +3448,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3534,7 +3534,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -3585,7 +3585,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -3643,7 +3643,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
@@ -3752,7 +3752,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3841,7 +3841,7 @@ func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithCircuitBreaker(nil),
 	)
@@ -3902,7 +3902,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3950,7 +3950,7 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3994,7 +3994,7 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -4046,7 +4046,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -4070,7 +4070,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — bad inputs surface
 // before any component starts.
 func TestBootstrap_WithManagedCloser_NilFailFast(t *testing.T) {
-	app := New(WithClock(clock.Real()), WithManagedCloser(nil))
+	app := New(clock.Real(), WithManagedCloser(nil))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithManagedCloser(nil) was used")
@@ -4088,7 +4088,7 @@ func TestBootstrap_WithManagedCloser_TypedNilFailFast(t *testing.T) {
 	var c *mockContextCloser // typed nil
 	var iface kernellifecycle.ContextCloser = c
 
-	app := New(WithClock(clock.Real()), WithManagedCloser(iface))
+	app := New(clock.Real(), WithManagedCloser(iface))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithManagedCloser receives a typed-nil interface")
@@ -4107,7 +4107,7 @@ func (m *mockRateLimiter) Allow(string) bool { return m.allow }
 // TestBootstrap_WithRateLimiter_NilFailFast verifies that WithRateLimiter(nil)
 // sets the rateLimiterNil flag and Run() rejects it at phase0.
 func TestBootstrap_WithRateLimiter_NilFailFast(t *testing.T) {
-	app := New(WithClock(clock.Real()), WithRateLimiter(nil))
+	app := New(clock.Real(), WithRateLimiter(nil))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithRateLimiter(nil) was used")
@@ -4124,7 +4124,7 @@ func TestBootstrap_WithRateLimiter_TypedNilFailFast(t *testing.T) {
 	var rl *mockRateLimiter // typed nil
 	var iface middleware.RateLimiter = rl
 
-	app := New(WithClock(clock.Real()), WithRateLimiter(iface))
+	app := New(clock.Real(), WithRateLimiter(iface))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithRateLimiter receives a typed-nil interface")
@@ -4213,7 +4213,7 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -4238,7 +4238,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
 		// before the listener is actually bound, so no connection is ever served.
@@ -4269,7 +4269,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 	ln := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		// Two declarations for PrimaryListener — second one is the duplicate.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -4297,7 +4297,7 @@ func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
 
 	ln := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -4366,7 +4366,7 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 	require.NoError(t, asm.Register(newDuplicateInternalCell("dup-internal-cell")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
@@ -4445,7 +4445,7 @@ func TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack(t *testing.T) {
 	require.NoError(t, asm.Register(newHealthListenerTargetingCell("rogue-health-cell")))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
@@ -4515,7 +4515,7 @@ func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
 	require.NoError(t, asm.Register(newUnknownListenerCell()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		// Only PrimaryListener declared; cell uses zero-value ref.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),

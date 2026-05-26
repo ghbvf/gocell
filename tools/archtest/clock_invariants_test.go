@@ -683,18 +683,18 @@ var forbiddenTimeFns = map[string]string{
 //
 // A FuncDecl is exempt if and only if ALL of:
 //
-//  (a) rel is under "runtime/command/" — this package gate prevents any other
-//      package from claiming to host a "controlPlaneClock" method; the type is
-//      package-private (unexported) so only code in runtime/command can declare
-//      methods on it. This is the structural "seal" that replaces the old
-//      hand-maintained allowlist map.
+//	(a) rel is under "runtime/command/" — this package gate prevents any other
+//	    package from claiming to host a "controlPlaneClock" method; the type is
+//	    package-private (unexported) so only code in runtime/command can declare
+//	    methods on it. This is the structural "seal" that replaces the old
+//	    hand-maintained allowlist map.
 //
-//  (b) fd.Recv != nil — it is a method, not a free function.
+//	(b) fd.Recv != nil — it is a method, not a free function.
 //
-//  (c) The receiver's type name is "controlPlaneClock" (value receiver) or
-//      "*controlPlaneClock" (pointer receiver), extracted from the AST. Both
-//      forms are accepted for robustness, though the current impl uses value
-//      receivers only.
+//	(c) The receiver's type name is "controlPlaneClock" (value receiver) or
+//	    "*controlPlaneClock" (pointer receiver), extracted from the AST. Both
+//	    forms are accepted for robustness, though the current impl uses value
+//	    receivers only.
 //
 // Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File, so depth=1 is correct and sufficient.
@@ -1127,7 +1127,7 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 			return
 		}
 		arg0 := call.Args[0]
-		if !clockArg0IsParam(fset, file, arg0, info) {
+		if !clockArg0IsParam(file, arg0, info) {
 			line := fset.Position(call.Pos()).Line
 			key := fmt.Sprintf("%s:%d:A", rel, line)
 			if !seen[key] {
@@ -1207,7 +1207,7 @@ func isMustHaveClockCall(call *ast.CallExpr, info *types.Info) bool {
 //
 // Uses FindFirstChild[ast.FuncDecl] at depth=1 to find the enclosing top-level
 // FuncDecl — the same depth constraint as enclosingFuncDeclKey.
-func clockArg0IsParam(fset *token.FileSet, file *ast.File, arg0 ast.Expr, info *types.Info) bool {
+func clockArg0IsParam(file *ast.File, arg0 ast.Expr, info *types.Info) bool {
 	if info == nil {
 		return false
 	}
@@ -1298,9 +1298,9 @@ func TestClockPositionalInjectionFixtures(t *testing.T) {
 	// GREEN: compliant (arg0 is a param; no WithClock).
 	// RED: violations (selector arg0; exported WithClock).
 	dirs := []string{
-		"param_passes",           // GREEN: MustHaveClock(clk, ...) where clk is a param
-		"selector_violates",      // RED: MustHaveClock(cfg.Clock, ...) — selector arg0
-		"withclock_violates",     // RED: exported func WithClock(...)
+		"param_passes",       // GREEN: MustHaveClock(clk, ...) where clk is a param
+		"selector_violates",  // RED: MustHaveClock(cfg.Clock, ...) — selector arg0
+		"withclock_violates", // RED: exported func WithClock(...)
 	}
 
 	for _, dir := range dirs {

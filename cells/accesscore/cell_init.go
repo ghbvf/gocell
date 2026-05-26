@@ -22,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -236,11 +235,19 @@ func (c *AccessCore) initSlices() error {
 	loginOpts := []sessionlogin.Option{
 		sessionlogin.WithEmitter(c.emitter),
 		sessionlogin.WithTxManager(c.txRunner),
-		sessionlogin.WithClock(c.clk),
 		sessionlogin.WithSessionTTL(DefaultRefreshMaxAge),
 		sessionlogin.WithAccountLockout(lockoutSvc),
 	}
-	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionStore, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
+	loginSvc, err := sessionlogin.NewService(
+		c.clk,
+		c.userRepo,
+		c.sessionStore,
+		c.roleRepo,
+		c.refreshStore,
+		c.jwtIssuer,
+		c.logger,
+		loginOpts...,
+	)
 	if err != nil {
 		return err
 	}
@@ -251,12 +258,11 @@ func (c *AccessCore) initSlices() error {
 	identityOpts := []identitymanage.Option{
 		identitymanage.WithEmitter(c.emitter),
 		identitymanage.WithTxManager(c.txRunner),
-		identitymanage.WithClock(c.clk),
 		identitymanage.WithLastAdminProtection(c.roleRepo),
 		identitymanage.WithPasswordHasher(c.passwordHasher),
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.userRepo, c.invalidator, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.clk, c.userRepo, c.invalidator, c.logger, identityOpts...)
 	if err != nil {
 		return err
 	}
@@ -276,9 +282,9 @@ func (c *AccessCore) initSlices() error {
 	// validated by the store itself; any malformed input (including an
 	// access JWT replay attempt) returns ErrRejected.
 	refreshSvc, err := sessionrefresh.NewService(
+		c.clk,
 		c.sessionStore, c.roleRepo, c.userRepo, c.refreshStore,
 		c.jwtIssuer, c.logger,
-		sessionrefresh.WithClock(c.clk),
 		sessionrefresh.WithTxManager(c.txRunner),
 		sessionrefresh.WithInvalidator(c.invalidator),
 	)
@@ -396,8 +402,6 @@ func (c *AccessCore) initRbacAssign() error {
 //
 //nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (devicecell)
 func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registrar) error {
-	clock.MustHaveClock(c.clk, "accesscore.initInternal")
-
 	durabilityMode := reg.DurabilityMode()
 
 	if err := c.initValidate(durabilityMode); err != nil {

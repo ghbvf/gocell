@@ -166,7 +166,7 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 	asm := buildAsmStarted(t, plain)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -186,7 +186,7 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -216,10 +216,10 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 		},
 	}
 	asm := buildAsmStarted(t, cellA, cellB)
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	// Use the real lifecycle so Append's dup-name guard actually fires;
 	// mockLifecycle has no state tracking.
-	b.lifecycle = NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+	b.lifecycle = NewLifecycle(clock.Real(), LifecycleConfig{})
 
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
@@ -237,7 +237,7 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 // still fails — but this test catches the regression sooner + documents
 // the sentinel (ErrDuplicateHookName) publicly.
 func TestLifecycle_AppendRejectsDuplicateName(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
+	lc := NewLifecycle(clock.Real(), LifecycleConfig{})
 	noop := func(_ context.Context) error { return nil }
 
 	require.NoError(t, lc.Append(Hook{Name: "foo", OnStart: noop}))
@@ -262,7 +262,7 @@ func TestPhase3b_NilSliceContributor(t *testing.T) {
 	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -285,7 +285,7 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -312,7 +312,7 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 	asm := buildAsmStarted(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -348,7 +348,7 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 	asm := buildAsmStarted(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -373,7 +373,7 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -396,7 +396,7 @@ func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{appendErr: errors.New("already started")}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)

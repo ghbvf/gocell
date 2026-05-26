@@ -175,7 +175,6 @@ func buildConfigCorePGRelay(db *pgxpool.Pool, cfg ConfigCoreModuleConfig) (*outb
 		return nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 	}
 	relayCfg.Metrics = relayMetrics
-	relayCfg.Clock = cfg.Clock
 
 	pendingDepth, pdErr := obmetrics.NewOutboxPendingDepthCollector(cfg.MetricsProvider, "configcore")
 	if pdErr != nil {
@@ -183,7 +182,7 @@ func buildConfigCorePGRelay(db *pgxpool.Pool, cfg ConfigCoreModuleConfig) (*outb
 	}
 
 	pgStore := adapterpg.NewOutboxStore(db, cfg.Clock)
-	relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
+	relayWorker := outboxruntime.NewRelay(cfg.Clock, pgStore, cfg.Publisher, relayCfg)
 	relayWorker.WithPendingDepthObserver(pendingDepth)
 	return relayWorker, nil
 }

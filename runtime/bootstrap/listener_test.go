@@ -24,7 +24,7 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, ":9091", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -47,7 +47,7 @@ func TestWithListener_MultipleListeners(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.InternalListener, ":9090", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, ":9091", []auth.ListenerAuth{auth.AuthNone{}}),
@@ -91,7 +91,7 @@ func TestWithListenerOptions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := New(
-				WithClock(clock.Real()),
+				clock.Real(),
 				WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}, tc.opts...),
 			)
 			if b == nil {
@@ -112,7 +112,7 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 	defer closeListener(t, ln)
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(
 			cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerNet(ln),
@@ -128,7 +128,7 @@ func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(
 			cell.HealthListener, ":9091", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerShutdownGrace(0),
@@ -146,7 +146,7 @@ func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(
 			cell.PrimaryListener, ":9090", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerShutdownGrace(testtime.DNeg1s),
@@ -209,7 +209,7 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			b := New(WithClock(clock.Real()), tc.l1, tc.l2)
+			b := New(clock.Real(), tc.l1, tc.l2)
 			err := b.phase0ValidateOptions()
 
 			// Phase-2 expectation: error with ErrListenerAuthChainMissing.
@@ -231,7 +231,7 @@ func TestPhase0_RejectsZeroListenerRef(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.ListenerRef{}, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 
@@ -251,7 +251,7 @@ func TestPhase0_AcceptsExplicitAuthNone(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ":8080",
 			[]auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, ":9091",

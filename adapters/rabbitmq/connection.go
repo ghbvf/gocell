@@ -587,14 +587,14 @@ const runtimePermanentConfirmHits = 2
 
 // NewConnection creates a new Connection with the given config.
 // It attempts an initial connection and starts the reconnect loop.
-// A clock.Clock must be supplied via WithConnectionClock; NewConnection
-// panics if no clock is provided (use clock.Real() at the composition root).
+// clk is required: NewConnection panics via clock.MustHaveClock when clk is
+// nil (use clock.Real() at the composition root).
 //
 // Option-order contract: the default dial function (built via
 // newDefaultDialFn(config.ConnectTimeout) so amqp.DefaultDial(d) bounds
 // TCP+handshake) is established BEFORE options are applied; WithDialFunc
 // replaces it transparently for tests that need to inject a mock dialer.
-func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error) {
+func NewConnection(clk clock.Clock, config Config, opts ...ConnectionOption) (*Connection, error) {
 	config.setDefaults()
 
 	c := &Connection{
@@ -603,13 +603,14 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
+		clock:       clk,
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	clock.MustHaveClock(c.clock, "rabbitmq.NewConnection")
+	clock.MustHaveClock(clk, "rabbitmq.NewConnection")
 
 	if err := c.connect(); err != nil {
 		// rawErr (1st arg) must be the un-sanitized error so classifyDialError
@@ -635,15 +636,6 @@ type ConnectionOption func(*Connection)
 func WithDialFunc(dial DialFunc) ConnectionOption {
 	return func(c *Connection) {
 		c.dial = dial
-	}
-}
-
-// WithConnectionClock sets the clock used by the Connection for reconnect
-// backoff and timeout calculations. Required — NewConnection panics if no
-// clock is supplied. Pass clock.Real() at the composition root.
-func WithConnectionClock(clk clock.Clock) ConnectionOption {
-	return func(c *Connection) {
-		c.clock = clk
 	}
 }
 

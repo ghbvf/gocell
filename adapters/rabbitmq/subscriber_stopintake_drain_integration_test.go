@@ -54,12 +54,11 @@ func TestIntegration_StopIntakeDrainsPrefetchedMessages(t *testing.T) {
 		numMsgs   = 5
 	)
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
-	sub := NewSubscriber(conn, SubscriberConfig{
+	pub := NewPublisher(clock.Real(), conn)
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: numMsgs,
 		DLXExchange:   "test.stopintake.drain.dlx",
-		Clock:         clock.Real(),
 	})
 
 	var handlerStarts atomic.Int32

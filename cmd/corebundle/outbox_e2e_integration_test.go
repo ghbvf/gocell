@@ -127,7 +127,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
@@ -215,14 +215,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
 	// buildConfigCoreOpts — no separate publisher wiring needed.
-	// Go prevents mixing positional args and slice spread, so WithClock is
-	// prepended into the slice; the allow-marker below documents this.
 	cellAdapterOpts = append([]configcore.Option{
-		configcore.WithClock(clock.Real()),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(cellAdapterOpts...)
+	configCell := configcore.NewConfigCore(clock.Real(), cellAdapterOpts...)
 
 	// Wire accesscore with WithBootstrapAuth. The operator calls POST /setup/admin
 	// with Basic Auth to provision the first admin (interactive mode, ADR §D5).
@@ -234,8 +231,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	accessCell := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -244,8 +240,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auditCell := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -263,7 +258,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
@@ -278,7 +272,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
 	// buildConfigCoreOpts so its Worker/Close/Checkers lifecycle is independently
 	// managed by bootstrap — not carried inside PoolResource.Worker().
-	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))
+	app := newBootstrapFromOptions(asm.Clock(), append(baseOpts, relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)
@@ -464,7 +458,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle ---
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
 	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
@@ -545,14 +539,11 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	// Go prevents mixing positional args and slice spread, so WithClock is
-	// prepended into the slice; the allow-marker below documents this.
 	cellAdapterOpts = append([]configcore.Option{
-		configcore.WithClock(clock.Real()),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(cellAdapterOpts...)
+	configCell := configcore.NewConfigCore(clock.Real(), cellAdapterOpts...)
 
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
@@ -565,8 +556,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	accessCell := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	accessCell := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -576,8 +566,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	auditCell := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auditCell := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), nil),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
@@ -595,7 +584,6 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
@@ -604,7 +592,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 	}
-	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))
+	app := newBootstrapFromOptions(asm.Clock(), append(baseOpts, relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)

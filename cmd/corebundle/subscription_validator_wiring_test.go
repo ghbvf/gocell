@@ -106,7 +106,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 			return bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, chain)
 		}(),
 	)
-	b := newBootstrapFromOptions(opts)
+	b := newBootstrapFromOptions(shared.Clock, opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()

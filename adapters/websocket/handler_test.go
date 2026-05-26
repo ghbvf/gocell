@@ -50,10 +50,10 @@ var _ = os.Exit // suppress unused import
 func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
 
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.SlowPoll
 
-	hub := rtws.NewHub(cfg, handler)
+	hub := rtws.NewHub(clock.Real(), cfg, handler)
 
 	// Check TCP availability before starting anything.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -149,9 +149,9 @@ func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
 }
 
 func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.SlowPoll
-	hub := rtws.NewHub(cfg, nil)
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -310,7 +310,7 @@ func TestHub_StopClosesConnections(t *testing.T) {
 }
 
 func TestDefaultHubConfig(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	assert.Equal(t, testtime.CtxLong, cfg.PingInterval)
 	assert.Equal(t, testtime.CtxDefault, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
@@ -318,8 +318,8 @@ func TestDefaultHubConfig(t *testing.T) {
 }
 
 func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
-	hub := rtws.NewHub(cfg, nil)
+	cfg := rtws.DefaultHubConfig()
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
@@ -382,8 +382,8 @@ func TestHub_StopWithActiveConns_NoDeadlock(t *testing.T) {
 }
 
 func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
-	hub := rtws.NewHub(cfg, nil)
+	cfg := rtws.DefaultHubConfig()
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 	// Hub intentionally NOT started.
 
 	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
@@ -406,10 +406,10 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 //
 // Positive case: AllowedOrigins: []string{"http://*"} must not panic.
 func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 
 	t.Run("empty origins — expect construction error with *errcode.Error", func(t *testing.T) {
-		hub := rtws.NewHub(cfg, nil)
+		hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: nil,
@@ -425,7 +425,7 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	})
 
 	t.Run("explicit allowed origins — ok", func(t *testing.T) {
-		hub := rtws.NewHub(cfg, nil)
+		hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: []string{"http://*"},
@@ -471,7 +471,7 @@ func TestUpgradeHandler_NilHubTakesPriorityOverOrigins(t *testing.T) {
 }
 
 func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"*"},
@@ -491,7 +491,7 @@ func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
 // handshake and would silently disable origin checking. Validate must
 // surface this as ErrWebsocketOriginsInvalid.
 func TestUpgradeHandler_RejectsBareHostOrigin(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
@@ -557,9 +557,9 @@ func TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds(t *testing.T) {
 // the connection. Pairs with the allow test above to lock both directions
 // of the security boundary.
 func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.SlowPoll
-	hub := rtws.NewHub(cfg, nil)
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -593,7 +593,7 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 
 // TestUpgradeHandler_RejectsNilAuthenticator locks fail-fast at composition.
 func TestUpgradeHandler_RejectsNilAuthenticator(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
 		// Authenticator: nil — explicit
@@ -622,7 +622,7 @@ func (stubFailingAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, 
 }
 
 func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
@@ -652,7 +652,7 @@ func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
 }
 
 func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
@@ -696,7 +696,7 @@ func (stubForbiddenAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool
 // as 403, distinct from the 401 path used for absent or invalid credentials.
 // Status is derived via errcode.Kind.Status() — single source.
 func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
@@ -723,7 +723,7 @@ func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
 
 // 401 response body should be plain text (browser WS API can't read body anyway).
 func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	hub := rtws.NewHub(clock.Real(), rtws.DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "websocket-hub-running", hub.IsRunning, testtime.D2s, testtime.D1ms)
@@ -754,9 +754,9 @@ func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 // so it must surface as 500 rather than 400. (PR-V1-SEC-WS-AUTH-ACL review
 // round 2 #P2-2.)
 func TestUpgradeHandler_HijackerNotSupported_Returns500(t *testing.T) {
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.SlowPoll
-	hub := rtws.NewHub(cfg, nil)
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()

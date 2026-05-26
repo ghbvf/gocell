@@ -68,9 +68,6 @@ type HubConfig struct {
 	// writeLoop). Recommended starting value: expected concurrent sessions
 	// + 20% headroom. Token-authenticated unlimited capacity is a DoS path.
 	MaxConnections int
-	// Clock is the time source. Required; NewHub panics if nil.
-	Clock clock.Clock
-
 	// SendBufferSize is the per-connection send channel capacity used by the
 	// writeLoop. When the channel is full the connection is evicted (slow
 	// client; gorilla/websocket select-default-drop). Default 32; zero value
@@ -100,9 +97,9 @@ type HubConfig struct {
 	ConcurrentCloseLimit int
 }
 
-// DefaultHubConfig returns a HubConfig with sensible defaults. A clock must be
-// provided; pass clock.Real() at the composition root or a clockmock for tests.
-func DefaultHubConfig(clk clock.Clock) HubConfig {
+// DefaultHubConfig returns a HubConfig with sensible defaults. Pass the clock
+// as the first positional argument to NewHub.
+func DefaultHubConfig() HubConfig {
 	return HubConfig{
 		PingInterval:         defaultPingInterval,
 		PingTimeout:          defaultPingTimeout,
@@ -111,7 +108,6 @@ func DefaultHubConfig(clk clock.Clock) HubConfig {
 		SendBufferSize:       defaultSendBufferSize,
 		ShutdownTimeout:      defaultShutdownTimeout,
 		ConcurrentCloseLimit: defaultConcurrentCloseLimit,
-		Clock:                clk,
 	}
 }
 
@@ -220,8 +216,8 @@ func MustValidateHubConfig(cfg HubConfig) {
 // defaults (10s / 64). This matches clock.MustHaveClock's panic-on-misconfig
 // style — wiring bugs surface before any goroutine runs, never as a
 // shutdown-time make-chan panic or an already-expired context.
-func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
-	clock.MustHaveClock(cfg.Clock, "websocket.NewHub")
+func NewHub(clk clock.Clock, cfg HubConfig, handler MessageHandler) *Hub {
+	clock.MustHaveClock(clk, "websocket.NewHub")
 	MustValidateHubConfig(cfg)
 	if cfg.PingInterval == 0 {
 		cfg.PingInterval = defaultPingInterval
@@ -250,7 +246,7 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 
 	return &Hub{
 		config:       cfg,
-		clk:          cfg.Clock,
+		clk:          clk,
 		handler:      handler,
 		conns:        make(map[string]*connEntry),
 		subjectIdx:   make(map[string]map[string]*connEntry),
@@ -894,7 +890,7 @@ func (w *hubWorker) Stop(ctx context.Context) error {
 //
 // Composition root (PR #393, post-/fix): one of the two equivalent patterns
 //
-//	hub := websocket.NewHub(cfg, handler)
+//	hub := websocket.NewHub(clk, cfg, handler)
 //	bootstrap.New(..., bootstrap.WithManagedResource(hub))
 //	// hub.Start is invoked by the bootstrap WorkerGroup; Close runs LIFO
 //	// during phase10. Do NOT also run `go hub.Start(ctx)` manually — the
@@ -902,7 +898,7 @@ func (w *hubWorker) Stop(ctx context.Context) error {
 //
 // Manual mode (legacy / tests):
 //
-//	hub := websocket.NewHub(cfg, handler)
+//	hub := websocket.NewHub(clk, cfg, handler)
 //	go func() { _ = hub.Start(ctx) }()
 //	// caller is responsible for hub.Stop(ctx) on shutdown.
 //

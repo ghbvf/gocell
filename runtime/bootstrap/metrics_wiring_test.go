@@ -85,14 +85,14 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 	// field directly — this is a white-box test sharing the package, so
 	// we can construct the default config the same way Run() does and
 	// assert the resulting dispatcher used our Provider.
-	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
+	b := New(clock.Real(), WithMetricsProvider(spy))
 
 	// Mirror bootstrap.Run's default-assembly construction exactly.
-	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo, Clock: b.clock}
+	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
-	asm := assembly.New(cfg)
+	asm := assembly.New(b.clock, cfg)
 	t.Cleanup(asm.Shutdown)
 
 	names := spy.counters()
@@ -109,12 +109,12 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 // registry. This is defensive: removing MetricsProvider from the default
 // Config should not regress into nil or panic.
 func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
-	b := New(WithClock(clock.Real()))
-	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo, Clock: b.clock}
+	b := New(clock.Real())
+	cfg := assembly.Config{ID: "default", DurabilityMode: kerneloutbox.DurabilityDemo}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
-	asm := assembly.New(cfg)
+	asm := assembly.New(b.clock, cfg)
 	t.Cleanup(asm.Shutdown)
 	// Smoke: Register + Start + Stop using in-memory cell; no panic
 	// expected. If MetricsProvider default were nil-typed, this would
@@ -136,8 +136,10 @@ func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
 		ID:   "fail-start",
 		Type: "core",
 	})}
-	asm := assembly.New(clock.Real(), assembly.Config{ID:             "t-fail",
-		DurabilityMode: kerneloutbox.DurabilityDemo})
+	asm := assembly.New(clock.Real(), assembly.Config{
+		ID:             "t-fail",
+		DurabilityMode: kerneloutbox.DurabilityDemo,
+	})
 	require.NoError(t, asm.Register(failing))
 
 	err := asm.Start(context.Background())
@@ -168,7 +170,7 @@ func (c *startFailCell) Start(context.Context) error {
 // metric names: http_requests_total and http_request_duration_seconds.
 func TestBootstrap_MetricsProvider_AutoWiresHTTPCollector(t *testing.T) {
 	spy := &registrationSpy{}
-	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
+	b := New(clock.Real(), WithMetricsProvider(spy))
 
 	opts, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err, "autoWireHTTPMetricsCollector must succeed with a valid provider")
@@ -190,7 +192,7 @@ func TestBootstrap_MetricsProvider_AutoWiresHTTPCollector(t *testing.T) {
 // configured (NopProvider default), autoWireHTTPMetricsCollector returns the
 // input opts unchanged without adding any new options.
 func TestBootstrap_NoMetricsProvider_NoAutoWire(t *testing.T) {
-	b := New(WithClock(clock.Real())) // NopProvider default
+	b := New(clock.Real()) // NopProvider default
 
 	initial := []router.Option{}
 	opts, err := b.autoWireHTTPMetricsCollector(initial)
@@ -209,7 +211,7 @@ func TestAutoWire_CellLabel_FromCtxArg(t *testing.T) {
 	p := newFakeMetricsProvider()
 	// WithAssemblyID is irrelevant to metrics labels post-realign; use it to
 	// prove the assembly ID does not leak into the cell label.
-	b := New(WithClock(clock.Real()), WithMetricsProvider(p), WithAssemblyID("my-service"))
+	b := New(clock.Real(), WithMetricsProvider(p), WithAssemblyID("my-service"))
 
 	_, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err)
@@ -250,7 +252,7 @@ func TestAutoWireHTTPMetricsCollector_Conflict(t *testing.T) {
 		triggerName: "http_requests_total",
 	}
 
-	b := New(WithClock(clock.Real()), WithMetricsProvider(conflict))
+	b := New(clock.Real(), WithMetricsProvider(conflict))
 
 	_, autoErr := b.autoWireHTTPMetricsCollector(nil)
 	require.Error(t, autoErr, "registration error must propagate as a conflict error")
@@ -295,7 +297,7 @@ func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) erro
 // metrics provider is NopProvider (default), autoWireOutboxRejectCollector
 // returns nil without creating a collector. No outbox counters should be registered.
 func TestAutoWireOutboxRejectCollector_NopProvider_Skips(t *testing.T) {
-	b := New(WithClock(clock.Real())) // NopProvider default
+	b := New(clock.Real()) // NopProvider default
 
 	err := b.autoWireOutboxRejectCollector()
 	require.NoError(t, err)
@@ -311,7 +313,7 @@ func TestAutoWireOutboxRejectCollector_RealProvider_AttachesToConsumerBase(t *te
 	cb := newTestConsumerBase(t)
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithMetricsProvider(spy),
 		WithConsumerBase(cb),
 	)
@@ -341,12 +343,10 @@ func TestAutoWireOutboxRejectCollector_RealProvider_AttachesToConsumerBase(t *te
 func TestAutoWireOutboxRejectCollector_RealProvider_NoRelayWiring(t *testing.T) {
 	spy := &registrationSpy{}
 	store := &outboxtest.FakeStore{}
-	relay := runtimeoutbox.NewRelay(store, &kerneloutbox.DiscardPublisher{}, runtimeoutbox.RelayConfig{
-		Clock: clock.Real(),
-	})
+	relay := runtimeoutbox.NewRelay(clock.Real(), store, &kerneloutbox.DiscardPublisher{}, runtimeoutbox.RelayConfig{})
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithMetricsProvider(spy),
 		WithRelay(relay),
 	)
@@ -370,7 +370,7 @@ func TestAutoWireOutboxRejectCollector_RealProvider_NoRelayWiring(t *testing.T) 
 // metrics provider is NopProvider, autoWireEventRouterCollector returns an
 // empty option slice without creating a collector.
 func TestAutoWireEventRouterCollector_NopProvider_Skips(t *testing.T) {
-	b := New(WithClock(clock.Real())) // NopProvider default
+	b := New(clock.Real()) // NopProvider default
 
 	opts, err := b.autoWireEventRouterCollector()
 	require.NoError(t, err)
@@ -385,7 +385,7 @@ func TestAutoWireEventRouterCollector_NopProvider_Skips(t *testing.T) {
 // WithEventRouterCollector.
 func TestAutoWireEventRouterCollector_RealProvider_Wired(t *testing.T) {
 	spy := &registrationSpy{}
-	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
+	b := New(clock.Real(), WithMetricsProvider(spy))
 
 	opts, err := b.autoWireEventRouterCollector()
 	require.NoError(t, err, "autoWireEventRouterCollector must succeed with a real provider")
@@ -412,7 +412,7 @@ func TestAutoWire_DoubleListenerDoesNotDoubleRegister(t *testing.T) {
 		onCounter: func() { registrationCount++ },
 	}
 
-	b := New(WithClock(clock.Real()), WithMetricsProvider(counting))
+	b := New(clock.Real(), WithMetricsProvider(counting))
 
 	opts1, err := b.autoWireEventRouterCollector()
 	require.NoError(t, err)
@@ -465,7 +465,7 @@ func TestAutoWireOutboxRejectCollector_DoubleCallWithConsumerBase_Idempotent(t *
 	cb := newTestConsumerBase(t)
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithMetricsProvider(spy),
 		WithConsumerBase(cb),
 	)

@@ -220,7 +220,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
@@ -327,7 +327,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		Topology:               topo,
 		JWTDeps:                jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:              ps,
-		EventBus:               eventbus.New(eventbus.WithClock(clock.Real())),
+		EventBus:               eventbus.New(clock.Real()),
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
 		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
@@ -364,7 +364,7 @@ func TestDevtoolsOption_EmptyRoot(t *testing.T) {
 	require.NotNil(t, opt, "devtoolsOption must always return a non-nil Option")
 
 	// Apply option to a bootstrap and verify devtoolsMeta is nil (disabled).
-	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	b := bootstrap.New(shared.Clock, opt)
 	require.NotNil(t, b)
 }
 
@@ -379,7 +379,7 @@ func TestDevtoolsOption_RootOutsideCwd(t *testing.T) {
 	opt := devtoolsOption(shared)
 	require.NotNil(t, opt)
 
-	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	b := bootstrap.New(shared.Clock, opt)
 	require.NotNil(t, b)
 }
 
@@ -464,7 +464,7 @@ func buildBootstrapFromShared(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return newBootstrapFromOptions(opts), nil
+	return newBootstrapFromOptions(shared.Clock, opts), nil
 }
 
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {

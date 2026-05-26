@@ -63,16 +63,6 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
-// WithClock sets the clock used for order timestamps. Defaults to
-// clock.Real() when not provided.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
-	}
-}
-
 // Service handles order creation business logic.
 // Cell wiring injects either durable or demo defaults, but the service always
 // runs through the same Emitter + TxRunner code path.
@@ -87,12 +77,13 @@ type Service struct {
 // NewService creates an order-create Service. Returns an error if any required
 // dependency is nil (repo, txRunner).
 // Callers (ordercell.Init) guarantee txRunner is non-nil via resolveOutboxDeps.
-func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "ordercreate.NewService")
 	s := &Service{
 		repo:    repo,
 		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
-		clock:   clock.Real(),
+		clock:   clk,
 	}
 	for _, o := range opts {
 		o(s)

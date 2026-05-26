@@ -27,8 +27,10 @@ import (
 // see nil until the assembly reaches stateStarted, even though Init has
 // already recorded local registry declarations.
 func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "race-snapshots",
-		DurabilityMode: outbox.DurabilityDemo})
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "race-snapshots",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 
 	// Pre-register 3 fast cells so Phase 1 will populate localSnaps before
 	// reaching the blocking last cell. This creates the same writer pressure
@@ -116,8 +118,10 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 // A regression that writes a.snapshots from the Init loop without a.mu races
 // this reader under `go test -race`.
 func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "race-snapshots-internal",
-		DurabilityMode: outbox.DurabilityDemo})
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "race-snapshots-internal",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 
 	initGate := make(chan struct{})
 	var releaseOnce sync.Once
@@ -226,8 +230,10 @@ func waitForReaders(ready <-chan struct{}, readers int) {
 // the same map race when a Start collides with a concurrent Snapshots() reader.
 // Post-fix: passes cleanly.
 func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "race-startstop",
-		DurabilityMode: outbox.DurabilityDemo})
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "race-startstop",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 	registeredIDs := registerConcurrentRaceCells(t, a, 3)
 
 	const writers = 4

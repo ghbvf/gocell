@@ -29,14 +29,14 @@ const (
 // default in-memory aggregator.
 func TestRunAggregatorConformance(t *testing.T) {
 	healthztest.RunAggregatorConformance(t, func() khealthz.Aggregator {
-		return NewAggregator(WithClock(clock.Real()))
+		return NewAggregator(clock.Real())
 	})
 }
 
 // --- Implementation-specific tests (not part of the shared conformance harness) ---
 
 func TestNewAggregator_DefaultDeadline(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real())).(*aggregator)
+	agg := NewAggregator(clock.Real()).(*aggregator)
 	if agg.deadline != defaultDeadline {
 		t.Errorf("default deadline = %s, want %s", agg.deadline, defaultDeadline)
 	}
@@ -44,7 +44,7 @@ func TestNewAggregator_DefaultDeadline(t *testing.T) {
 
 func TestWithDeadline_CustomValue(t *testing.T) {
 	want := testDeadlineCustom
-	agg := NewAggregator(WithClock(clock.Real()), WithDeadline(want)).(*aggregator)
+	agg := NewAggregator(clock.Real(), WithDeadline(want)).(*aggregator)
 	if agg.deadline != want {
 		t.Errorf("deadline = %s, want %s", agg.deadline, want)
 	}
@@ -52,7 +52,7 @@ func TestWithDeadline_CustomValue(t *testing.T) {
 
 func TestWithClock_UsesInjectedClock(t *testing.T) {
 	clk := clockmock.New(time.Time{})
-	agg := NewAggregator(WithClock(clk)).(*aggregator)
+	agg := NewAggregator(clk).(*aggregator)
 	if agg.clk != clk {
 		t.Error("aggregator did not use injected clock")
 	}
@@ -66,7 +66,7 @@ func TestNewAggregator_NilClockPanics(t *testing.T) {
 	}()
 	// Provide a typed-nil clock.
 	var clk *clockmock.FakeClock
-	NewAggregator(WithClock(clk))
+	NewAggregator(clk)
 }
 
 func TestNewAggregator_ZeroDeadlinePanics(t *testing.T) {
@@ -75,11 +75,11 @@ func TestNewAggregator_ZeroDeadlinePanics(t *testing.T) {
 			t.Error("expected panic on zero deadline, got none")
 		}
 	}()
-	NewAggregator(WithClock(clock.Real()), WithDeadline(0))
+	NewAggregator(clock.Real(), WithDeadline(0))
 }
 
 func TestEvaluate_DeadlineExceededProbe(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()), WithDeadline(testDeadlineFast))
+	agg := NewAggregator(clock.Real(), WithDeadline(testDeadlineFast))
 	p := khealthz.NewProbe("slow_ready", func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
@@ -97,7 +97,7 @@ func TestEvaluate_DeadlineExceededProbe(t *testing.T) {
 }
 
 func TestEvaluate_DegradedSentinelMapsToStatusDegraded(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()))
+	agg := NewAggregator(clock.Real())
 	p := khealthz.NewProbe("cache_ready", func(_ context.Context) error {
 		return outbox.ErrDegraded
 	})
@@ -118,7 +118,7 @@ func TestEvaluate_DegradedSentinelMapsToStatusDegraded(t *testing.T) {
 }
 
 func TestEvaluate_WrappedDegradedSentinel(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()))
+	agg := NewAggregator(clock.Real())
 	p := khealthz.NewProbe("cache_ready", func(_ context.Context) error {
 		return errors.Join(errors.New("outer"), outbox.ErrDegraded)
 	})
@@ -135,7 +135,7 @@ func TestEvaluate_ProbeLatencyRecorded(t *testing.T) {
 	clk := clockmock.New(time.Unix(0, 0))
 	delay := testProbeDelay
 
-	agg := NewAggregator(WithClock(clk), WithDeadline(testProbeDeadlineLong)).(*aggregator)
+	agg := NewAggregator(clk, WithDeadline(testProbeDeadlineLong)).(*aggregator)
 
 	// A probe that advances the fake clock so Latency is non-zero.
 	p := khealthz.NewProbe("slow_ready", func(_ context.Context) error {
@@ -152,7 +152,7 @@ func TestEvaluate_ProbeLatencyRecorded(t *testing.T) {
 }
 
 func TestEvaluate_EmptyProbesSliceNotNil(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()))
+	agg := NewAggregator(clock.Real())
 	snap := agg.Evaluate(context.Background())
 	if snap.Probes == nil {
 		t.Error("Probes should be non-nil empty slice, got nil")
@@ -193,7 +193,7 @@ func TestEvaluate_MultipleProbesAllStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			agg := NewAggregator(WithClock(clock.Real()))
+			agg := NewAggregator(clock.Real())
 			for name, err := range tc.probes {
 				capturedErr := err
 				if regErr := agg.Register(khealthz.NewProbe(name, func(_ context.Context) error {
@@ -230,7 +230,7 @@ func TestCtxSafeProbe_CanceledCtxReturnsCtxErr(t *testing.T) {
 }
 
 func TestRunOneProbe_PanicIsStatusDown(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real())).(*aggregator)
+	agg := NewAggregator(clock.Real()).(*aggregator)
 	p := khealthz.NewProbe("crash_ready", func(_ context.Context) error {
 		panic("intentional panic")
 	})
@@ -247,7 +247,7 @@ func TestRunOneProbe_PanicIsStatusDown(t *testing.T) {
 }
 
 func TestEvaluate_SortedByName(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()))
+	agg := NewAggregator(clock.Real())
 	names := []string{"z_ready", "m_ready", "a_ready", "k_ready"}
 	for _, n := range names {
 		n := n
@@ -268,7 +268,7 @@ func TestEvaluate_SortedByName(t *testing.T) {
 }
 
 func TestRegisterAfterDeregister_AllowsReregistration(t *testing.T) {
-	agg := NewAggregator(WithClock(clock.Real()))
+	agg := NewAggregator(clock.Real())
 	p := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
 	if err := agg.Register(p); err != nil {
 		t.Fatalf("first Register: %v", err)

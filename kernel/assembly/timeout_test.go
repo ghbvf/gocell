@@ -73,27 +73,33 @@ func TestHookTimeout_DefaultApplied(t *testing.T) {
 }
 
 func TestHookTimeout_CustomValue(t *testing.T) {
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-custom",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-custom",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookTimeout:    testtime.D5s})
+		HookTimeout:    testtime.D5s,
+	})
 	assert.Equal(t, testtime.D5s, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_NegativeDisables(t *testing.T) {
 	// Negative value must pass through untouched so the hook inherits parent ctx.
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-neg",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-neg",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookTimeout:    disableHookTimeout})
+		HookTimeout:    disableHookTimeout,
+	})
 	assert.Equal(t, disableHookTimeout, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	obs := &captureObserver{}
 	// Tight 20ms deadline so the test runs fast.
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-bs",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-bs",
 		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStart")))
 
 	err := a.Start(context.Background())
@@ -117,10 +123,12 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 
 func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-as",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-as",
 		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "AfterStart")))
 
 	err := a.Start(context.Background())
@@ -191,9 +199,11 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 	// godoc ("Negative values disable per-hook timeouts entirely") against
 	// accidental regression.
 	dc := newDeadlineCheckCell("D")
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "no-deadline",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "no-deadline",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookTimeout:    disableHookTimeout})
+		HookTimeout:    disableHookTimeout,
+	})
 	require.NoError(t, a.Register(dc))
 	require.NoError(t, a.Start(context.Background()))
 
@@ -204,9 +214,11 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 	// Counter-test: HookTimeout>0 MUST wrap ctx with a deadline.
 	dc := newDeadlineCheckCell("D")
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "with-deadline",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "with-deadline",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookTimeout:    testtime.D5s})
+		HookTimeout:    testtime.D5s,
+	})
 	require.NoError(t, a.Register(dc))
 	require.NoError(t, a.Start(context.Background()))
 
@@ -216,10 +228,12 @@ func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 
 func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-wrapped",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-wrapped",
 		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newWrappedCtxCell("W")))
 
 	err := a.Start(context.Background())
@@ -242,10 +256,12 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 
 func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, clock.Real(), Config{ID:             "timeout-stop",
+	a := newTestAssembly(t, clock.Real(), Config{
+		ID:             "timeout-stop",
 		DurabilityMode: outbox.DurabilityDemo,
 		HookTimeout:    testtime.D20ms,
-		HookObserver:   obs})
+		HookObserver:   obs,
+	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStop")))
 	require.NoError(t, a.Start(context.Background()))
 

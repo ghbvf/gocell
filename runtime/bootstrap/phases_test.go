@@ -55,7 +55,7 @@ func buildPhase5State(t *testing.T) *phaseState {
 
 	_, s := newPhaseState()
 	s.asm = asm
-	s.hh = health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
+	s.hh = health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
 	return s
 }
 
@@ -69,14 +69,14 @@ func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
 }
 
 // TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener is an
-// intentional white-box test: b := New(WithClock(clock.Real())) bypasses
+// intentional white-box test: b := New(clock.Real()) bypasses
 // phase0ValidateOptions. phase5CollectRouteGroups is a pure computation step —
 // it builds the framework health groups, which always target
 // cell.HealthListener. #673 removed the fallback remap onto PrimaryListener, so
 // the assignment no longer depends on which listeners are declared.
 func TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener(t *testing.T) {
 	t.Parallel()
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	s := buildPhase5State(t)
 
 	groups := b.phase5CollectRouteGroups(s)
@@ -105,7 +105,7 @@ func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 
 	groups := []cell.RouteGroup{
 		{
@@ -211,7 +211,7 @@ func TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener(t *testing.T) {
 	healthRtr, err := router.NewForListener(cell.HealthListener, router.WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 
 	groups := []cell.RouteGroup{
 		{
@@ -245,7 +245,7 @@ func TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener(t *testing.T) {
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -253,7 +253,7 @@ func TestPhase0_AcceptsValidOptions(t *testing.T) {
 }
 
 func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithHealthChecker("", func(_ context.Context) error { return nil }))
+	b := New(clock.Real(), WithHealthChecker("", func(_ context.Context) error { return nil }))
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "health checker name must not be empty")
@@ -263,7 +263,7 @@ func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 	// White-box: directly populates b.http internals because the public
 	// WithHealthChecker rejects nil at option construction time, but we want
 	// to verify phase0 also rejects (defense-in-depth).
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.healthCheckers = append(b.healthCheckers, namedChecker{name: "test", fn: nil})
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -274,7 +274,7 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 	// White-box: directly populates b.http internals because the public
 	// WithCircuitBreaker rejects nil at option construction time, but we want
 	// to verify phase0 also rejects (defense-in-depth).
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.circuitBreakerNil = true
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -293,7 +293,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	asmA := assembly.New(clock.Real(), assembly.Config{ID: "asm-a", DurabilityMode: outbox.DurabilityDemo})
 	asmB := assembly.New(clock.Real(), assembly.Config{ID: "asm-b", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asmA),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
@@ -308,7 +308,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "asm-match", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}),
@@ -322,7 +322,7 @@ func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 // check would not run. Bootstrap.phase0 must reject the listener config.
 func TestPhase0_RejectsAuthMTLSWithoutTLS(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthMTLS{}}),
 	)
@@ -338,7 +338,7 @@ func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
 		ClientCAs:  pool,
 	}
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
@@ -354,7 +354,7 @@ func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
 		// ClientCAs: nil — handshake has no CA pool to validate against
 	}
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthMTLS{}},
 			WithListenerTLS(cfg)),
@@ -375,7 +375,7 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return &tls.Certificate{}, nil },
 	}
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]auth.ListenerAuth{auth.AuthMTLS{}},
@@ -456,7 +456,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 // --- phase1LoadConfig tests ---
 
 func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	require.NoError(t, b.phase1LoadConfig(s))
 	assert.NotNil(t, s.cfg)
@@ -465,7 +465,7 @@ func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
 
 func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 	closed := false
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.closers = append(b.closers, closerFunc(func() error {
 		closed = true
 		return nil
@@ -482,7 +482,7 @@ func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 // --- phase2InitPubSub tests ---
 
 func TestPhase2_InitPubSub_DefaultsToInMemoryBus(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	assert.NotNil(t, s.pub)
@@ -492,7 +492,7 @@ func TestPhase2_InitPubSub_DefaultsToInMemoryBus(t *testing.T) {
 func TestPhase2_InitPubSub_ExplicitPublisherAndSubscriber(t *testing.T) {
 	pub := &phaseTestPublisher{}
 	sub := &phaseTestSubscriber{}
-	b := New(WithClock(clock.Real()), WithPublisher(pub), WithSubscriber(sub))
+	b := New(clock.Real(), WithPublisher(pub), WithSubscriber(sub))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	assert.Same(t, pub, s.pub.(*phaseTestPublisher))
@@ -502,7 +502,7 @@ func TestPhase2_InitPubSub_ExplicitPublisherAndSubscriber(t *testing.T) {
 func TestPhase2_InitPubSub_RegistersTeardownForCloser(t *testing.T) {
 	var closeCalled []string
 	sub := &phaseTestSubscriberCloser{name: "sub", log: &closeCalled}
-	b := New(WithClock(clock.Real()), WithSubscriber(sub))
+	b := New(clock.Real(), WithSubscriber(sub))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	require.Len(t, s.teardowns, 1)
@@ -514,7 +514,7 @@ func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
 	// When pub and sub are the same object, only one teardown should be registered.
 	var closeCalled int
 	eb := &phaseTestSharedBus{closeCount: &closeCalled}
-	b := New(WithClock(clock.Real()), WithPublisher(eb), WithSubscriber(eb))
+	b := New(clock.Real(), WithPublisher(eb), WithSubscriber(eb))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
@@ -545,7 +545,7 @@ func TestSamePubSubIdentity(t *testing.T) {
 
 func TestPhase2_InitPubSub_NonComparablePubSubDoesNotPanic(t *testing.T) {
 	bus := nonComparablePubSub{labels: []string{"in-memory"}}
-	b := New(WithClock(clock.Real()), WithPublisher(bus), WithSubscriber(bus))
+	b := New(clock.Real(), WithPublisher(bus), WithSubscriber(bus))
 	_, s := newPhaseState()
 
 	require.NotPanics(t, func() {
@@ -557,7 +557,7 @@ func TestPhase2_InitPubSub_NonComparablePubSubDoesNotPanic(t *testing.T) {
 // --- phase3InitAssembly tests ---
 
 func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
@@ -567,7 +567,7 @@ func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T)
 
 func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "pre", DurabilityMode: outbox.DurabilityDemo})
-	b := New(WithClock(clock.Real()), WithAssembly(asm))
+	b := New(clock.Real(), WithAssembly(asm))
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
@@ -575,7 +575,7 @@ func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
 }
 
 func TestPhase3_InitAssembly_RegistersAssemblyTeardown(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
@@ -586,7 +586,7 @@ func TestPhase3_InitAssembly_RegistersAssemblyTeardown(t *testing.T) {
 // --- phase8StartWorkers tests ---
 
 func TestPhase8_StartWorkers_NoWorkers_EmptyWorkerErrCh(t *testing.T) {
-	b := New(WithClock(clock.Real())) // no workers
+	b := New(clock.Real()) // no workers
 	runCtx, s := newPhaseState()
 	b.phase8StartWorkers(runCtx, s)
 	assert.Nil(t, s.workerErrCh, "workerErrCh must be nil when no workers are registered")
@@ -594,7 +594,7 @@ func TestPhase8_StartWorkers_NoWorkers_EmptyWorkerErrCh(t *testing.T) {
 
 func TestPhase8_StartWorkers_WorkersRegistered_WorkerErrChCreated(t *testing.T) {
 	w := &countWorker{}
-	b := New(WithClock(clock.Real()), WithWorkers(w))
+	b := New(clock.Real(), WithWorkers(w))
 	runCtx, s := newPhaseState()
 	b.phase8StartWorkers(runCtx, s)
 	assert.NotNil(t, s.workerErrCh)
@@ -760,7 +760,7 @@ func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
 	// PR-A14b: phase5BuildHTTPRouter is replaced by phase5BuildRouters.
 	// phase10ReadinessFlip only requires s.hh (may be nil) and s.reloads.
 	// Setting up a full router is no longer needed to test the readiness flip.
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
@@ -779,7 +779,7 @@ func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
 }
 
 func TestPhase10LIFOTeardown_ExecutesInReverseOrder(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	var order []int
 	s.addTeardown(func(_ context.Context) error { order = append(order, 1); return nil })
@@ -791,7 +791,7 @@ func TestPhase10LIFOTeardown_ExecutesInReverseOrder(t *testing.T) {
 }
 
 func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 	s.addTeardown(func(_ context.Context) error { return errors.New("td1") })
 	s.addTeardown(func(_ context.Context) error { return errors.New("td2") })
@@ -806,7 +806,7 @@ func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
 // teardown is recovered via safeTeardown, wrapped in phaseError (if named),
 // and the remaining teardowns still execute in LIFO order.
 func TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	var executed []string
@@ -852,7 +852,7 @@ func TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues(t *testing.T
 func TestPhase10LIFOTeardown_PanickingTeardownJoinedIntoFinalError(t *testing.T) {
 	// Use phase10LIFOTeardown directly: the panicking error must appear in the
 	// joined []error slice returned, confirming it is not silently swallowed.
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	boom := errors.New("shutdown-panic")
@@ -1002,7 +1002,7 @@ func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
 		},
 	}
 
-	b := New(WithClock(clock.Real()), WithSubscriber(sub))
+	b := New(clock.Real(), WithSubscriber(sub))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
@@ -1031,7 +1031,7 @@ func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
 		return nil
 	}}
 
-	b := New(WithClock(clock.Real()), WithSubscriber(sub), WithPublisher(pub))
+	b := New(clock.Real(), WithSubscriber(sub), WithPublisher(pub))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
@@ -1063,7 +1063,7 @@ func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
 		return nil
 	}}
 
-	b := New(WithClock(clock.Real()), WithPublisher(eb), WithSubscriber(eb))
+	b := New(clock.Real(), WithPublisher(eb), WithSubscriber(eb))
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
@@ -1083,7 +1083,7 @@ func TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers(t *testing.T) {
 	const numClosers = 3
 	receivedCtxs := make([]context.Context, numClosers)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	for i := range numClosers {
@@ -1268,7 +1268,7 @@ func (b nonComparablePubSub) Close(_ context.Context) error { return nil }
 //
 // ref: sigs.k8s.io/controller-runtime engageStopProcedure — per-step error labeling.
 func TestBootstrapTeardown_ErrorsContainPhaseLabel(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	sentinel := errors.New("disk full")
@@ -1295,7 +1295,7 @@ func TestBootstrapTeardown_ErrorsContainPhaseLabel(t *testing.T) {
 // registered without a name (via addTeardown) still surface their errors, but
 // without a phaseError wrapper.
 func TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	sentinel := errors.New("connection reset")
@@ -1314,7 +1314,7 @@ func TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled(t *testing.T) {
 // TestBootstrapTeardown_LIFOOrder verifies teardowns execute in reverse
 // registration order (LIFO).
 func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_, s := newPhaseState()
 
 	var order []int
@@ -1368,7 +1368,7 @@ func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
 // calling phase5FinalizeAllRouters a second time (after authFinalized=true) returns
 // an error that names the listener ref, making post-mortem diagnosis unambiguous.
 func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	b := New(clock.Real(), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
 	s := buildPhase5State(t)
 
 	routers := map[cell.ListenerRef]*router.Router{
@@ -1387,7 +1387,7 @@ func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing
 }
 
 func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1406,7 +1406,7 @@ func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0",
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0",
 		[]auth.ListenerAuth{authtest.MustAuthJWT(&stubIntentTokenVerifier{})}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
@@ -1425,7 +1425,7 @@ func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
 }
 
 func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}}))
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1442,7 +1442,7 @@ func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
 
 func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
 	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{plan}))
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1458,7 +1458,7 @@ func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
 
 func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T) {
 	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
-	b := New(WithClock(clock.Real()), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}, plan}))
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}, plan}))
 	rtr := buildRouter(t, cell.InternalListener)
 	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "POST",
@@ -1480,7 +1480,7 @@ func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T
 // certificate source is rejected at phase0 (Wave B sanity check).
 func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{})), // no Certificates / GetCertificate / GetConfigForClient
 	)
@@ -1498,7 +1498,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 	// recognizes this as a populated entry. Actual TLS handshake is not
 	// exercised in this unit test.
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}}},
@@ -1514,7 +1514,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 // first ClientHello with an opaque tls error rather than fail-fast at startup.
 func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{}},
@@ -1529,7 +1529,7 @@ func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 // with a non-nil GetCertificate callback is accepted at phase0.
 func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {

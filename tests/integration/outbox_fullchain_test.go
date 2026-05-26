@@ -87,13 +87,13 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get rabbitmq amqp url")
 
-	conn, err := rabbitmq.NewConnection(rabbitmq.Config{
+	conn, err := rabbitmq.NewConnection(clock.Real(), rabbitmq.Config{
 		URL:                 amqpURL,
 		ReconnectMaxBackoff: testtime.SelectShutdown,
 		ReconnectBaseDelay:  testtime.D500ms,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
-	}, rabbitmq.WithConnectionClock(clock.Real()))
+	})
 	require.NoError(t, err, "create rabbitmq connection")
 
 	cleanup := func() {
@@ -226,21 +226,19 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	txm := postgres.NewTxManager(pool)
 	writer := postgres.NewOutboxWriter(clock.Real())
-	pub := rabbitmq.NewPublisher(rmqConn, rabbitmq.WithPublisherClock(clock.Real()))
-	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
+	pub := rabbitmq.NewPublisher(clock.Real(), rmqConn)
+	sub := rabbitmq.NewSubscriber(clock.Real(), rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:     "outbox.fullchain.queue",
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
 	})
 	claimer, err := redis.NewIdempotencyClaimer(redisClient, redis.KeyNamespace("_runtime"))
 	require.NoError(t, err)
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.D200ms // fast polling for test
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write in a single transaction.
@@ -493,19 +491,17 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// ---------------------------------------------------------------
 	txm := postgres.NewTxManager(pool)
 	writer := postgres.NewOutboxWriter(clock.Real())
-	pub := rabbitmq.NewPublisher(rmqConn, rabbitmq.WithPublisherClock(clock.Real()))
-	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
+	pub := rabbitmq.NewPublisher(clock.Real(), rmqConn)
+	sub := rabbitmq.NewSubscriber(clock.Real(), rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:     "outbox.fullchain.notrace.queue",
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
 	})
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.D200ms
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write.
@@ -673,10 +669,9 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	mock := &capturingPublisher{messages: make(chan publishedMessage, 10)}
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.SlowPoll
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), mock, relayCfg)
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), mock, relayCfg)
 
 	// Write outbox entry within a transaction.
 	entryID := uuid.New().String()

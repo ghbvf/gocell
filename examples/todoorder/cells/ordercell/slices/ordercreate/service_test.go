@@ -75,10 +75,9 @@ func TestService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := NewService(mem.NewOrderRepository(), slog.Default(),
+			svc, err := NewService(clock.Real(), mem.NewOrderRepository(), slog.Default(),
 				WithEmitter(outbox.DemoCellEmitter()),
 				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-				WithClock(clock.Real()),
 			)
 			require.NoError(t, err)
 
@@ -107,8 +106,8 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
-		WithTxManager(persistence.WrapForCell(txRunner)), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
 	resp, err := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
@@ -131,8 +130,8 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
-		WithTxManager(persistence.WrapForCell(txRunner)), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
+		WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
 	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
@@ -153,10 +152,9 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	// Demo mode: NoopWriter validates entries then discards. Same outbox code path.
 	repo := mem.NewOrderRepository()
-	svc, err := NewService(repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)
 
@@ -171,10 +169,9 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
-	svc, err := NewService(repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)
 
@@ -201,10 +198,9 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 }
 
 func TestService_Create_RepoFailure(t *testing.T) {
-	svc, err := NewService(failRepo{}, slog.Default(),
+	svc, err := NewService(clock.Real(), failRepo{}, slog.Default(),
 		WithEmitter(outbox.DemoCellEmitter()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-		WithClock(clock.Real()),
 	)
 	require.NoError(t, err)
 
@@ -230,7 +226,6 @@ func TestNewService_NilDep(t *testing.T) {
 			opts: []Option{
 				WithEmitter(outbox.DemoCellEmitter()),
 				WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
-				WithClock(clock.Real()),
 			},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "repo required",
@@ -238,14 +233,14 @@ func TestNewService_NilDep(t *testing.T) {
 		{
 			name:     "nil txRunner",
 			repo:     mem.NewOrderRepository(),
-			opts:     []Option{WithEmitter(outbox.DemoCellEmitter()), WithClock(clock.Real())},
+			opts:     []Option{WithEmitter(outbox.DemoCellEmitter())},
 			wantCode: errcode.ErrCellInvalidConfig,
 			wantMsg:  "TxRunner required",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(tt.repo, slog.Default(), tt.opts...)
+			_, err := NewService(clock.Real(), tt.repo, slog.Default(), tt.opts...)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
@@ -257,10 +252,9 @@ func TestNewService_NilDep(t *testing.T) {
 
 // TestService_NilTxRunner_FailsFast verifies that NewService rejects nil TxRunner.
 func TestService_NilTxRunner_FailsFast(t *testing.T) {
-	_, err := NewService(mem.NewOrderRepository(), slog.Default(),
+	_, err := NewService(clock.Real(), mem.NewOrderRepository(), slog.Default(),
 		WithEmitter(outbox.DemoCellEmitter()),
 		// No WithTxManager — txRunner remains nil.
-		WithClock(clock.Real()),
 	)
 	require.Error(t, err)
 	var ecErr *errcode.Error

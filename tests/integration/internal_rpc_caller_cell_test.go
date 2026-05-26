@@ -131,7 +131,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("callercell-audit-key-32-bytes!!!"))
@@ -162,8 +162,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	// WithMemBundle wires (UserRepository, RoleRepository, SetupLock,
 	// store-paired TxRunner) from a single mem.Store — see accesscore.MemBundle
 	// godoc for the Hard funnel rationale.
-	ac := accesscore.NewAccessCore(
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(),
 		accesscore.WithMemBundle(accessmem.NewBundle(clock.Real())),
 		accesscore.WithSessionStore(acSessionStore),
 		accesscore.WithRefreshStore(acRefreshStore),
@@ -175,8 +174,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
@@ -196,8 +194,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	callerCellAuditStore, err := ledger.NewMemStore(callerCellAuditProto, clock.Real())
 	require.NoError(t, err)
-	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(),
 		auditcore.WithLedgerProtocol(callerCellAuditProto),
 		auditcore.WithLedgerStore(callerCellAuditStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -212,8 +209,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(
 			cell.PrimaryListener,

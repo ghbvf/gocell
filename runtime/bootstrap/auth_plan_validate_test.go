@@ -145,7 +145,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Run("Match_SameInstance", func(t *testing.T) {
 		t.Parallel()
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmA)}),
@@ -157,7 +157,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Run("Mismatch_DifferentInstances", func(t *testing.T) {
 		t.Parallel()
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
@@ -175,7 +175,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 		asmWithID := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo})
 		otherWithSameID := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo})
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmWithID),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(otherWithSameID)}),

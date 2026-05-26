@@ -79,7 +79,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -155,7 +155,7 @@ func TestShutdown_LIFOTeardownOrder(t *testing.T) {
 	s.addTeardown(record("second"))
 	s.addTeardown(record("third"))
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_ = b.phase10LIFOTeardown(context.Background(), s)
 
 	mu.Lock()
@@ -195,7 +195,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	const assertionDelay = barrierAssertionDelay
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -258,7 +258,7 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-worker-err", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -285,9 +285,9 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 
 	healthLn := newLocalListener(t)
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo})
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),

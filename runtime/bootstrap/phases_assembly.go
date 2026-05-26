@@ -95,11 +95,11 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 func (b *Bootstrap) resolveHealthAggregator() error {
 	switch {
 	case b.healthAggregator == nil:
-		aggOpts := []obshealthz.Option{obshealthz.WithClock(b.clock)}
+		var aggOpts []obshealthz.Option
 		if b.readyzDeadline > 0 {
 			aggOpts = append(aggOpts, obshealthz.WithDeadline(b.readyzDeadline))
 		}
-		b.healthAggregator = obshealthz.NewAggregator(aggOpts...)
+		b.healthAggregator = obshealthz.NewAggregator(b.clock, aggOpts...)
 	case b.readyzDeadline > 0:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"bootstrap: WithReadyzDeadline cannot combine with WithHealthAggregator; "+
@@ -172,7 +172,7 @@ func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 //
 // Callers must pass the same clock.Clock instance to both:
 //
-//	bootstrap.WithClock(clk) and assembly.New(clk, assembly.Config{})
+//	bootstrap.New(clk, ...) and assembly.New(clk, assembly.Config{})
 func (b *Bootstrap) validateAssemblyClockAlignment() error {
 	if b.assemblyCore == nil {
 		return nil
@@ -180,7 +180,7 @@ func (b *Bootstrap) validateAssemblyClockAlignment() error {
 	if b.assemblyCore.Clock() != b.clock {
 		return fmt.Errorf(
 			"bootstrap: clock mismatch — the assembly's Clock and the bootstrap's Clock are different instances; " +
-				"pass the same clock.Clock instance to both bootstrap.WithClock and assembly.New(Config{Clock: ...})",
+				"pass the same clock.Clock instance to both bootstrap.New(clk, ...) and assembly.New(clk, assembly.Config{})",
 		)
 	}
 	return nil
@@ -260,7 +260,7 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	pub := b.publisher
 	sub := b.subscriber
 	if pub == nil && sub == nil {
-		eb := eventbus.New(eventbus.WithClock(b.clock))
+		eb := eventbus.New(b.clock)
 		pub = eb
 		sub = eb
 	}

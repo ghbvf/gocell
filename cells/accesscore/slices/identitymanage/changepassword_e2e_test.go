@@ -152,9 +152,8 @@ func newE2EFixture() *e2eFixture {
 		panic("newE2EFixture: accountlockout setup failed: " + err.Error())
 	}
 
-	loginSvc, err := sessionlogin.NewService(
+	loginSvc, err := sessionlogin.NewService(clock.Real(),
 		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
-		sessionlogin.WithClock(clock.Real()),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 		sessionlogin.WithSessionTTL(time.Hour),
 		sessionlogin.WithAccountLockout(lockoutSvc),
@@ -162,10 +161,9 @@ func newE2EFixture() *e2eFixture {
 	if err != nil {
 		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
 	}
-	idmSvc, err := NewService(
+	idmSvc, err := NewService(clock.Real(), 
 		userRepo, inv, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
-		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(tx)),
 	)
 	if err != nil {
@@ -276,8 +274,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}
 		})
-		mid := auth.AuthMiddleware(e2eVerifier,
-			auth.WithAuthClock(clock.Real()),
+		mid := auth.AuthMiddleware(clock.Real(), e2eVerifier,
 			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)

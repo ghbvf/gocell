@@ -209,7 +209,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	healthLn := newLocalListener(t)
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "sm-phase", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -248,7 +248,7 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	healthLn := newLocalListener(t)
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "sm-dur", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -287,7 +287,7 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 	healthLn := newLocalListener(t)
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "sm-ok", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -357,7 +357,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	// block just long enough for shutCtx to expire.
 	const shutdownTimeout = testtime.D100ms
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -433,7 +433,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 	failWorker := &failingTeardownWorker{stopErr: fmt.Errorf("simulated teardown failure")}
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -471,7 +471,7 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 	errWorker := &erroringWorker{err: fmt.Errorf("simulated worker crash")}
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -525,7 +525,7 @@ func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 	healthLn := newLocalListener(t)
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "nop-sm", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),

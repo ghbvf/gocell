@@ -42,10 +42,6 @@ type Config struct {
 	// KeyStore provides public keys for JWT verification. May be nil in non-real mode.
 	KeyStore auth.VerificationKeyStore
 
-	// Clock is required; pass clock.Real() at the composition root or
-	// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
-	Clock clock.Clock
-
 	// RealMode enforces non-empty Issuer and Audiences at construction time.
 	// Set to true in production; leave false for dev/test.
 	RealMode bool
@@ -56,7 +52,7 @@ type Config struct {
 //
 // Configuration errors use errcode.ErrAuthVerifierConfig so operators can
 // distinguish startup misconfigurations from runtime key errors.
-func New(cfg Config) (*Registry, error) {
+func New(clk clock.Clock, cfg Config) (*Registry, error) {
 	issuer := strings.TrimSpace(cfg.Issuer)
 
 	// Trim and filter whitespace-only audience elements before validation so
@@ -79,14 +75,14 @@ func New(cfg Config) (*Registry, error) {
 		}
 	}
 
-	clock.MustHaveClock(cfg.Clock, "auth/config.NewRegistry")
+	clock.MustHaveClock(clk, "auth/config.NewRegistry")
 
 	return &Registry{
 		issuer:    issuer,
 		audiences: auds,
 		keyProv:   cfg.KeyProv,
 		keyStore:  cfg.KeyStore,
-		clk:       cfg.Clock,
+		clk:       clk,
 		realMode:  cfg.RealMode,
 	}, nil
 }
@@ -198,12 +194,11 @@ func FromEnv(opts ...EnvOption) (*Registry, error) {
 		audiences = []string{audience}
 	}
 
-	return New(Config{
+	return New(ec.clock, Config{
 		Issuer:    issuer,
 		Audiences: audiences,
 		KeyProv:   ec.keyProv,
 		KeyStore:  ec.keyStore,
-		Clock:     ec.clock,
 		RealMode:  ec.realMode,
 	})
 }

@@ -74,11 +74,10 @@ func newTestCell(t testing.TB) *AuditCore {
 	t.Helper()
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	return NewAuditCore(
-		WithClock(clock.Real()),
+	return NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -145,11 +144,10 @@ func TestAuditCore_Startup(t *testing.T) {
 func TestAuditCore_MissingLedgerProtocol(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerStore(store),
 		// No WithLedgerProtocol.
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -165,11 +163,10 @@ func TestAuditCore_MissingLedgerProtocol(t *testing.T) {
 func TestAuditCore_NilLedgerProtocol_SentinelRejected(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(nil), // bare nil — sentinel sticky
 		WithLedgerStore(store),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -180,11 +177,10 @@ func TestAuditCore_NilLedgerProtocol_SentinelRejected(t *testing.T) {
 
 func TestAuditCore_MissingLedgerStore(t *testing.T) {
 	p := newTestProtocol(t)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		// No WithLedgerStore.
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -201,11 +197,10 @@ func TestAuditCore_MissingLedgerStore(t *testing.T) {
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		// txRunner intentionally omitted
 	)
@@ -219,11 +214,10 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithTxManager(outbox.DemoCellTxManager()),
 		// outboxWriter intentionally omitted
 	)
@@ -237,8 +231,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 	)
@@ -252,8 +245,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -270,11 +262,10 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
@@ -285,8 +276,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
@@ -303,8 +293,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithEmitter(outbox.DemoCellEmitter()),
@@ -320,12 +309,11 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithEmitter(outbox.DemoCellEmitter()),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, outbox.DurabilityDemo))
 	require.Error(t, err)
@@ -342,8 +330,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	store := newTestMemStore(t, p)
 	cursorCodec, err := query.NewCursorCodec([]byte("audit-wrapper-durable-test-key!!"))
 	require.NoError(t, err)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithCursorCodec(cursorCodec),
@@ -456,8 +443,7 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(&recordingWriter{})), // non-Nooper; durable-gated CheckNotNoop passes
@@ -507,8 +493,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			t.Parallel()
 			p := newTestProtocol(t)
 			store := newTestMemStore(t, p)
-			c := NewAuditCore(
-				WithClock(clock.Real()),
+			c := NewAuditCore(clock.Real(),
 				WithLedgerProtocol(p),
 				WithLedgerStore(store),
 				WithOutboxDeps(nil, outbox.WrapWriterForCell(tc.outbox)),
@@ -603,11 +588,10 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 	inner := newTestMemStore(t, p)
 	probe := newDeadlineProbeStore(t, inner)
 
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(probe),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(outbox.DemoCellTxManager()),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -648,8 +632,7 @@ func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	p := newTestProtocol(t)
 	store := newTestMemStore(t, p)
-	c := NewAuditCore(
-		WithClock(clock.Real()),
+	c := NewAuditCore(clock.Real(),
 		WithLedgerProtocol(p),
 		WithLedgerStore(store),
 		WithEmitter(outbox.DemoCellEmitter()), // WriterEmitter — no ProbeSet method

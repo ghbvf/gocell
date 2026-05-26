@@ -167,7 +167,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(userRepo),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		withRoleRepository(roleRepo),
@@ -267,8 +267,8 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	inv1, err := credentialinvalidate.New(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)
 	require.NoError(t, err)
 	refreshSvc, err := sessionrefresh.NewService(
+		clock.Real(),
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
-		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv1),
 	)
@@ -293,8 +293,8 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	inv2, err := credentialinvalidate.New(fx.Cell.userRepo, fx.Cell.sessionStore, fx.Cell.refreshStore)
 	require.NoError(t, err)
 	refreshSvc, err := sessionrefresh.NewService(
+		clock.Real(),
 		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
-		sessionrefresh.WithClock(clock.Real()),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv2),
 	)

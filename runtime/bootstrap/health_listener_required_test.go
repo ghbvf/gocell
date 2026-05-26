@@ -55,7 +55,7 @@ func TestPhase0_NoHealthListener_FailsFast(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			b := New(append([]Option{WithClock(clock.Real())}, tc.opts...)...)
+			b := New(clock.Real(), tc.opts...)
 			err := b.phase0ValidateOptions()
 
 			require.Error(t, err, "phase0 must fail-fast when no HealthListener is declared")
@@ -77,7 +77,7 @@ func TestPhase0_MetricsHandler_NoHealthListener_FailsFast(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithHealthRoutes(WithMetricsHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))),
 	)
@@ -100,7 +100,7 @@ func TestPhase0_HealthListenerDeclared_NoHealthError(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ":8080", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:9091", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -120,7 +120,7 @@ func TestPhase0_HealthOnlyNoPrimary_Passes(t *testing.T) {
 	t.Parallel()
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.HealthListener, "127.0.0.1:9091", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 	err := b.phase0ValidateOptions()

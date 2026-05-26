@@ -210,13 +210,6 @@ func WithLockoutMetrics(rec accountlockout.MetricsRecorder) Option {
 	}
 }
 
-// WithClock sets the time source for this Cell. Required — Init() panics via
-// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
-// inject a deterministic clock to control time-sensitive logic.
-func WithClock(clk clock.Clock) Option {
-	return func(c *AccessCore) { c.clk = clk }
-}
-
 // WithConfigGetter injects the ConfigGetter used by the configreceive slice to
 // fetch the current config entry value from configcore after an upsert event
 // (contract: http.config.internal.get.v1). When not set the slice operates in
@@ -409,9 +402,11 @@ type AccessCore struct {
 }
 
 // NewAccessCore creates a new AccessCore Cell.
-func NewAccessCore(opts ...Option) *AccessCore {
+func NewAccessCore(clk clock.Clock, opts ...Option) *AccessCore {
+	clock.MustHaveClock(clk, "accesscore.New")
 	c := &AccessCore{
 		BaseCell:       cell.MustNewBaseCell(loadCellMetadata()),
+		clk:            clk,
 		logger:         slog.Default(),
 		passwordHasher: credential.NewProductionHasher(),
 	}

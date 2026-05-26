@@ -63,7 +63,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	clk := clock.Real()
 
 	// In-memory event bus for demo mode.
-	eb := eventbus.New(eventbus.WithClock(clk))
+	eb := eventbus.New(clk)
 
 	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
 	// otherwise explicit in-memory wiring. The cell never falls back silently
@@ -85,7 +85,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 
 	// Create the device cell with explicitly wired persistence.
 	dc := devicecell.NewDeviceCell(
-		devicecell.WithClock(clk),
+		clk,
 		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(eb)),
 		devicecell.WithCursorCodec(cursorCodec),
@@ -118,7 +118,6 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 
 	opts := []bootstrap.Option{
-		bootstrap.WithClock(clk),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []auth.ListenerAuth{jwtPlan}),
@@ -134,7 +133,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	if pgPool != nil {
 		opts = append(opts, bootstrap.WithManagedCloser(pgPool))
 	}
-	app := bootstrap.New(opts...)
+	app := bootstrap.New(clk, opts...)
 
 	logger.Info("iotdevice: starting on :8083; protected routes require an RS256 bearer token")
 	return app.Run(ctx)

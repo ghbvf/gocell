@@ -112,7 +112,6 @@ func (m ConfigCoreModule) Provide(
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
-		configcore.WithClock(shared.Clock),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
@@ -120,7 +119,7 @@ func (m ConfigCoreModule) Provide(
 		configcore.WithCASProtocol(casProto),
 	}
 	baseOpts = append(baseOpts, modResult.CellOptions...)
-	c := configcore.NewConfigCore(baseOpts...)
+	c := configcore.NewConfigCore(shared.Clock, baseOpts...)
 
 	return buildConfigCoreResult(c, kp, modResult)
 }
