@@ -312,26 +312,21 @@ func collectPkgCtxkeysIdentifiers(
 	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
 		switch gd.Tok {
 		case token.CONST, token.VAR:
-			for _, spec := range gd.Specs {
-				vs, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
+			EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 				for _, name := range vs.Names {
 					if name.Name == "_" {
 						continue
 					}
 					valueDecls[name.Name] = foundDecl{rel: rel, line: fset.Position(name.Pos()).Line}
 				}
-			}
+			})
 		case token.TYPE:
-			for _, spec := range gd.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || ts.Name == nil || ts.Name.Name == "_" {
-					continue
+			EachInChildren[ast.TypeSpec](gd, func(ts *ast.TypeSpec) {
+				if ts.Name == nil || ts.Name.Name == "_" {
+					return
 				}
 				types[ts.Name.Name] = foundDecl{rel: rel, line: fset.Position(ts.Name.Pos()).Line}
-			}
+			})
 		}
 	})
 	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
@@ -359,11 +354,7 @@ func collectPkgCtxkeysValueDeclStringValues(
 		if gd.Tok != token.CONST && gd.Tok != token.VAR {
 			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, expr := range vs.Values {
 				val, ok := EvaluateConstString(info, expr)
 				if !ok {
@@ -371,7 +362,7 @@ func collectPkgCtxkeysValueDeclStringValues(
 				}
 				out[val] = foundDecl{rel: rel, line: fset.Position(expr.Pos()).Line}
 			}
-		}
+		})
 	})
 }
 
@@ -482,20 +473,15 @@ func parseSelf() map[string]int {
 	if err != nil {
 		return out
 	}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
+	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok != token.VAR {
+			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, n := range vs.Names {
 				out[n.Name] = fset.Position(n.Pos()).Line
 			}
-		}
-	}
+		})
+	})
 	return out
 }
