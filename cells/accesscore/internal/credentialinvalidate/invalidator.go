@@ -6,6 +6,15 @@
 //   - CREDENTIAL-INVALIDATE-FUNNEL-01:  session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
 //   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:  UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, *_test.go}
 //   - REFRESH-REVOKE-USER-FUNNEL-01:    refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
+//   - FENCE-TOKEN-MINT-FUNNEL-01:       credentialfence.Mint callers ⊆ {this pkg, storetest/conformance, *_test.go}
+//
+// The three mutation methods take a credentialfence.FenceToken capability
+// proof (#1033). Apply mints a FenceToken via credentialfence.Mint and
+// passes it to each downstream call — combined with the type-system seal on
+// FenceToken (external packages cannot implement the interface or construct
+// the unexported impl), this closes the upstream half of the funnel: only
+// code reachable from this package can produce the token argument the
+// mutation methods require.
 //
 // Apply must be called inside an ambient transaction (txCtx derived from
 // persistence.CellTxManager.RunInTx). All three operations commit atomically;
@@ -19,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -61,16 +71,22 @@ func New(users ports.UserRepository, sessions session.Store, refreshStore refres
 // Order is defined only for short-circuit predictability; correctness does not
 // depend on the order.
 func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event session.CredentialEvent) error {
+	// Mint the FenceToken once and pass the same value through all three
+	// mutations. The token is identity-less (any non-nil FenceToken is
+	// equally valid), so sharing it across the three calls is
+	// semantically equivalent to minting per call — and saves two
+	// allocations on the hot path.
+	tok := credentialfence.Mint()
 	// New epoch value is intentionally discarded: sessionvalidate re-reads
 	// authz_epoch from the DB on every request, so the caller does not need
 	// the bumped value here. The DB row is the single source of truth.
-	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID); err != nil {
+	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: bump authz_epoch: %w", err)
 	}
-	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event); err != nil {
+	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: revoke sessions: %w", err)
 	}
-	if err := i.refresh.RevokeUser(txCtx, subjectID); err != nil {
+	if err := i.refresh.RevokeUser(txCtx, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: revoke refresh chain: %w", err)
 	}
 	return nil
