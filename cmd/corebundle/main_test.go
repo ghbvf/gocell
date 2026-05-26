@@ -177,7 +177,8 @@ func TestLoadKeySet(t *testing.T) {
 						"expected errcode.Error in chain, got %T: %v", err, err)
 					attr, ok := ec.FindAttr("env")
 					require.True(t, ok, "expected 'env' detail attr in errcode.Error")
-					assert.Equal(t, tc.errEnv, attr.Value.String())
+					got, _ := attr.Value().(string)
+					assert.Equal(t, tc.errEnv, got)
 				}
 				return
 			}

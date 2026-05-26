@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -306,11 +305,15 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 // VerifyExpectedShape tests
 // ---------------------------------------------------------------------------
 
-// attrsContainKV is a helper that checks if any slog.Attr in attrs has the
-// given key and string value.
-func attrsContainKV(attrs []slog.Attr, key, value string) bool {
-	for _, a := range attrs {
-		if a.Key == key && a.Value.String() == value {
+// attrsContainKV is a helper that checks if any errcode.PublicDetail in attrs
+// has the given key and string value.
+func attrsContainKV(attrs []errcode.PublicDetail, key, value string) bool {
+	for _, d := range attrs {
+		if d.Key() != key {
+			continue
+		}
+		s, ok := d.Value().(string)
+		if ok && s == value {
 			return true
 		}
 	}
@@ -449,8 +452,20 @@ func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
 	// details should carry count >= 1
 	var foundCount bool
 	for _, a := range ec.Details {
-		if a.Key == "count" && a.Value.Int64() >= 1 {
-			foundCount = true
+		if a.Key() != "count" {
+			continue
+		}
+		switch v := a.Value().(type) {
+		case int:
+			if int64(v) >= 1 {
+				foundCount = true
+			}
+		case int64:
+			if v >= 1 {
+				foundCount = true
+			}
+		}
+		if foundCount {
 			break
 		}
 	}
@@ -542,12 +557,15 @@ func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
 // VerifyExpectedShape: multi-dimension wrong-shape tests
 // ---------------------------------------------------------------------------
 
-// extractDimensionDetail extracts the "dimension" slog.Attr value from an
+// extractDimensionDetail extracts the "dimension" PublicDetail value from an
 // errcode.Error's Details slice. Returns "" if not found.
 func extractDimensionDetail(ec *errcode.Error) string {
-	for _, a := range ec.Details {
-		if a.Key == "dimension" {
-			return a.Value.String()
+	for _, d := range ec.Details {
+		if d.Key() != "dimension" {
+			continue
+		}
+		if s, ok := d.Value().(string); ok {
+			return s
 		}
 	}
 	return ""
