@@ -147,11 +147,12 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 | a. Message | `errcode.Message` const literal | ✓ | ✓ | 不需要 |
 | b. Details | `errcode.Details` `[]slog.Attr` | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
 | c. Internal | `errcode.WithInternal` | ✗ | ✓ | server-only |
-| **d. Ops-Diagnostics** | handler-side `slog.Warn` typed payload | ✗ | ✓ | **typed funnel + archtest** |
+| **d. Ops-Diagnostics** | handler-side `slog.Log(ctx, level, ...)` typed payload（透传 request ctx 关联字段） | ✗ | ✓ | **typed funnel + archtest** |
 
 readyz 各字段归属：
 - wire body `dependencies[*]` (200 verbose) — 类型 `verboseDependencyEntry{Status, DurationMs}`，字段集冻结（`HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01`）。**wire 上不携带 error 文本**——对齐 Kubernetes apiserver healthz.go:274-275 wire/klog 双 buffer 分离。
 - slog `dependencies` — 用 `slog.Group("dependencies", slog.Any(name, entry)...)`，**不要**用 `slog.Any("dependencies", map)`（后者在 unexported 字段下被 JSON handler 输出成 `{}`，丢失诊断，PR #552 实测 bug）。`SlogDependencyEntry` 三字段全 unexported，唯一构造路径 `newRedactedErrorMsg → RedactString`、无 testing backdoor（上游 Hard），下游 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` 锁 conversion callsite——funnel 细节见 archtest godoc + ADR。
+- `logDiagnostics` 经 `slog.Log(ctx, level, ...)` 透传 request ctx，readyz record 带 `request_id` + `correlation_id`（RequestID middleware 注入，与 errcode `WithInternal` 同源；#942 R2）；`trace_id` 在 probe 端点**默认不出现**——`DefaultProbeFilter` 跳过 `/healthz /readyz /livez /metrics` 的 tracing span 创建。slog 是 wire 删 error 文本后的主诊断通道，secret 泄漏面真值以 ADR §3 威胁矩阵为准（裸 JWT/PEM/UUID 仍会进 slog——已知盲区，wire 兜底）。
 
 详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
 
