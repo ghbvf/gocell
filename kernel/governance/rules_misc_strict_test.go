@@ -1244,7 +1244,7 @@ func TestFMT22_EmptyStateViolation(t *testing.T) {
 		},
 	}
 
-	v := NewValidator(pm, "", clock.Real())
+	v := NewValidator(pm, "", clockmock.New(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)))
 	results, err := v.ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
 	matches := findByCode(results, "FMT-22")
