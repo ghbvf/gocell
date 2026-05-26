@@ -175,7 +175,7 @@ type PackageDepsView struct {
 type CellSpec struct {
 	Type             string `json:"type"             yaml:"type"`
 	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
-	// Lifecycle is the cell's governance maturity phase (cellvocab.Phase),
+	// Lifecycle is the cell's governance maturity lifecycle (cellvocab.CellLifecycle),
 	// projected from CellMeta.Lifecycle. Same wire key as ContractSpec.Lifecycle.
 	// Omitted when cell.yaml does not declare it (consumers treat absence as the
 	// experimental default, matching NewBaseCell).
@@ -214,7 +214,7 @@ type CellSpecL0Dep struct {
 type SliceSpec struct {
 	BelongsToCell    string `json:"belongsToCell"   yaml:"belongsToCell"`
 	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
-	// Lifecycle is the slice's governance maturity phase (cellvocab.Phase),
+	// Lifecycle is the slice's governance maturity lifecycle (cellvocab.CellLifecycle),
 	// projected from SliceMeta.Lifecycle. Omitted when slice.yaml does not declare it.
 	// Note: distinct value set from ContractSpec.Lifecycle (maturity
 	// experimental|candidate|asset|maintenance|retired, not

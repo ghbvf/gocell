@@ -64,7 +64,8 @@ func TestAt(t *testing.T) {
 // every valid index in the L0..L4 taxonomy.
 func TestRankAtRoundTrip(t *testing.T) {
 	t.Parallel()
-	for i := 0; i < len(cellvocab.Levels); i++ {
+	all := cellvocab.AllLevels()
+	for i := 0; i < len(all); i++ {
 		s := cellvocab.At(i)
 		if s == "" {
 			t.Fatalf("At(%d) returned empty", i)

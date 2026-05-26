@@ -109,8 +109,8 @@ var allRules = []Rule{
 	{Code: codeSLICECONSISTENCY01, Phase: PhaseBase, Detect: (*Validator).validateSliceConsistency},
 	{Code: codeSLICECONSISTENCY02, Phase: PhaseBase, Detect: (*Validator).validateSliceConsistencyContractUsages},
 
-	// LIFECYCLE-PHASE — cell/slice maturity phase membership + slice≤cell.
-	{Code: codeLIFECYCLEPHASE01, Phase: PhaseBase, Detect: (*Validator).validateLifecyclePhase},
+	// CELL-LIFECYCLE — cell/slice maturity lifecycle membership + slice≤cell.
+	{Code: codeCELLLIFECYCLE01, Phase: PhaseBase, Detect: (*Validator).validateLifecyclePhase},
 
 	// CONTRACT-CONSISTENCY-EMIT
 	{Code: codeCONTRACTCONSISTENCYEMIT01, Phase: PhaseBase, Detect: (*Validator).validateCONTRACTCONSISTENCYEMIT01},

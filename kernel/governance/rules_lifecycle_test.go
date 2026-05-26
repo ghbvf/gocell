@@ -9,10 +9,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// TestValidateLifecyclePhase covers LIFECYCLE-PHASE-01: cell/slice `lifecycle`
-// must be a valid maturity phase (membership), and a slice's phase must not
-// exceed its parent cell's phase (empty defaults to experimental, matching the
-// BaseCell construction default).
+// TestValidateLifecyclePhase covers CELL-LIFECYCLE-01: cell/slice `lifecycle`
+// must be a valid maturity lifecycle (membership), and a slice's lifecycle must
+// not exceed its parent cell's lifecycle (empty defaults to experimental,
+// matching the BaseCell construction default).
 func TestValidateLifecyclePhase(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -32,6 +32,12 @@ func TestValidateLifecyclePhase(t *testing.T) {
 		{"contract lifecycle value on cell rejected - 1 error", "active", "", 1},
 		{"slice retired in asset cell - 1 error", "asset", "retired", 1},
 		{"invalid cell phase + mature slice → only cell finding", "stable", "asset", 1},
+		// maintenance cases
+		{"slice maintenance in candidate cell - 1 error", "candidate", "maintenance", 1},
+		{"cell maintenance valid - 0 findings", "maintenance", "candidate", 0},
+		{"both maintenance - 0 findings", "maintenance", "maintenance", 0},
+		{"slice maintenance in asset cell - 1 error", "asset", "maintenance", 1},
+		{"slice maintenance in maintenance cell - 0 findings", "maintenance", "maintenance", 0},
 	}
 
 	for _, tt := range tests {
@@ -59,7 +65,7 @@ func TestValidateLifecyclePhase(t *testing.T) {
 			for _, r := range results {
 				if r.Severity == SeverityError {
 					errCount++
-					assert.Equal(t, RuleCode("LIFECYCLE-PHASE-01"), r.Code)
+					assert.Equal(t, RuleCode("CELL-LIFECYCLE-01"), r.Code)
 					assert.Equal(t, "lifecycle", r.Field)
 				}
 			}
@@ -83,8 +89,34 @@ func TestValidateLifecyclePhase_MissingParentCell(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	results := NewValidator(project, ".", clock.Real()).validateLifecyclePhase()
-	// valid phase + missing parent → no findings from this rule
+	// valid lifecycle + missing parent → no findings from this rule
 	for _, r := range results {
-		assert.NotEqual(t, SeverityError, r.Severity, "orphan slice with valid phase must not error here")
+		assert.NotEqual(t, SeverityError, r.Severity, "orphan slice with valid lifecycle must not error here")
 	}
+}
+
+// TestValidateLifecyclePhase_OrphanSliceInvalidLifecycle verifies that an
+// orphan slice (no registered parent cell) with an invalid lifecycle value is
+// flagged with a membership error (the slice≤cell check is skipped for orphans).
+func TestValidateLifecyclePhase_OrphanSliceInvalidLifecycle(t *testing.T) {
+	t.Parallel()
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{
+			"ghost/orphan": {ID: "orphan", BelongsToCell: "ghost", ConsistencyLevel: "L1", Lifecycle: "bogus"},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	results := NewValidator(project, ".", clock.Real()).validateLifecyclePhase()
+	var errCount int
+	for _, r := range results {
+		if r.Severity == SeverityError {
+			errCount++
+			assert.Equal(t, RuleCode("CELL-LIFECYCLE-01"), r.Code)
+			assert.Equal(t, "lifecycle", r.Field)
+		}
+	}
+	assert.Equal(t, 1, errCount, "orphan slice with invalid lifecycle should produce exactly 1 membership error")
 }

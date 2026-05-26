@@ -23,9 +23,10 @@ type CellMeta struct {
 	// (experimental|candidate|asset|maintenance|retired). Optional; empty
 	// defaults to experimental at BaseCell construction. Distinct from the
 	// runtime cellState and from a Contract's draft/active/deprecated lifecycle
-	// — see kernel/cellvocab.Phase. The parser stays lenient (membership is
-	// enforced by cell.schema.json enum + governance LIFECYCLE-PHASE-01 +
-	// NewBaseCell's ParsePhase), matching the durabilityMode/requires posture.
+	// — see kernel/cellvocab.CellLifecycle. The parser stays lenient (membership
+	// is enforced by cell.schema.json enum + governance CELL-LIFECYCLE-01 +
+	// NewBaseCell's ParseCellLifecycle), matching the durabilityMode/requires
+	// posture.
 	Lifecycle      string         `yaml:"lifecycle,omitempty"`
 	Owner          OwnerMeta      `yaml:"owner"`
 	Schema         SchemaMeta     `yaml:"schema"`
@@ -138,7 +139,8 @@ type SliceMeta struct {
 	ConsistencyLevel string `yaml:"consistencyLevel"`
 	// Lifecycle is the slice's governance maturity phase
 	// (experimental|candidate|asset|maintenance|retired). Optional; MUST be ≤ the
-	// parent cell's phase (governance LIFECYCLE-PHASE-01). See kernel/cellvocab.Phase.
+	// parent cell's lifecycle (governance CELL-LIFECYCLE-01). See
+	// kernel/cellvocab.CellLifecycle.
 	Lifecycle      string          `yaml:"lifecycle,omitempty"`
 	ContractUsages []ContractUsage `yaml:"contractUsages"`
 	Verify         SliceVerifyMeta `yaml:"verify"`

@@ -115,11 +115,12 @@ func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error
 }
 
 // logAssemblyMaturity emits a startup Info log of the running assembly's
-// maturity-phase distribution (e.g. asset=2 candidate=1). This is the consumer
-// of runtime/lifecycle.PhaseAggregator: it makes the maturity composition of a
-// deployment visible at boot, so operators notice if (say) a production bundle
-// is unexpectedly running experimental cells. The aggregator exposes raw
-// per-cell phases; the "gap"/distribution is computed here, by the consumer.
+// maturity-lifecycle distribution as a structured group (e.g.
+// lifecycle.experimental=1 lifecycle.asset=2). This is the consumer of
+// runtime/lifecycle.LifecycleAggregator: it makes the maturity composition of
+// a deployment visible at boot, so operators notice if (say) a production
+// bundle is unexpectedly running experimental cells. The aggregator exposes raw
+// per-cell lifecycles; the distribution is computed here, by the consumer.
 func logAssemblyMaturity(cells []cell.Cell) {
 	if len(cells) == 0 {
 		return
@@ -128,18 +129,21 @@ func logAssemblyMaturity(cells []cell.Cell) {
 	for i, c := range cells {
 		ids[i] = c
 	}
-	dist := make(map[cellvocab.Phase]int, len(cellvocab.Phases))
-	for _, e := range lifecycle.NewPhaseAggregator(ids).Snapshot() {
-		dist[e.Phase]++
+	all := cellvocab.AllCellLifecycles()
+	dist := make(map[cellvocab.CellLifecycle]int, len(all))
+	for _, e := range lifecycle.NewLifecycleAggregator(ids).Snapshot() {
+		dist[e.Lifecycle]++
 	}
-	attrs := make([]any, 0, 1+len(cellvocab.Phases))
-	attrs = append(attrs, slog.Int("total_cells", len(cells)))
-	for _, p := range cellvocab.Phases {
-		if n := dist[p]; n > 0 {
-			attrs = append(attrs, slog.Int(string(p), n))
-		}
-	}
-	slog.Info("corebundle: assembly maturity composition", attrs...)
+	slog.Info("corebundle: assembly maturity composition",
+		slog.Int("total_cells", len(cells)),
+		slog.Group("lifecycle",
+			slog.Int(string(cellvocab.CellLifecycleExperimental), dist[cellvocab.CellLifecycleExperimental]),
+			slog.Int(string(cellvocab.CellLifecycleCandidate), dist[cellvocab.CellLifecycleCandidate]),
+			slog.Int(string(cellvocab.CellLifecycleAsset), dist[cellvocab.CellLifecycleAsset]),
+			slog.Int(string(cellvocab.CellLifecycleMaintenance), dist[cellvocab.CellLifecycleMaintenance]),
+			slog.Int(string(cellvocab.CellLifecycleRetired), dist[cellvocab.CellLifecycleRetired]),
+		),
+	)
 }
 
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from

@@ -10,27 +10,27 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func TestParsePhase(t *testing.T) {
+func TestParseCellLifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		in      string
-		want    Phase
+		want    CellLifecycle
 		wantErr bool
 	}{
-		{"experimental", PhaseExperimental, false},
-		{"candidate", PhaseCandidate, false},
-		{"asset", PhaseAsset, false},
-		{"maintenance", PhaseMaintenance, false},
-		{"retired", PhaseRetired, false},
+		{"experimental", CellLifecycleExperimental, false},
+		{"candidate", CellLifecycleCandidate, false},
+		{"asset", CellLifecycleAsset, false},
+		{"maintenance", CellLifecycleMaintenance, false},
+		{"retired", CellLifecycleRetired, false},
 		{"", "", true},
 		{"Experimental", "", true},
 		{"stable", "", true},
-		{"draft", "", true}, // contract Lifecycle value must not leak into Phase
+		{"draft", "", true}, // contract Lifecycle value must not leak into CellLifecycle
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
 			t.Parallel()
-			got, err := ParsePhase(tt.in)
+			got, err := ParseCellLifecycle(tt.in)
 			if tt.wantErr {
 				require.Error(t, err)
 				var ecErr *errcode.Error
@@ -44,43 +44,43 @@ func TestParsePhase(t *testing.T) {
 	}
 }
 
-// TestPhases_Ordered locks the canonical maturity ordering. PhaseRank and the
+// TestCellLifecycles_Ordered locks the canonical maturity ordering. CellLifecycleRank and the
 // governance slice≤cell check depend on this exact ascending order.
-func TestPhases_Ordered(t *testing.T) {
+func TestCellLifecycles_Ordered(t *testing.T) {
 	t.Parallel()
-	want := []Phase{
-		PhaseExperimental, PhaseCandidate, PhaseAsset, PhaseMaintenance, PhaseRetired,
+	want := [5]CellLifecycle{
+		CellLifecycleExperimental, CellLifecycleCandidate, CellLifecycleAsset, CellLifecycleMaintenance, CellLifecycleRetired,
 	}
-	assert.Equal(t, want, Phases[:])
+	assert.Equal(t, want, AllCellLifecycles())
 }
 
-func TestPhaseRank(t *testing.T) {
+func TestCellLifecycleRank(t *testing.T) {
 	t.Parallel()
 	// Ascending: experimental < candidate < asset < maintenance < retired.
-	assert.Equal(t, 0, PhaseRank("experimental"))
-	assert.Equal(t, 1, PhaseRank("candidate"))
-	assert.Equal(t, 2, PhaseRank("asset"))
-	assert.Equal(t, 3, PhaseRank("maintenance"))
-	assert.Equal(t, 4, PhaseRank("retired"))
-	assert.Equal(t, -1, PhaseRank("stable"))
-	assert.Equal(t, -1, PhaseRank(""))
+	assert.Equal(t, 0, CellLifecycleRank("experimental"))
+	assert.Equal(t, 1, CellLifecycleRank("candidate"))
+	assert.Equal(t, 2, CellLifecycleRank("asset"))
+	assert.Equal(t, 3, CellLifecycleRank("maintenance"))
+	assert.Equal(t, 4, CellLifecycleRank("retired"))
+	assert.Equal(t, -1, CellLifecycleRank("stable"))
+	assert.Equal(t, -1, CellLifecycleRank(""))
 
 	// Method form mirrors the string-keyed lookup.
-	assert.Equal(t, 2, PhaseAsset.Rank())
-	assert.True(t, PhaseExperimental.Rank() < PhaseAsset.Rank())
-	assert.True(t, PhaseAsset.Rank() < PhaseRetired.Rank())
+	assert.Equal(t, 2, CellLifecycleAsset.Rank())
+	assert.True(t, CellLifecycleExperimental.Rank() < CellLifecycleAsset.Rank())
+	assert.True(t, CellLifecycleAsset.Rank() < CellLifecycleRetired.Rank())
 }
 
-// TestPhase_AllConstsInPhases is the test-side mirror of the
-// CELL-PHASE-RANK-COMPLETENESS-01 archtest: every declared Phase const must
-// appear in the ordered Phases slice (otherwise PhaseRank returns -1 and the
-// governance ordering silently breaks).
-func TestPhase_AllConstsInPhases(t *testing.T) {
+// TestCellLifecycle_AllConstsInAllCellLifecycles is the test-side mirror of the
+// CELL-LIFECYCLE-RANK-COMPLETENESS-01 archtest: every declared CellLifecycle const must
+// appear in the ordered AllCellLifecycles array (otherwise CellLifecycleRank returns -1
+// and the governance ordering silently breaks).
+func TestCellLifecycle_AllConstsInAllCellLifecycles(t *testing.T) {
 	t.Parallel()
-	for _, p := range []Phase{
-		PhaseExperimental, PhaseCandidate, PhaseAsset, PhaseMaintenance, PhaseRetired,
+	for _, p := range []CellLifecycle{
+		CellLifecycleExperimental, CellLifecycleCandidate, CellLifecycleAsset, CellLifecycleMaintenance, CellLifecycleRetired,
 	} {
-		assert.GreaterOrEqual(t, PhaseRank(string(p)), 0,
-			"Phase const %q must appear in the ordered Phases slice", p)
+		assert.GreaterOrEqual(t, CellLifecycleRank(string(p)), 0,
+			"CellLifecycle const %q must appear in the AllCellLifecycles array", p)
 	}
 }

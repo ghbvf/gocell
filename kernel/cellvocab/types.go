@@ -45,13 +45,15 @@ const (
 	RoleRead      ContractRole = "read"
 )
 
-// Lifecycle represents the governance state of a Contract.
-type Lifecycle string
+// ContractLifecycle represents the wire-stability governance state of a Contract
+// (draft / active / deprecated). This is orthogonal to CellLifecycle (the
+// cell/slice maturity axis) and JourneyMeta.Lifecycle (journey delivery status).
+type ContractLifecycle string
 
 const (
-	LifecycleDraft      Lifecycle = "draft"
-	LifecycleActive     Lifecycle = "active"
-	LifecycleDeprecated Lifecycle = "deprecated"
+	ContractLifecycleDraft      ContractLifecycle = "draft"
+	ContractLifecycleActive     ContractLifecycle = "active"
+	ContractLifecycleDeprecated ContractLifecycle = "deprecated"
 )
 
 // ParseCellType parses a string into a CellType.
@@ -117,19 +119,19 @@ func ParseContractRole(s string) (ContractRole, error) {
 	}
 }
 
-// ParseLifecycle parses a string into a Lifecycle.
+// ParseContractLifecycle parses a string into a ContractLifecycle.
 // Returns errcode.ErrValidationFailed for unrecognized input.
-func ParseLifecycle(s string) (Lifecycle, error) {
+func ParseContractLifecycle(s string) (ContractLifecycle, error) {
 	switch s {
 	case "draft":
-		return LifecycleDraft, nil
+		return ContractLifecycleDraft, nil
 	case "active":
-		return LifecycleActive, nil
+		return ContractLifecycleActive, nil
 	case "deprecated":
-		return LifecycleDeprecated, nil
+		return ContractLifecycleDeprecated, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid lifecycle",
+			"invalid contract lifecycle",
 			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }

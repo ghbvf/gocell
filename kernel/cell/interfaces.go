@@ -42,12 +42,12 @@ type CellIdentity interface {
 	Type() cellvocab.CellType
 	// ConsistencyLevel reports the cell's declared consistency tier (cellvocab.L0–cellvocab.L4).
 	ConsistencyLevel() cellvocab.Level
-	// Phase reports the cell's declared governance maturity phase
+	// Lifecycle reports the cell's declared governance maturity lifecycle
 	// (experimental → candidate → asset → maintenance → retired); empty in
 	// cell.yaml defaults to experimental. The YAML / wire key is `lifecycle`.
-	// Consumers: runtime/lifecycle.PhaseAggregator (startup maturity log),
+	// Consumers: runtime/lifecycle.LifecycleAggregator (startup maturity log),
 	// runtime/devtools/catalog (catalog wire).
-	Phase() cellvocab.Phase
+	Lifecycle() cellvocab.CellLifecycle
 }
 
 // CellLifecycle drives the cell through Init → Start → Stop transitions. All
@@ -171,8 +171,8 @@ type Contract interface {
 	OwnerCell() string
 	// ConsistencyLevel reports the contract's consistency tier (cellvocab.L0–cellvocab.L4).
 	ConsistencyLevel() cellvocab.Level
-	// Lifecycle returns the contract's governance state (draft / active / deprecated).
-	Lifecycle() cellvocab.Lifecycle
+	// Lifecycle returns the contract's wire-stability governance state (draft / active / deprecated).
+	Lifecycle() cellvocab.ContractLifecycle
 }
 
 // Assembly orchestrates a set of Cells into a runnable application: registers

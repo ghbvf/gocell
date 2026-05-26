@@ -30,9 +30,9 @@ var pathPlaceholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
 var (
 	validLifecycles = map[string]bool{
-		string(cellvocab.LifecycleDraft):      true,
-		string(cellvocab.LifecycleActive):     true,
-		string(cellvocab.LifecycleDeprecated): true,
+		string(cellvocab.ContractLifecycleDraft):      true,
+		string(cellvocab.ContractLifecycleActive):     true,
+		string(cellvocab.ContractLifecycleDeprecated): true,
 	}
 	validJourneyLifecycles = map[string]bool{
 		"active":       true,

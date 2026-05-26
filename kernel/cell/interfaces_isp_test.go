@@ -17,16 +17,16 @@ import (
 
 // idMock 仅实现 CellIdentity 四方法。
 type idMock struct {
-	id    string
-	ctype cellvocab.CellType
-	level cellvocab.Level
-	phase cellvocab.Phase
+	id        string
+	ctype     cellvocab.CellType
+	level     cellvocab.Level
+	lifecycle cellvocab.CellLifecycle
 }
 
-func (m idMock) ID() string                        { return m.id }
-func (m idMock) Type() cellvocab.CellType          { return m.ctype }
-func (m idMock) ConsistencyLevel() cellvocab.Level { return m.level }
-func (m idMock) Phase() cellvocab.Phase            { return m.phase }
+func (m idMock) ID() string                              { return m.id }
+func (m idMock) Type() cellvocab.CellType                { return m.ctype }
+func (m idMock) ConsistencyLevel() cellvocab.Level       { return m.level }
+func (m idMock) Lifecycle() cellvocab.CellLifecycle      { return m.lifecycle }
 
 var _ CellIdentity = (*idMock)(nil)
 

@@ -10,22 +10,25 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// TestBaseCell_Phase covers the lifecycle-phase funnel in NewBaseCell:
-// a declared phase is parsed to the typed cellvocab.Phase; an empty phase
-// defaults to PhaseExperimental (least-mature, mirrors NewBaseContract
-// defaulting to active); an unrecognized value is a construction error.
-func TestBaseCell_Phase(t *testing.T) {
+// TestBaseCell_Lifecycle covers the lifecycle funnel in NewBaseCell:
+// a declared lifecycle value is parsed to the typed cellvocab.CellLifecycle;
+// an empty value defaults to CellLifecycleExperimental (least-mature, mirrors
+// NewBaseContract defaulting to active); an unrecognized value is a construction
+// error.
+func TestBaseCell_Lifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
 		lifecycle string
-		want      cellvocab.Phase
+		want      cellvocab.CellLifecycle
 		wantErr   bool
 	}{
-		{"explicit asset", "asset", cellvocab.PhaseAsset, false},
-		{"explicit experimental", "experimental", cellvocab.PhaseExperimental, false},
-		{"explicit retired", "retired", cellvocab.PhaseRetired, false},
-		{"empty defaults to experimental", "", cellvocab.PhaseExperimental, false},
+		{"explicit asset", "asset", cellvocab.CellLifecycleAsset, false},
+		{"explicit experimental", "experimental", cellvocab.CellLifecycleExperimental, false},
+		{"explicit retired", "retired", cellvocab.CellLifecycleRetired, false},
+		{"explicit maintenance", "maintenance", cellvocab.CellLifecycleMaintenance, false},
+		{"explicit candidate", "candidate", cellvocab.CellLifecycleCandidate, false},
+		{"empty defaults to experimental", "", cellvocab.CellLifecycleExperimental, false},
 		{"invalid value errors", "bogus", "", true},
 		{"contract lifecycle value rejected", "active", "", true},
 	}
@@ -38,7 +41,7 @@ func TestBaseCell_Phase(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, c.Phase())
+			assert.Equal(t, tt.want, c.Lifecycle())
 		})
 	}
 }

@@ -60,9 +60,9 @@ const (
 type BaseCell struct {
 	mu       sync.RWMutex
 	meta     *metadata.CellMeta
-	cellType cellvocab.CellType
-	level    cellvocab.Level
-	phase    cellvocab.Phase
+	cellType  cellvocab.CellType
+	level     cellvocab.Level
+	lifecycle cellvocab.CellLifecycle
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
@@ -112,22 +112,22 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 		}
 		level = lv
 	}
-	// Empty lifecycle defaults to the least-mature phase (mirrors
+	// Empty lifecycle defaults to the least-mature value (mirrors
 	// NewBaseContract defaulting an empty contract lifecycle to active); a
 	// non-empty but unrecognized value is a construction error.
-	phase := cellvocab.PhaseExperimental
+	lc := cellvocab.CellLifecycleExperimental
 	if meta.Lifecycle != "" {
-		ph, err := cellvocab.ParsePhase(meta.Lifecycle)
+		parsed, err := cellvocab.ParseCellLifecycle(meta.Lifecycle)
 		if err != nil {
 			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
 		}
-		phase = ph
+		lc = parsed
 	}
 	return &BaseCell{
-		meta:     meta.Clone(),
-		cellType: cellType,
-		level:    level,
-		phase:    phase,
+		meta:      meta.Clone(),
+		cellType:  cellType,
+		level:     level,
+		lifecycle: lc,
 	}, nil
 }
 
@@ -145,10 +145,10 @@ func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	return c
 }
 
-func (b *BaseCell) ID() string                        { return b.meta.ID }
-func (b *BaseCell) Type() cellvocab.CellType          { return b.cellType }
-func (b *BaseCell) ConsistencyLevel() cellvocab.Level { return b.level }
-func (b *BaseCell) Phase() cellvocab.Phase            { return b.phase }
+func (b *BaseCell) ID() string                              { return b.meta.ID }
+func (b *BaseCell) Type() cellvocab.CellType                { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() cellvocab.Level       { return b.level }
+func (b *BaseCell) Lifecycle() cellvocab.CellLifecycle      { return b.lifecycle }
 
 // Metadata returns an independent deep copy of the cell's declarative
 // metadata. Callers may freely mutate the returned value without
@@ -450,25 +450,25 @@ type BaseContract struct {
 	kind  cellvocab.ContractKind
 	owner string
 	level cellvocab.Level
-	lc    cellvocab.Lifecycle
+	lc    cellvocab.ContractLifecycle
 }
 
-// NewBaseContract creates a BaseContract with cellvocab.Lifecycle defaulting to cellvocab.LifecycleActive.
+// NewBaseContract creates a BaseContract with cellvocab.ContractLifecycle defaulting to cellvocab.ContractLifecycleActive.
 func NewBaseContract(id string, kind cellvocab.ContractKind, owner string, level cellvocab.Level) *BaseContract {
 	return &BaseContract{
 		id:    id,
 		kind:  kind,
 		owner: owner,
 		level: level,
-		lc:    cellvocab.LifecycleActive,
+		lc:    cellvocab.ContractLifecycleActive,
 	}
 }
 
-func (c *BaseContract) ID() string                        { return c.id }
-func (c *BaseContract) Kind() cellvocab.ContractKind      { return c.kind }
-func (c *BaseContract) OwnerCell() string                 { return c.owner }
-func (c *BaseContract) ConsistencyLevel() cellvocab.Level { return c.level }
-func (c *BaseContract) Lifecycle() cellvocab.Lifecycle    { return c.lc }
+func (c *BaseContract) ID() string                              { return c.id }
+func (c *BaseContract) Kind() cellvocab.ContractKind            { return c.kind }
+func (c *BaseContract) OwnerCell() string                       { return c.owner }
+func (c *BaseContract) ConsistencyLevel() cellvocab.Level       { return c.level }
+func (c *BaseContract) Lifecycle() cellvocab.ContractLifecycle  { return c.lc }
 
-// SetLifecycle updates the governance lifecycle state of the contract.
-func (c *BaseContract) SetLifecycle(lc cellvocab.Lifecycle) { c.lc = lc }
+// SetLifecycle updates the wire-stability governance lifecycle state of the contract.
+func (c *BaseContract) SetLifecycle(lc cellvocab.ContractLifecycle) { c.lc = lc }
