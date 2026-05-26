@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -253,7 +254,7 @@ func (errorSessionStore) Get(_ context.Context, _ string) (*session.ValidateView
 	return nil, fmt.Errorf("db connection timeout")
 }
 func (errorSessionStore) Revoke(_ context.Context, _ string) error { return nil }
-func (errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+func (errorSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent, _ credentialfence.FenceToken) error {
 	return nil
 }
 func (errorSessionStore) RepoReady(_ context.Context) error { return nil }
@@ -331,7 +332,7 @@ func (r *stubUserRepo) UpdatePassword(_ context.Context, _ string, _ string, _ b
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
 	panic("not implemented")
 }
 
@@ -425,7 +426,7 @@ func (r capturingStore) Get(_ context.Context, _ string) (*session.ValidateView,
 	return nil, r.getErr
 }
 func (r capturingStore) Revoke(_ context.Context, _ string) error { return nil }
-func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+func (r capturingStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent, _ credentialfence.FenceToken) error {
 	return nil
 }
 func (r capturingStore) RepoReady(_ context.Context) error { return nil }
@@ -472,7 +473,7 @@ func (r *capturingUserRepo) UpdatePassword(_ context.Context, _ string, _ string
 	return 0, nil
 }
 
-func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ string) (int64, error) {
+func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ string, _ credentialfence.FenceToken) (int64, error) {
 	return 0, nil
 }
 

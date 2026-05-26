@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -28,7 +29,7 @@ type stubUserRepo struct {
 	bumpCallsFor []string // captures userID args
 }
 
-func (s *stubUserRepo) BumpAuthzEpoch(_ context.Context, userID string) (int64, error) {
+func (s *stubUserRepo) BumpAuthzEpoch(_ context.Context, userID string, _ credentialfence.FenceToken) (int64, error) {
 	s.bumpCallsFor = append(s.bumpCallsFor, userID)
 	return s.bumpEpoch, s.bumpErr
 }
@@ -98,7 +99,9 @@ func (s *stubSessionStore) Revoke(_ context.Context, _ string) error {
 	panic("stubSessionStore.Revoke: unexpected call")
 }
 
-func (s *stubSessionStore) RevokeForSubject(_ context.Context, subjectID string, _ session.CredentialEvent) error {
+func (s *stubSessionStore) RevokeForSubject(
+	_ context.Context, subjectID string, _ session.CredentialEvent, _ credentialfence.FenceToken,
+) error {
 	s.revokeCallsFor = append(s.revokeCallsFor, subjectID)
 	return s.revokeErr
 }
@@ -134,7 +137,7 @@ func (s *stubRefreshStore) RevokeSessionDetached(_ context.Context, _ string) er
 	panic("stubRefreshStore.RevokeSessionDetached: unexpected call")
 }
 
-func (s *stubRefreshStore) RevokeUser(_ context.Context, subjectID string) error {
+func (s *stubRefreshStore) RevokeUser(_ context.Context, subjectID string, _ credentialfence.FenceToken) error {
 	s.revokeUserCallsFor = append(s.revokeUserCallsFor, subjectID)
 	return s.revokeUserErr
 }

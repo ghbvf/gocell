@@ -38,6 +38,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -139,7 +140,7 @@ func TestSessionvalidate_ConcurrentEpochBumpAndValidate(t *testing.T) {
 
 	// Bump the epoch directly (test-only; funnel not needed here — see package
 	// godoc for rationale).
-	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID)
+	newEpoch, err := userRepo.BumpAuthzEpoch(context.Background(), userID, credentialfence.Mint())
 	require.NoError(t, err, "BumpAuthzEpoch must succeed")
 	require.Equal(t, int64(2), newEpoch, "bump from epoch=1 must yield epoch=2")
 
