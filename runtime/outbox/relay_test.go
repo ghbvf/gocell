@@ -245,7 +245,7 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	snap := store.Snapshot()
 	require.Len(t, snap, 3)
 	for _, row := range snap {
-		assert.Equal(t, "published", row.Status, "entry %s should be published", row.Entry.ID)
+		assert.Equal(t, kout.StatePublished, row.Status, "entry %s should be published", row.Entry.ID)
 	}
 
 	// Verify wire envelope contains correct payload via the public funnel
@@ -275,13 +275,13 @@ func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
 		if len(snap) == 0 {
 			return false
 		}
-		return snap[0].Status == "pending" && snap[0].Attempts == 1
+		return snap[0].Status == kout.StatePending && snap[0].Attempts == 1
 	})
 	stop()
 
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
-	assert.Equal(t, "pending", snap[0].Status)
+	assert.Equal(t, kout.StatePending, snap[0].Status)
 	assert.Equal(t, 1, snap[0].Attempts)
 	assert.NotNil(t, snap[0].NextRetryAt, "retry must set NextRetryAt")
 	// NextRetryAt must be in the near future (backoff range).
@@ -312,13 +312,13 @@ func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 	defer stop()
 
 	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
-		return len(snap) > 0 && snap[0].Status == "dead"
+		return len(snap) > 0 && snap[0].Status == kout.StateDead
 	})
 	stop()
 
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
-	assert.Equal(t, "dead", snap[0].Status)
+	assert.Equal(t, kout.StateDead, snap[0].Status)
 	assert.Equal(t, 3, snap[0].Attempts)
 	assert.Contains(t, snap[0].LastError, "permanent broker failure")
 	assert.NotNil(t, snap[0].DeadAt)
@@ -490,13 +490,13 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 		if len(snap) == 0 {
 			return false
 		}
-		return snap[0].Status == "pending" && snap[0].Attempts > 0
+		return snap[0].Status == kout.StatePending && snap[0].Attempts > 0
 	})
 	stop()
 
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
-	assert.Equal(t, "pending", snap[0].Status)
+	assert.Equal(t, kout.StatePending, snap[0].Status)
 	assert.Greater(t, snap[0].Attempts, 0)
 }
 
@@ -521,7 +521,7 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	// Verify it is published.
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
-	assert.Equal(t, "published", snap[0].Status)
+	assert.Equal(t, kout.StatePublished, snap[0].Status)
 
 	// Manually invoke CleanupPublished with a future cutoff.
 	deleted, err := store.CleanupPublished(ctx, time.Now().Add(testtime.D1h), 1000)
@@ -662,7 +662,7 @@ func TestRelay_NilMetrics_DoesNotPanic(t *testing.T) {
 
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
-	assert.Equal(t, "published", snap[0].Status)
+	assert.Equal(t, kout.StatePublished, snap[0].Status)
 }
 
 func TestRelay_SanitizesError_InLastError(t *testing.T) {
@@ -678,7 +678,7 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 	defer stop()
 
 	waitStore(t, store, func(snap []outboxtest.FakeRow) bool {
-		return len(snap) > 0 && (snap[0].Status == "pending" || snap[0].Status == "dead") && snap[0].LastError != ""
+		return len(snap) > 0 && (snap[0].Status == kout.StatePending || snap[0].Status == kout.StateDead) && snap[0].LastError != ""
 	})
 	stop()
 

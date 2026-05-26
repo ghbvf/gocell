@@ -37,9 +37,13 @@ type fakeRow struct {
 
 // FakeRow is a read-only snapshot of a fakeRow, returned by Snapshot.
 // For tests only, not for production use.
+//
+// Status is typed kout.State so test callers compare against named constants
+// (e.g. kout.StatePending) rather than bare string literals, preserving the
+// typed-state single-source guarantee enforced by OUTBOX-STATE-LITERAL-BAN-01.
 type FakeRow struct {
 	Entry       kout.Entry
-	Status      string
+	Status      kout.State
 	Attempts    int
 	LeaseID     string
 	ClaimedAt   *time.Time
@@ -130,7 +134,7 @@ func (s *FakeStore) snapshotLocked() []FakeRow {
 	for _, r := range s.rows {
 		fr := FakeRow{
 			Entry:     r.entry,
-			Status:    r.status.String(),
+			Status:    r.status,
 			Attempts:  r.attempts,
 			LeaseID:   r.leaseID,
 			LastError: r.lastError,

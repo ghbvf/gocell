@@ -121,6 +121,17 @@ func (s State) ValidTransitions() []State {
 // Callers invoke the corresponding store mutation (MarkPublished / MarkDead /
 // MarkRetry) after a successful return; the relay calls this at its settlement
 // decision points so an illegal target fails loudly.
+//
+// Scope: this guard validates the relay's Go-side settlement decisions —
+// the three paths where the relay explicitly decides claiming→published,
+// claiming→dead, or claiming→pending. The store's ClaimPending
+// (pending→claiming) and ReclaimStale (claiming→pending/dead) transitions are
+// enforced by SQL CAS on the status column (WHERE status='claiming' / 'pending'),
+// not by a Go-side decision point. Wiring TransitionState at those SQL sites
+// would be a tautological assertion that cannot fail in practice. The complete
+// legal transition graph is instead validated statically by the
+// OUTBOX-STATE-TRANSITION-COMPLETENESS-01 archtest, which verifies that every
+// State const is present in stateTransitions or documented as terminal.
 func TransitionState(from, to State) error {
 	if from.CanTransitionTo(to) {
 		return nil

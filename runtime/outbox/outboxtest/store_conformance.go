@@ -580,7 +580,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 		if len(snap) != 1 {
 			t.Fatalf("FakeStore snapshot: expected 1 row, got %d", len(snap))
 		}
-		if snap[0].Status != kout.StateDead.String() {
+		if snap[0].Status != kout.StateDead {
 			t.Errorf("FakeStore: expected status=%s, got %s", kout.StateDead, snap[0].Status)
 		}
 		if snap[0].Attempts != 5 {

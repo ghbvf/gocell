@@ -51,6 +51,24 @@ var outboxStatusLiterals = map[string]struct{}{
 	"pending": {}, "claiming": {}, "published": {}, "dead": {},
 }
 
+// containsQuotedStatusLiteral reports whether s contains a single-quoted SQL
+// status token (e.g. 'pending', 'dead') as a substring. This catches SQL strings
+// like "UPDATE outbox_entries SET status='dead' WHERE ..." that embed the status
+// value inline rather than as a standalone Go literal.
+//
+// Returns the offending token (without quotes) and true when found, or ("", false)
+// when the string is clean. Column names like 'published_at' do not match because
+// the check requires exact single-quoted tokens against the known status set.
+func containsQuotedStatusLiteral(s string) (string, bool) {
+	for tok := range outboxStatusLiterals {
+		quoted := "'" + tok + "'"
+		if strings.Contains(s, quoted) {
+			return tok, true
+		}
+	}
+	return "", false
+}
+
 // outboxTerminalStates are the State consts that legitimately have no outgoing
 // transitions (absent from stateTransitions). Hardcoded by name — blind spot:
 // renaming a terminal must update this set. Reverse-checked by the round-trip
@@ -118,12 +136,26 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 				if err != nil {
 					return
 				}
+				// Path A: exact-match — Go string literal whose value IS a status token.
 				if _, banned := outboxStatusLiterals[val]; banned {
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: p.Fset.Position(lit.Pos()).Line,
 						Message: "bare outbox status literal " + strconv.Quote(val) +
 							" — bind kernel/outbox.State*.String() instead (single source of the wire status string)",
+					})
+					return
+				}
+				// Path B: substring-match — SQL string containing a single-quoted
+				// status token like "WHERE status = 'pending'" or
+				// "SET status='dead'".  Column names like 'published_at' do not
+				// match because containsQuotedStatusLiteral checks exact tokens.
+				if tok, found := containsQuotedStatusLiteral(val); found {
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(lit.Pos()).Line,
+						Message: "SQL string contains bare single-quoted outbox status literal '" + tok + "'" +
+							" — use kernel/outbox.State*.String() as the bind parameter instead",
 					})
 				}
 			})
@@ -135,6 +167,7 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 
 // outboxSettlementMarks are the store mutations that move an entry out of
 // claiming. A function calling any of them must also call TransitionState.
+//
 // Blind spots (documented):
 //   - TransitionState placed in a different function than the Mark call would
 //     evade per-FuncDecl co-location; acceptable since the guard's purpose is to
@@ -144,8 +177,32 @@ func TestOutboxStateLiteralBan(t *testing.T) {
 //     covered. outboxtest conformance helpers call the store API directly to
 //     exercise it (not to settle in the relay loop) and are intentionally out
 //     of scope.
+//
+// Intentional scope boundary: this guard covers only relay.go's Go-side
+// settlement decisions (claiming→published/dead/pending via Mark*). The
+// store's ClaimPending (pending→claiming) and ReclaimStale
+// (claiming→pending/dead) are also real transitions, but their target is
+// computed by SQL CAS (WHERE status='claiming'/'pending'), not a Go decision
+// point — wiring TransitionState there would be a tautological assertion that
+// cannot fail in practice. Those transitions are instead validated by
+// OUTBOX-STATE-TRANSITION-COMPLETENESS-01, which checks the full legal graph.
 var outboxSettlementMarks = map[string]struct{}{
 	"MarkPublished": {}, "MarkDead": {}, "MarkRetry": {},
+}
+
+// markToTransitionTarget maps each settlement Mark method to the expected
+// TransitionState second-argument (target state name) that must appear in
+// the same function body. A function that calls MarkPublished but passes
+// StatePending as the target would be a Go-level logical error; this check
+// catches such mismatches at CI time.
+//
+//   - MarkPublished → StatePublished (claiming entry succeeded)
+//   - MarkDead      → StateDead      (retry budget exhausted)
+//   - MarkRetry     → StatePending   (transient failure, back to queue)
+var markToTransitionTarget = map[string]string{
+	"MarkPublished": "StatePublished",
+	"MarkDead":      "StateDead",
+	"MarkRetry":     "StatePending",
 }
 
 func TestOutboxStateTransitionGuard(t *testing.T) {
@@ -169,6 +226,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 				if len(marks) == 0 {
 					return
 				}
+				// Check 1: the function must call TransitionState at all.
 				if !funcCallsSelector(fn.Body, "TransitionState") {
 					d = append(d, Diagnostic{
 						Rel:  rel,
@@ -176,6 +234,46 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 						Message: "function " + fn.Name.Name + " settles outbox entries (" + strings.Join(marks, ",") +
 							") but does not call TransitionState; settlement must assert the claiming→target transition",
 					})
+					return
+				}
+				// Check 2: for each Mark called, verify that the expected
+				// TransitionState target state appears as the second argument of
+				// a TransitionState call in the same function body.
+				//
+				// We collect all second-arg .Sel.Name values from TransitionState
+				// CallExprs (e.g. kout.TransitionState(StateClaiming, kout.StatePublished)
+				// → "StatePublished"). Each Mark must have its expected target present.
+				transitionTargets := map[string]struct{}{}
+				EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+					se, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || se.Sel.Name != "TransitionState" {
+						return
+					}
+					if len(call.Args) < 2 {
+						return
+					}
+					// The second arg is a SelectorExpr like kout.StatePublished.
+					argSel, ok := call.Args[1].(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					transitionTargets[argSel.Sel.Name] = struct{}{}
+				})
+				for _, markName := range marks {
+					expectedTarget, known := markToTransitionTarget[markName]
+					if !known {
+						continue
+					}
+					if _, present := transitionTargets[expectedTarget]; !present {
+						d = append(d, Diagnostic{
+							Rel:  rel,
+							Line: p.Fset.Position(fn.Pos()).Line,
+							Message: "function " + fn.Name.Name + " calls " + markName +
+								" but TransitionState does not target " + expectedTarget +
+								"; the Mark↔target pairing must match (MarkPublished↔StatePublished," +
+								" MarkDead↔StateDead, MarkRetry↔StatePending)",
+						})
+					}
 				}
 			})
 		}
@@ -275,6 +373,8 @@ func missingKeys(declared, covered map[string]struct{}) []string {
 
 // funcCallsSelector reports whether body contains a call whose function is a
 // selector with the given method name (e.g. kout.TransitionState).
+//
+//nolint:unparam // general helper; all callers currently pass "TransitionState"
 func funcCallsSelector(body *ast.BlockStmt, sel string) bool {
 	found := false
 	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {
@@ -305,16 +405,51 @@ func callSelectorsIn(body *ast.BlockStmt, names map[string]struct{}) []string {
 }
 
 // TestOutboxStateLiteralBan_ReverseSelfCheck proves the banned-literal matcher
-// fires on a status word and not on a column name / unrelated string.
+// fires on a status word and not on a column name / unrelated string. It also
+// exercises the SQL-substring matcher (containsQuotedStatusLiteral).
 func TestOutboxStateLiteralBan_ReverseSelfCheck(t *testing.T) {
 	t.Parallel()
+
+	// Exact-equal path: all four status tokens must be in the banned set.
 	for _, banned := range []string{"pending", "claiming", "published", "dead"} {
 		_, ok := outboxStatusLiterals[banned]
 		assert.True(t, ok, "%q must be banned", banned)
 	}
+	// Exact-equal path: column names and unrelated strings must not be banned.
 	for _, allowed := range []string{"published_at", "dead_at", "claimed_at", "pendingish", "retry"} {
 		_, ok := outboxStatusLiterals[allowed]
 		assert.False(t, ok, "%q must not be banned (column name / unrelated)", allowed)
+	}
+
+	// SQL-substring path: single-quoted status tokens embedded in SQL strings
+	// must be detected.
+	sqlHits := []struct {
+		input string
+		want  string
+	}{
+		{"UPDATE outbox_entries SET status='dead' WHERE id=$1", "dead"},
+		{"SELECT * FROM outbox_entries WHERE status = 'pending' LIMIT 10", "pending"},
+		{"SET status='claiming', claimed_at=now()", "claiming"},
+		{"WHERE status='published'", "published"},
+	}
+	for _, tc := range sqlHits {
+		tok, found := containsQuotedStatusLiteral(tc.input)
+		assert.True(t, found, "expected SQL substring match in %q", tc.input)
+		assert.Equal(t, tc.want, tok, "unexpected token in %q", tc.input)
+	}
+
+	// SQL-substring path: column names like 'published_at' must NOT match
+	// (only exact token 'published' matches, not 'published_at').
+	sqlMisses := []string{
+		"SELECT published_at FROM outbox_entries",
+		"ORDER BY dead_at ASC",
+		"WHERE claimed_at < now() - interval '1 hour'",
+		"no status here",
+		"SELECT * FROM outbox_entries WHERE id=$1",
+	}
+	for _, s := range sqlMisses {
+		tok, found := containsQuotedStatusLiteral(s)
+		assert.False(t, found, "expected no SQL substring match in %q (got %q)", s, tok)
 	}
 }
 
@@ -351,20 +486,34 @@ func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
 
 // TestOutboxStateTransitionGuard_ReverseSelfCheck proves funcCallsSelector and
 // callSelectorsIn correctly distinguish functions that call TransitionState from
-// those that do not. Two tiny Go source snippets are parsed in-memory:
+// those that do not. It also verifies the Mark↔target pairing logic:
 //
-//   - bothFunc calls both store.MarkPublished and kout.TransitionState → guard passes.
-//   - markOnlyFunc calls only store.MarkPublished → guard would diagnose.
+//   - bothFunc: calls MarkPublished + TransitionState(_, StatePublished) → passes all checks.
+//   - markOnlyFunc: calls only MarkPublished → guard fires (no TransitionState).
+//   - wrongTargetFunc: calls MarkPublished + TransitionState(_, StatePending) → pairing check fires.
+//   - multiMarkFunc: calls MarkDead+MarkRetry + matching targets → passes.
 func TestOutboxStateTransitionGuard_ReverseSelfCheck(t *testing.T) {
 	t.Parallel()
 
 	const src = `package p
+import kout "github.com/ghbvf/gocell/kernel/outbox"
+
 func bothFunc() {
+	kout.TransitionState(kout.StateClaiming, kout.StatePublished)
 	store.MarkPublished(ctx, id, lease)
-	kout.TransitionState(from, to)
 }
 func markOnlyFunc() {
 	store.MarkPublished(ctx, id, lease)
+}
+func wrongTargetFunc() {
+	kout.TransitionState(kout.StateClaiming, kout.StatePending)
+	store.MarkPublished(ctx, id, lease)
+}
+func multiMarkFunc() {
+	kout.TransitionState(kout.StateClaiming, kout.StateDead)
+	kout.TransitionState(kout.StateClaiming, kout.StatePending)
+	store.MarkDead(ctx, id, lease, 5, "err")
+	store.MarkRetry(ctx, id, lease, 1, retryAt, "err")
 }
 `
 	fset := token.NewFileSet()
@@ -377,19 +526,67 @@ func markOnlyFunc() {
 	})
 	require.Contains(t, funcs, "bothFunc", "bothFunc must be parsed")
 	require.Contains(t, funcs, "markOnlyFunc", "markOnlyFunc must be parsed")
+	require.Contains(t, funcs, "wrongTargetFunc", "wrongTargetFunc must be parsed")
+	require.Contains(t, funcs, "multiMarkFunc", "multiMarkFunc must be parsed")
 
 	both := funcs["bothFunc"]
 	markOnly := funcs["markOnlyFunc"]
+	wrongTarget := funcs["wrongTargetFunc"]
+	multi := funcs["multiMarkFunc"]
 
-	// bothFunc: has a settlement mark AND calls TransitionState → no diagnostic.
+	// bothFunc: has MarkPublished AND TransitionState(_, StatePublished) → passes.
 	bothMarks := callSelectorsIn(both.Body, outboxSettlementMarks)
 	assert.NotEmpty(t, bothMarks, "bothFunc must call at least one settlement mark")
 	assert.True(t, funcCallsSelector(both.Body, "TransitionState"),
 		"bothFunc must call TransitionState")
+	// Verify pairing: StatePublished target is present.
+	bothTargets := collectTransitionTargets(both.Body)
+	assert.Contains(t, bothTargets, "StatePublished",
+		"bothFunc must have StatePublished as a TransitionState target")
 
 	// markOnlyFunc: has a settlement mark but does NOT call TransitionState → would diagnose.
 	markOnlyMarks := callSelectorsIn(markOnly.Body, outboxSettlementMarks)
 	assert.NotEmpty(t, markOnlyMarks, "markOnlyFunc must call at least one settlement mark")
 	assert.False(t, funcCallsSelector(markOnly.Body, "TransitionState"),
 		"markOnlyFunc must NOT call TransitionState (guard would fire)")
+
+	// wrongTargetFunc: calls MarkPublished + TransitionState(_, StatePending) → pairing mismatch.
+	wrongMarks := callSelectorsIn(wrongTarget.Body, outboxSettlementMarks)
+	assert.NotEmpty(t, wrongMarks, "wrongTargetFunc must call MarkPublished")
+	assert.True(t, funcCallsSelector(wrongTarget.Body, "TransitionState"),
+		"wrongTargetFunc calls TransitionState (check 1 passes)")
+	wrongTargets := collectTransitionTargets(wrongTarget.Body)
+	assert.NotContains(t, wrongTargets, "StatePublished",
+		"wrongTargetFunc must NOT have StatePublished target (pairing check would fire)")
+
+	// multiMarkFunc: calls MarkDead+MarkRetry with StateDead+StatePending targets → passes.
+	multiMarks := callSelectorsIn(multi.Body, outboxSettlementMarks)
+	assert.ElementsMatch(t, []string{"MarkDead", "MarkRetry"}, multiMarks,
+		"multiMarkFunc must call MarkDead and MarkRetry")
+	multiTargets := collectTransitionTargets(multi.Body)
+	assert.Contains(t, multiTargets, "StateDead", "multiMarkFunc must have StateDead target")
+	assert.Contains(t, multiTargets, "StatePending", "multiMarkFunc must have StatePending target")
+}
+
+// collectTransitionTargets is a test helper that extracts the second-argument
+// selector names from all TransitionState calls in body. Used by
+// TestOutboxStateTransitionGuard_ReverseSelfCheck to verify the pairing logic
+// without duplicating the production guard's inner loop.
+func collectTransitionTargets(body *ast.BlockStmt) map[string]struct{} {
+	targets := map[string]struct{}{}
+	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
+		se, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || se.Sel.Name != "TransitionState" {
+			return
+		}
+		if len(call.Args) < 2 {
+			return
+		}
+		argSel, ok := call.Args[1].(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		targets[argSel.Sel.Name] = struct{}{}
+	})
+	return targets
 }
