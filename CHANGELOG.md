@@ -26,7 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   §M3, amended: Go typed-struct carrier, not YAML). `next-action` disposition and
   per-finding `metric` fields were speculative repository-convergence scaffolding
   with no consumer; they were removed from M3 and from the current M0-M4 roadmap
-  after M5-HARVEST was cancelled (see ADR §M3 amendment).
+  after M5-HARVEST was canceled (see ADR §M3 amendment).
 
 - **`gocell_vault_cached_key_version` removes `mount_path` and `key_name` ConstLabels** (PR for #879):
   single-process single-key deployment has label cardinality 1; the labels carried no

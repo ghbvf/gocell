@@ -22,7 +22,7 @@ import "context"
 //
 // next-action and per-finding metric were removed from M3 and from the current
 // M0-M4 roadmap as speculative repository-convergence scaffolding (no consumer
-// exists; M5-HARVEST is cancelled). M3 ships the engine refactor only: single
+// exists; M5-HARVEST is canceled). M3 ships the engine refactor only: single
 // allRules registry + engine + Phase + ADV-05 fix. Future repository
 // convergence must start with a new ADR and a real consumer.
 // See ADR §M3 amendment (2026-05-26 #687 round-3).
