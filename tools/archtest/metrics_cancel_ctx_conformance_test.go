@@ -5,14 +5,14 @@
 // This archtest is a *test-existence backstop*: it enforces that every concrete
 // production kernel/observability/metrics.Provider implementation is exercised
 // by the no-skip-on-cancel behavioral conformance harness
-// (kernel/observability/metrics/metricstest.RunCancelledCtxConformance). It is
+// (kernel/observability/metrics/metricstest.RunCanceledCtxConformance). It is
 // the Medium membership layer that the Hard behavioral harness sits on.
 //
 //   - 实现扫描: types.Implements(*types.Interface) — type-aware, identifies every
 //     concrete named type (exported OR unexported) that satisfies
 //     kernel/observability/metrics.Provider (or *T), restricted to the
 //     enrollable production layer adapters/ (see scope below).
-//   - conformance 调用扫描: per *implementation*. Each RunCancelledCtxConformance
+//   - conformance 调用扫描: per *implementation*. Each RunCanceledCtxConformance
 //     call's Provider argument (args[1]) is resolved via *types.Info to its
 //     concrete type key, so a package with N Provider impls must
 //     conformance-test each of the N — enrolling one does not cover its
@@ -20,7 +20,7 @@
 //   - 综合: Medium is the **ceiling by construction** — Go cannot require a test
 //     to exist at compile time. This is the established shape of the sibling
 //     CELL-REPO-READYZ-PROBE-01. The behavioral correctness of the harness
-//     itself is Hard: RunCancelledCtxConformance records via an already-cancelled
+//     itself is Hard: RunCanceledCtxConformance records via an already-canceled
 //     ctx and asserts the measured values through an adapter-supplied readback,
 //     so a regression such as `if ctx.Err() != nil { return }` inside an
 //     adapter's Add/Observe/Set makes the readback return 0/wrong and the
@@ -28,7 +28,7 @@
 //
 // Enforces: every concrete type under adapters/ that implements
 // kernel/observability/metrics.Provider must be passed as the Provider argument
-// to at least one metricstest.RunCancelledCtxConformance call in a _test.go
+// to at least one metricstest.RunCanceledCtxConformance call in a _test.go
 // file. Impls with no such call are reported as violations.
 //
 // Contract source: kernel/observability/metrics/metrics.go §contract (1):
@@ -41,7 +41,7 @@
 //
 //   - In scope: package paths under adapters/. Both production Provider impls
 //     (otel.MetricProvider, prometheus.MetricProvider) live here and can hang a
-//     RunCancelledCtxConformance call off a _test.go in their own package.
+//     RunCanceledCtxConformance call off a _test.go in their own package.
 //
 //   - Excluded: kernel/. The kernel nop Provider (kernel/observability/metrics.nop*)
 //     records nothing — it has no observable failure domain and is structurally
@@ -83,13 +83,13 @@ const (
 	metricsProviderIfacePkg    = "github.com/ghbvf/gocell/kernel/observability/metrics"
 	metricsProviderIfaceName   = "Provider"
 	cancelCtxConformancePkg    = "github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
-	cancelCtxConformanceFunc   = "RunCancelledCtxConformance"
+	cancelCtxConformanceFunc   = "RunCanceledCtxConformance"
 	metricsProviderScopePrefix = "adapters/"
 )
 
 // TestMetricsCancelCtxConformance enforces METRICS-CANCEL-CTX-CONFORMANCE-01:
 // every concrete type under adapters/ implementing metrics.Provider must have a
-// metricstest.RunCancelledCtxConformance call in a _test.go file of its package.
+// metricstest.RunCanceledCtxConformance call in a _test.go file of its package.
 func TestMetricsCancelCtxConformance(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -143,7 +143,7 @@ func TestMetricsCancelCtxConformance(t *testing.T) {
 			"adapters/ — likely a type-universe regression (iface and impls must share one "+
 			"packages.Load). Expect otel.MetricProvider and prometheus.MetricProvider.")
 
-	// ─── Step 3: scan test corpus for RunCancelledCtxConformance call sites ───
+	// ─── Step 3: scan test corpus for RunCanceledCtxConformance call sites ───
 	enrolledImpls := make(map[string]bool) // "pkg/path.TypeName" → true
 	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodPatterns,
 		func(p *Pass) []Diagnostic {
@@ -271,8 +271,8 @@ func collectMetricsProviderImpls(pkg *types.Package, iface *types.Interface, imp
 }
 
 // collectEnrolledMetricsProviders records the concrete impl key of every
-// Provider argument (args[1]) passed to a metricstest.RunCancelledCtxConformance
-// call in file. Signature: RunCancelledCtxConformance(t, p, rb) — args[1] is
+// Provider argument (args[1]) passed to a metricstest.RunCanceledCtxConformance
+// call in file. Signature: RunCanceledCtxConformance(t, p, rb) — args[1] is
 // resolved to its concrete type so enrollment is per-implementation.
 func collectEnrolledMetricsProviders(file *ast.File, info *types.Info, enrolled map[string]bool) {
 	if info == nil {
@@ -309,9 +309,9 @@ func unenrolledMetricsProviders(implSet, enrolledImpls map[string]bool) []Diagno
 			Line: 0,
 			Message: fmt.Sprintf(
 				"archtest: metrics.Provider impl %q not enrolled in a "+
-					"metricstest.RunCancelledCtxConformance test call "+
+					"metricstest.RunCanceledCtxConformance test call "+
 					"(METRICS-CANCEL-CTX-CONFORMANCE-01). Add a _test.go in package %s that calls "+
-					"metricstest.RunCancelledCtxConformance(t, provider, readback) passing this "+
+					"metricstest.RunCanceledCtxConformance(t, provider, readback) passing this "+
 					"concrete Provider, asserting the no-skip-on-cancel contract "+
 					"(kernel/observability/metrics/metrics.go §contract (1)).",
 				implKey, pkgPath),

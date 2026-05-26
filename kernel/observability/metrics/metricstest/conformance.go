@@ -3,7 +3,7 @@
 //
 // kernel/observability/metrics/metrics.go §contract (1): "实现禁止因 ctx 已取消/
 // 超时而跳过记录——ctx 取消不得导致数据丢失". This harness drives a metrics.Provider's
-// Counter/Histogram/Gauge instruments with an already-cancelled context and
+// Counter/Histogram/Gauge instruments with an already-canceled context and
 // asserts — via an implementation-supplied Readback — that every measurement
 // still landed. Membership of every production Provider implementation is
 // enforced by archtest METRICS-CANCEL-CTX-CONFORMANCE-01.
@@ -29,7 +29,7 @@ const (
 	labelKey = "k"
 	labelVal = "v"
 
-	// Expected recorded values after the cancelled-ctx drive sequence below.
+	// Expected recorded values after the canceled-ctx drive sequence below.
 	wantCounter   = 3 // Add(2) + Inc
 	wantHistogram = 1 // one Observe
 	wantGauge     = 8 // Set(5) + Inc - Dec + Add(3)
@@ -47,13 +47,13 @@ type Readback struct {
 	Gauge     func() float64
 }
 
-// RunCancelledCtxConformance asserts that p's instruments record measurements
-// even when the supplied context is already cancelled (metrics.go §contract (1)).
+// RunCanceledCtxConformance asserts that p's instruments record measurements
+// even when the supplied context is already canceled (metrics.go §contract (1)).
 // It drives Counter.Add/Inc, Histogram.Observe, and Gauge.Set/Inc/Dec/Add with an
-// already-cancelled ctx, then uses rb to assert each measurement landed. A
+// already-canceled ctx, then uses rb to assert each measurement landed. A
 // regression that gates recording on ctx.Err() makes a readback return the wrong
 // value and fails here — a no-op implementation cannot satisfy it.
-func RunCancelledCtxConformance(t *testing.T, p metrics.Provider, rb Readback) {
+func RunCanceledCtxConformance(t *testing.T, p metrics.Provider, rb Readback) {
 	t.Helper()
 	if rb.Counter == nil || rb.Histogram == nil || rb.Gauge == nil {
 		t.Fatal("metricstest: Readback.Counter/Histogram/Gauge must all be supplied")
@@ -92,15 +92,15 @@ func RunCancelledCtxConformance(t *testing.T, p metrics.Provider, rb Readback) {
 	gv.With(Labels()).Add(ctx, 3)
 
 	if got := rb.Counter(); got != wantCounter {
-		t.Errorf("metricstest: counter recorded %v under cancelled ctx, want %d "+
+		t.Errorf("metricstest: counter recorded %v under canceled ctx, want %d "+
 			"(no-skip-on-cancel violated: Add/Inc must not gate on ctx.Err())", got, wantCounter)
 	}
 	if got := rb.Histogram(); got != wantHistogram {
-		t.Errorf("metricstest: histogram recorded count %d under cancelled ctx, want %d "+
+		t.Errorf("metricstest: histogram recorded count %d under canceled ctx, want %d "+
 			"(no-skip-on-cancel violated: Observe must not gate on ctx.Err())", got, wantHistogram)
 	}
 	if got := rb.Gauge(); got != wantGauge {
-		t.Errorf("metricstest: gauge recorded %v under cancelled ctx, want %d "+
+		t.Errorf("metricstest: gauge recorded %v under canceled ctx, want %d "+
 			"(no-skip-on-cancel violated: Set/Inc/Dec/Add must not gate on ctx.Err())", got, wantGauge)
 	}
 }

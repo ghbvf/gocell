@@ -22,15 +22,15 @@ import (
 // registered metric name is "<namespace>_<opts.Name>".
 const promNamespace = "gocelltest_"
 
-// TestMetricProvider_CancelledCtxConformance enrolls prometheus.MetricProvider
+// TestMetricProvider_CanceledCtxConformance enrolls prometheus.MetricProvider
 // in the no-skip-on-cancel conformance harness (METRICS-CANCEL-CTX-CONFORMANCE-01).
-// The Prometheus adapter discards ctx entirely, so a cancelled ctx can never
+// The Prometheus adapter discards ctx entirely, so a canceled ctx can never
 // suppress a write; the readback confirms the measured values regardless.
 //
 // The provider is constructed concretely (not via newTestProvider, which widens
 // to metrics.Provider) so the archtest's per-impl enrollment scan can resolve
 // the argument to *prometheus.MetricProvider.
-func TestMetricProvider_CancelledCtxConformance(t *testing.T) {
+func TestMetricProvider_CanceledCtxConformance(t *testing.T) {
 	reg := prom.NewRegistry()
 	provider, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{
 		Registry:  reg,
@@ -40,7 +40,7 @@ func TestMetricProvider_CancelledCtxConformance(t *testing.T) {
 		t.Fatalf("NewMetricProvider: %v", err)
 	}
 	labels := prom.Labels(metricstest.Labels())
-	metricstest.RunCancelledCtxConformance(t, provider, metricstest.Readback{
+	metricstest.RunCanceledCtxConformance(t, provider, metricstest.Readback{
 		Counter: func() float64 {
 			return testutil.ToFloat64(collect(t, reg, promNamespace+metricstest.CounterName, labels))
 		},
