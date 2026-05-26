@@ -16,10 +16,23 @@ package archtest
 // conformance suites). Any other caller is a violation: production code that
 // is not the funnel must not be able to construct a FenceToken.
 //
-// AI-robust grade: Hard (closed caller set enforced via ResolvePackageRef
-// form-uniqueness; A1 resolves the SelectorExpr X to a *types.PkgName and
-// requires (pkgPath, name) == (credentialfence, Mint); A2/A3 blindspot
-// self-checks reject function-value capture and reflect invocations).
+// AI-robust grade (Mint-caller dimension): Hard via call-site form-uniqueness
+// per ai-robust.md §Hard 范本目录 "typed marker funnel for unbounded ops".
+// The scanner is form-complete: it flags EVERY reference to credentialfence.Mint
+// (direct call, var-decl / short-var function-value capture, return, pass-through
+// arg, reflect arg) by walking all SelectorExpr and resolving each via
+// ResolvePackageRef (alias-immune). Because credentialfence is type-sealed, a
+// reference to Mint is the only way to obtain a FenceToken, so flagging every
+// reference closes the function-value-capture and reflect blindspots
+// structurally — there is no separate per-form blindspot self-check to keep in
+// sync. Residual blindspots (dot-import, //go:linkname, unsafe) are the
+// universal class that defeats any static analysis; see scanFenceTokenMintRefs.
+//
+// Grade caveat: enforcement is archtest-bound, not compile-time. Go cannot
+// express "only package X may call function Y", so this is the Hard ceiling the
+// rule's shape can reach (the PANIC-REGISTERED-01 precedent). The type-system
+// Hard guarantee is the *construction* seal (external packages cannot implement
+// FenceToken nor build the unexported impl); see runtime/auth/credentialfence.
 //
 // Companion archtests (the downstream half of the same funnel):
 //   - CREDENTIAL-INVALIDATE-FUNNEL-01    — RevokeForSubject caller allowlist
@@ -94,24 +107,27 @@ func isFenceTokenMintAllowlisted(rel string) bool {
 
 // TestFenceTokenMintFunnel_AllowlistEnforced enforces FENCE-TOKEN-MINT-FUNNEL-01.
 //
-// Every call to credentialfence.Mint outside an allowlisted path is a
-// violation. Combined with the upstream type-system seal (unexported marker
-// method on FenceToken) the only way to construct a non-nil FenceToken is
-// through Mint; constraining Mint's callers therefore constrains every
-// non-nil FenceToken's origin.
+// Every reference to credentialfence.Mint outside an allowlisted path is a
+// violation — not just a direct call, but any function-value capture or
+// reflect arg as well (see scanFenceTokenMintRefs for the form-complete scan).
+// Combined with the upstream type-system seal (unexported marker method on
+// FenceToken) the only way to obtain a non-nil FenceToken is through Mint;
+// constraining every reference to Mint therefore constrains every non-nil
+// FenceToken's origin.
 //
-// Scanner: ResolvePackageRef + EachInSubtree[ast.CallExpr]. credentialfence.Mint
-// is a package-level function (not a method), so its reference is recorded
-// in types.Info.Uses as a (PkgName, FuncName) pair — ResolveMethodCall would
+// Scanner: ResolvePackageRef + EachInSubtree[ast.SelectorExpr]. credentialfence.Mint
+// is a package-level function (not a method), so its reference is recorded in
+// types.Info.Uses as a (PkgName, FuncName) pair — ResolveMethodCall would
 // silently miss it (Selections only holds method selectors). The resolver
-// returns the (pkgPath, name) tuple; we accept the call only when
-// pkgPath == credentialfence package path and name == "Mint" — exact
-// identity, no name-collision possible across packages.
+// returns the (pkgPath, name) tuple; a selector is a violation only when
+// pkgPath == credentialfence package path and name == "Mint" — exact identity,
+// no name-collision possible across packages, alias-immune.
 //
 // RED fixture verification: testdata/fence_token_fixtures/external_mint_red/
-// is loaded separately and the scanner must detect ≥ 1 violation, proving
-// the rule is not a permanently-passing no-op (the reverse RED self-check
-// mandated by ai-robust.md §"工具选定后强制盲区自检").
+// is loaded separately and the scanner must detect all five reference forms
+// (wantMin=5), proving the rule is form-complete and not a permanently-passing
+// no-op (the reverse RED self-check mandated by
+// ai-robust.md §"工具选定后强制盲区自检").
 func TestFenceTokenMintFunnel_AllowlistEnforced(t *testing.T) {
 	t.Parallel()
 
@@ -136,7 +152,7 @@ func TestFenceTokenMintFunnel_AllowlistEnforced(t *testing.T) {
 			if isFenceTokenMintAllowlisted(rel) {
 				continue
 			}
-			violations = append(violations, scanFenceTokenMintViolations(p, file, rel)...)
+			violations = append(violations, scanFenceTokenMintRefs(p, file, rel)...)
 		}
 		return nil
 	})
@@ -146,205 +162,78 @@ func TestFenceTokenMintFunnel_AllowlistEnforced(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"FENCE-TOKEN-MINT-FUNNEL-01: credentialfence.Mint must only be called "+
+		"FENCE-TOKEN-MINT-FUNNEL-01: credentialfence.Mint must only be referenced "+
 			"from the credentialinvalidate funnel, storetest/conformance suites, "+
 			"or *_test.go files. New callers require updating "+
 			"fenceTokenMintAllowlistPrefixes — every addition is a review event "+
 			"about whether this package should own a FenceToken at all.")
 
-	// Reverse RED self-check: the scanner must catch the bypass attempt in
-	// the external_mint_red fixture (calls Mint from a non-allowlisted path).
+	// Reverse RED self-check: the scanner must catch all five reference forms
+	// (call / var-decl capture / short-var capture / pass-through arg /
+	// reflect arg) in the external_mint_red fixture. wantMin=5 pins
+	// form-completeness — a CallExpr-only scanner would catch only the single
+	// direct call and fail here.
 	verifyFenceTokenMintRedFixture(t,
 		"./tools/archtest/testdata/fence_token_fixtures/external_mint_red",
-		"FENCE-TOKEN-MINT-FUNNEL-01 RED fixture")
+		"FENCE-TOKEN-MINT-FUNNEL-01 RED fixture", 5)
 }
 
-// TestFenceTokenMintFunnel_BlindSpot_FuncValueAssignment is the reverse
-// blindspot self-check for function-value capture: `fn := credentialfence.Mint;
-// fn()`. The right-hand side of the assignment is a *ast.SelectorExpr whose
-// Sel is "Mint", but the subsequent CallExpr has Fun = *ast.Ident, which
-// ResolvePackageRef cannot match against credentialfence.Mint. This test
-// asserts the form does NOT appear in production code, keeping the
-// FENCE-TOKEN-MINT-FUNNEL-01 rule complete under the "blindspot is absent"
-// premise.
+// scanFenceTokenMintRefs returns a violation string for EVERY reference to
+// credentialfence.Mint in file — regardless of the syntactic shape that
+// references it. It walks all `*ast.SelectorExpr` nodes and resolves each via
+// ResolvePackageRef, so it catches the direct call (`credentialfence.Mint()`),
+// var-decl / short-var function-value capture (`var x = credentialfence.Mint`,
+// `x := credentialfence.Mint`), return of the function value, pass-through as a
+// call argument, and the reflect-arg form (`reflect.ValueOf(credentialfence.Mint)`).
 //
-// Detection is alias-immune: the AssignStmt RHS SelectorExpr is resolved via
-// ResolvePackageRef (types.Info.Uses), which returns the canonical package
-// path regardless of any import alias (e.g. `import cf "...credentialfence"`).
-// Name-based xIdent.Name == "credentialfence" matching is NOT used here.
+// This is the form-complete replacement for the earlier CallExpr-only scanner
+// plus its two enumerate-form blindspot self-checks: because credentialfence
+// is sealed, the ONLY way for a non-funnel package to obtain a FenceToken is to
+// reference Mint, so flagging every reference — not just the invocation —
+// closes the function-value-capture and reflect blindspots structurally rather
+// than asserting their absence one form at a time.
 //
-// Mirrors TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment in
-// credential_invalidate_funnel_invariants_test.go.
-func TestFenceTokenMintFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
-	t.Parallel()
-
-	patterns := []string{
-		"./cells/...", "./runtime/...", "./adapters/...", "./cmd/...", "./examples/...",
-	}
-
-	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			if isFenceTokenMintAllowlisted(rel) {
-				continue
-			}
-			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if sel.Sel.Name != fenceTokenMintFunc {
-						return
-					}
-					// Use ResolvePackageRef to resolve via types.Info.Uses to the
-					// canonical package path — immune to import aliases such as
-					// `import cf "...credentialfence"`.
-					pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
-					if !ok {
-						return
-					}
-					if pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
-						return
-					}
-					line := p.Fset.Position(assign.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: credentialfence.Mint function-value assignment blind spot detected "+
-							"(FENCE-TOKEN-MINT-FUNNEL-01)",
-						rel, line,
-					))
-				})
-			})
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"FENCE-TOKEN-MINT-FUNNEL-01 blind-spot: function-value assignment of "+
-			"credentialfence.Mint found in production code — the archtest would "+
-			"miss subsequent invocations. Inline the call at the funnel site.")
-}
-
-// TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation is the reverse
-// blindspot self-check for reflect-based invocation. Production code must
-// never use reflect.ValueOf to fetch / call Mint — such forms are
-// AST-invisible to the main A1 ResolvePackageRef scanner. Asserts the form
-// is absent.
+// Resolution: credentialfence.Mint is a package-level function (not a method),
+// so its qualified reference lives in types.Info.Uses. ResolvePackageRef
+// resolves the SelectorExpr (X is a PkgName, Sel is the function name) to the
+// canonical (pkgPath, name) tuple — alias-immune (an `import cf "…"` rename
+// resolves to the same path). The `sel.Sel.Name` pre-filter keeps the resolver
+// off the hot path for unrelated selectors.
 //
-// Detection for the inner argument is alias-immune: the credentialfence.Mint
-// SelectorExpr passed as reflect.ValueOf's argument is resolved via
-// ResolvePackageRef (types.Info.Uses) to the canonical package path, not via
-// the local identifier name. The outer reflect.ValueOf identification uses
-// name-based matching ("reflect"/"ValueOf") which is safe because reflect is
-// a stdlib package that is never aliased in this codebase.
-//
-// Mirrors TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName.
-func TestFenceTokenMintFunnel_BlindSpot_ReflectInvocation(t *testing.T) {
-	t.Parallel()
-
-	patterns := []string{
-		"./cells/...", "./runtime/...", "./adapters/...", "./cmd/...", "./examples/...",
-	}
-
-	var violations []string
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return
-				}
-				// reflect.ValueOf(credentialfence.Mint) — argument is the
-				// SelectorExpr we care about.
-				// Outer reflect.ValueOf identification is name-based (reflect is
-				// stdlib, never aliased in this codebase).
-				if sel.Sel.Name != "ValueOf" || len(call.Args) != 1 {
-					return
-				}
-				xIdent, ok := sel.X.(*ast.Ident)
-				if !ok || xIdent.Name != "reflect" {
-					return
-				}
-				argSel, ok := call.Args[0].(*ast.SelectorExpr)
-				if !ok {
-					return
-				}
-				// Use ResolvePackageRef on the inner argument SelectorExpr to
-				// resolve via types.Info.Uses — alias-immune.
-				pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, argSel)
-				if !ok {
-					return
-				}
-				if pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
-					return
-				}
-				line := p.Fset.Position(call.Pos()).Line
-				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.ValueOf(credentialfence.Mint) blind spot detected "+
-						"(FENCE-TOKEN-MINT-FUNNEL-01)",
-					rel, line,
-				))
-			})
-		}
-		return nil
-	})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"FENCE-TOKEN-MINT-FUNNEL-01 blind-spot: reflect.ValueOf(credentialfence.Mint) "+
-			"found in production code — the archtest cannot see reflect-based invocations.")
-}
-
-// scanFenceTokenMintViolations returns violation strings for every CallExpr
-// in file whose callee resolves to credentialfence.Mint.
-//
-// Resolution: credentialfence.Mint is a package-level function (not a
-// method), so its qualified reference lives in types.Info.Uses, not in
-// Selections. ResolvePackageRef walks the SelectorExpr (X is a PkgName,
-// Sel is the function name) and returns the (pkgPath, name) tuple.
-// ResolveMethodCall would silently miss this — it only resolves method
-// selections.
-func scanFenceTokenMintViolations(p *Pass, file *ast.File, rel string) []string {
+// Residual blindspots (universal class, not enumerated per-form): dot-import of
+// credentialfence (`import . "…/credentialfence"` makes Mint a bare Ident — not
+// used anywhere in this module, and a dot-import of an internal-style package
+// would itself be an anomaly), `//go:linkname`, and `unsafe`. These defeat any
+// static analysis and are out of scope for an archtest funnel.
+func scanFenceTokenMintRefs(p *Pass, file *ast.File, rel string) []string {
 	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !ok {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != fenceTokenMintFunc {
 			return
 		}
-		if pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
+		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
+		if !ok || pkgPath != fenceTokenPkgPath || name != fenceTokenMintFunc {
 			return
 		}
-		line := p.Fset.Position(call.Pos()).Line
+		line := p.Fset.Position(sel.Pos()).Line
 		out = append(out, fmt.Sprintf(
-			"%s:%d: FENCE-TOKEN-MINT-FUNNEL-01: direct call to credentialfence.Mint "+
-				"bypasses the credentialinvalidate funnel",
+			"%s:%d: FENCE-TOKEN-MINT-FUNNEL-01: reference to credentialfence.Mint "+
+				"outside the funnel (direct call or function-value capture)",
 			rel, line,
 		))
 	})
 	return out
 }
 
-// verifyFenceTokenMintRedFixture loads the RED fixture and asserts the
-// scanner detects at least one violation. Mirrors verifyRedFixtureDetectedPass
-// in credential_invalidate_funnel_invariants_test.go.
-func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string) {
+// verifyFenceTokenMintRedFixture loads the RED fixture and asserts the scanner
+// detects at least wantMin violations. wantMin is the number of distinct
+// credentialfence.Mint reference forms in the fixture (call / var-decl capture /
+// short-var capture / pass-through arg / reflect arg). Requiring the full count
+// — not merely ≥ 1 — proves the scanner is form-complete: a CallExpr-only
+// scanner would catch only the single direct call and fall short, surfacing the
+// regression here. Mirrors verifyRedFixtureDetectedPass in
+// credential_invalidate_funnel_invariants_test.go.
+func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string, wantMin int) {
 	t.Helper()
 
 	var found int
@@ -353,14 +242,15 @@ func verifyFenceTokenMintRedFixture(t *testing.T, fixturePattern, label string) 
 			return nil
 		}
 		for _, file := range p.Files {
-			found += len(scanFenceTokenMintViolations(p, file, label))
+			found += len(scanFenceTokenMintRefs(p, file, label))
 		}
 		return nil
 	})
-	require.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"The production scanner would be permanently GREEN and miss real "+
-			"violations. Check that the fixture file actually calls "+
-			"credentialfence.Mint and is type-checkable.",
-		label)
+	require.GreaterOrEqual(t, found, wantMin,
+		"RED fixture self-check FAILED: %s — expected ≥ %d violations, got %d. "+
+			"A shortfall means the scanner is NOT form-complete (e.g. it only "+
+			"catches direct CallExpr and misses function-value capture / reflect "+
+			"arg forms), so a non-funnel package could construct a FenceToken "+
+			"undetected. Check scanFenceTokenMintRefs covers every reference shape.",
+		label, wantMin, found)
 }

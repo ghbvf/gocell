@@ -144,6 +144,9 @@ func Run(t *testing.T, factory Factory, protocol *session.Protocol) {
 	t.Run("RevokeForSubject_UnknownEvent_Rejected", func(t *testing.T) {
 		runRevokeForSubjectUnknownEvent(t, factory)
 	})
+	t.Run("RevokeForSubject_NilFenceToken_Panics", func(t *testing.T) {
+		runRevokeForSubjectNilFenceToken(t, factory)
+	})
 
 	for _, event := range protocol.RevokeOn() {
 		event := event
@@ -331,6 +334,39 @@ func runRevokeForSubjectUnknownEvent(t *testing.T, factory Factory) {
 
 	err := store.RevokeForSubject(context.Background(), subjectA, session.CredentialEvent(99), credentialfence.Mint())
 	assertErrCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runRevokeForSubjectNilFenceToken — Store contract: a nil FenceToken is a
+// programmer error that credentialfence.MustHave converts to a B-class panic
+// (*errcode.Error, KindInternal) whose message identifies the call site. Every
+// implementation (mem / PG / Redis decorator) must honor the guard — the shared
+// suite holds them all to it rather than relying on per-impl unit tests. The
+// MustHave check is the first statement of each impl, so the panic fires before
+// any backend I/O (PG runs this case under -tags=integration without a query).
+func runRevokeForSubjectNilFenceToken(t *testing.T, factory Factory) {
+	store, _, cleanup := factory(t)
+	defer cleanup()
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		// nil FenceToken is intentional — exercising the MustHave guard.
+		_ = store.RevokeForSubject(context.Background(), subjectA, session.CredentialEventPasswordReset, nil)
+	}()
+
+	if recovered == nil {
+		t.Fatal("nil FenceToken must trigger MustHave panic, got nil")
+	}
+	coded, ok := recovered.(*errcode.Error)
+	if !ok {
+		t.Fatalf("panic payload must be *errcode.Error, got %T: %v", recovered, recovered)
+	}
+	if coded.Kind != errcode.KindInternal {
+		t.Errorf("nil-token panic must carry KindInternal (Assertion), got %v", coded.Kind)
+	}
+	if !strings.Contains(coded.Message, "session.Store.RevokeForSubject") {
+		t.Errorf("panic message must identify call site, got %q", coded.Message)
+	}
 }
 
 // revokeForSubjectFixtures bundles the four session fixtures used by the

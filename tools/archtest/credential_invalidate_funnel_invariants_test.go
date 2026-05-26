@@ -12,66 +12,75 @@ package archtest
 //
 // # AI-robust grade (post #1033)
 //
-// All four rules are Hard. UPSTREAM-CALLER-01's grade upgraded from
-// Medium to Hard once the sealed FenceToken capability proof (#1033)
-// closed the type-system half of the upstream funnel:
+// The credential-invalidation safety model rests on three mechanisms with
+// distinct enforcement layers — do not conflate them into one "Hard":
 //
-//  1. DOWNSTREAM (rules 1–3) — Hard via ResolveMethodCall call-site
-//     form-uniqueness. Any direct call to RevokeForSubject /
-//     BumpAuthzEpoch / RevokeUser outside the allowlisted paths
-//     resolves to the exact *types.Func identity and fails archtest.
-//     The honesty caveat (matching SESSIONREFRESH-NO-SESSION-CREATE-01):
-//     Go does not prevent the calls at compile time; enforcement is
-//     archtest-bound.
+//  1. DOWNSTREAM (rules 1–3) — Hard via call-site form-uniqueness, archtest-
+//     bound (NOT compile-time). scanFunnelViolationsPass is form-complete: it
+//     flags every reference to RevokeForSubject / BumpAuthzEpoch / RevokeUser
+//     outside the allowlist — direct call AND function-value capture alike —
+//     by resolving every SelectorExpr to the exact *types.Func identity. Go
+//     cannot express "only package X may call method Y", so this is the Hard
+//     ceiling the rule's shape can reach (same caveat as
+//     SESSIONREFRESH-NO-SESSION-CREATE-01 / the PANIC-REGISTERED-01 precedent).
 //
-//  2. UPSTREAM (rule 4) — Hard via the combined seal:
-//       (a) FenceToken interface seal: types declared outside
-//           runtime/auth/credentialfence cannot implement FenceToken
-//           (unexported isCredentialFenceToken marker method); the
-//           concrete fenceToken is itself unexported, so external
-//           composite literals cannot construct it. Compile-time
-//           guarantee.
-//       (b) FENCE-TOKEN-MINT-FUNNEL-01 archtest: credentialfence.Mint
-//           callers are locked to the credentialinvalidate funnel,
-//           storetest / conformance suites, and *_test.go files via
-//           ResolvePackageRef form-uniqueness. Combined with (a), no
-//           non-test production package outside the funnel can produce
-//           a FenceToken value.
-//       (c) Runtime nil-guard: credentialfence.MustHave at the top of
-//           every mutation impl converts the residual "pass nil" form
-//           into an immediate panic via panicregister.Approved +
-//           errcode.Assertion, surfaced as a 500. Closes the archtest
-//           blindspots (function-value capture / reflect.MethodByName)
-//           that the type-system seal alone cannot prevent.
+//  2. CONSTRUCTION SEAL — Hard, compile-time (Go type system). Types declared
+//     outside runtime/auth/credentialfence cannot implement FenceToken
+//     (unexported isCredentialFenceToken marker method); the concrete
+//     fenceToken is itself unexported, so external composite literals cannot
+//     construct it. This is the only genuinely compile-time guarantee here: a
+//     non-funnel package cannot fabricate a FenceToken, so to invoke a mutation
+//     method it must obtain one from Mint.
 //
-// See tools/archtest/fence_token_mint_funnel_test.go for the
-// FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
-// docs/architecture/202605101400-adr-credential-session-protocol.md §A16
-// for the closure proof and threat-matrix re-evaluation.
+//  3. Mint-CALLER FUNNEL — Hard via call-site form-uniqueness, archtest-bound
+//     (FENCE-TOKEN-MINT-FUNNEL-01). credentialfence.Mint references are locked
+//     to the credentialinvalidate funnel, storetest / conformance suites, and
+//     *_test.go files via a form-complete ResolvePackageRef scan. Combined with
+//     (2), no non-test production package outside the funnel can produce a
+//     FenceToken value.
 //
-// Scanning tool: ResolveMethodCall + EachInSubtree[ast.CallExpr].
-// Resolver scope: targeted package trees (not full module ./...) to keep RAM
-// bounded while still covering every non-test, non-store-impl call site.
+// Runtime nil-guard (NOT a static grade): credentialfence.MustHave at the top
+// of every mutation impl converts a literal `nil` argument — which compiles
+// and is therefore invisible to (1)/(3) — into an immediate panic
+// (panicregister.Approved + errcode.Assertion → 500). It is a defense-in-depth
+// backstop for the residual "pass nil" form; it does NOT elevate any static
+// grade, and the static Hard claims above stand on (1)+(2)+(3) alone.
+//
+// UPSTREAM-CALLER-01 (rule 4) upgraded Medium → Hard once (2)+(3) closed the
+// "missing caller" hole structurally (a new mutator cannot revoke without a
+// FenceToken it cannot mint). See tools/archtest/fence_token_mint_funnel_test.go
+// for the FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
+// docs/architecture/202605101400-adr-credential-session-protocol.md §A16 for
+// the closure proof and threat-matrix re-evaluation.
+//
+// Scanning tool: ResolveMethodCall + EachInSubtree[ast.SelectorExpr]. The scan
+// is form-complete — it resolves EVERY SelectorExpr (not only the Fun of a
+// CallExpr), so the direct call AND the function-value capture forms
+// (`fn := store.RevokeForSubject`, `var fn = store.RevokeForSubject`, return /
+// pass-through of the method value) all resolve to the same *types.Func and are
+// flagged. info.Selections records a MethodVal selection for a captured method
+// value even when it is not immediately invoked. Resolver scope: targeted
+// package trees (not full module ./...) to keep RAM bounded while still covering
+// every non-test, non-store-impl reference site.
 //
 // Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
 // ResolveMethodCall resolves `*ast.SelectorExpr` via info.Selections. Forms
 // NOT covered by this tool:
 //
-//  1. Function-value store + call: `fn := store.RevokeForSubject; fn(ctx, id, e)`
-//     The `fn(...)` CallExpr's Fun is *ast.Ident, not *ast.SelectorExpr, so
-//     info.Selections[sel] misses it. Captured by:
-//     TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment (asserts absence).
+//  1. reflect invoke: `reflect.ValueOf(store).MethodByName("RevokeForSubject").Call(...)`
+//     The method is named by string, so no SelectorExpr resolves to it — fully
+//     AST-invisible. Asserted absent by:
+//     TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName.
 //
-//  2. reflect invoke: `reflect.ValueOf(store).MethodByName("RevokeForSubject").Call(...)`
-//     Fully AST-invisible. Captured by:
-//     TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName (asserts absence).
+//  2. //go:linkname / unsafe — the universal class that defeats any static
+//     analysis; out of scope for an archtest funnel.
 //
-//  3. Embedded struct method promotion: `type Wrapper struct { session.Store };
-//     w.RevokeForSubject(...)` — receiver type resolves to Wrapper, not session.Store.
-//     ResolveMethodCall recovers the correct *types.Func via info.Selections, so
-//     this IS covered (embedded promotion is transparent to Selections.Obj()).
-//     Documented here for completeness; no separate self-check needed.
+// Covered without a separate self-check: embedded struct method promotion
+// (`type Wrapper struct { session.Store }; w.RevokeForSubject(...)`) —
+// ResolveMethodCall recovers the correct *types.Func via info.Selections, so
+// promotion is transparent. The function-value-capture form (formerly a
+// blind-spot self-check) is now caught directly by the form-complete scan.
 
 import (
 	"fmt"
@@ -266,11 +275,15 @@ func TestCredentialInvalidateFunnel_RevokeForSubject_01(t *testing.T) {
 
 	// RED fixture verification: the scanner must detect ≥ 1 violation in the
 	// rbacassign_direct_revoke_for_subject_red fixture package.
+	// wantMin=3: the fixture exercises three reference forms (direct call +
+	// short-var capture + var-decl capture). Requiring all three pins the
+	// form-completeness of the method-funnel scanner.
 	verifyRedFixtureDetectedPass(
 		t,
 		"./tools/archtest/testdata/credential_invalidate_fixtures/rbacassign_direct_revoke_for_subject_red",
 		sessionStorePkg, sessionRevokeMethod,
 		"CREDENTIAL-INVALIDATE-FUNNEL-01 RED fixture",
+		3,
 	)
 }
 
@@ -329,6 +342,7 @@ func TestCredentialInvalidateFunnel_BumpAuthzEpoch_01(t *testing.T) {
 		"./cells/accesscore/internal/credentialinvalidate/testdata/identitymanage_direct_bump_epoch_red",
 		userRepoPkg, userBumpMethod,
 		"USER-AUTHZ-EPOCH-BUMP-FUNNEL-01 RED fixture",
+		1,
 	)
 }
 
@@ -383,6 +397,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 		"./tools/archtest/testdata/credential_invalidate_fixtures/identitymanage_direct_revoke_refresh_red",
 		refreshStorePkg, refreshRevokeMethod,
 		"REFRESH-REVOKE-USER-FUNNEL-01 RED fixture",
+		1,
 	)
 }
 
@@ -465,69 +480,11 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		"./cells/accesscore/internal/credentialinvalidate/testdata/sessionlogin_direct_apply_red",
 		invalidatorPkg, invalidatorMethod,
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
+		1,
 	)
 }
 
 // ─── Blind-spot self-check tests ─────────────────────────────────────────
-
-// TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment asserts that the
-// function-value-assignment blind spot (e.g. `fn := store.RevokeForSubject; fn(...)`)
-// does NOT appear in production code. If it did, the scanner would miss it.
-// This inverts the blind-spot into a production-absence assertion so the rule
-// remains valid under the "blind spot is not present" premise.
-//
-// Scanner used: EachInSubtree[ast.AssignStmt] + right-hand-side SelectorExpr
-// name matching. This is an AST-only pattern check (not type-aware), but is
-// sufficient because the method names are distinct enough to avoid false
-// positives.
-func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) {
-	t.Parallel()
-
-	bannedMethodNames := map[string]string{
-		"RevokeForSubject": "CREDENTIAL-INVALIDATE-FUNNEL-01",
-		"BumpAuthzEpoch":   "USER-AUTHZ-EPOCH-BUMP-FUNNEL-01",
-		"RevokeUser":       "REFRESH-REVOKE-USER-FUNNEL-01",
-	}
-
-	var violations []string
-	// Load production code (no tests).
-	_ = RunTyped(t, TypedOpts{Tests: false},
-		[]string{"./cells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."},
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				if isAllowlisted(rel) {
-					continue
-				}
-				EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-					EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-						if rule, banned := bannedMethodNames[sel.Sel.Name]; banned {
-							line := p.Fset.Position(assign.Pos()).Line
-							violations = append(violations, fmt.Sprintf(
-								"%s:%d: %s function-value assignment blind spot detected (%s)",
-								rel, line, sel.Sel.Name, rule,
-							))
-						}
-					})
-				})
-			}
-			return nil
-		})
-
-	sort.Strings(violations)
-	for _, v := range violations {
-		t.Log(v)
-	}
-	assert.Empty(t, violations,
-		"funnel blind-spot: function-value assignment of banned methods found in production code — "+
-			"the archtest would miss these calls. Refactor to call credentialinvalidate.Invalidator.Apply directly.")
-}
 
 // TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName asserts that
 // reflect.Value.MethodByName("RevokeForSubject") / ("BumpAuthzEpoch") /
@@ -594,13 +551,25 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 
 // ─── shared helpers ──────────────────────────────────────────────────────
 
-// scanFunnelViolationsPass walks a single file's AST for CallExpr nodes where
-// the method receiver resolves to the interface at (targetPkg, targetMethod).
-// It returns a slice of violation strings for any call found.
+// scanFunnelViolationsPass walks a single file's AST for EVERY SelectorExpr
+// that resolves to the method (targetPkg, targetMethod) — regardless of whether
+// it is the Fun of a CallExpr. It returns a violation string for each. Walking
+// all selectors (not just call.Fun) makes the scan form-complete: it catches
+// the direct call (`store.RevokeForSubject(...)`) AND the function-value
+// capture forms (`fn := store.RevokeForSubject`, `var fn = store.RevokeForSubject`,
+// `return store.RevokeForSubject`, pass-through as an argument) that a
+// CallExpr-only scan misses (the later `fn(...)` has Fun = *ast.Ident, invisible
+// to ResolveMethodCall). info.Selections records a MethodVal selection for a
+// method value even when it is not immediately invoked, so ResolveMethodCall
+// resolves the capture forms to the same *types.Func identity.
 //
-// Receiver type check: we verify fn.Pkg().Path() == targetPkg AND that the
-// Selection receiver is the named interface type. This is the same pattern as
-// in sessionrefresh_no_session_create_test.go (which guards session.Store methods).
+// The `sel.Sel.Name != targetMethod` pre-filter keeps ResolveMethodCall off the
+// hot path for unrelated selectors. Receiver type check: fn.Pkg().Path() ==
+// targetPkg (same identity pattern as sessionrefresh_no_session_create_test.go).
+//
+// Residual blindspot (asserted absent by TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName):
+// reflect.Value.MethodByName("RevokeForSubject") names the method by string, so
+// no SelectorExpr resolves to it. //go:linkname / unsafe are the universal class.
 func scanFunnelViolationsPass(
 	p *Pass,
 	file *ast.File,
@@ -608,12 +577,8 @@ func scanFunnelViolationsPass(
 	targetPkg, targetMethod, ruleID string,
 ) []string {
 	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return
-		}
-		if sel.Sel.Name != targetMethod {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != targetMethod {
 			return
 		}
 		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
@@ -623,29 +588,34 @@ func scanFunnelViolationsPass(
 		if fn.Pkg() == nil || fn.Pkg().Path() != targetPkg {
 			return
 		}
-		line := p.Fset.Position(call.Pos()).Line
+		line := p.Fset.Position(sel.Pos()).Line
 		out = append(out, fmt.Sprintf(
-			"%s:%d: %s: direct call to %s.%s bypasses credentialinvalidate funnel",
+			"%s:%d: %s: reference to %s.%s outside credentialinvalidate funnel "+
+				"(direct call or function-value capture)",
 			rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
 		))
 	})
 	return out
 }
 
-// verifyRedFixtureDetectedPass loads the given fixture pattern via RunTyped
-// and asserts that the scanner finds ≥ 1 violation — proving the rule is
-// not permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
-// mandated by ai-robust.md.
+// verifyRedFixtureDetectedPass loads the given fixture pattern via RunTyped and
+// asserts the scanner finds ≥ wantMin violations — proving the rule is not
+// permanently GREEN. This is the "反向 RED 自检" (reverse RED self-check)
+// mandated by ai-robust.md. wantMin is the number of distinct banned-method
+// reference forms in the fixture; for fixtures that also exercise function-value
+// capture (rbacassign_direct_revoke_for_subject_red), wantMin > 1 pins
+// form-completeness — a CallExpr-only scan would catch only the direct call and
+// fall short here.
 //
-// Fixture load failure is a hard fail: the previous silent t.Logf+return
-// masked archtest regressions — a fixture that stops type-checking would
-// silently disable the RED self-check, leaving the production scan
-// permanently GREEN with no warning. The fixture is in-tree and its build
-// health is part of the archtest contract, so a load failure must fail the
-// test and surface in CI.
+// Fixture load failure is a hard fail: the previous silent t.Logf+return masked
+// archtest regressions — a fixture that stops type-checking would silently
+// disable the RED self-check, leaving the production scan permanently GREEN with
+// no warning. The fixture is in-tree and its build health is part of the
+// archtest contract, so a load failure must fail the test and surface in CI.
 func verifyRedFixtureDetectedPass(
 	t *testing.T,
 	fixturePattern, targetPkg, targetMethod, label string,
+	wantMin int,
 ) {
 	t.Helper()
 
@@ -660,9 +630,11 @@ func verifyRedFixtureDetectedPass(
 		return nil
 	})
 	_ = diags
-	require.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"This means the production scanner is permanently GREEN and would miss real violations. "+
-			"Check that the fixture file actually calls the banned method and is type-checkable.",
-		label)
+	require.GreaterOrEqual(t, found, wantMin,
+		"RED fixture self-check FAILED: %s — expected ≥ %d violations, got %d. "+
+			"A shortfall means the scanner is NOT form-complete (e.g. it only catches "+
+			"direct calls and misses function-value capture), so a non-funnel package "+
+			"could bypass the funnel undetected. Check scanFunnelViolationsPass walks "+
+			"all SelectorExpr, and that the fixture is type-checkable.",
+		label, wantMin, found)
 }

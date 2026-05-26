@@ -630,16 +630,26 @@ BumpPasswordVersion 只自增）。
   首行 `credentialfence.MustHave(tok, "<site>")` 兜 nil 漏洞（panicregister.Approved
   + errcode.Assertion，B-class panic → 500）。
 
-**funnel 闭环证明**：
-1. 类型系统层：外部包既无法实现 FenceToken（未导出标记方法），也无法构造
-   非 nil 值（未导出 impl + Mint 调用方 archtest 锁定）。
-2. 调用形态唯一性：`FENCE-TOKEN-MINT-FUNNEL-01` A1 锁 Mint 调用点 *types.Func
-   身份；A2/A3 反向自检 function-value 捕获 + reflect 调用盲区。
-3. nil 兜底：每个 mutation impl 首行运行时检查，archtest 盲区漏入的 nil
-   token 立即转 500。
+**funnel 闭环证明**（三机制，**分属不同 enforcement 层，不可混为一个 "Hard"**）：
 
-三者组合 = 上游 Hard。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01` godoc
-正式升 Medium → Hard。
+1. **构造封印（编译期 Hard，类型系统）**：外部包无法实现 FenceToken（未导出
+   标记方法），也无法构造 `fenceToken{}`（未导出 impl）。这是本 amendment **唯一**
+   的编译期保证——它强制任何外部吊销方必须从 `Mint` 取 token。
+2. **Mint 调用方 funnel（archtest form-uniqueness Hard，非编译期）**：
+   `FENCE-TOKEN-MINT-FUNNEL-01` 的扫描器是 **form-complete** 的——遍历所有
+   SelectorExpr 经 `ResolvePackageRef` 解析，flag **每一处** Mint 引用（直接调用 /
+   函数值捕获 var-decl/short-var / return / 传参 / reflect arg），不再靠逐形态盲区
+   自检。Go 无法表达 "只有包 X 能调 Mint"，故这是该规则形状可达的 Hard 天花板
+   （PANIC-REGISTERED-01 范本），**不是**编译期保证。下游三方法 funnel
+   （`CREDENTIAL-INVALIDATE-FUNNEL-01` 等）同样升级为 form-complete SelectorExpr
+   扫描，覆盖方法值捕获形态。
+3. **nil 运行时兜底（不计静态档）**：字面量 `nil` 实参可编译、对 (1)(2) 静态不可见；
+   每个 mutation impl 首行 `MustHave` 将其转 panic（500）。这是 defense-in-depth
+   backstop，**不抬升任何静态档**。
+
+上游 Hard 由 (1)+(2) 组合支撑（构造封印编译期 + Mint funnel form-complete
+archtest）；(3) 是运行时兜底，不属于静态 claim。`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
+godoc 正式升 Medium → Hard。
 
 **test-file Mint() caller 豁免**：`FENCE-TOKEN-MINT-FUNNEL-01` 的
 `isFenceTokenMintAllowlisted` helper 对所有 `*_test.go` 文件返回 true，使测试
@@ -658,9 +668,14 @@ FenceToken。§A10 论证的前提"funnel 仅靠 caller allowlist"已不成立�
 
 - line 893 "新增 user authz-affecting 字段漏调 invalidator"：原 ✅（S4e
   AUTHZ-MUTATION-APPLY-FUNNEL-01 Hard）现 ✅✅ **强化**——`CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01`
-  的 "Medium-by-necessity" 标注由 #1033 转 Hard。"漏调" 现在是 Go 编译期
-  错误（mutation 方法需要 FenceToken，外部包无法构造），不再依赖 archtest
-  CI 兜底。
+  的 "Medium-by-necessity" 标注由 #1033 转 Hard。强化的精确含义（按上方三机制
+  分层，**不是**单一 "编译期错误"）：(a) 外部包**构造** FenceToken 是 Go 编译期
+  错误（构造封印），故新吊销方必须经 Mint；(b) Mint 调用方 + 三 mutation 方法
+  调用方由 **form-complete** archtest funnel 锁定（archtest-bound Hard，非编译期）；
+  (c) 漏传 `nil` 可编译，由运行时 `MustHave` 转 500 兜底。"漏调 invalidator"
+  之所以闭合，是因为新吊销方既无法构造 token，也无法在 funnel 外调用 Mint 取 token
+  （archtest 拦截），而非"方法签名需要 FenceToken"本身在编译期阻止漏调（传 nil
+  仍可编译）。
 - 其他 ✅ 格子 **不退化**：本 amendment 只升级 1 个格子的支撑机制（Medium →
   Hard），未改变任一格子的最终结论。
 - **无 ✅ → ⚠️/❌ 退化**。

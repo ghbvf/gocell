@@ -167,35 +167,6 @@ func TestUserRepo_BumpAuthzEpoch_NotFound(t *testing.T) {
 	assert.Equal(t, errcode.KindNotFound, ce.Kind)
 }
 
-// TestUserRepo_BumpAuthzEpoch_NilToken verifies that passing a nil FenceToken to
-// BumpAuthzEpoch panics via MustHave (B-class programmer error) and that the
-// panic payload is an *errcode.Error wrapping errcode.Assertion.
-func TestUserRepo_BumpAuthzEpoch_NilToken(t *testing.T) {
-	ctx := context.Background()
-	repo := NewStore(clock.Real()).UserRepository()
-
-	user, err := domain.NewUser("niltoken_user", "niltoken@example.com", "$2a$12$hash", time.Now())
-	require.NoError(t, err)
-	user.ID = "usr-niltoken-001"
-	require.NoError(t, repo.Create(ctx, user))
-
-	var recovered any
-	func() {
-		defer func() { recovered = recover() }()
-		_, _ = repo.BumpAuthzEpoch(ctx, "usr-niltoken-001", nil)
-	}()
-
-	if recovered == nil {
-		t.Fatal("BumpAuthzEpoch with nil FenceToken must panic, but did not")
-	}
-	var ce *errcode.Error
-	if !errors.As(recovered.(error), &ce) {
-		t.Fatalf("panic payload must be an *errcode.Error, got %T: %v", recovered, recovered)
-	}
-	assert.Equal(t, errcode.KindInternal, ce.Kind,
-		"nil-token panic must carry KindInternal (errcode.Assertion)")
-}
-
 func TestUserRepo_BumpAuthzEpoch_Concurrent(t *testing.T) {
 	ctx := context.Background()
 	repo := NewStore(clock.Real()).UserRepository()

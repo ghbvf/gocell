@@ -124,6 +124,7 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T16_Rotate_GraceInsideInterval_DistinctWire", func(t *testing.T) { t.Parallel(); runT16GraceInside(t, factory) })
 	t.Run("T17_Rotate_ParseFailure_Uniform", func(t *testing.T) { t.Parallel(); runT17ParseFailure(t, factory) })
 	t.Run("T18_RevokeUser_OnlyTargetSubject", func(t *testing.T) { t.Parallel(); runT18RevokeUser(t, factory) })
+	t.Run("T18b_RevokeUser_NilFenceToken_Panics", func(t *testing.T) { t.Parallel(); runT18bRevokeUserNilFenceToken(t, factory) })
 	t.Run("T19_Peek_DoesNotAdvanceLineage", func(t *testing.T) { t.Parallel(); runT19PeekDoesNotAdvance(t, factory) })
 	t.Run("T20_Peek_RejectionParityAndReuseCascade", func(t *testing.T) {
 		t.Parallel()
@@ -528,6 +529,28 @@ func runT18RevokeUser(t *testing.T, factory Factory) {
 
 	// Unknown subject is a no-op.
 	require.NoError(t, store.RevokeUser(ctx, "nobody", credentialfence.Mint()))
+}
+
+// runT18bRevokeUserNilFenceToken — Store contract: a nil FenceToken is a
+// programmer error that credentialfence.MustHave converts to a B-class panic
+// (*errcode.Error, KindInternal) identifying the call site. Every impl (mem /
+// PG) must honor the guard — the shared suite holds them all to it. MustHave is
+// the first statement, so the panic fires before any backend I/O.
+func runT18bRevokeUserNilFenceToken(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		// nil FenceToken is intentional — exercising the MustHave guard.
+		_ = store.RevokeUser(context.Background(), "subject-nil-token", nil)
+	}()
+
+	require.NotNil(t, recovered, "nil FenceToken must trigger MustHave panic")
+	coded, ok := recovered.(*errcode.Error)
+	require.True(t, ok, "panic payload must be *errcode.Error, got %T", recovered)
+	require.Equal(t, errcode.KindInternal, coded.Kind, "nil-token panic must carry KindInternal")
+	require.Contains(t, coded.Message, "refresh.Store.RevokeUser", "panic message must identify call site")
 }
 
 func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {

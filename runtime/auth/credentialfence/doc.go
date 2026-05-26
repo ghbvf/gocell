@@ -41,19 +41,34 @@
 //
 // # AI-robust evaluation
 //
-//   - Implementation seal — Hard (Go type system; unimplementable outside
-//     this package due to unexported marker method)
-//   - Mint callsite seal — Hard via call-site form-uniqueness (archtest
-//     A1 ResolvePackageRef resolves the SelectorExpr X to a *types.PkgName;
-//     A2/A3 blindspot self-checks reject function-value and reflect forms)
-//   - nil-FenceToken hole — closed via runtime guard in the three mutation
-//     methods (pkg/validation.IsNilInterface → errcode.Assertion through
-//     panicregister.Approved). Single-source completeness vs. archtest
-//     blindspots.
+// Three mechanisms with distinct enforcement layers — do not collapse them
+// into one "Hard":
 //
-// Combined grade: funnel upstream Hard, downstream Hard. See
-// .claude/rules/gocell/ai-robust.md §"Hard 范本目录" entry "typed marker
-// funnel for unbounded ops" and §"Funnel 双向锁评级".
+//   - Construction seal — Hard, compile-time (Go type system). FenceToken is
+//     unimplementable outside this package (unexported marker method) and the
+//     concrete [fenceToken] is unexported, so no external composite literal can
+//     build one. This is the only compile-time guarantee here; it forces every
+//     external would-be revoker to obtain a token from [Mint].
+//   - Mint callsite funnel — Hard via call-site form-uniqueness, archtest-bound
+//     (FENCE-TOKEN-MINT-FUNNEL-01), NOT compile-time. The scanner is
+//     form-complete: it flags every reference to Mint (direct call,
+//     function-value capture, return, pass-through arg, reflect arg) via a
+//     ResolvePackageRef SelectorExpr walk, so there is no per-form blindspot
+//     self-check to drift. Go cannot express "only package X may call Mint", so
+//     this is the Hard ceiling the rule's shape can reach (the
+//     PANIC-REGISTERED-01 precedent).
+//   - nil-FenceToken — runtime backstop, NOT a static grade. A literal nil
+//     argument compiles and is invisible to the two static mechanisms above;
+//     [MustHave] in each mutation impl converts it to an immediate panic
+//     (pkg/validation.IsNilInterface → errcode.Assertion via
+//     panicregister.Approved → 500). Defense-in-depth; it does not elevate any
+//     static grade.
+//
+// Combined grade: funnel upstream Hard, downstream Hard — resting on the
+// construction seal (compile-time) plus the two form-complete archtest funnels.
+// The nil guard is a runtime backstop, not part of the static claim. See
+// .claude/rules/gocell/ai-robust.md §"Hard 范本目录" entry "typed marker funnel
+// for unbounded ops" and §"Funnel 双向锁评级".
 //
 // # Reference precedent
 //

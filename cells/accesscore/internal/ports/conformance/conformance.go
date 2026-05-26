@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -120,6 +121,9 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	})
 	t.Run("BumpAuthzEpoch_MonotonicIncrement", func(t *testing.T) {
 		conformBumpAuthzEpochMonotonic(t, factory)
+	})
+	t.Run("BumpAuthzEpoch_NilFenceToken_Panics", func(t *testing.T) {
+		conformBumpAuthzEpochNilFenceToken(t, factory)
 	})
 	t.Run("GetByIDForUpdate_LockContention", func(t *testing.T) {
 		conformGetByIDForUpdateLockContention(t, factory)
@@ -452,6 +456,40 @@ func conformBumpAuthzEpochSucceeds(t *testing.T, factory UserRepoFactory) {
 	}
 	if newEpoch != initialEpoch+1 {
 		t.Errorf("BumpAuthzEpoch_Succeeds: want epoch %d, got %d", initialEpoch+1, newEpoch)
+	}
+}
+
+// conformBumpAuthzEpochNilFenceToken: a nil FenceToken is a programmer error
+// that credentialfence.MustHave converts to a B-class panic (*errcode.Error,
+// KindInternal) identifying the call site. Every UserRepository impl (mem / PG)
+// must honor the guard — the shared conformance suite holds them all to it
+// rather than relying on per-impl unit tests. MustHave is the first statement
+// of each impl, so the panic fires before any tx / backend I/O (no seed or
+// RunInTx needed).
+func conformBumpAuthzEpochNilFenceToken(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, _, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		// nil FenceToken is intentional — exercising the MustHave guard.
+		_, _ = repo.BumpAuthzEpoch(context.Background(), "usr-nil-token", nil)
+	}()
+
+	if recovered == nil {
+		t.Fatal("nil FenceToken must trigger MustHave panic, got nil")
+	}
+	coded, ok := recovered.(*errcode.Error)
+	if !ok {
+		t.Fatalf("panic payload must be *errcode.Error, got %T: %v", recovered, recovered)
+	}
+	if coded.Kind != errcode.KindInternal {
+		t.Errorf("nil-token panic must carry KindInternal (Assertion), got %v", coded.Kind)
+	}
+	if !strings.Contains(coded.Message, "ports.UserRepository.BumpAuthzEpoch") {
+		t.Errorf("panic message must identify call site, got %q", coded.Message)
 	}
 }
 
