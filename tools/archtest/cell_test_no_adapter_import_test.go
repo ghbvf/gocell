@@ -20,7 +20,8 @@
 //   - outbox.Store / record  → runtime/outbox/outboxtest.{Recorder,FakeStore}
 //   - distlock.Driver        → runtime/distlock/locktest.FakeDriver
 //   - crypto.KeyProvider     → runtime/crypto.LocalAESKeyProvider
-//   - persistence.TxRunner   → kernel/outbox.DemoTxRunner
+//   - persistence.TxRunner       → kernel/outbox.DemoTxRunner{}        (bare runner, for constructors taking persistence.TxRunner)
+//   - persistence.CellTxManager  → kernel/outbox.DemoCellTxManager()   (sealed marker, for cell WithTxManager options)
 //   - cell ports (repos)     → cells/<cell>/internal/mem, cells/accesscore/mem.Bundle
 //
 // Why NOT an adapters/<name>/<name>fake/ subpackage (the #803 literal ask):
@@ -55,7 +56,17 @@
 // more robust than a depguard filename exemption. depguard is deliberately NOT
 // used here: it matches paths only and cannot evaluate //go:build, so it cannot
 // express the correct (build-tag) exemption. Routed to archtest per ai-robust
-// "纯 AST 模式 → archtest.Run".
+// "纯 AST 模式 → archtest.Run". The hand-written ModuleScope+ParseBuildConstraint
+// walker (vs an archtest.Run Rule closure) mirrors the sibling build-constraint
+// discovery rule ci_integration_discovery_invariants_test.go::discoverPackagesUnderTag,
+// uses only public archtest façade primitives (no internal/scanner import), and
+// passes SCANNER-FRAMEWORK-USAGE-01/02 + PASS-FUNNEL-* meta-archtests.
+//
+// This is a UNIDIRECTIONAL import ban, not a funnel — the ai-robust "下游/上游
+// 双向锁" grading does not apply. There is no upstream sealing: Go's type system
+// cannot prevent a test file from importing a package, so upstream is permanently
+// Soft (the same Go-language ceiling depguard hits). No gh issue is opened for an
+// upstream-Hard upgrade because none is reachable in Go.
 //
 // # Blind spots (out of this rule's declared range) + reverse self-checks
 //
@@ -76,6 +87,7 @@
 package archtest
 
 import (
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -138,13 +150,13 @@ func cellTestAdapterImportFindings(root string) ([]string, error) {
 			continue // build-tag gated (integration/e2e/...) — legitimately uses real adapters
 		}
 
-		imports, iErr := fileImportPaths(path)
+		imports, iErr := fileImportRefs(path)
 		if iErr != nil {
 			return nil, iErr
 		}
-		for _, p := range imports {
-			if isPlatformAdapterImport(p) {
-				findings = append(findings, relSlash+": imports "+p)
+		for _, ir := range imports {
+			if isPlatformAdapterImport(ir.path) {
+				findings = append(findings, fmt.Sprintf("%s:%d: imports %s", relSlash, ir.line, ir.path))
 			}
 		}
 	}
@@ -184,17 +196,24 @@ func fileDefaultVisible(path string) (bool, error) {
 	return expr.Eval(BuildContextPredicate()), nil
 }
 
-// fileImportPaths returns the import path literals of a Go file.
-func fileImportPaths(path string) ([]string, error) {
+// importRef is an import path literal paired with its 1-based source line, so
+// findings can point CI at the exact line (not just the file).
+type importRef struct {
+	path string
+	line int
+}
+
+// fileImportRefs returns the import path literals of a Go file with line numbers.
+func fileImportRefs(path string) ([]importRef, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []importRef
 	for _, imp := range file.Imports {
 		if p := archStringLiteralValue(imp.Path); p != "" {
-			out = append(out, p)
+			out = append(out, importRef{path: p, line: fset.Position(imp.Path.Pos()).Line})
 		}
 	}
 	return out, nil
@@ -211,7 +230,8 @@ func isPlatformAdapterImport(p string) bool {
 // TestCellTestNoAdapterImport_FixtureMetaTest verifies the walker classifies
 // synthetic files correctly across the blind spots documented in the package
 // godoc: aliased import, dot import, cell-internal adapter, build-tag exemption,
-// example-cell scope, non-cell out-of-scope, production-file out-of-scope.
+// example-cell scope, non-cell out-of-scope, production-file out-of-scope, and a
+// clean cell unit test (reverse self-check: no false positive).
 func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 	t.Parallel()
 
@@ -273,6 +293,14 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 			name:    "production_file_out_of_scope",
 			rel:     "cells/i/prod.go",
 			content: "package i\nimport _ \"github.com/ghbvf/gocell/adapters/postgres\"\n",
+			wantHit: false,
+		},
+		{
+			// Reverse self-check: a normal cell unit test importing only canonical
+			// in-mem fakes / kernel / stdlib must NOT be flagged (no false positive).
+			name:    "clean_cell_unit_test",
+			rel:     "cells/k/k_test.go",
+			content: "package k\nimport (\n\t\"testing\"\n\t_ \"github.com/ghbvf/gocell/kernel/outbox\"\n)\nfunc TestK(t *testing.T) {}\n",
 			wantHit: false,
 		},
 	}

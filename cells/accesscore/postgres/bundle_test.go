@@ -36,6 +36,9 @@ func TestNewBundle_FailFast(t *testing.T) {
 	})
 
 	t.Run("nil_txMgr_typed_nil", func(t *testing.T) {
+		// typed-nil caught by validation.IsNilInterface — behavior is identical
+		// for any concrete TxRunner type (DemoTxRunner here vs the real adapter
+		// in production), since IsNilInterface checks the interface's data pointer.
 		var nilTxm *outbox.DemoTxRunner
 		_, err := NewBundle(fakePool, nilTxm, clock.Real())
 		assertValidationFailed(t, err)
