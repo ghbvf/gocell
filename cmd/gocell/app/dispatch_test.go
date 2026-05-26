@@ -15,8 +15,20 @@ import (
 
 // captureDispatch runs Dispatch with args while capturing stdout and stderr
 // separately, so contract tests can assert which stream each message lands on.
+//
+// It holds both stream-capture mutexes for the duration, matching the locking
+// discipline of captureStdout/captureStderr (see main_test.go): redirecting
+// the process-global os.Stdout/os.Stderr without them would race a parallel
+// capturing test. The acquisition order is fixed stdout→stderr; the
+// single-lock captureStdout/captureStderr never wait on the other lock, so no
+// ordering cycle is possible.
 func captureDispatch(t *testing.T, ctx context.Context, args []string) (exit int, stdout, stderr string) {
 	t.Helper()
+
+	stdoutCaptureMu.Lock()
+	defer stdoutCaptureMu.Unlock()
+	stderrCaptureMu.Lock()
+	defer stderrCaptureMu.Unlock()
 
 	origOut, origErr := os.Stdout, os.Stderr
 	rOut, wOut, _ := os.Pipe()
