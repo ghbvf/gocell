@@ -303,54 +303,46 @@ func extractRegisteredFromAllRules(t *testing.T, pkg *governancePackage) (map[st
 			if fatal != "" || gd.Tok != token.VAR {
 				return
 			}
-			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+			// Find the ValueSpec whose name is "allRules".
+			vs, ok := scanner.FindFirstChild[ast.ValueSpec](gd, func(vs *ast.ValueSpec) bool {
+				for _, nameIdent := range vs.Names {
+					if nameIdent.Name == "allRules" {
+						return true
+					}
+				}
+				return false
+			})
+			if !ok || len(vs.Values) == 0 {
+				return
+			}
+			// vs.Values[0] should be a []Rule{...} composite literal.
+			cl, ok := vs.Values[0].(*ast.CompositeLit)
+			if !ok {
+				return
+			}
+			// Each element in allRules is a Rule{...} composite literal.
+			scanner.EachInChildren[ast.CompositeLit](cl, func(ruleLit *ast.CompositeLit) {
 				if fatal != "" {
 					return
 				}
-				// Find the ValueSpec whose name is "allRules".
-				isAllRules := false
-				for _, nameIdent := range vs.Names {
-					if nameIdent.Name == "allRules" {
-						isAllRules = true
-						break
+				// Find the Detect: KeyValueExpr in this Rule literal.
+				scanner.EachInChildren[ast.KeyValueExpr](ruleLit, func(kv *ast.KeyValueExpr) {
+					if fatal != "" {
+						return
 					}
-				}
-				if !isAllRules {
-					return
-				}
-				// vs.Values[0] should be a []Rule{...} composite literal.
-				if len(vs.Values) == 0 {
-					return
-				}
-				cl, ok := vs.Values[0].(*ast.CompositeLit)
-				if !ok {
-					return
-				}
-				// Each element in allRules is a Rule{...} composite literal.
-				for _, elt := range cl.Elts {
-					ruleLit, ok := elt.(*ast.CompositeLit)
-					if !ok {
-						continue
+					keyIdent, ok := kv.Key.(*ast.Ident)
+					if !ok || keyIdent.Name != "Detect" {
+						return
 					}
-					// Find the Detect: KeyValueExpr in this Rule literal.
-					scanner.EachInChildren[ast.KeyValueExpr](ruleLit, func(kv *ast.KeyValueExpr) {
-						if fatal != "" {
-							return
-						}
-						keyIdent, ok := kv.Key.(*ast.Ident)
-						if !ok || keyIdent.Name != "Detect" {
-							return
-						}
-						name, ok, isFatal := extractDetectMethodName(kv.Value, relPath, pkg.fset)
-						if isFatal {
-							fatal = name // name carries the fatal message when isFatal
-							return
-						}
-						if ok {
-							registered[name] = struct{}{}
-						}
-					})
-				}
+					name, ok, isFatal := extractDetectMethodName(kv.Value, relPath, pkg.fset)
+					if isFatal {
+						fatal = name // name carries the fatal message when isFatal
+						return
+					}
+					if ok {
+						registered[name] = struct{}{}
+					}
+				})
 			})
 		})
 	}
@@ -1519,34 +1511,29 @@ func scanEmitterFuncValueUsages(f *ast.File) []token.Pos {
 	callees := map[ast.Expr]bool{}
 	selSel := map[*ast.Ident]bool{}
 	declName := map[*ast.Ident]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.CallExpr:
-			callees[x.Fun] = true
-		case *ast.SelectorExpr:
-			if x.Sel != nil {
-				selSel[x.Sel] = true
-			}
-		case *ast.FuncDecl:
-			if x.Name != nil {
-				declName[x.Name] = true
-			}
+	scanner.EachInSubtree[ast.CallExpr](f, func(x *ast.CallExpr) {
+		callees[x.Fun] = true
+	})
+	scanner.EachInSubtree[ast.SelectorExpr](f, func(x *ast.SelectorExpr) {
+		if x.Sel != nil {
+			selSel[x.Sel] = true
 		}
-		return true
+	})
+	scanner.EachInSubtree[ast.FuncDecl](f, func(x *ast.FuncDecl) {
+		if x.Name != nil {
+			declName[x.Name] = true
+		}
 	})
 	var bad []token.Pos
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch e := n.(type) {
-		case *ast.SelectorExpr:
-			if e.Sel != nil && isGovernanceEmitterName(e.Sel.Name) && !callees[e] {
-				bad = append(bad, e.Pos())
-			}
-		case *ast.Ident:
-			if isGovernanceEmitterName(e.Name) && !callees[e] && !selSel[e] && !declName[e] {
-				bad = append(bad, e.Pos())
-			}
+	scanner.EachInSubtree[ast.SelectorExpr](f, func(e *ast.SelectorExpr) {
+		if e.Sel != nil && isGovernanceEmitterName(e.Sel.Name) && !callees[e] {
+			bad = append(bad, e.Pos())
 		}
-		return true
+	})
+	scanner.EachInSubtree[ast.Ident](f, func(e *ast.Ident) {
+		if isGovernanceEmitterName(e.Name) && !callees[e] && !selSel[e] && !declName[e] {
+			bad = append(bad, e.Pos())
+		}
 	})
 	return bad
 }
@@ -1583,37 +1570,33 @@ func extractAllRulesEntries(t *testing.T, pkg *governancePackage) ([]allRulesEnt
 			if fatal != "" || gd.Tok != token.VAR {
 				return
 			}
-			scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+			// Find the ValueSpec whose name is "allRules".
+			vs, ok := scanner.FindFirstChild[ast.ValueSpec](gd, func(vs *ast.ValueSpec) bool {
+				for _, nameIdent := range vs.Names {
+					if nameIdent.Name == "allRules" {
+						return true
+					}
+				}
+				return false
+			})
+			if !ok || len(vs.Values) == 0 {
+				return
+			}
+			cl, ok := vs.Values[0].(*ast.CompositeLit)
+			if !ok {
+				return
+			}
+			scanner.EachInChildren[ast.CompositeLit](cl, func(ruleLit *ast.CompositeLit) {
 				if fatal != "" {
 					return
 				}
-				isAllRules := false
-				for _, nameIdent := range vs.Names {
-					if nameIdent.Name == "allRules" {
-						isAllRules = true
-						break
-					}
-				}
-				if !isAllRules || len(vs.Values) == 0 {
+				entry, entryFatal := parseRuleEntry(ruleLit, relPath, pkg)
+				if entryFatal != "" {
+					fatal = entryFatal
 					return
 				}
-				cl, ok := vs.Values[0].(*ast.CompositeLit)
-				if !ok {
-					return
-				}
-				for _, elt := range cl.Elts {
-					ruleLit, ok := elt.(*ast.CompositeLit)
-					if !ok {
-						continue
-					}
-					entry, entryFatal := parseRuleEntry(ruleLit, relPath, pkg)
-					if entryFatal != "" {
-						fatal = entryFatal
-						return
-					}
-					if entry != nil {
-						entries = append(entries, *entry)
-					}
+				if entry != nil {
+					entries = append(entries, *entry)
 				}
 			})
 		})
@@ -1692,16 +1675,15 @@ func resolveRuleCodeValue(expr ast.Expr, info *types.Info) (string, bool) {
 func buildValidatorMethodMap(files []*ast.File) map[string]*ast.FuncDecl {
 	out := make(map[string]*ast.FuncDecl)
 	for _, file := range files {
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Name == nil || fd.Recv == nil || len(fd.Recv.List) == 0 {
-				continue
+		scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Name == nil || fd.Recv == nil || len(fd.Recv.List) == 0 {
+				return
 			}
 			if !isPointerValidatorReceiver(fd.Recv.List[0]) {
-				continue
+				return
 			}
 			out[fd.Name.Name] = fd
-		}
+		})
 	}
 	return out
 }
