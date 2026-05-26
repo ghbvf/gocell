@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -35,7 +34,7 @@ func (r *DeviceRepository) Create(_ context.Context, device *domain.Device) erro
 	if _, exists := r.devices[device.ID]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"device already exists",
-			errcode.WithInternal(fmt.Sprintf("id=%q", device.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", device.ID))))
 	}
 	stored := *device
 	r.devices[device.ID] = &stored
@@ -51,7 +50,7 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
-			errcode.WithDetails(slog.String("deviceId", id)))
+			errcode.WithDetails(errcode.PublicAttr("deviceId", id)))
 	}
 	out := *d
 	return &out, nil

@@ -89,7 +89,7 @@ func (r *PGDeviceRepository) Create(ctx context.Context, device *domain.Device) 
 		if pgquery.IsUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"device already exists",
-				errcode.WithInternal(fmt.Sprintf("id=%q", device.ID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", device.ID))))
 		}
 		slog.Error("device_repo: pg write failed",
 			slog.String("operation", "create"),
@@ -108,7 +108,7 @@ func (r *PGDeviceRepository) GetByID(ctx context.Context, id string) (*domain.De
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 				"device not found",
-				errcode.WithDetails(slog.String("deviceId", id)))
+				errcode.WithDetails(errcode.PublicAttr("deviceId", id)))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -267,8 +267,8 @@ func scanDevice(row pgx.Row) (*domain.Device, error) {
 	if !validDeviceStatus(status) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"device row has invalid status enum",
-			errcode.WithDetails(slog.String("table", "devices"), slog.String("column", "status")),
-			errcode.WithInternal(fmt.Sprintf("scanned status=%q", status)))
+			errcode.WithDetails(errcode.PublicAttr("table", "devices"), errcode.PublicAttr("column", "status")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	d.Status = status
 	d.LastSeen = lastSeen
@@ -287,8 +287,8 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 	if !validDeviceStatus(status) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"device row has invalid status enum",
-			errcode.WithDetails(slog.String("table", "devices"), slog.String("column", "status")),
-			errcode.WithInternal(fmt.Sprintf("scanned status=%q", status)))
+			errcode.WithDetails(errcode.PublicAttr("table", "devices"), errcode.PublicAttr("column", "status")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	d.Status = status
 	d.LastSeen = lastSeen

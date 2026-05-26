@@ -182,7 +182,9 @@ func TestExecutePagedQuery_ScopeMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "sort scope mismatch", reasonAttr.Value.String())
+	s, ok := reasonAttr.Value().(string)
+	require.True(t, ok, "reason must be a string value")
+	assert.Equal(t, "sort scope mismatch", s)
 }
 
 func TestExecutePagedQuery_ContextMismatch(t *testing.T) {
@@ -205,7 +207,9 @@ func TestExecutePagedQuery_ContextMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
+	s, ok := reasonAttr.Value().(string)
+	require.True(t, ok, "reason must be a string value")
+	assert.Equal(t, "query context mismatch", s)
 }
 
 func TestExecutePagedQuery_OnCursorErr_Decode(t *testing.T) {

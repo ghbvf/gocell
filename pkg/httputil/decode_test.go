@@ -229,11 +229,15 @@ func assertDecodeError(t *testing.T, err error, wantCode errcode.Code, wantReaso
 	if wantReason != "" {
 		reasonAttr, ok := ecErr.FindAttr("reason")
 		require.True(t, ok)
-		assert.Equal(t, wantReason, reasonAttr.Value.String())
+		s, ok := reasonAttr.Value().(string)
+		require.True(t, ok, "reason must be a string value")
+		assert.Equal(t, wantReason, s)
 	}
 	if wantField != "" {
 		fieldAttr, ok := ecErr.FindAttr("field")
 		require.True(t, ok)
-		assert.Equal(t, wantField, fieldAttr.Value.String())
+		s, ok := fieldAttr.Value().(string)
+		require.True(t, ok, "field must be a string value")
+		assert.Equal(t, wantField, s)
 	}
 }

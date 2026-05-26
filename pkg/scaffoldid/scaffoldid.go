@@ -47,7 +47,6 @@
 package scaffoldid
 
 import (
-	"log/slog"
 	"regexp"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -96,9 +95,9 @@ func Parse(raw string) (ScaffoldID, error) {
 		return ScaffoldID{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffoldid: identifier does not match IdentifierPattern",
 			errcode.WithDetails(
-				slog.String("id", raw),
-				slog.String("pattern", IdentifierPattern),
-				slog.String("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
+				errcode.PublicAttr("id", raw),
+				errcode.PublicAttr("pattern", IdentifierPattern),
+				errcode.PublicAttr("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
 			))
 	}
 	return ScaffoldID{value: raw}, nil

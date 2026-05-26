@@ -1,7 +1,6 @@
 package httputil
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -35,7 +34,7 @@ func ParseUUIDPathParam(w http.ResponseWriter, r *http.Request, name string) (st
 			errcode.KindInvalid,
 			errcode.ErrValidationInvalidUUID,
 			"path parameter must be a valid UUID",
-			errcode.WithDetails(slog.String("param", name)),
+			errcode.WithDetails(errcode.PublicAttr("param", name)),
 		))
 		return "", false
 	}

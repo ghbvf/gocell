@@ -64,8 +64,8 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 		errcode.KindInvalid,
 		errcode.ErrValidationFailed,
 		"invalid cursor",
-		errcode.WithInternal("cursor token failed signature check"),
-		errcode.WithDetails(slog.String("reason", "signature")),
+		errcode.WithInternal(errcode.InternalAttr("_", "cursor token failed signature check")),
+		errcode.WithDetails(errcode.PublicAttr("reason", "signature")),
 	)
 
 	rec := httptest.NewRecorder()
@@ -82,7 +82,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 	require.NotNil(t, warnRec)
 	assertStringAttr(t, *warnRec, "code", string(errcode.ErrValidationFailed))
 	assertStringAttr(t, *warnRec, "status", "400")
-	assertStringAttr(t, *warnRec, "internal", "cursor token failed signature check")
+	assertStringAttr(t, *warnRec, "_", "cursor token failed signature check")
 	assertStringAttr(t, *warnRec, "request_id", "req-4xx")
 	assertStringAttr(t, *warnRec, "trace_id", "trace-4xx")
 	assertStringAttr(t, *warnRec, "span_id", "span-4xx")
@@ -146,8 +146,8 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 		errcode.ErrConfigRepoQuery,
 		"config query failed for tenant admin@example.com",
 		cause,
-		errcode.WithInternal("select config_entries failed"),
-		errcode.WithDetails(slog.String("tenant", "admin@example.com")),
+		errcode.WithInternal(errcode.InternalAttr("_", "select config_entries failed")),
+		errcode.WithDetails(errcode.PublicAttr("tenant", "admin@example.com")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-5xx")
 
@@ -166,7 +166,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	assertStringAttr(t, *errRec, "code", string(errcode.ErrConfigRepoQuery))
 	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrInternal))
 	assertStringAttr(t, *errRec, "status", "500")
-	assertStringAttr(t, *errRec, "internal", "select config_entries failed")
+	assertStringAttr(t, *errRec, "_", "select config_entries failed")
 	assertStringAttr(t, *errRec, "cause", cause.Error())
 	assertStringAttr(t, *errRec, "request_id", "req-5xx")
 	// Details must be logged server-side even for 5xx (framework strips them
@@ -188,7 +188,7 @@ func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
 
 	ecErr := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
 		"session not found",
-		errcode.WithDetails(slog.String("sessionId", "s-7")))
+		errcode.WithDetails(errcode.PublicAttr("sessionId", "s-7")))
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-404")
 	ctx = WithClientErrorLogSamplingEvery(ctx, "test", 1)
 
@@ -219,8 +219,8 @@ func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing
 		errcode.ErrConfigRepoQuery,
 		"config query failed",
 		errors.New("postgres pool exhausted"),
-		errcode.WithInternal("select config_entries failed"),
-		errcode.WithDetails(slog.String("tenant", "admin@example.com")),
+		errcode.WithInternal(errcode.InternalAttr("_", "select config_entries failed")),
+		errcode.WithDetails(errcode.PublicAttr("tenant", "admin@example.com")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-500")
 
@@ -238,7 +238,7 @@ func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing
 	require.NotNil(t, errRec)
 	assertStringAttr(t, *errRec, "code", string(errcode.ErrConfigRepoQuery))
 	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrInternal))
-	assertStringAttr(t, *errRec, "internal", "select config_entries failed")
+	assertStringAttr(t, *errRec, "_", "select config_entries failed")
 	// Details must remain in slog for diagnostics.
 	assertStringAttr(t, *errRec, "tenant", "admin@example.com")
 }
@@ -524,36 +524,31 @@ func (erroringResponseWriter) Write([]byte) (int, error) {
 
 func (erroringResponseWriter) WriteHeader(int) {}
 
-// TestWriteError_DetailsBypassFencedByMarshalSentinel verifies that an
+// TestWriteError_DetailsBypassFencedBySentinel verifies that an
 // *errcode.Error whose Details slice was mutated to include a wire-unsafe
-// attr (bypassing WithDetails' kind whitelist via direct field assignment)
-// lands as a normal 4xx response — Error.MarshalJSON substitutes the unsafe
-// value with the sentinel marker so encoding/json never sees the bad
-// payload. This is the layer-2 defense (P1-B); together with the layer-3
-// fail-closed sentinel below it eliminates the empty-200 fail-open mode of
-// the prior writeErrorBody.
-func TestWriteError_DetailsBypassFencedByMarshalSentinel(t *testing.T) {
+// value (bypassing WithDetails' sealed PublicDetail type via direct field
+// assignment) triggers the fail-closed sentinel path. PublicDetail.MarshalJSON
+// delegates value marshaling to encoding/json; a non-serializable value
+// (e.g. chan int) causes json.Marshal to fail, which encodeErrorEnvelopeTo
+// propagates to writeErrorBody, which falls through to writeInternalErrorSentinel
+// (HTTP 500 + canonical error envelope). This is the layer-3 fail-closed
+// defense — layer-2 (slog.Attr kind substitution) no longer exists because
+// the sealed PublicDetail newtype makes slog.Attr construction inexpressible.
+func TestWriteError_DetailsBypassFencedBySentinel(t *testing.T) {
 	bad := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad")
-	// Direct field write — sidesteps WithDetails' kind whitelist (the only
-	// API path) so we can inject a KindAny attr to exercise MarshalJSON's
-	// defense-in-depth substitution. ERRCODE-KIND-LITERAL-01 forbids
-	// composite-literal construction; field assignment is allowed.
-	bad.Details = []slog.Attr{slog.Any("ch", make(chan int))}
+	// Direct field write — sidesteps the sealed PublicDetail newtype invariant
+	// so we can inject a non-JSON-serializable value. Field assignment is the
+	// only path that bypasses PublicAttr's type safety at the Go level.
+	bad.Details = []errcode.PublicDetail{errcode.PublicAttr("ch", make(chan int))}
 
 	rec := httptest.NewRecorder()
 	WriteError(context.Background(), rec, bad)
-	assert.Equal(t, http.StatusBadRequest, rec.Code,
-		"defense-in-depth substitution keeps 4xx flow intact")
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	errObj := body["error"].(map[string]any)
-	details := errObj["details"].([]any)
-	require.Len(t, details, 1)
-	entry := details[0].(map[string]any)
-	assert.Equal(t, "ch", entry["key"])
-	assert.Equal(t, unsafeKindMarkerWire, entry["value"],
-		"wire value must be the sentinel string after JSON decode (encoder html-escapes < and >)")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"non-serializable detail triggers fail-closed 500 sentinel")
+	assert.JSONEq(t,
+		`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`,
+		rec.Body.String(),
+		"fail-closed sentinel body must be the canonical error envelope")
 }
 
 // TestWriteInternalErrorSentinel_BodyAndStatus verifies the layer-3
@@ -587,21 +582,13 @@ func TestWriteErrorBody_HappyPathStatusReachesWire(t *testing.T) {
 	assert.NotEmpty(t, rec.Body.String(), "happy path: body must be non-empty")
 }
 
-// marshalFailErrcodeWrapper is a wrapper whose MarshalJSON always fails.
-// Used only by TestWriteErrorBody_FailClosedOnMarshalFailure to drive the
-// sentinel branch in writeErrorBody — public errcode.Error.MarshalJSON
-// is fail-closed (substitutes unsafe-kind values via the unsafeKindMarker
-// path), so the only way to reach the marshal-error fallback is to feed
-// writeErrorBody an *errcode.Error built via errcode.New plus a synthetic
-// failure mechanism. We can't easily inject one without a wrapper type;
-// the test below instead verifies the invariant by direct call to the
-// sentinel writer (which is what the fail-closed branch invokes).
-
 // TestWriteErrorBody_FailClosedOnMarshalFailure verifies writeErrorBody's
 // fail-closed contract via the sentinel writer in isolation: marshal
 // failure → 500 + canonical body. The body+status invariant is validated
 // directly because reaching the in-flow marshal-error branch would require
-// monkey-patching encoding/json (not a useful test seam).
+// monkey-patching encoding/json (not a useful test seam). With the sealed
+// PublicDetail newtype, a non-serializable value injected via direct field
+// assignment triggers this path (see TestWriteError_DetailsBypassFencedBySentinel).
 func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeInternalErrorSentinel(rec)
@@ -614,11 +601,6 @@ func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"fail-closed: content-type must remain JSON")
 }
-
-// unsafeKindMarkerWire mirrors errcode.unsafeKindMarker for the test's
-// substring assertion. The marker is a stable wire constant; if the
-// marker text changes there it must change here too.
-const unsafeKindMarkerWire = "<UNSUPPORTED_KIND>"
 
 // TestWriteErrorWithStatus_5xxKindNormalize verifies that both
 // WriteErrorWithStatus and writeErrcodeError (via WriteError) normalize the
@@ -638,7 +620,7 @@ func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
 			name:   "503 with KindNotFound (4xx Kind) details stripped",
 			status: http.StatusServiceUnavailable,
 			ecErr: errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound, "x",
-				errcode.WithDetails(slog.String("dsn", "postgres://u:p@h"))),
+				errcode.WithDetails(errcode.PublicAttr("dsn", "postgres://u:p@h"))),
 			wantWireCode:   errcode.ErrServiceUnavailable,
 			wantDetailsLen: 0,
 		},
@@ -692,7 +674,7 @@ func TestLog5xx_DetailsRedacted(t *testing.T) {
 		errcode.KindInternal,
 		errcode.ErrInternal,
 		"upstream failed",
-		errcode.WithDetails(slog.String("config", "host=h password=secret123 port=5432")),
+		errcode.WithDetails(errcode.PublicAttr("config", "host=h password=secret123 port=5432")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-redact")
 
@@ -721,7 +703,7 @@ func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
 
 	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"too big",
-		errcode.WithDetails(slog.Int64("size", bigInt)))
+		errcode.WithDetails(errcode.PublicAttr("size", bigInt)))
 
 	rec := httptest.NewRecorder()
 	writeErrorBody(context.Background(), rec, http.StatusBadRequest, ec)

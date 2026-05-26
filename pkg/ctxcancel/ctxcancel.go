@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -97,8 +96,8 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 			"request timed out",
 			err,
 			errcode.WithCategory(errcode.CategoryInfra),
-			errcode.WithInternal(fmt.Sprintf("%s ctx canceled %s", op, identifier)),
-			errcode.WithDetails(slog.String(DetailsKeyReason, ReasonDeadlineExceeded)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s ctx canceled %s", op, identifier))),
+			errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonDeadlineExceeded)),
 		)
 	}
 	return errcode.Wrap(
@@ -107,8 +106,8 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 		"request canceled",
 		err,
 		errcode.WithCategory(errcode.CategoryInfra),
-		errcode.WithInternal(fmt.Sprintf("%s ctx canceled %s", op, identifier)),
-		errcode.WithDetails(slog.String(DetailsKeyReason, ReasonCanceled)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s ctx canceled %s", op, identifier))),
+		errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonCanceled)),
 	)
 }
 
@@ -165,14 +164,15 @@ func ReasonFromDetails(e *errcode.Error) string {
 	if e == nil {
 		return ""
 	}
-	attr, ok := e.FindAttr(DetailsKeyReason)
+	d, ok := e.FindAttr(DetailsKeyReason)
 	if !ok {
 		return ""
 	}
-	if attr.Value.Kind() != slog.KindString {
+	s, ok := d.Value().(string)
+	if !ok {
 		return ""
 	}
-	switch s := attr.Value.String(); s {
+	switch s {
 	case ReasonCanceled, ReasonDeadlineExceeded:
 		return s
 	default:

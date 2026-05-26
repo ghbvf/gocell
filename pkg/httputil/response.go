@@ -197,8 +197,8 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 		slog.String("code", string(ecErr.Code)),
 		slog.Int("status", status),
 	}
-	if ecErr.InternalMessage != "" {
-		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+	for _, d := range ecErr.InternalDetails {
+		logAttrs = append(logAttrs, redaction.RedactSlogAttr(d.AsSlogAttr()))
 	}
 	if status == StatusClientClosedRequest {
 		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
@@ -220,14 +220,14 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 		slog.String("public_code", string(publicCode)),
 		slog.Int("status", status),
 	}
-	if ecErr.InternalMessage != "" {
-		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+	for _, d := range ecErr.InternalDetails {
+		logAttrs = append(logAttrs, redaction.RedactSlogAttr(d.AsSlogAttr()))
 	}
 	if ecErr.Cause != nil {
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
 	}
-	for _, attr := range ecErr.Details {
-		logAttrs = append(logAttrs, redaction.RedactSlogAttr(attr))
+	for _, d := range ecErr.Details {
+		logAttrs = append(logAttrs, redaction.RedactSlogAttr(d.AsSlogAttr()))
 	}
 	if ecErr.Kind == errcode.KindDeadlineExceeded {
 		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {

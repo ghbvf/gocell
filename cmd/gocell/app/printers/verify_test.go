@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -143,8 +142,8 @@ func TestVerifyPrinter_ErrcodeUsesPublicMessage(t *testing.T) {
 				errcode.KindNotFound,
 				errcode.ErrZeroTestMatch,
 				"pattern matched no tests — check your YAML ref",
-				errcode.WithInternal(`pattern="TestSecret" pkg=./cells token=hunter2`),
-				errcode.WithDetails(slog.String("ref", "journey.J-login.auto")),
+				errcode.WithInternal(errcode.InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
+				errcode.WithDetails(errcode.PublicAttr("ref", "journey.J-login.auto")),
 			),
 		},
 	}
@@ -168,9 +167,9 @@ func TestVerifyPrinter_ErrcodeUsesPublicMessage(t *testing.T) {
 	require.Len(t, doc.Errors, 1)
 	require.Equal(t, errcode.ErrZeroTestMatch, doc.Errors[0].Code)
 	require.Equal(t, "pattern matched no tests — check your YAML ref", doc.Errors[0].Message)
-	require.Equal(t, []errcode.PublicDetail{
-		{Key: "ref", Value: "journey.J-login.auto"},
-	}, doc.Errors[0].Details)
+	require.Len(t, doc.Errors[0].Details, 1)
+	require.Contains(t, rawJSON.String(), `"key": "ref"`)
+	require.Contains(t, rawJSON.String(), `"value": "journey.J-login.auto"`)
 	require.NotContains(t, rawJSON.String(), "TestSecret")
 	require.NotContains(t, rawJSON.String(), "hunter2")
 }
@@ -187,7 +186,7 @@ func TestVerifyJSONPrinter_EmitsSkippedOnlyAndStructuredErrors(t *testing.T) {
 				errcode.KindNotFound,
 				errcode.ErrZeroTestMatch,
 				"pattern matched only skipped tests — replace stubs with executable checks",
-				errcode.WithDetails(slog.String("pattern", "^TestOnlySkip$")),
+				errcode.WithDetails(errcode.PublicAttr("pattern", "^TestOnlySkip$")),
 			),
 		},
 	}
@@ -218,8 +217,8 @@ func TestVerifyJSONPrinter_InternalErrcodeUsesOperatorProjection(t *testing.T) {
 				errcode.KindInternal,
 				errcode.ErrTestExecution,
 				"go test execution failed: dsn=postgres://user:secret@example/db",
-				errcode.WithInternal("token=hunter2"),
-				errcode.WithDetails(slog.String("pkg", "./cells/private")),
+				errcode.WithInternal(errcode.InternalAttr("_", "token=hunter2")),
+				errcode.WithDetails(errcode.PublicAttr("pkg", "./cells/private")),
 			),
 		},
 	}

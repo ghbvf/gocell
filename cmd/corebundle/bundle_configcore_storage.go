@@ -95,7 +95,7 @@ func buildConfigCoreOpts(clk clock.Clock, cfg ConfigCoreModuleConfig) (ConfigCor
 		// StorageBackend values. Keep as defense-in-depth only.
 		return ConfigCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"buildConfigCoreOpts: unexpected StorageBackend (topology validation bypass)",
-			errcode.WithInternal(fmt.Sprintf("backend=%q", cfg.Topology.StorageBackend)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", cfg.Topology.StorageBackend))))
 	}
 }
 

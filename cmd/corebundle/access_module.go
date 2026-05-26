@@ -332,7 +332,7 @@ func wrapSessionStoreWithCache(inner session.Store, shared *SharedDeps, logger *
 	if ttl > sessionCacheTTLMax {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"accesscore: GOCELL_SESSION_CACHE_TTL exceeds documented maximum",
-			errcode.WithInternal(fmt.Sprintf("GOCELL_SESSION_CACHE_TTL=%s exceeds max %s", ttl, sessionCacheTTLMax)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("GOCELL_SESSION_CACHE_TTL=%s exceeds max %s", ttl, sessionCacheTTLMax))))
 	}
 	if shared.Redis == nil {
 		logger.Warn("accesscore: session cache disabled — GOCELL_SESSION_CACHE_TTL set but no Redis client " +

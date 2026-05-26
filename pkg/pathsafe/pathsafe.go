@@ -28,7 +28,6 @@ package pathsafe
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,13 +75,13 @@ func WriteFileForce(realRoot, absPath string, content []byte, mode os.FileMode) 
 		// is not meaningful; require explicit realRoot from caller.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: WriteFileForce requires non-empty realRoot",
-			errcode.WithDetails(slog.String("path", absPath)))
+			errcode.WithDetails(errcode.PublicAttr("path", absPath)))
 	}
 	targetRel, err := filepath.Rel(realRoot, absPath)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: cannot relativize path", err,
-			errcode.WithDetails(slog.String("path", absPath)))
+			errcode.WithDetails(errcode.PublicAttr("path", absPath)))
 	}
 	if _, err := ContainPath(realRoot, targetRel); err != nil {
 		return err
@@ -159,7 +158,7 @@ func ResolveRoot(root string) (string, error) {
 	if err != nil {
 		return "", errcode.Wrap(errcode.KindNotFound, errcode.ErrValidationFailed,
 			"pathsafe: resolve root", err,
-			errcode.WithInternal("root="+root))
+			errcode.WithInternal(errcode.InternalAttr("_", "root="+root)))
 	}
 	return resolved, nil
 }
@@ -184,7 +183,7 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 	if filepath.IsAbs(targetRel) {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: target must be relative",
-			errcode.WithDetails(slog.String("target", targetRel)))
+			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
 	}
 
 	sep := string(filepath.Separator)
@@ -194,7 +193,7 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 	if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: target escapes root",
-			errcode.WithDetails(slog.String("target", targetRel)))
+			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
 	}
 
 	// Walk existing parent components from filepath.Dir(cleanTarget) up to realRoot.
@@ -221,7 +220,7 @@ func walkParentsForSymlinkContainment(realRoot, cleanTarget, targetRel string) e
 			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: stat parent", statErr,
-				errcode.WithInternal(fmt.Sprintf("parent=%s", parent)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("parent=%s", parent))))
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			if err := checkSymlinkContained(parent, realRoot, targetRel, sep); err != nil {
@@ -240,12 +239,12 @@ func checkSymlinkContained(symlinkPath, realRoot, targetRel, sep string) error {
 	if resolveErr != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: resolve symlink", resolveErr,
-			errcode.WithInternal(fmt.Sprintf("parent=%s", symlinkPath)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("parent=%s", symlinkPath))))
 	}
 	if !strings.HasPrefix(resolved, realRoot+sep) && resolved != realRoot {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: parent symlink escapes root",
-			errcode.WithDetails(slog.String("target", targetRel)))
+			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
 	}
 	return nil
 }
@@ -271,7 +270,7 @@ func NewPlanSet(items []PlannedFile) (PlanSet, error) {
 		if _, dup := seen[f.AbsPath]; dup {
 			return PlanSet{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"pathsafe: duplicate AbsPath in plan",
-				errcode.WithDetails(slog.String("absPath", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicAttr("absPath", f.AbsPath)))
 		}
 		seen[f.AbsPath] = struct{}{}
 	}
@@ -355,13 +354,13 @@ func planContainmentPass(realRoot string, plan []PlannedFile) error {
 		if err != nil {
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"pathsafe: cannot relativize path", err,
-				errcode.WithDetails(slog.String("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
 		}
 		cleanTarget := filepath.Clean(filepath.Join(realRoot, targetRel))
 		if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"pathsafe: target escapes root",
-				errcode.WithDetails(slog.String("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
 		}
 	}
 	return nil
@@ -393,11 +392,11 @@ func conflictPass(plan []PlannedFile) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"pathsafe: target is a symlink (rejected)",
-				errcode.WithDetails(slog.String("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
 		}
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"pathsafe: file already exists",
-			errcode.WithDetails(slog.String("path", f.AbsPath)))
+			errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
 	}
 	return nil
 }
@@ -461,13 +460,13 @@ func captureOriginal(path string) (writeRecord, error) {
 		}
 		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: lstat original for ForceOverwrite capture", err,
-			errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtPath, path))))
 	}
 	mode := info.Mode()
 	if !forceOverwriteRestorable(mode) {
 		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgForceOverwriteKindGate,
-			errcode.WithDetails(slog.String("path", path)))
+			errcode.WithDetails(errcode.PublicAttr("path", path)))
 	}
 	if mode.IsRegular() {
 		// path already passed planContainmentPass + caller-side ContainPath;
@@ -477,7 +476,7 @@ func captureOriginal(path string) (writeRecord, error) {
 		if readErr != nil {
 			return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: read original for ForceOverwrite capture", readErr,
-				errcode.WithInternal(fmt.Sprintf(fmtPath, path)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtPath, path))))
 		}
 		return writeRecord{
 			path:          path,
@@ -492,7 +491,7 @@ func captureOriginal(path string) (writeRecord, error) {
 	if readErr != nil {
 		return writeRecord{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: readlink original for ForceOverwrite capture", readErr,
-			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("path=%s", path))))
 	}
 	return writeRecord{
 		path:           path,
@@ -538,12 +537,12 @@ func forceOverwritePreflightPass(plan []PlannedFile) error {
 			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: lstat ForceOverwrite target (preflight)", err,
-				errcode.WithInternal(fmt.Sprintf(fmtPath, f.AbsPath)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtPath, f.AbsPath))))
 		}
 		if !forceOverwriteRestorable(info.Mode()) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgForceOverwriteKindGate,
-				errcode.WithDetails(slog.String("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
 		}
 	}
 	return nil
@@ -623,7 +622,7 @@ func rollbackWrites(written []writeRecord, dirs []string, originalErr error) err
 	}
 	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 		"pathsafe: write failed; rollback removed files and dirs", originalErr,
-		errcode.WithInternal(fmt.Sprintf("rollback removed %d files %d dirs, restored %d originals", len(written), len(dirs), restored)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("rollback removed %d files %d dirs, restored %d originals", len(written), len(dirs), restored))))
 }
 
 // collectMissingDirs returns the directories that do not exist yet, starting
@@ -662,7 +661,7 @@ func collectMissingDirs(dir, realRoot string) ([]string, error) {
 		// continues to match the underlying syscall.Errno.
 		return nil, errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrInternal,
 			"pathsafe: stat parent dir", err,
-			errcode.WithInternal(fmt.Sprintf("dir=%s", cur)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("dir=%s", cur))))
 	}
 	return missing, nil
 }

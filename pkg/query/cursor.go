@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -47,7 +46,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 	if len(current) < minCursorKeyBytes {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 			"cursor HMAC key too short",
-			errcode.WithDetails(slog.Int("got", len(current)), slog.Int("min", minCursorKeyBytes)))
+			errcode.WithDetails(errcode.PublicAttr("got", len(current)), errcode.PublicAttr("min", minCursorKeyBytes)))
 	}
 	var prev []byte
 	if len(previous) > 0 && len(previous[0]) > 0 {
@@ -55,7 +54,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 		if len(prev) < minCursorKeyBytes {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 				"previous cursor HMAC key too short",
-				errcode.WithDetails(slog.Int("got", len(prev)), slog.Int("min", minCursorKeyBytes)))
+				errcode.WithDetails(errcode.PublicAttr("got", len(prev)), errcode.PublicAttr("min", minCursorKeyBytes)))
 		}
 		if bytes.Equal(current, prev) {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
@@ -186,23 +185,23 @@ func cursorInvalid(reason string) error {
 		errcode.KindInvalid,
 		errcode.ErrCursorInvalid,
 		cursorInvalidMsg,
-		errcode.WithInternal(reason),
-		errcode.WithDetails(slog.String("reason", reason)),
+		errcode.WithInternal(errcode.InternalAttr("_", reason)),
+		errcode.WithDetails(errcode.PublicAttr("reason", reason)),
 	)
 }
 
 // cursorInvalidExtra returns a standardized cursor error with extra diagnostic
 // attributes appended after the reason key. The reason attribute is appended
 // last so dashboards can rely on it appearing in a stable position.
-func cursorInvalidExtra(reason string, extra ...slog.Attr) error {
-	attrs := make([]slog.Attr, 0, len(extra)+1)
+func cursorInvalidExtra(reason string, extra ...errcode.PublicDetail) error {
+	attrs := make([]errcode.PublicDetail, 0, len(extra)+1)
 	attrs = append(attrs, extra...)
-	attrs = append(attrs, slog.String("reason", reason))
+	attrs = append(attrs, errcode.PublicAttr("reason", reason))
 	return errcode.New(
 		errcode.KindInvalid,
 		errcode.ErrCursorInvalid,
 		cursorInvalidMsg,
-		errcode.WithInternal(reason),
+		errcode.WithInternal(errcode.InternalAttr("_", reason)),
 		errcode.WithDetails(attrs...),
 	)
 }
@@ -217,14 +216,14 @@ func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
 	}
 	if expected := SortScope(sort); cur.Scope != expected {
 		return cursorInvalidExtra("sort scope mismatch",
-			slog.String("got", cur.Scope), slog.String("want", expected))
+			errcode.PublicAttr("got", cur.Scope), errcode.PublicAttr("want", expected))
 	}
 	if cur.Context == "" {
 		return cursorInvalid("query context is required")
 	}
 	if cur.Context != queryCtx {
 		return cursorInvalidExtra("query context mismatch",
-			slog.String("got", cur.Context), slog.String("want", queryCtx))
+			errcode.PublicAttr("got", cur.Context), errcode.PublicAttr("want", queryCtx))
 	}
 	if len(cur.Values) != len(sort) {
 		return cursorInvalid(fmt.Sprintf("has %d values but expected %d sort columns", len(cur.Values), len(sort)))

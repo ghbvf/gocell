@@ -6,7 +6,6 @@
 package validation
 
 import (
-	"log/slog"
 	"reflect"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -51,7 +50,7 @@ func RequireNotEmpty(code errcode.Code, fields ...NamedValue) error {
 	for _, f := range fields {
 		if f.Value == "" {
 			return errcode.New(errcode.KindInvalid, code, "validation: required field missing",
-				errcode.WithDetails(slog.String("field", f.Name)))
+				errcode.WithDetails(errcode.PublicAttr("field", f.Name)))
 		}
 	}
 	return nil

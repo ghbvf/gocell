@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -116,7 +115,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 		if err != nil || parsed < 0 {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"GOCELL_REDIS_DB must be a non-negative integer",
-				errcode.WithDetails(slog.String("got", raw)))
+				errcode.WithDetails(errcode.PublicAttr("got", raw)))
 		}
 		db = parsed
 	}

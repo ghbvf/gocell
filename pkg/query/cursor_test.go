@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -273,7 +272,9 @@ func requireCursorInvalid(t *testing.T, err error, wantReason string) {
 	assert.Equal(t, cursorInvalidMsg, ecErr.Message)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, wantReason, reasonAttr.Value.String())
+	s, ok := reasonAttr.Value().(string)
+	require.True(t, ok, "reason must be a string value")
+	assert.Equal(t, wantReason, s)
 }
 
 func TestValidateCursorScope_Mismatch(t *testing.T) {
@@ -289,10 +290,14 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	gotAttr, ok := ecErr.FindAttr("got")
 	require.True(t, ok)
-	assert.Equal(t, SortScope(sortA), gotAttr.Value.String())
+	gotStr, ok := gotAttr.Value().(string)
+	require.True(t, ok, "got must be a string value")
+	assert.Equal(t, SortScope(sortA), gotStr)
 	wantAttr, ok := ecErr.FindAttr("want")
 	require.True(t, ok)
-	assert.Equal(t, SortScope(sortB), wantAttr.Value.String())
+	wantStr, ok := wantAttr.Value().(string)
+	require.True(t, ok, "want must be a string value")
+	assert.Equal(t, SortScope(sortB), wantStr)
 }
 
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
@@ -347,10 +352,14 @@ func TestValidateCursorScope_ContextMismatch(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	gotAttr, ok := ecErr.FindAttr("got")
 	require.True(t, ok)
-	assert.Equal(t, ctxA, gotAttr.Value.String())
+	gotStr, ok := gotAttr.Value().(string)
+	require.True(t, ok, "got must be a string value")
+	assert.Equal(t, ctxA, gotStr)
 	wantAttr, ok := ecErr.FindAttr("want")
 	require.True(t, ok)
-	assert.Equal(t, ctxB, wantAttr.Value.String())
+	wantStr, ok := wantAttr.Value().(string)
+	require.True(t, ok, "want must be a string value")
+	assert.Equal(t, ctxB, wantStr)
 }
 
 func TestValidateCursorScope_ContextMatch(t *testing.T) {
@@ -471,20 +480,19 @@ func TestCursorCodec_AllKeysFail_NoSideChannel(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	for _, attr := range ecErr.Details {
-		assert.NotContains(t, attr.Key, "key", "details key must not reveal key role")
-		assert.NotContains(t, attr.Key, "current", "details must not expose rotation position")
-		assert.NotContains(t, attr.Key, "previous", "details must not expose rotation position")
-		if attr.Value.Kind() == slog.KindString {
-			s := attr.Value.String()
+		assert.NotContains(t, attr.Key(), "key", "details key must not reveal key role")
+		assert.NotContains(t, attr.Key(), "current", "details must not expose rotation position")
+		assert.NotContains(t, attr.Key(), "previous", "details must not expose rotation position")
+		if s, ok := attr.Value().(string); ok {
 			assert.NotContains(t, s, "current", "detail value must not expose rotation position")
 			assert.NotContains(t, s, "previous", "detail value must not expose rotation position")
 		}
 	}
-	// InternalMessage is the server-side diagnostic; it also must not leak rotation position.
-	assert.NotContains(t, ecErr.InternalMessage, "current",
-		"InternalMessage must not expose rotation position")
-	assert.NotContains(t, ecErr.InternalMessage, "previous",
-		"InternalMessage must not expose rotation position")
+	// Error() includes InternalDetails; it also must not leak rotation position.
+	assert.NotContains(t, ecErr.Error(), "current",
+		"Error() must not expose rotation position")
+	assert.NotContains(t, ecErr.Error(), "previous",
+		"Error() must not expose rotation position")
 }
 
 // TestCursorCodec_KeyRotation_Lifecycle3Step is a regression guard on the
@@ -557,7 +565,9 @@ func TestCursorCodec_Decode_TooLong(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "cursor token exceeds maximum length", reasonAttr.Value.String())
+	s, ok := reasonAttr.Value().(string)
+	require.True(t, ok, "reason must be a string value")
+	assert.Equal(t, "cursor token exceeds maximum length", s)
 }
 
 // TestCursorCodec_Decode_MaxLengthBoundary confirms the exact-limit cursor
@@ -577,6 +587,8 @@ func TestCursorCodec_Decode_MaxLengthBoundary(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	// Must not be rejected by the length guard.
 	if reasonAttr, ok := ecErr.FindAttr("reason"); ok {
-		assert.NotEqual(t, "cursor token exceeds maximum length", reasonAttr.Value.String())
+		if s, ok := reasonAttr.Value().(string); ok {
+			assert.NotEqual(t, "cursor token exceeds maximum length", s)
+		}
 	}
 }

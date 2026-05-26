@@ -65,7 +65,7 @@ func (d *SharedDeps) validateCore() []error {
 	missing := func(field string) {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"SharedDeps field must be set",
-			errcode.WithInternal(fmt.Sprintf("field=%s", field))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s", field)))))
 	}
 	// Clock is the single root clock instance threaded through every adapter,
 	// service, and middleware. Required: a nil here would surface as a deeper
@@ -131,7 +131,7 @@ func (d *SharedDeps) validateControlPlane() []error {
 	if d.VerboseToken == SampleVerbosePlaceholder {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenSample,
 			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder; a production deploy must mint its own high-entropy secret",
-			errcode.WithInternal(fmt.Sprintf("placeholder=%q", SampleVerbosePlaceholder))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("placeholder=%q", SampleVerbosePlaceholder)))))
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
