@@ -12,8 +12,6 @@
 package errcode_assertion_green
 
 import (
-	"log/slog"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -23,7 +21,7 @@ func foo() *errcode.Error {
 
 func bar() *errcode.Error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "validation",
-		errcode.WithDetails(slog.String("field", "value")))
+		errcode.WithDetails(errcode.PublicAttr("field", "value")))
 }
 
 func baz(cause error) *errcode.Error {
