@@ -50,7 +50,9 @@ type noopMetrics struct{}
 
 // IncAccountLockout is intentionally empty — noopMetrics discards all metric
 // increments. See noopMetrics godoc for when this is wired.
-func (noopMetrics) IncAccountLockout(context.Context, string) {}
+func (noopMetrics) IncAccountLockout(context.Context, string) {
+	// Intentional no-op: noopMetrics discards all metric increments.
+}
 
 // Option configures the Service at construction time.
 type Option func(*Service)

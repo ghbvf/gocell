@@ -26,6 +26,10 @@ import (
 // constant carries no runtime data (MESSAGE-CONST-LITERAL-01 compliant).
 const msgCommandAlreadyExists = "commandtest: command already exists"
 
+// commandIDInternalPrefix is the WithInternal detail prefix carrying the
+// runtime command ID. Extracted to satisfy go:S1192 (used in 5 lookups).
+const commandIDInternalPrefix = "commandID="
+
 // msgCommandNotFound is the static message for not-found errors. The runtime
 // command ID is attached via WithInternal so the message itself is a const
 // literal (go:S1192 / MESSAGE-CONST-LITERAL-01 compliant).
@@ -203,7 +207,7 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal("commandID="+commandID))
+			errcode.WithInternal(commandIDInternalPrefix+commandID))
 	}
 	if e.Status == command.StatusDelivered {
 		return nil // idempotent
@@ -237,7 +241,7 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal("commandID="+commandID))
+			errcode.WithInternal(commandIDInternalPrefix+commandID))
 	}
 
 	target := reason.TargetStatus()
@@ -266,7 +270,7 @@ func (q *InMemQueue) ExtendLease(_ context.Context, commandID string, extension 
 
 	if _, ok := q.entries[commandID]; !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal("commandID="+commandID))
+			errcode.WithInternal(commandIDInternalPrefix+commandID))
 	}
 
 	expiry, hasLease := q.leases[commandID]
@@ -286,7 +290,7 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal("commandID="+commandID))
+			errcode.WithInternal(commandIDInternalPrefix+commandID))
 	}
 	if err := command.AdvanceCommand(e, command.StatusCanceled, now); err != nil {
 		return fmt.Errorf("commandtest: cancel: %w", err)
@@ -364,7 +368,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 	e, ok := q.entries[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal("commandID="+id))
+			errcode.WithInternal(commandIDInternalPrefix+id))
 	}
 	cp := stripInternalMetaKeys(*e)
 	return &cp, nil

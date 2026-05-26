@@ -67,7 +67,9 @@ func NewProductionHasher() Hasher { return bcryptHasher{cost: ProductionCost} }
 // test code.
 func NewTestHasher(cost int) Hasher { return bcryptHasher{cost: cost} }
 
-func (bcryptHasher) isCredentialHasher() {}
+func (bcryptHasher) isCredentialHasher() {
+	// Sealed-interface marker: no behavior; blocks external Hasher impls.
+}
 
 func (h bcryptHasher) Hash(password []byte) (string, error) {
 	b, err := bcrypt.GenerateFromPassword(password, h.cost)

@@ -14,6 +14,10 @@ import (
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
+// verifyDryRunHelpLine is the shared --verify/--dry-run help line reused
+// across codegen subcommands. Extracted to satisfy go:S1192.
+const verifyDryRunHelpLine = "--verify reports drift without writing; --dry-run prints"
+
 // generateSubcommands is the single source of truth for `gocell generate`
 // (see subcommand.go / CLI-UNIMPL-HIDE-01). assembly/catalog/cell/contract
 // have no cancelable downstream (codegen is metadata + file IO), so their
@@ -60,7 +64,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"Render cell_gen.go and slice_gen.go from cell.yaml /",
 			"slice.yaml. Default: all opted-in cells (goStructName set).",
 			"Optional: [<cellID>] scopes to a single cell.",
-			"--verify reports drift without writing; --dry-run prints",
+			verifyDryRunHelpLine,
 			"would-write file paths without writing.",
 			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
 		},
@@ -71,7 +75,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		help: []string{
 			"Render generated/contracts/**/*_gen.go from contract.yaml",
 			"+ JSON schemas. <contractID> | --all [--dry-run | --verify].",
-			"--verify reports drift without writing; --dry-run prints",
+			verifyDryRunHelpLine,
 			"would-write paths without writing.",
 			"Default: codegen on; set codegen: false to opt out.",
 			"CI: commit *_gen.go files and run with --verify.",
@@ -84,7 +88,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"Generate service_required_gen.go for each slice that has",
 			"gocell:\"required\" struct field tags on its Service struct.",
 			"[<slicePath>] | --all [--dry-run | --verify].",
-			"--verify reports drift without writing; --dry-run prints",
+			verifyDryRunHelpLine,
 			"would-write paths without writing.",
 			"CI: commit service_required_gen.go and run with --verify.",
 		},
