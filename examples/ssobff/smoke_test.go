@@ -43,6 +43,10 @@ import (
 // runner job env — from crossing into the child binary. The kept variables
 // cover Go toolchain plumbing and PATH/HOME-style basics needed by `go run`
 // or any future helper command we shell out to.
+//
+// Keys MUST be UPPER_CASE: filteredEnv looks them up after strings.ToUpper
+// normalization, so a lower-case entry here would never match and silently
+// drop the variable.
 var smokeEnvAllowlist = map[string]struct{}{
 	"PATH":            {},
 	"HOME":            {},
