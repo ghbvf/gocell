@@ -83,6 +83,11 @@
 - **credential-invalidate 三 funnel 的未封口上游**：`session.Store.RevokeForSubject` /
   `refresh.Store.RevokeUser` / `UserRepository.BumpAuthzEpoch` 下游 Hard、
   上游**完全无锁**且无配对 backlog —— 这是整个吊销安全模型唯一结构性开口。
+  > **CLOSED 2026-05-26** by issue #1033：sealed `credentialfence.FenceToken`
+  > 关闭上游半边；三 mutation 方法签名要求 FenceToken，外部包既无法实现接口
+  > 也无法构造非 nil 值。详见 ADR `docs/architecture/202605101400-adr-credential-session-protocol.md`
+  > §A16 + archtest `tools/archtest/fence_token_mint_funnel_test.go`
+  > (FENCE-TOKEN-MINT-FUNNEL-01)。
 
 ### 3b. Soft→Hard 通用范式（跨域复用 + 开源对标）
 
@@ -112,7 +117,7 @@
 | # | 收口动作 | 消灭 / 降级的规则 | 类别 |
 |---|---|---|---|
 | 1 | `reg.Health(string,fn)` → `RegisterReadiness(ProbeName, Prober)` | READYZ-PROBE-NAMING(Soft) 变编译错误；吸收 CELL-REPO-READYZ N1/N2 duck-type | 可观测最高 ROI |
-| 2 | credential-invalidate **sealed fenceToken**：三 mutation 方法收未导出 token，仅 `Invalidator` 可造 | 三 funnel 上游 Soft→闭环 Hard；堵住吊销模型唯一结构开口 | 安全最高 ROI |
+| 2 | credential-invalidate **sealed fenceToken**：三 mutation 方法收未导出 token，仅 `Invalidator` 可造 ✅ **DONE 2026-05-26 #1033** — sealed `credentialfence.FenceToken` interface + Mint funnel + runtime nil-guard 三层闭环；UPSTREAM-CALLER-01 Medium → Hard | 三 funnel 上游 Soft→闭环 Hard；堵住吊销模型唯一结构开口 | 安全最高 ROI |
 | 3 | `errcode.WithDetails/WithInternal` → sealed `PublicDetail/InternalDetail` newtype | DETAILS-SLOG-ATTR + MESSAGE-CONST 两 Medium → 一 Hard 类型 | 错误模型 |
 | 4 | `outbox.HandleResult` 字段全 unexport（kernel 内部 builder 分离） | OUTBOX-HANDLERESULT-FACTORY-PREFERRED + FIELDS-FROZEN 退役 | 事件总线 |
 | 5 | sink 侧脱敏（SafeSpan + slog middleware） | 删 4 条 call-site redaction Soft archtest | 可观测 |
