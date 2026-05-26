@@ -28,8 +28,10 @@
 #     extra local guard because the integration-tag build break is a
 #     repeatedly-forgotten failure mode (project memory: integration-tag
 #     build). The other three commands do mirror real CI steps
-#     (_build-lint.yml: go build ./... / go vet ./... / go vet -tags=e2e
-#     ./tests/e2e/...).
+#     (_build-lint.yml: go build ./... / go vet -tags=e2e ./tests/e2e/...;
+#     bare `go vet ./...` is intentionally absent from CI because govet
+#     is in golangci-lint v2's default linter set, but the hook still runs
+#     it as a fast standalone fail-fast independent of the lint step).
 #   - archtest is NOT run here. PR #887 first round wired
 #     `SHARD_COUNT=4 bash hack/verify-archtest.sh` as a PR-time
 #     replacement after ADR 202605120000 §Amendment 2026-05-23-pr-time-
