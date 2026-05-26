@@ -136,6 +136,6 @@ func CheckVersionMatch(rowsAffected int64, entityDesc, entityKey string) error {
 	}
 	return errcode.New(errcode.KindConflict, errcode.ErrVersionConflict,
 		"concurrent update detected; reload and retry",
-		errcode.WithInternal(fmt.Sprintf("cas conflict: entity=%s key=%s rowsAffected=%d",
-			entityDesc, entityKey, rowsAffected)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cas conflict: entity=%s key=%s rowsAffected=%d",
+			entityDesc, entityKey, rowsAffected))))
 }

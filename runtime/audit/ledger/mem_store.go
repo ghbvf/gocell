@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -159,7 +158,7 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 	if seq < 1 || int(seq) > len(m.entries) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
-			errcode.WithDetails(slog.Int64("seqNo", seq)),
+			errcode.WithDetails(errcode.PublicAttr("seqNo", seq)),
 		)
 	}
 	return copyEntry(m.entries[seq-1]), nil
@@ -286,7 +285,7 @@ func validatePayloadJSON(payload []byte) error {
 	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: payload must be a JSON object or null",
-			errcode.WithInternal(fmt.Sprintf("json decode: %v", err)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("json decode: %v", err))),
 		)
 	}
 	return nil

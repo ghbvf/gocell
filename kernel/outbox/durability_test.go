@@ -56,7 +56,7 @@ func TestCheckNotNoop_DurableMode_RejectsNoop(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
 	assert.Contains(t, ecErr.Message, "durable mode")
-	assert.Contains(t, ecErr.InternalMessage, "test-cell")
+	assert.Contains(t, ecErr.Error(), "test-cell")
 }
 
 func TestCheckNotNoop_DurableMode_AllowsReal(t *testing.T) {

@@ -116,5 +116,5 @@ func Transition(from, to Status) error {
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga: invalid status transition",
-		errcode.WithInternal(fmt.Sprintf("from=%s to=%s", from, to)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("from=%s to=%s", from, to))))
 }

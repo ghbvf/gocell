@@ -74,12 +74,12 @@ func resolveStartupTimeout() (time.Duration, error) {
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: invalid startup timeout (expected time.ParseDuration format, e.g. 45s)", err,
-			errcode.WithDetails(slog.String("env", startupTimeoutEnvVar)))
+			errcode.WithDetails(errcode.PublicAttr("env", startupTimeoutEnvVar)))
 	}
 	if d <= 0 {
 		return 0, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: startup timeout must be positive",
-			errcode.WithDetails(slog.String("env", startupTimeoutEnvVar)))
+			errcode.WithDetails(errcode.PublicAttr("env", startupTimeoutEnvVar)))
 	}
 	return d, nil
 }
@@ -895,7 +895,7 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 	if !strings.HasPrefix(keyID, vaultKeyIDPrefix) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			"vault-transit: key ID does not have expected prefix",
-			errcode.WithInternal(fmt.Sprintf("key_id=%q prefix=%q", keyID, vaultKeyIDPrefix)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key_id=%q prefix=%q", keyID, vaultKeyIDPrefix))))
 	}
 	return &vaultTransitHandle{
 		id:        keyID,
@@ -982,13 +982,13 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 		if err != nil {
 			return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 				"vault-transit: latest_version json.Number parse error",
-				errcode.WithInternal(fmt.Sprintf("err=%v", err)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("err=%v", err))))
 		}
 		return int(n), nil
 	default:
 		return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			"vault-transit: unexpected latest_version type",
-			errcode.WithInternal(fmt.Sprintf("type=%T", versionRaw)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("type=%T", versionRaw))))
 	}
 }
 
@@ -1013,11 +1013,11 @@ func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg stri
 		// Wrap(KindUnavailable, ErrKeyProviderTransient, …) shape is gone.
 		return errcode.WrapInfra(errcode.ErrKeyProviderTransient,
 			"vault-transit: transient error", err,
-			errcode.WithInternal(permanentMsg))
+			errcode.WithInternal(errcode.InternalAttr("_", permanentMsg)))
 	}
 	return errcode.Wrap(errcode.KindInternal, permanentCode,
 		"vault-transit: operation failed", err,
-		errcode.WithInternal(permanentMsg))
+		errcode.WithInternal(errcode.InternalAttr("_", permanentMsg)))
 }
 
 // classifyVaultEncryptError classifies an encrypt path error.
@@ -1133,7 +1133,7 @@ func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 		return "", errcode.New(errcode.KindInternal, errCode,
 			"vault-transit: unexpected ciphertext prefix (want 'vault:vN:...')",
 			errcode.WithCategory(errcode.CategoryInfra),
-			errcode.WithInternal(fmt.Sprintf("prefix=%q", prefix)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("prefix=%q", prefix))))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }

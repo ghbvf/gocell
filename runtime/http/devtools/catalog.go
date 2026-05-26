@@ -257,7 +257,7 @@ func writeValidationError(ctx context.Context, w http.ResponseWriter, detail str
 		errcode.KindInvalid,
 		errcode.ErrValidationFailed,
 		"invalid query parameter",
-		errcode.WithDetails(slog.String("detail", detail)),
+		errcode.WithDetails(errcode.PublicAttr("detail", detail)),
 	))
 }
 

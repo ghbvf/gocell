@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -82,7 +81,7 @@ func (o ObservabilityMetadata) Validate() error {
 		// (4xx visible) to align with errcode three-layer redaction.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: observability.traceParent is not a valid W3C traceparent",
-			errcode.WithInternal(fmt.Sprintf("traceParent length=%d", len(o.TraceParent))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("traceParent length=%d", len(o.TraceParent)))))
 	}
 	if err := validateObservabilitySafeID("requestId", o.RequestID); err != nil {
 		return err
@@ -100,7 +99,7 @@ func validateObservabilitySafeID(name string, id idutil.SafeID) error {
 	if err := id.Validate(); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: observability field invalid", err,
-			errcode.WithDetails(slog.String("field", name)))
+			errcode.WithDetails(errcode.PublicAttr("field", name)))
 	}
 	return nil
 }

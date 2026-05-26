@@ -2,7 +2,6 @@ package otel
 
 import (
 	"context"
-	"log/slog"
 
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -128,7 +127,7 @@ func registerPoolCallbacks(meter otelmetric.Meter, statters []poolstats.Statter)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			msgCreatePoolCounterFailed, err,
-			errcode.WithDetails(slog.String("metric", metricNameConnCount)))
+			errcode.WithDetails(errcode.PublicAttr("metric", metricNameConnCount)))
 	}
 
 	connMax, err := meter.Int64ObservableUpDownCounter(
@@ -139,7 +138,7 @@ func registerPoolCallbacks(meter otelmetric.Meter, statters []poolstats.Statter)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			msgCreatePoolCounterFailed, err,
-			errcode.WithDetails(slog.String("metric", metricNameConnMax)))
+			errcode.WithDetails(errcode.PublicAttr("metric", metricNameConnMax)))
 	}
 
 	// db.client.connection.timeouts is a monotonically increasing Counter
@@ -155,7 +154,7 @@ func registerPoolCallbacks(meter otelmetric.Meter, statters []poolstats.Statter)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			msgCreatePoolCounterFailed, err,
-			errcode.WithDetails(slog.String("metric", metricNameConnTimeouts)))
+			errcode.WithDetails(errcode.PublicAttr("metric", metricNameConnTimeouts)))
 	}
 
 	// Snapshot each statter during the callback; OTel calls this on every

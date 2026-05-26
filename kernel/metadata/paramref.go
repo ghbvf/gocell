@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"path"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -96,8 +95,8 @@ func ResolveParamRef(
 			errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"param $ref target not found or unreadable",
 			err,
-			errcode.WithDetails(slog.String("param", paramName), slog.String("ref", param.Ref)),
-			errcode.WithInternal(fmt.Sprintf("param=%q ref=%q dir=%q", paramName, param.Ref, contractDir)),
+			errcode.WithDetails(errcode.PublicAttr("param", paramName), errcode.PublicAttr("ref", param.Ref)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("param=%q ref=%q dir=%q", paramName, param.Ref, contractDir))),
 		)
 	}
 	return backfillParamFromMixin(paramName, param, raw)
@@ -110,7 +109,7 @@ func backfillParamFromMixin(paramName string, param ParamSchema, raw []byte) (Pa
 			errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"param $ref file is not valid JSON",
 			err,
-			errcode.WithInternal(fmt.Sprintf("param=%q ref=%q", paramName, param.Ref)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("param=%q ref=%q", paramName, param.Ref))),
 		)
 	}
 
@@ -139,10 +138,10 @@ func checkMutualExclusion(paramName string, p ParamSchema) error {
 		return errcode.New(
 			errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"param $ref and inline type/minimum/maximum/minLength/maxLength/format are mutually exclusive",
-			errcode.WithInternal(fmt.Sprintf(
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 				"param=%q has both $ref=%q and one or more inline value-shape fields; "+
 					"remove inline fields or remove $ref", paramName, p.Ref,
-			)),
+			))),
 		)
 	}
 	return nil

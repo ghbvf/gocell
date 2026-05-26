@@ -30,7 +30,7 @@ func validateRSAKeySize(n int, keyKind string) error {
 	if n < MinRSAKeyBits {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"RSA key size below minimum",
-			errcode.WithDetails(slog.String("kind", keyKind), slog.Int("bits", n), slog.Int("min", MinRSAKeyBits)))
+			errcode.WithDetails(errcode.PublicAttr("kind", keyKind), errcode.PublicAttr("bits", n), errcode.PublicAttr("min", MinRSAKeyBits)))
 	}
 	return nil
 }
@@ -207,7 +207,7 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 	if !ok {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"verification key lookup failed",
-			errcode.WithInternal(fmt.Sprintf("kid=%s", kid)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("kid=%s", kid))))
 	}
 
 	// Signing key has no entry in keyExpiry — it never expires.
@@ -216,7 +216,7 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 		if !ks.clk.Now().Before(exp) {
 			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 				"verification key expired",
-				errcode.WithInternal(fmt.Sprintf("kid=%s", kid)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("kid=%s", kid))))
 		}
 	}
 
@@ -303,28 +303,28 @@ func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, er
 	if privPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			"jwt key env not set",
-			errcode.WithDetails(slog.String("env", EnvJWTPrivateKey)))
+			errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrivateKey)))
 	}
 
 	pubPEM := os.Getenv(EnvJWTPublicKey)
 	if pubPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			"jwt key env not set",
-			errcode.WithDetails(slog.String("env", EnvJWTPublicKey)))
+			errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPublicKey)))
 	}
 
 	privateKey, err = parseRSAPrivateKey([]byte(privPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(slog.String("env", EnvJWTPrivateKey)))
+			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrivateKey)))
 	}
 
 	publicKey, err = parseRSAPublicKey([]byte(pubPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(slog.String("env", EnvJWTPublicKey)))
+			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPublicKey)))
 	}
 
 	return privateKey, publicKey, nil
@@ -350,21 +350,21 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(slog.String("env", EnvJWTPrevPublicKey)))
+			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrevPublicKey)))
 	}
 
 	expiresStr := os.Getenv(EnvJWTPrevKeyExpires)
 	if expiresStr == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"prev key set without expiry",
-			errcode.WithDetails(slog.String("envPub", EnvJWTPrevPublicKey), slog.String("envExpiry", EnvJWTPrevKeyExpires)))
+			errcode.WithDetails(errcode.PublicAttr("envPub", EnvJWTPrevPublicKey), errcode.PublicAttr("envExpiry", EnvJWTPrevKeyExpires)))
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(slog.String("env", EnvJWTPrevKeyExpires)))
+			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrevKeyExpires)))
 	}
 
 	vk := VerificationKey{
@@ -390,7 +390,7 @@ func parseRSAKeyPEM[T any](pemData []byte, missingLabel, usage string, parse fun
 		var zero T
 		return zero, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"no PEM block found",
-			errcode.WithInternal(fmt.Sprintf("source=%s", missingLabel)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("source=%s", missingLabel))))
 	}
 
 	key, bitLen, err := parse(block.Bytes)

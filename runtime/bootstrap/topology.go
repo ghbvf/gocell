@@ -95,7 +95,7 @@ func (t Topology) validate() error {
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_ADAPTER_MODE; known values: \"\" (unset = dev) or \"real\"",
-			errcode.WithInternal(fmt.Sprintf("mode=%q", t.AdapterMode)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("mode=%q", t.AdapterMode))))
 	}
 
 	switch t.StorageBackend {
@@ -113,7 +113,7 @@ func (t Topology) validate() error {
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_CELL_ADAPTER_MODE; known values: \"\" (unset = memory) or \"postgres\"",
-			errcode.WithInternal(fmt.Sprintf("backend=%q", t.StorageBackend)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("backend=%q", t.StorageBackend))))
 	}
 }
 

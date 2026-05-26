@@ -76,5 +76,5 @@ func ParseLevel(s string) (Level, error) {
 	}
 	return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"invalid consistency level",
-		errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 }

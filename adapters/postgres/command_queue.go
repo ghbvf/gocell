@@ -247,12 +247,12 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 		// PK collision (same id, no matching idempotency key) → ErrConflict.
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"command already exists",
-			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", entry.ID))))
 	}
 	if pgquery.IsForeignKeyViolation(insertErr) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
-			errcode.WithDetails(slog.String("deviceId", entry.DeviceID)))
+			errcode.WithDetails(errcode.PublicAttr("deviceId", entry.DeviceID)))
 	}
 	slog.Error("command_queue: pg write failed",
 		slog.String("operation", "insert"),
@@ -352,7 +352,7 @@ func (q *PGCommandQueue) ackInTx(txCtx context.Context, commandID string, target
 		}
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command already in terminal state",
-			errcode.WithInternal(fmt.Sprintf("current=%s target=%s", current, target)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("current=%s target=%s", current, target))))
 	}
 
 	if err := command.Transition(current, target); err != nil {
@@ -402,7 +402,7 @@ func (q *PGCommandQueue) Cancel(ctx context.Context, commandID string, now time.
 		if current.IsTerminal() {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"command already in terminal state",
-				errcode.WithInternal(fmt.Sprintf("current=%s", current)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("current=%s", current))))
 		}
 
 		if err := command.Transition(current, command.StatusCanceled); err != nil {

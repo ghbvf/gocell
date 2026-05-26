@@ -11,7 +11,6 @@ package auth
 
 import (
 	"encoding/hex"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -274,7 +273,7 @@ func validateCallerCell(callerCell string) error {
 	if !metadata.MatchCellID(callerCell) {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
 			msgCallerCellInvalid,
-			errcode.WithDetails(slog.String("callerCell", callerCell)))
+			errcode.WithDetails(errcode.PublicAttr("callerCell", callerCell)))
 	}
 	return nil
 }

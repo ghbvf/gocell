@@ -102,7 +102,7 @@ func GetJSON[T any](ctx context.Context, c *Cache, key string) (T, error) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
 			"redis: cache json unmarshal failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyFmt, prefixed))))
 	}
 	return result, nil
 }
@@ -115,7 +115,7 @@ func SetJSON[T any](ctx context.Context, c *Cache, key string, value T, ttl time
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			"redis: cache json marshal failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalKeyFmt, prefixed)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyFmt, prefixed))))
 	}
 	if err := c.rdb.Set(ctx, prefixed, string(data), ttl).Err(); err != nil {
 		return classifyRedisError(err, ErrAdapterRedisSet,

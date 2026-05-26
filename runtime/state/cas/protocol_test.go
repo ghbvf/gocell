@@ -198,12 +198,13 @@ func TestCheckVersionMatch_ZeroRowsReturnsVersionConflict(t *testing.T) {
 		t.Error("key must not leak via Details (PR464 P2)")
 	}
 	// entity / key must be in Internal (server-side only).
-	if coded.InternalMessage == "" {
+	internalStr := coded.Error()
+	if len(coded.InternalDetails) == 0 {
 		t.Error("expected Internal to carry entity/key for ops correlation")
 	}
 	for _, want := range []string{"user", "usr-001"} {
-		if !strings.Contains(coded.InternalMessage, want) {
-			t.Errorf("Internal=%q missing %q", coded.InternalMessage, want)
+		if !strings.Contains(internalStr, want) {
+			t.Errorf("InternalDetails=%q missing %q", internalStr, want)
 		}
 	}
 }

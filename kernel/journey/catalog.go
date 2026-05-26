@@ -67,7 +67,7 @@ func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
 	sort.Strings(msgs)
 	return errcode.New(errcode.KindInvalid, errcode.ErrReferenceBroken,
 		"journey catalog has broken references",
-		errcode.WithInternal(strings.Join(msgs, "; ")))
+		errcode.WithInternal(errcode.InternalAttr("_", strings.Join(msgs, "; "))))
 }
 
 // Get returns a deep copy of a journey by ID, or nil if not found.

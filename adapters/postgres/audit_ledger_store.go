@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -364,7 +363,7 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
-			errcode.WithDetails(slog.Int64("seqNo", seq)),
+			errcode.WithDetails(errcode.PublicAttr("seqNo", seq)),
 		)
 	}
 	if err != nil {
@@ -450,7 +449,7 @@ func bindTimestampCursor(params query.ListParams) (query.ListParams, error) {
 		if parseErr != nil {
 			return query.ListParams{}, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 				"invalid cursor; restart from first page (client should discard stored cursor)",
-				errcode.WithInternal(fmt.Sprintf("timestamp cursor parse: %v", parseErr)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("timestamp cursor parse: %v", parseErr))))
 		}
 		vals[i] = ts
 	}
@@ -525,7 +524,7 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: Verify baseline entry not found",
-			errcode.WithDetails(slog.Int64("baselineSeqNo", fromSeq-1)))
+			errcode.WithDetails(errcode.PublicAttr("baselineSeqNo", fromSeq-1)))
 	}
 	if err != nil {
 		return "", ctxcancel.WrapOrInfra(err, "verify_baseline", ns,
@@ -575,7 +574,7 @@ func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq
 	if expectedSeq <= toSeq {
 		return false, expectedSeq, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found during Verify",
-			errcode.WithDetails(slog.Int64("missingSeqNo", expectedSeq)),
+			errcode.WithDetails(errcode.PublicAttr("missingSeqNo", expectedSeq)),
 		)
 	}
 	return true, -1, nil
@@ -593,7 +592,7 @@ func validateAuditPayloadJSON(payload []byte) error {
 	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&m); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: payload must be a JSON object or null",
-			errcode.WithInternal(fmt.Sprintf("json decode: %v", err)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("json decode: %v", err))),
 		)
 	}
 	return nil

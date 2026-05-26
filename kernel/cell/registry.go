@@ -465,7 +465,7 @@ func (r *RegistryRecorder) Subscribe(
 	if spec.Kind != "event" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Kind must be \"event\"",
-			errcode.WithInternal(fmt.Sprintf("got=%q", spec.Kind)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%q", spec.Kind))))
 	}
 	if spec.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

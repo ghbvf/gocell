@@ -1,8 +1,6 @@
 package saga
 
 import (
-	"log/slog"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
@@ -13,7 +11,7 @@ import (
 func errDefinitionNotRegistered(definitionID idutil.SafeID) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga coordinator: definition not registered",
-		errcode.WithDetails(slog.String("definitionId", string(definitionID))),
+		errcode.WithDetails(errcode.PublicAttr("definitionId", string(definitionID))),
 	)
 }
 
@@ -28,8 +26,8 @@ func errFoldEventMismatch(instanceID idutil.SafeID, reason string) error {
 	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"saga coordinator: replayed events inconsistent with state machine",
 		errcode.WithDetails(
-			slog.String("instanceId", string(instanceID)),
+			errcode.PublicAttr("instanceId", string(instanceID)),
 		),
-		errcode.WithInternal(reason),
+		errcode.WithInternal(errcode.InternalAttr("_", reason)),
 	)
 }

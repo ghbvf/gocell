@@ -56,7 +56,7 @@ func ValidateMode(mode DurabilityMode) error {
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid DurabilityMode; explicitly choose DurabilityDemo or DurabilityDurable",
-			errcode.WithInternal(fmt.Sprintf("mode=%d", int(mode))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("mode=%d", int(mode)))))
 	}
 }
 
@@ -67,7 +67,7 @@ func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
 	if err := ValidateMode(mode); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"DurabilityMode check failed", err,
-			errcode.WithInternal(fmt.Sprintf("cell=%s", cellID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%s", cellID))))
 	}
 	if mode == DurabilityDemo {
 		return nil
@@ -79,7 +79,7 @@ func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
 		if n, ok := dep.(Nooper); ok && n.Noop() {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				"durable mode rejects noop dependency; inject a real implementation",
-				errcode.WithInternal(fmt.Sprintf("cell=%s type=%T", cellID, dep)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%s type=%T", cellID, dep))))
 		}
 	}
 	return nil

@@ -1041,7 +1041,7 @@ func (s *Subscriber) Close(ctx context.Context) error {
 			slog.Any("error", err))
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPCloseTimeout,
 			"rabbitmq: subscriber Close timed out",
-			errcode.WithDetails(slog.Int("remaining_runs", remaining)))
+			errcode.WithDetails(errcode.PublicAttr("remaining_runs", remaining)))
 	}
 
 	// Sweep any runs that subscribeOnce's defer has not yet removed. This is

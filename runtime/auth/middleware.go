@@ -160,7 +160,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 func writePasswordResetRequired(ctx context.Context, w http.ResponseWriter, changeEndpointHint string) {
 	opts := []errcode.Option{}
 	if changeEndpointHint != "" {
-		opts = append(opts, errcode.WithDetails(slog.String("changePasswordEndpoint", changeEndpointHint)))
+		opts = append(opts, errcode.WithDetails(errcode.PublicAttr("changePasswordEndpoint", changeEndpointHint)))
 	}
 	httputil.WriteError(ctx, w, errcode.New(
 		errcode.KindPermissionDenied,

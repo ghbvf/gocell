@@ -502,9 +502,9 @@ func TestUpgradeHandler_RejectsBareHostOrigin(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrWebsocketOriginsInvalid, ec.Code)
-	assert.Contains(t, ec.Message+" "+ec.InternalMessage, "scheme",
+	assert.Contains(t, ec.Message+" "+ec.Error(), "scheme",
 		"error message must steer operators to the required pattern shape (origin pattern with scheme)")
-	assert.Contains(t, ec.Message+" "+ec.InternalMessage, "example.com",
+	assert.Contains(t, ec.Message+" "+ec.Error(), "example.com",
 		"error must echo the offending entry so operators can find it in their config")
 }
 

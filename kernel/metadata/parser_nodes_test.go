@@ -169,7 +169,7 @@ func TestParseFS_RejectsMultiDocument(t *testing.T) {
 	require.Error(t, err)
 	var ecErrNodes *errcode.Error
 	require.True(t, errors.As(err, &ecErrNodes))
-	assert.Contains(t, ecErrNodes.Message+" "+ecErrNodes.InternalMessage, "multiple YAML documents")
+	assert.Contains(t, ecErrNodes.Message+" "+ecErrNodes.Error(), "multiple YAML documents")
 }
 
 // TestParseFS_AcceptsLeadingDocumentMarker: a single document preceded by the

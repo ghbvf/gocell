@@ -413,7 +413,7 @@ func TestParseFS_InvalidYAMLParsing(t *testing.T) {
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tt.wantMsg)
+			assert.Contains(t, ecErr.Message+" "+ecErr.Error(), tt.wantMsg)
 		})
 	}
 }
@@ -661,7 +661,7 @@ verify:
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-	full := ecErr.Message + " " + ecErr.InternalMessage
+	full := ecErr.Message + " " + ecErr.Error()
 	assert.Contains(t, full, "does not match directory")
 	assert.Contains(t, full, "wrong-cell")
 	assert.Contains(t, full, "accesscore")
@@ -700,7 +700,7 @@ verify:
 	require.Error(t, err)
 	var ecErrCell *errcode.Error
 	require.True(t, errors.As(err, &ecErrCell))
-	fullCell := ecErrCell.Message + " " + ecErrCell.InternalMessage
+	fullCell := ecErrCell.Message + " " + ecErrCell.Error()
 	assert.Contains(t, fullCell, "duplicate")
 	assert.Contains(t, fullCell, "accesscore")
 }
@@ -732,7 +732,7 @@ endpoints:
 	require.Error(t, err)
 	var ecErrContract *errcode.Error
 	require.True(t, errors.As(err, &ecErrContract))
-	fullContract := ecErrContract.Message + " " + ecErrContract.InternalMessage
+	fullContract := ecErrContract.Message + " " + ecErrContract.Error()
 	assert.Contains(t, fullContract, "duplicate")
 	assert.Contains(t, fullContract, "http.auth.login.v1")
 }
@@ -768,7 +768,7 @@ passCriteria: []
 	require.Error(t, err)
 	var ecErrJourney *errcode.Error
 	require.True(t, errors.As(err, &ecErrJourney))
-	fullJourney := ecErrJourney.Message + " " + ecErrJourney.InternalMessage
+	fullJourney := ecErrJourney.Message + " " + ecErrJourney.Error()
 	assert.Contains(t, fullJourney, "duplicate")
 	assert.Contains(t, fullJourney, "J-ssologin")
 }
@@ -798,7 +798,7 @@ build:
 	require.Error(t, err)
 	var ecErrAssembly *errcode.Error
 	require.True(t, errors.As(err, &ecErrAssembly))
-	fullAssembly := ecErrAssembly.Message + " " + ecErrAssembly.InternalMessage
+	fullAssembly := ecErrAssembly.Message + " " + ecErrAssembly.Error()
 	assert.Contains(t, fullAssembly, "duplicate")
 	assert.Contains(t, fullAssembly, "corebundle")
 }
@@ -837,7 +837,7 @@ verify:
 	require.Error(t, err)
 	var ecErrSlice *errcode.Error
 	require.True(t, errors.As(err, &ecErrSlice))
-	fullSlice := ecErrSlice.Message + " " + ecErrSlice.InternalMessage
+	fullSlice := ecErrSlice.Message + " " + ecErrSlice.Error()
 	assert.Contains(t, fullSlice, "duplicate")
 	assert.Contains(t, fullSlice, "dup-slice")
 }
@@ -1176,7 +1176,7 @@ func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "multiple YAML documents")
+			assert.Contains(t, ecErr.Message+" "+ecErr.Error(), "multiple YAML documents")
 		})
 	}
 }
@@ -1387,7 +1387,7 @@ belongsToCell: x
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tt.wantMsg)
+			assert.Contains(t, ecErr.Message+" "+ecErr.Error(), tt.wantMsg)
 		})
 	}
 }

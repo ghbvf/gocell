@@ -619,7 +619,7 @@ func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code)
 	assert.Equal(t, "foreign_key", extractDimensionDetail(ec))
-	assert.Contains(t, ec.InternalMessage, "on_delete")
+	assert.Contains(t, ec.Error(), "on_delete")
 }
 
 // TestVerifyExpectedShape_DetectsMissingUniqueIndex verifies that dropping a

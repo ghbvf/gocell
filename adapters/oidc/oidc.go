@@ -181,7 +181,7 @@ func (a *Adapter) discover(ctx context.Context) (*gooidc.Provider, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOIDCDiscovery,
 			"oidc: discovery failed", err,
-			errcode.WithDetails(slog.String("issuer", a.config.IssuerURL)))
+			errcode.WithDetails(errcode.PublicAttr("issuer", a.config.IssuerURL)))
 	}
 	a.provider.Store(p)
 	// Distinguish periodic re-discovery from first-time discovery so that ops

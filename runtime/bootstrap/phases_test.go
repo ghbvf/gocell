@@ -30,13 +30,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// errFullPhases returns Message + " " + InternalMessage for *errcode.Error,
-// falling back to err.Error() for other error types.
+// errFullPhases returns Message + " " + Error() for *errcode.Error (Error() includes
+// internal diagnostic text), falling back to err.Error() for other error types.
 func errFullPhases(t *testing.T, err error) string {
 	t.Helper()
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		return ecErr.Message + " " + ecErr.InternalMessage
+		return ecErr.Message + " " + ecErr.Error()
 	}
 	return err.Error()
 }

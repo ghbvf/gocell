@@ -566,7 +566,7 @@ func writeReadyz503(ctx context.Context, w http.ResponseWriter, status, reason s
 		errcode.KindUnavailable,
 		errcode.ErrServiceUnavailable,
 		readyzPublic503Message,
-		errcode.WithInternal(fmt.Sprintf("readyz status=%s reason=%s", status, reason)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("readyz status=%s reason=%s", status, reason))),
 	))
 }
 

@@ -92,7 +92,7 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 	if c == nil {
 		return "", errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
 			"contract not found in registry",
-			errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", contractID))))
 	}
 	switch c.Kind {
 	case "http":
@@ -106,7 +106,7 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
-			errcode.WithInternal(fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind))))
 	}
 }
 
@@ -118,7 +118,7 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	if c == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
 			"contract not found in registry",
-			errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", contractID))))
 	}
 	switch c.Kind {
 	case "http":
@@ -132,7 +132,7 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
-			errcode.WithInternal(fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind))))
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 
@@ -87,7 +86,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	if len(metadata) > MaxMetadataBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: metadata too large",
-			errcode.WithDetails(slog.Int("limit", MaxMetadataBytes), slog.Int("got", len(metadata))))
+			errcode.WithDetails(errcode.PublicAttr("limit", MaxMetadataBytes), errcode.PublicAttr("got", len(metadata))))
 	}
 
 	observabilityJSON, err := marshalObservability(entry.Observability)
@@ -120,7 +119,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"outbox: failed to insert entry", err,
-			errcode.WithInternal(fmt.Sprintf("entry_id=%s", entry.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("entry_id=%s", entry.ID))))
 	}
 
 	return nil
@@ -160,12 +159,12 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		if strings.TrimSpace(entries[i].ID) == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox entry ID must not be empty",
-				errcode.WithDetails(slog.Int("index", i)))
+				errcode.WithDetails(errcode.PublicAttr("index", i)))
 		}
 		if entries[i].ID == allZeroUUID {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox entry ID must not be all-zeros UUID",
-				errcode.WithDetails(slog.Int("index", i)))
+				errcode.WithDetails(errcode.PublicAttr("index", i)))
 		}
 		entries[i].InjectObservabilityFromContext(ctx)
 		if err := entries[i].Validate(); err != nil {
@@ -216,7 +215,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 	if _, err := tx.Exec(ctx, sb.String(), args...); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"outbox: failed to batch insert entries", err,
-			errcode.WithDetails(slog.Int("count", len(entries))))
+			errcode.WithDetails(errcode.PublicAttr("count", len(entries))))
 	}
 	return nil
 }
@@ -233,19 +232,19 @@ func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any,
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
 			"outbox entry: failed to marshal metadata", err,
-			errcode.WithDetails(slog.Int("index", globalIndex)))
+			errcode.WithDetails(errcode.PublicAttr("index", globalIndex)))
 	}
 	if len(metadata) > MaxMetadataBytes {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox entry: metadata too large",
-			errcode.WithDetails(slog.Int("index", globalIndex), slog.Int("limit", MaxMetadataBytes), slog.Int("got", len(metadata))))
+			errcode.WithDetails(errcode.PublicAttr("index", globalIndex), errcode.PublicAttr("limit", MaxMetadataBytes), errcode.PublicAttr("got", len(metadata))))
 	}
 
 	observabilityJSON, err := marshalObservability(e.Observability)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
 			"outbox entry: failed to marshal observability", err,
-			errcode.WithDetails(slog.Int("index", globalIndex)))
+			errcode.WithDetails(errcode.PublicAttr("index", globalIndex)))
 	}
 
 	createdAt := e.CreatedAt

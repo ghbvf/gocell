@@ -135,7 +135,7 @@ func (b *FailureBudget) Checker() func(context.Context) error {
 		}
 		return errcode.New(errcode.KindUnavailable, errcode.ErrRelayBudgetExhausted,
 			"relay failure budget exhausted",
-			errcode.WithInternal(fmt.Sprintf("name=%q consec=%d threshold=%d", b.name, b.consec.Load(), b.threshold)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("name=%q consec=%d threshold=%d", b.name, b.consec.Load(), b.threshold))))
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -1071,8 +1070,8 @@ func TestNewCoordinator_TypedNilJournal(t *testing.T) {
 func TestFailurePayload_NoInternalLeak(t *testing.T) {
 	err := errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"step blew up",
-		errcode.WithInternal("secret=hunter2"),
-		errcode.WithDetails(slog.String("password", "p")),
+		errcode.WithInternal(errcode.InternalAttr("_", "secret=hunter2")),
+		errcode.WithDetails(errcode.PublicAttr("password", "p")),
 	)
 
 	payload := failurePayload(err)

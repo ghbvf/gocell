@@ -184,7 +184,7 @@ func validateConfig(cfg config) error {
 func invalidDistlockConfig(reason string, got any) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"distlock.New: invalid configuration",
-		errcode.WithInternal(fmt.Sprintf("reason=%s got=%v", reason, got)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("reason=%s got=%v", reason, got))))
 }
 
 // Acquire implements Locker.
@@ -203,7 +203,7 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	if ttl < MinTTL {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"distlock: ttl must be ≥ 1ms; sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock",
-			errcode.WithInternal(fmt.Sprintf("ttl=%s", ttl)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("ttl=%s", ttl))))
 	}
 
 	token, err := randomToken()

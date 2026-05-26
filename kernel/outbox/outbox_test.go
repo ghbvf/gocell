@@ -199,7 +199,7 @@ func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+	assert.Equal(t, 1, idxAttr.Value())
 }
 
 func TestNoopWriter_Noop(t *testing.T) {
@@ -858,7 +858,7 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+	assert.Equal(t, 1, idxAttr.Value())
 
 	// Cause chain must remain reachable: the inner Entry.Validate failure
 	// (a *errcode.Error from kernel/outbox/entry.go) is wrapped into the
@@ -918,11 +918,11 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, int64(1), idxAttr.Value.Int64())
+	assert.Equal(t, 1, idxAttr.Value())
 
 	idAttr, ok := ecErr.FindAttr("entry_id")
 	require.True(t, ok, "expected entry_id attribute in Details")
-	assert.Equal(t, "e2", idAttr.Value.String())
+	assert.Equal(t, "e2", idAttr.Value())
 
 	assert.ErrorContains(t, err, "db write failed", "wrapped cause must remain reachable via %%w chain")
 	assert.Len(t, w.entries, 1, "only the first entry should have been written")
@@ -1006,7 +1006,7 @@ func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
 			var ecErrRes *errcode.Error
 			require.True(t, errors.As(err, &ecErrRes))
 			assert.Contains(t, ecErrRes.Message, "reserved")
-			assert.Contains(t, ecErrRes.InternalMessage, k)
+			assert.Contains(t, ecErrRes.Error(), k)
 		})
 	}
 }
