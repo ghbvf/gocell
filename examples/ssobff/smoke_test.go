@@ -14,7 +14,12 @@
 // and integration-test (no `needs:` dependency).
 //
 // ref: kubernetes/test/e2e_node — subprocess-driven node smoke pattern.
-package main_test
+//
+// package main (not main_test): shares startEphemeralPostgres with
+// walkthrough_test.go via pgfixture_test.go (//go:build integration ||
+// examples_smoke). The smoke test uses only exported surface, so internal-vs-
+// external test package makes no behavioral difference here.
+package main
 
 import (
 	"context"
@@ -71,10 +76,12 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		t.Skip("smoke test relies on POSIX signals; ssobff has no Windows production target")
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("smoke test requires DATABASE_URL; set when running examples-smoke against a PG fixture (CI sets this automatically)")
-	}
+	// Self-provision an ephemeral postgres so the smoke guard RUNS wherever
+	// Docker is available (CI + local), never silently SKIPs on a missing
+	// DATABASE_URL. RequireDocker (inside startEphemeralPostgres) self-skips
+	// locally without Docker but FAILS under GOCELL_TEST_DOCKER_REQUIRED=1.
+	dbURL, cleanup := startEphemeralPostgres(t)
+	defer cleanup()
 
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "ssobff-smoke")

@@ -834,8 +834,12 @@ jobs:
     # via httptest.NewServer and does NOT exercise main.go's bootstrap path.
     #
     # Parallel with build-test and integration-test — no `needs:` dependency.
-    # The whole job (go build + ~5s ready probe + ~1s graceful shutdown) lands
-    # under 1 min, so this guard adds zero wall-time to PR check fan-out.
+    # The job (go build + testcontainers postgres spin + ~5s ready probe + ~1s
+    # graceful shutdown) lands ~1–1.5 min, still well within the PR fan-out.
+    # The smoke test self-provisions postgres via testcontainers (see
+    # examples/ssobff/pgfixture_test.go), so this job depends on the runner's
+    # Docker (ubuntu-latest has it built in) — no static `services:` block or
+    # DATABASE_URL env is needed.
     if: ${{ inputs.run-examples-smoke }}
     runs-on: ubuntu-latest
     steps:
@@ -849,21 +853,26 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: ssobff startup smoke
+        # GOCELL_TEST_DOCKER_REQUIRED=1 makes RequireDocker fail (not skip) when
+        # the runner has no Docker, so this guard cannot silently pass as a SKIP
+        # — same fail-closed lever the integration-test job uses.
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
         # `examples_smoke` build tag isolates this from the `integration` tag
         # (whose tests assume DB/RMQ testcontainers and run in the slow
         # integration-test job). The dedicated tag also keeps `go test ./...`
         # without tags fast on developer laptops — subprocess smoke fires
         # only when explicitly requested.
         #
-        # `-timeout 90s` bounds the test runtime once compilation finishes
-        # (Go's `go test -timeout` does not constrain the build phase).
-        # Test budget: ~5s readyz poll + ~5s SIGTERM wait + slack — 90s
-        # leaves headroom for cold-cache `go build` slowdowns on shared
-        # runners. `-count=1` is mandatory: without it `go test` may
-        # return a cached PASS from a prior run with the same flags,
-        # silently skipping the subprocess that the regression guard
-        # exists to exercise.
-        run: go test -tags=examples_smoke -count=1 -timeout 90s -run TestSSOBFFStartupSmoke ./examples/ssobff/...
+        # `-timeout 180s` bounds the test runtime once compilation finishes
+        # (Go's `go test -timeout` does not constrain the build phase). Test
+        # budget now includes a testcontainers postgres spin (image pull +
+        # start) on top of the ~5s readyz poll + ~5s SIGTERM wait; 180s leaves
+        # headroom for a cold image cache on shared runners. `-count=1` is
+        # mandatory: without it `go test` may return a cached PASS from a prior
+        # run with the same flags, silently skipping the subprocess that the
+        # regression guard exists to exercise.
+        run: go test -tags=examples_smoke -count=1 -timeout 180s -run TestSSOBFFStartupSmoke ./examples/ssobff/...
 
   # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
   # empty for forks), which would cause this job to fail with an opaque auth

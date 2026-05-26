@@ -397,6 +397,13 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
 	}
+	// accesscore paginates (session/identity list endpoints) so durable mode
+	// requires a cursor codec — same demo-key pattern as config/audit above.
+	// WARNING: demo key only; production deployments must inject from a secret manager.
+	accessCursorCodec, err := query.NewCursorCodec([]byte("ssobff-access-cursor-key-32bytes"))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("ssobff: create access cursor codec: %w", err)
+	}
 	ac := accesscore.NewAccessCore(append(
 		accessStorageOpts,
 		accesscore.WithClock(clock.Real()),
@@ -405,6 +412,7 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 		accesscore.WithJWTIssuer(p.jwtIssuer),
 		accesscore.WithJWTVerifier(p.jwtVerifier),
 		accesscore.WithCASProtocol(accessCAS),
+		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithLogger(p.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)...)
