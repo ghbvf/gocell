@@ -9,8 +9,9 @@
 //   - auth.BuiltinServiceRoles
 //
 // These symbols were removed in Wave 2 of the SVCTOKEN-CALLER-IDENTITY
-// migration (PR A5). The rule enforces a "0 references" check so re-introduction
-// at any call site fails CI.
+// migration (PR #362 "A5 service token caller_cell + contract.clients
+// runtime enforce"). The rule enforces a "0 references" check so
+// re-introduction at any call site fails CI.
 //
 // # AI-robust 评级：Medium-true (type-aware via typeseval.ResolvePackageRef)
 //
@@ -35,20 +36,35 @@
 //
 // # Blind spots
 //
-//   - BS-1 Reflection via string literal (e.g. reflect.ValueOf(...)
-//     .MethodByName("BuiltinServiceRoles")): NOT a Go identifier, so neither
+//   - BS-1 Reflection via string literal (e.g. reflect.ValueOf
+//     ("BuiltinServiceRoles")): NOT a Go identifier, so neither
 //     ResolvePackageRef branch sees it. Reverse self-check
-//     TestNoDeletedAuthSymbols_BS1_NoReflectAccess asserts production AST
-//     has zero such references.
+//     TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess asserts production
+//     AST has zero such references; TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect
+//     pins the scanner-logic-verified contract by asserting the fixture's
+//     red case is caught.
+//   - BS-1a (accepted) Chained reflect form (`reflect.TypeOf(x).MethodByName
+//     ("BuiltinServiceRoles")`): the outer CallExpr's Fun is a SelectorExpr
+//     whose .X is itself a CallExpr, not an *ast.Ident, so the BS-1 scanner's
+//     direct-call check skips it. Realistic threat surface is bounded — the
+//     symbols are physically deleted; any reflective lookup link-errors at
+//     build time on `reflect.TypeOf(x).MethodByName(name)` when the underlying
+//     declaration is absent. Not extended in this PR.
+//   - BS-2 (accepted) `//go:linkname` directive: AST scanners do not parse
+//     compiler directives, so `//go:linkname myLocal
+//     github.com/.../runtime/auth.BuiltinServiceRoles` would not be detected
+//     by either (A) or (B). The symbols are physically deleted, so a
+//     linkname reference fails at link time (LINKLOAD does not resolve);
+//     this is a build-time guard rather than a CI archtest gap.
 //   - BS-A (accepted) Dot-imported const/var bare-Ident (e.g.
 //     `import . "...runtime/auth"; _ = RoleInternalAdmin`):
 //     ResolvePackageRef returns false for bare-Ident → *types.Const /
 //     *types.Var per its typed-callable filter. Extending the resolver to
 //     cover Const/Var bare Idents is tracked by #1037 (archtest façade
-//     收缩); not in scope for this PR. The same-package case is also
-//     out of rule scope — the rule targets references OUTSIDE the canonical
-//     definition site; re-introducing the symbol inside runtime/auth then
-//     using it cross-package is caught by (A).
+//     收缩); not in scope for this PR. Re-introducing the symbol inside
+//     runtime/auth and using it cross-package via the qualified
+//     `auth.RoleInternalAdmin` form IS caught by (A); only the dot-import
+//     const/var bare-Ident form is missed.
 //
 // # Hard is unattainable for this rule shape
 //
@@ -64,6 +80,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"strings"
 	"testing"
 
@@ -74,7 +91,7 @@ import (
 const ruleNoDeletedAuthSymbols01 = "NO-DELETED-AUTH-SYMBOLS-01"
 
 // fixtureAuthImportPath is the canonical path of the fixture-local fake
-// `auth` package used by TestNoDeletedAuthSymbols_FixtureCatchesAllForms.
+// `auth` package used by TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms.
 // It is intentionally distinct from authRuntimeImportPath (defined in
 // svctoken_caller_cell_test.go) so the same scanner function exercises both
 // targets without redeclaring constants in production scope.
@@ -105,7 +122,11 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 
 		// Pre-collect the positions of SelectorExpr.Sel so the bare-Ident
 		// scan below does not double-count an Ident that is already the Sel
-		// half of a qualified selector caught by (A).
+		// half of a qualified selector caught by (A). Without this guard,
+		// EachInSubtree[ast.Ident] would visit `auth.RoleInternalAdmin`'s
+		// `RoleInternalAdmin` Sel-Ident and resolve it (via info.Uses) to the
+		// same *types.Const / *types.Func that (A) already recorded — every
+		// qualified reference would be reported twice.
 		selSelPositions := make(map[token.Pos]bool)
 		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 			if sel.Sel != nil {
@@ -123,11 +144,9 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 				return
 			}
 			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: p.Fset.Position(sel.Pos()).Line,
-				Message: fmt.Sprintf(
-					"deprecated symbol %s.%s — replace with caller-cell identity pattern (see PR #362 SVCTOKEN-CALLER-IDENTITY)",
-					shortPkg(authImportPath), name),
+				Rel:     rel,
+				Line:    p.Fset.Position(sel.Pos()).Line,
+				Message: formatBannedSymbolDiag(authImportPath, name, false),
 			})
 		})
 
@@ -145,15 +164,40 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 				return
 			}
 			diags = append(diags, Diagnostic{
-				Rel:  rel,
-				Line: p.Fset.Position(id.Pos()).Line,
-				Message: fmt.Sprintf(
-					"deprecated symbol %s.%s (dot-imported) — replace with caller-cell identity pattern (see PR #362 SVCTOKEN-CALLER-IDENTITY)",
-					shortPkg(authImportPath), name),
+				Rel:     rel,
+				Line:    p.Fset.Position(id.Pos()).Line,
+				Message: formatBannedSymbolDiag(authImportPath, name, true),
 			})
 		})
 	}
 	return diags
+}
+
+// formatBannedSymbolDiag composes the diagnostic message for a banned symbol
+// reference. The dotImported suffix differentiates (A) qualified vs (B)
+// dot-imported hits so log readers can tell at a glance which AST form
+// triggered.
+func formatBannedSymbolDiag(authImportPath, name string, dotImported bool) string {
+	qualifier := ""
+	if dotImported {
+		qualifier = " (dot-imported)"
+	}
+	return fmt.Sprintf(
+		"deprecated symbol %s.%s%s — replace with auth.RequireCallerCell (authz) "+
+			"or auth.TestServiceContext (test principals); see PR #362 SVCTOKEN-CALLER-IDENTITY",
+		shortPkg(authImportPath), name, qualifier)
+}
+
+// productionScanPatterns is the seven production roots scanned by both the
+// main invariant test and the BS-1 reverse self-check.
+var productionScanPatterns = []string{
+	"./runtime/...",
+	"./cells/...",
+	"./cmd/...",
+	"./kernel/...",
+	"./adapters/...",
+	"./examples/...",
+	"./tests/...",
 }
 
 // TestNO_DELETED_AUTH_SYMBOLS_01 enforces that no production or test code
@@ -163,19 +207,9 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 	t.Parallel()
 
-	patterns := []string{
-		"./runtime/...",
-		"./cells/...",
-		"./cmd/...",
-		"./kernel/...",
-		"./adapters/...",
-		"./examples/...",
-		"./tests/...",
-	}
-
 	diags := RunTyped(t,
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		patterns,
+		productionScanPatterns,
 		func(p *Pass) []Diagnostic {
 			return scanDeletedAuthSymbolsAgainst(p, authRuntimeImportPath)
 		})
@@ -183,11 +217,12 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 	Report(t, ruleNoDeletedAuthSymbols01, diags)
 }
 
-// TestNoDeletedAuthSymbols_FixtureCatchesAllForms exercises every import
-// form the scanner must catch (default alias, custom alias, dot-imported
-// func) and the false-positive form it must reject (same-name decoy from a
-// different package). The fixture-local auth import path replaces the
-// runtime/auth path so the same scanner code path runs unchanged.
+// TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms exercises every
+// import form the scanner must catch (default alias, custom alias,
+// dot-imported func) and the false-positive form it must reject (same-name
+// decoy from a different package). The fixture-local auth import path
+// replaces the runtime/auth path so the same scanner code path runs
+// unchanged.
 //
 // Expected hit breakdown (drift would break exact-count assertion):
 //
@@ -195,11 +230,14 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 //   - caller_custom_alias.go       → 3 hits (2 consts + 1 func, custom alias)
 //   - caller_dot_import.go         → 1 hit  (func only; const dot-import is BS-A)
 //   - caller_negative_other_pkg.go → 0 hits (same names, different package)
+//   - caller_reflect_bs1.go        → 0 hits (BS-1 fixture; main scan ignores
+//     string literals; verified by sibling BS-1 fixture test)
+//   - doc.go                       → 0 hits (package documentation only)
 //
 // Per ai-robust.md §"Hard 范本": the fixture is a real Go package loaded via
 // packages.Load with the archtest_fixture build tag. Bypassing this test
 // requires modifying real source code.
-func TestNoDeletedAuthSymbols_FixtureCatchesAllForms(t *testing.T) {
+func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 	t.Parallel()
 
 	diags := RunTypedFixture(t,
@@ -216,11 +254,13 @@ func TestNoDeletedAuthSymbols_FixtureCatchesAllForms(t *testing.T) {
 	}
 
 	require.Len(t, diags, 7,
-		"fixture must yield exactly 7 hits (3 default + 3 custom-alias + 1 dot-import + 0 negative); "+
+		"fixture must yield exactly 7 hits (3 default + 3 custom-alias + 1 dot-import + 0 negative + 0 reflect-bs1 + 0 doc); "+
 			"any change in the fixture must update the expected count")
 
 	// Per-file breakdown so a re-shuffled fixture cannot silently keep the
-	// total constant while losing a form.
+	// total constant while losing a form. doc.go and caller_reflect_bs1.go
+	// assertions (0 hits each) catch silent drift if someone adds a banned
+	// reference to those files.
 	type expect struct {
 		suffix string
 		want   int
@@ -230,6 +270,8 @@ func TestNoDeletedAuthSymbols_FixtureCatchesAllForms(t *testing.T) {
 		{"caller_custom_alias.go", 3},
 		{"caller_dot_import.go", 1},
 		{"caller_negative_other_pkg.go", 0},
+		{"caller_reflect_bs1.go", 0},
+		{"doc.go", 0},
 	}
 	for _, e := range expectations {
 		got := 0
@@ -244,36 +286,61 @@ func TestNoDeletedAuthSymbols_FixtureCatchesAllForms(t *testing.T) {
 	}
 }
 
-// TestNoDeletedAuthSymbols_BS1_NoReflectAccess implements the BS-1 reverse
-// self-check: no production code calls a reflect.* function with a string
-// argument that contains one of the banned symbol names. This guards the
-// obvious reflective-bypass pattern without requiring full reflect type
-// tracing.
-func TestNoDeletedAuthSymbols_BS1_NoReflectAccess(t *testing.T) {
+// TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess implements the BS-1
+// reverse self-check: no production code calls a reflect.* function with a
+// string argument that contains one of the banned symbol names. This guards
+// the obvious reflective-bypass pattern without requiring full reflect type
+// tracing. Companion test
+// TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect verifies the
+// scanner logic actually fires on a synthetic call site.
+func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_NoReflectAccess(t *testing.T) {
 	t.Parallel()
-
-	patterns := []string{
-		"./runtime/...",
-		"./cells/...",
-		"./cmd/...",
-		"./kernel/...",
-		"./adapters/...",
-		"./examples/...",
-		"./tests/...",
-	}
 
 	diags := RunTyped(t,
 		TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		patterns,
+		productionScanPatterns,
 		scanDeletedAuthSymbolsReflectBypass)
 
 	assert.Empty(t, diags,
 		"NO-DELETED-AUTH-SYMBOLS-01 BS-1: reflect call site references a banned "+
-			"symbol name as a string literal; production code must not bypass the typed funnel via reflection")
+			"symbol name as a string literal; production code must not bypass the typed "+
+			"funnel via reflection — remove the reflective lookup and call the replacement "+
+			"API (auth.RequireCallerCell / auth.TestServiceContext) directly; "+
+			"see PR #362 SVCTOKEN-CALLER-IDENTITY")
 }
 
-// scanDeletedAuthSymbolsReflectBypass walks reflect.* call sites and reports
-// any whose string-literal argument contains a banned symbol name.
+// TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect pins the BS-1
+// scanner's positive-detection contract: a synthetic reflect.<X>(...) call
+// site whose string-literal argument names a banned symbol must produce
+// exactly one diagnostic. Without this gate, a regression that disables the
+// BS-1 scanner's string-match branch would leave the "no reflect access"
+// assertion silently green forever (production scan stays at 0 hits regardless).
+func TestNO_DELETED_AUTH_SYMBOLS_01_BS1_FixtureCatchesReflect(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedFixture(t,
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/nodeletedauthsymbolsfixture/..."},
+		scanDeletedAuthSymbolsReflectBypass)
+
+	require.Len(t, diags, 1,
+		"BS-1 fixture must yield exactly 1 hit (the reflect.ValueOf call in caller_reflect_bs1.go); "+
+			"got %d", len(diags))
+	got := diags[0]
+	assert.Contains(t, got.Rel, "caller_reflect_bs1.go",
+		"BS-1 fixture hit must originate in caller_reflect_bs1.go")
+	assert.Contains(t, got.Message, "BuiltinServiceRoles",
+		"BS-1 fixture diagnostic must name the banned symbol triggering the match")
+}
+
+// scanDeletedAuthSymbolsReflectBypass walks reflect package call sites and
+// reports any whose string-literal argument contains a banned symbol name.
+//
+// Package identification uses info.Uses[xIdent].(*types.PkgName).Imported()
+// .Path() rather than the syntactic identifier name, so `import r "reflect";
+// r.ValueOf(...)` does not bypass the check. Chained forms like
+// `reflect.TypeOf(x).MethodByName("...")` are an accepted BS-1a residual
+// (see package godoc).
 func scanDeletedAuthSymbolsReflectBypass(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil {
 		return nil
@@ -287,7 +354,11 @@ func scanDeletedAuthSymbolsReflectBypass(p *Pass) []Diagnostic {
 				return
 			}
 			xIdent, ok := sel.X.(*ast.Ident)
-			if !ok || xIdent.Name != "reflect" {
+			if !ok {
+				return
+			}
+			pkgName, ok := p.TypesInfo.Uses[xIdent].(*types.PkgName)
+			if !ok || pkgName.Imported().Path() != "reflect" {
 				return
 			}
 			for _, arg := range call.Args {
