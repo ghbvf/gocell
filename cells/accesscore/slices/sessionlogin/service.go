@@ -421,7 +421,9 @@ func (s *Service) loginInTx(
 		return loginOutcome{
 			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				errMsgInvalidCredentials,
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("credentialauthority: in-tx assert failed (user_id=%s): %v", user.ID, err)))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+					"credentialauthority: in-tx assert failed (user_id=%s): %v",
+					user.ID, err)))),
 		}, nil
 	}
 

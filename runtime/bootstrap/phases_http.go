@@ -247,7 +247,8 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 			"set bootstrap.WithListener(cell.InternalListener, ..., "+
 			"[]kauth.ListenerAuth{<svcTokenAuth from kauth.NewAuthServiceToken(store, ring)>}) "+
 			"and optionally layer kauth.AuthMTLS{} with verified client TLS",
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", ")))))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+			"count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", ")))))
 }
 
 func declaredInternalRoutes(rtr *router.Router) []string {

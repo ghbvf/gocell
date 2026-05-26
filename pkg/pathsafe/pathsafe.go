@@ -622,7 +622,9 @@ func rollbackWrites(written []writeRecord, dirs []string, originalErr error) err
 	}
 	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 		"pathsafe: write failed; rollback removed files and dirs", originalErr,
-		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("rollback removed %d files %d dirs, restored %d originals", len(written), len(dirs), restored))))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+			"rollback removed %d files %d dirs, restored %d originals",
+			len(written), len(dirs), restored))))
 }
 
 // collectMissingDirs returns the directories that do not exist yet, starting

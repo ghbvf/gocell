@@ -237,7 +237,10 @@ func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any,
 	if len(metadata) > MaxMetadataBytes {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox entry: metadata too large",
-			errcode.WithDetails(errcode.PublicAttr("index", globalIndex), errcode.PublicAttr("limit", MaxMetadataBytes), errcode.PublicAttr("got", len(metadata))))
+			errcode.WithDetails(
+				errcode.PublicAttr("index", globalIndex),
+				errcode.PublicAttr("limit", MaxMetadataBytes),
+				errcode.PublicAttr("got", len(metadata))))
 	}
 
 	observabilityJSON, err := marshalObservability(e.Observability)

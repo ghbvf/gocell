@@ -945,7 +945,9 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 					errcode.PublicAttr("table", tr.Table),
 					errcode.PublicAttr("trigger", tr.Name),
 				),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("tgenabled=%q (enabled=%v) want enabled=%v", gotEnabled, isEnabled, tr.Enabled))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+					"tgenabled=%q (enabled=%v) want enabled=%v",
+					gotEnabled, isEnabled, tr.Enabled))),
 			)
 		}
 		if gotFn != tr.Function {

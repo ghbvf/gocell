@@ -864,7 +864,9 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, err,
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+				"config repo: GetVersion scan error config_id=%s version=%d",
+				configID, version))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}

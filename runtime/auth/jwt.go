@@ -197,7 +197,9 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if len(v.expectedAudiences) > 0 && !audContainsAny(claims.Audience, v.expectedAudiences) {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token audience validation failed",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+				"aud %v does not satisfy any configured expected audience",
+				claims.Audience))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Issuer validation: when expectedIssuer is configured, the token's iss claim

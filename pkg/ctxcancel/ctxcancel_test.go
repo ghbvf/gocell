@@ -114,9 +114,21 @@ func TestReasonFromDetails(t *testing.T) {
 	}{
 		{name: "nil error → empty", err: nil, want: ""},
 		{name: "no details → empty", err: mkErr(), want: ""},
-		{name: "non-string value → empty", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, 42))), want: ""},
-		{name: "empty-string value → empty", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ""))), want: ""},
-		{name: "ReasonCanceled accepted", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonCanceled))), want: ReasonCanceled},
+		{
+			name: "non-string value → empty",
+			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, 42))),
+			want: "",
+		},
+		{
+			name: "empty-string value → empty",
+			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ""))),
+			want: "",
+		},
+		{
+			name: "ReasonCanceled accepted",
+			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonCanceled))),
+			want: ReasonCanceled,
+		},
 		{
 			name: "ReasonDeadlineExceeded accepted",
 			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonDeadlineExceeded))),

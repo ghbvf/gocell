@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
-
 // buildKeyProvider constructs the KeyProvider from the supplied providerName,
 // masterKey, and prevMasterKey (all pre-read from per-cell env by the caller).
 //
