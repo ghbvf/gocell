@@ -1,3 +1,17 @@
+# [SUPERSEDED] 039 P2 OPEN 整理与实施计划（独立于 034/038 主线）
+
+> **2026-05-25 归档**：66 项 P2 全部对账完毕,**无需立项的未登记任务**。分布如下:
+>
+> | 状态 | 项数 | 说明 |
+> |---|---|---|
+> | 现存 open GitHub issue 跟踪 | ~37 | C-04 #613 / KERNEL-RECONCILE #661 / WM-32 #631 / CONTRACT-* #757-759 / Wave4 各项 等 |
+> | 已 ship（code 核实，2026-05-13→现在随 D3/B7/testwait 等批次落地） | ~21 | B2-A-13/20/21 / R-02 / B2-X-01/03 / B2-T-08 / B2-K-08 / C-L6 / P4-TD-10 / B2-C-13 / PR341-FU / C-06 / F-04 / F-05 / PR-V1-PG-STARTUP-HARDEN / 等 |
+> | completed 快照（已闭） | 4 | PR411-SERVICEOWNED（+#719 Hard 升级 open）/ B2-C-11 / P2-T-02 / P3-TD-10 |
+> | 前提消失 / 已解（resolved by design 变更或删除） | 2 | B2-PROVISIONER-MUTEX（→ PG `pg_advisory_xact_lock`，in-process mutex 已弃）/ C-DC9（auditarchive 死代码已不存在，premise gone） |
+> | **低风险、无 discrete issue（唯二候选，见下）** | 2 | B2-K-05（metadata parser PII — 近乎 moot：parser 处理 dev 配置非用户 PII）/ PR464-FU-CAS-PROTOCOL-ARCHTEST-TYPESEVAL（trigger-gated archtest 微升级，sibling #812 open） |
+>
+> 真正"没登记"的只有 2 项低风险候选,均非 actionable gap（一个近乎 moot，一个 trigger-gated archtest 微升级）。新工作走 GitHub Issues。以下为归档前原文。
+
 # 039 P2 OPEN 整理与实施计划（独立于 034/038 主线）
 
 **生成日期**：2026-05-13
