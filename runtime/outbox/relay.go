@@ -587,6 +587,8 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 			slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
 				slog.Int("completed", i),
 				slog.Int("remaining", remaining),
+				slog.String("entry_id", res.entry.ID),
+				slog.String("event_type", res.entry.EventType),
 				slog.Any("error", err))
 			return stats, err
 		}

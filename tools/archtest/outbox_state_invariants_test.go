@@ -26,6 +26,7 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"sort"
 	"strconv"
@@ -33,6 +34,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -314,4 +316,80 @@ func TestOutboxStateLiteralBan_ReverseSelfCheck(t *testing.T) {
 		_, ok := outboxStatusLiterals[allowed]
 		assert.False(t, ok, "%q must not be banned (column name / unrelated)", allowed)
 	}
+}
+
+// TestOutboxStateTransitionCompleteness_BlindSpotShape asserts that
+// stateTransitions in kernel/outbox is a composite map literal with a
+// non-empty key set — a runtime-built map would yield empty keys and silently
+// pass the completeness invariant without actually checking anything.
+//
+// Mirrors TestCellPhaseRankCompleteness_BlindSpotShape in lifecycle_phase_test.go.
+func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	_ = Run(t, DirsScope(root, []string{"kernel/outbox"}), func(p *Pass) []Diagnostic {
+		var sawMapComposite bool
+		for _, f := range p.Files {
+			if strings.HasSuffix(p.Rel(f), "_test.go") {
+				continue
+			}
+			// forEachVarComposite fires only when the var is a *ast.CompositeLit;
+			// a runtime-built map (make / append) would not fire this callback.
+			forEachVarComposite(f, stateTransitionsVarN, func(cl *ast.CompositeLit) {
+				keys := collectMapKeyIdents(f, stateTransitionsVarN)
+				if len(keys) > 0 {
+					sawMapComposite = true
+				}
+			})
+		}
+		assert.True(t, sawMapComposite,
+			"expected stateTransitions to be a non-empty composite map literal in kernel/outbox "+
+				"(blind-spot guard: a runtime-built map would evade key completeness checks)")
+		return nil
+	})
+}
+
+// TestOutboxStateTransitionGuard_ReverseSelfCheck proves funcCallsSelector and
+// callSelectorsIn correctly distinguish functions that call TransitionState from
+// those that do not. Two tiny Go source snippets are parsed in-memory:
+//
+//   - bothFunc calls both store.MarkPublished and kout.TransitionState → guard passes.
+//   - markOnlyFunc calls only store.MarkPublished → guard would diagnose.
+func TestOutboxStateTransitionGuard_ReverseSelfCheck(t *testing.T) {
+	t.Parallel()
+
+	const src = `package p
+func bothFunc() {
+	store.MarkPublished(ctx, id, lease)
+	kout.TransitionState(from, to)
+}
+func markOnlyFunc() {
+	store.MarkPublished(ctx, id, lease)
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "reverse_self_check.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	funcs := map[string]*ast.FuncDecl{}
+	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		funcs[fn.Name.Name] = fn
+	})
+	require.Contains(t, funcs, "bothFunc", "bothFunc must be parsed")
+	require.Contains(t, funcs, "markOnlyFunc", "markOnlyFunc must be parsed")
+
+	both := funcs["bothFunc"]
+	markOnly := funcs["markOnlyFunc"]
+
+	// bothFunc: has a settlement mark AND calls TransitionState → no diagnostic.
+	bothMarks := callSelectorsIn(both.Body, outboxSettlementMarks)
+	assert.NotEmpty(t, bothMarks, "bothFunc must call at least one settlement mark")
+	assert.True(t, funcCallsSelector(both.Body, "TransitionState"),
+		"bothFunc must call TransitionState")
+
+	// markOnlyFunc: has a settlement mark but does NOT call TransitionState → would diagnose.
+	markOnlyMarks := callSelectorsIn(markOnly.Body, outboxSettlementMarks)
+	assert.NotEmpty(t, markOnlyMarks, "markOnlyFunc must call at least one settlement mark")
+	assert.False(t, funcCallsSelector(markOnly.Body, "TransitionState"),
+		"markOnlyFunc must NOT call TransitionState (guard would fire)")
 }

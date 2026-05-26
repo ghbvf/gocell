@@ -179,6 +179,9 @@ type CellSpec struct {
 	// projected from CellMeta.Lifecycle. Same wire key as ContractSpec.Lifecycle.
 	// Omitted when cell.yaml does not declare it (consumers treat absence as the
 	// experimental default, matching NewBaseCell).
+	// Note: distinct value set from ContractSpec.Lifecycle (maturity
+	// experimental|candidate|asset|maintenance|retired, not
+	// draft|active|deprecated).
 	Lifecycle      string          `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
 	DurabilityMode string          `json:"durabilityMode,omitempty" yaml:"durabilityMode,omitempty"`
 	Owner          CellSpecOwner   `json:"owner"            yaml:"owner"`
@@ -213,6 +216,9 @@ type SliceSpec struct {
 	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
 	// Lifecycle is the slice's governance maturity phase (cellvocab.Phase),
 	// projected from SliceMeta.Lifecycle. Omitted when slice.yaml does not declare it.
+	// Note: distinct value set from ContractSpec.Lifecycle (maturity
+	// experimental|candidate|asset|maintenance|retired, not
+	// draft|active|deprecated).
 	Lifecycle      string                   `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty"`
 	ContractUsages []SliceSpecContractUsage `json:"contractUsages,omitempty" yaml:"contractUsages,omitempty"`
 	VerifyUnit     []string                 `json:"verifyUnit,omitempty"     yaml:"verifyUnit,omitempty"`

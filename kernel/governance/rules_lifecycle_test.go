@@ -14,6 +14,7 @@ import (
 // exceed its parent cell's phase (empty defaults to experimental, matching the
 // BaseCell construction default).
 func TestValidateLifecyclePhase(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		cellPhase      string
@@ -29,10 +30,14 @@ func TestValidateLifecyclePhase(t *testing.T) {
 		{"invalid cell phase - 1 error", "stable", "", 1},
 		{"invalid slice phase - 1 error", "asset", "bogus", 1},
 		{"contract lifecycle value on cell rejected - 1 error", "active", "", 1},
+		{"slice retired in asset cell - 1 error", "asset", "retired", 1},
+		{"invalid cell phase + mature slice → only cell finding", "stable", "asset", 1},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			project := &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
 					"testcell": {ID: "testcell", ConsistencyLevel: "L2", Lifecycle: tt.cellPhase},
@@ -67,6 +72,7 @@ func TestValidateLifecyclePhase(t *testing.T) {
 // registered parent cell is skipped for the slice≤cell check (REF-01 covers
 // the missing cell) but still membership-checked.
 func TestValidateLifecyclePhase_MissingParentCell(t *testing.T) {
+	t.Parallel()
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 		Slices: map[string]*metadata.SliceMeta{

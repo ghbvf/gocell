@@ -44,7 +44,9 @@ type CellIdentity interface {
 	ConsistencyLevel() cellvocab.Level
 	// Phase reports the cell's declared governance maturity phase
 	// (experimental → candidate → asset → maintenance → retired); empty in
-	// cell.yaml defaults to experimental. Consumed by runtime/lifecycle.PhaseAggregator.
+	// cell.yaml defaults to experimental. The YAML / wire key is `lifecycle`.
+	// Consumers: runtime/lifecycle.PhaseAggregator (startup maturity log),
+	// runtime/devtools/catalog (catalog wire).
 	Phase() cellvocab.Phase
 }
 

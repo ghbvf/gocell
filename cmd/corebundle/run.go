@@ -132,7 +132,8 @@ func logAssemblyMaturity(cells []cell.Cell) {
 	for _, e := range lifecycle.NewPhaseAggregator(ids).Snapshot() {
 		dist[e.Phase]++
 	}
-	attrs := make([]any, 0, len(cellvocab.Phases))
+	attrs := make([]any, 0, 1+len(cellvocab.Phases))
+	attrs = append(attrs, slog.Int("total_cells", len(cells)))
 	for _, p := range cellvocab.Phases {
 		if n := dist[p]; n > 0 {
 			attrs = append(attrs, slog.Int(string(p), n))

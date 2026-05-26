@@ -29,7 +29,8 @@ type PhaseEntry struct {
 // PhaseAggregator reports the maturity phase of each cell in an assembly.
 type PhaseAggregator interface {
 	// Snapshot returns one entry per cell, sorted by CellID for deterministic
-	// output. The gap/aggregate (e.g. distribution) is left to the consumer.
+	// output. The aggregate summary (e.g. the phase distribution across the
+	// assembly) is computed by the consumer.
 	Snapshot() []PhaseEntry
 }
 

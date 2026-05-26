@@ -117,9 +117,10 @@ func (s State) ValidTransitions() []State {
 }
 
 // TransitionState validates a state transition from → to and returns an error
-// if it is not allowed. Pure validation; it does NOT mutate any state. The
-// relay calls this at its settlement decision points so an illegal target
-// fails loudly rather than no-op'ing through the SQL CAS WHERE clause.
+// if it is not allowed. Pure validation; it does NOT mutate any state.
+// Callers invoke the corresponding store mutation (MarkPublished / MarkDead /
+// MarkRetry) after a successful return; the relay calls this at its settlement
+// decision points so an illegal target fails loudly.
 func TransitionState(from, to State) error {
 	if from.CanTransitionTo(to) {
 		return nil

@@ -7,6 +7,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// lifecyclePhaseFix is the remediation guidance for invalid lifecycle phase
+// findings (membership check). Used in both the cell and slice error messages
+// to keep them in sync.
+const lifecyclePhaseFix = "set lifecycle to one of: experimental, candidate, asset, maintenance, retired"
+
 // validateLifecyclePhase implements LIFECYCLE-PHASE-01.
 //
 // Two checks on the cell.yaml / slice.yaml `lifecycle` maturity phase:
@@ -38,7 +43,7 @@ func (v *Validator) validateLifecyclePhase() []ValidationResult {
 				codeLIFECYCLEPHASE01, IssueInvalid,
 				cellFile(c), "lifecycle",
 				fmt.Sprintf("cell %q declares lifecycle %q which is not a valid maturity phase", c.ID, c.Lifecycle),
-				"set lifecycle to one of: experimental, candidate, asset, maintenance, retired",
+				lifecyclePhaseFix,
 			))
 		}
 	}
@@ -50,7 +55,7 @@ func (v *Validator) validateLifecyclePhase() []ValidationResult {
 					codeLIFECYCLEPHASE01, IssueInvalid,
 					sliceFile(s), "lifecycle",
 					fmt.Sprintf("slice %q declares lifecycle %q which is not a valid maturity phase", s.ID, s.Lifecycle),
-					"set lifecycle to one of: experimental, candidate, asset, maintenance, retired",
+					lifecyclePhaseFix,
 				))
 				continue
 			}
@@ -72,7 +77,9 @@ func (v *Validator) checkSlicePhaseNotAboveCell(s *metadata.SliceMeta) []Validat
 	}
 	cellRank := effectivePhaseRank(parentCell.Lifecycle)
 	sliceRank := effectivePhaseRank(s.Lifecycle)
-	// Negative rank = invalid value already flagged by the membership check.
+	// negative rank = invalid phase already flagged by the membership check
+	// above; skip to avoid a duplicate finding (distinct from the
+	// missing-cell/REF-01 case).
 	if cellRank < 0 || sliceRank < 0 || sliceRank <= cellRank {
 		return nil
 	}
@@ -98,8 +105,8 @@ func effectivePhaseRank(lifecycle string) int {
 	return cellvocab.PhaseRank(lifecycle)
 }
 
-// effectivePhaseLabel renders a lifecycle string for error messages, showing
-// the experimental default for an empty value.
+// effectivePhaseLabel renders a lifecycle string for error messages,
+// substituting the experimental default for an empty value.
 func effectivePhaseLabel(lifecycle string) string {
 	if lifecycle == "" {
 		return string(cellvocab.PhaseExperimental)
