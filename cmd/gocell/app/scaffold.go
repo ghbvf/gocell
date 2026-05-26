@@ -784,6 +784,7 @@ func scaffoldJourney(root string, args []string) error {
 var inlineSliceYAMLTpl = template.Must(template.New("slice-yaml").Parse(`id: {{.ID}}
 belongsToCell: {{.CellID}}
 consistencyLevel: {{.Level}}
+lifecycle: experimental
 contractUsages: []
 verify:
   unit: []

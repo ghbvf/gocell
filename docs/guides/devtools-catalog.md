@@ -256,6 +256,27 @@ const catalog: CatalogDocument = await resp.json();
 
 `entities[*].relations` 字段（如 hasPart/partOf/dependsOn/ownedBy）对称遵循 [Backstage well-known relations](https://backstage.io/docs/features/software-catalog/well-known-relations) 命名约定。
 
+### CellSpec / SliceSpec lifecycle 字段
+
+`entities[*].spec.lifecycle` 字段在 Cell 和 Slice 实体中表示**成熟度**（production-readiness），由 cell.yaml / slice.yaml 的 `lifecycle` 字段派生：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `CellSpec.Lifecycle` | `string`（omitempty） | Cell 的成熟度；省略时消费方视为 `experimental` |
+| `SliceSpec.Lifecycle` | `string`（omitempty） | Slice 的成熟度；省略时消费方视为 `experimental` |
+
+**值域**（Cell / Slice）：`experimental` | `candidate` | `asset` | `maintenance` | `retired`
+
+> **注意：三种 artifact 的 lifecycle 值域不同，不可混用：**
+>
+> | Artifact | lifecycle 值域 | 语义 |
+> |----------|--------------|------|
+> | Cell / Slice（本字段） | `experimental` \| `candidate` \| `asset` \| `maintenance` \| `retired` | 成熟度（production-readiness） |
+> | Contract（`ContractSpec.Lifecycle`） | `draft` \| `active` \| `deprecated` | wire 稳定性（可安全消费的程度） |
+> | Journey（`JourneyMeta.Lifecycle`） | `active` \| `experimental` | 交付状态 |
+>
+> 三者语义轴正交，值域刻意不重叠，不应互相推断。
+
 ---
 
 ## Backstage 借鉴说明

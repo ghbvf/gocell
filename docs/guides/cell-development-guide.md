@@ -32,6 +32,7 @@ cells/
 id: mycell
 type: core
 consistencyLevel: L1
+lifecycle: experimental  # 可选，默认 experimental；值域：experimental|candidate|asset|maintenance|retired
 owner:
   team: my-team
   role: mycell-owner

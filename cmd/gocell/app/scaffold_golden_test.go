@@ -101,6 +101,7 @@ func TestScaffoldCell_GoldenCellYAML(t *testing.T) {
 		reason  string
 	}{
 		{"consistencyLevel: L2", "K-06: consistencyLevel must appear at top-level of cell.yaml"},
+		{"lifecycle: experimental", "ADR-202605262100: lifecycle must default to experimental in scaffolded cell.yaml"},
 		{"goStructName: GoldCell", "K#04: goStructName required for cellgen to find the struct"},
 		{"id: goldcell", "id must match the CellID argument"},
 		{"type: core", "type must be rendered from spec.Type"},

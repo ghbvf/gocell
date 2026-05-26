@@ -88,6 +88,7 @@ var cellGoTemplate = template.Must(template.New("scaffold-cell.tmpl").ParseFS(te
 var cellYAMLTemplate = template.Must(template.New("cell-yaml").Parse(`id: {{.CellID}}
 type: {{.Type}}
 consistencyLevel: {{.ConsistencyLevel}}
+lifecycle: experimental
 durabilityMode: durable
 owner:
   team: {{.OwnerTeam}}
