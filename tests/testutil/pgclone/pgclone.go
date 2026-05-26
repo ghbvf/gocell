@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration || examples_smoke
 
 // Package pgclone owns the process-wide shared PostgreSQL container lifecycle
 // and per-test database minting for integration test packages. It is the

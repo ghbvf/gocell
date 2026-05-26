@@ -1,6 +1,6 @@
 //go:build examples_smoke
 
-// Package main_test holds the ssobff startup smoke regression guard.
+// Package main holds the ssobff startup smoke regression guard.
 //
 // Build tag `examples_smoke` keeps this isolated from:
 //   - the `integration` tag, whose tests assume DB/RMQ testcontainers and
@@ -80,12 +80,12 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		t.Skip("smoke test relies on POSIX signals; ssobff has no Windows production target")
 	}
 
-	// Self-provision an ephemeral postgres so the smoke guard RUNS wherever
-	// Docker is available (CI + local), never silently SKIPs on a missing
-	// DATABASE_URL. RequireDocker (inside startEphemeralPostgres) self-skips
-	// locally without Docker but FAILS under GOCELL_TEST_DOCKER_REQUIRED=1.
-	dbURL, cleanup := startEphemeralPostgres(t)
-	defer cleanup()
+	// Self-provision an empty postgres (shared pgclone container) so the smoke
+	// guard RUNS wherever Docker is available (CI + local), never silently
+	// SKIPs on a missing DATABASE_URL. pgclone calls RequireDocker, so this
+	// self-skips locally without Docker but FAILS under
+	// GOCELL_TEST_DOCKER_REQUIRED=1. The per-test DB is dropped via t.Cleanup.
+	dbURL := startEphemeralPostgres(t)
 
 	tmp := t.TempDir()
 	binPath := filepath.Join(tmp, "ssobff-smoke")

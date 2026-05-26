@@ -141,13 +141,13 @@ func (s *walkthroughServer) Cleanup(t *testing.T) {
 
 func buildWalkthroughServer(t *testing.T, capHandler *capturingHandler) *walkthroughServer {
 	t.Helper()
-	// Self-provision an ephemeral postgres so the walkthrough RUNS wherever
-	// Docker is available, never silently SKIPs on a missing DATABASE_URL.
-	// t.Setenv feeds NewSSOBFFApp's DATABASE_URL read and auto-restores on
-	// cleanup. RequireDocker (inside startEphemeralPostgres) self-skips
-	// locally without Docker but FAILS under GOCELL_TEST_DOCKER_REQUIRED=1.
-	dsn, cleanup := startEphemeralPostgres(t)
-	t.Cleanup(cleanup)
+	// Self-provision an empty postgres (shared pgclone container) so the
+	// walkthrough RUNS wherever Docker is available, never silently SKIPs on a
+	// missing DATABASE_URL. t.Setenv feeds NewSSOBFFApp's DATABASE_URL read and
+	// auto-restores on cleanup. pgclone calls RequireDocker, so this self-skips
+	// locally without Docker but FAILS under GOCELL_TEST_DOCKER_REQUIRED=1. The
+	// per-test DB is dropped via t.Cleanup.
+	dsn := startEphemeralPostgres(t)
 	t.Setenv(ssobffDatabaseURLEnv, dsn)
 
 	logger := slog.New(capHandler)
