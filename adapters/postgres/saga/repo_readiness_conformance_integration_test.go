@@ -32,11 +32,10 @@ func TestPGJournal_RepoReadinessConformance(t *testing.T) {
 	healthy, err := saga.NewJournal(healthyPool.DB(), clk)
 	require.NoError(t, err, "construct healthy PGJournal")
 
-	// broken: per-test DB with migrations applied, then saga_instances table
-	// dropped to simulate schema drift / missing migration. saga_events cascades
-	// via the FK, so dropping saga_instances alone is sufficient; the repoReadyQuery
-	// in PGJournal probes both tables in a UNION ALL so either missing table
-	// surfaces a non-nil error.
+	// broken: per-test DB with migrations applied, then both saga tables dropped
+	// (saga_events first to respect the FK, saga_instances next with CASCADE) to
+	// simulate schema drift / missing migration. PGJournal.repoReadyQuery probes
+	// both tables in a UNION ALL, so either missing table surfaces a non-nil error.
 	brokenPool := sharedPG.NewPerTestPool(t)
 	_, dropErr := brokenPool.DB().Exec(ctx, "DROP TABLE IF EXISTS saga_events, saga_instances CASCADE")
 	require.NoError(t, dropErr, "drop saga tables for broken scenario")

@@ -58,6 +58,12 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // observability is a leaf imported by the upper-tier sub-modules
 // (assembly/cell/outbox) for their metrics provider; this is a structural
 // metrics dependency akin to wrapper→outbox and stays as-is.
+//
+// W6 added two saga sub-modules: `fsm` (leaf — the generic state-machine
+// helper, no kernel→kernel out-edges) and `saga`. saga→fsm (status.go uses
+// the fsm transition table), saga→clock (journal lease timing), saga→healthz
+// (sagajournaltest RepoReady conformance prober — a non-test .go file, so the
+// edge is counted). None of fsm/clock/healthz import saga back (no cycle).
 var allowedKernelEdges = map[string][]string{
 	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
 	"auth":          {"cell"},

@@ -288,6 +288,11 @@ func ruleShapeSignature(sig *types.Signature) bool {
 // Same-source guarantee: pkg.files, pkg.info, and pkg.fset come from a single
 // RunTyped Pass invocation (loadGovernancePackage), so AST nodes and TypesInfo
 // are co-derived from the same packages.Load call.
+//
+// Fatal propagation: once a malformed Detect entry sets fatal, each enclosing
+// scanner.EachInChildren callback short-circuits at its `if fatal != ""` guard.
+// The walk itself is not interrupted (EachInChildren has no early-stop), but no
+// further entries are registered, so the first fatal wins deterministically.
 func extractRegisteredFromAllRules(t *testing.T, pkg *governancePackage) (map[string]struct{}, string) {
 	t.Helper()
 
