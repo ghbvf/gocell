@@ -15,25 +15,36 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// commands maps sub-command names to their run functions. It is kept
-// unexported so callers go through Dispatch, which enforces the error/usage
-// contract; tests in this package may reference it directly.
-// Black-box tests in the app_test package must go through Dispatch; direct
-// map mutation is not supported.
+// commands is the top-level command registry — the single source of truth
+// for both Dispatch (handler lookup via findSub) and PrintUsage (help
+// derived via renderTopHelp). A command cannot be dispatchable without a
+// help entry, nor listed in help without a runnable handler; the two truths
+// share one slice and cannot drift (INVARIANT CLI-TOPLEVEL-HELP-REGISTRY-01,
+// the top-level peer of the verb-tree CLI-UNIMPL-HIDE-01 funnel — see
+// subcommand.go). It is kept unexported so callers go through Dispatch,
+// which enforces the error/usage contract; tests in this package may
+// reference it directly. Black-box tests in the app_test package must go
+// through Dispatch.
+//
+// help[0] carries the description plus a one-line hint of the most-used
+// flags; the embedded spacing aligns the flag-hint column across rows.
+// Per-command sub-type detail is intentionally NOT listed here — it lives in
+// `gocell <command> -h` (derived from each verb's own registry), so the
+// top-level surface stays fully registry-derived and cannot drift.
 //
 // The ctx parameter is the signal-aware context wired in main.go
 // (signal.NotifyContext); commands that have a cancelable downstream
 // (validate, verify, generate metrics-schema) thread it all the way to
 // the go test / go/packages subprocesses. The rest accept it for a
 // uniform dispatch signature.
-var commands = map[string]func(ctx context.Context, args []string) error{
-	"validate": runValidate,
-	"scaffold": runScaffold,
-	"generate": runGenerate,
-	"check":    runCheck,
-	"verify":   runVerify,
-	"graph":    runGraph,
-	"export":   runExport,
+var commands = []subcommand[func(ctx context.Context, args []string) error]{
+	{name: "validate", help: []string{"Validate all metadata (blocking)         [--root, --fail-fast, --strict, --format]"}, run: runValidate},
+	{name: "scaffold", help: []string{"Generate new cell/slice/contract/journey [--dry-run]"}, run: runScaffold},
+	{name: "generate", help: []string{"Generate assembly code and derived files [--id, --module]"}, run: runGenerate},
+	{name: "check", help: []string{"Run targeted architecture analysis"}, run: runCheck},
+	{name: "verify", help: []string{"Run tests and artifact checks            [--id, --active, --files]"}, run: runVerify},
+	{name: "graph", help: []string{"Emit module package dependency graph     [--format, --pattern, --root, --include-tests]"}, run: runGraph},
+	{name: "export", help: []string{"Export project catalog as JSON/YAML      <catalog|metadata>"}, run: runExport},
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go
@@ -71,7 +82,7 @@ func Dispatch(ctx context.Context, args []string) int {
 		PrintUsage()
 		return ExitUsage
 	}
-	cmd, ok := commands[args[0]]
+	cmd, ok := findSub(commands, args[0])
 	if !ok {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		PrintUsage()
@@ -105,26 +116,5 @@ func Dispatch(ctx context.Context, args []string) int {
 // Stability: internal. Used by cmd/gocell/main.go and in-tree smoke tests;
 // signature may change without notice.
 func PrintUsage() {
-	fmt.Println("Usage: gocell <command> [args]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  validate    Validate all metadata (blocking)         [--root, --fail-fast, --strict, --format]")
-	fmt.Println("  scaffold    Generate new cell/slice/contract/journey [--dry-run]")
-	fmt.Println("  generate    Generate assembly code and derived files [--id, --module]")
-	fmt.Println("    assembly --id=<assemblyID> [--module=<module>]")
-	fmt.Println("    cell [<cellID>] [--dry-run | --verify]")
-	fmt.Println("    metrics-schema --id=<assemblyID>")
-	fmt.Println("  check       Run targeted architecture analysis")
-	fmt.Println("    contract-health [--format text|json|sarif]")
-	fmt.Println("    slice-coverage --cell=<cellID>")
-	fmt.Println("    assembly-completeness --id=<assemblyID>")
-	fmt.Println("    journey-readiness --journey=<journeyID>")
-	fmt.Println("    l0-imports --cell=<cellID>")
-	fmt.Println("    unconditional-skip [--format text|json|sarif]")
-	fmt.Println("  verify      Run tests and artifact checks            [--id, --active, --files]")
-	fmt.Println("    generated [--module=<module>]")
-	fmt.Println("  graph       Emit module package dependency graph     [--format, --pattern, --root, --include-tests]")
-	fmt.Println("  export <catalog|metadata>  Export project catalog (entities + dep graphs) as JSON/YAML")
-	fmt.Println()
-	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")
+	renderTopHelp(commands, "Run 'gocell <command> -h' for full flag help on a sub-command.")
 }

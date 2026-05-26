@@ -14,32 +14,36 @@ func isHelpFlag(arg string) bool {
 	return arg == "-h" || arg == "--help" || arg == "help"
 }
 
-// helpEntry is one type listed under a sub-command's "Types:" section. desc
-// can span multiple lines; printHelp indents continuation lines under the
-// type name so the help surface stays aligned.
+// helpEntry is one entry listed under a help surface's section ("Types:"
+// for a verb tree, "Commands:" for the top level). desc can span multiple
+// lines; printHelp indents continuation lines under the name so the surface
+// stays aligned.
 type helpEntry struct {
 	name string
 	desc []string
 }
 
-// printHelp renders a uniform help surface for sub-commands. The shape is
+// printHelp renders a uniform help surface. usage is the "Usage: …" line and
+// section is the list header; both are passed in so the same renderer serves
+// the verb trees ("Usage: gocell <verb> <type> [flags]" / "Types:") and the
+// top level ("Usage: gocell <command> [args]" / "Commands:"). The shape is
 //
-//	Usage: gocell <verb> <type> [flags]
+//	<usage>
 //
-//	Types:
+//	<section>
 //	  <name>   <desc[0]>
 //	           <desc[1]>
 //	           ...
 //
 //	<footer>
 //
-// Adding a new type to a sub-command means appending a helpEntry; missing
-// the help line is impossible because the data structure is the source of
-// truth for the help renderer.
-func printHelp(verb string, entries []helpEntry, footer ...string) {
-	fmt.Printf("Usage: gocell %s <type> [flags]\n", verb)
+// Adding an entry means appending a helpEntry; missing the help line is
+// impossible because the data structure is the source of truth for the
+// renderer.
+func printHelp(usage, section string, entries []helpEntry, footer ...string) {
+	fmt.Println(usage)
 	fmt.Println()
-	fmt.Println("Types:")
+	fmt.Println(section)
 	width := longestEntryName(entries)
 	for _, e := range entries {
 		first := true
@@ -74,7 +78,9 @@ func longestEntryName(entries []helpEntry) int {
 	return max
 }
 
-// Per-verb help is no longer hand-written here: each verb's help surface
-// is derived from its subcommand registry via renderSubHelp (see
-// subcommand.go / CLI-UNIMPL-HIDE-01). printHelp + helpEntry remain as
-// the shared rendering primitive renderSubHelp builds on.
+// Help is no longer hand-written here: every help surface — each verb's
+// "Types:" list (renderSubHelp) and the top-level "Commands:" list
+// (renderTopHelp) — is derived from a subcommand registry via
+// buildHelpEntries (see subcommand.go / CLI-UNIMPL-HIDE-01 +
+// CLI-TOPLEVEL-HELP-REGISTRY-01). printHelp + helpEntry remain as the
+// shared rendering primitive those builders feed.
