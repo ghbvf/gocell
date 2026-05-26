@@ -33,8 +33,12 @@ package archtest
 // Blind-spot self-checks (ai-robust.md §"工具选定后强制盲区自检"):
 //
 //  1. reflect.Value.FieldByName("RevokedAt"): bypasses SelectorExpr
-//     resolution; the field name is in a string literal. Captured by:
-//     TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName.
+//     resolution; the field name is a string argument. Captured by:
+//     TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName via the shared
+//     scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01) — type-aware
+//     receiver gate + EvaluateConstString cover raw-string / const / concat
+//     forms. Irreducible caveat: a runtime-computed (non-constant) field name
+//     folds to no constant and is invisible to any static scan.
 //
 //  2. unsafe.Pointer offset read of Session / ValidateView.RevokedAt:
 //     bypasses Go field visibility entirely. Captured by:
@@ -212,7 +216,7 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 		"./runtime/...",
 		"./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -220,28 +224,14 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "FieldByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if name == credRevokedAt {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-							"archtest cannot see reflect-based field reads",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+				func(n string) bool { return n == credRevokedAt }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
+						"archtest cannot see reflect-based field reads",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})

@@ -1920,7 +1920,7 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 	_ = RunTyped(t, TypedOpts{Tests: true},
 		[]string{outboxtestPattern},
 		func(p *Pass) []Diagnostic {
-			if p.Fset == nil {
+			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
 			}
 			for _, file := range p.Files {
@@ -1951,27 +1951,14 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 				})
 
 				// Blind spot 2: reflect.MethodByName("Close")
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-						return
-					}
-					if len(call.Args) != 1 {
-						return
-					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
-					if !ok {
-						return
-					}
-					name := strings.Trim(lit.Value, `"`)
-					if name == "Close" {
-						violations = append(violations, violation{
-							rel:  rel,
-							line: p.Fset.Position(call.Pos()).Line,
-							msg:  `reflect.MethodByName("Close") detected — OUTBOXTEST-CLOSE-VIA-BUDGET-01 cannot see reflect-based invocations`,
-						})
-					}
-				})
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return n == "Close" }) {
+					violations = append(violations, violation{
+						rel:  rel,
+						line: hit.Line,
+						msg:  `reflect.MethodByName("Close") detected — OUTBOXTEST-CLOSE-VIA-BUDGET-01 cannot see reflect-based invocations`,
+					})
+				}
 			}
 			return nil
 		})

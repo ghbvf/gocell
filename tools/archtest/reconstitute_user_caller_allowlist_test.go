@@ -278,33 +278,19 @@ func TestReconstituteUser_BlindSpot_NoMethodValueOrReflectInProd(t *testing.T) {
 					})
 				})
 
-				// Blind spot 2: MethodByName("ReconstituteUser")
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-						return
-					}
-					if len(call.Args) != 1 {
-						return
-					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
-					if !ok {
-						return
-					}
-					name := strings.Trim(lit.Value, `"`)
-					if name == reconstituteUserName {
-						line := p.Fset.Position(call.Pos()).Line
-						diags = append(diags, Diagnostic{
-							Rel:  rel,
-							Line: line,
-							Message: fmt.Sprintf(
-								"reflect.MethodByName(%q) detected — "+
-									"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
-								name,
-							),
-						})
-					}
-				})
+				// Blind spot 2: reflect.MethodByName("ReconstituteUser")
+				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+					func(n string) bool { return n == reconstituteUserName }) {
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: hit.Line,
+						Message: fmt.Sprintf(
+							"reflect.MethodByName(%q) detected — "+
+								"RECONSTITUTE-USER-CALLER-01 cannot see reflect-based invocations",
+							hit.Name,
+						),
+					})
+				}
 			}
 			allDiags = append(allDiags, diags...)
 			return nil

@@ -25,7 +25,7 @@ package archtest
 //	2. typed arg: EvaluateConstString folds the single argument (covers raw
 //	   string / const ident / concatenation / cross-package const), replacing
 //	   the incumbent *ast.BasicLit + strings.Trim that was blind to all but the
-//	   plain double-quoted literal.
+//	   plain double-quoted literal (issue #948 / PR #542).
 //
 // Why not Hard (upgrade path exhausted): reflect.Value.FieldByName(runtimeVar)
 // with a non-constant name cannot be folded → invisible to any static scan
@@ -50,7 +50,7 @@ package archtest
 
 import (
 	"go/ast"
-	"strings"
+	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,6 +61,8 @@ import (
 const (
 	reflectFieldByName  = "FieldByName"
 	reflectMethodByName = "MethodByName"
+	reflectPkgPath      = "reflect"
+	reflectValueType    = "Value"
 )
 
 // reflectStringArgHit is one detected reflect.Value.{Field,Method}ByName call
@@ -73,12 +75,9 @@ type reflectStringArgHit struct {
 // scanReflectStringArgCalls walks file for calls to reflect.Value.<method>
 // (method ∈ {"FieldByName","MethodByName"}) whose single argument is a banned
 // constant string. See the package-level INVARIANT doc for the type-aware
-// two-gate design and grading.
-//
-// NOTE (Wave 1 RED stub): this body is the incumbent *ast.BasicLit-only
-// extraction, deliberately blind to raw-string / const / concat forms and to
-// the receiver type. TestReflectStringArgScanner_TypedReceiverAndConstArg fails
-// against it; Wave 2 replaces the body with the typed two-gate implementation.
+// two-gate design and grading. The sel.Sel.Name == method check is only a cheap
+// pre-filter; the real gate is isReflectValueMethod (typed receiver) +
+// EvaluateConstString (typed arg).
 func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned func(string) bool) []reflectStringArgHit {
 	var out []reflectStringArgHit
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -89,12 +88,11 @@ func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned fu
 		if len(call.Args) != 1 {
 			return
 		}
-		lit, ok := call.Args[0].(*ast.BasicLit)
-		if !ok {
+		if !isReflectValueMethod(p.TypesInfo, sel) {
 			return
 		}
-		name := strings.Trim(lit.Value, `"`)
-		if !banned(name) {
+		name, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
+		if !ok || !banned(name) {
 			return
 		}
 		out = append(out, reflectStringArgHit{
@@ -103,6 +101,23 @@ func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned fu
 		})
 	})
 	return out
+}
+
+// isReflectValueMethod reports whether sel typed-resolves to a method of
+// reflect.Value (pkg "reflect", receiver named type "Value"). This is the typed
+// receiver gate that separates a genuine reflect bypass from a non-reflect type
+// exposing a same-named method and from reflect.Type.FieldByName metadata reads.
+func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
+	fn, ok := ResolveMethodCall(info, sel)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != reflectPkgPath {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	owner := typeOwner(sig.Recv().Type())
+	return owner != nil && owner.Name() == reflectValueType
 }
 
 // TestReflectStringArgScanner_TypedReceiverAndConstArg is the reverse

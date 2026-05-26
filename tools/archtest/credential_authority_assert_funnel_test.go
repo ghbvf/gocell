@@ -71,11 +71,15 @@ package archtest
 //
 //  2. reflect.Value.MethodByName("CanAuthenticate"): AST-invisible at the
 //     bytes that actually invoke the method. Captured by:
-//     TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName.
+//     TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName via the
+//     shared scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01).
 //
 //  3. reflect.Value.FieldByName("PasswordVersion"): bypasses SelectorExpr
-//     resolution; field name is in a string literal. Captured by:
-//     TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName.
+//     resolution; field name is a string argument. Captured by:
+//     TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName via the
+//     shared scanReflectStringArgCalls — type-aware receiver gate +
+//     EvaluateConstString cover raw-string / const / concat forms (runtime-value
+//     names remain the irreducible reflect caveat).
 //     (RevokedAt blind-spot is handled by SESSION-REVOKED-FIELD-ACCESS-01.)
 //
 //  4. unsafe.Pointer offset read of a User field: bypasses Go field
@@ -448,6 +452,11 @@ func verifyDirectReadRedFixtureDetectedPerBucket(t *testing.T, pattern, label st
 // `fn := user.CanAuthenticate; fn()`) does NOT appear in non-allowlisted
 // production code. If it did, the upstream prong would miss the deferred
 // fn() CallExpr because Fun would be *ast.Ident, not *ast.SelectorExpr.
+//
+// Detection is typed (ResolveMethodCall + isFunnelMethod), not a name anchor:
+// only a selector that resolves to domain.(*User).CanAuthenticate is flagged,
+// so an unrelated type exposing a CanAuthenticate method does not false-positive
+// (Soft→Medium, issue #948 (b)).
 func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *testing.T) {
 	t.Parallel()
 
@@ -456,7 +465,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -470,14 +479,16 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_MethodValueAssignment(t *test
 				// the SelectorExpr nests inside a CallExpr child of the
 				// AssignStmt, which EachInChildren (depth=1) would miss.
 				EachInSubtree[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if sel.Sel != nil && sel.Sel.Name == credCanAuthenticate {
-						line := p.Fset.Position(assign.Pos()).Line
-						violations = append(violations, fmt.Sprintf(
-							"%s:%d: method-value assignment of CanAuthenticate "+
-								"blind spot detected — archtest would miss the deferred call",
-							rel, line,
-						))
+					fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+					if !ok || !isFunnelMethod(fn) {
+						return
 					}
+					line := p.Fset.Position(assign.Pos()).Line
+					violations = append(violations, fmt.Sprintf(
+						"%s:%d: method-value assignment of CanAuthenticate "+
+							"blind spot detected — archtest would miss the deferred call",
+						rel, line,
+					))
 				})
 			})
 		}
@@ -504,7 +515,7 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -512,28 +523,14 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if name == credCanAuthenticate {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
-							"archtest cannot see reflect-based invocations",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+				func(n string) bool { return n == credCanAuthenticate }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
+						"archtest cannot see reflect-based invocations",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})
@@ -555,16 +552,12 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing.T) {
 	t.Parallel()
 
-	bannedNames := map[string]bool{
-		credPasswordVersion: true,
-	}
-
 	var violations []string
 	_ = RunTyped(t, TypedOpts{}, []string{
 		"./cells/accesscore/...",
 		"./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -572,28 +565,14 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel == nil || sel.Sel.Name != "FieldByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if bannedNames[name] {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-							"archtest cannot see reflect-based field reads",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+				func(n string) bool { return n == credPasswordVersion }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
+						"archtest cannot see reflect-based field reads",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})
@@ -674,8 +653,10 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_UnsafePointerRead(t *testing.
 // (SnapshotPasswordVersion, etc.), which controls field initialization.
 //
 // Hard rating: type identity is resolved through *types.Info; exported-name
-// detection is unicode.IsUpper on the first rune, identical to Go's own
-// export rule. Picking any exported name shape is a CI failure.
+// detection uses ast.IsExported (token.IsExported → unicode.IsUpper on the
+// first rune), identical to Go's own export rule — so a Unicode-uppercase
+// exported name (which the prior ASCII-only check missed) is still flagged.
+// Picking any exported name shape is a CI failure.
 func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 	t.Parallel()
 
@@ -724,7 +705,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 			if !typesutil.ImplementsInterface(named, checkIface) {
 				continue
 			}
-			if !isExportedName(name) {
+			if !ast.IsExported(name) {
 				continue
 			}
 			pos := p.Fset.Position(tn.Pos())
@@ -748,14 +729,6 @@ func TestCredentialAuthorityAssertFunnel_UpstreamSealed_03(t *testing.T) {
 			"concrete struct in credentialauthority/ that implements Check "+
 			"must be unexported, so package-external callers can only obtain "+
 			"a Check through the factory function.")
-}
-
-func isExportedName(s string) bool {
-	if s == "" {
-		return false
-	}
-	r := s[0]
-	return r >= 'A' && r <= 'Z'
 }
 
 // stripModuleRoot turns an absolute filename produced by p.Fset.Position
@@ -867,12 +840,36 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 // type-assertion expr, type-conversion arg — all are non-CallExpr.Fun
 // positions and produce a violation. No syntactic-context enumeration.
 func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
+	var out []string
+	for _, hit := range collectFunnelCalleeReferenceHits(p, file) {
+		out = append(out, fmt.Sprintf(
+			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
+				"%s referenced as value (not direct call) — bypasses "+
+				"caller allowlist via deferred invocation",
+			rel, hit.Line, hit.Callee,
+		))
+	}
+	return out
+}
+
+// funnelCalleeHit is one value-capture reference of a funnel-protected callee.
+type funnelCalleeHit struct {
+	Line   int
+	Callee string // funnelCalleeAssert or funnelCalleeCanAuth
+}
+
+// collectFunnelCalleeReferenceHits is the single-source scan behind both the
+// production assertion (scanFunnelCalleeReferences) and the per-callee RED
+// fixture self-check. Pass 1 collects every CallExpr.Fun node identity; pass 2
+// reports every SelectorExpr that typed-resolves to a funnel callee and is NOT
+// at a CallExpr.Fun position (value capture in any expression slot).
+func collectFunnelCalleeReferenceHits(p *Pass, file *ast.File) []funnelCalleeHit {
 	directCallFuns := map[ast.Expr]struct{}{}
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		directCallFuns[call.Fun] = struct{}{}
 	})
 
-	var out []string
+	var out []funnelCalleeHit
 	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 		if _, isDirect := directCallFuns[sel]; isDirect {
 			return
@@ -881,13 +878,7 @@ func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
 		if !ok {
 			return
 		}
-		line := p.Fset.Position(sel.Pos()).Line
-		out = append(out, fmt.Sprintf(
-			"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01 (typed callee reference): "+
-				"%s referenced as value (not direct call) — bypasses "+
-				"caller allowlist via deferred invocation",
-			rel, line, callee,
-		))
+		out = append(out, funnelCalleeHit{Line: p.Fset.Position(sel.Pos()).Line, Callee: callee})
 	})
 	return out
 }
@@ -901,6 +892,15 @@ func scanFunnelCalleeReferences(p *Pass, file *ast.File, rel string) []string {
 //   - domain.(*User).CanAuthenticate — method selector, resolved via
 //     *types.Info.Selections[sel] (handles value or pointer receiver
 //     and embedded promotion uniformly).
+//
+// funnel callee labels — single source shared by resolveFunnelCallee (message
+// + bucket key) and verifyFunnelCalleeReferenceRedFixtureDetected (per-callee
+// assertion), so the two cannot drift.
+const (
+	funnelCalleeAssert  = "credentialauthority.Assert"
+	funnelCalleeCanAuth = "domain.(*User).CanAuthenticate"
+)
+
 func resolveFunnelCallee(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
 	if sel.Sel == nil {
 		return "", false
@@ -909,7 +909,7 @@ func resolveFunnelCallee(info *types.Info, sel *ast.SelectorExpr) (string, bool)
 	if selection := info.Selections[sel]; selection != nil {
 		if fn, ok := selection.Obj().(*types.Func); ok {
 			if isFunnelMethod(fn) {
-				return "domain.(*User).CanAuthenticate", true
+				return funnelCalleeCanAuth, true
 			}
 		}
 	}
@@ -918,7 +918,7 @@ func resolveFunnelCallee(info *types.Info, sel *ast.SelectorExpr) (string, bool)
 	if obj := info.Uses[sel.Sel]; obj != nil {
 		if fn, ok := obj.(*types.Func); ok {
 			if isFunnelPackageFunc(fn) {
-				return "credentialauthority.Assert", true
+				return funnelCalleeAssert, true
 			}
 		}
 	}
@@ -951,27 +951,31 @@ func isFunnelMethod(fn *types.Func) bool {
 	return named.Obj().Name() == domainUserType
 }
 
-// verifyFunnelCalleeReferenceRedFixtureDetected asserts that the RED
-// fixture produces ≥ 1 violation. Per-bucket counting no longer applies:
-// typed-parent-check treats every non-CallExpr.Fun reference uniformly
-// regardless of syntactic context, so the meaningful self-check is
-// whether the detector fires at all, not per-syntactic-shape coverage.
+// verifyFunnelCalleeReferenceRedFixtureDetected asserts the RED fixture fires
+// ≥ 1 violation in EACH callee bucket. The two callees travel DIFFERENT typed
+// resolution paths — credentialauthority.Assert via *types.Info.Uses, and
+// domain.(*User).CanAuthenticate via *types.Info.Selections — so an aggregate
+// ≥ 1 count could silently pass while one resolution path is dead. Per-callee
+// counting proves both paths live (mirrors the Upstream_02 per-bucket rationale;
+// issue #948 (a)).
 func verifyFunnelCalleeReferenceRedFixtureDetected(t *testing.T, pattern, label string) {
 	t.Helper()
-	var found int
+	byCallee := map[string]int{}
 	_ = RunTyped(t, TypedOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
-			found += len(scanFunnelCalleeReferences(p, file, label))
+			for _, hit := range collectFunnelCalleeReferenceHits(p, file) {
+				byCallee[hit.Callee]++
+			}
 		}
 		return nil
 	})
-	assert.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: %s — expected ≥ 1 violation, got 0. "+
-			"Check that the fixture references credentialauthority.Assert or "+
-			"domain.(*User).CanAuthenticate as a function value (any non-call "+
-			"expression position).",
-		label)
+	assert.GreaterOrEqual(t, byCallee[funnelCalleeAssert], 1,
+		"RED fixture self-check FAILED (Assert via info.Uses): %s — expected ≥ 1 "+
+			"value-capture of credentialauthority.Assert, got 0.", label)
+	assert.GreaterOrEqual(t, byCallee[funnelCalleeCanAuth], 1,
+		"RED fixture self-check FAILED (CanAuthenticate via info.Selections): %s — "+
+			"expected ≥ 1 value-capture of domain.(*User).CanAuthenticate, got 0.", label)
 }

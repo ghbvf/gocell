@@ -538,7 +538,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 	_ = RunTyped(t, TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -546,28 +546,14 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "MethodByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if bannedNames[name] {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
-							"archtest cannot see reflect-based invocations of authz setters",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+				func(n string) bool { return bannedNames[n] }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
+						"archtest cannot see reflect-based invocations of authz setters",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})
@@ -656,7 +642,7 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 	_ = RunTyped(t, TypedOpts{}, []string{
 		"./cells/accesscore/...", "./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -664,28 +650,14 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "FieldByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if bannedFieldNames[name] {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-							"archtest cannot see reflect-based writes to domain.User authz fields",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
+				func(n string) bool { return bannedFieldNames[n] }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
+						"archtest cannot see reflect-based writes to domain.User authz fields",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})

@@ -411,33 +411,22 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 
 	var violations []string
 	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./adapters/redis/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil || p.Fset == nil {
+			return nil
+		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "MethodByName" {
-					return
-				}
-				if len(call.Args) != 1 {
-					return
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return
-				}
-				name := strings.Trim(lit.Value, `"`)
-				if revokeTargetMethods[name] {
-					line := p.Fset.Position(call.Pos()).Line
-					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) detected — "+
-							"archtest cannot see reflect-based invocations",
-						rel, line, name,
-					))
-				}
-			})
+			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
+				func(n string) bool { return revokeTargetMethods[n] }) {
+				violations = append(violations, fmt.Sprintf(
+					"%s:%d: reflect.MethodByName(%q) detected — "+
+						"archtest cannot see reflect-based invocations",
+					rel, hit.Line, hit.Name,
+				))
+			}
 		}
 		return nil
 	})
