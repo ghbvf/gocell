@@ -43,6 +43,14 @@ func runExport(_ context.Context, args []string) error {
 		return fmt.Errorf("usage: gocell export <catalog|metadata> [flags]")
 	}
 	sub := args[0]
+	// Honor the `gocell <command> -h` discovery contract that PrintUsage
+	// advertises for every top-level command. export has no subcommand
+	// registry (catalog/metadata are byte-equal aliases — see runExport doc),
+	// so its help is a small hand-written surface rather than renderSubHelp.
+	if isHelpFlag(sub) {
+		printExportHelp()
+		return nil
+	}
 	rest := args[1:]
 	switch sub {
 	case "catalog", "metadata":
@@ -50,6 +58,16 @@ func runExport(_ context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown export subcommand %q (want catalog|metadata)", sub)
 	}
+}
+
+func printExportHelp() {
+	fmt.Println("Usage: gocell export <catalog|metadata> [flags]")
+	fmt.Println()
+	fmt.Println("Subcommands:")
+	fmt.Println("  catalog   Export project catalog (entities + dep graphs) as JSON/YAML")
+	fmt.Println("  metadata  Alias of catalog (byte-equal output)")
+	fmt.Println()
+	fmt.Println("Flags: --format json|yaml  --out <path>  --include  --kinds  --layers  --cells  --root")
 }
 
 func exportCatalog(args []string) error {

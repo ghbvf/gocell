@@ -78,10 +78,13 @@
 //     the `commands` []subcommand registry, Dispatch resolves via findSub
 //     (covered by scanDispatchSwitchFree, Dispatch ∈ dispatchFuncs) and
 //     PrintUsage renders via a sole renderTopHelp(commands) delegation
-//     (scanPrintUsageDerived). The old assertPrintUsageNoStaleToken
-//     compensation is deleted — a stale token cannot survive in prose that
-//     no longer exists. Fixtures: printusage_handwritten (must flag) /
-//     printusage_delegating (must NOT flag).
+//     (scanPrintUsageDerived, which pins both the statement shape AND arg0 ==
+//     the canonical `commands` identifier). The old
+//     assertPrintUsageNoStaleToken compensation is deleted — a stale token
+//     cannot survive in prose that no longer exists. Fixtures:
+//     printusage_handwritten (hand-printed prose — must flag) /
+//     printusage_wrongvar (sole renderTopHelp but a non-commands registry —
+//     must flag) / printusage_delegating (must NOT flag).
 //  2. helpEntry built with a named field (`helpEntry{name: …}`) vs
 //     positional (`helpEntry{…}`) — both handled (KeyValueExpr key and
 //     positional element 0). Fixture: namedfield.
@@ -100,8 +103,11 @@
 //     form-complete: it accepts ONLY the sole-renderTopHelp(commands) body
 //     and rejects every other statement form, so unlike a fmt.Print*
 //     blacklist there is no fmt.Fprintln / os.Stdout / helper-indirection
-//     escape. printusage_handwritten exercises the fmt.Fprintln bypass a
-//     blacklist would miss.
+//     escape. Two reverse fixtures cover the distinct escapes a weaker
+//     matcher would miss: printusage_handwritten (multi-statement, incl. the
+//     fmt.Fprintln(os.Stdout,…) form) and printusage_wrongvar (right shape,
+//     wrong registry arg — proves the arg0 == `commands` pin, i.e. help
+//     cannot be sourced from a second/parallel slice).
 //
 // ref: docs/plans/202605121830-038-p0-p1-blocking-implementation-plan.md PR-3
 // ref: cmd/gocell/app/subcommand.go (the funnel this test guards)
@@ -438,6 +444,24 @@ func TestCLITopLevelHelpRegistry01_DetectsHandwrittenPrintUsage(t *testing.T) {
 	got := scanPrintUsageDerived(p, f, rel)
 	if len(got) == 0 {
 		t.Fatal("expected hand-written PrintUsage fixture to be flagged, got 0")
+	}
+	if !containsMsg(got, "must delegate to renderTopHelp") {
+		t.Errorf("missing the form-uniqueness diagnostic; got %v", got)
+	}
+}
+
+// TestCLITopLevelHelpRegistry01_DetectsWrongRegistryArg proves the funnel
+// rejects a sole renderTopHelp call that renders from a non-`commands`
+// registry (a parallel/local source). isSoleRenderTopHelpCall pins arg0 to
+// the `commands` identifier; without this assertion the "single source"
+// claim would be unproven (the right statement shape over the wrong slice
+// would silently pass).
+func TestCLITopLevelHelpRegistry01_DetectsWrongRegistryArg(t *testing.T) {
+	t.Parallel()
+	p, f, rel := parseFixture(t, "printusage_wrongvar.go")
+	got := scanPrintUsageDerived(p, f, rel)
+	if len(got) == 0 {
+		t.Fatal("expected renderTopHelp(non-commands) fixture to be flagged, got 0")
 	}
 	if !containsMsg(got, "must delegate to renderTopHelp") {
 		t.Errorf("missing the form-uniqueness diagnostic; got %v", got)

@@ -124,11 +124,17 @@ func TestReadModuleNotFound(t *testing.T) {
 // TestDispatch_SuccessPath_ExitZero) exercise the wiring end-to-end.
 
 func TestCommands(t *testing.T) {
-	// Verify all expected commands are registered in the commands registry.
-	expected := []string{"validate", "scaffold", "generate", "check", "verify"}
-	for _, name := range expected {
+	// Pin the full top-level command set, not a subset: length catches a
+	// stray addition, the findSub loop catches a removal or rename (a renamed
+	// command leaves its old name unfound). This keeps the anti-drift
+	// guarantee airtight rather than blind to graph/export.
+	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export"}
+	if len(commands) != len(want) {
+		t.Fatalf("commands registry has %d entries, want %d (%v)", len(commands), len(want), subNames(commands))
+	}
+	for _, name := range want {
 		if _, ok := findSub(commands, name); !ok {
-			t.Errorf("command %q not registered in commands registry", name)
+			t.Errorf("command %q not registered in commands registry; have %v", name, subNames(commands))
 		}
 	}
 }
@@ -138,6 +144,10 @@ func TestCommands(t *testing.T) {
 // errcode-redaction Dispatch tests to drive an arbitrary handler error
 // through the real dispatch path. Not parallel-safe (mutates a package var),
 // consistent with these tests' non-Parallel design.
+//
+// Restore is clean: the commands literal has cap == len, so append always
+// allocates a fresh backing array rather than writing into a shared slot;
+// reassigning commands = orig fully reverts both header and reachable data.
 func withInjectedCommand(t *testing.T, name string, run func(context.Context, []string) error) {
 	t.Helper()
 	orig := commands
@@ -177,6 +187,10 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 	const cmdName = "test-errcode-operator"
 	withInjectedCommand(t, cmdName, func(context.Context, []string) error {
+		// The DSN in the message is intentional worst-case data: a KindInternal
+		// error whose message was carelessly built with a secret. project()'s
+		// operator surface replaces a 5xx message with "internal server error",
+		// so the leak assertion below proves postgres:// never reaches stderr.
 		return errcode.New(
 			errcode.KindInternal,
 			errcode.ErrAuthRoleFetchFailed,
@@ -216,6 +230,9 @@ func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 		{"verify", runVerify, []string{"Usage: gocell verify", "generated", "stale, staged-only"}},
 		{"scaffold", runScaffold, []string{"Usage: gocell scaffold", "cell", "--dry-run"}},
 		{"check", runCheck, []string{"Usage: gocell check", "contract-health", "unconditional-skip"}},
+		// export has no subcommand registry but must still honor the
+		// top-level `gocell <command> -h` contract PrintUsage advertises.
+		{"export", runExport, []string{"Usage: gocell export", "catalog", "metadata"}},
 	}
 
 	for _, tc := range cases {
