@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
-	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
 // minimalProjectMeta returns a *metadata.ProjectMeta with one cell, sufficient
@@ -138,12 +137,7 @@ func TestPhase5CollectRouteGroups_AppendsDevtools(t *testing.T) {
 	pm := minimalProjectMeta()
 	s.devtoolsHandler = devtools.NewHandler(pm, nil, nil, "/tmp", clock.Real())
 
-	routers := map[cell.ListenerRef]*router.Router{
-		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
-		cell.HealthListener:  buildRouter(t, cell.HealthListener),
-	}
-
-	groups := b.phase5CollectRouteGroups(s, routers)
+	groups := b.phase5CollectRouteGroups(s)
 
 	// Find the devtools route group.
 	var found bool
@@ -170,19 +164,14 @@ func TestPhase5CollectRouteGroups_NoDevtools(t *testing.T) {
 	s := buildPhase5State(t)
 	// s.devtoolsHandler is nil by default.
 
-	routers := map[cell.ListenerRef]*router.Router{
-		cell.HealthListener:  buildRouter(t, cell.HealthListener),
-		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
-	}
-
-	withoutDevtools := b.phase5CollectRouteGroups(s, routers)
+	withoutDevtools := b.phase5CollectRouteGroups(s)
 
 	baselineCount := len(withoutDevtools)
 	assert.Greater(t, baselineCount, 0, "health groups must always be present")
 
 	pm := minimalProjectMeta()
 	s.devtoolsHandler = devtools.NewHandler(pm, nil, nil, "/tmp", clock.Real())
-	withHandler := b.phase5CollectRouteGroups(s, routers)
+	withHandler := b.phase5CollectRouteGroups(s)
 	assert.Len(t, withHandler, baselineCount+1,
 		"installing devtools handler must append exactly one route group")
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
@@ -394,14 +395,14 @@ func TestAuditLedgerStore_NamespaceIsolation(t *testing.T) {
 	assert.Equal(t, int64(2), tailB.SeqNo, "namespace B SeqNo must be 2")
 
 	// Query storeA must not return storeB's entries.
-	aEntries, err := storeA.Query(ctx, ledger.AuditFilters{}, ledger.QueryListParams{Limit: 50})
+	aEntries, err := storeA.Query(ctx, ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, aEntries, 3, "namespace A Query must return exactly 3 entries")
 	for _, e := range aEntries {
 		assert.Equal(t, "actor-a", e.ActorID, "namespace A entry must have actor-a")
 	}
 
-	bEntries, err := storeB.Query(ctx, ledger.AuditFilters{}, ledger.QueryListParams{Limit: 50})
+	bEntries, err := storeB.Query(ctx, ledger.AuditFilters{}, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
 	assert.Len(t, bEntries, 2, "namespace B Query must return exactly 2 entries")
 	for _, e := range bEntries {

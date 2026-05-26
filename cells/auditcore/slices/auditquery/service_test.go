@@ -378,61 +378,6 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	require.NoError(t, err, "changing From between pages must not invalidate the cursor")
 }
 
-// TestQuery_FetchCap_500 asserts that auditQueryFetchCap equals 500.
-//
-// A-07/F-07 RED: current value is 5000. After the fix it must be 500 to
-// prevent unbounded in-memory loads before keyset pagination lands (S8).
-// This test verifies the constant value directly via a mock store that
-// returns exactly 501 entries and checks that the Warn log fires at that threshold.
-//
-// Note: auditQueryFetchCap is package-private; we probe it indirectly by
-// seeding 501 entries and checking the Warn fires. When the cap is 5000 (current)
-// no Warn is emitted → RED. When the cap is 500 (target) the Warn fires → GREEN.
-func TestQuery_FetchCap_500(t *testing.T) {
-	var buf strings.Builder
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-
-	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
-		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	require.NoError(t, err)
-	store, err := ledger.NewMemStore(p, clock.Real())
-	require.NoError(t, err)
-
-	svc, err := NewService(store, testCodec(), logger, query.RunModeProd)
-	require.NoError(t, err)
-
-	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	// Seed 501 entries — above the target cap of 500, below the current cap of 5000.
-	// When cap == 500: Warn fires → GREEN; when cap == 5000: no Warn → RED.
-	const seedCount = 501
-	for i := range seedCount {
-		e := &ledger.Entry{
-			EventID:   fmt.Sprintf("cap500-evt-%d", i),
-			EventType: "cap.test",
-			ActorID:   "actor",
-			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
-			Payload:   []byte("{}"),
-		}
-		require.NoError(t, store.Append(context.Background(), e))
-	}
-
-	buf.Reset()
-	_, err = svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
-	require.NoError(t, err)
-
-	// Cap warning must appear — only fires when cap ≤ 501.
-	// RED: current cap is 5000, so 501 entries does NOT trigger the warning.
-	if !strings.Contains(buf.String(), "fetch cap reached") {
-		t.Errorf("expected 'fetch cap reached' warning for 501 entries with cap=500; "+
-			"current cap is 5000 so this FAILS as expected (F-07 RED); log output: %q",
-			buf.String())
-	}
-}
-
 // TestQuery_ZeroTime_SkipsFromToFormat asserts that when filters.From and filters.To
 // are zero, the QueryContext attrs slice does NOT contain "from" or "to" keys.
 //
@@ -528,51 +473,5 @@ func TestQuery_ZeroTime_SkipsFromToFormat(t *testing.T) {
 		} else {
 			t.Errorf("unexpected error on page2 with non-zero From: %v", err2)
 		}
-	}
-}
-
-// TestAuditQuery_FetchCapEnforced verifies that when the store returns
-// auditQueryFetchCap or more entries the service logs a warning at Warn level.
-// The store is seeded with exactly cap entries so the warning fires, then a
-// second query with fewer entries confirms the happy path does not warn.
-func TestAuditQuery_FetchCapEnforced(t *testing.T) {
-	// Use a log handler that captures records.
-	var buf strings.Builder
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-
-	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),
-		ledger.WithNamespace(ledger.NamespaceID("auditcore")),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	require.NoError(t, err)
-	store, err := ledger.NewMemStore(p, clock.Real())
-	require.NoError(t, err)
-
-	svc, err := NewService(store, testCodec(), logger, query.RunModeProd)
-	require.NoError(t, err)
-
-	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	// Seed exactly auditQueryFetchCap entries so the cap warning fires.
-	for i := range auditQueryFetchCap {
-		e := &ledger.Entry{
-			EventID:   fmt.Sprintf("cap-evt-%d", i),
-			EventType: "cap.test",
-			ActorID:   "actor",
-			Timestamp: now.Add(time.Duration(i) * time.Millisecond),
-			Payload:   []byte("{}"),
-		}
-		require.NoError(t, store.Append(context.Background(), e))
-	}
-
-	buf.Reset()
-	_, err = svc.Query(context.Background(), ledger.AuditFilters{}, query.PageParams{Limit: 10})
-	require.NoError(t, err)
-
-	// Cap warning must appear in the log output.
-	if !strings.Contains(buf.String(), "fetch cap reached") {
-		t.Errorf("expected 'fetch cap reached' warning in log; got: %s", buf.String())
 	}
 }

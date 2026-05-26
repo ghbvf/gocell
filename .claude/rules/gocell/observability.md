@@ -105,7 +105,7 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 
 **注册方式约束**：cell-level repo readiness probe **必须**通过 cellgen 生成的 `<cellpkg>.RegisterRepoReady(reg, prober)` 有类型 funnel 注册（`healthz_gen.go` 生成产物）；禁止直接调用 `reg.Healthz()` 注册 repo probe，也禁止以匿名 duck-type 形式绕过（accesscore 曾因此产生一个永远不触发的死代码 probe，已在 PR-REPO-READYZ 修复）。enforcement：archtest `HEALTHZ-WRITE-01`（A2 caller allowlist 锁 Register callsites）+ `HEALTHZ-TYPED-REGISTER-01`（锁 cells/ 包内 `reg.Healthz()` 调用必须在 `healthz_gen.go` 内）；`kernel/cell/celltest.RunRepoReadinessConformance` 提供 real-failure-injection 合规测试（healthy → nil；PG 表删除 → non-nil；mem → skip）。conformance 入列（每个 `healthz.RepoProber` 实现必须出现在 `RunRepoReadinessConformance` 调用点）由 archtest `CELL-REPO-READYZ-PROBE-01`（Medium，`tools/archtest/cell_repo_readyz_probe_test.go`）守卫——范围 cells/+adapters/+runtime/+examples/，kernel/ 因 CELLTEST-B（`CELLTEST-IMPORT-BOUNDARY-01`：kernel/ 禁 import `kernel/cell/celltest`）层级不变式排除。
 
-emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：cell 不再各自生成 `RegisterEmitterProbes`，而是统一调 kernel `cell.RegisterEmitterHealthProbes(reg, c.emitter)`（内含 `healthz.ProbeSet` 断言 + `validation.IsNilInterface` 守卫）。注：自 PR-A23 起 `c.emitter` 是 `outbox.CellEmitter`（embed `healthz.ProbeSet`），故 `ProbeSet` 断言对生产 cell 恒成立；非 DirectEmitter 内层时 `Probes()` 返回 nil，循环为空，与旧 `ok==false` 路径行为等价（probe 名 / 注册语义不变）。该 funnel 是 `HEALTHZ-WRITE-01/A2` allowlist 的唯一 kernel/ caller（A2 scan scope 含 kernel/）。AI-robust 评级：下游 Medium（`HEALTHZ-TYPED-REGISTER-01` 锁 cells/ 不直调 `reg.Healthz()`）+ 上游 Medium（A2 caller allowlist），共享既有 healthz funnel 的 Hard-upgrade 路径 `HEALTHZ-HOLDER-SEAL-01`（seal `Aggregator` interface）。
+emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：cell 不再各自生成 `RegisterEmitterProbes`，而是统一调 kernel `cell.RegisterEmitterHealthProbes(reg, c.emitter)`（内含 `healthz.ProbeSet` 断言 + `validation.IsNilInterface` 守卫）。注：自 PR-A23 起 `c.emitter` 是 `outbox.CellEmitter`（embed `healthz.ProbeSet`），故 `ProbeSet` 断言对生产 cell 恒成立；非 DirectEmitter 内层时 `Probes()` 返回 nil，循环为空，与旧 `ok==false` 路径行为等价（probe 名 / 注册语义不变）。该 funnel 是 `HEALTHZ-WRITE-01/A2` allowlist 的唯一 kernel/ caller（A2 scan scope 含 kernel/）。AI-robust 评级（两条正交轴，grading 以 `HEALTHZ-WRITE-01` godoc 为准，不在此复制）：**downstream** = 注册 funnel 的 caller 侧守卫（cellgen + `RepoProber` typed param + `HEALTHZ-TYPED-REGISTER-01` file-identity 整体 Hard；`HEALTHZ-WRITE-01/A2` 为 Medium archtest caller-identity backstop，锁 cells/ 不直调 `reg.Healthz()`），本次撤回不改变其评级；**upstream** 的唯一 Hard 形态是 type-system seal `Aggregator` interface，但不可行（holder 轴 Go 类型系统无法表达「谁能声明某类型的字段」，sealing 仅约束 implementer；且 4 处跨包实现 + `kernel/healthz↔kernel/outbox` import 环阻断单包内实现），故 `HEALTHZ-HOLDER-SEAL-01`（gh #893）won't-do——upstream 的 A3 holder allowlist 维持 Medium archtest 为 Go 下永久天花板。详见 `tools/archtest/healthz_invariants_test.go` 的 A3 godoc。
 
 ## HTTP Metrics `cell` Label
 
@@ -147,11 +147,12 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 | a. Message | `errcode.Message` const literal | ✓ | ✓ | 不需要 |
 | b. Details | `errcode.Details` `[]slog.Attr` | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
 | c. Internal | `errcode.WithInternal` | ✗ | ✓ | server-only |
-| **d. Ops-Diagnostics** | handler-side `slog.Warn` typed payload | ✗ | ✓ | **typed funnel + archtest** |
+| **d. Ops-Diagnostics** | handler-side `slog.Log(ctx, level, ...)` typed payload（透传 request ctx 关联字段） | ✗ | ✓ | **typed funnel + archtest** |
 
 readyz 各字段归属：
 - wire body `dependencies[*]` (200 verbose) — 类型 `verboseDependencyEntry{Status, DurationMs}`，字段集冻结（`HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01`）。**wire 上不携带 error 文本**——对齐 Kubernetes apiserver healthz.go:274-275 wire/klog 双 buffer 分离。
 - slog `dependencies` — 用 `slog.Group("dependencies", slog.Any(name, entry)...)`，**不要**用 `slog.Any("dependencies", map)`（后者在 unexported 字段下被 JSON handler 输出成 `{}`，丢失诊断，PR #552 实测 bug）。`SlogDependencyEntry` 三字段全 unexported，唯一构造路径 `newRedactedErrorMsg → RedactString`、无 testing backdoor（上游 Hard），下游 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01` 锁 conversion callsite——funnel 细节见 archtest godoc + ADR。
+- `logDiagnostics` 经 `slog.Log(ctx, level, ...)` 透传 request ctx，readyz record 带 `request_id` + `correlation_id`（RequestID middleware 注入，与 errcode `WithInternal` 同源；#942 R2）；`trace_id` 在 probe 端点**默认不出现**——`DefaultProbeFilter` 跳过 `/healthz /readyz /livez /metrics` 的 tracing span 创建。slog 是 wire 删 error 文本后的主诊断通道，secret 泄漏面真值以 ADR §3 威胁矩阵为准（裸 JWT/PEM/UUID 仍会进 slog——已知盲区，wire 兜底）。
 
 详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
 

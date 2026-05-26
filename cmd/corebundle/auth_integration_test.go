@@ -59,6 +59,9 @@ var testHTTPClient = &http.Client{Timeout: testtime.D2s}
 func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	// #673: a dedicated HealthListener is mandatory — /healthz, /readyz move
+	// off the primary listener, so readiness is polled on the health listener.
+	healthLn := newCorebundleLocalListener(t)
 
 	// Set up JWT key pair (same as main.go dev mode).
 	privKey, pubKey := keystest.MustGenerateKeyPair()
@@ -128,6 +131,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -138,14 +143,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	go func() { done <- app.Run(ctx) }()
 
 	addr := ln.Addr().String()
-	testwait.External(t, "corebundle-listener-started", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
 
 	// --- Protected routes: must return 401 without token ---
 	protectedRoutes := []struct {
@@ -231,9 +230,9 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 			"refresh endpoint must not return 401 (auth must be bypassed)")
 	})
 
-	// --- Infra: must bypass auth ---
+	// --- Infra: must bypass auth (on the dedicated health listener, #673) ---
 	t.Run("healthz_200", func(t *testing.T) {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -351,6 +350,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// cell.Policy (round-3 collapse) and resolves the verifier lazily at phase4.
 	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
+	// #673: a dedicated HealthListener is mandatory; /healthz moves there.
+	healthLn := newCorebundleLocalListener(t)
 	internalAuthChain := []kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)}
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
@@ -358,6 +359,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
 			bootstrap.WithListenerNet(internalLn)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -369,14 +372,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 	addr := ln.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	testwait.External(t, "corebundle-listener-started", func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// PR-A14a primary isolation: primary listener must 404 any /internal/v1/*
 	// request — those routes never reach the public mux.

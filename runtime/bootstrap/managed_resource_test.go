@@ -87,10 +87,12 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	res := &fakeResource{name: "fake-pg", checkErr: nil}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -103,7 +105,7 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 		<-errCh
 	}()
 
-	addr := ln.Addr().String()
+	addr := healthLn.Addr().String()
 	waitForHealthy(t, addr)
 
 	// /readyz?verbose should include the "fake-pg" checker name in the body,
@@ -134,10 +136,12 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 	res := &fakeResource{name: "worker-res", worker: fw}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res),
 	)
 
@@ -145,8 +149,7 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {
@@ -186,10 +189,12 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 	res3 := makeRes("third")
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -199,8 +204,7 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {
@@ -246,10 +250,12 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 	res := &fakeResource{name: "no-worker-res", worker: nil}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res),
 	)
 
@@ -257,8 +263,7 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {
@@ -279,10 +284,12 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 	res2 := &trackingResource{name: "good-res", closeOrder: new([]string)}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -291,8 +298,7 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {
@@ -365,10 +371,12 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	res := &fakeResource{name: "bad-res", closeErr: closeErr}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithManagedResource(res),
 	)
 
@@ -376,8 +384,7 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {
@@ -458,6 +465,7 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 // RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
 func TestWithRelay_RegistersCheckers(t *testing.T) {
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 
 	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: koutbox.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
@@ -469,6 +477,7 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -478,7 +487,7 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	addr := healthLn.Addr().String()
 	waitForHealthy(t, addr)
 
 	// GET /readyz?verbose — all three relay checkers must appear.
@@ -534,11 +543,13 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(store, &koutbox.DiscardPublisher{}, cfg)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -558,7 +569,7 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 		}
 	}()
 
-	addr := ln.Addr().String()
+	addr := healthLn.Addr().String()
 	waitForHealthy(t, addr)
 
 	// TM3: bootstrap WorkerGroup is the single startup path for the relay.
@@ -632,11 +643,13 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &koutbox.DiscardPublisher{}, cfg)
 
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
 		WithRelay(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -646,7 +659,7 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	addr := healthLn.Addr().String()
 	waitForHealthy(t, addr)
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -873,10 +886,12 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 	worker := &sequencedResource{name: "fake-consumer-worker", counter: &counter}
 
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	app := New(
 		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		// pgRes registered FIRST (simulating the assembly pool MR that
 		// runtimeBaseOptions registers ahead of cell opts; see provisionCapabilities).
 		WithManagedResource(pgRes),
@@ -888,7 +903,7 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	waitForHealthy(t, ln.Addr().String())
+	waitForHealthy(t, healthLn.Addr().String())
 
 	cancel()
 	select {

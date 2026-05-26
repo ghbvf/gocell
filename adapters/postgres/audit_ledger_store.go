@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
@@ -362,11 +365,21 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 	return &e, nil
 }
 
-// Query lists entries matching the supplied AuditFilters with simple
-// LIMIT/OFFSET pagination as documented in store.go for QueryListParams.
-// Returns an empty (non-nil) slice when no entries match.
-func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, params ledger.QueryListParams) ([]*ledger.Entry, error) {
+// Query lists entries matching the supplied AuditFilters using keyset cursor
+// pagination pushed into SQL via pgquery.AppendKeyset: params.Sort drives the
+// ORDER BY and the keyset WHERE predicate, and params.FetchLimit() (Limit+1) is
+// the LIMIT for N+1 hasMore detection. The idx_audit_namespace_ts_id composite
+// index covers the (timestamp DESC, id ASC) keyset, so this is an index scan.
+// params.Sort must be non-empty (callers pass ledger.QuerySort); AppendKeyset
+// returns ErrValidationFailed on empty Sort. Returns an empty (non-nil) slice
+// when no entries match.
+func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, params query.ListParams) ([]*ledger.Entry, error) {
 	ns := s.namespace()
+
+	params, err := bindTimestampCursor(params)
+	if err != nil {
+		return nil, err
+	}
 
 	b := pgquery.NewBuilder()
 	b.AppendParam(`SELECT id, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
@@ -375,12 +388,8 @@ FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
 	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
 	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
-	b.Append(`ORDER BY timestamp DESC, id ASC`)
-	if params.Limit > 0 {
-		b.AppendParam(`LIMIT `, params.Limit)
-	}
-	if params.Offset > 0 {
-		b.AppendParam(`OFFSET `, params.Offset)
+	if ksErr := pgquery.AppendKeyset(b, params); ksErr != nil {
+		return nil, ksErr
 	}
 
 	sql, args := b.Build()
@@ -399,6 +408,45 @@ FROM audit_entries WHERE namespace = `, ns)
 		result = []*ledger.Entry{}
 	}
 	return result, nil
+}
+
+// bindTimestampCursor converts the cursor value for the "timestamp" sort column
+// from its RFC3339Nano string wire form back to time.Time. Cursor values arrive
+// as strings: the auditquery service Extract closure formats the timestamp as
+// RFC3339Nano, and the cursor codec round-trips values through JSON. pgx binds
+// time.Time into the timestamptz keyset predicate — exactly as the filters.From
+// / filters.To bindings above already do — but cannot encode a bare string for
+// a timestamptz parameter. The id UUID tie-breaker already uses the cursor's
+// string form and is left untouched. Returns params unchanged on the first page
+// (no cursor).
+//
+// When ledger.QuerySort gains another non-text keyset column (e.g. another
+// timestamptz or a numeric column), add a matching conversion case here: pgx
+// cannot bind the RFC3339Nano/JSON string wire form to a non-text column.
+// Audit is currently the only non-text keyset consumer in the codebase.
+func bindTimestampCursor(params query.ListParams) (query.ListParams, error) {
+	if params.CursorValues == nil {
+		return params, nil
+	}
+	vals := slices.Clone(params.CursorValues)
+	for i, col := range params.Sort {
+		if col.Name != "timestamp" || i >= len(vals) {
+			continue
+		}
+		raw, ok := vals[i].(string)
+		if !ok {
+			continue
+		}
+		ts, parseErr := time.Parse(time.RFC3339Nano, raw)
+		if parseErr != nil {
+			return query.ListParams{}, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
+				"invalid cursor; restart from first page (client should discard stored cursor)",
+				errcode.WithInternal(fmt.Sprintf("timestamp cursor parse: %v", parseErr)))
+		}
+		vals[i] = ts
+	}
+	params.CursorValues = vals
+	return params, nil
 }
 
 // scanEntries scans all rows from a pgx.Rows result into []*ledger.Entry.

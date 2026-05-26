@@ -120,6 +120,9 @@ func runTodoorder(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 			[]auth.ListenerAuth{jwtPlan}),
 		// demo loopback 隔离，生产按容器网络拓扑配置
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9082", internalAuthChain),
+		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
+		// /metrics no longer fall back onto the primary listener.
+		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9092", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)
 

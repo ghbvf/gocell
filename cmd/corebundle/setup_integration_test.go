@@ -80,6 +80,7 @@ var setupHTTPClient = &http.Client{Timeout: testtime.SelectAsyncSettle}
 func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
@@ -159,6 +160,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -179,7 +182,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 	addr := ln.Addr().String()
 	testwait.External(t, "corebundle-setup-completed", func() bool {
-		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -229,7 +232,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		entries, err := auditStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-			ledger.QueryListParams{Limit: 10})
+			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(entries), 1, "401 missing-header path must write a bootstrap.auth.fail ledger entry")
 		var payloadStruct struct {
@@ -259,7 +262,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		entries, err := auditStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-			ledger.QueryListParams{Limit: 10})
+			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, len(entries), 2,
 			"wrong-credentials path must add a second bootstrap.auth.fail entry (missing_header from 2a is first)")
@@ -384,6 +387,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
@@ -462,6 +466,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -482,7 +488,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 
 	addr := ln.Addr().String()
 	testwait.External(t, "corebundle-setup-completed", func() bool {
-		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -523,7 +529,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	// above, the ledger Append has already completed — no Eventually needed.
 	entries, qerr := auditStore.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
-		ledger.QueryListParams{Limit: 10})
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
 	require.Len(t, entries, 1, "exactly one rate_limited entry expected")
 

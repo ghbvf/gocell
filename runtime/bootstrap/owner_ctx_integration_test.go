@@ -83,11 +83,13 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 
 		ln := newIntegrationListener(t)
 		addr := ln.Addr().String()
+		healthLn := newIntegrationListener(t)
 
 		b := New(
 			WithClock(clock.Real()),
 			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+			WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 			WithShutdownTimeout(testtime.D3s),
 			WithLifecycle(func(lc Lifecycle) {
 				_ = lc.Append(Hook{
@@ -133,7 +135,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		go func() { done <- b.Run(runCtx) }()
 
 		// Wait for HTTP to become healthy (lifecycle.Start completed at this point).
-		waitForIntegrationHealthy(t, addr)
+		waitForIntegrationHealthy(t, healthLn.Addr().String())
 
 		// Trigger graceful shutdown by cancelling the caller ctx passed to Run.
 		// bootstrap.Run then calls phase9AwaitShutdownSignal → phase10, which:
@@ -192,11 +194,13 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 
 		ln := newIntegrationListener(t)
 		addr := ln.Addr().String()
+		healthLn := newIntegrationListener(t)
 
 		b := New(
 			WithClock(clock.Real()),
 			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
+			WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 			WithShutdownTimeout(testtime.D3s),
 			WithLifecycle(func(lc Lifecycle) {
 				hook := sl.Hook()
@@ -212,7 +216,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- b.Run(runCtx) }()
 
-		waitForIntegrationHealthy(t, addr)
+		waitForIntegrationHealthy(t, healthLn.Addr().String())
 		cancel()
 
 		select {

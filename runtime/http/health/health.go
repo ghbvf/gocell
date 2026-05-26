@@ -168,7 +168,7 @@ func (h *Handler) SetShuttingDown() {
 // infrastructure and business responses uniformly (PR-A35 alignment).
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, envelopeData(map[string]any{
+		writeJSON(r.Context(), w, http.StatusOK, envelopeData(map[string]any{
 			"status": "healthy",
 		}))
 	}
@@ -217,7 +217,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		if h.shuttingDown.Load() {
-			slog.Info("readyz: shutting down (graceful_shutdown)",
+			slog.InfoContext(ctx, "readyz: shutting down (graceful_shutdown)",
 				slog.String("status", readyzStatusShuttingDown),
 				slog.String("reason", readyzReasonGracefulShutdown))
 			writeReadyz503(ctx, w, readyzStatusShuttingDown, readyzReasonGracefulShutdown)
@@ -251,7 +251,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		})
 		result, ok := shared.(readyzResult)
 		if !ok {
-			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+			slog.ErrorContext(ctx, "readyz: singleflight returned unexpected payload; failing closed",
 				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("value", shared))
 			writeReadyz503(ctx, w, "unhealthy", readyzReasonReadinessFailed)
@@ -275,7 +275,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 func (h *Handler) computeReadyzSafe(ctx context.Context, verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("readyz: recovered panic during readiness computation",
+			slog.ErrorContext(ctx, "readyz: recovered panic during readiness computation",
 				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("panic", redaction.RedactAny(r)))
 			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
@@ -471,20 +471,20 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 	body["status"] = r.overall
 	switch r.overall {
 	case "healthy":
-		writeJSON(w, http.StatusOK, envelopeData(body))
+		writeJSON(ctx, w, http.StatusOK, envelopeData(body))
 	case "degraded":
 		// HTTP 200 — degraded does NOT trigger pod eviction (fail-open semantic).
 		// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
 		// Emit channel d ops-diagnostics at Info level so operators can observe
 		// degraded dependency ErrorMsg without triggering a warn-level alert.
-		r.logDiagnostics(slog.LevelInfo, "readyz degraded")
-		writeJSON(w, http.StatusOK, envelopeData(body))
+		r.logDiagnostics(ctx, slog.LevelInfo, "readyz degraded")
+		writeJSON(ctx, w, http.StatusOK, envelopeData(body))
 	default: // "unhealthy"
 		reason := r.reason
 		if reason == "" {
 			reason = readyzReasonReadinessFailed
 		}
-		r.logDiagnostics(slog.LevelWarn, "readyz unhealthy", slog.String("reason", reason))
+		r.logDiagnostics(ctx, slog.LevelWarn, "readyz unhealthy", slog.String("reason", reason))
 		writeReadyz503(ctx, w, r.overall, reason)
 	}
 }
@@ -492,6 +492,18 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 // logDiagnostics emits the channel d (ops-diagnostics) breakdown to slog so
 // operators retain the diagnostic data per ADR 202605171200 §3. Public
 // responses always carry no error text on wire (D1 decision).
+//
+// ctx is the request context (threaded from ReadyzHandler via writeTo). Since
+// the wire body carries no error text post-ADR, slog is the *primary*
+// diagnostic channel — it must carry the request correlation fields that the
+// framework's contextHandler (runtime/observability/logging) injects from ctx,
+// same source as the errcode WithInternal path. On probe endpoints that means
+// request_id + correlation_id (RequestID middleware runs on /readyz; it is not
+// probe-filtered); trace_id is NOT present by default because the Tracing
+// middleware's DefaultProbeFilter skips span creation for /healthz, /readyz,
+// /livez, /metrics. Passing context.Background() here silently drops even
+// request_id/correlation_id and breaks the link between a 503/degraded record
+// and its request (R2 / #942).
 //
 // The slogDependencies map (not the wire dependencies) is what gets logged
 // — its typed SlogDependencyEntry.ErrorMsg field carries the redacted error
@@ -514,7 +526,7 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 // Cells/dependencies/adapters maps are appended only on verbose probes so
 // that high-frequency k8s readiness probes (typically every 5s) don't spam
 // log backends with full breakdown when only status/reason are actionable.
-func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog.Attr) {
+func (r readyzResult) logDiagnostics(ctx context.Context, level slog.Level, msg string, extra ...slog.Attr) {
 	attrs := []any{
 		slog.String("status", r.overall),
 	}
@@ -539,7 +551,7 @@ func (r readyzResult) logDiagnostics(level slog.Level, msg string, extra ...slog
 			slog.Any("adapters", r.adapters),
 		)
 	}
-	slog.Log(context.Background(), level, msg, attrs...)
+	slog.Log(ctx, level, msg, attrs...)
 }
 
 // writeReadyz503 emits the canonical errcode 503 envelope shared with all
@@ -598,7 +610,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	h.mu.RUnlock()
 	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
 	if disabled {
-		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
+		slog.DebugContext(r.Context(), "readyz: verbose requested but endpoint is disabled; serving plain aggregate",
 			slog.String("remote_addr", remoteAddr))
 		return false, false
 	}
@@ -606,7 +618,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	// configure a token or disable the verbose endpoint. Silently rendering
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
-		slog.Warn("readyz: verbose requested but no token configured; denying",
+		slog.WarnContext(r.Context(), "readyz: verbose requested but no token configured; denying",
 			slog.String("reason", "token_unconfigured"),
 			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
 			slog.String("remote_addr", remoteAddr))
@@ -615,7 +627,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseAuthHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
-		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
+		slog.WarnContext(r.Context(), "readyz: verbose token mismatch at handler layer; denying",
 			slog.String("reason", "token_mismatch"),
 			slog.String("remote_addr", remoteAddr))
 		return false, true
@@ -673,10 +685,10 @@ func statusFromRank(r int) string {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, statusCode int, v any) {
+func writeJSON(ctx context.Context, w http.ResponseWriter, statusCode int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("health: failed to write response", slog.Any("error", err))
+		slog.ErrorContext(ctx, "health: failed to write response", slog.Any("error", err))
 	}
 }

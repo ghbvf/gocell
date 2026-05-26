@@ -51,7 +51,7 @@ export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 go run ./examples/todoorder
 ```
 
-The server starts with primary listener on `:8082` (API + infra) and internal listener on `:9082` (control-plane).
+The server starts with primary listener on `:8082` (API), internal listener on `:9082` (control-plane), and health listener on `127.0.0.1:9092` (`/healthz` `/readyz` `/metrics`).
 `TODOORDER_TOKEN` is a real RS256 access token signed by the local key above.
 
 ## Docker Mode
@@ -218,9 +218,9 @@ To move from demo mode to a durable L2 path, wire all of the following into the 
 ### Health check
 
 ```bash
-curl http://localhost:8082/healthz
-curl http://localhost:8082/readyz
-curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:8082/readyz?verbose'
+curl http://localhost:9092/healthz
+curl http://localhost:9092/readyz
+curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:9092/readyz?verbose'
 ```
 
 `/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the matching `X-Readyz-Token` header on the request.

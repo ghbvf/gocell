@@ -31,7 +31,7 @@
 //     emitter-probe funnel shared by all cells). Any other Register callsite
 //     fails CI.
 //
-//   - A3 (upstream Medium → backlog HEALTHZ-HOLDER-SEAL-01): structs holding
+//   - A3 (Medium archtest — strongest available Go form): structs holding
 //     a healthz.Aggregator interface-typed field are restricted to:
 //
 //   - runtime/observability/healthz.aggregator (unexported, package-private)
@@ -39,11 +39,21 @@
 //   - runtime/http/health.Handler (the HTTP transport)
 //
 //   - runtime/bootstrap.Bootstrap (the composition root)
-//     Adding a holder elsewhere fails CI. Upgrade path: seal Aggregator via an
-//     unexported marker method aggregatorOK() so external packages can't satisfy
-//     the interface — would make A3 Hard at compile time. Tracked as backlog
-//     HEALTHZ-HOLDER-SEAL-01 (cap-13 §13.1, PR #886; ADR amendment in
-//     docs/architecture/202605041430-adr-architecture-optimization-via-engineering-thinking.md).
+//     Adding a holder elsewhere fails CI. A3 stays archtest — it is NOT
+//     upgradable to a compile-time Hard seal, for two independent reasons:
+//     (1) A3 restricts which structs may *hold* a field of type
+//     healthz.Aggregator; Go has no mechanism to restrict who declares a field
+//     of a given type. Interface sealing (an unexported marker method) restricts
+//     *implementers*, not *holders* — a different axis entirely.
+//     (2) Even the implementer axis is unsealable here: an unexported marker is
+//     package-scoped to kernel/healthz, but Aggregator has cross-package
+//     implementations (runtime/observability/healthz.aggregator,
+//     kernel/cell.recorderProbeSink, the public healthztest.FakeAggregator, the
+//     A4 violate fixture), and collapsing to a single in-package impl is blocked
+//     by the kernel/healthz → kernel/outbox → kernel/healthz import cycle.
+//     HEALTHZ-HOLDER-SEAL-01 (cap-13 §13.1, PR #886; gh issue #893) is therefore
+//     closed won't-do; see ADR 202605041430-...-engineering-thinking.md
+//     §"Amendment 2026-05-26".
 //
 //   - A4 reverse self-test fixture (testdata/healthz_violate/): synthetic
 //     violations of A1/A2/A3 each detected by the rule logic against a
@@ -80,7 +90,8 @@
 // ref: kernel/healthz.Aggregator — probe registry interface
 // ref: cells/<cell>/healthz_gen.go — cellgen typed helpers
 // ref: .claude/rules/gocell/observability.md — Cell 级别 Repo Readiness Probe
-// ref: HEALTHZ-HOLDER-SEAL-01 — backlog cap-13 §13.1, upgrade A3 to Hard
+// ref: HEALTHZ-HOLDER-SEAL-01 (gh #893) — closed won't-do; A3 holder axis is
+// inexpressible in Go's type system (see A3 godoc above for full rationale)
 package archtest
 
 import (
@@ -135,8 +146,10 @@ var healthzRegisterExactPaths = map[string]bool{
 	// healthz.Aggregator.Register. Cells route emitter probes through this
 	// helper (the former per-cell cellgen RegisterEmitterProbes is removed);
 	// cell-repo probes still go through cellgen RegisterRepoReady in
-	// cells/<cell>/healthz_gen.go. Upstream-Hard upgrade for the whole funnel:
-	// seal the Aggregator interface — HEALTHZ-HOLDER-SEAL-01 (gh issue #893).
+	// cells/<cell>/healthz_gen.go. This A2 caller-identity allowlist is a
+	// downstream guard; the funnel's upstream type-system seal (the only Hard
+	// upstream form) is infeasible, so HEALTHZ-HOLDER-SEAL-01 (gh issue #893) is
+	// won't-do — see the A3 rationale in this file's package godoc.
 	"kernel/cell/healthz.go": true,
 }
 
@@ -420,7 +433,8 @@ func scanHealthzA3(fset *token.FileSet, file *ast.File, rel string, info *types.
 						"sanctioned holder allowlist "+
 						"(runtime/observability/healthz.aggregator, runtime/http/health.Handler, "+
 						"runtime/bootstrap.Bootstrap); "+
-						"upgrade path: seal Aggregator interface (HEALTHZ-HOLDER-SEAL-01 backlog) "+
+						"this allowlist is archtest-only — the holder axis is inexpressible "+
+						"in Go's type system, so it cannot become a compile-time seal "+
 						"(HEALTHZ-WRITE-01/A3 Medium)",
 					ts.Name.Name, rel,
 				),
