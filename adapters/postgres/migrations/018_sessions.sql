@@ -18,8 +18,6 @@
 -- ref: hashicorp/vault vault/token_store.go accessor + parent layout
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS sessions (
     id                    TEXT        PRIMARY KEY,
     -- subject_id references the user; CASCADE delete keeps schema consistent
