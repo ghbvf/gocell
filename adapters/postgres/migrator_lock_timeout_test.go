@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"testing"
+	"testing/fstest"
 
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3/lock"
@@ -51,4 +52,57 @@ func TestMigrator_LockTimeoutSessionLocker_SetsAndResets(t *testing.T) {
 	require.NoError(t,
 		conn.QueryRowContext(ctx, `SELECT current_setting('lock_timeout')`).Scan(&lt))
 	assert.Equal(t, preLock, lt, "lock_timeout must be reset to its pre-lock value after unlock")
+}
+
+// TestMigrator_LockTimeoutAppliedViaProvider guards the wiring (not just the
+// locker type): it runs probe migrations through the REAL
+// NewMigrator(...).Up(ctx) → newGooseProvider → goose → SessionLock path, where
+// each migration body RAISEs unless current_setting('lock_timeout') = '5s'. If
+// the lockTimeoutSessionLocker wrapper in newGooseProvider were removed, the
+// session would carry the default lock_timeout and Up would fail here — which
+// TestMigrator_LockTimeoutSessionLocker_SetsAndResets (constructs the locker
+// directly) cannot catch. Covers both a transactional and a
+// `-- +goose no transaction` migration, locking the PR's session-scope claim
+// across implicit-tx boundaries.
+func TestMigrator_LockTimeoutAppliedViaProvider(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	const txnProbe = `-- +goose Up
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF current_setting('lock_timeout') IS DISTINCT FROM '5s' THEN
+        RAISE EXCEPTION 'lock_timeout not injected (txn): got %', current_setting('lock_timeout');
+    END IF;
+END $$;
+-- +goose StatementEnd
+
+-- +goose Down
+SELECT 1;
+`
+	const noTxnProbe = `-- +goose NO TRANSACTION
+-- +goose Up
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF current_setting('lock_timeout') IS DISTINCT FROM '5s' THEN
+        RAISE EXCEPTION 'lock_timeout not injected (no-txn): got %', current_setting('lock_timeout');
+    END IF;
+END $$;
+-- +goose StatementEnd
+`
+	fixtureFS := fstest.MapFS{
+		"001_locktimeout_probe_txn.sql":   &fstest.MapFile{Data: []byte(txnProbe)},
+		"002_locktimeout_probe_notxn.sql": &fstest.MapFile{Data: []byte(noTxnProbe)},
+	}
+
+	migrator, err := NewMigrator(pool, fixtureFS, "schema_migrations_locktimeout_probe")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = migrator.Close() })
+
+	require.NoError(t, migrator.Up(ctx),
+		"probe migrations RAISE unless lock_timeout='5s' is injected by "+
+			"lockTimeoutSessionLocker via newGooseProvider — guards the wiring, "+
+			"not just the locker type")
 }
