@@ -209,10 +209,14 @@ func TestPGVerify_SubRange_Tampered(t *testing.T) {
 		require.NoError(t, store.Append(ctx, e), "Append seq %d", i)
 	}
 
-	// Tamper seq=3's hash directly in the DB.
+	// Tamper seq=3's hash directly in the DB. The replacement is a valid-format
+	// (64-char lowercase hex) but wrong-value hash, so it passes the
+	// ck_audit_hash_format CHECK yet still breaks the chain — a realistic tamper
+	// that Verify must catch (a malformed value would be rejected by the DB
+	// constraint before Verify ever sees it).
 	_, execErr := p.DB().Exec(ctx,
-		`UPDATE audit_entries SET hash = 'tampered-hash-fcr1'
-		 WHERE namespace = $1 AND seq_no = 3`, "auditcore")
+		`UPDATE audit_entries SET hash = $2
+		 WHERE namespace = $1 AND seq_no = 3`, "auditcore", strings.Repeat("0", 64))
 	require.NoError(t, execErr, "direct hash tamper must succeed")
 
 	// Verify sub-range [2, 5] must detect corruption at seq=3 (hash recompute fails).

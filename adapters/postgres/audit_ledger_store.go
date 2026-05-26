@@ -278,6 +278,12 @@ func (s *LedgerStore) readTailForUpdate(ctx context.Context, ns string) (prevHas
 // Returns (0, "", 0) via ErrNoRows when the namespace is empty.
 //
 // F13: merged Tail + Count into one query.
+//
+// $1 (namespace) appears twice — in the COUNT(*) subquery and the outer WHERE.
+// pgx binds a single positional parameter to all occurrences of $1, so both
+// clauses receive the same namespace value; this is intentional, not a
+// parameter mismatch. If the two clauses ever needed different values they
+// would use $1 and $2 respectively.
 const tailWithCountSQL = `
 SELECT seq_no, hash,
        (SELECT COUNT(*) FROM audit_entries WHERE namespace=$1) AS total
