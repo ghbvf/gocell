@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -828,7 +829,9 @@ type revokeFailingSessionStore struct {
 	err error
 }
 
-func (r *revokeFailingSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent) error {
+func (r *revokeFailingSessionStore) RevokeForSubject(
+	_ context.Context, _ string, _ session.CredentialEvent, _ credentialfence.FenceToken,
+) error {
 	return r.err
 }
 
@@ -1661,7 +1664,7 @@ type failingRefreshStore struct {
 	calls         int
 }
 
-func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string) error {
+func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string, _ credentialfence.FenceToken) error {
 	s.calls++
 	return s.revokeUserErr
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -39,9 +40,11 @@ type trackingSessionStore struct {
 	revokeCalls int
 }
 
-func (r *trackingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
+func (r *trackingSessionStore) RevokeForSubject(
+	ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken,
+) error {
 	r.revokeCalls++
-	return r.Store.RevokeForSubject(ctx, subjectID, event)
+	return r.Store.RevokeForSubject(ctx, subjectID, event, tok)
 }
 
 // newDurableTestService creates a Service with emitter + txRunner injected.
