@@ -227,8 +227,8 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
 				func(n string) bool { return n == credRevokedAt }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-						"archtest cannot see reflect-based field reads",
+					"%s:%d: SESSION-REVOKED-FIELD-ACCESS-01: reflect.FieldByName(%q) blind spot "+
+						"detected — archtest cannot see reflect-based field reads",
 					rel, hit.Line, hit.Name,
 				))
 			}

@@ -550,8 +550,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectMethodByName(t *testing.T) {
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 				func(n string) bool { return bannedNames[n] }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
-						"archtest cannot see reflect-based invocations of authz setters",
+					"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.MethodByName(%q) blind spot "+
+						"detected — archtest cannot see reflect-based invocations of authz setters",
 					rel, hit.Line, hit.Name,
 				))
 			}
@@ -654,8 +654,8 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
 				func(n string) bool { return bannedFieldNames[n] }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-						"archtest cannot see reflect-based writes to domain.User authz fields",
+					"%s:%d: DOMAIN-AUTHZ-FIELD-PRIVATE-01: reflect.FieldByName(%q) blind spot "+
+						"detected — archtest cannot see reflect-based writes to domain.User authz fields",
 					rel, hit.Line, hit.Name,
 				))
 			}

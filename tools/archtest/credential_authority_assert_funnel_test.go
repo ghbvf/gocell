@@ -401,19 +401,6 @@ func scanDirectFieldReads(p *Pass, file *ast.File, rel string) []string {
 	return out
 }
 
-// typeOwner unwraps a *T → T and returns the *types.TypeName for the owning
-// named type, or nil if the type isn't a *types.Named.
-func typeOwner(t types.Type) *types.TypeName {
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return nil
-	}
-	return named.Obj()
-}
-
 // verifyDirectReadRedFixtureDetectedPerBucket asserts that the fixture
 // produces ≥ 1 violation in EACH detector category (CanAuthenticate +
 // PasswordVersion). An aggregate ≥ 1 count would let a fixture cover only
@@ -526,8 +513,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectMethodByName(t *testin
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 				func(n string) bool { return n == credCanAuthenticate }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.MethodByName(%q) blind spot detected — "+
-						"archtest cannot see reflect-based invocations",
+					"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.MethodByName(%q) blind "+
+						"spot detected — archtest cannot see reflect-based invocations",
 					rel, hit.Line, hit.Name,
 				))
 			}
@@ -568,8 +555,8 @@ func TestCredentialAuthorityAssertFunnel_BlindSpot_ReflectFieldByName(t *testing
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectFieldByName,
 				func(n string) bool { return n == credPasswordVersion }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.FieldByName(%q) blind spot detected — "+
-						"archtest cannot see reflect-based field reads",
+					"%s:%d: CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01: reflect.FieldByName(%q) blind "+
+						"spot detected — archtest cannot see reflect-based field reads",
 					rel, hit.Line, hit.Name,
 				))
 			}

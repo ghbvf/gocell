@@ -422,8 +422,8 @@ func TestCachingSessionRevokeDelegateOnly_BlindSpot_Reflect(t *testing.T) {
 			for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 				func(n string) bool { return revokeTargetMethods[n] }) {
 				violations = append(violations, fmt.Sprintf(
-					"%s:%d: reflect.MethodByName(%q) detected — "+
-						"archtest cannot see reflect-based invocations",
+					"%s:%d: CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: reflect.MethodByName(%q) "+
+						"detected — archtest cannot see reflect-based invocations",
 					rel, hit.Line, hit.Name,
 				))
 			}

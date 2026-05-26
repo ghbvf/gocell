@@ -530,7 +530,8 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 				for _, hit := range scanReflectStringArgCalls(p, file, reflectMethodByName,
 					func(n string) bool { return bannedNames[n] }) {
 					violations = append(violations, fmt.Sprintf(
-						"%s:%d: reflect.MethodByName(%q) blind spot detected — archtest would miss this",
+						"%s:%d: CREDENTIAL-INVALIDATE-FUNNEL-01: reflect.MethodByName(%q) blind spot "+
+							"detected — archtest cannot see reflect-based invocations",
 						rel, hit.Line, hit.Name,
 					))
 				}

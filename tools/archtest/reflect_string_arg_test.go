@@ -41,12 +41,13 @@ package archtest
 //
 // Out-of-scope reflect read shapes (documented blind spots — this scanner keys
 // on the string ARGUMENT of FieldByName/MethodByName, so it cannot see):
-//   - reflect.Value.FieldByIndex([]int{…}) / .Field(i) — positional field read,
-//     no string name. Index→field-name resolution needs the struct type.
+//   - reflect.Value.FieldByIndex([]int{…}) / .FieldByIndexErr(…) / .Field(i) —
+//     positional field read, no string name. Index→field-name resolution needs
+//     the reflected struct type + numeric-const fold + (for non-inline) dataflow.
 //   - reflect.Value.Method(i) — positional method, same shape.
 // These are pre-existing gaps in all reflect blind-spot scans, not introduced
-// or widened here; closing them is a separate (harder) effort, not a 立项-able
-// Soft string-anchor.
+// or widened here; closing them is a separate (harder, false-positive-prone)
+// effort tracked in #1120 — NOT a 立项-able Soft string-anchor.
 //
 // Blind-spot reverse self-check: TestReflectStringArgScanner_TypedReceiverAndConstArg
 // loads testdata/reflect_string_form_red and asserts the three const-form
@@ -130,8 +131,8 @@ func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 	if !ok || sig.Recv() == nil {
 		return false
 	}
-	// typeOwner unwraps *T→T to the owning *types.TypeName; it is a shared
-	// archtest helper defined in credential_authority_assert_funnel_test.go.
+	// typeOwner (shared archtest helper in helpers_test.go) unwraps *T→T to the
+	// owning *types.TypeName.
 	owner := typeOwner(sig.Recv().Type())
 	return owner != nil && owner.Name() == reflectValueType
 }
