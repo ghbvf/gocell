@@ -173,13 +173,17 @@ type PackageDepsView struct {
 
 // CellSpec is Document.Entities[Kind=="Cell"].Spec.
 type CellSpec struct {
-	Type             string          `json:"type"             yaml:"type"`
-	ConsistencyLevel string          `json:"consistencyLevel" yaml:"consistencyLevel"`
-	DurabilityMode   string          `json:"durabilityMode,omitempty" yaml:"durabilityMode,omitempty"`
-	Owner            CellSpecOwner   `json:"owner"            yaml:"owner"`
-	Schema           CellSpecSchema  `json:"schema"           yaml:"schema"`
-	VerifySmoke      []string        `json:"verifySmoke,omitempty"    yaml:"verifySmoke,omitempty"`
-	L0Dependencies   []CellSpecL0Dep `json:"l0Dependencies,omitempty" yaml:"l0Dependencies,omitempty"`
+	Type             string `json:"type"             yaml:"type"`
+	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
+	// Phase is the cell's governance maturity phase (cellvocab.Phase). Omitted
+	// when cell.yaml does not declare lifecycle (consumers treat absence as the
+	// experimental default, matching NewBaseCell).
+	Phase          string          `json:"phase,omitempty" yaml:"phase,omitempty"`
+	DurabilityMode string          `json:"durabilityMode,omitempty" yaml:"durabilityMode,omitempty"`
+	Owner          CellSpecOwner   `json:"owner"            yaml:"owner"`
+	Schema         CellSpecSchema  `json:"schema"           yaml:"schema"`
+	VerifySmoke    []string        `json:"verifySmoke,omitempty"    yaml:"verifySmoke,omitempty"`
+	L0Dependencies []CellSpecL0Dep `json:"l0Dependencies,omitempty" yaml:"l0Dependencies,omitempty"`
 	// Requires is the assembly capabilities this cell consumes (postgres/redis/rabbitmq).
 	Requires []string `json:"requires,omitempty" yaml:"requires,omitempty"`
 	Slices   []string `json:"slices,omitempty"   yaml:"slices,omitempty"` // canonical "cell.slice" IDs
@@ -204,12 +208,15 @@ type CellSpecL0Dep struct {
 
 // SliceSpec is Document.Entities[Kind=="Slice"].Spec.
 type SliceSpec struct {
-	BelongsToCell    string                   `json:"belongsToCell"   yaml:"belongsToCell"`
-	ConsistencyLevel string                   `json:"consistencyLevel" yaml:"consistencyLevel"`
-	ContractUsages   []SliceSpecContractUsage `json:"contractUsages,omitempty" yaml:"contractUsages,omitempty"`
-	VerifyUnit       []string                 `json:"verifyUnit,omitempty"     yaml:"verifyUnit,omitempty"`
-	VerifyContract   []string                 `json:"verifyContract,omitempty" yaml:"verifyContract,omitempty"`
-	AllowedFiles     []string                 `json:"allowedFiles,omitempty"   yaml:"allowedFiles,omitempty"`
+	BelongsToCell    string `json:"belongsToCell"   yaml:"belongsToCell"`
+	ConsistencyLevel string `json:"consistencyLevel" yaml:"consistencyLevel"`
+	// Phase is the slice's governance maturity phase (cellvocab.Phase). Omitted
+	// when slice.yaml does not declare lifecycle.
+	Phase          string                   `json:"phase,omitempty" yaml:"phase,omitempty"`
+	ContractUsages []SliceSpecContractUsage `json:"contractUsages,omitempty" yaml:"contractUsages,omitempty"`
+	VerifyUnit     []string                 `json:"verifyUnit,omitempty"     yaml:"verifyUnit,omitempty"`
+	VerifyContract []string                 `json:"verifyContract,omitempty" yaml:"verifyContract,omitempty"`
+	AllowedFiles   []string                 `json:"allowedFiles,omitempty"   yaml:"allowedFiles,omitempty"`
 }
 
 // SliceSpecContractUsage mirrors ContractUsageMeta on the wire.

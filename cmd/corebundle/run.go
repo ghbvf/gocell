@@ -29,8 +29,11 @@ import (
 	"log/slog"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/lifecycle"
 )
 
 // runCorebundle is the handwritten runtime half behind the generated
@@ -67,6 +70,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	if err != nil {
 		return err
 	}
+	logAssemblyMaturity(cells)
 
 	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
@@ -108,6 +112,33 @@ func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error
 		return nil, err
 	}
 	return mods, nil
+}
+
+// logAssemblyMaturity emits a startup Info log of the running assembly's
+// maturity-phase distribution (e.g. asset=2 candidate=1). This is the consumer
+// of runtime/lifecycle.PhaseAggregator: it makes the maturity composition of a
+// deployment visible at boot, so operators notice if (say) a production bundle
+// is unexpectedly running experimental cells. The aggregator exposes raw
+// per-cell phases; the "gap"/distribution is computed here, by the consumer.
+func logAssemblyMaturity(cells []cell.Cell) {
+	if len(cells) == 0 {
+		return
+	}
+	ids := make([]cell.CellIdentity, len(cells))
+	for i, c := range cells {
+		ids[i] = c
+	}
+	dist := make(map[cellvocab.Phase]int, len(cellvocab.Phases))
+	for _, e := range lifecycle.NewPhaseAggregator(ids).Snapshot() {
+		dist[e.Phase]++
+	}
+	attrs := make([]any, 0, len(cellvocab.Phases))
+	for _, p := range cellvocab.Phases {
+		if n := dist[p]; n > 0 {
+			attrs = append(attrs, slog.Int(string(p), n))
+		}
+	}
+	slog.Info("corebundle: assembly maturity composition", attrs...)
 }
 
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from
