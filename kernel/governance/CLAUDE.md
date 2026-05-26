@@ -11,7 +11,7 @@ scaffolding，无消费方）。如 M5-HARVEST 落地，届时对真实消费方
 
 ## ValidationResult 构建
 
-findings 一律经类型化构造函数（locator 方法 / `newErrorAt` 包级函数），**禁止**手写 `ValidationResult{}` 字面量（locator.go 外）。选 error 语义 = 调用强制带 `fix`（remediation guidance）参数的 API；warning 无 `fix`。由 archtest `GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 守卫（fix 非空 + 禁裸字面量）+ `...CODE-CONST-SINGLE-SOURCE-01`（code 必为 `rulecodes.go` 的 `RuleCode` const）。
+findings 一律经类型化构造函数（locator 方法 / `newErrorAt` 包级函数），**禁止**手写 `ValidationResult{}` 字面量（locator.go 外）。`newError` 产 error、`newWarning` 产 warning——`fix`（remediation guidance）对两者都是必填参数（typed-Fix 契约 **severity-agnostic**，见下文）。severity 只决定 blocking(error) vs advisory(warning)，不决定"怎么改"是否结构化。由 archtest `GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 守卫（四个构造函数 fix 非空 + 禁裸字面量）+ `...CODE-CONST-SINGLE-SOURCE-01`（code 必为 `rulecodes.go` 的 `RuleCode` const）。
 
 ```go
 // error：fix 必填（最后一个位置参数）

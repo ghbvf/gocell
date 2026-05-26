@@ -387,7 +387,7 @@ type Rule struct {
 **怎么做**：
 - 收敛对象 = 仓库代码 + 元数据
 - 触发器 = git push / 定时 CI / AI Agent 巡检
-- 输入 = M3 规则引擎产出的 finding（带 next-action + metric）
+- 输入 = M3 规则引擎产出的 finding（M3 只产出 finding 本体；next-action + metric 已在 #687 从 M3 移除——见 §M3 amendment——由本里程碑落地时对真实 harvester 定义后从 finding 派生）
 - 动作分级：
   - autofix：CI bot 自动开 PR
   - suggest：写 advice 到 `harvest/` 目录
@@ -497,8 +497,8 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3（载体为 Go typed-struct `allRules []Rule`，见 §M3 Amendment 2026-05-26） |
 | P-B3 | 配置管理 | SRP | 单源公理 | 编译期 | GVK 唯一 | M0 |
 | P-C1 | 闭环 | testable | 收敛定义 | **CI 期 + Agent** | controller manager | **M5（仓库收敛）** |
-| P-C2 | 执行动作 | 结构化错误 | 动作可表达 | CI 期 | Result+Event | M3 |
-| P-C3 | 反馈量化 | — | 距离 metric | CI 期 | ObservedGeneration | M3 |
+| P-C2 | 执行动作 | 结构化错误 | 动作可表达 | CI 期 | Result+Event | M5（#687 从 M3 推迟：next-action 无消费方）|
+| P-C3 | 反馈量化 | — | 距离 metric | CI 期 | ObservedGeneration | M5（#687 从 M3 推迟：per-finding metric 无消费方）|
 | P-D1 | 子系统分解 | DIP | 单向因果 | 编译期 | apimachinery 分层 | M0 |
 | P-D2 | 故障显式 | 错误不吞 | 补丁不累积 | 编译期 + 启动期 | fail-fast probes | M0 |
 | P-D3 | 边界 | 封装 | 协议显式 | 编译期 | typed client | M0 |

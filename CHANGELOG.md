@@ -12,8 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   an active event contract with no subscribers no longer fails `gocell validate` (exit 1);
   it is now an advisory warning (exit 0), fixing the ADR-noted SeverityError
   misclassification (ADV is the advisory series). CI pipelines that relied on ADV-05
-  blocking a merge must add their own gate, e.g.
-  `gocell validate --format=json | jq -e '.issues[] | select(.code=="ADV-05")'`.
+  blocking a merge must add their own gate that *fails* (non-zero) when ADV-05 is
+  present, e.g.
+  `! gocell validate --format=json | jq -e '.issues[] | select(.code=="ADV-05")' >/dev/null`.
+  The leading `!` is required: `jq -e 'select(...)'` exits 0 on a match, so the
+  bare pipeline would *pass* exactly when a dead event exists (inverted gate); the
+  `!` flips it so the step blocks the merge when — and only when — ADV-05 fires.
   Governance rules are now a single data-driven `allRules` registry (ADR `202605041430`
   §M3, amended: Go typed-struct carrier, not YAML). `next-action` disposition and
   per-finding `metric` fields were speculative M5-HARVEST scaffolding with no consumer;

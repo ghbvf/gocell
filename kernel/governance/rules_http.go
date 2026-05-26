@@ -151,6 +151,13 @@ func (v *Validator) checkCH04() []ValidationResult {
 	cache := map[string]*parsedHandlerFile{}
 	var results []ValidationResult
 	for _, c := range v.sortedContracts() {
+		// CH-04 parses a handler file per contract; honor cancellation between
+		// contracts so a signal-aware ctx (Ctrl-C) stops mid-scan rather than
+		// after the whole repository has been walked (F2). run() observes the
+		// canceled runCtx on the next rule boundary and surfaces the error.
+		if v.runCtx.Err() != nil {
+			return results
+		}
 		if c.Kind != "http" {
 			continue
 		}
@@ -168,30 +175,64 @@ func (v *Validator) checkResponseAlignmentForContract(
 			slog.String("contract", c.ID))
 		return nil
 	}
+	// relHandler keeps absolute CI-worker paths out of user-facing messages (F8).
+	relHandler := relToRoot(v.root, handlerFile)
 
-	handlerCodes, err := extractHandlerStatusCodesForContract(handlerFile, c.ID, cache)
+	handlerCodes, unresolved, err := extractHandlerStatusCodesForContract(handlerFile, c.ID, cache)
 	if err != nil {
 		if errors.Is(err, errCorrelationMissing) {
 			return []ValidationResult{v.newError(
 				codeCH04, IssueRequired,
 				c.File, fieldHTTPPath,
-				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, handlerFile),
+				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, relHandler),
 				advHintCH04CorrelationFailedFix,
 			)}
 		}
 		// Fail-closed: an unparseable handler means CH-04 cannot verify
 		// response-status alignment, so emit a finding rather than silently
 		// passing the contract (mirrors the errCorrelationMissing branch above).
+		// The parser error is sanitized to strip the absolute root prefix (F8).
 		return []ValidationResult{v.newError(
 			codeCH04, IssueInvalid,
 			c.File, fieldHTTPPath,
-			fmt.Sprintf(advHintCH04ParseFailed, c.ID, handlerFile, err),
+			fmt.Sprintf(advHintCH04ParseFailed, c.ID, relHandler, sanitizeRootPaths(v.root, err.Error())),
 			advHintCH04ParseFailedFix,
 		)}
 	}
 
 	declared := declaredErrorStatuses(c)
-	return buildAlignmentFindings(v, c, handlerCodes, declared)
+	results := buildAlignmentFindings(v, c, handlerCodes, declared)
+	// Fail-closed on response writes whose status CH-04 cannot statically
+	// resolve (dynamic errcode.Kind / unknown httputil writer): emit a finding
+	// rather than silently dropping the un-analyzable status (F9).
+	return append(results, v.dynamicWriteFindings(c, relHandler, unresolved)...)
+}
+
+// dynamicWriteFindings emits one CH-04 finding per distinct unresolved
+// response-write reason collected while scanning the handler. Each reason is a
+// write whose emitted status could not be determined statically (a non-static
+// errcode.Kind argument or an unknown httputil writer); leaving them silent
+// would let an undeclared status slip past CH-04 (fail-open). Deduplicated so a
+// handler repeating the same pattern produces a single finding.
+func (v *Validator) dynamicWriteFindings(c *metadata.ContractMeta, relHandler string, unresolved []string) []ValidationResult {
+	if len(unresolved) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(unresolved))
+	var results []ValidationResult
+	for _, reason := range unresolved {
+		if _, dup := seen[reason]; dup {
+			continue
+		}
+		seen[reason] = struct{}{}
+		results = append(results, v.newError(
+			codeCH04, IssueInvalid,
+			c.File, fieldHTTPPath,
+			fmt.Sprintf(advHintCH04DynamicWrite, c.ID, relHandler, reason),
+			advHintCH04DynamicWriteFix,
+		))
+	}
+	return results
 }
 
 // declaredErrorStatuses returns the union of 4xx/5xx status codes declared in
@@ -245,6 +286,59 @@ func diffStatuses(a, b map[int]struct{}) []int {
 	return out
 }
 
+// safeJoinUnderRoot joins root with path segments derived from a contract ID
+// and returns ("", false) when any segment is unsafe or the assembled path
+// would escape root. Generated-path assembly treats the contract ID as
+// untrusted input: a segment that is empty, ".", "..", or contains a path
+// separator could redirect the lookup into another package or outside the
+// repository. Both a structural per-segment check and a final IsWithinRoot
+// containment check are applied, mirroring the Go traversal-resistant path
+// guidance (validate the components, then bind the result to a root). Shared by
+// findHandlerFile (handler_gen.go) and typedEnvelopeTypesGenPath (types_gen.go).
+func safeJoinUnderRoot(root string, segments ...string) (string, bool) {
+	for _, s := range segments {
+		if s == "" || s == "." || s == ".." ||
+			strings.ContainsRune(s, '/') || strings.ContainsRune(s, os.PathSeparator) {
+			return "", false
+		}
+	}
+	full := filepath.Join(append([]string{root}, segments...)...)
+	if !IsWithinRoot(root, full) {
+		return "", false
+	}
+	return full, true
+}
+
+// relToRoot expresses p relative to root for user-facing finding messages.
+// Governance findings must not leak absolute CI-worker paths (F8); falls back
+// to the base name when p is not under root.
+func relToRoot(root, p string) string {
+	if root != "" {
+		if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return filepath.Base(p)
+}
+
+// sanitizeRootPaths strips the project-root prefix from s so absolute paths
+// embedded by other tooling (e.g. a go/parser error that references the handler
+// file by absolute path) become repo-relative in user-facing messages (F8).
+func sanitizeRootPaths(root, s string) string {
+	if root == "" {
+		return s
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	s = strings.ReplaceAll(s, abs+string(os.PathSeparator), "")
+	if abs != root {
+		s = strings.ReplaceAll(s, root+string(os.PathSeparator), "")
+	}
+	return s
+}
+
 // findHandlerFile resolves the handler file path for the contract serving contractID.
 //
 // K#06 PR-2 codegen path: when contract.Codegen is true and contract.Kind is
@@ -258,17 +352,34 @@ func diffStatuses(a, b map[int]struct{}) []int {
 func findHandlerFile(project *metadata.ProjectMeta, contractID, projectRoot string) string {
 	contract, ok := project.Contracts[contractID]
 	if ok && contract.Codegen && contract.Kind == "http" {
-		// "http.order.create.v1" → ["http","order","create","v1"]
-		segments := strings.Split(contractID, ".")
-		pkgParts := append([]string{projectRoot, "generated", "contracts"}, segments...)
-		handlerPath := filepath.Join(append(pkgParts, "handler_gen.go")...)
-		if _, err := os.Stat(handlerPath); err == nil {
-			return handlerPath
-		}
+		return findCodegenHandlerFile(projectRoot, contractID)
+	}
+	return findLegacyHandlerFile(project, contractID, projectRoot)
+}
+
+// findCodegenHandlerFile resolves the generated handler_gen.go for a codegen
+// HTTP contract. Returns "" when the contract ID yields an unsafe path segment
+// (empty / "." / ".." / a path separator) — contract IDs are dotted and never
+// contain "/", so refusing rather than joining keeps the lookup from probing
+// another package or escaping the repo (F1) — or when the file is absent
+// (Codegen=true is the single source of truth; no legacy fallback).
+func findCodegenHandlerFile(projectRoot, contractID string) string {
+	// "http.order.create.v1" → ["http","order","create","v1"]
+	segments := strings.Split(contractID, ".")
+	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
+	if !safe {
 		return ""
 	}
+	handlerPath := filepath.Join(dir, "handler_gen.go")
+	if _, err := os.Stat(handlerPath); err == nil {
+		return handlerPath
+	}
+	return ""
+}
 
-	// Legacy: hand-written slice/handler.go.
+// findLegacyHandlerFile scans slices for a "serve" role on contractID and
+// returns the slice-adjacent handler.go if it exists on disk.
+func findLegacyHandlerFile(project *metadata.ProjectMeta, contractID, projectRoot string) string {
 	for _, slice := range project.Slices {
 		for _, usage := range slice.ContractUsages {
 			if usage.Contract != contractID || usage.Role != "serve" {
@@ -320,16 +431,18 @@ type parsedHandlerFile struct {
 // For legacy hand-written handlers: uses auth.Mount correlation (the previous
 // behavior). Returns errCorrelationMissing when no auth.Mount call maps
 // contractID to a handler function.
-func extractHandlerStatusCodesForContract(filename, contractID string, cache map[string]*parsedHandlerFile) (map[int]struct{}, error) {
+func extractHandlerStatusCodesForContract(
+	filename, contractID string, cache map[string]*parsedHandlerFile,
+) (map[int]struct{}, []string, error) {
 	ph, err := parseHandlerFile(filename, cache)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if ph.generated {
-		return extractFromGeneratedHandler(ph, contractID, filename)
+		return extractFromGeneratedHandler(ph, contractID)
 	}
-	return extractFromLegacyHandler(ph, contractID, filename)
+	return extractFromLegacyHandler(ph, contractID)
 }
 
 // extractFromGeneratedHandler scans the "handle" method body of the generated
@@ -339,7 +452,7 @@ func extractHandlerStatusCodesForContract(filename, contractID string, cache map
 // Correlation: the generated file must contain a package-level var with
 // ContractSpec.ID == contractID (set by collectSpecVarIDs in Pass 1). If the
 // spec var is absent, errCorrelationMissing is returned (fail-closed).
-func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID, file string) (map[int]struct{}, error) {
+func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID string) (map[int]struct{}, []string, error) {
 	// Verify that the contractSpec var in this file actually matches contractID.
 	found := false
 	for _, id := range ph.specVarToID {
@@ -349,7 +462,7 @@ func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID, file string)
 		}
 	}
 	if !found {
-		return nil, errCorrelationMissing
+		return nil, nil, errCorrelationMissing
 	}
 
 	// The generated handler's logic lives in "Handler.handle" (unexported).
@@ -361,30 +474,30 @@ func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID, file string)
 		// (e.g. future generator changes the method name). Fail-closed: if the
 		// file has no codes at all, return errCorrelationMissing.
 		if len(ph.allCodes) == 0 {
-			return nil, errCorrelationMissing
+			return nil, nil, errCorrelationMissing
 		}
 		out := make(map[int]struct{}, len(ph.allCodes))
 		for k, v := range ph.allCodes {
 			out[k] = v
 		}
-		return out, nil
+		return out, nil, nil
 	}
 	codes := make(map[int]struct{})
-	collectStatusCodesFromNode(body, codes, file)
-	return codes, nil
+	unresolved := collectStatusCodesFromNode(body, codes)
+	return codes, unresolved, nil
 }
 
 // extractFromLegacyHandler extracts status codes for contractID from a legacy
 // hand-written handler.go using auth.Mount correlation.
-func extractFromLegacyHandler(ph *parsedHandlerFile, contractID, file string) (map[int]struct{}, error) {
+func extractFromLegacyHandler(ph *parsedHandlerFile, contractID string) (map[int]struct{}, []string, error) {
 	if fnName, ok := ph.contractToFuncs[contractID]; ok {
 		if body, ok := ph.funcBodies[fnName]; ok {
 			codes := make(map[int]struct{})
-			collectStatusCodesFromNode(body, codes, file)
-			return codes, nil
+			unresolved := collectStatusCodesFromNode(body, codes)
+			return codes, unresolved, nil
 		}
 	}
-	return nil, errCorrelationMissing
+	return nil, nil, errCorrelationMissing
 }
 
 // parseHandlerFile parses filename and extracts the per-contract function
@@ -421,7 +534,7 @@ func parseHandlerFile(filename string, cache map[string]*parsedHandlerFile) (*pa
 	collectSpecVarIDs(f, ph.specVarToID)
 
 	// Pass 2: collect function declarations and whole-file status codes.
-	collectFuncBodies(f, ph.funcBodies, ph.allCodes, filename)
+	collectFuncBodies(f, ph.funcBodies, ph.allCodes)
 
 	// Pass 3: correlate auth.Mount calls to contract ID + handler function name.
 	collectAuthMountCorrelations(f, ph.specVarToID, ph.contractToFuncs)
@@ -454,7 +567,7 @@ func isGoCellGeneratedFile(f *ast.File) bool {
 // "ReceiverType.MethodName" so generated handler dispatch (e.g.
 // "Handler.handle") can be looked up. allCodes receives every ≥400 status
 // code found in any function body.
-func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map[int]struct{}, file string) {
+func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map[int]struct{}) {
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -467,7 +580,10 @@ func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map
 				funcBodies[recvType+"."+fn.Name.Name] = fn.Body
 			}
 		}
-		collectStatusCodesFromNode(fn.Body, allCodes, file)
+		// The whole-file allCodes scan is a diagnostic fallback only; unresolved
+		// dynamic-write reasons are surfaced per-contract from the correlated
+		// function body, so the returned reasons are intentionally not collected.
+		collectStatusCodesFromNode(fn.Body, allCodes)
 	}
 }
 
@@ -633,18 +749,27 @@ func extractHandlerFuncName(expr ast.Expr) string {
 }
 
 // collectStatusCodesFromNode walks node and adds every ≥400 HTTP status code
-// encountered in call arguments to out.
-func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}, file string) {
+// encountered in call arguments to out. It returns the reasons for any response
+// writes whose emitted status could not be resolved statically (non-static
+// errcode.Kind / unknown httputil writer); the caller turns these into
+// fail-closed CH-04 findings (F9).
+func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}) []string {
+	var unresolved []string
 	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		collectHTTPStatusSelectors(call, out)
-		collectErrcodeKinds(call, out, file)
-		collectHelperWriteStatuses(call, out, file)
+		if reason := collectErrcodeKinds(call, out); reason != "" {
+			unresolved = append(unresolved, reason)
+		}
+		if reason := collectHelperWriteStatuses(call, out); reason != "" {
+			unresolved = append(unresolved, reason)
+		}
 		return true
 	})
+	return unresolved
 }
 
 // collectHTTPStatusSelectors looks for http.StatusXxx used as arguments inside
@@ -668,32 +793,32 @@ func collectHTTPStatusSelectors(call *ast.CallExpr, out map[int]struct{}) {
 // collectErrcodeKinds looks for errcode.KindXxx values inside errcode.New/Wrap
 // calls and maps them through errcode.Kind.Status. Code names are deliberately
 // ignored: runtime status is Kind-derived, so CH-04 must not reintroduce a
-// second code-name status table.
-func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}, file string) {
+// second code-name status table. Returns a non-empty reason when the Kind
+// argument is not a static errcode.KindXxx selector (so CH-04 cannot resolve
+// the status); the caller fails closed on it (F9).
+func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}) string {
 	fun, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return
+		return ""
 	}
 	pkg, ok := fun.X.(*ast.Ident)
 	if !ok || pkg.Name != "errcode" {
-		return
+		return ""
 	}
 	switch fun.Sel.Name {
 	case "New", "Wrap":
 	default:
-		return
+		return ""
 	}
 	kindArg := errcodeKindArg(call.Args)
 	status, found := errcodeKindStatus(kindArg)
 	if !found {
-		slog.Warn("CH-04: errcode constructor without static Kind selector, skipping alignment check",
-			slog.String("constructor", fun.Sel.Name),
-			slog.String("file", file))
-		return
+		return fmt.Sprintf(advHintCH04DynamicKind, fun.Sel.Name)
 	}
 	if status >= 400 {
 		out[status] = struct{}{}
 	}
+	return ""
 }
 
 func errcodeKindArg(args []ast.Expr) ast.Expr {
@@ -722,27 +847,27 @@ func errcodeKindStatus(expr ast.Expr) (int, bool) {
 //
 // Helpers that write responses without accepting a status code parameter are
 // invisible to collectHTTPStatusSelectors, so this table bridges that gap for
-// CH-04. Unknown httputil calls emit a slog.Warn so new helpers are not silently
-// skipped.
-func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}, file string) {
+// CH-04. A genuinely unknown httputil writer returns a non-empty reason so the
+// caller fails closed rather than silently skipping a possibly-undeclared
+// status (F9).
+func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) string {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return
+		return ""
 	}
 	pkg, ok := sel.X.(*ast.Ident)
 	if !ok || pkg.Name != "httputil" {
-		return
+		return ""
 	}
 	helperName := sel.Sel.Name
 	if helperName == "WritePublic" {
-		collectWritePublicKind(call, out, file)
-		return
+		return collectWritePublicKind(call, out)
 	}
 	statuses, known := httpHelperWritesStatuses[helperName]
 	if !known {
-		// Not every httputil function writes a response. Only warn for names
-		// that are not in a well-known "does not write status" allowlist.
-		// Presence in the map (regardless of value) suppresses the warning;
+		// Not every httputil function writes a response. Fail closed only for
+		// names that are not in a well-known "does not write status" allowlist.
+		// Presence in the map (regardless of value) suppresses the finding;
 		// absence means a genuinely unknown helper that may write status.
 		knownNonWriters := map[string]struct{}{
 			"WriteJSON":                       {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
@@ -756,34 +881,30 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}, file s
 			"ParseCanonicalUUID":              {}, // pure util — no HTTP I/O
 		}
 		if _, suppressed := knownNonWriters[helperName]; !suppressed {
-			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",
-				slog.String("helper", helperName),
-				slog.String("file", file))
+			return fmt.Sprintf(advHintCH04UnknownHelper, helperName)
 		}
-		return
+		return ""
 	}
 	for _, s := range statuses {
 		if s >= 400 {
 			out[s] = struct{}{}
 		}
 	}
+	return ""
 }
 
-func collectWritePublicKind(call *ast.CallExpr, out map[int]struct{}, file string) {
+func collectWritePublicKind(call *ast.CallExpr, out map[int]struct{}) string {
 	if len(call.Args) < 3 {
-		slog.Warn("CH-04: httputil.WritePublic without Kind argument, skipping alignment check",
-			slog.String("file", file))
-		return
+		return advHintCH04WritePublicNoKind
 	}
 	status, found := errcodeKindStatus(call.Args[2])
 	if !found {
-		slog.Warn("CH-04: httputil.WritePublic without static Kind selector, skipping alignment check",
-			slog.String("file", file))
-		return
+		return advHintCH04WritePublicDynamicKind
 	}
 	if status >= 400 {
 		out[status] = struct{}{}
 	}
+	return ""
 }
 
 // stripQuotes removes the enclosing double-quote characters from a Go string
@@ -819,6 +940,11 @@ func (v *Validator) checkCH05() []ValidationResult {
 	cache := map[string]*parsedHandlerFile{}
 	var results []ValidationResult
 	for _, c := range v.sortedContracts() {
+		// Honor cancellation between contracts (F2) — CH-05 also parses a
+		// handler file per contract.
+		if v.runCtx.Err() != nil {
+			return results
+		}
 		if c.Kind != "http" {
 			continue
 		}
@@ -1000,6 +1126,11 @@ var typedResponseStructPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*?(\d{3})(
 func (v *Validator) checkCH06() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.sortedContracts() {
+		// Honor cancellation between contracts (F2) — CH-06 parses each
+		// contract's generated types_gen.go.
+		if v.runCtx.Err() != nil {
+			return results
+		}
 		if c.Kind != "http" || !c.Codegen {
 			continue
 		}
@@ -1076,6 +1207,10 @@ func typedEnvelopeDeclaredStatuses(c *metadata.ContractMeta) map[int]struct{} {
 // contractgen-internal pathx package to keep kernel/governance free of any
 // tools/codegen dependency. If a second consumer outside tools/ ever needs
 // the same mapping, promote pathx to pkg/contractpath.
+//
+// Returns "" when the contract ID yields an unsafe path segment or the
+// assembled path would escape projectRoot (F1); scanTypedResponseStructs treats
+// "" as a missing file and CH-06 skips the contract.
 func typedEnvelopeTypesGenPath(projectRoot, contractID string) string {
 	parts := strings.Split(contractID, ".")
 	segments := make([]string, len(parts))
@@ -1086,8 +1221,11 @@ func typedEnvelopeTypesGenPath(projectRoot, contractID string) string {
 			segments[i] = p
 		}
 	}
-	pkgParts := append([]string{projectRoot, "generated", "contracts"}, segments...)
-	return filepath.Join(append(pkgParts, "types_gen.go")...)
+	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
+	if !safe {
+		return ""
+	}
+	return filepath.Join(dir, "types_gen.go")
 }
 
 // scanTypedResponseStructs parses types_gen.go and returns the set of HTTP

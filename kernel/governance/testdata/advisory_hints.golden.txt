@@ -103,6 +103,21 @@ advHintCH04CorrelationFailedFix
 ensure routes are registered via auth.Mount with a resolvable contract spec
 -----
 
+advHintCH04DynamicKind
+=====
+errcode.%s called with a non-static Kind argument
+-----
+
+advHintCH04DynamicWrite
+=====
+CH-04: contract %s — handler %s has a response write whose status cannot be statically resolved (%s); response-status alignment cannot be verified
+-----
+
+advHintCH04DynamicWriteFix
+=====
+use a static errcode.KindXxx selector / a known httputil writer so the emitted status is analyzable, or declare the status in the contract's responses[]
+-----
+
 advHintCH04ParseFailed
 =====
 CH-04: contract %s — handler file %s could not be parsed (%v); cannot verify response-status alignment
@@ -111,6 +126,21 @@ CH-04: contract %s — handler file %s could not be parsed (%v); cannot verify r
 advHintCH04ParseFailedFix
 =====
 fix the handler file so it parses (gofmt/go build), or remove the contract's in-repo handler reference
+-----
+
+advHintCH04UnknownHelper
+=====
+unknown httputil helper %q that may write a response
+-----
+
+advHintCH04WritePublicDynamicKind
+=====
+httputil.WritePublic called with a non-static Kind argument
+-----
+
+advHintCH04WritePublicNoKind
+=====
+httputil.WritePublic called without a Kind argument
 -----
 
 advHintCH05CorrelationFailed

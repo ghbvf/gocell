@@ -57,6 +57,19 @@ const (
 	advHintCH04ParseFailedFix = "fix the handler file so it parses (gofmt/go build), " +
 		"or remove the contract's in-repo handler reference"
 
+	// CH-04: a response write whose emitted status cannot be resolved statically.
+	// Fail-closed (F9) — leaving it silent would let an undeclared status slip
+	// past the alignment check. %s holds the per-write reason (below).
+	advHintCH04DynamicWrite = "CH-04: contract %s — handler %s has a response write whose status" +
+		" cannot be statically resolved (%s); response-status alignment cannot be verified"
+	advHintCH04DynamicWriteFix = "use a static errcode.KindXxx selector / a known httputil writer" +
+		" so the emitted status is analyzable, or declare the status in the contract's responses[]"
+	// Per-write reasons interpolated into advHintCH04DynamicWrite.
+	advHintCH04DynamicKind            = "errcode.%s called with a non-static Kind argument"
+	advHintCH04UnknownHelper          = "unknown httputil helper %q that may write a response"
+	advHintCH04WritePublicNoKind      = "httputil.WritePublic called without a Kind argument"
+	advHintCH04WritePublicDynamicKind = "httputil.WritePublic called with a non-static Kind argument"
+
 	// CH-05: auth.Mount correlation failed for UUID pathParam.
 	advHintCH05CorrelationFailed = "CH-05: contract %s with `pathParams.{name}.format: uuid`" +
 		" — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function." +

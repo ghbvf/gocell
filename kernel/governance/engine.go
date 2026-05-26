@@ -12,11 +12,13 @@ import "context"
 // Detect returns the finished []ValidationResult (built through the existing
 // locator constructors newError/newWarning/newScopedError/newErrorAt, which stay
 // the construction funnel — GOVERNANCE-RULE-ERROR-FIX-FIELD-01 unchanged).
-// Rule.Code duplicates the code each Detect emits. That pairing is held by the
-// golden-set + uniqueness check in TestAllRulesMatchGolden (a mis-paired code
-// drops or duplicates an entry in the set) together with the per-rule unit
-// tests (each asserts its method emits its own code) — not by the registration
-// archtest, which only locks that every Detect method is registered in allRules.
+// Rule.Code duplicates the code each Detect emits. Three archtests cover the
+// pairing: GOVERNANCE-RULE-CODE-DETECT-BINDING-01 walks each Detect body and
+// asserts the emitted code(s) include Rule.Code (catching a swapped
+// {Code, Detect} pair); GOVERNANCE-RULES-REGISTRATION-GUARD-01 locks that every
+// Detect method is registered in allRules; and TestAllRulesMatchGolden
+// golden-locks the rule-code set + uniqueness. The per-rule unit tests
+// additionally assert each method emits its own code.
 //
 // next-action and per-finding metric were removed from M3 as speculative
 // M5-HARVEST scaffolding (no consumer exists). M3 ships the engine refactor
@@ -84,6 +86,13 @@ func (v *Validator) run(ctx context.Context, rules []Rule, failFast bool) ([]Val
 		}
 		found := rules[i].Detect(v)
 		out = append(out, found...)
+		// Re-check after Detect: a long rule (e.g. CH-04 scanning many handler
+		// files) may have observed cancellation mid-body and returned partial
+		// findings. Without this, cancellation during the *final* rule would be
+		// lost (no next iteration to catch it) and the run would look clean.
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		if failFast && HasErrors(found) {
 			return out, nil
 		}

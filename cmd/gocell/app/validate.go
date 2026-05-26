@@ -15,7 +15,8 @@ import (
 )
 
 // runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]
-// Parses all metadata, runs validate-meta and depcheck.
+// Parses all metadata, then runs the base + dependency-graph rules (plus the
+// strict-only rules under --strict) through the single governance engine pass.
 // exit 0 = pass, exit 1 = errors found.
 //
 // --fail-fast: short-circuits at the first SeverityError. Output is trimmed
@@ -82,10 +83,12 @@ func strictFlagUsage() string {
 	return "enforce strict-only governance rules (" + strings.Join(parts, ", ") + ")"
 }
 
-// runValidateFailFast runs validation in short-circuit mode: the validator
-// and the dependency checker stop at the first SeverityError. When strict is
-// true, the PhaseStrict rules (governance.StrictRuleCodes) are appended only if
-// the base pass finds no errors.
+// runValidateFailFast runs validation in short-circuit mode: the single engine
+// pass (governance.ValidateStrict) stops at the first SeverityError. The rule
+// set is one phase-filtered allRules slice — base + dep, plus the PhaseStrict
+// rules (governance.StrictRuleCodes) when strict is true — all run in
+// declaration order by the same loop; there is no separate DependencyChecker
+// and no second "strict pass" gated on the base pass.
 //
 // Output rendering depends on the --format and the run's outcome:
 //
