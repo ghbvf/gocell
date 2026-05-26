@@ -100,27 +100,49 @@ var httpStatusNameToCode = map[string]int{
 	"StatusNetworkAuthenticationRequired": 511,
 }
 
-// httpHelperWritesStatuses maps pkg/httputil helper names that write HTTP error
-// responses internally to the set of ≥400 status codes they may emit.
+// httpHelperWritesStatuses is the single source of truth for every known
+// pkg/httputil helper CH-04 may encounter. The value is the set of ≥400 status
+// codes the helper writes internally; a helper absent from this map is treated
+// as a possibly-undeclared writer and fails closed (advHintCH04UnknownHelper).
+// An empty set means "known helper, contributes no inferred ≥400 status" and
+// covers two cases:
+//   - the helper does not write a status at all (decorators, pure utils, or
+//     callers that supply the status themselves — caught by
+//     collectHTTPStatusSelectors), and
+//   - the helper's status is explicit through errcode.Kind, caught separately
+//     by collectErrcodeKinds / collectWritePublicKind, so re-inferring it here
+//     would double-count.
+//
 // Helpers whose status is explicit through errcode.Kind (WritePublic) are
-// handled separately by collectWritePublicKind.
+// dispatched to collectWritePublicKind before this table is consulted.
 var httpHelperWritesStatuses = map[string][]int{
-	"WriteError":             {},
+	// Writers that emit a fixed ≥400 set.
 	"DecodeJSON":             {http.StatusBadRequest, http.StatusRequestEntityTooLarge},
 	"DecodeJSONStrict":       {http.StatusBadRequest, http.StatusRequestEntityTooLarge},
 	"ParsePageParams":        {http.StatusBadRequest},
 	"ParseUUIDPathParam":     {http.StatusBadRequest},
 	"ParsePageParamsOrWrite": {http.StatusBadRequest},
+	// WriteError's status comes from its errcode.Kind argument, which
+	// collectErrcodeKinds resolves independently — empty set avoids double-count.
+	"WriteError": {},
 	// Framework 5xx fallbacks invoked only by generated handlers
 	// (typed-envelope nil-response guard / visit encode failure path). Per
 	// ADR 202605061500-adr-typed-response-envelope.md D1, the error return
 	// surface is "reserved for un-declared framework 5xx" — these helpers
-	// must not require contract.yaml responses[500] declaration. Empty
-	// status set in the table both registers them as known writers (silences
-	// the "unknown httputil helper" warning) and keeps CH-04 from inferring
-	// 500 from their inner errcode.New(KindInternal, ...) implementations.
+	// must not require contract.yaml responses[500] declaration. Empty set keeps
+	// CH-04 from inferring 500 from their inner errcode.New(KindInternal, ...).
 	"WriteNilResponseInternal": {},
 	"WriteEncodeFaultInternal": {},
+	// Non-writers: registered with an empty set so they are recognized rather
+	// than failing closed as "unknown". WriteJSON's status is caller-supplied
+	// (caught by collectHTTPStatusSelectors); the rest write no HTTP status.
+	"WriteJSON":                       {},
+	"WithClientErrorLogSampling":      {},
+	"WithClientErrorLogSamplingEvery": {},
+	"AppendCorrelationAttrs":          {},
+	"WithCancelReasonSlot":            {},
+	"CancelReason":                    {},
+	"ParseCanonicalUUID":              {},
 }
 
 var errcodeKindNameToStatus = map[string]int{
@@ -312,6 +334,10 @@ func safeJoinUnderRoot(root string, segments ...string) (string, bool) {
 // relToRoot expresses p relative to root for user-facing finding messages.
 // Governance findings must not leak absolute CI-worker paths (F8); falls back
 // to the base name when p is not under root.
+//
+// Scoped to rules_http.go (CH-04/05 message redaction). Promote to helpers.go
+// if a third rule needs it — it is deliberately separate from the security-
+// oriented IsWithinRoot/repositoryRoot helpers there.
 func relToRoot(root, p string) string {
 	if root != "" {
 		if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {
@@ -324,17 +350,24 @@ func relToRoot(root, p string) string {
 // sanitizeRootPaths strips the project-root prefix from s so absolute paths
 // embedded by other tooling (e.g. a go/parser error that references the handler
 // file by absolute path) become repo-relative in user-facing messages (F8).
+//
+// Strips all three forms the root may take so a symlinked root (e.g. macOS
+// TempDir /var → /private/var) is covered regardless of which form the embedded
+// path uses: the raw root, its filepath.Abs, and its EvalSymlinks resolution.
+// Scoped to rules_http.go; see relToRoot's note on promotion.
 func sanitizeRootPaths(root, s string) string {
 	if root == "" {
 		return s
 	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		abs = root
+	prefixes := []string{root}
+	if abs, err := filepath.Abs(root); err == nil {
+		prefixes = append(prefixes, abs)
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			prefixes = append(prefixes, resolved)
+		}
 	}
-	s = strings.ReplaceAll(s, abs+string(os.PathSeparator), "")
-	if abs != root {
-		s = strings.ReplaceAll(s, root+string(os.PathSeparator), "")
+	for _, p := range prefixes {
+		s = strings.ReplaceAll(s, p+string(os.PathSeparator), "")
 	}
 	return s
 }
@@ -410,10 +443,6 @@ type parsedHandlerFile struct {
 	// For generated handlers, the key is "<ReceiverType>.<MethodName>" for methods
 	// (e.g. "Handler.handle") in addition to bare function names.
 	funcBodies map[string]ast.Node
-	// allCodes is the union of all ≥400 status codes in the file. Retained
-	// for potential future diagnostic use; not used for rule enforcement
-	// (correlation is now required via auth.Mount).
-	allCodes map[int]struct{}
 	// generated is true when the first comment in the file is the standard
 	// "Code generated by gocell generate contract. DO NOT EDIT." header.
 	// When true, extractHandlerStatusCodesForContract uses the generated path.
@@ -470,17 +499,13 @@ func extractFromGeneratedHandler(ph *parsedHandlerFile, contractID string) (map[
 	const generatedHandleKey = "Handler.handle"
 	body, ok := ph.funcBodies[generatedHandleKey]
 	if !ok {
-		// Fall back to scanning the whole-file codes if the method key is missing
-		// (e.g. future generator changes the method name). Fail-closed: if the
-		// file has no codes at all, return errCorrelationMissing.
-		if len(ph.allCodes) == 0 {
-			return nil, nil, errCorrelationMissing
-		}
-		out := make(map[int]struct{}, len(ph.allCodes))
-		for k, v := range ph.allCodes {
-			out[k] = v
-		}
-		return out, nil, nil
+		// The spec var matched but the canonical delegate method is absent (e.g.
+		// a future generator renamed Handler.handle). We cannot reliably scope
+		// the scan to this contract, so fail closed via correlation-missing
+		// rather than fall back to a whole-file scan — that fallback would drop
+		// the per-call unresolved dynamic-write reasons and silently re-open the
+		// F9 fail-open it was meant to close.
+		return nil, nil, errCorrelationMissing
 	}
 	codes := make(map[int]struct{})
 	unresolved := collectStatusCodesFromNode(body, codes)
@@ -523,7 +548,6 @@ func parseHandlerFile(filename string, cache map[string]*parsedHandlerFile) (*pa
 		specVarToID:     make(map[string]string),
 		contractToFuncs: make(map[string]string),
 		funcBodies:      make(map[string]ast.Node),
-		allCodes:        make(map[int]struct{}),
 	}
 
 	// Detect generated file via the standard gocell codegen header comment.
@@ -533,8 +557,9 @@ func parseHandlerFile(filename string, cache map[string]*parsedHandlerFile) (*pa
 	// Pass 1: collect spec var declarations (var specFoo = contractspec.ContractSpec{ID: "..."}).
 	collectSpecVarIDs(f, ph.specVarToID)
 
-	// Pass 2: collect function declarations and whole-file status codes.
-	collectFuncBodies(f, ph.funcBodies, ph.allCodes)
+	// Pass 2: collect function/method declaration bodies (per-contract scanning
+	// keys off these; status codes are collected later from the correlated body).
+	collectFuncBodies(f, ph.funcBodies)
 
 	// Pass 3: correlate auth.Mount calls to contract ID + handler function name.
 	collectAuthMountCorrelations(f, ph.specVarToID, ph.contractToFuncs)
@@ -565,9 +590,10 @@ func isGoCellGeneratedFile(f *ast.File) bool {
 // collectFuncBodies populates funcBodies with every top-level function/method
 // declaration found in f. Methods are indexed under both "MethodName" and
 // "ReceiverType.MethodName" so generated handler dispatch (e.g.
-// "Handler.handle") can be looked up. allCodes receives every ≥400 status
-// code found in any function body.
-func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map[int]struct{}) {
+// "Handler.handle") can be looked up. Status codes are not collected here:
+// CH-04 scans only the correlated handler body (per contract), so a whole-file
+// scan would mis-attribute codes across sibling handlers.
+func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node) {
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -580,10 +606,6 @@ func collectFuncBodies(f *ast.File, funcBodies map[string]ast.Node, allCodes map
 				funcBodies[recvType+"."+fn.Name.Name] = fn.Body
 			}
 		}
-		// The whole-file allCodes scan is a diagnostic fallback only; unresolved
-		// dynamic-write reasons are surfaced per-contract from the correlated
-		// function body, so the returned reasons are intentionally not collected.
-		collectStatusCodesFromNode(fn.Body, allCodes)
 	}
 }
 
@@ -865,25 +887,10 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) string
 	}
 	statuses, known := httpHelperWritesStatuses[helperName]
 	if !known {
-		// Not every httputil function writes a response. Fail closed only for
-		// names that are not in a well-known "does not write status" allowlist.
-		// Presence in the map (regardless of value) suppresses the finding;
-		// absence means a genuinely unknown helper that may write status.
-		knownNonWriters := map[string]struct{}{
-			"WriteJSON":                       {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
-			"DecodeJSON":                      {},
-			"DecodeJSONStrict":                {}, // strict variant; same semantics as DecodeJSON
-			"WithClientErrorLogSampling":      {}, // logging decorator — no status write
-			"WithClientErrorLogSamplingEvery": {}, // logging decorator — no status write
-			"AppendCorrelationAttrs":          {}, // decorator — appends slog.Attr, no status write
-			"WithCancelReasonSlot":            {}, // decorator — installs cancel-reason ctx slot
-			"CancelReason":                    {}, // decorator — reads cancel-reason from ctx
-			"ParseCanonicalUUID":              {}, // pure util — no HTTP I/O
-		}
-		if _, suppressed := knownNonWriters[helperName]; !suppressed {
-			return fmt.Sprintf(advHintCH04UnknownHelper, helperName)
-		}
-		return ""
+		// A helper absent from the single httpHelperWritesStatuses table is a
+		// genuinely unknown writer that may emit an undeclared status — fail
+		// closed. Known non-writers carry an empty set in that table (see its doc).
+		return fmt.Sprintf(advHintCH04UnknownHelper, helperName)
 	}
 	for _, s := range statuses {
 		if s >= 400 {
@@ -969,11 +976,13 @@ func (v *Validator) checkPathParamUUIDForContract(
 	ph, err := parseHandlerFile(handlerFile, cache)
 	if err != nil {
 		// Fail-closed, symmetric with CH-04: an unparseable handler means the
-		// UUID-param check cannot run, so emit a finding rather than skip.
+		// UUID-param check cannot run, so emit a finding rather than skip. The
+		// path is relativized and the parser error sanitized so absolute
+		// CI-worker paths do not leak into the message (F8, symmetric with CH-04).
 		return []ValidationResult{v.newError(
 			codeCH05, IssueInvalid,
 			c.File, fieldHTTPPath,
-			fmt.Sprintf(advHintCH05ParseFailed, c.ID, handlerFile, err),
+			fmt.Sprintf(advHintCH05ParseFailed, c.ID, relToRoot(v.root, handlerFile), sanitizeRootPaths(v.root, err.Error())),
 			advHintCH05ParseFailedFix,
 		)}
 	}

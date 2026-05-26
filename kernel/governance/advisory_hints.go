@@ -64,7 +64,11 @@ const (
 		" cannot be statically resolved (%s); response-status alignment cannot be verified"
 	advHintCH04DynamicWriteFix = "use a static errcode.KindXxx selector / a known httputil writer" +
 		" so the emitted status is analyzable, or declare the status in the contract's responses[]"
-	// Per-write reasons interpolated into advHintCH04DynamicWrite.
+	// Per-write reason *sub-strings*: each is fmt.Sprintf'd at the collect site
+	// (advHintCH04DynamicKind takes the constructor name; the others are plain),
+	// then the fully-expanded result is itself interpolated into
+	// advHintCH04DynamicWrite's third %s. They are NOT Message/Fix consts and
+	// must never be passed to a constructor directly without that expansion.
 	advHintCH04DynamicKind            = "errcode.%s called with a non-static Kind argument"
 	advHintCH04UnknownHelper          = "unknown httputil helper %q that may write a response"
 	advHintCH04WritePublicNoKind      = "httputil.WritePublic called without a Kind argument"

@@ -50,7 +50,7 @@ func setup(mux http.Handler) {
 
 // writeHandlerFileWithHTTPUtil writes Go source as handler.go with httputil imported.
 // The source must define a function named "h" as the handler.
-func writeHandlerFileWithHTTPUtil(t *testing.T, dir, contractID, src string) string {
+func writeHandlerFileWithHTTPUtil(t *testing.T, dir, contractID, src string) {
 	t.Helper()
 	path := filepath.Join(dir, "handler.go")
 	content := `package x
@@ -71,7 +71,6 @@ func setup(mux http.Handler) {
 
 ` + src
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-	return path
 }
 
 // makeContract builds a minimal ContractMeta for CH-04 tests. contractFile is

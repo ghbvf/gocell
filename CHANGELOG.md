@@ -18,6 +18,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   The leading `!` is required: `jq -e 'select(...)'` exits 0 on a match, so the
   bare pipeline would *pass* exactly when a dead event exists (inverted gate); the
   `!` flips it so the step blocks the merge when — and only when — ADV-05 fires.
+  Verify the `.issues[]` filter against the actual `--format=json` output first
+  (`gocell validate --format=json | jq .`): if the JSON schema ever changes, an
+  unmatched filter makes `jq -e` exit non-zero on *every* run, silently disabling
+  the gate.
   Governance rules are now a single data-driven `allRules` registry (ADR `202605041430`
   §M3, amended: Go typed-struct carrier, not YAML). `next-action` disposition and
   per-finding `metric` fields were speculative M5-HARVEST scaffolding with no consumer;
