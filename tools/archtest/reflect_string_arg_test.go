@@ -34,6 +34,20 @@ package archtest
 // is infeasible because the scanned scopes (cells/ + runtime/ + cmd/)
 // legitimately use reflect. Medium is the reachable ceiling.
 //
+// This is a shared scanning helper, NOT a funnel (it neither restricts who may
+// call a method nor forces callers through a single path), so ai-robust.md
+// §"Funnel 双向锁评级" does not apply; each consuming archtest carries its own
+// funnel grading in its own godoc.
+//
+// Out-of-scope reflect read shapes (documented blind spots — this scanner keys
+// on the string ARGUMENT of FieldByName/MethodByName, so it cannot see):
+//   - reflect.Value.FieldByIndex([]int{…}) / .Field(i) — positional field read,
+//     no string name. Index→field-name resolution needs the struct type.
+//   - reflect.Value.Method(i) — positional method, same shape.
+// These are pre-existing gaps in all reflect blind-spot scans, not introduced
+// or widened here; closing them is a separate (harder) effort, not a 立项-able
+// Soft string-anchor.
+//
 // Blind-spot reverse self-check: TestReflectStringArgScanner_TypedReceiverAndConstArg
 // loads testdata/reflect_string_form_red and asserts the three const-form
 // FieldByName + three const-form MethodByName calls are detected, AND that the
@@ -116,6 +130,8 @@ func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 	if !ok || sig.Recv() == nil {
 		return false
 	}
+	// typeOwner unwraps *T→T to the owning *types.TypeName; it is a shared
+	// archtest helper defined in credential_authority_assert_funnel_test.go.
 	owner := typeOwner(sig.Recv().Type())
 	return owner != nil && owner.Name() == reflectValueType
 }
@@ -123,13 +139,20 @@ func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 // TestReflectStringArgScanner_TypedReceiverAndConstArg is the reverse
 // self-check for REFLECT-STRING-ARG-SCANNER-01. It loads the shared RED fixture
 // and asserts exact hit counts: each const-form is detected, and neither
-// boundary call (runtime-value arg, non-reflect receiver) is — an exact count
-// of 3 simultaneously proves the positive forms AND excludes both boundaries
-// (a leaking receiver gate would push FieldByName to 4 via the non-reflect
-// "RevokedAt" call).
+// boundary call is. The exact count of 3 simultaneously proves the positive
+// forms AND excludes both boundaries:
+//   - receiver boundary: a leaking receiver gate would push FieldByName to 4
+//     via the non-reflect fakeReflect{}.FieldByName("RevokedAt") plain literal.
+//   - arg boundary: the runtime-value call FieldByName(runtimeName) folds to no
+//     constant (EvaluateConstString → false), so it never enters the banned
+//     check; a regression that mistook it for a constant would also push to 4.
 func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 	t.Parallel()
 
+	// RunTyped (not a fixture-tagged loader): reflect_string_form_red is a
+	// testdata/ subpackage of the main module — excluded from `go build ./...`
+	// and `./...` patterns, loaded only via this explicit path. It lives under
+	// cells/accesscore/ because it imports internal/domain (see fixture godoc).
 	const fixture = "./cells/accesscore/internal/credentialauthority/testdata/reflect_string_form_red"
 
 	var fieldHits, methodHits []reflectStringArgHit
@@ -137,6 +160,8 @@ func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 		if p.TypesInfo == nil || p.Fset == nil {
 			return nil
 		}
+		// No _test.go guard: TypedOpts{} defaults Tests:false, so p.Files holds
+		// only the fixture's non-test source.
 		for _, file := range p.Files {
 			fieldHits = append(fieldHits, scanReflectStringArgCalls(p, file, reflectFieldByName,
 				func(n string) bool { return n == credRevokedAt })...)

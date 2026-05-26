@@ -63,7 +63,7 @@ func badMethodConst(u domain.User) reflect.Value {
 }
 
 func badMethodConcat(u domain.User) reflect.Value {
-	return reflect.ValueOf(u).MethodByName("CanAuth" + "enticate")
+	return reflect.ValueOf(u).MethodByName("CanAuth" + "enticate") // string concatenation
 }
 
 // ── Boundary 1 (arg): runtime-value field name folds to no constant, so it is

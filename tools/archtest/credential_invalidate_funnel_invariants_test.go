@@ -503,8 +503,9 @@ func TestCredentialInvalidateFunnel_BlindSpot_FuncValueAssignment(t *testing.T) 
 // ("RevokeUser") does NOT appear in production code, confirming the reflect
 // blind spot is not exercised (which would be scanner-invisible).
 //
-// Scanner: AST-only search for ast.BasicLit STRING containing the banned names
-// as arguments to MethodByName calls.
+// Scanner: shared scanReflectStringArgCalls (REFLECT-STRING-ARG-SCANNER-01) —
+// typed reflect.Value receiver gate + EvaluateConstString arg folding (covers
+// raw-string / const / concat banned names passed to MethodByName).
 func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) {
 	t.Parallel()
 

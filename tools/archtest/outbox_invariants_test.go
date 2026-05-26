@@ -1936,6 +1936,7 @@ func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 
 				// Blind spot 1: SelectorExpr with Sel.Name == "Close" that is NOT
 				// in a CallExpr.Fun position — potential method-value assignment.
+				// Soft (name-only); typed-resolver upgrade tracked in #1118.
 				EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 					if sel.Sel == nil || sel.Sel.Name != "Close" {
 						return

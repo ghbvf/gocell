@@ -472,7 +472,8 @@ func verifySetMutatorRedFixtureDetected(
 //
 // Scanner: EachInSubtree[ast.AssignStmt] + right-hand-side SelectorExpr name
 // matching. AST-only (no type info), but the method names are distinct enough
-// to avoid false positives.
+// to avoid false positives. Soft (name-only); typed-resolver upgrade tracked
+// in #1118 (method-value name-only detection across sites).
 func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 	t.Parallel()
 
