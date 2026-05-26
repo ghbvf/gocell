@@ -52,8 +52,7 @@
 // helper (not itself typed as CompensateFunc) that then calls sql.Tx is NOT
 // caught. Mitigation: B1 body-count discipline + the structural guarantee that
 // Compensate receives no tx in its context. Call-graph upgrade tracked in
-// backlog: "tracked in saga compensate-pure call-graph backlog" (TODO: assign
-// gh issue number in PR-08+).
+// gh issue #1182.
 //
 // # Blind spots (reverse self-test for each)
 //
@@ -65,15 +64,19 @@
 //
 // B2 — generic/reflection: a CompensateFunc body using reflect.Value.MethodByName
 //
-//	to call a banned method. Not detected. Mitigated by:
-//	reverse self-test asserts no production CompensateFunc body uses MethodByName.
+//	to call a banned method. Not detected. Mitigated by reverse self-test
+//	(TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies)
+//	which asserts no production CompensateFunc body uses MethodByName.
+//	Call-graph upgrade tracked in gh issue #1182.
 //
 // B3 — CompensateFunc passed as a function parameter (not an assignment):
 //
 //	e.g. runComp(myComp) where param type is CompensateFunc. The function body
 //	of myComp is NOT currently scanned. This is a known gap; the named-func
 //	path (forms 4-5) covers the most common idiom (assignment to typed slot).
-//	Tracked in same call-graph backlog.
+//	Reverse self-test (TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncParam)
+//	asserts no production code passes a CompensateFunc value as a function argument
+//	(call-graph upgrade tracked in gh issue #1182).
 //
 // ref: tools/archtest/aftercommit_pure_transient_test.go (sibling purity pattern).
 // ref: .claude/rules/gocell/ai-robust.md §"typed marker funnel for unbounded ops".
@@ -422,11 +425,6 @@ func TestSagaStepCompensatePure_A1_NoForbiddenCallsInCompensateBody(t *testing.T
 // production CompensateFunc literal exceeds sagaMaxCompensateStmts top-level
 // statements. Pure compensates must be short; a long body suggests a helper
 // call that may hide forbidden calls (B1 mitigation).
-//
-// Blind spot B2 (reflection) and B3 (parameter passing) are documented in
-// the file-level godoc. Neither has a dedicated reverse self-test here since
-// production currently has zero CompensateFunc assignments; these gaps are
-// tracked in the saga compensate-pure call-graph backlog.
 func TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount(t *testing.T) {
 	t.Parallel()
 	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
@@ -443,6 +441,109 @@ func TestSagaStepCompensatePure_BlindSpot_B1_BodyStatementCount(t *testing.T) {
 		return out
 	})
 	Report(t, sagaCompensatePureRuleID+"-B1", diags)
+}
+
+// TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies is
+// the reverse self-test for blind spot B2 (reflection via MethodByName).
+// It asserts that no production CompensateFunc body (literal or named) contains
+// a call to reflect.Value.MethodByName or reflect.Type.MethodByName, which
+// would allow bypassing the banned-receiver check. Production currently has
+// zero CompensateFunc assignments so this always passes; the test guards future
+// authors. Call-graph upgrade tracked in gh issue #1182.
+func TestSagaStepCompensatePure_BlindSpot_B2_NoMethodByNameInCompensateBodies(t *testing.T) {
+	t.Parallel()
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		funcDecls := sagaFuncDeclsByObject(p)
+		var out []Diagnostic
+		for _, file := range p.Files {
+			if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
+				continue
+			}
+			assignments := collectCompensateAssignments(p, file)
+			rel := p.Rel(file)
+			for _, a := range assignments {
+				var body *ast.BlockStmt
+				switch {
+				case a.Lit != nil:
+					body = a.Lit.Body
+				case a.NamedIdent != nil:
+					if obj, ok := p.TypesInfo.ObjectOf(a.NamedIdent).(*types.Func); ok {
+						if fd, ok2 := funcDecls[obj]; ok2 {
+							body = fd.Body
+						}
+					}
+				}
+				if body == nil {
+					continue
+				}
+				EachInSubtree[ast.SelectorExpr](body, func(sel *ast.SelectorExpr) {
+					if sel.Sel.Name == "MethodByName" {
+						out = append(out, sagaDiag(p, sel, rel,
+							sagaCompensatePureRuleID+"-B2 (blind-spot guard): "+
+								"MethodByName call inside a CompensateFunc body; "+
+								"reflection-based dispatch is a B2 blind spot — "+
+								"call-graph upgrade tracked in gh issue #1182"))
+					}
+				})
+			}
+		}
+		return out
+	})
+	Report(t, sagaCompensatePureRuleID+"-B2", diags)
+}
+
+// TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument is
+// the reverse self-test for blind spot B3 (CompensateFunc passed as a function
+// argument rather than assigned to a typed slot). The scan asserts that no
+// production CallExpr outside the executor's own safeRunCompensate transport
+// layer passes a value of type kernel/saga.CompensateFunc as an argument —
+// such a pattern is the main B3 escape path and is disallowed until the
+// call-graph upgrade in gh issue #1182 is complete.
+//
+// Exclusion: runtime/saga/executor/executor.go is the single sanctioned site
+// that calls safeRunCompensate(ctx, step.Compensate, ...) — this is the
+// framework transport funnel, not business code. All other call sites are
+// forbidden.
+func TestSagaStepCompensatePure_BlindSpot_B3_NoCompensateFuncPassedAsArgument(t *testing.T) {
+	t.Parallel()
+	// The one sanctioned call site: executor passes step.Compensate to safeRunCompensate.
+	const sanctionedCallee = "safeRunCompensate"
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				// Exclude the sanctioned safeRunCompensate call in the executor transport layer.
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == sanctionedCallee {
+					return
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == sanctionedCallee {
+					return
+				}
+				for _, arg := range call.Args {
+					if typ := p.TypesInfo.TypeOf(arg); typ != nil && isCompensateFuncType(typ) {
+						out = append(out, sagaDiag(p, arg, p.Rel(file),
+							sagaCompensatePureRuleID+"-B3 (blind-spot guard): "+
+								"CompensateFunc value passed as a function argument outside "+
+								"the safeRunCompensate transport funnel; "+
+								"B3 bodies are not scanned — use the typed-slot assignment forms "+
+								"(forms 1–5) until call-graph support lands (gh issue #1182)"))
+					}
+				}
+			})
+		}
+		return out
+	})
+	Report(t, sagaCompensatePureRuleID+"-B3", diags)
 }
 
 // TestSagaStepCompensatePure_Detector_RedOutboxCallFixture loads the

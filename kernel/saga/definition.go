@@ -19,19 +19,13 @@ import (
 //
 // Step.Timeout / Definition.Timeout are enforced via context deadline only —
 // Go has no preemptive goroutine cancellation, so a Step.Run that ignores
-// ctx.Done() will block its driveOne goroutine until it returns naturally.
-// Best-effort recovery when this happens:
+// ctx.Done() blocks its driver's goroutine until it returns naturally. Step
+// authors MUST select on ctx.Done() inside any IO / blocking primitive.
 //
-//   - Coordinator.Stop() drain budget eventually elapses; the goroutine is
-//     left running, but the heartbeat stops extending the lease.
-//   - Once the lease expires, another coordinator (or a future restart of the
-//     same coordinator) may re-claim the instance.
-//
-// Step authors MUST select on ctx.Done() inside any IO / blocking primitive.
-// Recovery when a step ignores cancellation: the executor's heartbeat stops
-// extending the lease once Execute returns, and once the lease expires another
-// coordinator (or a restart) re-claims the instance. There is no preemptive
-// kill — Go cannot interrupt a goroutine that never observes ctx.Done().
+// Best-effort recovery when a step ignores cancellation: the driver (the
+// Coordinator's drain on Stop, or the per-step Executor once Execute returns)
+// stops extending the lease; once the lease expires another coordinator (or a
+// restart) re-claims the instance. There is no preemptive kill.
 type StepFunc func(ctx context.Context, inst *Instance, prevState []byte) (newState []byte, err error)
 
 // CompensateFunc undoes one previously-committed step during the Compensating
@@ -60,6 +54,8 @@ type CompensateFunc func(ctx context.Context, inst *Instance, committedState []b
 //     0 => inherit / executor default.
 //   - MaxInterval: backoff cap. 0 => inherit / executor default.
 type RetryPolicy struct {
+	// MaxAttempts is the total number of Run invocations (including the first).
+	// NOTE: 0 means "inherit", not unlimited — saga has no unlimited-retry option.
 	MaxAttempts  int
 	BaseInterval time.Duration
 	MaxInterval  time.Duration
@@ -108,11 +104,13 @@ func (p RetryPolicy) Validate() error {
 // for this step; its zero value inherits (mirroring Timeout's
 // "0 => inherit Definition.Timeout").
 type Step struct {
-	Name        idutil.SafeID
-	Run         StepFunc
-	Compensate  CompensateFunc // optional; nil => no rollback for this step
-	Timeout     time.Duration  // per-step; 0 => inherit Definition.Timeout
-	RetryPolicy RetryPolicy    // zero value => inherit Definition.RetryPolicy
+	Name       idutil.SafeID
+	Run        StepFunc
+	Compensate CompensateFunc // optional; nil => no rollback for this step
+	Timeout    time.Duration  // per-step; 0 => inherit Definition.Timeout
+	// RetryPolicy overrides Definition.RetryPolicy for this step.
+	// NOTE: 0 means "inherit", not unlimited — saga has no unlimited-retry option.
+	RetryPolicy RetryPolicy
 }
 
 // Definition is the static recipe for a saga. ID is the DefinitionID stored

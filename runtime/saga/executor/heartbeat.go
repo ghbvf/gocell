@@ -15,6 +15,10 @@ import (
 //
 // INVARIANT: executor never imports kernel/saga/journal — it uses this narrow
 // interface instead (SAGA-JOURNAL-HOLDER-SEAL-01).
+//
+// Caller contract: the Executor stops the heartbeat loop when ok=false is
+// returned; implementations should guarantee that ok=false is idempotent
+// (i.e., repeated observation after the lease is lost is safe).
 type Heartbeater interface {
 	// Heartbeat attempts to renew the lease for the given instance.
 	// Returns ok=true when the lease was successfully renewed; ok=false when
@@ -52,14 +56,16 @@ func runHeartbeat(
 			ok, err := hb.Heartbeat(ctx, instanceID, leaseID, leaseDuration)
 			if err != nil {
 				logger.WarnContext(ctx, "saga executor: heartbeat failed",
-					slog.String("instanceId", string(instanceID)),
+					slog.String("instance_id", string(instanceID)),
+					slog.String("lease_id", string(leaseID)),
 					slog.Any("error", err),
 				)
 				continue
 			}
 			if !ok {
 				logger.InfoContext(ctx, "saga executor: lease lost (stale); stopping heartbeat",
-					slog.String("instanceId", string(instanceID)),
+					slog.String("instance_id", string(instanceID)),
+					slog.String("lease_id", string(leaseID)),
 				)
 				return
 			}

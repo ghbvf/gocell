@@ -4,15 +4,27 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 )
 
 // Package-level defaults for resolved retry policy.
+// These constants are the fallback values used by resolvePolicy when neither
+// the step nor the definition sets a field (all zeros ⇒ inherit).
+//
+// NOTE: DefaultMaxAttempts of 1 means a single attempt with no retry.
+// There is no "unlimited" option — retries are bounded, then compensation runs.
 const (
-	defaultMaxAttempts = 1
-	pkgDefaultBase     = 100 * time.Millisecond
-	pkgDefaultMax      = 30 * time.Second
+	// DefaultMaxAttempts is the total number of Run invocations (including the
+	// first) used when neither the step nor the definition specifies MaxAttempts.
+	DefaultMaxAttempts = 1
+	// DefaultBaseInterval is the first retry backoff base when neither the step
+	// nor the definition specifies BaseInterval.
+	DefaultBaseInterval = 100 * time.Millisecond
+	// DefaultMaxInterval is the backoff cap when neither the step nor the
+	// definition specifies MaxInterval.
+	DefaultMaxInterval = 30 * time.Second
 )
 
 // jitterSource is a source of bounded random integers used for retry backoff.
@@ -24,11 +36,19 @@ type jitterSource interface {
 	Int64N(n int64) int64
 }
 
-// newDefaultJitter returns a production jitter source seeded from the clock.
+// newDefaultJitter returns a production jitter source seeded from clk.
 // math/rand/v2 is intentional: backoff jitter is not security-sensitive.
-func newDefaultJitter() jitterSource {
-	seed1 := uint64(time.Now().UnixNano())
-	seed2 := uint64(time.Now().UnixNano() >> 17)
+// Two decorrelated seeds are derived via splitmix64 to satisfy PCG's
+// independence requirement (two consecutive time reads would be highly
+// correlated and risk collisions in the period).
+func newDefaultJitter(clk clock.Clock) jitterSource {
+	seed1 := uint64(clk.Now().UnixNano())
+	// splitmix64: derive a decorrelated second seed so PCG gets two
+	// independent seeds (consecutive time reads are highly correlated).
+	s := seed1 + 0x9e3779b97f4a7c15
+	s = (s ^ (s >> 30)) * 0xbf58476d1ce4e5b9
+	s = (s ^ (s >> 27)) * 0x94d049bb133111eb
+	seed2 := s ^ (s >> 31)
 	return rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // non-security backoff jitter
 }
 
@@ -49,7 +69,7 @@ func resolvePolicy(step, def ksaga.RetryPolicy) resolvedPolicy {
 	} else if def.MaxAttempts != 0 {
 		p.maxAttempts = def.MaxAttempts
 	} else {
-		p.maxAttempts = defaultMaxAttempts
+		p.maxAttempts = DefaultMaxAttempts
 	}
 
 	if step.BaseInterval != 0 {
@@ -57,7 +77,7 @@ func resolvePolicy(step, def ksaga.RetryPolicy) resolvedPolicy {
 	} else if def.BaseInterval != 0 {
 		p.base = def.BaseInterval
 	} else {
-		p.base = pkgDefaultBase
+		p.base = DefaultBaseInterval
 	}
 
 	if step.MaxInterval != 0 {
@@ -65,7 +85,7 @@ func resolvePolicy(step, def ksaga.RetryPolicy) resolvedPolicy {
 	} else if def.MaxInterval != 0 {
 		p.max = def.MaxInterval
 	} else {
-		p.max = pkgDefaultMax
+		p.max = DefaultMaxInterval
 	}
 
 	return p

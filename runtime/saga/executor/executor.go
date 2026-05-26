@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -53,6 +54,22 @@ const (
 	// Executor.Compensate for this step.
 	OutcomeCompensationRequired
 )
+
+// String implements fmt.Stringer for readable log output.
+func (o Outcome) String() string {
+	switch o {
+	case OutcomeSucceeded:
+		return "Succeeded"
+	case OutcomeFailed:
+		return "Failed"
+	case OutcomeExpired:
+		return "Expired"
+	case OutcomeCompensationRequired:
+		return "CompensationRequired"
+	default:
+		return "Outcome(" + strconv.Itoa(int(o)) + ")"
+	}
+}
 
 // Result is the value returned by Execute.
 type Result struct {
@@ -98,7 +115,7 @@ func NewExecutor(hb Heartbeater, clk clock.Clock, opts ...Option) (*Executor, er
 		clk:               clk,
 		heartbeatInterval: 10 * time.Second,
 		leaseDuration:     30 * time.Second,
-		jitter:            newDefaultJitter(),
+		jitter:            newDefaultJitter(clk),
 		logger:            slog.Default(),
 	}
 
@@ -235,7 +252,19 @@ func (e *Executor) Compensate(
 	if step.Compensate == nil {
 		return nil
 	}
-	return safeRunCompensate(ctx, step.Compensate, inst, committedState)
+	e.logger.InfoContext(ctx, "saga executor: compensating step",
+		slog.String("instance_id", string(inst.ID)),
+		slog.String("step_name", string(step.Name)),
+	)
+	if err := safeRunCompensate(ctx, step.Compensate, inst, committedState); err != nil {
+		e.logger.WarnContext(ctx, "saga executor: compensate failed",
+			slog.String("instance_id", string(inst.ID)),
+			slog.String("step_name", string(step.Name)),
+			slog.Any("error", err),
+		)
+		return err
+	}
+	return nil
 }
 
 // safeRun is the exclusive call site for ksaga.StepFunc invocations

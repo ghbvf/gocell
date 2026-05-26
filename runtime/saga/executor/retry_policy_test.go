@@ -24,12 +24,7 @@ func (d *deterministicJitter) Int64N(n int64) int64 {
 
 // TestResolvePolicy verifies inheritance priority: step > def > default.
 func TestResolvePolicy(t *testing.T) {
-	const (
-		defaultMaxAttempts  = 1
-		defaultBaseInterval = 100 * time.Millisecond
-		defaultMaxInterval  = 30 * time.Second
-	)
-
+	t.Parallel()
 	tests := []struct {
 		name         string
 		step         ksaga.RetryPolicy
@@ -42,9 +37,9 @@ func TestResolvePolicy(t *testing.T) {
 			name:         "all_zero_uses_defaults",
 			step:         ksaga.RetryPolicy{},
 			def:          ksaga.RetryPolicy{},
-			wantAttempts: defaultMaxAttempts,
-			wantBase:     defaultBaseInterval,
-			wantMax:      defaultMaxInterval,
+			wantAttempts: DefaultMaxAttempts,
+			wantBase:     DefaultBaseInterval,
+			wantMax:      DefaultMaxInterval,
 		},
 		{
 			name:         "def_overrides_defaults",
@@ -98,6 +93,7 @@ func TestResolvePolicy(t *testing.T) {
 
 // TestShouldRetry verifies boundary conditions.
 func TestShouldRetry(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		maxAttempts int
@@ -126,6 +122,7 @@ func TestShouldRetry(t *testing.T) {
 
 // TestBackoff_Capped verifies that Backoff respects MaxInterval cap.
 func TestBackoff_Capped(t *testing.T) {
+	t.Parallel()
 	j := newDeterministicJitter(42, 1337)
 	p := resolvedPolicy{maxAttempts: 10, base: 100 * time.Millisecond, max: 500 * time.Millisecond}
 
@@ -138,6 +135,7 @@ func TestBackoff_Capped(t *testing.T) {
 
 // TestBackoff_JitterRange verifies jitter falls in [0.8d, d].
 func TestBackoff_JitterRange(t *testing.T) {
+	t.Parallel()
 	// Use a fresh jitter source for each sub-test to avoid coupling
 	for attempt := 0; attempt < 5; attempt++ {
 		j := newDeterministicJitter(uint64(attempt+1), 999)
@@ -162,6 +160,7 @@ func TestBackoff_JitterRange(t *testing.T) {
 
 // TestBackoff_Deterministic verifies same seed produces same result.
 func TestBackoff_Deterministic(t *testing.T) {
+	t.Parallel()
 	j1 := newDeterministicJitter(12345, 67890)
 	j2 := newDeterministicJitter(12345, 67890)
 	p := resolvedPolicy{maxAttempts: 5, base: 100 * time.Millisecond, max: 30 * time.Second}
@@ -177,6 +176,7 @@ func TestBackoff_Deterministic(t *testing.T) {
 
 // TestBackoff_ZeroPolicy verifies zero policy (1 attempt, zero base) returns 0.
 func TestBackoff_ZeroPolicy(t *testing.T) {
+	t.Parallel()
 	j := newDeterministicJitter(1, 2)
 	p := resolvedPolicy{maxAttempts: 1, base: 0, max: 0}
 	d := p.Backoff(0, j)

@@ -49,8 +49,7 @@
 // not a type-system constraint (no sealed interface). A helper package outside
 // runtime/saga/executor/ that calls the global rand and whose result is used by
 // the executor is NOT caught by this rule. That indirect path is documented as
-// a known blind spot (B1) tracked in:
-// "tracked in saga rand-injected call-graph backlog" (TODO: assign gh issue in PR-08+).
+// a known blind spot (B1) tracked in gh issue #1183.
 //
 // # Blind spots (reverse self-tests below)
 //

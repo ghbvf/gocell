@@ -49,9 +49,26 @@ func (a *alwaysOKHeartbeater) Heartbeat(_ context.Context, instanceID, leaseID i
 
 func (a *alwaysOKHeartbeater) Count() int { return int(atomic.LoadInt32(&a.callCount)) }
 
+// waitForOnePendingTimer waits up to 2 seconds for the FakeClock to have at
+// least one pending timer. This ensures the executor goroutine has registered
+// its backoff Sleep call before Advance is called, preventing flakiness under
+// CI load. Mirrors the waitForOneTicker pattern used in heartbeat_test.go.
+func waitForOnePendingTimer(t *testing.T, fc *clockmock.FakeClock) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if fc.PendingTimers() >= 1 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for a pending timer")
+}
+
 // --- NewExecutor validation tests ---
 
 func TestNewExecutor_NilHeartbeater(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	_, err := NewExecutor(nil, fc)
 	if err == nil {
@@ -67,6 +84,7 @@ func TestNewExecutor_NilHeartbeater(t *testing.T) {
 }
 
 func TestNewExecutor_NilClock(t *testing.T) {
+	t.Parallel()
 	hb := &alwaysOKHeartbeater{}
 	defer func() {
 		if r := recover(); r == nil {
@@ -77,6 +95,7 @@ func TestNewExecutor_NilClock(t *testing.T) {
 }
 
 func TestNewExecutor_BadHeartbeatLeaseRatio(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 
@@ -105,6 +124,7 @@ func TestNewExecutor_BadHeartbeatLeaseRatio(t *testing.T) {
 }
 
 func TestNewExecutor_ValidRatio(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	_, err := NewExecutor(hb, fc,
@@ -119,6 +139,7 @@ func TestNewExecutor_ValidRatio(t *testing.T) {
 // --- Execute success test ---
 
 func TestExecute_FirstAttemptSuccess(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -155,6 +176,7 @@ func TestExecute_FirstAttemptSuccess(t *testing.T) {
 // --- Execute retry backoff determinism test ---
 
 func TestExecute_RetryBackoffDeterministic(t *testing.T) {
+	t.Parallel()
 	// We inject a deterministic jitter source.
 	seed1, seed2 := uint64(42), uint64(1337)
 	j := &deterministicJitter{r: rand.New(rand.NewPCG(seed1, seed2))} //nolint:gosec // deterministic test jitter
@@ -164,7 +186,7 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &alwaysOKHeartbeater{}
-	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()), WithJitterSource(j))
+	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()), withJitterSource(j))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +225,8 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 	// attempt-1 → Backoff(0), attempt-2 → Backoff(1), attempt-3 → Backoff(2).
 	for i := 0; i < maxAttempts-1; i++ {
 		delay := policy.Backoff(i, jExpected)
-		// Wait briefly for the executor to reach the Sleep call.
-		time.Sleep(5 * time.Millisecond)
+		// Wait for the executor to register its backoff Sleep timer before advancing.
+		waitForOnePendingTimer(t, fc)
 		fc.Advance(delay)
 	}
 
@@ -220,6 +242,7 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 // --- Execute exhausted + compensatable → CompensationRequired ---
 
 func TestExecute_ExhaustedWithCompensate_CompensationRequired(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -259,6 +282,7 @@ func TestExecute_ExhaustedWithCompensate_CompensationRequired(t *testing.T) {
 // --- Execute exhausted + no compensate → Failed ---
 
 func TestExecute_ExhaustedNoCompensate_Failed(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -284,6 +308,7 @@ func TestExecute_ExhaustedNoCompensate_Failed(t *testing.T) {
 // --- Execute per-step timeout → Expired ---
 
 func TestExecute_PerStepTimeout_Expired(t *testing.T) {
+	t.Parallel()
 	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
 	hb := &alwaysOKHeartbeater{}
@@ -325,6 +350,7 @@ func TestExecute_PerStepTimeout_Expired(t *testing.T) {
 // --- Execute inherited context deadline → Expired ---
 
 func TestExecute_InheritedContextDeadline_Expired(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -361,6 +387,7 @@ func TestExecute_InheritedContextDeadline_Expired(t *testing.T) {
 // --- Execute backoff parent ctx cancel → Expired ---
 
 func TestExecute_BackoffParentCancel_Expired(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -383,9 +410,9 @@ func TestExecute_BackoffParentCancel_Expired(t *testing.T) {
 		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-5", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	// First attempt fails; executor will enter backoff sleep.
-	// Cancel ctx before backoff completes.
-	time.Sleep(5 * time.Millisecond)
+	// First attempt fails; wait for executor to register backoff Sleep timer,
+	// then cancel ctx before the backoff completes.
+	waitForOnePendingTimer(t, fc)
 	cancel()
 
 	result := <-resultCh
@@ -397,6 +424,7 @@ func TestExecute_BackoffParentCancel_Expired(t *testing.T) {
 // --- Execute: Run panic → convert to error, then retry ---
 
 func TestExecute_RunPanic_ConvertedToError(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -422,8 +450,8 @@ func TestExecute_RunPanic_ConvertedToError(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-6", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	// Advance past backoff for attempt 1.
-	time.Sleep(5 * time.Millisecond)
+	// Wait for executor to register backoff Sleep timer, then advance past it.
+	waitForOnePendingTimer(t, fc)
 	fc.Advance(defaultBaseInterval + time.Millisecond)
 
 	result := <-resultCh
@@ -438,6 +466,7 @@ func TestExecute_RunPanic_ConvertedToError(t *testing.T) {
 // --- Execute: leaseID is passed to heartbeater ---
 
 func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
+	t.Parallel()
 	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
 	hb := &alwaysOKHeartbeater{}
@@ -474,6 +503,7 @@ func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
 // --- Compensate tests ---
 
 func TestCompensate_Success(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -501,6 +531,7 @@ func TestCompensate_Success(t *testing.T) {
 }
 
 func TestCompensate_Failure(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -524,6 +555,7 @@ func TestCompensate_Failure(t *testing.T) {
 }
 
 func TestCompensate_NilCompensate_ReturnsNil(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -544,6 +576,7 @@ func TestCompensate_NilCompensate_ReturnsNil(t *testing.T) {
 }
 
 func TestCompensate_Panic_ConvertedToError(t *testing.T) {
+	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
@@ -566,6 +599,7 @@ func TestCompensate_Panic_ConvertedToError(t *testing.T) {
 }
 
 func TestCompensate_IgnoresStepTimeout(t *testing.T) {
+	t.Parallel()
 	// Even with a very small step.Timeout, Compensate should complete.
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
@@ -602,14 +636,15 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 	}
 }
 
-// Re-export for test usage.
+// Aliases for test usage — reference the exported package constants.
 var (
-	defaultBaseInterval = 100 * time.Millisecond
-	defaultMaxInterval  = 30 * time.Second
+	defaultBaseInterval = DefaultBaseInterval
+	defaultMaxInterval  = DefaultMaxInterval
 )
 
 // verify ExponentialDelay is what we think it is (sanity).
 func TestExponentialDelay_SanityCheck(t *testing.T) {
+	t.Parallel()
 	got := koutbox.ExponentialDelay(100*time.Millisecond, 30*time.Second, 0)
 	if got != 100*time.Millisecond {
 		t.Errorf("ExponentialDelay(100ms, 30s, 0) = %v, want 100ms", got)
