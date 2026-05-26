@@ -44,7 +44,7 @@ var commands = []subcommand[func(ctx context.Context, args []string) error]{
 	{name: "check", help: []string{"Run targeted architecture analysis"}, run: runCheck},
 	{name: "verify", help: []string{"Run tests and artifact checks            [--id, --active, --files]"}, run: runVerify},
 	{name: "graph", help: []string{"Emit module package dependency graph     [--format, --pattern, --root, --include-tests]"}, run: runGraph},
-	{name: "export", help: []string{"Export project catalog as JSON/YAML      <catalog|metadata>"}, run: runExport},
+	{name: "export", help: []string{"Export project catalog (entities + dep graphs) as JSON/YAML"}, run: runExport},
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go

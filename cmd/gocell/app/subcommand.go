@@ -5,7 +5,8 @@ package app
 //   - the top-level command set (dispatch.go's `commands`):
 //     `gocell <command>` — validate / scaffold / generate / check / verify /
 //     graph / export;
-//   - each `gocell <verb> <type>` tree (generate / verify / scaffold / check).
+//   - each `gocell <verb> <type>` tree
+//     (generate / verify / scaffold / check / export).
 //
 // INVARIANT:
 //   - CLI-UNIMPL-HIDE-01
@@ -25,9 +26,10 @@ package app
 // structurally unrepresentable rather than convention. Enforced repo-wide
 // by tools/archtest/cli_unimpl_hide_test.go:
 //   - upstream: Dispatch (top level) and runGenerate/runVerify/
-//     runScaffoldWithRoot/runCheck (verb trees) must dispatch via findSub
-//     over a subcommand[…] slice — a string-literal switch/case on the name
-//     (or a name→handler map index) fails archtest.
+//     runScaffoldWithRoot/runCheck/runExport (verb trees) must resolve the
+//     handler via `findSub(<registry>, …)` and invoke that resolved handler —
+//     a switch/case ladder, or a dummy findSub paired with a name→handler map
+//     index, fails archtest (scanDispatchViaRegistry form-uniqueness).
 //   - downstream: help must be produced by buildHelpEntries from the
 //     registry — a hand-written helpEntry literal carrying a string-literal
 //     name fails archtest (verb trees), and PrintUsage's body must be the

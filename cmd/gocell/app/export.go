@@ -30,44 +30,43 @@ var validKinds = catalog.AllKinds
 // References catalog.AllLayers — single source of truth.
 var validLayersList = catalog.AllLayers
 
-// runExport dispatches `export <subcommand>` to its handler. catalog and
-// metadata are byte-equal aliases sharing exportCatalog as the
-// implementation — there is no per-type help surface (no helpEntry list),
-// so this stays a plain alias switch rather than a subcommand registry;
-// CLI-UNIMPL-HIDE-01 only governs the four help-bearing verb trees.
-//
-// ctx is part of the uniform commands-map signature; exportCatalog is
-// metadata + file IO with no cancelable downstream.
-func runExport(_ context.Context, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell export <catalog|metadata> [flags]")
-	}
-	sub := args[0]
-	// Honor the `gocell <command> -h` discovery contract that PrintUsage
-	// advertises for every top-level command. export has no subcommand
-	// registry (catalog/metadata are byte-equal aliases — see runExport doc),
-	// so its help is a small hand-written surface rather than renderSubHelp.
-	if isHelpFlag(sub) {
-		printExportHelp()
-		return nil
-	}
-	rest := args[1:]
-	switch sub {
-	case "catalog", "metadata":
-		return exportCatalog(rest)
-	default:
-		return fmt.Errorf("unknown export subcommand %q (want catalog|metadata)", sub)
-	}
+// exportSubcommands is export's registry. catalog and metadata are byte-equal
+// aliases sharing exportCatalog, but both are registered so dispatch,
+// `export -h` help, and the unknown-subcommand error all derive from this one
+// slice (INVARIANT CLI-UNIMPL-HIDE-01, like the other verb trees) — never a
+// hand-written alias switch paired with hand-written help that could drift.
+var exportSubcommands = []subcommand[func(ctx context.Context, args []string) error]{
+	{
+		name: "catalog",
+		help: []string{"Export the project catalog (entities + dep graphs) as JSON/YAML"},
+		run:  func(_ context.Context, a []string) error { return exportCatalog(a) },
+	},
+	{
+		name: "metadata",
+		help: []string{"Alias of catalog — byte-equal output"},
+		run:  func(_ context.Context, a []string) error { return exportCatalog(a) },
+	},
 }
 
-func printExportHelp() {
-	fmt.Println("Usage: gocell export <catalog|metadata> [flags]")
-	fmt.Println()
-	fmt.Println("Subcommands:")
-	fmt.Println("  catalog   Export project catalog (entities + dep graphs) as JSON/YAML")
-	fmt.Println("  metadata  Alias of catalog (byte-equal output)")
-	fmt.Println()
-	fmt.Println("Flags: --format json|yaml  --out <path>  --include  --kinds  --layers  --cells  --root")
+// runExport resolves `export <type>` through exportSubcommands (findSub) and
+// derives `export -h` from the same registry (renderSubHelp), honoring the
+// `gocell <command> -h` contract PrintUsage advertises. ctx is part of the
+// uniform dispatch signature; exportCatalog is metadata + file IO with no
+// cancelable downstream.
+func runExport(ctx context.Context, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: gocell export <%s> [flags]",
+			strings.Join(subNames(exportSubcommands), "|"))
+	}
+	if isHelpFlag(args[0]) {
+		return renderSubHelp("export", exportSubcommands)
+	}
+	run, ok := findSub(exportSubcommands, args[0])
+	if !ok {
+		return fmt.Errorf("unknown export subcommand %q (want %s)",
+			args[0], strings.Join(subNames(exportSubcommands), ", "))
+	}
+	return run(ctx, args[1:])
 }
 
 func exportCatalog(args []string) error {
