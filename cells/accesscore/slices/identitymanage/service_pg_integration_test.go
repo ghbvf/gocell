@@ -179,7 +179,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 	pgRefreshStore := newPGIntegRefreshStore()
 	inv, err := credentialinvalidate.New(repo, pgSessionStore, pgRefreshStore)
 	require.NoError(t, err)
-	svc, err := NewService(clock.Real(), 
+	svc, err := NewService(clock.Real(),
 		repo,
 		inv,
 		slog.Default(),

@@ -203,8 +203,10 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(clock.Real(), assembly.Config{ID:             "caller-cell-test",
-		DurabilityMode: outbox.DurabilityDemo})
+	asm := assembly.New(clock.Real(), assembly.Config{
+		ID:             "caller-cell-test",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

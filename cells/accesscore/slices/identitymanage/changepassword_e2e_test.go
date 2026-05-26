@@ -161,7 +161,7 @@ func newE2EFixture() *e2eFixture {
 	if err != nil {
 		panic("newE2EFixture: loginSvc setup failed: " + err.Error())
 	}
-	idmSvc, err := NewService(clock.Real(), 
+	idmSvc, err := NewService(clock.Real(),
 		userRepo, inv, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithTxManager(persistence.WrapForCell(tx)),
