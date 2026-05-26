@@ -1458,8 +1458,8 @@ func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationRes
 // bootstrap /healthz) set no flag and never trigger; the rule fires only when
 // one slice holds at least one of each.
 //
-// Membership guard: TestRuleReachabilityFromRegistrationRoots locks FMT-33 in
-// goldenRuleIDs — deleting the rules() registration turns CI red.
+// Membership guard: TestAllRulesMatchGolden locks FMT-33 in
+// goldenRuleIDs — deleting the allRules registration turns CI red.
 //
 // AI-robust: Medium (governance YAML-metadata validate layer, same tier as
 // FMT-31/ADV-06). Both visibility classes route through metadata oracles

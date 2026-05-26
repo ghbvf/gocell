@@ -162,17 +162,13 @@ func isAcquireArgRecvStoreMu(ce *ast.CallExpr, recv string) bool {
 // statement of runLocked, not deferred to another stack frame / goroutine.
 func directBodyAcquireCalls(fd *ast.FuncDecl, isAcquire func(*ast.CallExpr) bool) []*ast.CallExpr {
 	var out []*ast.CallExpr
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		if n == nil {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false // do not descend into nested closures
-		}
-		if ce, ok := n.(*ast.CallExpr); ok && isAcquire(ce) {
+	EachInSubtreeStopAt[ast.CallExpr](fd.Body, func(n ast.Node) bool {
+		_, ok := n.(*ast.FuncLit)
+		return ok // do not descend into nested closures
+	}, func(ce *ast.CallExpr) {
+		if isAcquire(ce) {
 			out = append(out, ce)
 		}
-		return true
 	})
 	return out
 }
@@ -511,11 +507,11 @@ func (r memTxRunner) runLocked() {
 	require.NoError(t, err)
 
 	var runLocked *ast.FuncDecl
-	for _, d := range f.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "runLocked" {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Name.Name == "runLocked" {
 			runLocked = fd
 		}
-	}
+	})
 	require.NotNil(t, runLocked)
 
 	// Syntactic acquire predicate (no type info): exercises the traversal only.

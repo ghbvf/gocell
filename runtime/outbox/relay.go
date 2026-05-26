@@ -86,7 +86,7 @@ type pollStats struct {
 // Intentionally defined here (not imported from runtime/observability/metrics)
 // to avoid coupling runtime/outbox to its sibling package.
 type PendingDepthObserver interface {
-	ObservePendingDepth(n int64)
+	ObservePendingDepth(ctx context.Context, n int64)
 }
 
 // Relay polls unpublished outbox entries via a Store interface and publishes
@@ -399,7 +399,7 @@ func (r *Relay) observePendingDepth(ctx context.Context) {
 			slog.Any("error", err))
 		return
 	}
-	observability.SafeObserve(slog.Default(), func() { r.pendingDepthObserver.ObservePendingDepth(n) })
+	observability.SafeObserve(slog.Default(), func() { r.pendingDepthObserver.ObservePendingDepth(ctx, n) })
 }
 
 // cleanupLoop runs cleanup data-driven: after each pass it asks the store for
@@ -510,7 +510,7 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	}
 
 	// Record batch size even for empty batches (captures idle cycles).
-	r.metrics.RecordBatchSize(len(entries))
+	r.metrics.RecordBatchSize(ctx, len(entries))
 
 	if len(entries) == 0 {
 		return nil
@@ -540,7 +540,7 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
 		)
-		r.metrics.RecordPollCycle(kout.PollCycleResult{
+		r.metrics.RecordPollCycle(ctx, kout.PollCycleResult{
 			Published:    stats.published,
 			Retried:      stats.retried,
 			Dead:         stats.dead,
@@ -708,7 +708,7 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 				"outbox relay: reclaimed stale entries",
 				slog.Int("count", total),
 			)
-			r.metrics.RecordReclaim(int64(total))
+			r.metrics.RecordReclaim(ctx, int64(total))
 		}
 	}()
 	for i := 0; i < reclaimMaxIterations; i++ {
@@ -787,7 +787,7 @@ func (r *Relay) cleanup(ctx context.Context) error {
 	}
 
 	if totalPublished > 0 || totalDead > 0 {
-		r.metrics.RecordCleanup(totalPublished, totalDead)
+		r.metrics.RecordCleanup(ctx, totalPublished, totalDead)
 	}
 	return nil
 }

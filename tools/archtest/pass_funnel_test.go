@@ -695,15 +695,14 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 		if gd.Tok != token.VAR {
 			return
 		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-				continue
+		scanner.EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+			if len(vs.Names) != 1 || len(vs.Values) != 1 {
+				return
 			}
 			if exprCarriesFixtureTag(info, vs.Values[0]) {
 				bindIdent(vs.Names[0])
 			}
-		}
+		})
 	})
 	return out
 }

@@ -53,7 +53,7 @@ export IOT_ADMIN_TOKEN="$(go run ./examples/iotdevice/localtoken)"
 go run ./examples/iotdevice
 ```
 
-The server starts with primary listener on `:8083` (API + infra) and internal listener on `:9083` (control-plane).
+The server starts with primary listener on `:8083` (API), internal listener on `:9083` (control-plane), and health listener on `127.0.0.1:9093` (`/healthz` `/readyz` `/metrics`).
 `IOT_ADMIN_TOKEN` is a real RS256 access token signed by the local key above.
 The helper defaults to the roles needed by the walkthrough; override with
 `go run ./examples/iotdevice/localtoken -roles admin,role:operator,role:device`.
@@ -183,9 +183,9 @@ Response (200):
 ### Health check
 
 ```bash
-curl http://localhost:8083/healthz
-curl http://localhost:8083/readyz
-curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:8083/readyz?verbose'
+curl http://localhost:9093/healthz
+curl http://localhost:9093/readyz
+curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:9093/readyz?verbose'
 ```
 
 `/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the matching `X-Readyz-Token` header on the request.

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,12 +13,13 @@ import (
 )
 
 func TestInMemoryCollector_Handler(t *testing.T) {
+	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest("auditcore", http.MethodPost, "/z", 500, 0.004)
-	c.RecordRequest("accesscore", http.MethodPost, "/api", 201, 0.1)
-	c.RecordRequest("accesscore", http.MethodGet, "/api", 200, 0.05)
-	c.RecordRequest("accesscore", http.MethodGet, "/api", 200, 0.03)
-	c.RecordRequest("accesscore", http.MethodGet, "/admin", 404, 0.002)
+	c.RecordRequest(ctx, "auditcore", http.MethodPost, "/z", 500, 0.004)
+	c.RecordRequest(ctx, "accesscore", http.MethodPost, "/api", 201, 0.1)
+	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/api", 200, 0.05)
+	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/api", 200, 0.03)
+	c.RecordRequest(ctx, "accesscore", http.MethodGet, "/admin", 404, 0.002)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -49,9 +51,10 @@ func TestInMemoryCollector_Handler(t *testing.T) {
 }
 
 func TestInMemoryCollector_Snapshot(t *testing.T) {
+	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest("accesscore", "GET", "/a", 200, 0.001)
-	c.RecordRequest("accesscore", "GET", "/a", 200, 0.002)
+	c.RecordRequest(ctx, "accesscore", "GET", "/a", 200, 0.001)
+	c.RecordRequest(ctx, "accesscore", "GET", "/a", 200, 0.002)
 
 	snap := c.Snapshot()
 	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/a", Status: 200}
@@ -60,9 +63,10 @@ func TestInMemoryCollector_Snapshot(t *testing.T) {
 }
 
 func TestInMemoryCollector_PerCellSeparation(t *testing.T) {
+	ctx := context.Background()
 	c := NewInMemoryCollector()
-	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.001)
-	c.RecordRequest("auditcore", "GET", "/api/v1/sessions", 200, 0.002)
+	c.RecordRequest(ctx, "accesscore", "GET", "/api/v1/sessions", 200, 0.001)
+	c.RecordRequest(ctx, "auditcore", "GET", "/api/v1/sessions", 200, 0.002)
 
 	snap := c.Snapshot()
 	assert.Equal(t, int64(1), snap.RequestCounts[RequestKey{

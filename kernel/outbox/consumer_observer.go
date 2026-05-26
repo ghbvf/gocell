@@ -1,6 +1,8 @@
 package outbox
 
 import (
+	"context"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -30,7 +32,7 @@ import (
 // interface for the Relay path; same kernel-defined-runtime-implemented
 // pattern keeps adapter-backend imports out of kernel.
 type ConsumerObserver interface {
-	ObserveReject(cellID, topic, consumerGroup, reason string)
+	ObserveReject(ctx context.Context, cellID, topic, consumerGroup, reason string)
 }
 
 // ConsumerRejectReason* are the closed-set values passed to
@@ -63,7 +65,7 @@ type NopConsumerObserver struct{}
 // metrics collector is wired. Discarding the observation is deliberate — the
 // no-op exists so ConsumerBase can always call ObserveReject unconditionally
 // without a nil guard.
-func (NopConsumerObserver) ObserveReject(_, _, _, _ string) {
+func (NopConsumerObserver) ObserveReject(_ context.Context, _, _, _, _ string) {
 	// no-op: NopConsumerObserver is the default when no metrics collector is
 	// wired; discarding the observation is deliberate so ConsumerBase can call
 	// ObserveReject unconditionally without a nil guard.

@@ -1,6 +1,7 @@
 package metrics_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestEventRouterCollector_IncSubscriptionActive_EmitsGaugeLabel(t *testing.T
 		t.Fatalf("NewEventRouterCollector: %v", err)
 	}
 
-	c.IncSubscriptionActive("accesscore")
+	c.IncSubscriptionActive(context.Background(), "accesscore")
 
 	ops := p.gaugeOps["event_router_subscriptions_active"]
 	if len(ops) != 1 {
@@ -60,7 +61,7 @@ func TestEventRouterCollector_DecSubscriptionActive_EmitsGaugeLabel(t *testing.T
 		t.Fatalf("NewEventRouterCollector: %v", err)
 	}
 
-	c.DecSubscriptionActive("configcore")
+	c.DecSubscriptionActive(context.Background(), "configcore")
 
 	ops := p.gaugeOps["event_router_subscriptions_active"]
 	if len(ops) != 1 {
@@ -78,7 +79,7 @@ func TestEventRouterCollector_RecordSetupError_EmitsCounterLabels(t *testing.T) 
 		t.Fatalf("NewEventRouterCollector: %v", err)
 	}
 
-	c.RecordSetupError("auditcore", "event.audit.appended.v1", "dial_timeout")
+	c.RecordSetupError(context.Background(), "auditcore", "event.audit.appended.v1", "dial_timeout")
 
 	ops := p.counterOps["event_router_setup_errors_total"]
 	if len(ops) != 1 {
@@ -103,7 +104,7 @@ func TestEventRouterCollector_ObserveReadyWait_EmitsHistogramLabel(t *testing.T)
 		t.Fatalf("NewEventRouterCollector: %v", err)
 	}
 
-	c.ObserveReadyWait("accesscore", testReadyWaitDuration)
+	c.ObserveReadyWait(context.Background(), "accesscore", testReadyWaitDuration)
 
 	ops := p.histogramOps["event_router_ready_wait_seconds"]
 	if len(ops) != 1 {
@@ -120,11 +121,12 @@ func TestEventRouterCollector_ObserveReadyWait_EmitsHistogramLabel(t *testing.T)
 }
 
 func TestEventRouterCollector_NilReceiverDoesNotPanic(t *testing.T) {
+	ctx := context.Background()
 	var c *obmetrics.EventRouterCollector
-	c.IncSubscriptionActive("cell")
-	c.DecSubscriptionActive("cell")
-	c.RecordSetupError("cell", "topic", "reason")
-	c.ObserveReadyWait("cell", time.Second)
+	c.IncSubscriptionActive(ctx, "cell")
+	c.DecSubscriptionActive(ctx, "cell")
+	c.RecordSetupError(ctx, "cell", "topic", "reason")
+	c.ObserveReadyWait(ctx, "cell", time.Second)
 }
 
 func TestNewEventRouterCollector_RollbackOnPartialFailure(t *testing.T) {
@@ -233,8 +235,8 @@ type eventSpyCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c *eventSpyCounter) Inc() { c.Add(1) }
-func (c *eventSpyCounter) Add(d float64) {
+func (c *eventSpyCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *eventSpyCounter) Add(_ context.Context, d float64) {
 	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], eventSpyRecord{labels: c.labels, value: d})
 }
 
@@ -244,7 +246,7 @@ type eventSpyHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h *eventSpyHistogram) Observe(v float64) {
+func (h *eventSpyHistogram) Observe(_ context.Context, v float64) {
 	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], eventSpyRecord{labels: h.labels, value: v})
 }
 
@@ -254,12 +256,12 @@ type eventSpyGauge struct {
 	labels kernelmetrics.Labels
 }
 
-func (g *eventSpyGauge) Set(v float64) {
+func (g *eventSpyGauge) Set(_ context.Context, v float64) {
 	g.parent.gaugeOps[g.name] = append(g.parent.gaugeOps[g.name], eventSpyRecord{labels: g.labels, value: v})
 }
-func (g *eventSpyGauge) Inc()          { g.Add(1) }
-func (g *eventSpyGauge) Dec()          { g.Add(-1) }
-func (g *eventSpyGauge) Add(d float64) { g.Set(d) }
+func (g *eventSpyGauge) Inc(ctx context.Context)            { g.Add(ctx, 1) }
+func (g *eventSpyGauge) Dec(ctx context.Context)            { g.Add(ctx, -1) }
+func (g *eventSpyGauge) Add(ctx context.Context, d float64) { g.Set(ctx, d) }
 
 // ---------------------------------------------------------------------------
 // eventPartialFailProvider: configurable partial failure for rollback tests.

@@ -28,7 +28,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/http/health"
-	"github.com/ghbvf/gocell/runtime/http/router"
 	obshealthz "github.com/ghbvf/gocell/runtime/observability/healthz"
 )
 
@@ -263,9 +262,7 @@ func TestPhase5_RouteGroupsDrainedFromSnapshots(t *testing.T) {
 	// Build a minimal hh so phase5CollectRouteGroups can succeed.
 	s.hh = health.New(asm, newTestAggregator(), clock.Real())
 
-	// routers is empty here — we just want to verify groups are collected.
-	routers := map[cell.ListenerRef]*router.Router{}
-	groups := b.phase5CollectRouteGroups(s, routers)
+	groups := b.phase5CollectRouteGroups(s)
 
 	// Filter to only groups from our cell (not health groups).
 	var cellGroups []cell.RouteGroup

@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -46,7 +47,7 @@ func TestNewProviderPublisherCollector_NopProviderNoPanic(t *testing.T) {
 	require.NotNil(t, c)
 
 	for _, r := range allPublishFailureReasons() {
-		assert.NotPanics(t, func() { c.RecordPublishFailure(r) })
+		assert.NotPanics(t, func() { c.RecordPublishFailure(context.Background(), r) })
 	}
 }
 
@@ -79,7 +80,7 @@ func TestProviderPublisherCollector_RecordPublishFailure_AllReasons(t *testing.T
 			col, err := NewProviderPublisherCollector(provider, "rmqtest")
 			require.NoError(t, err)
 
-			col.RecordPublishFailure(reason)
+			col.RecordPublishFailure(context.Background(), reason)
 
 			ops := provider.ops()
 			require.Len(t, ops, 1, "exactly one counter Inc per RecordPublishFailure")
@@ -207,13 +208,13 @@ type publisherSpyCounter struct {
 	labels metrics.Labels
 }
 
-func (c *publisherSpyCounter) Inc() {
+func (c *publisherSpyCounter) Inc(_ context.Context) {
 	c.parent.records = append(c.parent.records, spyCounterRecord{
 		name: c.name, op: "Inc", labels: c.labels, value: 1,
 	})
 }
 
-func (c *publisherSpyCounter) Add(d float64) {
+func (c *publisherSpyCounter) Add(_ context.Context, d float64) {
 	c.parent.records = append(c.parent.records, spyCounterRecord{
 		name: c.name, op: "Add", labels: c.labels, value: d,
 	})

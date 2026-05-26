@@ -123,6 +123,9 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []auth.ListenerAuth{jwtPlan}),
 		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
+		// #673: a dedicated HealthListener is mandatory — /healthz, /readyz,
+		// /metrics no longer fall back onto the primary listener.
+		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093", []auth.ListenerAuth{auth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
 	// Durable mode: register the PG pool as a managed closer so framework

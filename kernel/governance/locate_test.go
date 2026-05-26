@@ -201,10 +201,10 @@ func TestValidationResult_PositionFields(t *testing.T) {
 	assert.Equal(t, 7, r.Column)
 }
 
-// TestDependencyChecker_NewError_AutoFillsLocation mirrors the Validator
-// test to confirm DependencyChecker gets the same location enrichment via
-// the embedded locator.
-func TestDependencyChecker_NewError_AutoFillsLocation(t *testing.T) {
+// TestLocator_NewError_AutoFillsLocation confirms findings constructed through
+// the locator embedded in Validator get line/column enrichment from the
+// yaml.Node cache (the DEP rules rely on this for belongsToCell findings).
+func TestLocator_NewError_AutoFillsLocation(t *testing.T) {
 	src := "id: s\n" + // line 1
 		"belongsToCell: ghost\n" + // line 2 — the field we'll locate
 		"contractUsages: []\n" // line 3
@@ -213,7 +213,7 @@ func TestDependencyChecker_NewError_AutoFillsLocation(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{},
 	}
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
-	dc := NewDependencyChecker(pm)
+	dc := NewValidator(pm, "", clock.Real())
 
 	r := dc.newError(codeDEP01, IssueMismatch,
 		"cells/x/slices/s/slice.yaml", "belongsToCell",
@@ -224,13 +224,13 @@ func TestDependencyChecker_NewError_AutoFillsLocation(t *testing.T) {
 	assert.Equal(t, codeDEP01, r.Code)
 }
 
-// TestDependencyChecker_Locate_FallsBack verifies the nil-project / missing
-// file nodes fallback shared with Validator.
-func TestDependencyChecker_Locate_FallsBack(t *testing.T) {
-	dc := NewDependencyChecker(nil)
-	// Safe on a nil project (NewDependencyChecker stores it as-is but locate
-	// short-circuits on l.project == nil).
-	line, col := dc.locate("any.yaml", "id")
+// TestLocator_Locate_FallsBack verifies the missing file-nodes fallback on the
+// locator embedded in Validator.
+func TestLocator_Locate_FallsBack(t *testing.T) {
+	v := NewValidator(nil, "", clock.Real())
+	// NewValidator substitutes an empty ProjectMeta; locate returns 0,0 when the
+	// file has no yaml.Node cache entry.
+	line, col := v.locate("any.yaml", "id")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
 }

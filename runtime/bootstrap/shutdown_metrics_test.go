@@ -62,8 +62,8 @@ type fakeCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c *fakeCounter) Inc() { c.Add(1) }
-func (c *fakeCounter) Add(delta float64) {
+func (c *fakeCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *fakeCounter) Add(_ context.Context, delta float64) {
 	c.vec.mu.Lock()
 	defer c.vec.mu.Unlock()
 	c.vec.records = append(c.vec.records, fakeCounterRecord{labels: c.labels, delta: delta})
@@ -104,7 +104,7 @@ type fakeHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h *fakeHistogram) Observe(value float64) {
+func (h *fakeHistogram) Observe(_ context.Context, value float64) {
 	h.vec.mu.Lock()
 	defer h.vec.mu.Unlock()
 	h.vec.records = append(h.vec.records, fakeHistogramRecord{labels: h.labels, value: value})
@@ -165,9 +165,10 @@ func (p *fakeMetricsProvider) histogram(name string) *fakeHistogramVec {
 // ---------------------------------------------------------------------------
 
 // runWithCancelAndListener starts Bootstrap.Run in a goroutine, waits for the
-// HTTP server to become healthy, cancels ctx, then waits for Run to return.
+// health listener to become healthy, cancels ctx, then waits for Run to return.
+// healthLn must be the HealthListener net.Listener passed to WithListener.
 // The wait budget is fixed at 5 s.
-func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error {
+func runWithCancelAndListener(t *testing.T, b *Bootstrap, healthLn net.Listener) error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -176,7 +177,7 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 	go func() { errCh <- b.Run(ctx) }()
 
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get("http://" + ln.Addr().String() + "/healthz")
+		resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
 		if err != nil {
 			return false
 		}
@@ -205,17 +206,19 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln))
+	require.NoError(t, runWithCancelAndListener(t, b, healthLn))
 
 	phaseVec := p.counter(obsmetrics.ShutdownPhaseCounterName)
 	require.NotNil(t, phaseVec, "phase counter %q must be registered", obsmetrics.ShutdownPhaseCounterName)
@@ -242,17 +245,19 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln))
+	require.NoError(t, runWithCancelAndListener(t, b, healthLn))
 
 	durVec := p.histogram(obsmetrics.ShutdownPhaseDurationName)
 	require.NotNil(t, durVec, "duration histogram %q must be registered", obsmetrics.ShutdownPhaseDurationName)
@@ -279,17 +284,19 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln))
+	require.NoError(t, runWithCancelAndListener(t, b, healthLn))
 
 	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
 	require.NotNil(t, outcomeVec, "outcome counter %q must be registered", obsmetrics.ShutdownTotalCounterName)
@@ -341,6 +348,7 @@ func (w *slowWorker) Stop(ctx context.Context) error {
 func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	sw := newSlowWorker()
 
 	asm := assembly.New(assembly.Config{ID: "timeout-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
@@ -353,6 +361,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(shutdownTimeout),
 		WithMetricsProvider(p),
 		WithWorkers(sw),
@@ -367,7 +376,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	go func() { errCh <- b.Run(ctx) }()
 
 	testwait.External(t, "bootstrap-listener-served", func() bool {
-		resp, err := testHTTPClient.Get("http://" + ln.Addr().String() + "/healthz")
+		resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
 		if err != nil {
 			return false
 		}
@@ -418,6 +427,7 @@ func (w *failingTeardownWorker) Stop(_ context.Context) error {
 func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 
 	failWorker := &failingTeardownWorker{stopErr: fmt.Errorf("simulated teardown failure")}
@@ -427,12 +437,13 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(failWorker),
 	)
 
-	err := runWithCancelAndListener(t, b, ln)
+	err := runWithCancelAndListener(t, b, healthLn)
 	require.Error(t, err, "Run must surface the teardown error")
 
 	outcomeVec := p.counter(obsmetrics.ShutdownTotalCounterName)
@@ -464,6 +475,7 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(errWorker),
@@ -510,14 +522,16 @@ func (w *erroringWorker) Stop(_ context.Context) error { return nil }
 // normally when no metrics provider is configured (NopProvider default).
 func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),
 		// No WithMetricsProvider — defaults to NopProvider.
 	)
-	require.NoError(t, runWithCancelAndListener(t, b, ln))
+	require.NoError(t, runWithCancelAndListener(t, b, healthLn))
 }

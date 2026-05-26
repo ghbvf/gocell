@@ -259,12 +259,15 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 6: Boot the assembly with the relay worker ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
@@ -284,7 +287,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	addr := ln.Addr().String()
 	baseURL := "http://" + addr
 
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// --- Step 7: Drive HTTP requests ---
 	// Operator provisions the first admin via POST /setup/admin with Basic Auth
@@ -588,12 +591,15 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// --- Step 6: Boot the assembly ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
@@ -606,7 +612,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	addr := ln.Addr().String()
 	baseURL := "http://" + addr
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// --- Step 7: Authenticate as admin ---
 	// Operator provisions the first admin via POST /setup/admin with Basic Auth

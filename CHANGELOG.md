@@ -8,6 +8,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **ADV-05 (dead event) reclassified `error` → `warning`** (PR for #687, M3-RULE-ENGINE):
+  an active event contract with no subscribers no longer fails `gocell validate` (exit 1);
+  it is now an advisory warning (exit 0), fixing the ADR-noted SeverityError
+  misclassification (ADV is the advisory series). CI pipelines that relied on ADV-05
+  blocking a merge must add their own gate that *fails* (non-zero) when ADV-05 is
+  present, e.g.
+  `! gocell validate --format=json | jq -e '.issues[] | select(.code=="ADV-05")' >/dev/null`.
+  The leading `!` is required: `jq -e 'select(...)'` exits 0 on a match, so the
+  bare pipeline would *pass* exactly when a dead event exists (inverted gate); the
+  `!` flips it so the step blocks the merge when — and only when — ADV-05 fires.
+  Verify the `.issues[]` filter against the actual `--format=json` output first
+  (`gocell validate --format=json | jq .`): if the JSON schema ever changes, an
+  unmatched filter makes `jq -e` exit non-zero on *every* run, silently disabling
+  the gate.
+  Governance rules are now a single data-driven `allRules` registry (ADR `202605041430`
+  §M3, amended: Go typed-struct carrier, not YAML). `next-action` disposition and
+  per-finding `metric` fields were speculative repository-convergence scaffolding
+  with no consumer; they were removed from M3 and from the current M0-M4 roadmap
+  after M5-HARVEST was canceled (see ADR §M3 amendment).
+
 - **`gocell_vault_cached_key_version` removes `mount_path` and `key_name` ConstLabels** (PR for #879):
   single-process single-key deployment has label cardinality 1; the labels carried no
   information. Dashboards / alerts referencing `mount_path` or `key_name` matchers on

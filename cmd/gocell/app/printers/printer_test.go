@@ -726,10 +726,10 @@ func TestSARIF_FixInProperties(t *testing.T) {
 		"message.text must not carry the fix suffix — fix is in properties.fix only")
 }
 
-// TestSARIF_EmptyFix_NoProperties verifies that when Fix is empty, the
-// properties field is omitted from the SARIF result (omitempty).
-func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
-	results := []governance.ValidationResult{
+// TestSARIF_EmptyFix_PropertiesAbsent verifies that a finding with no Fix
+// produces nil result.properties (properties is present iff Fix is non-empty).
+func TestSARIF_EmptyFix_PropertiesAbsent(t *testing.T) {
+	noFix := []governance.ValidationResult{
 		{
 			Code:     "REF-01",
 			Severity: governance.SeverityError,
@@ -739,8 +739,7 @@ func TestSARIF_EmptyFix_NoProperties(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
-
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(noFix))
 	var parsed sarifLog
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
 	require.Len(t, parsed.Runs[0].Results, 1)

@@ -110,13 +110,13 @@ func (c *Cache) Len() int {
 // deletedAt exceeds tombstoneTTL. Active entries are never touched — the
 // monotonic-version guard for live keys is fully preserved. Each evicted
 // tombstone increments eventbus_cache_tombstone_evicted_total.
-func (c *Cache) sweepTombstones(now time.Time) {
+func (c *Cache) sweepTombstones(ctx context.Context, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k, e := range c.entries {
 		if !e.present && now.Sub(e.deletedAt) > c.tombstoneTTL {
 			delete(c.entries, k)
-			c.cacheCollector.RecordTombstoneEvicted(cacheCellID, cacheSliceID)
+			c.cacheCollector.RecordTombstoneEvicted(ctx, cacheCellID, cacheSliceID)
 		}
 	}
 }
@@ -322,7 +322,7 @@ func (s *Service) runTombstoneGC(ctx context.Context, done chan struct{}) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C():
-			s.cache.sweepTombstones(s.clk.Now())
+			s.cache.sweepTombstones(ctx, s.clk.Now())
 		}
 	}
 }

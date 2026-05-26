@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,8 +41,8 @@ type shutdownFakeCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c *shutdownFakeCounter) Inc() { c.Add(1) }
-func (c *shutdownFakeCounter) Add(delta float64) {
+func (c *shutdownFakeCounter) Inc(ctx context.Context) { c.Add(ctx, 1) }
+func (c *shutdownFakeCounter) Add(_ context.Context, delta float64) {
 	c.vec.mu.Lock()
 	defer c.vec.mu.Unlock()
 	c.vec.records = append(c.vec.records, shutdownFakeCounterRecord{labels: c.labels, delta: delta})
@@ -69,7 +70,7 @@ type shutdownFakeHistogram struct {
 	labels kernelmetrics.Labels
 }
 
-func (h *shutdownFakeHistogram) Observe(value float64) {
+func (h *shutdownFakeHistogram) Observe(_ context.Context, value float64) {
 	h.vec.mu.Lock()
 	defer h.vec.mu.Unlock()
 	h.vec.records = append(h.vec.records, shutdownFakeHistogramRecord{labels: h.labels, value: value})
@@ -119,11 +120,12 @@ var _ kernelmetrics.Provider = (*shutdownFakeProvider)(nil)
 // TestShutdownCollector_NilSafe verifies that all ShutdownCollector methods are
 // nil-safe and do not panic when called on a nil receiver.
 func TestShutdownCollector_NilSafe(t *testing.T) {
+	ctx := context.Background()
 	var m *ShutdownCollector
 	require.NotPanics(t, func() {
-		m.RecordPhaseEntry(ShutdownPhaseReadinessFlip)
-		m.ObservePhaseDuration("readiness_flip", testtime.D1ms)
-		m.CountOutcome("success")
+		m.RecordPhaseEntry(ctx, ShutdownPhaseReadinessFlip)
+		m.ObservePhaseDuration(ctx, "readiness_flip", testtime.D1ms)
+		m.CountOutcome(ctx, "success")
 	})
 }
 
@@ -150,6 +152,7 @@ func TestShutdownCollector_ConcurrentObserve(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, m)
 
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	var panicked atomic.Bool
 	for range 10 {
@@ -159,9 +162,9 @@ func TestShutdownCollector_ConcurrentObserve(t *testing.T) {
 					panicked.Store(true)
 				}
 			}()
-			m.RecordPhaseEntry(ShutdownPhaseReadinessFlip)
-			m.ObservePhaseDuration("readiness_flip", time.Millisecond)
-			m.CountOutcome("success")
+			m.RecordPhaseEntry(ctx, ShutdownPhaseReadinessFlip)
+			m.ObservePhaseDuration(ctx, "readiness_flip", time.Millisecond)
+			m.CountOutcome(ctx, "success")
 		})
 	}
 	wg.Wait()

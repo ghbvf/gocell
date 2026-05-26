@@ -155,6 +155,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
+	healthLn := newCorebundleLocalListener(t)
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
@@ -162,6 +163,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -182,7 +185,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 
 	addr := ln.Addr().String()
 	testwait.External(t, "corebundle-setup-completed", func() bool {
-		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
 		if err != nil {
 			return false
 		}
@@ -460,6 +463,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
+	sessionHealthLn := newCorebundleLocalListener(t)
 	app := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
@@ -473,6 +477,8 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 				chain,
 				bootstrap.WithListenerNet(internalLn))
 		}(),
+		bootstrap.WithListener(cell.HealthListener, sessionHealthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}},
+			bootstrap.WithListenerNet(sessionHealthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
@@ -493,7 +499,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 
 	addr := ln.Addr().String()
 	testwait.External(t, "corebundle-setup-completed", func() bool {
-		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", sessionHealthLn.Addr().String()))
 		if err != nil {
 			return false
 		}

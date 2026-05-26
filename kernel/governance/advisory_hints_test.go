@@ -30,11 +30,21 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 		"advHintADV05EmptySubscribers":    advHintADV05EmptySubscribers,
 		"advHintADV05EmptySubscribersFix": advHintADV05EmptySubscribersFix,
 		// CH-04
-		"advHintCH04CorrelationFailed":    advHintCH04CorrelationFailed,
-		"advHintCH04CorrelationFailedFix": advHintCH04CorrelationFailedFix,
+		"advHintCH04CorrelationFailed":      advHintCH04CorrelationFailed,
+		"advHintCH04CorrelationFailedFix":   advHintCH04CorrelationFailedFix,
+		"advHintCH04ParseFailed":            advHintCH04ParseFailed,
+		"advHintCH04ParseFailedFix":         advHintCH04ParseFailedFix,
+		"advHintCH04DynamicWrite":           advHintCH04DynamicWrite,
+		"advHintCH04DynamicWriteFix":        advHintCH04DynamicWriteFix,
+		"advHintCH04DynamicKind":            advHintCH04DynamicKind,
+		"advHintCH04UnknownHelper":          advHintCH04UnknownHelper,
+		"advHintCH04WritePublicNoKind":      advHintCH04WritePublicNoKind,
+		"advHintCH04WritePublicDynamicKind": advHintCH04WritePublicDynamicKind,
 		// CH-05
 		"advHintCH05CorrelationFailed":    advHintCH05CorrelationFailed,
 		"advHintCH05CorrelationFailedFix": advHintCH05CorrelationFailedFix,
+		"advHintCH05ParseFailed":          advHintCH05ParseFailed,
+		"advHintCH05ParseFailedFix":       advHintCH05ParseFailedFix,
 		"advHintCH05MissingParseCall":     advHintCH05MissingParseCall,
 		"advHintCH05MissingParseCallFix":  advHintCH05MissingParseCallFix,
 		// FMT-13

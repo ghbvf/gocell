@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -52,7 +53,8 @@ func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 
 func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clk clock.Clock) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring, clk,
+	return ServiceTokenMiddleware(
+		ring, clk,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +65,8 @@ func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clk clock.Clock) ht
 
 func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clk clock.Clock) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring, clk,
+	return ServiceTokenMiddleware(
+		ring, clk,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +418,8 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 
 func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	handler := ServiceTokenMiddleware(ring, clock.Real(),
+	handler := ServiceTokenMiddleware(
+		ring, clock.Real(),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
@@ -489,7 +493,8 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 	now := time.Now()
 	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -517,7 +522,8 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 	now := time.Now()
 	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -568,7 +574,8 @@ func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *te
 func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(NewNoopNonceStore()),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be called when NonceStore is Noop")
@@ -663,7 +670,8 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *te
 	// The 2-part format has no nonce, so this is a fully valid legacy credential.
 	legacyToken := legacyTwoPartToken(testHMACKey, method, path, now)
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
@@ -691,7 +699,8 @@ func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T
 	// Forged hex MAC — not a real HMAC output.
 	forgedMAC := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
@@ -714,7 +723,8 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 	now := time.Now()
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", now)
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -769,7 +779,8 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 
 	var gotPrincipal *Principal
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -826,10 +837,10 @@ type spyCounter struct {
 	reason string
 }
 
-func (c *spyCounter) Inc() {
+func (c *spyCounter) Inc(_ context.Context) {
 	c.vec.recorded = append(c.vec.recorded, spyRecord{result: c.result, reason: c.reason})
 }
-func (c *spyCounter) Add(_ float64) {}
+func (c *spyCounter) Add(_ context.Context, _ float64) {}
 
 // spyProvider is a metrics.Provider that returns a spyCounterVec for the
 // service-token counter and no-ops for everything else.
@@ -884,7 +895,8 @@ func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
 
 	legacyToken := legacyTwoPartToken(testHMACKey, http.MethodGet, "/internal/v1/test", now)
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -916,7 +928,8 @@ func TestServiceTokenMiddleware_CallerCellPropagated(t *testing.T) {
 	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
 
 	var gotPrincipal *Principal
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -956,7 +969,8 @@ func TestServiceTokenMiddleware_TamperedCallerCell_Rejected(t *testing.T) {
 	require.Len(t, parts, 4, "GenerateServiceToken must produce a 4-part token")
 	tamperedToken := parts[0] + ":" + parts[1] + ":configcore:" + parts[3]
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1076,7 +1090,8 @@ func TestServiceToken_EmptyCallerCell_MetricLabel(t *testing.T) {
 	ts := fmt.Sprintf("%d", now.Unix())
 	crafted := ts + ":somenonce16bytes::deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1107,7 +1122,8 @@ func TestServiceToken_InvalidCallerCellPattern_MetricLabel(t *testing.T) {
 	ts := fmt.Sprintf("%d", now.Unix())
 	crafted := ts + ":somenonce16bytes:Bad-Cell:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1140,7 +1156,8 @@ func TestServiceTokenMiddleware_LegacyThreePart_Rejected(t *testing.T) {
 	require.Len(t, oldThreePart, 2)
 	simulatedThreePart := oldThreePart[0] + ":aaabbbccc000111222333" + ":" + oldThreePart[1]
 
-	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

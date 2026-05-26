@@ -196,15 +196,17 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 			return err
 		}
 	}
-	// B2: when a metrics handler is configured, a dedicated HealthListener must
-	// be declared so /metrics is isolated from the public primary listener.
-	if b.resolveHealthRouteGroupCfg().metricsHandler != nil {
-		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
-			return fmt.Errorf(
-				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
-					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener",
-			)
-		}
+	// #673: framework health routes (/healthz, /readyz, /metrics) belong solely
+	// on cell.HealthListener. A missing declaration fails fast — the pre-#673
+	// silent remap onto the public PrimaryListener (which collapsed port-level
+	// isolation between business traffic and infra probes) is gone, and there is
+	// no opt-in escape hatch. This subsumes the former metrics-specific B2 check:
+	// metrics-without-health is just one case of health-without-HealthListener.
+	if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: framework health routes (/healthz, /readyz, /metrics) require a dedicated "+
+				"cell.HealthListener; add WithListener(cell.HealthListener, ...) "+
+				"(use []auth.ListenerAuth{auth.AuthNone{}} for the loopback probe path)")
 	}
 	return nil
 }
@@ -374,12 +376,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 // Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //
-// Health-listener fallback: when no HealthListener is declared, /healthz,
-// /readyz, and /metrics are mounted on the PrimaryListener instead. This is
-// the expected behavior for tests that inject only primary + internal
-// listeners. Production deployments should declare a dedicated HealthListener
-// (typically "127.0.0.1:9091") to physically separate health traffic from
-// business traffic.
+// Health listener required (#673): framework health routes (/healthz, /readyz,
+// /metrics) are mounted only on a dedicated cell.HealthListener. When none is
+// declared, phase0 fails fast — there is no silent fallback onto the public
+// PrimaryListener. Every deployment (production and tests alike) must declare
+// WithListener(cell.HealthListener, ...); tests use an ephemeral
+// "127.0.0.1:0" bind. This physically separates health traffic from business
+// traffic.
 //
 // The ten phases and their responsibilities:
 //

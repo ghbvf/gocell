@@ -2,12 +2,12 @@ package governance
 
 // adv06_removal_test.go tests that:
 //   1. codeADV06 constant no longer exists in rulecodes.go — covered by goldenRuleIDs()
-//   2. validateADV06 is removed from rules() — covered by TestADV06_NotInRules
+//   2. validateADV06 is removed from allRules — covered by TestADV06_NotInRules
 //   3. ADV-05 fires when Subscribers is empty (no cells, no actors)
 //   4. ADV-05 passes when contract has ActorSubscribers that populate Subscribers
 //
 // These are TDD RED tests: they reflect the post-flip invariants.
-// Tests 1+2 are implicitly covered by TestRuleReachabilityFromRegistrationRoots
+// Tests 1+2 are implicitly covered by TestAllRulesMatchGolden
 // via goldenRuleIDs() not listing "ADV-06".
 
 import (
@@ -41,6 +41,7 @@ func assertResultsContainCode(t *testing.T, results []ValidationResult, code Rul
 // TestADV05_EmptySubscribers_NoActors asserts ADV-05 fires when a contract has
 // no cell subscribers AND no ActorSubscribers (so Subscribers is empty).
 func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	project.Contracts["event.dead.v1"] = &metadata.ContractMeta{
 		ID:        "event.dead.v1",
@@ -56,7 +57,9 @@ func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
 
 	v := NewValidator(project, "", clock.Real())
 	results := v.validateADV05()
-	assertResultsContainCode(t, results, codeADV05, "endpoints.subscribers")
+	// Field anchors at the locatable lifecycle field, not the derived
+	// endpoints.subscribers (which carries no YAML position).
+	assertResultsContainCode(t, results, codeADV05, "lifecycle")
 }
 
 // TestADV05_ActorSubscribers_PopulatesSubscribers asserts ADV-05 passes when
@@ -65,6 +68,7 @@ func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
 // In the post-flip model, the test directly sets Subscribers (as derive would),
 // simulating the output of deriveEventSubscribers having merged ActorSubscribers.
 func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	project.Contracts["event.audit.appended.v1"] = &metadata.ContractMeta{
 		ID:        "event.audit.appended.v1",
@@ -90,8 +94,9 @@ func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
 }
 
 // TestADV06_NotInRules asserts that no result has code == "ADV-06" after the rule
-// is removed from the pipeline. We run rules() and confirm no result has code "ADV-06".
+// is removed from the pipeline. We iterate allRules and confirm no result has code "ADV-06".
 func TestADV06_NotInRules(t *testing.T) {
+	t.Parallel()
 	project := minimalGovernanceProject()
 	// Add a contract with no subscribers to guarantee ADV-05 fires if present,
 	// ensuring the rules pipeline runs all rules.
@@ -104,11 +109,13 @@ func TestADV06_NotInRules(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	allRules := v.rules()
-	for _, rule := range allRules {
-		for _, r := range rule() {
+	// Only iterate non-Strict/non-Health rules: PhaseStrict rules (e.g. VERIFY-06)
+	// require v.runCtx to be set via run(); PhaseHealth rules require a full project.
+	// ADV-06 was a PhaseBase/advisory rule, so limiting to PhaseBase+PhaseDep is sufficient.
+	for _, rule := range rulesForPhases(PhaseBase, PhaseDep) {
+		for _, r := range rule.Detect(v) {
 			if r.Code == "ADV-06" {
-				t.Errorf("ADV-06 must not be emitted by rules(): found result %v", r)
+				t.Errorf("ADV-06 must not be emitted by allRules: found result %v", r)
 			}
 		}
 	}

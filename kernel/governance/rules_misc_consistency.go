@@ -1142,7 +1142,7 @@ func collectHelperCallTopics(
 func collectOutboxEmitTopic(
 	call *ast.CallExpr,
 	ctx emitScanContext,
-	state *emitScanState,
+	_ *emitScanState, // unused here; kept for signature parity with sibling collectors
 ) []ValidationResult {
 	topicExpr := call.Args[2]
 	topic, resolved := resolveTopicExpr(topicExpr, ctx.pkgConsts, ctx.fileConsts)
@@ -1163,7 +1163,6 @@ func collectOutboxEmitTopic(
 			advHintCCE01DynamicTopicEmitFix,
 		)}
 	}
-	_ = state
 	return nil
 }
 

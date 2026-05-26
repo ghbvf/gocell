@@ -132,7 +132,7 @@ func attachCellDeps(opts *catalog.ExportOptions, filter catalog.Filter, pm *meta
 	if !filter.Include.CellDeps {
 		return nil
 	}
-	g, errs := governance.NewDependencyChecker(pm).Graph()
+	g, errs := governance.NewValidator(pm, "", clk).Graph()
 	if len(errs) > 0 {
 		return fmt.Errorf("cell dep graph build had validation errors:\n%s", formatValidationErrors(errs))
 	}
@@ -233,7 +233,10 @@ func parseInclude(s string) (catalog.IncludeOptions, error) {
 func formatValidationErrors(errs []governance.ValidationResult) string {
 	var sb strings.Builder
 	for _, e := range errs {
-		fmt.Fprintf(&sb, "  [%s] %s: %s\n", e.Code, e.Field, e.Message)
+		// Lead with the code; Message is self-describing. Field is omitted: for
+		// scope findings (e.g. DEP-02) it is a placeholder like "cells" that would
+		// only mislead.
+		fmt.Fprintf(&sb, "  [%s] %s\n", e.Code, e.Message)
 	}
 	return sb.String()
 }

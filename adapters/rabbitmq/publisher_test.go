@@ -227,7 +227,7 @@ type fakeCollector struct {
 	reasons []PublishFailureReason
 }
 
-func (f *fakeCollector) RecordPublishFailure(reason PublishFailureReason) {
+func (f *fakeCollector) RecordPublishFailure(_ context.Context, reason PublishFailureReason) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reasons = append(f.reasons, reason)
@@ -253,7 +253,8 @@ func TestPublish_NackReturnsNackErrcodeAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)
@@ -288,7 +289,8 @@ func TestPublish_TimeoutReturnsTimeoutAndRecords(t *testing.T) {
 	}()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)
@@ -315,7 +317,8 @@ func TestPublish_ConfirmChanClosedReturnsTimeoutAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn,
+	pub := NewPublisher(
+		conn,
 		WithPublisherClock(clock.Real()),
 		WithPublisherCollector(col),
 	)
@@ -343,7 +346,7 @@ func TestNoopPublisherCollector_DoesNotPanic(t *testing.T) {
 		PublishFailureConfirmMode,
 		PublishFailurePublishSend,
 	} {
-		assert.NotPanics(t, func() { noop.RecordPublishFailure(r) })
+		assert.NotPanics(t, func() { noop.RecordPublishFailure(context.Background(), r) })
 	}
 }
 

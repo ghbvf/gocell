@@ -1,15 +1,17 @@
 package outbox
 
 import (
+	"context"
 	"testing"
 )
 
 func TestNopConsumerObserver_ObserveReject_DoesNotPanic(t *testing.T) {
 	var o ConsumerObserver = NopConsumerObserver{}
+	ctx := context.Background()
 	// All argument shapes must be safe; the Nop swallows them.
-	o.ObserveReject("accesscore", "topic.foo", "cg-accesscore-foo", ConsumerRejectReasonHandlerReject)
-	o.ObserveReject("", "", "", "")
-	o.ObserveReject("auditcore", "topic.bar", "cg-auditcore-bar", ConsumerRejectReasonRetryExhausted)
+	o.ObserveReject(ctx, "accesscore", "topic.foo", "cg-accesscore-foo", ConsumerRejectReasonHandlerReject)
+	o.ObserveReject(ctx, "", "", "", "")
+	o.ObserveReject(ctx, "auditcore", "topic.bar", "cg-auditcore-bar", ConsumerRejectReasonRetryExhausted)
 }
 
 func TestConsumerRejectReason_Constants(t *testing.T) {
@@ -63,6 +65,6 @@ type rejectCall struct {
 	reason        string
 }
 
-func (f *fakeObserver) ObserveReject(cellID, topic, consumerGroup, reason string) {
+func (f *fakeObserver) ObserveReject(_ context.Context, cellID, topic, consumerGroup, reason string) {
 	f.calls = append(f.calls, rejectCall{cellID, topic, consumerGroup, reason})
 }

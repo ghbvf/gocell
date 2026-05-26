@@ -1,6 +1,8 @@
 package governance
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
+
+// TestCheckHealth_CtxCanceled verifies CheckHealth propagates run()'s context
+// error instead of swallowing it — the regression guard for the signal-aware
+// ctx now threaded from `gocell check contract-health` (it previously ran with
+// context.Background() and dropped run's error). A pre-canceled ctx must surface
+// as a non-nil context.Canceled error so the CLI reports an interrupted run.
+func TestCheckHealth_CtxCanceled(t *testing.T) {
+	t.Parallel()
+	v := NewValidator(nil, "", clock.Real())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := v.CheckHealth(ctx)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "CheckHealth must propagate the ctx error")
+}
 
 // TestCheckContractHealth contains the 14 unit cases migrated from
 // cmd/gocell/app/check_test.go. They exercise CheckContractHealth logic
@@ -273,10 +290,17 @@ func TestCheckContractHealth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			contracts := map[string]*metadata.ContractMeta{}
+			for _, c := range tt.contracts {
+				contracts[c.ID] = c
+			}
 			v := NewValidator(&metadata.ProjectMeta{
-				Contracts: map[string]*metadata.ContractMeta{},
+				Contracts: contracts,
 			}, "", clock.Real())
-			issues := v.CheckContractHealth(tt.contracts)
+			var issues []ValidationResult
+			issues = append(issues, v.checkCH01()...)
+			issues = append(issues, v.checkCH02()...)
+			issues = append(issues, v.checkCH03()...)
 			assertContractHealthIssues(t, issues, tt.wantErr, tt.wantMsg)
 		})
 	}
@@ -325,7 +349,10 @@ schemaRefs:
 	require.NotEmpty(t, contracts, "parser must find the contract.yaml")
 
 	v := NewValidator(project, dir, clock.Real())
-	results := v.CheckContractHealth(contracts)
+	var results []ValidationResult
+	results = append(results, v.checkCH01()...)
+	results = append(results, v.checkCH02()...)
+	results = append(results, v.checkCH03()...)
 	require.NotEmpty(t, results, "empty ownerCell must produce findings")
 
 	var ownerFinding *ValidationResult
@@ -373,13 +400,11 @@ schemaRefs:
 	project, err := parser.Parse()
 	require.NoError(t, err)
 
-	contracts := make([]*metadata.ContractMeta, 0, len(project.Contracts))
-	for _, c := range project.Contracts {
-		contracts = append(contracts, c)
-	}
-
 	v := NewValidator(project, dir, clock.Real())
-	results := v.CheckContractHealth(contracts)
+	var results []ValidationResult
+	results = append(results, v.checkCH01()...)
+	results = append(results, v.checkCH02()...)
+	results = append(results, v.checkCH03()...)
 	require.NotEmpty(t, results, "responses[401] missing schemaRef must produce a CH-03 finding")
 
 	var schemaFinding *ValidationResult

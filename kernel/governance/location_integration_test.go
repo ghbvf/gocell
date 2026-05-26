@@ -3,6 +3,7 @@
 package governance_test
 
 import (
+	"context"
 	"testing"
 	"testing/fstest"
 
@@ -245,8 +246,8 @@ func TestLocation_DEP02_ScopeNotFile(t *testing.T) {
 		},
 	}
 
-	dc := governance.NewDependencyChecker(pm)
-	results := dc.Check()
+	v := governance.NewValidator(pm, "", clock.Real())
+	results, _ := v.ValidateStrict(context.Background(), false, false)
 
 	var dep02 *governance.ValidationResult
 	for i := range results {

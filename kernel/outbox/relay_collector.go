@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -182,50 +183,51 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 // Zero-count outcomes are skipped to keep time-series cardinality clean:
 // a persistent zero counter fragment would otherwise appear in Grafana
 // topology for dead-lettered cells that never actually dead-letter anything.
-func (c *providerRelayCollector) RecordPollCycle(r PollCycleResult) {
+func (c *providerRelayCollector) RecordPollCycle(ctx context.Context, r PollCycleResult) {
 	if r.Published > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "published"}).Add(float64(r.Published))
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "published"}).Add(ctx, float64(r.Published))
 	}
 	if r.Retried > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "retried"}).Add(float64(r.Retried))
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "retried"}).Add(ctx, float64(r.Retried))
 	}
 	if r.Dead > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "dead"}).Add(float64(r.Dead))
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "dead"}).Add(ctx, float64(r.Dead))
 	}
 	if r.Skipped > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "skipped"}).Add(float64(r.Skipped))
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "skipped"}).Add(ctx, float64(r.Skipped))
 	}
 	if r.Lost > 0 {
-		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "lost"}).Add(float64(r.Lost))
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "lost"}).Add(ctx, float64(r.Lost))
 	}
 
-	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(r.ClaimDur.Seconds())
-	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "publish"}).Observe(r.PublishDur.Seconds())
-	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "write_back"}).Observe(r.WriteBackDur.Seconds())
-	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "total"}).Observe((r.ClaimDur + r.PublishDur + r.WriteBackDur).Seconds())
+	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(ctx, r.ClaimDur.Seconds())
+	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "publish"}).Observe(ctx, r.PublishDur.Seconds())
+	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "write_back"}).Observe(ctx, r.WriteBackDur.Seconds())
+	total := (r.ClaimDur + r.PublishDur + r.WriteBackDur).Seconds()
+	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "total"}).Observe(ctx, total)
 }
 
 // RecordBatchSize observes the claim count of each poll, including zero to
 // capture idle cycles (useful for relay liveness panels).
-func (c *providerRelayCollector) RecordBatchSize(size int) {
-	c.batchSize.With(metrics.Labels{"cell": c.cellID}).Observe(float64(size))
+func (c *providerRelayCollector) RecordBatchSize(ctx context.Context, size int) {
+	c.batchSize.With(metrics.Labels{"cell": c.cellID}).Observe(ctx, float64(size))
 }
 
 // RecordReclaim emits only when count > 0; dropping zero avoids a noisy
 // counter increment every cleanup interval on a healthy relay.
-func (c *providerRelayCollector) RecordReclaim(count int64) {
+func (c *providerRelayCollector) RecordReclaim(ctx context.Context, count int64) {
 	if count > 0 {
-		c.reclaimed.With(metrics.Labels{"cell": c.cellID}).Add(float64(count))
+		c.reclaimed.With(metrics.Labels{"cell": c.cellID}).Add(ctx, float64(count))
 	}
 }
 
 // RecordCleanup splits increments by status so dashboards can track
 // published-vs-dead cleanup separately.
-func (c *providerRelayCollector) RecordCleanup(publishedDeleted, deadDeleted int64) {
+func (c *providerRelayCollector) RecordCleanup(ctx context.Context, publishedDeleted, deadDeleted int64) {
 	if publishedDeleted > 0 {
-		c.cleaned.With(metrics.Labels{"cell": c.cellID, "status": "published"}).Add(float64(publishedDeleted))
+		c.cleaned.With(metrics.Labels{"cell": c.cellID, "status": "published"}).Add(ctx, float64(publishedDeleted))
 	}
 	if deadDeleted > 0 {
-		c.cleaned.With(metrics.Labels{"cell": c.cellID, "status": "dead"}).Add(float64(deadDeleted))
+		c.cleaned.With(metrics.Labels{"cell": c.cellID, "status": "dead"}).Add(ctx, float64(deadDeleted))
 	}
 }

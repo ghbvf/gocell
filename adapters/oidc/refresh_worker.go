@@ -121,7 +121,7 @@ func (a *Adapter) runRefreshLoop(ctx context.Context) {
 			_, err := a.Refresh(ctx)
 			if err != nil {
 				n := a.consecutiveFailures.Add(1)
-				a.refreshCollector.RecordRefresh(false)
+				a.refreshCollector.RecordRefresh(ctx, false)
 				slog.Warn(
 					"oidc: jwks refresh failed",
 					slog.String("issuer", a.config.IssuerURL),
@@ -130,7 +130,7 @@ func (a *Adapter) runRefreshLoop(ctx context.Context) {
 				)
 			} else {
 				prev := a.consecutiveFailures.Swap(0)
-				a.refreshCollector.RecordRefresh(true)
+				a.refreshCollector.RecordRefresh(ctx, true)
 				if prev > 0 {
 					slog.Info(
 						"oidc: jwks refresh recovered",

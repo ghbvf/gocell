@@ -135,6 +135,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	require.NoError(t, asm.Register(cellImpl))
 
 	primaryLn := newLocalListener(t)
+	healthLn := newLocalListener(t)
 	b := New(
 		WithClock(clock.Real()),
 		WithSubscriber(bus),
@@ -143,16 +144,16 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithTracer(spyTracer),
 	)
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- b.Run(ctx) }()
 
-	// Wait until Bootstrap reports the primary listener healthy — by then
+	// Wait until Bootstrap reports the health listener healthy — by then
 	// phase6StartEventRouter has run and the subscription is live.
-	addr := primaryLn.Addr().String()
-	waitForHealthy(t, addr)
+	waitForHealthy(t, healthLn.Addr().String())
 
 	// Publish one entry on the topic and await handler invocation.
 	// The bus requires a v1 wire envelope, built via outbox.MarshalEnvelope.

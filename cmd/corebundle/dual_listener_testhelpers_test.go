@@ -24,11 +24,11 @@ func newCorebundleLocalListener(t *testing.T) net.Listener {
 }
 
 // waitForHealthy polls /healthz on addr until it returns 200 or the deadline
-// expires. addr must be a host:port string (no scheme). The path stays
-// /healthz regardless of which listener serves it: in production it lives on
-// the HealthListener, but the phase5 fallback (test convenience) remaps it
-// onto the PrimaryListener when no HealthListener is declared. Tests that
-// probe /healthz on either port should call this helper instead of
+// expires. addr must be a host:port string (no scheme) and must be the
+// HealthListener's address: since #673 /healthz, /readyz and /metrics live
+// exclusively on the HealthListener (the phase5 fallback that remapped them
+// onto the PrimaryListener was removed; bootstrap phase0 fails fast when no
+// HealthListener is declared). Tests should call this helper instead of
 // hand-rolled http.Get retries (R2-02). The retry loop also covers the
 // startup race where the listener has bound but Bootstrap.Run has not yet
 // attached the chi.Mux.

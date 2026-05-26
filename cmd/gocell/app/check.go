@@ -57,7 +57,7 @@ var checkSubcommands = []subcommand[func(ctx context.Context, args []string) err
 			"Aggregate contract metadata health.",
 			"[--format text|json|sarif]",
 		},
-		run: func(_ context.Context, a []string) error { return checkContractHealth(a) },
+		run: checkContractHealth,
 	},
 	{
 		name: cmdSliceCoverage,
@@ -119,7 +119,7 @@ func runCheck(ctx context.Context, args []string) error {
 	return run(ctx, args[1:])
 }
 
-func checkContractHealth(args []string) error {
+func checkContractHealth(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("check contract-health", flag.ContinueOnError)
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
@@ -159,10 +159,10 @@ func checkContractHealth(args []string) error {
 	}
 
 	validator := governance.NewValidator(project, root, clock.Real())
-	results := validator.CheckContractHealth(contracts)
-	results = append(results, validator.CheckHTTPResponseAlignment(contracts, root)...)
-	results = append(results, validator.CheckHTTPPathParamUUID(contracts, root)...)
-	results = append(results, validator.CheckHTTPTypedResponseEnvelope(contracts, root)...)
+	results, healthErr := validator.CheckHealth(ctx)
+	if healthErr != nil {
+		return fmt.Errorf("contract-health interrupted: %w", healthErr)
+	}
 
 	if err := printer.Print(results); err != nil {
 		return fmt.Errorf(errEmitResultsFmt, err)

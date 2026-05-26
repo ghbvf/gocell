@@ -143,8 +143,8 @@ type Dependencies struct {
 }
 
 // CellDepGraph is the cell-level (cell.yaml dependencies field) view. Built by
-// the caller from kernel/governance.DependencyChecker.Graph(). Nodes/Edges
-// sorted deterministically.
+// the caller from kernel/governance.Validator.Graph(). Nodes/Edges sorted
+// deterministically.
 //
 // BuiltAt records when this graph was last constructed (RFC3339 UTC). HTTP
 // clients can use this to detect stale graphs — the field does not change

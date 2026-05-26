@@ -10,11 +10,10 @@ package governance
 // package-scope RuleCode constants rather than an ad-hoc string literal.
 //
 // rulecodes.go is the single source of truth for governance rule code
-// literals emitted by all three registration roots:
-//
-//   - Validator (rules() + strictRules())
-//   - DependencyChecker (Check / CheckFailFast)
-//   - CheckContractHealth (and the CH-aligned rules in rules_http.go)
+// literals. Every rule is registered once in the allRules slice
+// (rules_registry.go) and selected by Phase (Base / Strict / Dep / Health);
+// the engine (engine.go) runs them. Each rule's detect method emits its code
+// through the locator constructors.
 //
 // Every "<SERIES>-<NN>" literal embedded in kernel/governance/*.go must come
 // from one of the codeXxx constants below; archtest
@@ -24,9 +23,10 @@ package governance
 // part of any public API. RuleCode itself is exported so external consumers
 // (cmd/gocell, tools) can create ValidationResult values with the correct type.
 //
-// Total: 88 constants across 12 series, matching goldenRuleIDs() in
-// rule_inventory_test.go. FMT-18 and ADV-02 are retired; the numbering gaps
-// are intentional.
+// FMT-18 and ADV-02 are retired; the numbering gaps are intentional. The exact
+// constant set is golden-locked against goldenRuleIDs() by TestAllRulesMatchGolden
+// in rule_inventory_test.go — that test, not a hand-maintained count here, is the
+// source of truth for how many rules exist.
 
 // RuleCode is a named string type that identifies a single governance rule.
 // Exported so cmd/ and tools/ can reference the type when constructing
@@ -117,14 +117,14 @@ const (
 	// 4 active constants (ADV-01/03/04/05); ADV-02 retired and ADV-06 removed
 	// (gap intentional). Subscribers are now derived from slice contractUsages +
 	// actorSubscribers, making drift-detection moot.
-	// ADV-05 is SeverityError; ADV-01/03/04 are SeverityWarning.
+	// ADV-05 is SeverityWarning (advisory); ADV-01/03/04 are also SeverityWarning.
 	codeADV01 RuleCode = "ADV-01"
 	codeADV03 RuleCode = "ADV-03"
 	codeADV04 RuleCode = "ADV-04"
 	codeADV05 RuleCode = "ADV-05"
 
 	// CH — contract-health (contracthealth.go, rules_http.go).
-	// Registered via Validator.CheckContractHealth, not rules().
+	// Registered in allRules with Phase: PhaseHealth (run by `gocell check`).
 	codeCH01 RuleCode = "CH-01"
 	codeCH02 RuleCode = "CH-02"
 	codeCH03 RuleCode = "CH-03"
@@ -132,8 +132,8 @@ const (
 	codeCH05 RuleCode = "CH-05"
 	codeCH06 RuleCode = "CH-06"
 
-	// DEP — dependency-graph checks (depcheck.go). Registered via
-	// DependencyChecker.Check / CheckFailFast, not rules().
+	// DEP — dependency-graph checks (depcheck.go). Registered in allRules with
+	// Phase: PhaseDep (run by `gocell validate`).
 	codeDEP01 RuleCode = "DEP-01"
 	codeDEP02 RuleCode = "DEP-02"
 	codeDEP03 RuleCode = "DEP-03"

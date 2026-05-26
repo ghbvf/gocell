@@ -145,6 +145,7 @@ type captureSubscriberHandler struct {
 }
 
 func (c *captureSubscriberHandler) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+
 func (c *captureSubscriberHandler) Ready(_ outbox.Subscription) <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
@@ -177,11 +178,15 @@ type coreConfigEventSettlementRecord struct {
 	result      outbox.SettlementResult
 }
 
-func (c *recordingCoreConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+func (c *recordingCoreConfigEventCollector) RecordEventProcess(
+	_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason,
+) {
 	c.processRecords = append(c.processRecords, coreConfigEventProcessRecord{cell: cellID, slice: sliceID, reason: reason})
 }
 
-func (c *recordingCoreConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
+func (c *recordingCoreConfigEventCollector) RecordEventSettlement(
+	_ context.Context, cellID, sliceID, disposition string, result outbox.SettlementResult,
+) {
 	rec := coreConfigEventSettlementRecord{
 		cell: cellID, slice: sliceID, disposition: disposition, result: result,
 	}

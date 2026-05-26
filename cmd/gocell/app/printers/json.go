@@ -20,6 +20,9 @@ import (
 // Camel-case keys per the GoCell JSON convention. Empty results emit
 // "issues": [] (never null) so consumers can safely iterate without
 // nil-checking.
+//
+// note: next/metric fields were removed from M3 and the current M0-M4 roadmap
+// as speculative repository-convergence scaffolding; they are not emitted here.
 type JSONPrinter struct {
 	w io.Writer
 }

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -9,13 +10,13 @@ import (
 
 // EventbusCacheCollector records eventbus subscriber-cache lifecycle metrics.
 type EventbusCacheCollector interface {
-	RecordTombstoneEvicted(cellID, sliceID string)
+	RecordTombstoneEvicted(ctx context.Context, cellID, sliceID string)
 }
 
 // NoopEventbusCacheCollector drops eventbus cache observations.
 type NoopEventbusCacheCollector struct{}
 
-func (NoopEventbusCacheCollector) RecordTombstoneEvicted(string, string) {
+func (NoopEventbusCacheCollector) RecordTombstoneEvicted(_ context.Context, _, _ string) {
 	// Intentionally empty: callers can inject this collector when eventbus-cache
 	// metrics are disabled while keeping service code free of nil checks.
 }
@@ -44,9 +45,9 @@ func NewProviderEventbusCacheCollector(p kernelmetrics.Provider) (EventbusCacheC
 	return &providerEventbusCacheCollector{tombstoneEvicted: tombstoneEvicted}, nil
 }
 
-func (c *providerEventbusCacheCollector) RecordTombstoneEvicted(cellID, sliceID string) {
+func (c *providerEventbusCacheCollector) RecordTombstoneEvicted(ctx context.Context, cellID, sliceID string) {
 	if c == nil {
 		return
 	}
-	c.tombstoneEvicted.With(kernelmetrics.Labels{"cell": cellID, "slice": sliceID}).Inc()
+	c.tombstoneEvicted.With(kernelmetrics.Labels{"cell": cellID, "slice": sliceID}).Inc(ctx)
 }

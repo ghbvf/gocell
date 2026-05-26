@@ -143,7 +143,7 @@ GoCell 的 harvest 反哺有两层独立域：
 - **运行时**：不参与（意图在编译期已凝固到 binary）
 
 ⇒ **B1**：声明 ↔ 实现双向追溯（编译期 + CI 期 archtest）
-⇒ **B2**：声明 / 规则数据化（CI 期规则引擎，规则即 YAML）
+⇒ **B2**：声明 / 规则数据化（CI 期规则引擎，规则即 Go typed-struct registry）
 ⇒ **B3**：单 owner 不可妥协（编译期检测）
 
 ### 4.3 目标③「系统自收敛」
@@ -153,16 +153,16 @@ GoCell 的 harvest 反哺有两层独立域：
 - 软件工程：幂等 + 结构化错误 + testable
 - 第一性原理：收敛需要距离 metric
 
-**形态约束下的实例化**（最关键）：
+**历史推导下的实例化**（M5-HARVEST 已取消，当前路线不落地）：
 - 收敛对象 = **仓库代码 + 元数据**（不是运行时集群状态）
 - 收敛触发器 = git push / 定时 CI / AI Agent 巡检
 - 收敛动作 = 开 PR / 写 advice / 升级人工 alert
 - 持久层 = git（GoCell 唯一拥有的"etcd"）
 - 执行者 = CI bot + Claude Code Agent
 
-⇒ **C1**：闭环必须完整（**在 CI 期/AI Agent 域闭环**，不假设运行时 controller）
-⇒ **C2**：每条规则带结构化 next-action（autofix PR / suggest / advisory / block / escalate）
-⇒ **C3**：每条规则带距离 metric（**仓库 metric**：deprecation 剩余天数 / 覆盖率 / 死契约数 / 未关闭 finding 数）
+⇒ **C1**：闭环必须完整（历史推导；M5-HARVEST 已取消，当前 M0-M4 路线不落地仓库收敛环）
+⇒ **C2**：每条规则带结构化 next-action（历史推导；M5-HARVEST 已取消，当前路线不保留该字段）
+⇒ **C3**：每条规则带距离 metric（历史推导；M5-HARVEST 已取消，当前路线不保留该字段）
 
 ### 4.4 横切要求
 
@@ -183,9 +183,9 @@ GoCell 的 harvest 反哺有两层独立域：
 | 意图 | P-B1 | 声明 ↔ 实现双向追溯（编译期/CI 期）|
 | 意图 | P-B2 | 声明/规则数据化（CI 期规则引擎）|
 | 意图 | P-B3 | 单 owner 不可妥协 |
-| 收敛 | P-C1 | 闭环必须完整（**CI 期/AI Agent 域**，不假设运行时 controller）|
-| 收敛 | P-C2 | 每条规则带结构化 next-action |
-| 收敛 | P-C3 | 每条规则带距离 metric（**仓库 metric** 优先）|
+| 收敛 | P-C1 | 闭环必须完整（历史推导；M5-HARVEST 已取消，当前 M0-M4 路线不落地）|
+| 收敛 | P-C2 | 每条规则带结构化 next-action（历史推导；当前路线已移除）|
+| 收敛 | P-C3 | 每条规则带距离 metric（历史推导；当前路线已移除）|
 | 横切 | P-D1 | 分层依赖纯粹 |
 | 横切 | P-D2 | fail-fast 优先（**限定编译期 + 启动期**）|
 | 横切 | P-D3 | 边界类型自有 |
@@ -323,18 +323,61 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 - governance 校验状态转移合法性（编译期）
 - 运行时通过 `kernel/healthz.Aggregator` 接口暴露当前相位（与 desired 对比的差距由消费方计算）
 
-### M3-RULE-ENGINE：CI 期规则引擎（满足 P-B2 + P-C2 + P-C3）
+### M3-RULE-ENGINE：CI 期规则引擎（满足 P-B2）
 
 **时间维度**：CI 期。
 
-**为什么必须**：15 个 rules_*.go 样板违反 DRY；规则需带 5 槽位（detect / evidence / next / level / harvest）才能驱动 harvest。
+**为什么必须**：15 个 rules_*.go 样板违反 DRY；规则统一注册才能单引擎执行。
 
-**怎么做**：
-- `kernel/governance/engine.go`：唯一执行体
-- `kernel/governance/rules/*.yaml`：64 条规则数据化（schema 含 5 槽位）
-- `next-action` 类型：autofix / suggest / advisory / block / escalate
-- 规则带 `metric`（距离函数：deprecation 剩余天数 / 覆盖率 / finding 数），不只是 bool
-- 修 ADV-05 SeverityError 错分（一行）
+**怎么做**（#687 实施后最终形态）：
+- `kernel/governance/engine.go`：唯一执行体（`Validator.run` 单循环迭代 `allRules`）
+- `kernel/governance/rules_registry.go`：`allRules []Rule` 单一规则注册表（载体见下方 amendment）
+- `Rule` 承载分类元数据：`Code`（RuleCode 常量）+ `Phase`（Base/Strict/Dep/Health，取代 base/strict 两套规则集）+ 编译期检查的 `Detect` 函数值
+- 修 ADV-05 SeverityError 错分（一行：`newError` → `newWarning`）
+- next-action 类型（`NextAction`）与 per-finding `Metric` 字段：推测性仓库收敛 scaffolding，在 #687 中移除，见下方 amendment
+
+**Amendment（2026-05-26，#687 实施）— 载体：Go typed-struct registry，不用 YAML；next-action + Metric 从当前路线移除**
+
+原 "怎么做" 写 `kernel/governance/rules/*.yaml`（5 槽位 detect/evidence/next/level/harvest 数据化）。
+实施时改为 **Go typed-struct registry**（`var allRules []Rule`），偏离 YAML 载体字面。理由：
+
+1. **YAML 倒退 detect 绑定**：规则检测体是任意 Go（DFS 环检测、git subprocess、schema 树递归、
+   签名匹配），无法声明式表达。YAML 只能以 `detect.fn: <名字>` 字符串引用 Go 函数 —— 把绑定从
+   **编译器 Hard**（`Detect: (*Validator).validateXxx` 方法表达式，编译期查存在性）降级为
+   **archtest Medium**（字符串名匹配），并引入 YAML↔Go 漂移缝（新双源）。
+2. **YAML 唯一独有好处是非 Go 外部消费**（仓库收敛工具 / 客户 app 读规则数据），但当前
+   M0-M4 路线没有真实消费方 —— 是推测性收益。未来若重新设计仓库收敛能力，必须先开新 ADR
+   定义 consumer，再由 Go registry 派生序列化（`gocell dump-rules`，codegen 单源），而非手编 YAML。
+3. Go-struct registry：单源、编译器绑定、零新缝。detect/evidence/level 保留为现有 rule 方法 +
+   `ValidationResult` 字段（经 `locator` 构造器，`GOVERNANCE-RULE-ERROR-FIX-FIELD-01` 不变）。
+   harvest 槽位是已取消的仓库收敛动作，本里程碑只产出 finding。
+
+`Rule` 最终结构（#687 实施后）：
+
+```go
+type Rule struct {
+    Code   RuleCode
+    Phase  Phase
+    Detect func(v *Validator) []ValidationResult
+}
+```
+
+`NextAction` 类型 + 5 常量（block / advisory / autofix / suggest / escalate）、`Rule.Next` 字段、
+`stamp()` / `resolveNext()`、`ValidationResult.Next` / `ValidationResult.Metric` 字段均在 #687
+**从 M3 与当前路线移除**。这些是推测性仓库收敛 scaffolding：无任何消费方（printer 不读、
+harvester 未构建），留在 M3 是零价值 surface area。M5-HARVEST 已取消；未来若重新恢复仓库
+收敛能力，必须以新 ADR 对真实消费方重新定义，而不是沿用 #687 的废弃字段。
+
+**P-B2 / P-C2 / P-C3 重评（per ai-robust ADR amendment 落地必查）**：
+
+| 目标 | M3 实施状态 | 说明 |
+|------|------------|------|
+| P-B2：规则数据驱动 | ✅ 满足 | `allRules` 单注册表替代 4 套 dispatch，`TestAllRulesMatchGolden` golden 锁，`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 守 orphan detect 方法 |
+| P-C2：next-action | ❌ 当前路线取消 | 无消费方，M3 中移除；M5-HARVEST 已取消。未来恢复需新 ADR + 真实 consumer |
+| P-C3：per-finding metric | ❌ 当前路线取消 | 同上，M3 中移除；M5-HARVEST 已取消。未来恢复需新 ADR + 真实 consumer |
+
+`GOVERNANCE-RULES-REGISTRATION-GUARD-01` 锁注册到 allRules 的 detect 方法不漏登。AI-robust 档
+载体从 YAML 改为 Go-struct **不降反升**：散落 4 套 dispatch → 单 allRules，漂移缝消除。
 
 ### M4-COVERAGE：双向追溯（满足 P-B1）
 
@@ -349,34 +392,25 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 - `DEAD-CONTRACT-01`：active contract 必须有 handler 入口（语义漂移）
 - `DEAD-CODE-01`：deprecated contract 引用代码不能在 main 分支
 
-### M5-HARVEST：仓库收敛环（满足 P-C1）
+### 取消项：仓库收敛环（P-C1/P-C2/P-C3）
 
-**时间维度**：CI 期 + AI Agent 域（**不在运行时**）。
+**状态**：M5-HARVEST 已取消，不属于当前 M0-M4 路线。
 
-**为什么必须**：GoCell 只有编译期/CI 期对仓库有修改权限，运行时无权改宿主。Bridle Leap 3 在编程框架域必须落到这里。
+**取消后的裁决**：GoCell 仍然不在运行时假设 controller，也不引入没有 consumer 的仓库收敛字段。
+M3 只产出 finding；M4 只做声明 ↔ 实现覆盖。PR #687 中曾讨论的 next-action / metric / harvest 槽位
+全部从当前路线移除。
 
-**怎么做**：
-- 收敛对象 = 仓库代码 + 元数据
-- 触发器 = git push / 定时 CI / AI Agent 巡检
-- 输入 = M3 规则引擎产出的 finding（带 next-action + metric）
-- 动作分级：
-  - autofix：CI bot 自动开 PR
-  - suggest：写 advice 到 `harvest/` 目录
-  - advisory：归入巡检报告
-  - block：阻断当前 PR
-  - escalate：人工 alert（R5）
-- 双层 harvest 域分离：
-  - `harvest/framework/`：GoCell 框架自演进
-  - `harvest/app/{appID}/`：客户应用自演进（客户在自己仓库使用相同引擎，路径独立）
-- 持久层 = git 本身（不需要新持久层）
+**未来恢复门槛**：若后续重新需要仓库收敛能力，必须新开 ADR，先定义真实 consumer（CI bot / Agent /
+外部工具）、动作语义、输出格式和安全边界，再决定是否从 finding 派生 next-action / metric。不得把
+#687 移除的字段当作预留 API 直接恢复。
 
-### 7.1 演进顺序（修正：M5 不依赖 M1）
+### 7.1 演进顺序（当前 M0-M4 路线）
 
 ```
 [M0-FOUNDATION] ──┬─→ [M1-OBSERVED] ─→ [M2-LIFECYCLE]
                   │                        （独立运行时分支）
                   │
-                  └─→ [M3-RULE-ENGINE] ─→ [M4-COVERAGE] ─→ [M5-HARVEST]
+                  └─→ [M3-RULE-ENGINE] ─→ [M4-COVERAGE]
                                               （CI 期分支）
 ```
 
@@ -387,9 +421,8 @@ P-A2 从"仅运行时接口"升级为"运行时接口 + 编译期 cellgen funnel
 | M2-LIFECYCLE | 编译期/运行时接口 | M0（M1 已就绪后接入更顺）|
 | M3-RULE-ENGINE | CI 期 | M0 |
 | M4-COVERAGE | CI 期 | M3 |
-| M5-HARVEST | CI 期 + AI Agent | M3 + M4 |
 
-**关键修正**：M5-HARVEST 走的是仓库通道，**不依赖 M1-OBSERVED**（运行时分支）。这是与上一版的重要差别。M1/M2 是运行时形态完善，M3/M4/M5 是 CI 形态完善，两条分支可并行推进。
+**关键修正**：M5-HARVEST 已取消。M1/M2 是运行时形态完善，M3/M4 是 CI 形态完善，两条分支可并行推进。
 
 ---
 
@@ -403,28 +436,30 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | P-A2 | apiserver 强制 status 由 controller 写 | `kernel/healthz.Aggregator` 接口（boot-time 注入）+ cellgen 派生 typed helper（编译期 funnel） | 运行时接口 + 编译期 |
 | P-A3 | conditions 层级 | 内存 Aggregator 树（`runtime/observability/healthz`）+ adapter 输出（延期） | 运行时 |
 | P-B1 | OwnerReference + finalizer | archtest 双向 + codegen 引用图 | 编译期 + CI 期 |
-| P-B2 | OPA Gatekeeper（运行时 admission）| CI 期规则引擎 + 规则即 YAML | CI 期 |
+| P-B2 | OPA Gatekeeper（运行时 admission）| CI 期规则引擎 + 规则即 Go typed-struct registry（`allRules []Rule`；载体由 §M3 Amendment 2026-05-26 从 YAML 改为 Go-struct，非-Go 外部消费走 `gocell dump-rules` 派生） | CI 期 |
 | P-B3 | API GVK 唯一性（运行时）| 类型 owner 唯一（编译期）| 编译期 |
-| P-C1 | controller manager 持续 reconcile（运行时）| CI bot + AI Agent harvest（仓库收敛）| **CI 期 + Agent 域** |
-| P-C2 | Reconcile.Result + Event | next-action 五级（PR / advice / block / escalate）| CI 期 |
-| P-C3 | ObservedGeneration vs Generation | 仓库 metric（剩余天数 / 覆盖率 / finding 数）| CI 期 |
+| P-C1 | controller manager 持续 reconcile（运行时）| M5-HARVEST 已取消；当前路线不落地仓库收敛环 | 当前路线取消 |
+| P-C2 | Reconcile.Result + Event | next-action 已从当前路线移除；未来恢复需新 ADR + consumer | 当前路线取消 |
+| P-C3 | ObservedGeneration vs Generation | per-finding metric 已从当前路线移除；未来恢复需新 ADR + consumer | 当前路线取消 |
 | P-D1 | apimachinery / client-go 严格分层 | kernel→runtime→adapters 单向 import | 编译期 |
 | P-D2 | initContainers + readinessProbe | 编译期 fail-fast + 启动期 fail-fast | 编译期 + 启动期 |
 | P-D3 | typed client + scheme.Codec | adapters 公开 API 全 GoCell 类型 | 编译期 |
 | **P-E1** | **（无对应——K8s 无编译期可前移）** | **任何能在编译期完成的事不推运行时** | 编译期 |
 
-**校准结论**：12/13 在 K8s 找到等价异形（不是形式相同），证明推导落到了正确的工程抽象。**P-E1 是 GoCell 形态独有原则**，K8s 因没有"编译期"维度无对应项——这点反而验证了 GoCell 不是 K8s 翻版而是**同范式不同形态**的正确实例化。
+**校准结论**：K8s 对照仍可解释 13 条原则的来源（不是形式相同），但 P-C1/P-C2/P-C3
+随 M5-HARVEST 取消而退出当前 M0-M4 落地路线。**P-E1 是 GoCell 形态独有原则**，K8s 因没有
+"编译期"维度无对应项——这点反而验证了 GoCell 不是 K8s 翻版而是**同范式不同形态**的正确实例化。
 
 ---
 
-## 9. 给 GoCell 架构师的决策准则（review 必问 12 条）
+## 9. 给 GoCell 架构师的决策准则（当前 M0-M4）
 
 ### 形态层（最高优先级）
 - **#0**：**这件事应该在编译期还是运行时？默认前移到编译期**（P-E1）
 
 ### 系统工程层
 - #1：状态有归属、时间维度、聚合层级吗？
-- #2：规则失败有没有形成闭环（detect → action → metric）？
+- #2：若 PR 重新引入仓库收敛动作，是否已有新 ADR + 真实 consumer？否则不得引入 next-action / metric 字段。
 - #3：组件有故障容忍吗？
 
 ### 软件工程层
@@ -435,11 +470,12 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 
 ### 第一性原理层
 - #8：唯一 owner 吗？
-- #9：规则能数据化（不是 .go 代码）吗？
+- #9：规则是否有单一数据化注册表，并且 detect 绑定不可漂移？
 - #10：Noop 在生产被意外拾取会立即崩吗？
-- #11：规则有距离 metric 吗（不只 bool）？
+- #11：若 PR 重新引入距离 metric，是否已有 consumer 消费该值？否则不预留字段。
 
-12 问回答全是"是"才合格。任何"否"都是架构债。**#0 优先级最高**——一旦放到运行时就回不来了。
+适用问题回答全是"是"才合格；#2/#11 是条件题，仅在 PR 重新引入仓库收敛能力时触发。任何
+"否"都是架构债。**#0 优先级最高**——一旦放到运行时就回不来了。
 
 ---
 
@@ -449,11 +485,11 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 >
 > **把 Bridle 三跃迁主要落在编译期 / CI 期 ——**
 > **codegen 是状态可见的载体，archtest + 规则引擎是意图可表达的载体，**
-> **harvest（CI bot + AI Agent 操作仓库）是系统自收敛的载体。**
+> **仓库收敛环（harvest）已从当前 M0-M4 路线移除；未来恢复必须新 ADR + 真实 consumer。**
 >
 > **运行时只暴露接口让宿主决定持久化与执行环境**（持久化交宿主、执行交宿主、降级交宿主）。
 >
-> K8s 把三跃迁全落在运行时，因为它拥有 etcd 与集群修改权限；GoCell 把三跃迁主要落在编译期/CI 期，因为只有那里它有完全控制权。**同范式、不同形态、不同时间维度的实例化** —— 这是对标 K8s 的正确方式。
+> K8s 把三跃迁全落在运行时，因为它拥有 etcd 与集群修改权限；GoCell 当前只把已确认有载体的部分落在编译期/CI 期。**同范式、不同形态、不同时间维度的实例化** —— 这是对标 K8s 的正确方式。
 
 ---
 
@@ -465,12 +501,12 @@ K8s 是同范式（声明式 / 单源 / 校验链 / 闭环）但不同形态（�
 | P-A2 | 配置管理 | DRY/SRP | 单源公理 | 运行时接口 + 编译期 funnel | apiserver 强制 | M1 ✅ |
 | P-A3 | 聚合 | 组合 | — | 运行时 | conditions 层级 | M1 ✅ |
 | P-B1 | traceability | 契约即代码 | 充要条件 | 编译期 + CI 期 | OwnerReference | M4 |
-| P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3 |
+| P-B2 | CI = 配置 | DRY | 形式化 | CI 期 | OPA / VAP | M3（载体为 Go typed-struct `allRules []Rule`，见 §M3 Amendment 2026-05-26） |
 | P-B3 | 配置管理 | SRP | 单源公理 | 编译期 | GVK 唯一 | M0 |
-| P-C1 | 闭环 | testable | 收敛定义 | **CI 期 + Agent** | controller manager | **M5（仓库收敛）** |
-| P-C2 | 执行动作 | 结构化错误 | 动作可表达 | CI 期 | Result+Event | M3 |
-| P-C3 | 反馈量化 | — | 距离 metric | CI 期 | ObservedGeneration | M3 |
+| P-C1 | 闭环 | testable | 收敛定义 | — | controller manager | 当前路线取消（M5-HARVEST 已取消） |
+| P-C2 | 执行动作 | 结构化错误 | 动作可表达 | — | Result+Event | 当前路线取消（#687 从 M3 移除；无 consumer）|
+| P-C3 | 反馈量化 | — | 距离 metric | — | ObservedGeneration | 当前路线取消（#687 从 M3 移除；无 consumer）|
 | P-D1 | 子系统分解 | DIP | 单向因果 | 编译期 | apimachinery 分层 | M0 |
 | P-D2 | 故障显式 | 错误不吞 | 补丁不累积 | 编译期 + 启动期 | fail-fast probes | M0 |
 | P-D3 | 边界 | 封装 | 协议显式 | 编译期 | typed client | M0 |
-| **P-E1** | 早反馈 | 形态约束 | 权限模型 | 编译期 | （无）| 横切于 M0-M5 |
+| **P-E1** | 早反馈 | 形态约束 | 权限模型 | 编译期 | （无）| 横切于 M0-M4 |

@@ -236,21 +236,16 @@ var pgrepoApprovedReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 // information about the bypass site. Aligned with panicregister precedent.
 var pgrepoApprovedReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
 
-// inspectStopAtFuncLit walks body's AST invoking visit on every non-FuncLit
-// node, but stops descending at *ast.FuncLit boundaries. R3 uses this to bound
-// the "approval scope" to a single FuncDecl/FuncLit body — markers and
-// ExecDirect calls must co-locate in the SAME scope, not the entire subtree.
-// Without this scope bound, a marker in a nested closure could batch-approve
-// outer-scope ExecDirect calls (and vice versa), defeating the audit-trail
-// intent. See F1 in PR #917 round-2 review.
-func inspectStopAtFuncLit(body ast.Node, visit func(ast.Node)) {
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		visit(n)
-		return true
-	})
+// stopAtFuncLit is a stopAt predicate for EachInSubtreeStopAt that halts
+// descent at *ast.FuncLit boundaries. R3 uses this to bound the "approval
+// scope" to a single FuncDecl/FuncLit body — markers and ExecDirect calls
+// must co-locate in the SAME scope, not the entire subtree. Without this
+// scope bound, a marker in a nested closure could batch-approve outer-scope
+// ExecDirect calls (and vice versa), defeating the audit-trail intent.
+// See F1 in PR #917 round-2 review.
+func stopAtFuncLit(n ast.Node) bool {
+	_, ok := n.(*ast.FuncLit)
+	return ok
 }
 
 // discoverPGAdapterPackages auto-discovers all production packages that
@@ -568,11 +563,7 @@ func scanR3UsagePoints(fset *token.FileSet, file *ast.File, rel string, info *ty
 // boundaries (each FuncLit is scanned separately by scanR3UsagePoints).
 func scanR3PoolAccess(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info, pkgPath string) []Diagnostic {
 	var diags []Diagnostic
-	inspectStopAtFuncLit(body, func(n ast.Node) {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return
-		}
+	EachInSubtreeStopAt[ast.SelectorExpr](body, stopAtFuncLit, func(sel *ast.SelectorExpr) {
 		if sel.Sel.Name != poolFieldName {
 			return
 		}
@@ -621,11 +612,7 @@ func scanR3ExecDirect(
 		return nil
 	}
 	var diags []Diagnostic
-	inspectStopAtFuncLit(body, func(n ast.Node) {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return
-		}
+	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return
@@ -680,12 +667,8 @@ func scanR3ExecDirect(
 // multiple markers in one scope are allowed (harmless redundancy).
 func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool {
 	found := false
-	inspectStopAtFuncLit(body, func(n ast.Node) {
+	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
 		if found {
-			return
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
 			return
 		}
 		fn := resolveCalleeFunc(call.Fun, info)
@@ -1321,12 +1304,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 // per-scope approval semantics of scanR3ExecDirect.
 func bodyCallsPGExecutorExecDirect(body *ast.BlockStmt, info *types.Info, pkgPath string) bool {
 	found := false
-	inspectStopAtFuncLit(body, func(n ast.Node) {
+	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
 		if found {
-			return
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
 			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)

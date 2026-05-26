@@ -220,8 +220,8 @@ func TestAutoWire_CellLabel_FromCtxArg(t *testing.T) {
 
 	// Driving distinct cellIDs proves the collector does not cache one;
 	// each call emits the cellID it was given.
-	b.httpCollector.RecordRequest("accesscore", "GET", "/api/v1/users", 200, 0.05)
-	b.httpCollector.RecordRequest("_runtime", "GET", "/healthz", 200, 0.001)
+	b.httpCollector.RecordRequest(context.Background(), "accesscore", "GET", "/api/v1/users", 200, 0.05)
+	b.httpCollector.RecordRequest(context.Background(), "_runtime", "GET", "/healthz", 200, 0.001)
 
 	reqs := p.counter("http_requests_total")
 	require.NotNil(t, reqs, "http_requests_total must be registered")

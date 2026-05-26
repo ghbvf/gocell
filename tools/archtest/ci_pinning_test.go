@@ -1,9 +1,12 @@
-// INVARIANT:
-//   - CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
-//   - DEPENDABOT-COVERAGE-GOLANGCI-01: dependabot root github-actions block covers
-//     golangci/golangci-lint-action and a root gomod block is present; the decode is
-//     tolerant of unmodeled orchestration fields (a typo in an asserted field
-//     collapses to its zero value and still reds the guard)
+// INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01
+//   - INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01
+//
+// CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
+// DEPENDABOT-COVERAGE-GOLANGCI-01: dependabot root github-actions block covers
+//
+//	golangci/golangci-lint-action and a root gomod block is present; the decode is
+//	tolerant of unmodeled orchestration fields (a typo in an asserted field
+//	collapses to its zero value and still reds the guard)
 package archtest
 
 import (
@@ -291,7 +294,7 @@ updates:
 // re-added, the unmodeled fields below (open-pull-requests-limit / labels /
 // ignore + sub-fields) make the decode error and this NoError assertion red.
 //
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01.
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01
 //
 // The fixture MUST retain those unmodeled fields — they are the regression
 // trip-wire; shrinking the fixture to only modeled fields would silently
@@ -339,7 +342,7 @@ updates:
 // the guard reds. This proves tolerant decode stays fail-closed on the fields
 // the guard reads — the safety claim that justified removing KnownFields(true).
 //
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01.
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — groups-field typo test.
 func TestDependabotCoversCIAndGolangCILintRejectsGroupsFieldTypo(t *testing.T) {
 	body := []byte(`version: 2
 updates:

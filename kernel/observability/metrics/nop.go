@@ -1,5 +1,7 @@
 package metrics
 
+import "context"
+
 // NopProvider is a no-op Provider used when no metrics backend is injected.
 // It validates label sets (so label-drift bugs surface in test) but records
 // nothing.
@@ -58,12 +60,12 @@ func (v nopGaugeVec) With(l Labels) Gauge {
 
 type nopCounter struct{}
 
-func (nopCounter) Inc()              {}
-func (nopCounter) Add(delta float64) {}
+func (nopCounter) Inc(_ context.Context)            {}
+func (nopCounter) Add(_ context.Context, _ float64) {}
 
 type nopHistogram struct{}
 
-func (nopHistogram) Observe(value float64) {}
+func (nopHistogram) Observe(_ context.Context, _ float64) {}
 
 // nopGauge is the no-op Gauge returned by NopProvider. All mutating methods are
 // deliberate no-ops: NopProvider implements the Provider contract without
@@ -71,13 +73,13 @@ func (nopHistogram) Observe(value float64) {}
 type nopGauge struct{}
 
 // Set is a no-op; see nopGauge.
-func (nopGauge) Set(value float64) {}
+func (nopGauge) Set(_ context.Context, _ float64) {}
 
 // Inc is a no-op; see nopGauge.
-func (nopGauge) Inc() {}
+func (nopGauge) Inc(_ context.Context) {}
 
 // Dec is a no-op; see nopGauge.
-func (nopGauge) Dec() {}
+func (nopGauge) Dec(_ context.Context) {}
 
 // Add is a no-op; see nopGauge.
-func (nopGauge) Add(delta float64) {}
+func (nopGauge) Add(_ context.Context, _ float64) {}
