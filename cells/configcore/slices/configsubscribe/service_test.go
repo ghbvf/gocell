@@ -90,7 +90,9 @@ type configEventRecord struct {
 	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcess(_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+func (c *recordingConfigEventCollector) RecordEventProcess(
+	_ context.Context, cellID, sliceID string, reason obmetrics.ConfigEventProcessReason,
+) {
 	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, reason: reason})
 }
 
