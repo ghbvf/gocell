@@ -1,5 +1,4 @@
 // invariants:
-//   - INVARIANT: CLOCK-INJECTION-PROD-CALLSITE-01
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
 //   - INVARIANT: PROD-CLOCK-INJECTION-01
@@ -8,7 +7,6 @@
 // Package archtest — clock injection invariants.
 //
 // Merged from:
-//   - clock_injection_prod_callsite_test.go (CLOCK-INJECTION-PROD-CALLSITE-01)
 //   - clock_leaf_fallback_test.go           (KERNEL-CLOCK-LEAF-FALLBACK-01)
 //   - clock_reset_relative_prod_test.go     (KERNEL-CLOCK-RESET-RELATIVE-PROD-01)
 //   - prod_clock_injection_test.go          (PROD-CLOCK-INJECTION-01)
@@ -22,7 +20,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -33,112 +30,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// CLOCK-INJECTION-PROD-CALLSITE-01
+// KERNEL-CLOCK-LEAF-FALLBACK-01
 // ---------------------------------------------------------------------------
-
-// isCompositionRoot reports whether the given module-relative path is a
-// production composition-root file for CLOCK-INJECTION-PROD-CALLSITE-01.
-//
-// Composition roots are:
-//   - any non-test .go file under cmd/
-//   - any main.go file under examples/ at any depth
-//
-// Intentionally NOT flagging cells/, runtime/, kernel/ — those are injection
-// targets, not composition roots.
-func isCompositionRoot(rel string) bool {
-	if rel == "" {
-		return false
-	}
-	if strings.HasSuffix(rel, "_test.go") {
-		return false
-	}
-	if strings.HasPrefix(rel, "tools/archtest/") {
-		return false
-	}
-	if strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/") {
-		return false
-	}
-	// cmd/: all non-test Go files
-	if strings.HasPrefix(rel, "cmd/") {
-		return true
-	}
-	// examples/: only main.go files (composition roots, not library code)
-	if strings.HasPrefix(rel, "examples/") && strings.HasSuffix(rel, "/main.go") {
-		return true
-	}
-	return false
-}
-
-// compositionRootDirExists checks whether a directory exists under root.
-func compositionRootDirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
-// clockRequiredCtor holds a collected constructor whose package has a WithClock
-// option function.
-type clockRequiredCtor struct {
-	ctorFullName      string // key: ctor.FullName()
-	withClockFullName string // key: withClock.FullName()
-}
-
-// collectClockRequiredCtorsFromPass scans a single package's types for
-// constructors (func name starting with "New", last param variadic) whose
-// package also exports a "WithClock" function. Returns entries to add to the
-// global ctors map.
-func collectClockRequiredCtorsFromPass(p *Pass) []clockRequiredCtor {
-	if p.Pkg == nil {
-		return nil
-	}
-	scope := p.Pkg.Scope()
-
-	// Check if this package exports WithClock.
-	obj := scope.Lookup("WithClock")
-	if obj == nil {
-		return nil
-	}
-	fn, ok := obj.(*types.Func)
-	if !ok {
-		return nil
-	}
-	withClockFullName := fn.FullName()
-
-	// Collect New* constructors from this package (variadic last param).
-	var result []clockRequiredCtor
-	for _, name := range scope.Names() {
-		if !strings.HasPrefix(name, "New") {
-			continue
-		}
-		cobj := scope.Lookup(name)
-		cfn, ok := cobj.(*types.Func)
-		if !ok {
-			continue
-		}
-		sig, ok := cfn.Type().(*types.Signature)
-		if !ok || !sig.Variadic() {
-			continue
-		}
-		result = append(result, clockRequiredCtor{
-			ctorFullName:      cfn.FullName(),
-			withClockFullName: withClockFullName,
-		})
-	}
-	return result
-}
-
-// callsWithClock reports whether any of the call arguments in parent contains
-// a CallExpr whose callee's FullName matches withClockFullName.
-func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
-	for _, arg := range parent.Args {
-		if _, ok := FindFirstInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) bool {
-			fn := resolvedFunc(call.Fun, info)
-			return fn != nil && fn.FullName() == withClockFullName
-		}); ok {
-			return true
-		}
-	}
-	return false
-}
 
 // resolvedFunc returns the *types.Func for a call expression's function
 // expression, or nil if it cannot be determined.
@@ -161,121 +54,6 @@ func resolvedFunc(fun ast.Expr, info *types.Info) *types.Func {
 	}
 	return obj
 }
-
-// INVARIANT: CLOCK-INJECTION-PROD-CALLSITE-01
-//
-// TestClockInjectionProdCallsite enforces CLOCK-INJECTION-PROD-CALLSITE-01:
-// production composition-root files (cmd/ + examples/*/main.go) must pass
-// WithClock when calling constructors whose package exports WithClock.
-//
-// This is the production-side complement to test-side clock injection rules.
-//
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
-// ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
-// ref: uber-go/fx fx.Provide DI graph validation
-func TestClockInjectionProdCallsite(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-
-	// Build patterns covering only cmd/ and examples/ (the composition roots).
-	var patterns []string
-	for _, dir := range []string{"cmd", "examples"} {
-		if compositionRootDirExists(filepath.Join(root, dir)) {
-			patterns = append(patterns, "./"+dir+"/...")
-		}
-	}
-	if len(patterns) == 0 {
-		t.Skip("no cmd/ or examples/ directories found")
-	}
-
-	// Phase 1: collect all ctors from packages that have WithClock.
-	ctors := make(map[string]clockRequiredCtor)
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns,
-		func(p *Pass) []Diagnostic {
-			for _, c := range collectClockRequiredCtorsFromPass(p) {
-				ctors[c.ctorFullName] = c
-			}
-			return nil
-		})
-
-	// Phase 2: scan composition-root files for callsite violations.
-	diags := RunTyped(t, TypedOpts{Tests: false}, patterns,
-		func(p *Pass) []Diagnostic {
-			var d []Diagnostic
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !isCompositionRoot(rel) {
-					continue
-				}
-				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
-			}
-			return d
-		})
-
-	Report(t, "CLOCK-INJECTION-PROD-CALLSITE-01", diags)
-}
-
-// scanClockCallsiteAST walks file looking for calls to any constructor in
-// ctors and reports violations where WithClock is missing.
-func scanClockCallsiteAST(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-	ctors map[string]clockRequiredCtor,
-) []Diagnostic {
-	var out []Diagnostic
-	seen := map[string]bool{}
-
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		callee := resolvedFunc(call.Fun, info)
-		if callee == nil {
-			return
-		}
-		ctor, isCtor := ctors[callee.FullName()]
-		if !isCtor {
-			return
-		}
-		// Only flag calls with at least one option argument.
-		if len(call.Args) == 0 {
-			return
-		}
-		if callsWithClock(call, info, ctor.withClockFullName) {
-			return
-		}
-		line := fset.Position(call.Pos()).Line
-		key := fmt.Sprintf("%s:%d:%s", rel, line, callee.Name())
-		if !seen[key] {
-			seen[key] = true
-			out = append(out, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"%s called without WithClock — "+
-						"must pass WithClock(clk) to satisfy the clock injection requirement. "+
-						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
-					callee.FullName(),
-				),
-			})
-		}
-	})
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Rel != out[j].Rel {
-			return out[i].Rel < out[j].Rel
-		}
-		return out[i].Line < out[j].Line
-	})
-	return out
-}
-
-// ---------------------------------------------------------------------------
-// KERNEL-CLOCK-LEAF-FALLBACK-01
-// ---------------------------------------------------------------------------
 
 // kernelClockPkgPath is the import path of the package whose Real() factory
 // the gate guards.

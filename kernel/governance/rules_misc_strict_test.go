@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
@@ -1144,7 +1145,10 @@ func TestStatusBoardStateEnum01(t *testing.T) {
 // --- FMT-23 (contract deprecated cleanup) ---
 
 // TestContractDeprecatedCleanup01 verifies the three deprecation violation cases.
+// The validator clock and the relative "recent" date are anchored to a fixed
+// instant (clockmock.New) so the <90d case is deterministic (#1022).
 func TestContractDeprecatedCleanup01(t *testing.T) {
+	fixed := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name         string
 		lifecycle    string
@@ -1185,7 +1189,7 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 		{
 			name:         "deprecated recent (<90d) — no violation",
 			lifecycle:    "deprecated",
-			deprecatedAt: time.Now().AddDate(0, 0, -30).Format("2006-01-02"),
+			deprecatedAt: fixed.AddDate(0, 0, -30).Format("2006-01-02"),
 			wantCount:    0,
 		},
 	}
@@ -1210,7 +1214,7 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 				Assemblies: map[string]*metadata.AssemblyMeta{},
 			}
 
-			v := NewValidator(pm, "", clock.Real())
+			v := NewValidator(pm, "", clockmock.New(fixed))
 			results, err := v.ValidateStrict(t.Context(), false, false)
 			require.NoError(t, err)
 			matches := findByCode(results, "FMT-23")
@@ -1252,11 +1256,13 @@ func TestFMT22_EmptyStateViolation(t *testing.T) {
 }
 
 // TestFMT23_DeprecatedCleanup_BoundaryCheck verifies the 90-day boundary.
-// Note: the check uses time.Parse (midnight UTC) vs time.Now().UTC() (current time),
-// so "N days ago" means midnight of that date. With 89 days the difference is
-// < 90 days + intraday remainder, guaranteeing no warning. With 91 days the
-// difference exceeds 90 days even at midnight, guaranteeing a warning.
+// Both the validator clock and the deprecatedAt dates are anchored to the same
+// fixed instant (clockmock.New) so the assertion is fully deterministic — no
+// UTC-midnight wall-clock flakiness (#1022). The rule compares deprecatedAt
+// (midnight UTC) against v.clk.Now() (the fixed instant): 89 days before noon
+// stays < 90d, 91 days before noon exceeds 90d, regardless of wall time.
 func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
+	fixed := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name      string
 		daysAgo   int
@@ -1276,7 +1282,7 @@ func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			deprecatedDate := time.Now().UTC().AddDate(0, 0, -tc.daysAgo).Format("2006-01-02")
+			deprecatedDate := fixed.UTC().AddDate(0, 0, -tc.daysAgo).Format("2006-01-02")
 			pm := &metadata.ProjectMeta{
 				Cells:  map[string]*metadata.CellMeta{},
 				Slices: map[string]*metadata.SliceMeta{},
@@ -1295,7 +1301,7 @@ func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
 				Assemblies: map[string]*metadata.AssemblyMeta{},
 			}
 
-			v := NewValidator(pm, "", clock.Real())
+			v := NewValidator(pm, "", clockmock.New(fixed))
 			results, err := v.ValidateStrict(t.Context(), false, false)
 			require.NoError(t, err)
 			matches := findByCode(results, "FMT-23")
