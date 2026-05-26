@@ -21,13 +21,13 @@ var (
 	_ lifecycle.ManagedResource = (*Pool)(nil)
 )
 
-// Pool readiness-probe names. healthz.ReadyProbeName-typed consts funneled by
-// archtest OPS-CONTRACT-STRING-FUNNEL-01 (snake_case + _ready).
+// Pool readiness-probe names. healthz.ProbeName-typed consts funneled by
+// archtest PROBENAME-SEALED-FUNNEL-01 (snake_case + _ready).
 const (
 	// ProbeReady probes basic pool liveness (Ping).
-	ProbeReady healthz.ReadyProbeName = "postgres_ready"
+	ProbeReady healthz.ProbeName = "postgres_ready"
 	// ProbeIndexesValidReady probes that all expected indexes are valid.
-	ProbeIndexesValidReady healthz.ReadyProbeName = "postgres_indexes_valid_ready"
+	ProbeIndexesValidReady healthz.ProbeName = "postgres_indexes_valid_ready"
 )
 
 // Default pool configuration values.

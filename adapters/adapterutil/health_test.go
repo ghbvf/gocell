@@ -14,7 +14,7 @@ import (
 func TestHealthToCheckers_ReturnsSingleNamedProbe(t *testing.T) {
 	t.Parallel()
 
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(context.Context) error {
 		return nil
 	}, testtime.D1s)
 	if len(probes) != 1 {
@@ -28,7 +28,7 @@ func TestHealthToCheckers_ReturnsSingleNamedProbe(t *testing.T) {
 func TestHealthToCheckers_HealthyDelegatesNil(t *testing.T) {
 	t.Parallel()
 
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(context.Context) error {
 		return nil
 	}, testtime.D1s)
 	if err := probes["foo_ready"](context.Background()); err != nil {
@@ -40,7 +40,7 @@ func TestHealthToCheckers_ErrorPropagated(t *testing.T) {
 	t.Parallel()
 
 	sentinel := errors.New("boom")
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(context.Context) error {
 		return sentinel
 	}, testtime.D1s)
 	if err := probes["foo_ready"](context.Background()); !errors.Is(err, sentinel) {
@@ -51,7 +51,7 @@ func TestHealthToCheckers_ErrorPropagated(t *testing.T) {
 func TestHealthToCheckers_InnerTimeoutBoundsProbe(t *testing.T) {
 	t.Parallel()
 
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(ctx context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}, testtime.D50ms)
@@ -75,7 +75,7 @@ func TestHealthToCheckers_DefaultTimeoutWhenZero(t *testing.T) {
 	if adapterutil.DefaultProbeTimeout != testtime.D5s {
 		t.Fatalf("DefaultProbeTimeout = %v, want %v", adapterutil.DefaultProbeTimeout, testtime.D5s)
 	}
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(context.Context) error {
 		return nil
 	}, 0)
 	if err := probes["foo_ready"](context.Background()); err != nil {
@@ -90,7 +90,7 @@ func TestHealthToCheckers_InheritsCallerDeadline(t *testing.T) {
 	// extend it — the probe still respects ctx cancellation.
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D20ms)
 	defer cancel()
-	probes := adapterutil.HealthToCheckers(healthz.ReadyProbeName("foo_ready"), func(ctx context.Context) error {
+	probes := adapterutil.HealthToCheckers(healthz.ProbeName("foo_ready"), func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}, testtime.D5s)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -51,8 +52,11 @@ func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 func (b *Bootstrap) expandManagedResources() error {
 	seen := make(map[string]struct{})
 	for _, r := range b.managedResources {
-		// Expand health checkers: r.Checkers() now returns
-		// map[string]func(context.Context) error matching namedChecker.fn type.
+		// Expand health checkers: r.Checkers() returns
+		// map[string]func(context.Context) error; convert each key to a typed
+		// healthz.ProbeName at the funnel boundary (ManagedResource.Checkers is
+		// a kernel/ interface that cannot import kernel/healthz.ProbeName without
+		// a circular dependency; conversion happens here in runtime/bootstrap).
 		for name, fn := range r.Checkers() {
 			if _, exists := seen[name]; exists {
 				return fmt.Errorf("bootstrap: duplicate checker key %q from ManagedResource %T — "+
@@ -60,7 +64,8 @@ func (b *Bootstrap) expandManagedResources() error {
 			}
 			seen[name] = struct{}{}
 			fn := fn // capture
-			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+			probeName := healthz.MustProbeName(name)
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: probeName, fn: fn})
 		}
 		// Expand worker (skip nil).
 		if w := r.Worker(); w != nil {

@@ -29,7 +29,7 @@ func newRecorder() *RegistryRecorder {
 }
 
 func probe(name string) healthz.Probe {
-	return healthz.NewProbe(name, func(context.Context) error { return nil })
+	return healthz.NewProbe(healthz.MustProbeName(name), func(context.Context) error { return nil })
 }
 
 func TestRegisterEmitterHealthProbes(t *testing.T) {
@@ -40,7 +40,7 @@ func TestRegisterEmitterHealthProbes(t *testing.T) {
 	tests := []struct {
 		name       string
 		emitter    func() outbox.Emitter
-		wantProbes []string
+		wantProbes []healthz.ProbeName
 	}{
 		{
 			name:       "bare-nil emitter registers nothing",
@@ -72,14 +72,14 @@ func TestRegisterEmitterHealthProbes(t *testing.T) {
 			emitter: func() outbox.Emitter {
 				return &probeEmitter{probes: []healthz.Probe{probe("outbox_failopen_rate_testcell")}}
 			},
-			wantProbes: []string{"outbox_failopen_rate_testcell"},
+			wantProbes: []healthz.ProbeName{healthz.MustProbeName("outbox_failopen_rate_testcell")},
 		},
 		{
 			name: "ProbeSet emitter registers all probes",
 			emitter: func() outbox.Emitter {
 				return &probeEmitter{probes: []healthz.Probe{probe("p_one"), probe("p_two")}}
 			},
-			wantProbes: []string{"p_one", "p_two"},
+			wantProbes: []healthz.ProbeName{healthz.MustProbeName("p_one"), healthz.MustProbeName("p_two")},
 		},
 	}
 
@@ -96,7 +96,7 @@ func TestRegisterEmitterHealthProbes(t *testing.T) {
 			}
 			for i, want := range tt.wantProbes {
 				if got[i].Name() != want {
-					t.Errorf("probe[%d] = %q, want %q", i, got[i].Name(), want)
+					t.Errorf("probe[%d] = %q, want %q", i, got[i].Name().String(), want.String())
 				}
 			}
 		})

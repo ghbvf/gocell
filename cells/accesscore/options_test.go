@@ -137,7 +137,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 func TestHealthCheckers_InMemory(t *testing.T) {
 	// session.Store now satisfies healthz.RepoProber via RepoReady. The
 	// repo probe is registered for ALL store implementations (including MemStore)
-	// through the cellgen-generated RegisterRepoReady funnel.
+	// through the cellgen-generated RegisterReadiness funnel.
 	// MemStore.RepoReady returns nil — in-memory always ready.
 	c := NewAccessCore(
 		clock.Real(),
@@ -165,7 +165,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 
 func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	// session.Store satisfies healthz.RepoProber via RepoReady. The probe is
-	// registered unconditionally (including MemStore) through RegisterRepoReady.
+	// registered unconditionally (including MemStore) through RegisterReadiness.
 	c := NewAccessCore(
 		clock.Real(),
 		WithJWTIssuer(testIssuer),

@@ -149,12 +149,12 @@ type SliceHandlerSpec struct {
 
 // HealthzGenSpec is the rendering input for healthz_gen.tmpl. It projects the
 // cell id and package needed to emit healthz_gen.go — the typed
-// RegisterRepoReady helper that is the sole sanctioned way for a cell to
+// RegisterReadiness helper that is the sole sanctioned way for a cell to
 // register its repo readiness probe (locked by HEALTHZ-TYPED-REGISTER-01).
 //
 // The file is emitted unconditionally for every cell that opts into codegen
 // (GoStructName present). Cells that do not have a primary repository simply
-// never call RegisterRepoReady; exported helpers do not trigger an
+// never call RegisterReadiness; exported helpers do not trigger an
 // unused-symbol compile error.
 type HealthzGenSpec struct {
 	// Package is the Go package name for healthz_gen.go (= CellMeta.Dir).

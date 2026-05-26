@@ -28,16 +28,16 @@ const DefaultProbeTimeout = 5 * time.Second
 // single-probe case. A multi-entry variant was considered but deferred
 // until a third multi-probe caller emerges (YAGNI).
 //
-// The name argument is a healthz.ReadyProbeName-typed const declared at the
+// The name argument is a healthz.ProbeName-typed const declared at the
 // caller's adapter (e.g. redis.ProbeReady); a bare string literal here fails
-// archtest OPS-CONTRACT-STRING-FUNNEL-01. The conversion to the bare-string
+// archtest PROBENAME-SEALED-FUNNEL-01. The conversion to the bare-string
 // Checkers() map key happens here once, at the funnel boundary.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers with
 // per-probe deadlines.
 // ref: uber-go/fx app.go StopTimeout — same shared-deadline pattern, dual side.
 func HealthToCheckers(
-	name healthz.ReadyProbeName,
+	name healthz.ProbeName,
 	healthFn func(context.Context) error,
 	timeout time.Duration,
 ) map[string]func(context.Context) error {

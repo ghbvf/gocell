@@ -78,6 +78,7 @@ type DirectEmitter struct {
 	mode              DirectPublishFailureMode
 	clock             clock.Clock
 	cellID            string
+	failOpenProbeName healthz.ProbeName
 	logger            *slog.Logger
 	failOpenDroppedCv metrics.CounterVec
 	failOpenTracker   *failOpenTracker
@@ -143,6 +144,10 @@ func NewDirectEmitter(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: cellID must not be empty for DirectEmitter")
 	}
+	probeName, err := healthz.EmitterFailOpenProbeName(cellID)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: build fail-open probe name: %w", err)
+	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_emit_failopen_dropped_total",
 		Help:       "Total outbox entries dropped in fail-open mode. cell=Cell ID; topic=routing topic.",
@@ -166,6 +171,7 @@ func NewDirectEmitter(
 		mode:              mode,
 		clock:             clk,
 		cellID:            cellID,
+		failOpenProbeName: probeName,
 		logger:            cfg.logger,
 		failOpenDroppedCv: cv,
 		failOpenTracker:   newFailOpenTracker(cfg.failOpenRateThresh),
@@ -277,7 +283,7 @@ var _ healthz.ProbeSet = (*DirectEmitter)(nil)
 // names — a hyphen in the prefix fails the archtest.
 func (e *DirectEmitter) Probes() []healthz.Probe {
 	return []healthz.Probe{
-		healthz.NewProbe("outbox_failopen_rate_"+e.cellID, e.checkFailOpenRate),
+		healthz.NewProbe(e.failOpenProbeName, e.checkFailOpenRate),
 	}
 }
 

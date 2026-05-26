@@ -1195,8 +1195,8 @@ func connectionStateMessage(state ConnectionPhase) string {
 var _ lifecycle.ManagedResource = (*Connection)(nil)
 
 // ProbeReady is the ops-contract name for the RabbitMQ readiness probe.
-// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "rabbitmq_ready"
+// healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "rabbitmq_ready"
 
 // Checkers returns the rabbitmq_ready probe for /readyz integration.
 //

@@ -88,7 +88,7 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registrar) error
 	// Register the differentiated config repo readiness probe via the
 	// cellgen-generated typed funnel.
 	// c.configRepo satisfies healthz.RepoProber via ports.ConfigRepository.RepoReady.
-	return RegisterRepoReady(reg, c.configRepo)
+	return RegisterReadiness(reg, c.configRepo)
 }
 
 // initAllSlices constructs all 7 configcore slices.

@@ -204,8 +204,8 @@ func (a *Adapter) Verifier(ctx context.Context) (*gooidc.IDTokenVerifier, error)
 }
 
 // ProbeReady is the ops-contract name for the OIDC readiness probe.
-// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "oidc_ready"
+// healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "oidc_ready"
 
 // Checkers returns a readyz probe for the OIDC provider. The probe verifies
 // that the cached provider is populated without re-discovering.

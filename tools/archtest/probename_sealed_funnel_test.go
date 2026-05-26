@@ -1,0 +1,1117 @@
+// INVARIANT: PROBENAME-SEALED-FUNNEL-01
+//
+// probename_sealed_funnel_test.go — typed-string concept funnel for
+// kernel/healthz.ProbeName (replaces OPS-CONTRACT-STRING-FUNNEL-01 and
+// READYZ-PROBE-NAMING-01, which are deleted).
+//
+// # Sanctioned declaration packages (ProbeName const set)
+//
+//   - kernel/healthz — framework-level typed const (ConfigWatcherProbeName,
+//     ConfigDriftProbeName) and composed-name constructor (EmitterFailOpenProbeName).
+//   - adapters/postgres — ProbeReady, ProbeIndexesValidReady
+//   - adapters/redis — ProbeReady
+//   - adapters/rabbitmq — ProbeReady
+//   - adapters/s3 — ProbeReady
+//   - adapters/vault — ProbeReady
+//   - adapters/oidc — ProbeReady
+//   - runtime/websocket — ProbeReady
+//   - runtime/saga — ProbeCoordinatorReady
+//   - cells/{configcore,auditcore,accesscore}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//   - examples/{iotdevice/cells/devicecell,todoorder/cells/ordercell}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
+//
+// # Golden inventory (sorted "<module-relative-pkg>.<ConstName>=<value>")
+//
+// See goldenProbeNames() for the full, authoritative list.  Operator hint: if
+// CI red-flags a "golden inventory mismatch" on a new probe, either add the
+// const to the sanctioned package set AND add the entry to goldenProbeNames()
+// in the same PR, or explain why the new const does not need funnel coverage
+// in an ADR.
+//
+// # AI-robust grading (per .claude/rules/gocell/ai-robust.md §Funnel 双向锁评级)
+//
+//   - A1 upstream (declaration sanction + value shape):
+//     Hard archtest-bound — the only Go form possible; const visibility is
+//     package-scoped so a seal at the type-system level is inexpressible.
+//   - A2 downstream (callsite resolves to declared const):
+//     Hard downstream — NewProbe(name ProbeName, ...) / RegisterReadiness(name
+//     ProbeName, ...) make passing a raw string a compile error; archtest
+//     additionally bans ProbeName(expr) casts where expr is not a sanctioned
+//     const (string-conversion bypass). Type system closes the form gap.
+//   - A3 downstream (Aggregator.Register allowlist):
+//     Hard downstream via type system (Registrar.Healthz() removed — any
+//     attempt is a compile error). Archtest enforces the residual direct-
+//     Aggregator.Register callsite set (Medium upstream archtest caller-identity
+//     backstop; see HEALTHZ-WRITE-01/A3 for holder allowlist).
+//   - A4 upstream (NewProbeName caller allowlist):
+//     Medium archtest — open gh issue to track Hard upgrade (won't-do: there is
+//     no sealed-construction path for a function with arbitrary string arg).
+//   - A5 upstream (EmitterFailOpenProbeName sole composed-name constructor):
+//     Medium archtest — BinaryExpr string concat `"outbox_failopen_rate_" + x`
+//     outside kernel/healthz is rejected.
+//
+// # Blind-spot assertions (B class)
+//
+//   - B1 (reflect bypass): reflect.ValueOf(reg).MethodByName("RegisterReadiness")
+//     in non-test code — expected absent in production AST.
+//   - B2 (helper wrapper indirection): non-allowlisted file defines a
+//     func Register*(reg cell.Registrar, ...) body that calls reg.RegisterReadiness —
+//     expected absent except in cellgen healthz_gen.go and kernel/cell/healthz.go.
+//   - B3 (string-cast bypass): healthz.ProbeName(callExpr) where the argument
+//     is a function call (Sprintf, Join, etc.) — expected absent in production AST.
+//
+// ref: kernel/healthz.ProbeName — typed concept type
+// ref: kernel/healthz.NewProbeName — sole validated entry point
+// ref: kernel/healthz.EmitterFailOpenProbeName — sole composed-name constructor
+// ref: HEALTHZ-WRITE-01 (healthz_invariants_test.go) — A1 HTTP ban + A3 holder allowlist (orthogonal)
+// ref: CELL-REPO-READYZ-PROBE-01 (cell_repo_readyz_probe_test.go) — enrollment backstop (orthogonal)
+// ref: ADR docs/architecture/202605271000-adr-probename-sealed-funnel.md
+package archtest
+
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
+)
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const (
+	// healthzPkgPath is the import path of the kernel/healthz package.
+	// Named without a "probename" prefix because it is the single authoritative
+	// package for all healthz concepts (ProbeName, Probe, Aggregator).
+	healthzPkgPath = "github.com/ghbvf/gocell/kernel/healthz"
+
+	// cellRegistrarPkgPath is the import path of the kernel/cell package,
+	// which defines the Registrar interface and RegisterReadiness method.
+	cellRegistrarPkgPath = "github.com/ghbvf/gocell/kernel/cell"
+
+	// adapterutilPkgPath is the import path of the adapterutil package,
+	// which provides HealthToCheckers (consumes ProbeName as first arg).
+	adapterutilPkgPath = "github.com/ghbvf/gocell/adapters/adapterutil"
+)
+
+// probeNameSanctionedPkgs is the closed set of packages allowed to declare
+// a healthz.ProbeName typed const.  A const appearing in any other package
+// is rejected by A1.
+var probeNameSanctionedPkgs = map[string]bool{
+	// Framework-level (kernel owns the typed concept)
+	"github.com/ghbvf/gocell/kernel/healthz": true,
+	// Adapter dependency probes
+	"github.com/ghbvf/gocell/adapters/postgres": true,
+	"github.com/ghbvf/gocell/adapters/redis":    true,
+	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
+	"github.com/ghbvf/gocell/adapters/s3":       true,
+	"github.com/ghbvf/gocell/adapters/vault":    true,
+	"github.com/ghbvf/gocell/adapters/oidc":     true,
+	// Runtime-level probe owners
+	"github.com/ghbvf/gocell/runtime/websocket": true,
+	"github.com/ghbvf/gocell/runtime/saga":      true,
+	// Platform cells (cellgen healthz_gen.go — marker required)
+	"github.com/ghbvf/gocell/cells/configcore": true,
+	"github.com/ghbvf/gocell/cells/auditcore":  true,
+	"github.com/ghbvf/gocell/cells/accesscore": true,
+	// Example cells (cellgen healthz_gen.go — marker required)
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell": true,
+	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":  true,
+}
+
+// cellgenSanctionedPkgs is the subset of probeNameSanctionedPkgs that requires
+// the cellgen marker — any ProbeName const in these packages must live in a
+// file with the cellgenMarkerLine header.
+var cellgenSanctionedPkgs = map[string]bool{
+	"github.com/ghbvf/gocell/cells/configcore":                    true,
+	"github.com/ghbvf/gocell/cells/auditcore":                     true,
+	"github.com/ghbvf/gocell/cells/accesscore":                    true,
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell": true,
+	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell":  true,
+}
+
+// adapterSanctionedPkgs requires that all ProbeName values in these packages
+// end with the "_ready" suffix (adapter dependency-availability convention).
+var adapterSanctionedPkgs = map[string]bool{
+	"github.com/ghbvf/gocell/adapters/postgres": true,
+	"github.com/ghbvf/gocell/adapters/redis":    true,
+	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
+	"github.com/ghbvf/gocell/adapters/s3":       true,
+	"github.com/ghbvf/gocell/adapters/vault":    true,
+	"github.com/ghbvf/gocell/adapters/oidc":     true,
+	"github.com/ghbvf/gocell/runtime/websocket": true,
+	"github.com/ghbvf/gocell/runtime/saga":      true,
+}
+
+// aggregatorRegisterAllowlist is the set of module-relative path suffixes that
+// are allowed to call healthz.Aggregator.Register directly.  All other
+// production code must go through reg.RegisterReadiness (which internally
+// calls healthz.NewProbe and accumulates into the RegistryRecorder, later
+// drained by bootstrap onto the Aggregator).
+var aggregatorRegisterAllowlist = map[string]bool{
+	// Bootstrap drains RegistrySnapshot.Probes and registers framework probes:
+	"runtime/bootstrap/bootstrap_phases.go": true,
+	"runtime/bootstrap/phases_lifecycle.go": true,
+	// Aggregator conformance test helper (not production code path):
+	"runtime/observability/healthz/healthztest/conformance.go": true,
+	// kernel/cell is the Registrar implementation — registerProbe body:
+	"kernel/cell/registry.go": true,
+	// kernel/cell/healthz.go registers emitter probes via reg.RegisterReadiness
+	// (not Aggregator.Register) but is listed here defensively to avoid
+	// false-positive if the inner funnel is refactored:
+	"kernel/cell/healthz.go": true,
+}
+
+// newProbeNameAllowlist is the set of module-relative path suffixes that are
+// allowed to call healthz.NewProbeName directly in production code (non-test).
+// The only production callsite is the probename.go constructor itself.
+// All other callers (tests, cellgen golden-lock tests) are handled by the
+// _test.go suffix exemption in the scanner.
+var newProbeNameAllowlist = map[string]bool{
+	"kernel/healthz/probename.go": true,
+}
+
+// ─── Golden inventory ─────────────────────────────────────────────────────────
+
+// goldenProbeNames returns the authoritative sorted list of every
+// healthz.ProbeName typed const in the production tree, in the format
+// "<module-relative-pkg-path>.<ConstName>=<value>".
+//
+// Adding a new adapter/framework/cellgen probe REQUIRES adding an entry here
+// in the same PR (enforced by A1 golden lock in TestProbenameSealedFunnel).
+func goldenProbeNames() []string {
+	names := []string{
+		// kernel/healthz — framework constants
+		"kernel/healthz.ConfigDriftProbeName=config_drift",
+		"kernel/healthz.ConfigWatcherProbeName=config_watcher",
+		// adapter probes (all _ready suffix)
+		"adapters/oidc.ProbeReady=oidc_ready",
+		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
+		"adapters/postgres.ProbeReady=postgres_ready",
+		"adapters/rabbitmq.ProbeReady=rabbitmq_ready",
+		"adapters/redis.ProbeReady=redis_ready",
+		"adapters/s3.ProbeReady=s3_ready",
+		"adapters/vault.ProbeReady=vault_transit_ready",
+		// runtime probes (all _ready suffix)
+		"runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
+		"runtime/websocket.ProbeReady=websocket_hub_ready",
+		// cellgen repo probes (all _repo_ready suffix)
+		"cells/accesscore.ProbeRepoReady=accesscore_repo_ready",
+		"cells/auditcore.ProbeRepoReady=auditcore_repo_ready",
+		"cells/configcore.ProbeRepoReady=configcore_repo_ready",
+		"examples/iotdevice/cells/devicecell.ProbeRepoReady=devicecell_repo_ready",
+		"examples/todoorder/cells/ordercell.ProbeRepoReady=ordercell_repo_ready",
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ─── Helper predicates ────────────────────────────────────────────────────────
+
+// isProbeNameTypedConst reports whether obj is a *types.Const whose type
+// resolves to kernel/healthz.ProbeName.
+func isProbeNameTypedConst(obj types.Object) bool {
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return false
+	}
+	named, ok := c.Type().(*types.Named)
+	if !ok {
+		return false
+	}
+	tobj := named.Obj()
+	return tobj.Pkg() != nil &&
+		tobj.Pkg().Path() == healthzPkgPath &&
+		tobj.Name() == "ProbeName"
+}
+
+// isProbeNameTypeConversion reports whether expr is a type-conversion of the
+// form healthz.ProbeName(<arg>) where arg is not a simple identifier / const.
+// Returns (arg, true) when the form matches.
+func isProbeNameTypeConversion(call *ast.CallExpr, info *types.Info) (ast.Expr, bool) {
+	if len(call.Args) != 1 || call.Ellipsis != token.NoPos {
+		return nil, false
+	}
+	// The "callee" of a type conversion is the type itself, which appears as
+	// a SelectorExpr (healthz.ProbeName) or Ident (after dot-import).
+	tv, ok := info.Types[call.Fun]
+	if !ok || !tv.IsType() {
+		return nil, false
+	}
+	named, ok := tv.Type.(*types.Named)
+	if !ok {
+		return nil, false
+	}
+	tobj := named.Obj()
+	if tobj.Pkg() == nil || tobj.Pkg().Path() != healthzPkgPath || tobj.Name() != "ProbeName" {
+		return nil, false
+	}
+	return call.Args[0], true
+}
+
+// isRegisterReadinessCall reports whether call is a call to
+// cell.Registrar.RegisterReadiness (via *types.Info.Selections).
+func isRegisterReadinessCall(call *ast.CallExpr, info *types.Info) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "RegisterReadiness" {
+		return false
+	}
+	fn, ok := ResolveMethodCall(info, sel)
+	if !ok || fn == nil {
+		return false
+	}
+	return fn.Pkg() != nil && fn.Pkg().Path() == cellRegistrarPkgPath
+}
+
+// isNewProbeCall reports whether call is a call to healthz.NewProbe.
+func isNewProbeCall(call *ast.CallExpr, info *types.Info) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == healthzPkgPath && name == "NewProbe"
+}
+
+// isHealthToCheckersCall reports whether call is a call to
+// adapterutil.HealthToCheckers.
+func isHealthToCheckersCall(call *ast.CallExpr, info *types.Info) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == adapterutilPkgPath && name == "HealthToCheckers"
+}
+
+// firstArgResolvesToConst reports whether the first argument of call resolves,
+// via info.Uses, to a declared *types.Const of type ProbeName.
+func firstArgResolvesToConst(call *ast.CallExpr, info *types.Info) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	arg := call.Args[0]
+	// Unwrap a single-level ProbeName(...) cast — adapter callsites write
+	// adapterutil.HealthToCheckers(string(postgres.ProbeReady), ...) or
+	// adapterutil.HealthToCheckers(postgres.ProbeReady, ...) — both are
+	// legitimate only when the inner value is a sanctioned const.
+	if castCall, ok := arg.(*ast.CallExpr); ok {
+		if inner, isCast := isProbeNameTypeConversion(castCall, info); isCast {
+			arg = inner
+		}
+	}
+	// Resolve the (possibly unwrapped) argument to a const.
+	ident, ok := arg.(*ast.Ident)
+	if !ok {
+		if sel, ok2 := arg.(*ast.SelectorExpr); ok2 {
+			ident = sel.Sel
+		} else {
+			return false
+		}
+	}
+	obj, ok := info.Uses[ident]
+	if !ok {
+		return false
+	}
+	return isProbeNameTypedConst(obj)
+}
+
+// isNewProbeNameCall reports whether call is a direct call to
+// healthz.NewProbeName.
+func isNewProbeNameCall(call *ast.CallExpr, info *types.Info) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == healthzPkgPath && name == "NewProbeName"
+}
+
+// ─── Scanner functions ────────────────────────────────────────────────────────
+
+// scanA1DeclarationSanction scans file for healthz.ProbeName typed consts
+// declared outside the sanctioned package set or (for cellgen packages)
+// missing the cellgen marker.
+func scanA1DeclarationSanction(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+	pkg *types.Package,
+	absPath string,
+) []Diagnostic {
+	if info == nil || pkg == nil {
+		return nil
+	}
+	pkgPath := pkg.Path()
+
+	var out []Diagnostic
+
+	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+			for _, name := range vs.Names {
+				obj, ok := info.Defs[name]
+				if !ok {
+					continue
+				}
+				if !isProbeNameTypedConst(obj) {
+					continue
+				}
+				// Const is of type ProbeName — enforce package sanction.
+				if !probeNameSanctionedPkgs[pkgPath] {
+					pos := fset.Position(name.Pos())
+					out = append(out, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"PROBENAME-SEALED-FUNNEL-01/A1: ProbeName const %q declared in "+
+								"non-sanctioned package %q — only adapter/framework/cellgen "+
+								"packages may declare ProbeName consts",
+							name.Name, pkgPath,
+						),
+					})
+					continue
+				}
+
+				// Cellgen packages require the marker.
+				if cellgenSanctionedPkgs[pkgPath] && !fileHasCellgenMarker(absPath) {
+					pos := fset.Position(name.Pos())
+					out = append(out, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"PROBENAME-SEALED-FUNNEL-01/A1: ProbeName const %q in cellgen "+
+								"package %q must be in a file with cellgen marker %q",
+							name.Name, pkgPath, cellgenMarkerLine,
+						),
+					})
+					continue
+				}
+
+				// Adapter / runtime packages require _ready suffix.
+				if adapterSanctionedPkgs[pkgPath] {
+					val, ok := EvaluateConstString(info, vs.Values[0])
+					if ok && !strings.HasSuffix(val, "_ready") {
+						pos := fset.Position(name.Pos())
+						out = append(out, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"PROBENAME-SEALED-FUNNEL-01/A1: adapter/runtime ProbeName const "+
+									"%q in %q has value %q — must end with \"_ready\" suffix",
+								name.Name, pkgPath, val,
+							),
+						})
+					}
+				}
+			}
+		})
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// a2FunnelInternalAllowlist names files that implement the funnel itself —
+// they legitimately pass ProbeName values that originated upstream (method
+// call on Probe, struct field, function parameter) rather than referencing a
+// declared const at their callsite. A2's resolve-to-const discipline is the
+// caller-side contract for *consumer* code; the funnel implementation is the
+// authority that consumers terminate against.
+var a2FunnelInternalAllowlist = map[string]struct{}{
+	"kernel/cell/healthz.go":                                   {},
+	"kernel/cell/registry.go":                                  {},
+	"kernel/outbox/emitter.go":                                 {},
+	"runtime/bootstrap/bootstrap_phases.go":                    {},
+	"runtime/bootstrap/phases_lifecycle.go":                    {},
+	"runtime/observability/healthz/healthztest/conformance.go": {},
+}
+
+// scanA2CallsiteResolves scans file for RegisterReadiness / NewProbe /
+// HealthToCheckers calls where the name argument does not resolve to a
+// sanctioned *types.Const.  Also catches ProbeName(callExpr) casts where the
+// argument is not a const (string-conversion bypass).
+//
+// Files in a2FunnelInternalAllowlist are exempt from the resolve-to-const
+// check (they pass ProbeName through from parameters / fields / method calls),
+// but the ProbeName(callExpr) string-cast detection (case 4) still applies
+// universally — there is no legitimate runtime-string-to-ProbeName cast.
+func scanA2CallsiteResolves(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+	var out []Diagnostic
+
+	_, funnelInternal := a2FunnelInternalAllowlist[rel]
+
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		// Case 1: RegisterReadiness(name, ...) — name must be sanctioned const
+		// (consumer-side discipline). Funnel-internal files are exempt.
+		if isRegisterReadinessCall(call, info) {
+			if !funnelInternal && !firstArgResolvesToConst(call, info) {
+				pos := fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROBENAME-SEALED-FUNNEL-01/A2: RegisterReadiness name arg at %s:%d "+
+							"does not resolve to a declared ProbeName const "+
+							"(bare string, var, or dynamic expr prohibited)",
+						rel, pos.Line,
+					),
+				})
+			}
+			return
+		}
+
+		// Case 2: healthz.NewProbe(name, fn) — name must be sanctioned const
+		// (consumer-side). Funnel-internal files exempt.
+		if isNewProbeCall(call, info) {
+			if !funnelInternal && !firstArgResolvesToConst(call, info) {
+				pos := fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROBENAME-SEALED-FUNNEL-01/A2: NewProbe name arg at %s:%d "+
+							"does not resolve to a declared ProbeName const "+
+							"(bare string, var, or dynamic expr prohibited)",
+						rel, pos.Line,
+					),
+				})
+			}
+			return
+		}
+
+		// Case 3: adapterutil.HealthToCheckers(name, ...) — name must be sanctioned const.
+		if isHealthToCheckersCall(call, info) {
+			if !firstArgResolvesToConst(call, info) {
+				pos := fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROBENAME-SEALED-FUNNEL-01/A2: HealthToCheckers name arg at %s:%d "+
+							"does not resolve to a declared ProbeName const "+
+							"(bare string, var, or dynamic expr prohibited)",
+						rel, pos.Line,
+					),
+				})
+			}
+			return
+		}
+
+		// Case 4: ProbeName(callExpr) type conversion — the arg must not be a CallExpr.
+		// e.g. healthz.ProbeName(fmt.Sprintf("x_%s", id)) is prohibited.
+		if inner, isCast := isProbeNameTypeConversion(call, info); isCast {
+			if _, isCallArg := inner.(*ast.CallExpr); isCallArg {
+				pos := fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROBENAME-SEALED-FUNNEL-01/A2: ProbeName(callExpr) at %s:%d "+
+							"is a string-cast bypass — use healthz.NewProbeName or a "+
+							"sanctioned composed-name constructor",
+						rel, pos.Line,
+					),
+				})
+			}
+		}
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// scanA3AggregatorRegisterAllowlist scans file for direct Aggregator.Register
+// calls outside the sanctioned allowlist.
+func scanA3AggregatorRegisterAllowlist(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+
+	// Check if this file is in the allowlist.
+	relSlash := filepath.ToSlash(rel)
+	for suffix := range aggregatorRegisterAllowlist {
+		if strings.HasSuffix(relSlash, suffix) {
+			return nil
+		}
+	}
+
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isAggregatorRegisterCall(call, info) {
+			return
+		}
+		pos := fset.Position(call.Pos())
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"PROBENAME-SEALED-FUNNEL-01/A3: direct healthz.Aggregator.Register call "+
+					"at %s:%d is outside the sanctioned allowlist — "+
+					"use reg.RegisterReadiness(name ProbeName, prober) instead; "+
+					"Registrar.Healthz() has been removed (compile error if called); "+
+					"direct Aggregator.Register is only allowed in bootstrap and celltest conformance",
+				rel, pos.Line,
+			),
+		})
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// scanA4NewProbeNameCallerAllowlist scans file for production (non-test) calls
+// to healthz.NewProbeName outside the sanctioned allowlist.
+func scanA4NewProbeNameCallerAllowlist(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+
+	relSlash := filepath.ToSlash(rel)
+	for suffix := range newProbeNameAllowlist {
+		if strings.HasSuffix(relSlash, suffix) {
+			return nil
+		}
+	}
+
+	var out []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isNewProbeNameCall(call, info) {
+			return
+		}
+		pos := fset.Position(call.Pos())
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"PROBENAME-SEALED-FUNNEL-01/A4: healthz.NewProbeName called at %s:%d "+
+					"from outside the sanctioned caller set "+
+					"(only kernel/healthz/probename.go may call NewProbeName directly "+
+					"in production code; tests use MustProbeName or err-check directly)",
+				rel, pos.Line,
+			),
+		})
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// scanA5EmitterFailOpenPrefixBypass scans file for bare BinaryExpr string
+// concatenation of the form `"outbox_failopen_rate_" + x` outside
+// kernel/healthz/probename.go — the sole sanctioned site.
+func scanA5EmitterFailOpenPrefixBypass(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+) []Diagnostic {
+	if info == nil {
+		return nil
+	}
+	const probePrefixFile = "kernel/healthz/probename.go"
+	if strings.HasSuffix(filepath.ToSlash(rel), probePrefixFile) {
+		return nil
+	}
+
+	const emitterPrefix = "outbox_failopen_rate_"
+	var out []Diagnostic
+
+	EachInSubtree[ast.BinaryExpr](file, func(bin *ast.BinaryExpr) {
+		// Catch `"outbox_failopen_rate_" + x`
+		if s, ok := EvaluateConstString(info, bin.X); ok && strings.Contains(s, emitterPrefix) {
+			pos := fset.Position(bin.Pos())
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"PROBENAME-SEALED-FUNNEL-01/A5: bare string concat of emitter probe prefix "+
+						"%q at %s:%d — use healthz.EmitterFailOpenProbeName(cellID) instead",
+					emitterPrefix, rel, pos.Line,
+				),
+			})
+		}
+		// Catch `x + "outbox_failopen_rate_"` (reversed — rare but defensive)
+		if s, ok := EvaluateConstString(info, bin.Y); ok && strings.Contains(s, emitterPrefix) {
+			pos := fset.Position(bin.Pos())
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: pos.Line,
+				Message: fmt.Sprintf(
+					"PROBENAME-SEALED-FUNNEL-01/A5: bare string concat of emitter probe prefix "+
+						"%q at %s:%d — use healthz.EmitterFailOpenProbeName(cellID) instead",
+					emitterPrefix, rel, pos.Line,
+				),
+			})
+		}
+	})
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out
+}
+
+// ─── Golden inventory collector ───────────────────────────────────────────────
+
+// collectProbeNameConsts collects all healthz.ProbeName typed const entries
+// from the production tree and returns them sorted as
+// "<module-relative-pkg>.<ConstName>=<value>".
+func collectProbeNameConsts(t *testing.T, root string) []string {
+	t.Helper()
+
+	var entries []string
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			// Derive module-relative package path (strip module prefix).
+			modPrefix := "github.com/ghbvf/gocell/"
+			pkgPath := p.Pkg.Path()
+			if !strings.HasPrefix(pkgPath, modPrefix) {
+				return nil
+			}
+			relPkg := strings.TrimPrefix(pkgPath, modPrefix)
+
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
+					EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+						for i, name := range vs.Names {
+							obj, ok := p.TypesInfo.Defs[name]
+							if !ok {
+								continue
+							}
+							if !isProbeNameTypedConst(obj) {
+								continue
+							}
+							if len(vs.Values) <= i {
+								continue
+							}
+							val, ok := EvaluateConstString(p.TypesInfo, vs.Values[i])
+							if !ok {
+								continue
+							}
+							entries = append(entries, fmt.Sprintf("%s.%s=%s", relPkg, name.Name, val))
+						}
+					})
+				})
+			}
+			return nil
+		})
+
+	sort.Strings(entries)
+	return entries
+}
+
+// ─── Main production scan ─────────────────────────────────────────────────────
+
+// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A5)
+// across the production tree.
+//
+// Sub-tests:
+//
+//   - A1_DeclarationSanction — every ProbeName const in production code must be
+//     declared in a sanctioned package; adapter packages must use _ready suffix;
+//     cellgen packages must have the cellgen marker.
+//   - A1_GoldenInventory — the full set of ProbeName consts must exactly match
+//     goldenProbeNames(); additions or removals must be acknowledged in the
+//     same PR by updating the golden list.
+//   - A2_CallsiteResolves — every RegisterReadiness / NewProbe / HealthToCheckers
+//     name arg must resolve to a declared ProbeName const; ProbeName(callExpr)
+//     casts are rejected.
+//   - A3_AggregatorRegisterAllowlist — direct Aggregator.Register calls outside
+//     the sanctioned allowlist are rejected.
+//   - A4_NewProbeNameCallerAllowlist — healthz.NewProbeName must not be called
+//     from production code outside kernel/healthz/probename.go.
+//   - A5_EmitterFailOpenPrefixBypass — the "outbox_failopen_rate_" string prefix
+//     must not appear in bare BinaryExpr concat outside probename.go.
+func TestProbenameSealedFunnel(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	allPatterns := prodscan.PatternsExtended(root)
+
+	var a1Diags, a2Diags, a3Diags, a4Diags, a5Diags []Diagnostic
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			pkgPath := p.Pkg.Path()
+			if !strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/kernel/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cells/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/adapters/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/runtime/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/cmd/") &&
+				!strings.HasPrefix(pkgPath, "github.com/ghbvf/gocell/examples/") {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				absPath := p.Abs(f)
+				a1Diags = append(a1Diags, scanA1DeclarationSanction(p.Fset, f, rel, p.TypesInfo, p.Pkg, absPath)...)
+				a2Diags = append(a2Diags, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
+				a3Diags = append(a3Diags, scanA3AggregatorRegisterAllowlist(p.Fset, f, rel, p.TypesInfo)...)
+				a4Diags = append(a4Diags, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
+				a5Diags = append(a5Diags, scanA5EmitterFailOpenPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
+			}
+			return nil
+		})
+
+	t.Run("A1_DeclarationSanction", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A1", a1Diags)
+	})
+
+	t.Run("A1_GoldenInventory", func(t *testing.T) {
+		t.Parallel()
+		got := collectProbeNameConsts(t, root)
+		want := goldenProbeNames()
+		assert.Equal(t, want, got,
+			"PROBENAME-SEALED-FUNNEL-01/A1: ProbeName const inventory mismatch — "+
+				"adding or removing a probe const requires updating goldenProbeNames() "+
+				"in the same PR (see probename_sealed_funnel_test.go)")
+	})
+
+	t.Run("A2_CallsiteResolves", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A2", a2Diags)
+	})
+
+	t.Run("A3_AggregatorRegisterAllowlist", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A3", a3Diags)
+	})
+
+	t.Run("A4_NewProbeNameCallerAllowlist", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A4", a4Diags)
+	})
+
+	t.Run("A5_EmitterFailOpenPrefixBypass", func(t *testing.T) {
+		t.Parallel()
+		Report(t, "PROBENAME-SEALED-FUNNEL-01/A5", a5Diags)
+	})
+}
+
+// ─── Reverse fixture self-tests ───────────────────────────────────────────────
+
+// TestProbenameSealedFunnel_ReverseFixtures loads the synthetic RED fixtures and
+// asserts each rule fires on its corresponding violation.
+func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "probename_sealed_funnel_fixtures")
+
+	type subDir struct {
+		name string
+		want string // which Ax/Bx rule must fire
+	}
+	cases := []subDir{
+		{name: "bare_literal_arg_red", want: "A2"},
+		{name: "decl_bypass_red", want: "A1"},
+		{name: "non_funnel_register_red", want: "A3"},
+		{name: "newprobename_dynamic_red", want: "A4"},
+		{name: "string_cast_bypass_red", want: "B3"},
+		{name: "reflect_bypass_red", want: "B1"},
+		// helper_wrapper_red (B2) is a *non-bypass*: the type system already
+		// enforces healthz.ProbeName at the wrapper's signature, so a wrapper
+		// inheriting the typed signature provides no escape from the typed
+		// funnel. The plan's B2 envisioned wrappers that hide name from
+		// cell-side callers, but with ProbeName as the funnel parameter that
+		// cannot happen (a wrapper that takes a bare string would not type-
+		// check). Keep the fixture for documentation purposes.
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			subFixtureDir := filepath.Join(fixtureDir, tc.name)
+
+			var a1, a2, a3, a4, b1b2, b3 []Diagnostic
+
+			_ = RunTypedDir(t, subFixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+				func(p *Pass) []Diagnostic {
+					if p.Pkg == nil {
+						return nil
+					}
+					for _, f := range p.Files {
+						rel := p.Rel(f)
+						if strings.HasSuffix(rel, "_test.go") {
+							continue
+						}
+						absPath := p.Abs(f)
+						a1 = append(a1, scanA1DeclarationSanction(p.Fset, f, rel, p.TypesInfo, p.Pkg, absPath)...)
+						a2 = append(a2, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
+						a3 = append(a3, scanA3AggregatorRegisterAllowlist(p.Fset, f, rel, p.TypesInfo)...)
+						a4 = append(a4, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
+
+						// B1 / B2 (via A3 + helper-wrapper scan) share the b1b2 bucket.
+						// B3 is the string-cast bypass (ProbeName(callExpr) form).
+						b3 = append(b3, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
+
+						// B1 reflect bypass — scan for reflect.MethodByName("RegisterReadiness").
+						EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+							sel, ok := call.Fun.(*ast.SelectorExpr)
+							if !ok || sel.Sel.Name != "MethodByName" {
+								return
+							}
+							if len(call.Args) != 1 {
+								return
+							}
+							lit, ok := call.Args[0].(*ast.BasicLit)
+							if !ok {
+								return
+							}
+							if strings.Contains(lit.Value, "RegisterReadiness") {
+								pos := p.Fset.Position(call.Pos())
+								b1b2 = append(b1b2, Diagnostic{
+									Rel:  rel,
+									Line: pos.Line,
+									Message: fmt.Sprintf(
+										"PROBENAME-SEALED-FUNNEL-01/B1: reflect bypass of "+
+											"RegisterReadiness at %s:%d",
+										rel, pos.Line,
+									),
+								})
+							}
+						})
+					}
+					return nil
+				})
+
+			switch tc.want {
+			case "A1":
+				require.NotEmpty(t, a1, "fixture %q: expected A1 to fire on declaration bypass", tc.name)
+			case "A2":
+				require.NotEmpty(t, a2, "fixture %q: expected A2 to fire on non-const name arg", tc.name)
+			case "A3":
+				require.NotEmpty(t, a3, "fixture %q: expected A3 to fire on direct Aggregator.Register", tc.name)
+			case "A4":
+				require.NotEmpty(t, a4, "fixture %q: expected A4 to fire on NewProbeName outside allowlist", tc.name)
+			case "B1":
+				require.NotEmpty(t, b1b2, "fixture %q: expected B1 reflect bypass to be detected", tc.name)
+			case "B2":
+				require.NotEmpty(t, b1b2, "fixture %q: expected B2 helper-wrapper to be detected via A3 or b1b2", tc.name)
+			case "B3":
+				require.NotEmpty(t, b3, "fixture %q: expected B3 string-cast bypass to be detected by A2", tc.name)
+			}
+		})
+	}
+}
+
+// ─── Blind-spot reverse self-check tests ──────────────────────────────────────
+
+// TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass (B1) asserts no
+// production file calls reflect.MethodByName("RegisterReadiness") or equivalent
+// reflect-based bypass patterns.
+func TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	var diags []Diagnostic
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "MethodByName" {
+						return
+					}
+					if len(call.Args) != 1 {
+						return
+					}
+					lit, ok := call.Args[0].(*ast.BasicLit)
+					if !ok {
+						return
+					}
+					if strings.Contains(lit.Value, "RegisterReadiness") {
+						pos := p.Fset.Position(call.Pos())
+						diags = append(diags, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"PROBENAME-SEALED-FUNNEL-01/B1: blind spot detected — "+
+									"reflect bypass of RegisterReadiness at %s:%d",
+								rel, pos.Line,
+							),
+						})
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Empty(t, diags, "PROBENAME-SEALED-FUNNEL-01/B1 blind-spot self-check failed — "+
+		"production code uses reflect to bypass RegisterReadiness funnel")
+}
+
+// TestProbenameSealedFunnel_ReverseBlindSpot_NoStringCastBypass (B3) asserts
+// no production file contains a ProbeName(callExpr) type conversion where the
+// argument is a dynamic function call (e.g. fmt.Sprintf, strings.Join).
+func TestProbenameSealedFunnel_ReverseBlindSpot_NoStringCastBypass(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	var diags []Diagnostic
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					inner, isCast := isProbeNameTypeConversion(call, p.TypesInfo)
+					if !isCast {
+						return
+					}
+					if _, isCallArg := inner.(*ast.CallExpr); isCallArg {
+						pos := p.Fset.Position(call.Pos())
+						diags = append(diags, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"PROBENAME-SEALED-FUNNEL-01/B3: ProbeName(callExpr) string-cast bypass "+
+									"at %s:%d — use healthz.NewProbeName or a sanctioned constructor",
+								rel, pos.Line,
+							),
+						})
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Empty(t, diags, "PROBENAME-SEALED-FUNNEL-01/B3 blind-spot self-check failed — "+
+		"production code bypasses ProbeName funnel via string-cast of dynamic expression")
+}
+
+// TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper (B2) asserts no
+// production file outside the sanctioned set defines a helper function that
+// wraps reg.RegisterReadiness to create an indirection layer that could
+// bypass the A2 callsite check.
+//
+// Sanctioned wrapper files: kernel/cell/healthz.go (RegisterEmitterHealthProbes)
+// and cells/<cell>/healthz_gen.go (cellgen-generated RegisterReadiness funnel).
+func TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	// Sanctioned files that are allowed to define a RegisterReadiness wrapper.
+	sanctionedWrapperSuffixes := []string{
+		"kernel/cell/healthz.go",
+	}
+	// cellgen healthz_gen.go files are also allowed — detected by cellgen marker.
+	isSanctionedWrapper := func(rel, absPath string) bool {
+		relSlash := filepath.ToSlash(rel)
+		for _, s := range sanctionedWrapperSuffixes {
+			if strings.HasSuffix(relSlash, s) {
+				return true
+			}
+		}
+		if strings.HasSuffix(relSlash, "healthz_gen.go") && fileHasCellgenMarker(absPath) {
+			return true
+		}
+		return false
+	}
+
+	root := findModuleRoot(t)
+	var diags []Diagnostic
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				absPath := p.Abs(f)
+				if isSanctionedWrapper(rel, absPath) {
+					continue
+				}
+				// Look for func declarations whose body calls reg.RegisterReadiness.
+				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+					if fd.Body == nil {
+						return
+					}
+					EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+						if !isRegisterReadinessCall(call, p.TypesInfo) {
+							return
+						}
+						pos := p.Fset.Position(fd.Pos())
+						diags = append(diags, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"PROBENAME-SEALED-FUNNEL-01/B2: function %q at %s:%d wraps "+
+									"reg.RegisterReadiness but is not in the sanctioned "+
+									"wrapper set — helper indirection can bypass A2 scanning",
+								fd.Name.Name, rel, pos.Line,
+							),
+						})
+					})
+				})
+			}
+			return nil
+		})
+
+	assert.Empty(t, diags, "PROBENAME-SEALED-FUNNEL-01/B2 blind-spot self-check failed — "+
+		"unsanctioned RegisterReadiness wrapper found in production code")
+}

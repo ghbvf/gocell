@@ -835,8 +835,8 @@ func (h *Hub) ConnCount() int {
 // ---------------------------------------------------------------------------
 
 // ProbeReady is the ops-contract name for the websocket hub readiness probe.
-// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "websocket_hub_ready"
+// healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "websocket_hub_ready"
 
 // Checkers implements lifecycle.ManagedResource. It returns a single probe
 // "websocket_hub_ready" that reports nil (healthy) only when the Hub is in

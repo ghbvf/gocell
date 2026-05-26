@@ -554,8 +554,8 @@ func TestRenderHealthzGen_GoldenSynth(t *testing.T) {
 // TestRenderHealthzGen_HappyPath verifies the structural skeleton of healthz_gen.go:
 // - generated header marker is present
 // - package declaration is correct
-// - ProbeRepoReady constant uses cellID + "_repo_ready"
-// - RegisterRepoReady function is present with correct signature
+// - ProbeRepoReady typed constant uses cellID + "_repo_ready"
+// - RegisterReadiness function is present with correct signature
 // - imports kernel/cell and kernel/healthz
 func TestRenderHealthzGen_HappyPath(t *testing.T) {
 	t.Parallel()
@@ -582,11 +582,11 @@ func TestRenderHealthzGen_HappyPath(t *testing.T) {
 	// Package declaration.
 	mustContain(t, got, "package mypackage")
 
-	// ProbeRepoReady constant.
-	mustContain(t, got, `const ProbeRepoReady = "mycell_repo_ready"`)
+	// ProbeRepoReady typed constant — must carry healthz.ProbeName type.
+	mustContain(t, got, `const ProbeRepoReady healthz.ProbeName = "mycell_repo_ready"`)
 
-	// RegisterRepoReady function signature.
-	mustContain(t, got, "func RegisterRepoReady(reg cell.Registrar, p healthz.RepoProber) error {")
+	// RegisterReadiness function signature (renamed from RegisterReadiness).
+	mustContain(t, got, "func RegisterReadiness(reg cell.Registrar, p healthz.RepoProber) error {")
 
 	// Imports.
 	mustContain(t, got, `"github.com/ghbvf/gocell/kernel/cell"`)
@@ -612,7 +612,7 @@ func TestRenderHealthzGen_UnderscoreCellID(t *testing.T) {
 		t.Fatalf("render healthz_gen.tmpl: %v", err)
 	}
 	got := string(out)
-	mustContain(t, got, `const ProbeRepoReady = "my_cell_repo_ready"`)
+	mustContain(t, got, `const ProbeRepoReady healthz.ProbeName = "my_cell_repo_ready"`)
 }
 
 // TestRenderHealthzGen_FileBasename verifies that the output path rendered via

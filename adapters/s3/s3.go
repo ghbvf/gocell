@@ -32,10 +32,10 @@ const (
 	defaultS3HealthInterval = 30 * time.Second
 
 	// ProbeReady is the ops-contract name for the S3 readiness probe registered
-	// by Checkers(). It is a healthz.ReadyProbeName-typed const (snake_case +
-	// "_ready" suffix), funneled by archtest OPS-CONTRACT-STRING-FUNNEL-01 so
+	// by Checkers(). It is a healthz.ProbeName-typed const (snake_case +
+	// "_ready" suffix), funneled by archtest PROBENAME-SEALED-FUNNEL-01 so
 	// production code and tests reference the same identifier without drift.
-	ProbeReady healthz.ReadyProbeName = "s3_ready"
+	ProbeReady healthz.ProbeName = "s3_ready"
 )
 
 // bucketHeader is the narrow interface used by the health state machine.

@@ -11,6 +11,24 @@
 // implementation lives in runtime/observability/healthz; HTTP exposure lives
 // in runtime/http/health.
 //
+// # Probe naming — ProbeName typed funnel
+//
+// All probe names are typed as kernel/healthz.ProbeName (a typed string).
+// The sole construction entry point is NewProbeName(s string) (ProbeName, error),
+// which validates snake_case format (regex ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$,
+// length ≤ 48). Typed constants are declared in each owning package:
+//
+//   - Adapter probes: each adapter declares const ProbeReady ProbeName = "<name>_ready".
+//   - Framework probes: ConfigWatcherProbeName / ConfigDriftProbeName typed const
+//     in this package; emitter probe via EmitterFailOpenProbeName(cellID) constructor.
+//   - Cell repo probes: cellgen emits const ProbeRepoReady ProbeName in healthz_gen.go.
+//
+// archtest PROBENAME-SEALED-FUNNEL-01 double-locks the funnel (upstream
+// declaration sanction + value shape; downstream callsite resolves to declared
+// const). Supersedes OPS-CONTRACT-STRING-FUNNEL-01, READYZ-PROBE-NAMING-01,
+// and HEALTHZ-TYPED-REGISTER-01 (the latter two retired because Registrar.Healthz()
+// no longer exists — calling it is a compile error).
+//
 // # Layering invariants
 //
 //   - kernel/healthz has zero runtime/ or adapters/ dependencies (stdlib + pkg/errcode).
@@ -28,8 +46,8 @@
 //   - A1 path-literal funnel: ban (http|mux).HandleFunc(_, "/healthz"|"/readyz", _)
 //     outside runtime/http/health
 //   - A2 caller-identity allowlist: Aggregator.Register callsites limited to
-//     the in-memory Aggregator helper, bootstrap drain, codegen cellgen output,
-//     and adapter probe constructors
+//     the in-memory Aggregator helper, bootstrap drain, and the kernel/cell
+//     RegisterReadiness + RegisterEmitterHealthProbes helpers
 //   - A3 holder allowlist (Medium archtest — strongest available Go form):
 //     structs holding a healthz.Aggregator field are limited to the runtime
 //     aggregator impl, runtime/http/health.Handler, and runtime/bootstrap.Bootstrap.
@@ -41,13 +59,6 @@
 //     (HEALTHZ-HOLDER-SEAL-01, gh #893, closed won't-do).
 //   - A4 reverse self-test: tools/archtest/testdata/healthz_violate/ fixture
 //     proves A1/A2/A3 catch known violations
-//
-// # INVARIANT: HEALTHZ-TYPED-REGISTER-01
-//
-// Cells must NOT call Registry.Healthz() directly outside cellgen-generated
-// healthz_gen.go files. Each cell receives a typed helper
-// "<cellname>healthz.RegisterRepoReady(reg, prober)" from cellgen; cell_init.go,
-// handler.go and other hand-written files must call that helper.
 //
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/healthz
 // ref: spring-projects/spring-boot HealthIndicator

@@ -98,6 +98,14 @@ var allowedMustDecls = map[string]map[string]struct{}{
 		"MustHaveClock":            {},
 		"MustHavePositiveInterval": {},
 	},
+	// (a) assertion guard — kernel/healthz.MustProbeName is the typed-funnel
+	// panic variant used by composed-name internals + test fixtures (test
+	// files load probe names through this so the validation regex governs
+	// fixture data too). Caller allowlist is enforced separately by
+	// PROBENAME-SEALED-FUNNEL-01/A4.
+	"kernel/healthz": {
+		"MustProbeName": {},
+	},
 	"kernel/observability/metrics": {
 		"MustValidateLabels": {},
 	},

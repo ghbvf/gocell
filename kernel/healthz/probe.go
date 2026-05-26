@@ -9,20 +9,14 @@ import (
 
 // Probe is a named readiness check.
 //
-// Name returns a stable lower-case snake_case identifier ending in "_ready"
-// for dependency probes; framework probes use stable identifiers without the
-// "_ready" suffix. Name shape is enforced **statically** by archtest, not at
-// runtime (runtime Aggregator.Register only rejects empty and duplicate names);
-// adding a runtime regex check would create a parallel governance surface and is
-// intentionally avoided. Two archtests split the surface by authoring site:
-//   - adapter dependency-availability probes authored via
-//     lifecycle.ManagedResource.Checkers() / adapterutil.HealthToCheckers —
-//     OPS-CONTRACT-STRING-FUNNEL-01 (must be a healthz.ReadyProbeName const;
-//     see kernel/healthz/readyprobename.go);
-//   - framework + cellgen probes constructed directly via NewProbe(name, fn)
-//     (config_watcher, outbox_failopen_rate_<cell>, <cell>_repo_ready) —
-//     READYZ-PROBE-NAMING-01 (no hyphens; see
-//     tools/archtest/readyz_probe_naming_test.go).
+// Name returns a typed [ProbeName] (snake_case lowercase). See [ProbeName]
+// for the typed-funnel discipline: the name flows through declared typed
+// const (adapter / framework / cellgen) or through a composed-name
+// constructor like [EmitterFailOpenProbeName]; bare strings never reach
+// [NewProbe] at production callsites. Compile-time `Name() ProbeName`
+// closes the form-uniqueness gap that the legacy `Name() string` left
+// open (downstream Hard via type system; see archtest
+// PROBENAME-SEALED-FUNNEL-01).
 //
 // Check is invoked by the Aggregator with a context carrying the probe
 // deadline. Returning nil indicates healthy; a non-nil error indicates
@@ -36,9 +30,29 @@ import (
 // (Name + Check). GoCell drops the *http.Request dependency: probes have
 // no HTTP context at the kernel layer.
 type Probe interface {
-	Name() string
+	Name() ProbeName
 	Check(ctx context.Context) error
 }
+
+// Prober is the check-only narrowing of [Probe], consumed by the typed
+// registration entry [github.com/ghbvf/gocell/kernel/cell.Registrar.RegisterReadiness].
+// Name flows in independently as a [ProbeName] parameter, so name and check
+// cannot drift — the funnel makes "register probe under name X but expose
+// itself as name Y" structurally impossible at the entry point.
+//
+// Every [Probe] is automatically a [Prober].
+type Prober interface {
+	Check(ctx context.Context) error
+}
+
+// ProberFunc adapts a bare check function to the [Prober] interface, for the
+// common cellgen / framework registration pattern where the underlying source
+// (e.g. RepoProber.RepoReady, *sql.DB.PingContext) does not already
+// satisfy Prober and a closure is the simplest bridge.
+type ProberFunc func(ctx context.Context) error
+
+// Check satisfies [Prober] by invoking the underlying function.
+func (f ProberFunc) Check(ctx context.Context) error { return f(ctx) }
 
 // RepoProber is implemented by a cell's primary repository/store to expose a
 // differentiated readiness check.
@@ -50,26 +64,25 @@ type Probe interface {
 // and table-level permission loss that a connection ping cannot detect.
 // In-memory implementations return nil (always ready).
 //
-// This interface is separate from Probe because cellgen-generated
-// RegisterRepoReady helpers take a RepoProber (semantic constraint:
-// repository readiness) rather than a generic Probe (any function). The
-// codegen pass wraps the RepoProber into a Probe with the cell-derived
-// canonical name "<cellid>_repo_ready" — naming, wrapping, and registration
-// are all centralized in the cellgen template.
+// RepoProber is a *semantic* narrowing distinct from [Prober] — the
+// `RepoReady` method name encodes the contract (representative table
+// query, not a generic ping). Cellgen-generated `RegisterReadiness` takes
+// a RepoProber and wraps it into a [Probe] under the cell-derived
+// canonical name "<cellid>_repo_ready"; naming, wrapping, and
+// registration are all centralized in the cellgen template.
 type RepoProber interface {
 	RepoReady(ctx context.Context) error
 }
 
-// NewProbe constructs a Probe with the given name and check function.
+// NewProbe constructs a Probe with the given typed name and check function.
 // It is the only sanctioned way to wrap a closure as a Probe — cells and
-// adapters that need a one-off probe go through this constructor so the
-// resulting value participates in HEALTHZ-WRITE-01 form-uniqueness.
+// adapters that need a one-off probe go through this constructor.
 //
 // NewProbe panics if name is empty or fn is nil — both are programmer
 // errors caught at composition time, not runtime failures of a healthy
 // probe execution. The panics route through panicregister.Approved so the
 // kernel recovery middleware classifies them correctly.
-func NewProbe(name string, fn func(context.Context) error) Probe {
+func NewProbe(name ProbeName, fn func(context.Context) error) Probe {
 	if name == "" {
 		panic(panicregister.Approved("healthz-probe-empty-name",
 			errcode.Assertion("healthz.NewProbe: name must not be empty")))
@@ -95,9 +108,9 @@ type ProbeSet interface {
 // Keeping it unexported funnels all closure-based probes through NewProbe,
 // which makes "wrap a closure as a Probe" form-unique for archtest.
 type funcProbe struct {
-	name string
+	name ProbeName
 	fn   func(context.Context) error
 }
 
-func (p funcProbe) Name() string                    { return p.name }
+func (p funcProbe) Name() ProbeName                 { return p.name }
 func (p funcProbe) Check(ctx context.Context) error { return p.fn(ctx) }

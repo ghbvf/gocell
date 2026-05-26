@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -478,7 +479,7 @@ func TestDirectEmitter_Probes_DegradedOnHighDropRatio(t *testing.T) {
 
 	probes := e.Probes()
 	require.Len(t, probes, 1)
-	require.Equal(t, "outbox_failopen_rate_testcell", probes[0].Name())
+	require.Equal(t, healthz.MustProbeName("outbox_failopen_rate_testcell"), probes[0].Name())
 
 	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
 	checkErr := probes[0].Check(ctx)
@@ -501,7 +502,7 @@ func TestDirectEmitter_Probes_HealthyOnLowDropRatio(t *testing.T) {
 
 	probes := e.Probes()
 	require.Len(t, probes, 1)
-	require.Equal(t, "outbox_failopen_rate_testcell", probes[0].Name())
+	require.Equal(t, healthz.MustProbeName("outbox_failopen_rate_testcell"), probes[0].Name())
 
 	// 0 drops / 10 total = 0% < 5% threshold → not tripped
 	checkErr := probes[0].Check(ctx)
@@ -581,7 +582,7 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 // WithLogger(nil) falls back to slog.Default() in NewDirectEmitter
 // (defensive — protects against accidental nil logger from caller).
 func TestNewDirectEmitter_WithLoggerNilFallsBackToDefault(t *testing.T) {
-	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "test-cell",
+	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell",
 		WithLogger(nil))
 	require.NoError(t, err)
 	require.NotNil(t, e)

@@ -43,10 +43,10 @@ import (
 type Option func(*Bootstrap)
 
 // readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go.
-const (
-	configWatcherCheckerName = "config_watcher"
-	configDriftCheckerName   = "config_drift"
-	eventRouterCheckerName   = "event_router"
+var (
+	configWatcherCheckerName = healthz.ConfigWatcherProbeName
+	configDriftCheckerName   = healthz.ConfigDriftProbeName
+	eventRouterCheckerName   = healthz.MustProbeName("event_router")
 )
 
 // Bootstrap orchestrates the GoCell application lifecycle.
@@ -170,7 +170,7 @@ type Bootstrap struct {
 
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
-	name string                      // unique identifier shown in /readyz?verbose output
+	name healthz.ProbeName           // unique identifier shown in /readyz?verbose output
 	fn   func(context.Context) error // nil return = healthy; non-nil = unhealthy
 }
 

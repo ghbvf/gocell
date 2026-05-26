@@ -273,7 +273,7 @@ func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registrar) error 
 //   - Emitter fail-open-rate probe (healthz.ProbeSet): checks the ratio of
 //     dropped outbox publishes. Only present when the emitter is a DirectEmitter.
 //   - Ledger store readiness probe (healthz.RepoProber): checks audit_entries
-//     connectivity via RegisterRepoReady typed funnel. ledger.Store
+//     connectivity via RegisterReadiness typed funnel. ledger.Store
 //     always satisfies RepoProber — MemStore returns nil (always ready),
 //     PG-backed store issues a Tail query against the relation.
 func (c *AuditCore) registerHealthProbes(reg cell.Registrar) error {
@@ -284,7 +284,7 @@ func (c *AuditCore) registerHealthProbes(reg cell.Registrar) error {
 	}
 	// Register ledger store readiness probe via the cellgen-generated typed funnel.
 	// ledger.Store satisfies healthz.RepoProber (RepoReady method).
-	return RegisterRepoReady(reg, c.ledgerStore)
+	return RegisterReadiness(reg, c.ledgerStore)
 }
 
 // strictTailVerifyOnStartup implements the RestartRecoveryStrictTailVerify

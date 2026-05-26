@@ -1174,8 +1174,8 @@ var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
 const transitReadinessTimeout = 3 * time.Second
 
 // ProbeReady is the ops-contract name for the Vault transit readiness probe.
-// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "vault_transit_ready"
+// healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "vault_transit_ready"
 
 // Checkers returns a map of readiness probe functions for TransitKeyProvider.
 // The single probe "vault_transit_ready" reads transit/keys/{keyName} metadata

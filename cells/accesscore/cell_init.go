@@ -421,8 +421,8 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registrar) error
 // registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
 func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registrar) error {
 	// session.Store satisfies healthz.RepoProber via its RepoReady method.
-	// RegisterRepoReady is the cellgen-generated typed funnel.
-	if err := RegisterRepoReady(reg, c.sessionStore); err != nil {
+	// RegisterReadiness is the cellgen-generated typed funnel.
+	if err := RegisterReadiness(reg, c.sessionStore); err != nil {
 		return err
 	}
 	if err := cell.RegisterEmitterHealthProbes(reg, c.emitter); err != nil {

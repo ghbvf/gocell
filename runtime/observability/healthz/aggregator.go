@@ -36,7 +36,7 @@ func WithDeadline(d time.Duration) Option {
 // All exported access is through the interface value returned by NewAggregator.
 type aggregator struct {
 	mu       sync.RWMutex
-	probes   map[string]healthz.Probe // name → ctx-safe wrapped probe
+	probes   map[healthz.ProbeName]healthz.Probe // name → ctx-safe wrapped probe
 	deadline time.Duration
 	clk      clock.Clock
 }
@@ -55,7 +55,7 @@ type aggregator struct {
 // take the write lock only during map mutation.
 func NewAggregator(clk clock.Clock, opts ...Option) healthz.Aggregator {
 	a := &aggregator{
-		probes:   make(map[string]healthz.Probe),
+		probes:   make(map[healthz.ProbeName]healthz.Probe),
 		deadline: defaultDeadline,
 		clk:      clk,
 	}
@@ -95,7 +95,7 @@ func (a *aggregator) Register(p healthz.Probe) error {
 
 // Deregister removes the probe with the given name. No-op if the name is not
 // currently registered.
-func (a *aggregator) Deregister(name string) {
+func (a *aggregator) Deregister(name healthz.ProbeName) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.probes, name)
@@ -184,7 +184,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 		pr.Latency = a.clk.Since(start)
 		if r := recover(); r != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", pr.Name),
+				slog.String("probe", pr.Name.String()),
 				slog.Any("panic", redaction.RedactAny(r)),
 			)
 			pr.Status = healthz.StatusDown
@@ -239,7 +239,7 @@ type ctxSafeProbe struct {
 	clk   clock.Clock
 }
 
-func (w *ctxSafeProbe) Name() string { return w.inner.Name() }
+func (w *ctxSafeProbe) Name() healthz.ProbeName { return w.inner.Name() }
 
 func (w *ctxSafeProbe) Check(ctx context.Context) error {
 	done := make(chan probeOutcome, 1)
@@ -260,12 +260,12 @@ func (w *ctxSafeProbe) Check(ctx context.Context) error {
 		// values are not silently dropped and operators can grep slog for
 		// probes that take a long time to honor cancellation.
 		cancelAt := w.clk.Now()
-		go watchLateOutcome(w.inner.Name(), ctx.Err(), start, cancelAt, done, w.clk)
+		go watchLateOutcome(w.inner.Name().String(), ctx.Err(), start, cancelAt, done, w.clk)
 		return ctx.Err()
 	case o := <-done:
 		if o.panicV != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", w.inner.Name()),
+				slog.String("probe", w.inner.Name().String()),
 				slog.Any("panic", redaction.RedactAny(o.panicV)),
 			)
 			return fmt.Errorf("panic: %v", redaction.RedactAny(o.panicV))
