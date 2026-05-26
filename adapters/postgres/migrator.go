@@ -311,7 +311,7 @@ func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *
 // could in principle build a mutating provider without this wrapper — caught by
 // GOOSE-SESSION-LOCKER-01 (Medium, caller-scope) + review, not by the type
 // system. This is a permanent Medium ceiling, tracked for Hard-ification in
-// docs/backlog.md alongside the SPAN/HEALTHZ holder-seal precedents.
+// gh issue #1131 (alongside the SPAN #851 / HEALTHZ #893 holder-seal precedents).
 // The only operational bypass is running goose CLI / psql directly — the same
 // threat model as destructiveDownSessionLocker's GUC guard.
 //
