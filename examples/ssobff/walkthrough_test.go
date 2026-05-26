@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -45,7 +46,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const walkthroughServiceSecret = "walkthrough-service-token-secret-32b"
+const (
+	walkthroughServiceSecret       = "walkthrough-service-token-secret-32b"
+	runKnownAuditChainIssue1121Env = "GOCELL_SSOBFF_RUN_KNOWN_AUDIT_CHAIN_1121"
+)
 
 var walkthroughHTTPClient = &http.Client{Timeout: testtime.D1s}
 
@@ -570,9 +574,16 @@ func TestWalkthrough(t *testing.T) {
 		// AppendBootstrapAuthFail) write the SAME HMAC hash chain; concurrent
 		// appends fork the chain, so the verified-read auditquery returns only
 		// a contiguous prefix and drops the bootstrap.auth.fail entry (observed:
-		// DB has the row, auditquery returns 0). Remove this Skip + the #1121
-		// reference once the dual-writer chain integrity is fixed.
-		t.Skip("known pre-existing audit-chain dual-writer fork, tracked in #1121")
+		// DB has the row, auditquery returns 0). Set
+		// GOCELL_SSOBFF_RUN_KNOWN_AUDIT_CHAIN_1121=1 to run the reproducer while
+		// fixing #1121; remove this gate once the dual-writer chain integrity is
+		// fixed.
+		if os.Getenv(runKnownAuditChainIssue1121Env) != "1" {
+			t.Skipf(
+				"known pre-existing audit-chain dual-writer fork, tracked in #1121; set %s=1 to run",
+				runKnownAuditChainIssue1121Env,
+			)
+		}
 
 		// End-to-end regression for PR #1005 ssobff bootstrap-audit-observer
 		// wiring. Trigger a 401 against the bootstrap-protected endpoint by
