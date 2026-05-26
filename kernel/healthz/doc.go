@@ -30,9 +30,15 @@
 //   - A2 caller-identity allowlist: Aggregator.Register callsites limited to
 //     the in-memory Aggregator helper, bootstrap drain, codegen cellgen output,
 //     and adapter probe constructors
-//   - A3 holder allowlist (Medium → backlog HEALTHZ-HOLDER-SEAL-01): structs
-//     holding healthz.Aggregator are limited to the runtime aggregator impl
-//     and runtime/http/health.Handler
+//   - A3 holder allowlist (Medium archtest — strongest available Go form):
+//     structs holding a healthz.Aggregator field are limited to the runtime
+//     aggregator impl, runtime/http/health.Handler, and runtime/bootstrap.Bootstrap.
+//     This stays archtest, not a type-system seal: A3 restricts who may *hold* a
+//     field of the type, which Go cannot express (sealing restricts implementers,
+//     not holders), and the interface's cross-package implementations plus a
+//     kernel/healthz↔kernel/outbox import cycle block an in-package seal. See the
+//     HEALTHZ-WRITE-01/A3 godoc in tools/archtest for the full rationale
+//     (HEALTHZ-HOLDER-SEAL-01, gh #893, closed won't-do).
 //   - A4 reverse self-test: tools/archtest/testdata/healthz_violate/ fixture
 //     proves A1/A2/A3 catch known violations
 //

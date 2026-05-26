@@ -160,10 +160,11 @@ pass through it):
 | Direction | Grade | Carrier |
 |-----------|-------|---------|
 | **Downstream** | **Hard** | (1) cellgen `healthz_gen.go` is the only file allowed to call `reg.Healthz()` in cells/ — `HEALTHZ-TYPED-REGISTER-01`; (2) `RegisterRepoReady(reg, p healthz.RepoProber)` typed parameter — anonymous duck-type bypass fails to compile; (3) `HEALTHZ-WRITE-01` A2 caller-identity allowlist locks `healthz.Aggregator.Register` callsites to a closed set. |
-| **Upstream** | **Medium** (caller allowlist) → Hard *tracked* | `HEALTHZ-WRITE-01` A2 is an archtest caller allowlist, not a type-system seal. Per §"Funnel 双向锁评级", this Medium-upstream + Hard-downstream transitional form has its explicit Hard-ization task tracked by the open `HEALTHZ-HOLDER-SEAL-01` (seal the `Aggregator` interface, cap-13 §13.1). |
+| **Upstream** | **Medium** (caller allowlist) — ceiling | `HEALTHZ-WRITE-01` A2 is an archtest caller allowlist, not a type-system seal. The §"Funnel 双向锁评级" Hard-upgrade path (seal the `Aggregator` interface, formerly `HEALTHZ-HOLDER-SEAL-01`) was found **infeasible in Go** — see ADR `202605041430-adr-architecture-optimization-via-engineering-thinking.md` §"Amendment 2026-05-26" — so `HEALTHZ-HOLDER-SEAL-01` (gh #893) is closed won't-do and Medium is the **ceiling** here, not a transitional rung. |
 
-This is the funnel the charter §"Funnel 双向锁评级" governs, and its Medium-upstream tracking
-obligation is discharged by the standing `HEALTHZ-HOLDER-SEAL-01` issue.
+This is the funnel the charter §"Funnel 双向锁评级" governs. Its Medium-upstream Hard-ization
+path (`HEALTHZ-HOLDER-SEAL-01`) was found infeasible in Go and closed won't-do (gh #893); Medium
+archtest is the ceiling, so no Hard-ization obligation remains open.
 
 ### Mechanism 2 — Conformance-enrollment backstop (`ai-robust.md` §"Funnel 双向锁评级" does **not** apply)
 
@@ -199,10 +200,11 @@ examples/ implementations ARE in scope and enroll.
 `REPO-READYZ-UPSTREAM-FUNNEL-HARD-01` (#699) was filed while this mechanism was mis-framed as a
 funnel upstream lock. Under the corrected classification (Mechanism 2 — a test-existence backstop,
 Hard at the behavioral layer, Medium-by-construction at the existence layer), the §"Funnel 双向锁
-评级" Hard-ization obligation is not owed by this mechanism, and the registration funnel's own
-upstream Hard-ization continues to be tracked separately by `HEALTHZ-HOLDER-SEAL-01`. #699 is
-resolved as **built**: the backstop now exists and is CI-enforced, matching the
-`USERREPO-CONFORMANCE-ENROLLMENT-01` precedent.
+评级" Hard-ization obligation is not owed by this mechanism. The registration funnel's own
+upstream Hard-ization (formerly tracked by `HEALTHZ-HOLDER-SEAL-01`) was found infeasible in Go
+and closed won't-do (gh #893; see ADR `202605041430` §"Amendment 2026-05-26") — its upstream stays
+Medium archtest, the ceiling. #699 is resolved as **built**: the backstop now exists and is
+CI-enforced, matching the `USERREPO-CONFORMANCE-ENROLLMENT-01` precedent.
 
 ### Full AI-robust table
 
@@ -227,7 +229,7 @@ This amendment rebuilds the picture:
 |-----|---------------|--------------|
 | Downstream registration gate | ❌ Virtual N1/N2 claimed Hard | ✅ Hard — HEALTHZ-TYPED-REGISTER-01 + cellgen + typed param |
 | Conformance-enrollment backstop | ❌ Virtual P1 claimed to exist | ✅ Medium (test-existence ceiling) — CELL-REPO-READYZ-PROBE-01 built this PR |
-| #699 disposition | ⚠️ Open, mis-framed as funnel-upstream Hard-upgrade | ✅ Resolved as built — reclassified as a test-existence backstop (Mechanism 2); §"Funnel 双向锁评级" does not classify it. Registration-funnel upstream Hard-ization stays tracked by HEALTHZ-HOLDER-SEAL-01. |
+| #699 disposition | ⚠️ Open, mis-framed as funnel-upstream Hard-upgrade | ✅ Resolved as built — reclassified as a test-existence backstop (Mechanism 2); §"Funnel 双向锁评级" does not classify it. Registration-funnel upstream Hard-ization (HEALTHZ-HOLDER-SEAL-01) was found infeasible in Go → closed won't-do; upstream stays Medium archtest (ceiling). |
 
 ### AI-robust honest caveats
 
