@@ -277,6 +277,11 @@ func TestAuditLedgerStore_HashFormatConstraint(t *testing.T) {
 	require.NoError(t, insertRow("ck-bad-prev", 1, "", hexA))
 	require.Error(t, insertRow("ck-bad-prev", 2, "", hexB),
 		"empty prev_hash on a non-genesis row (seq_no>1) must violate ck_audit_hash_format")
+	// Invalid: non-genesis row with a non-hex (uppercase) prev_hash — the regex
+	// guards prev_hash as well as hash.
+	require.NoError(t, insertRow("ck-bad-prevfmt", 1, "", hexA))
+	require.Error(t, insertRow("ck-bad-prevfmt", 2, strings.Repeat("A", 64), hexB),
+		"uppercase (non-hex) prev_hash on a non-genesis row must violate ck_audit_hash_format")
 	// Invalid: genesis row (seq_no=1) with a non-empty prev_hash.
 	require.Error(t, insertRow("ck-bad-genesis", 1, hexA, hexB),
 		"non-empty prev_hash on a genesis row (seq_no=1) must violate ck_audit_hash_format")

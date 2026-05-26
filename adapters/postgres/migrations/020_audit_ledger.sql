@@ -17,9 +17,11 @@
 --     express chain linkage (prev_hash == predecessor hash); that is Verify's job.
 --   - actor_id is always populated by the audit event producer; the appender's
 --     extractActor() rejects events with a missing/empty actorId before they reach
---     the store (system events use a "system:..." actor). actor_id is a queryable,
---     non-PII principal identifier (filterable via auditquery, self-or-admin gated)
---     and is NOT redacted on the query output path.
+--     the store (system events use a "system:..." actor). actor_id is a queryable
+--     principal identifier (a domain ID, not a credential/secret). It is filterable
+--     via auditquery and is NOT redacted on the query output path; the protection is
+--     the self-or-admin authorization gate (auditQueryPolicy), not field-level
+--     redaction.
 --   - payload BYTEA stores the raw event payload bytes; strict JSON validation is
 --     enforced in Go (validateAuditPayloadJSON) before the INSERT. BYTEA preserves
 --     the exact byte sequence used as HMAC input, ensuring byte-for-byte equivalence

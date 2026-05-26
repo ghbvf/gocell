@@ -33,6 +33,13 @@ func TestMigrator_LockTimeoutSessionLocker_SetsAndResets(t *testing.T) {
 	require.NoError(t, err)
 	locker := &lockTimeoutSessionLocker{inner: inner}
 
+	// Capture the pre-lock value so the reset assertion compares against the
+	// server's actual default rather than hardcoding "0" (RESET restores the
+	// startup/postgresql.conf value, which need not be 0).
+	var preLock string
+	require.NoError(t,
+		conn.QueryRowContext(ctx, `SELECT current_setting('lock_timeout')`).Scan(&preLock))
+
 	require.NoError(t, locker.SessionLock(ctx, conn))
 	var lt string
 	require.NoError(t,
@@ -43,5 +50,5 @@ func TestMigrator_LockTimeoutSessionLocker_SetsAndResets(t *testing.T) {
 	require.NoError(t, locker.SessionUnlock(ctx, conn))
 	require.NoError(t,
 		conn.QueryRowContext(ctx, `SELECT current_setting('lock_timeout')`).Scan(&lt))
-	assert.Equal(t, "0", lt, "lock_timeout must be reset to default (0) after unlock")
+	assert.Equal(t, preLock, lt, "lock_timeout must be reset to its pre-lock value after unlock")
 }

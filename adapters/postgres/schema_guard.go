@@ -419,10 +419,11 @@ var expectedIndexes = []expectedIndex{
 	// roles: no additional non-PK indexes in migration 019
 	// role_assignments
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
-	// audit_entries (020_audit_ledger.sql)
+	// audit_entries (020_audit_ledger.sql + 021 event_id unique)
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
+	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true},
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false},
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
@@ -523,6 +524,9 @@ var expectedChecks = []expectedCheck{
 	{Table: "devices", Name: "devices_status_chk"},
 	{Table: "commands", Name: "commands_status_chk"},
 	{Table: "commands", Name: "commands_attempt_chk"},
+	// audit_entries hash-format guard (020_audit_ledger.sql) — seq_no-coupled
+	// 64-char lowercase hex format for prev_hash/hash with the genesis exception.
+	{Table: "audit_entries", Name: "ck_audit_hash_format"},
 }
 
 // ---------------------------------------------------------------------------

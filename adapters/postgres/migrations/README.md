@@ -53,6 +53,13 @@ scope 设置 `lock_timeout = '5s'`，将 ACCESS EXCLUSIVE 锁的等待时间限�
 **migration .sql 文件禁止自行写 `SET LOCAL lock_timeout`**——migrator 已在 session 层保证，
 per-file 重复设置是冗余的双重机制，应删除。
 
+**与 `CREATE INDEX CONCURRENTLY` 的交互**：session 级注入也覆盖 `-- +goose no transaction`
+的 CONCURRENTLY migration（这些文件以前没有 `lock_timeout`，现在统一获得）。`lock_timeout`
+约束 CONCURRENTLY 首次获取 ShareUpdateExclusiveLock 的等待：低流量部署窗口下瞬时取锁、不受影响；
+若有长事务持冲突锁导致 5 秒内取不到锁，CONCURRENTLY 会 fail 并可能留下 INVALID 索引——这是
+fail-fast（优于无限阻塞 migration），由规则 5 的 `DetectInvalidIndexes` pre-check 兜底清理。
+migration 应在低流量/计划窗口执行。`lock_timeout` 值（5s）刻意不可配置，避免误用。
+
 ## 规则 5：INVALID 索引 pre-check 与启动期防线
 
 `CREATE INDEX CONCURRENTLY` 失败时，PostgreSQL 可能留下 `indisvalid = false` 的 INVALID 索引。

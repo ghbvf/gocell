@@ -294,15 +294,26 @@ func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *
 // is applied to every migration — Up or Down, transactional or
 // `-- +goose no transaction` — by construction.
 //
-// AI-robust: Hard-by-construction. goose always invokes SessionLock/SessionUnlock
-// around a migration run when WithSessionLocker is set, and newGooseProvider is
-// the sole construction site for any provider that APPLIES migrations
-// (Migrator.Up / Migrator.Down). schema_guard.VerifyExpectedVersion builds a
-// provider directly but only calls GetDBVersion (read-only, applies no DDL), so
-// it is out of scope. There is therefore no .sql-level knob to write or forget;
-// a migration cannot run without lock_timeout via the sanctioned Go path. The
-// only bypass is running goose CLI / psql directly — the same threat model as
-// the destructiveDownSessionLocker GUC guard.
+// AI-robust rating: Medium (not Hard). The funnel rests on three facts:
+//   - newGooseProvider always wraps the resolved locker with this type (one
+//     code line below) — code-fact, not separately archtested;
+//   - newGooseProvider is the sole construction site for a provider that APPLIES
+//     migrations (Migrator.Up / Migrator.Down) — GOOSE-SESSION-LOCKER-01 pins
+//     every *mutating* goose.NewProvider callsite under adapters/postgres/ to
+//     carry WithSessionLocker and carves out schema_guard.VerifyExpectedVersion's
+//     read-only (GetDBVersion, no DDL) provider;
+//   - TestMigrator_LockTimeoutSessionLocker_SetsAndResets verifies the locker's
+//     set/reset behavior.
+//
+// True Hard (type-seal the provider so it cannot be constructed without
+// lock_timeout) is INFEASIBLE: goose.NewProvider is a third-party constructor
+// that cannot be sealed, so a future sibling caller inside package postgres
+// could in principle build a mutating provider without this wrapper — caught by
+// GOOSE-SESSION-LOCKER-01 (Medium, caller-scope) + review, not by the type
+// system. This is a permanent Medium ceiling, tracked for Hard-ification in
+// docs/backlog.md alongside the SPAN/HEALTHZ holder-seal precedents.
+// The only operational bypass is running goose CLI / psql directly — the same
+// threat model as destructiveDownSessionLocker's GUC guard.
 //
 // Session scope (set_config third arg = false) — NOT SET LOCAL — is required so
 // the timeout survives across the implicit-transaction boundaries of
