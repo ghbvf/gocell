@@ -1,8 +1,18 @@
 # ADR: kernel/clock injection (D6 PROD-CLOCK-INJECTION-01)
 
-> Status: Accepted
+> Status: Superseded by `docs/architecture/202605270000-adr-clock-positional-injection-funnel.md` (2026-05-27)
 > Date: 2026-05-02
 > ref: `docs/plans/202605011500-029-master-roadmap.md` Track D #D6
+>
+> **Superseded note (#1053):** The §Injection convention below (struct-field
+> `Config.Clock` + `if cfg.Clock == nil { cfg.Clock = clock.Real() }` fallback)
+> and the "Functional WithClock Option — rejected" / "Required Clock with no
+> fallback — rejected" alternatives are **reversed** by the superseding ADR.
+> Clock is now a **mandatory positional parameter** on every clock-requiring
+> constructor (omission is a compile error); `WithClock` options and input
+> `Config.Clock` fields are deleted; `clock.MustHaveClock` is retained only for
+> the typed-nil axis. The `kernel/clock` package, `clockmock`, `clock.Real()`,
+> and `PROD-CLOCK-INJECTION-01` (still active) originate here and remain valid.
 
 ## Context
 
@@ -99,26 +109,14 @@ until a goroutine has registered a timer before driving the clock.
 
 ### Injection convention
 
-Every type that depends on the clock takes it through the constructor.
-The canonical pattern is a `Clock clock.Clock` field on the type's
-`Config` (or a positional `clk` parameter when the constructor has no
-config):
-
-```go
-// composition root passes clock.Real() once
-asm := assembly.New(assembly.Config{
-    ID:    "primary",
-    Clock: clock.Real(),
-    ...
-})
-```
-
-`if cfg.Clock == nil { cfg.Clock = clock.Real() }` is the project's
-canonical "construct-with-fallback-to-non-nil" pattern (CLAUDE.md
-"构造函数出口保证所有字段非 nil"). The fallback is to `clock.Real()`,
-which is itself in the archtest whitelist, so this satisfies both the
-PROD-CLOCK-INJECTION-01 gate and the project rule that constructors
-should not propagate nil.
+> **REVERSED by #1053 (see superseding ADR `202605270000`).** This section
+> originally prescribed a `Clock clock.Clock` field on the type's `Config` with
+> an `if cfg.Clock == nil { cfg.Clock = clock.Real() }` fallback. Both the
+> struct-field form and the nil-fallback are gone. The current convention is a
+> **mandatory positional `clk clock.Clock` parameter** (first parameter, or
+> after `ctx` when present); the composition root passes `clock.Real()` once and
+> threads it positionally, and `clock.MustHaveClock(clk, ...)` rejects nil.
+> Omitting the clock is a compile error, not a runtime fallback.
 
 ### Static enforcement
 
@@ -195,19 +193,16 @@ budget gate that catches future drift.
   excludes timers; the single combined interface keeps the surface
   small.
 
-- **Required Clock with no fallback** — rejected after empirical
-  evaluation. The "required field, panic on nil" shape would force
-  every test fixture in the repo to add `Clock: clock.Real()` to its
-  config literal, which compounds across ~50 test files. The
-  fallback-to-`clock.Real()` pattern follows the existing
-  `NopHookObserver`/`NopProvider` convention in the same Config types
-  and gates production wiring through composition-root review rather
-  than runtime panics.
+- **Required Clock with no fallback** — originally rejected, now **adopted**
+  (#1053). The objection was test-fixture boilerplate, but a *positional
+  parameter* (rather than a required struct field) makes omission a compile
+  error and the boilerplate is mechanical; the upside is that "forgot to inject
+  a clock" can no longer reach runtime. See superseding ADR `202605270000`.
 
-- **Functional `WithClock` Option on every constructor** — rejected.
-  Three of the affected types already use struct-Config injection;
-  forcing Options would have created mixed conventions. The struct
-  field is cheaper to read and to verify in tests.
+- **Functional `WithClock` Option on every constructor** — originally rejected
+  in favour of struct-field injection; now **both forms are deleted** in favour
+  of a positional parameter (#1053). The "mixed conventions" concern is resolved
+  by collapsing to a single form (positional), not by preferring struct fields.
 
 ## Closure status (2026-05-02 follow-up)
 
