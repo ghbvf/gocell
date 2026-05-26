@@ -7,6 +7,7 @@ package f4_wrong_delegate_red
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -17,10 +18,10 @@ type CachingSessionStore struct {
 
 // Revoke delegates to the wrong method (RevokeForSubject) — violates CACHING-SESSION-REVOKE-DELEGATE-ONLY-01.
 func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
-	return s.inner.RevokeForSubject(ctx, id, session.CredentialEventLock) // VIOLATION: wrong method name
+	return s.inner.RevokeForSubject(ctx, id, session.CredentialEventLock, credentialfence.Mint()) // VIOLATION: wrong method name
 }
 
 // RevokeForSubject is conformant.
-func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
-	return s.inner.RevokeForSubject(ctx, subjectID, event)
+func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken) error {
+	return s.inner.RevokeForSubject(ctx, subjectID, event, tok)
 }

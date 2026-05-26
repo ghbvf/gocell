@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
 )
@@ -64,7 +65,7 @@ func TestPGSessionStore_RevokeForSubjectNonUUIDRejected(t *testing.T) {
 	store, err := NewSessionStore(fakePool, txm, proto, fc)
 	require.NoError(t, err)
 
-	revokeErr := store.RevokeForSubject(context.Background(), "not-a-uuid", session.CredentialEventPasswordReset)
+	revokeErr := store.RevokeForSubject(context.Background(), "not-a-uuid", session.CredentialEventPasswordReset, credentialfence.Mint())
 	require.Error(t, revokeErr, "non-UUID subjectID must be rejected before DB execution")
 
 	var coded *errcode.Error

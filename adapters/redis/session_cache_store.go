@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -312,8 +313,10 @@ func (s *CachingSessionStore) Revoke(ctx context.Context, id string) error {
 // Hard-locked by archtest CACHING-SESSION-REVOKE-DELEGATE-ONLY-01: this
 // method body MUST be exactly one ReturnStmt delegating to inner with the
 // same name.
-func (s *CachingSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
-	return s.inner.RevokeForSubject(ctx, subjectID, event)
+func (s *CachingSessionStore) RevokeForSubject(
+	ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken,
+) error {
+	return s.inner.RevokeForSubject(ctx, subjectID, event, tok)
 }
 
 // RepoReady delegates to inner. Redis liveness is reported independently by

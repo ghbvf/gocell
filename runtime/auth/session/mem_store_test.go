@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -144,4 +145,41 @@ func TestMemStore_RepoReadinessConformance(t *testing.T) {
 		t.Fatalf("NewMemStore: %v", err)
 	}
 	celltest.RunRepoReadinessConformance(t, "session-mem", store, nil)
+}
+
+// TestMemStore_RevokeForSubject_NilFenceToken_Panics verifies that passing a
+// nil FenceToken to MemStore.RevokeForSubject triggers the MustHave guard
+// (B-class programmer error) with an *errcode.Error payload and a message that
+// identifies the call site.
+//
+// panicregister.Approved returns the payload unchanged, so recover() sees the
+// raw *errcode.Error from errcode.Assertion.
+func TestMemStore_RevokeForSubject_NilFenceToken_Panics(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(storetest.EpochAnchor())
+	store, err := session.NewMemStore(storetest.NewTestProtocol(t), fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		// nil FenceToken is intentional — we are testing the guard.
+		_ = store.RevokeForSubject(context.Background(), "subject-A", session.CredentialEventPasswordReset, nil)
+	}()
+
+	if recovered == nil {
+		t.Fatal("expected panic from nil FenceToken, got nil")
+	}
+	coded, ok := recovered.(*errcode.Error)
+	if !ok {
+		t.Fatalf("expected panic value *errcode.Error, got %T: %v", recovered, recovered)
+	}
+	if coded.Code != errcode.ErrInternal {
+		t.Errorf("expected ErrInternal (Assertion), got %s", coded.Code)
+	}
+	if !strings.Contains(coded.Message, "session.Store.RevokeForSubject") {
+		t.Errorf("expected panic message to identify call site, got %q", coded.Message)
+	}
 }

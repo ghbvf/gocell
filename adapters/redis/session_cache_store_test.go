@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -44,6 +45,7 @@ type lastRevokeArgs struct {
 type lastRevokeSubjArgs struct {
 	subjectID string
 	event     session.CredentialEvent
+	tok       credentialfence.FenceToken
 }
 
 // fakeSessionStore is an inner session.Store used by CachingSessionStore unit
@@ -98,9 +100,11 @@ func (f *fakeSessionStore) Revoke(_ context.Context, id string) error {
 	return f.revokeErr
 }
 
-func (f *fakeSessionStore) RevokeForSubject(_ context.Context, subjectID string, event session.CredentialEvent) error {
+func (f *fakeSessionStore) RevokeForSubject(
+	_ context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken,
+) error {
 	f.revokeSubjCalls.Add(1)
-	f.lastRevokeSubj.Store(&lastRevokeSubjArgs{subjectID: subjectID, event: event})
+	f.lastRevokeSubj.Store(&lastRevokeSubjArgs{subjectID: subjectID, event: event, tok: tok})
 	return f.revokeSubjErr
 }
 
@@ -351,12 +355,14 @@ func TestCachingSessionStore_RevokeForSubject_DoesNotTouchCache(t *testing.T) {
 	inner := &fakeSessionStore{}
 	store := newTestCachingStore(t, inner, mock)
 
-	err = store.RevokeForSubject(context.Background(), scsTestSubj, session.CredentialEventPasswordReset)
+	mintedTok := credentialfence.Mint()
+	err = store.RevokeForSubject(context.Background(), scsTestSubj, session.CredentialEventPasswordReset, mintedTok)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), inner.revokeSubjCalls.Load())
 	if args := inner.lastRevokeSubj.Load(); assert.NotNil(t, args, "lastRevokeSubj must be set") {
 		assert.Equal(t, scsTestSubj, args.subjectID, "RevokeForSubject must delegate exact subjectID")
 		assert.Equal(t, session.CredentialEventPasswordReset, args.event, "RevokeForSubject must delegate exact event")
+		assert.Equal(t, mintedTok, args.tok, "RevokeForSubject must delegate exact FenceToken")
 	}
 
 	// Cache entry must still be present — wrapper must not have invalidated.

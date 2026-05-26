@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest" // test funnel; storetest is testing-helper package, errcodetest import is intentional (not a test-only import in a non-_test.go file)
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -316,7 +317,7 @@ func runRevokeForSubjectEmptySubject(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	err := store.RevokeForSubject(context.Background(), "", session.CredentialEventPasswordReset)
+	err := store.RevokeForSubject(context.Background(), "", session.CredentialEventPasswordReset, credentialfence.Mint())
 	assertErrCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -328,7 +329,7 @@ func runRevokeForSubjectUnknownEvent(t *testing.T, factory Factory) {
 	store, _, cleanup := factory(t)
 	defer cleanup()
 
-	err := store.RevokeForSubject(context.Background(), subjectA, session.CredentialEvent(99))
+	err := store.RevokeForSubject(context.Background(), subjectA, session.CredentialEvent(99), credentialfence.Mint())
 	assertErrCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -427,7 +428,7 @@ func runRevokeForSubject(t *testing.T, factory Factory, event session.Credential
 	fc.Advance(time.Minute) // ensure subsequent revoke would have a distinct timestamp
 	revokeAt := fc.Now()
 
-	if err := store.RevokeForSubject(context.Background(), subjectA, event); err != nil {
+	if err := store.RevokeForSubject(context.Background(), subjectA, event, credentialfence.Mint()); err != nil {
 		t.Fatalf("RevokeForSubject(%s, %s): %v", subjectA, event, err)
 	}
 
