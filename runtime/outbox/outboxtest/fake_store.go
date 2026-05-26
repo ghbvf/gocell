@@ -22,20 +22,10 @@ import (
 // Compile-time assertion: FakeStore must satisfy outbox.Store.
 var _ outbox.Store = (*FakeStore)(nil)
 
-// rowStatus mirrors the four-state machine used by the PG adapter.
-type rowStatus string
-
-const (
-	statusPending   rowStatus = "pending"
-	statusClaiming  rowStatus = "claiming"
-	statusPublished rowStatus = "published"
-	statusDead      rowStatus = "dead"
-)
-
 // fakeRow holds the full mutable state of a single outbox entry in FakeStore.
 type fakeRow struct {
 	entry       kout.Entry
-	status      rowStatus
+	status      kout.State
 	attempts    int
 	leaseID     string
 	claimedAt   *time.Time
@@ -117,7 +107,7 @@ func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
 	for _, ce := range entries {
 		row := &fakeRow{
 			entry:    ce.Entry,
-			status:   statusPending,
+			status:   kout.StatePending,
 			attempts: ce.Attempts,
 		}
 		s.rows[ce.ID] = row
@@ -140,7 +130,7 @@ func (s *FakeStore) snapshotLocked() []FakeRow {
 	for _, r := range s.rows {
 		fr := FakeRow{
 			Entry:     r.entry,
-			Status:    string(r.status),
+			Status:    r.status.String(),
 			Attempts:  r.attempts,
 			LeaseID:   r.leaseID,
 			LastError: r.lastError,
@@ -219,7 +209,7 @@ func (s *FakeStore) ClaimPending(_ context.Context, batchSize int) ([]outbox.Cla
 	// Collect eligible rows.
 	var candidates []*fakeRow
 	for _, r := range s.rows {
-		if r.status != statusPending {
+		if r.status != kout.StatePending {
 			continue
 		}
 		if r.nextRetryAt != nil && r.nextRetryAt.After(now) {
@@ -255,7 +245,7 @@ func (s *FakeStore) ClaimPending(_ context.Context, batchSize int) ([]outbox.Cla
 	leaseID := uuid.NewString()
 	result := make([]outbox.ClaimedEntry, 0, len(candidates))
 	for _, r := range candidates {
-		r.status = statusClaiming
+		r.status = kout.StateClaiming
 		r.leaseID = leaseID
 		t := now
 		r.claimedAt = &t
@@ -278,11 +268,11 @@ func (s *FakeStore) MarkPublished(_ context.Context, id, leaseID string) (update
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
+	if !ok || r.status != kout.StateClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := s.now()
-	r.status = statusPublished
+	r.status = kout.StatePublished
 	r.publishedAt = &now
 	r.claimedAt = nil
 	s.notifyLocked()
@@ -298,10 +288,10 @@ func (s *FakeStore) MarkRetry(
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
+	if !ok || r.status != kout.StateClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
-	r.status = statusPending
+	r.status = kout.StatePending
 	r.attempts = attempts
 	r.nextRetryAt = &nextRetryAt
 	r.lastError = lastError
@@ -318,11 +308,11 @@ func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
+	if !ok || r.status != kout.StateClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := s.now()
-	r.status = statusDead
+	r.status = kout.StateDead
 	r.attempts = attempts
 	r.lastError = lastError
 	r.deadAt = &now
@@ -352,7 +342,7 @@ func (s *FakeStore) ReclaimStale(
 
 	// Reuse the cleanup-path stable ordering helper so reclaim and cleanup
 	// share a single source of "eligible rows in deterministic order".
-	ids := s.eligibleIDsByTimeAsc(statusClaiming, cutoff,
+	ids := s.eligibleIDsByTimeAsc(kout.StateClaiming, cutoff,
 		func(r *fakeRow) *time.Time { return r.claimedAt })
 
 	for _, id := range ids {
@@ -362,7 +352,7 @@ func (s *FakeStore) ReclaimStale(
 		r := s.rows[id]
 		newAttempts := r.attempts + 1
 		if newAttempts >= maxAttempts {
-			r.status = statusDead
+			r.status = kout.StateDead
 			r.attempts = newAttempts
 			r.deadAt = &now
 			r.claimedAt = nil
@@ -370,7 +360,7 @@ func (s *FakeStore) ReclaimStale(
 			shift := min(newAttempts, 30)
 			delay := cappedDelay(baseDelay<<shift, maxDelay)
 			nextRetry := now.Add(delay)
-			r.status = statusPending
+			r.status = kout.StatePending
 			r.attempts = newAttempts
 			r.nextRetryAt = &nextRetry
 			r.claimedAt = nil
@@ -392,7 +382,7 @@ func (s *FakeStore) CleanupPublished(_ context.Context, cutoff time.Time, batchS
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, id := range s.eligibleIDsByTimeAsc(statusPublished, cutoff, func(r *fakeRow) *time.Time { return r.publishedAt }) {
+	for _, id := range s.eligibleIDsByTimeAsc(kout.StatePublished, cutoff, func(r *fakeRow) *time.Time { return r.publishedAt }) {
 		if deleted >= batchSize {
 			break
 		}
@@ -412,7 +402,7 @@ func (s *FakeStore) CleanupDead(_ context.Context, cutoff time.Time, batchSize i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, id := range s.eligibleIDsByTimeAsc(statusDead, cutoff, func(r *fakeRow) *time.Time { return r.deadAt }) {
+	for _, id := range s.eligibleIDsByTimeAsc(kout.StateDead, cutoff, func(r *fakeRow) *time.Time { return r.deadAt }) {
 		if deleted >= batchSize {
 			break
 		}
@@ -437,7 +427,7 @@ func (s *FakeStore) CountPending(_ context.Context) (int64, error) {
 	now := s.now()
 	var n int64
 	for _, r := range s.rows {
-		if r.status != statusPending {
+		if r.status != kout.StatePending {
 			continue
 		}
 		if r.nextRetryAt != nil && r.nextRetryAt.After(now) {
@@ -448,26 +438,29 @@ func (s *FakeStore) CountPending(_ context.Context) (int64, error) {
 	return n, nil
 }
 
-// OldestEligibleAt returns the smallest published_at (status="published") or
-// dead_at (status="dead") across all rows. Returns ok=false when no rows of
-// the given status exist or all such rows have a nil timestamp.
-func (s *FakeStore) OldestEligibleAt(_ context.Context, status string) (time.Time, bool, error) {
+// OldestEligibleAt returns the smallest published_at (status=kout.StatePublished)
+// or dead_at (status=kout.StateDead) across all rows. Returns ok=false when no
+// rows of the given status exist or all such rows have a nil timestamp.
+//
+// status MUST be kout.StatePublished or kout.StateDead; any other value returns
+// an error.
+func (s *FakeStore) OldestEligibleAt(_ context.Context, status kout.State) (time.Time, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var (
-		want rowStatus
+		want kout.State
 		tsOf func(*fakeRow) *time.Time
 	)
 	switch status {
-	case string(statusPublished):
-		want = statusPublished
+	case kout.StatePublished:
+		want = kout.StatePublished
 		tsOf = func(r *fakeRow) *time.Time { return r.publishedAt }
-	case string(statusDead):
-		want = statusDead
+	case kout.StateDead:
+		want = kout.StateDead
 		tsOf = func(r *fakeRow) *time.Time { return r.deadAt }
 	default:
-		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %q (want published or dead)", status)
+		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %s (want StatePublished or StateDead)", status)
 	}
 
 	var (
@@ -493,7 +486,7 @@ func (s *FakeStore) OldestEligibleAt(_ context.Context, status string) (time.Tim
 // eligibleIDsByTimeAsc returns IDs of rows in the given status whose timestamp
 // (extracted by tsOf) is non-nil and strictly before cutoff, sorted ascending.
 // Caller must hold s.mu.
-func (s *FakeStore) eligibleIDsByTimeAsc(status rowStatus, cutoff time.Time, tsOf func(*fakeRow) *time.Time) []string {
+func (s *FakeStore) eligibleIDsByTimeAsc(status kout.State, cutoff time.Time, tsOf func(*fakeRow) *time.Time) []string {
 	type entry struct {
 		id string
 		ts time.Time

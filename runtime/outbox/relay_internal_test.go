@@ -234,7 +234,7 @@ func (s *minimalStore) CountPending(_ context.Context) (int64, error) {
 	return n, nil
 }
 
-func (s *minimalStore) OldestEligibleAt(_ context.Context, status string) (time.Time, bool, error) {
+func (s *minimalStore) OldestEligibleAt(_ context.Context, status kout.State) (time.Time, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var (
@@ -242,14 +242,14 @@ func (s *minimalStore) OldestEligibleAt(_ context.Context, status string) (time.
 		tsOf func(*minimalRow) *time.Time
 	)
 	switch status {
-	case "published":
+	case kout.StatePublished:
 		want = "published"
 		tsOf = func(r *minimalRow) *time.Time { return r.publishedAt }
-	case "dead":
+	case kout.StateDead:
 		want = "dead"
 		tsOf = func(r *minimalRow) *time.Time { return r.deadAt }
 	default:
-		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %q", status)
+		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %s", status)
 	}
 
 	var oldest time.Time

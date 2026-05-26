@@ -88,12 +88,13 @@ type Store interface {
 	// Debezium MilliSecondsBehindSource — non-blocking depth probe on reclaim cadence.
 	CountPending(ctx context.Context) (int64, error)
 
-	// OldestEligibleAt returns the oldest published_at (when status="published")
-	// or dead_at (when status="dead") in the table. The relay uses this to schedule
-	// data-driven cleanup wake-ups: sleep until oldest+retention instead of polling
-	// on a fixed interval. Returns ok=false when no rows of the given status exist.
+	// OldestEligibleAt returns the oldest published_at (when status=kout.StatePublished)
+	// or dead_at (when status=kout.StateDead) in the table. The relay uses this to
+	// schedule data-driven cleanup wake-ups: sleep until oldest+retention instead of
+	// polling on a fixed interval. Returns ok=false when no rows of the given status
+	// exist.
 	//
-	// status MUST be either "published" or "dead". Implementations should reject
-	// other values to keep the contract narrow.
-	OldestEligibleAt(ctx context.Context, status string) (at time.Time, ok bool, err error)
+	// status MUST be kout.StatePublished or kout.StateDead. Implementations must
+	// reject other values to keep the contract narrow.
+	OldestEligibleAt(ctx context.Context, status kout.State) (at time.Time, ok bool, err error)
 }

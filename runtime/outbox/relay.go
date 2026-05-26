@@ -452,12 +452,12 @@ func (r *Relay) nextCleanupWait(ctx context.Context) time.Duration {
 	now := r.clk().Now()
 	wait := cleanupWaitCeiling
 
-	if pubAt, ok := r.oldestOrZero(ctx, "published"); ok {
+	if pubAt, ok := r.oldestOrZero(ctx, kout.StatePublished); ok {
 		if d := pubAt.Add(r.cfg.RetentionPeriod).Sub(now); d < wait {
 			wait = d
 		}
 	}
-	if deadAt, ok := r.oldestOrZero(ctx, "dead"); ok {
+	if deadAt, ok := r.oldestOrZero(ctx, kout.StateDead); ok {
 		if d := deadAt.Add(r.cfg.DeadRetentionPeriod).Sub(now); d < wait {
 			wait = d
 		}
@@ -482,12 +482,12 @@ func (r *Relay) cleanupWaitFloor() time.Duration {
 // oldestOrZero wraps Store.OldestEligibleAt with logging and an idle-fallback:
 // any error degrades to ok=false so nextCleanupWait falls back to the ceiling
 // instead of tight-looping.
-func (r *Relay) oldestOrZero(ctx context.Context, status string) (time.Time, bool) {
+func (r *Relay) oldestOrZero(ctx context.Context, status kout.State) (time.Time, bool) {
 	at, ok, err := r.store.OldestEligibleAt(ctx, status)
 	if err != nil {
 		slog.Warn(
 			"outbox relay: OldestEligibleAt failed, backing off to ceiling",
-			slog.String("status", status),
+			slog.String("status", status.String()),
 			slog.Any("error", err),
 		)
 		return time.Time{}, false
@@ -582,36 +582,41 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (pollStats, error) {
 	var stats pollStats
 	for i, res := range results {
-		if res.err == nil {
-			updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
-			if err != nil {
-				remaining := len(results) - i
-				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
-					slog.Int("completed", i),
-					slog.Int("remaining", remaining),
-					slog.Any("error", err))
-				return stats, err
-			}
-			if !updated {
-				// Lease lost — entry was reclaimed (or its row vanished). At-least-
-				// once delivery means the broker may already have the message;
-				// silently skip and let the new lease owner re-issue if needed.
-				stats.skipped++
-			} else {
-				stats.published++
-			}
-		} else {
-			if err := r.handleFailedEntry(ctx, res, &stats); err != nil {
-				remaining := len(results) - i
-				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
-					slog.Int("completed", i),
-					slog.Int("remaining", remaining),
-					slog.Any("error", err))
-				return stats, err
-			}
+		if err := r.writeBackOne(ctx, res, &stats); err != nil {
+			remaining := len(results) - i
+			slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
+				slog.Int("completed", i),
+				slog.Int("remaining", remaining),
+				slog.Any("error", err))
+			return stats, err
 		}
 	}
 	return stats, nil
+}
+
+// writeBackOne settles a single publish result: MarkPublished on success,
+// or delegates to handleFailedEntry on failure. Extracted to keep
+// writeBackResults below the cognitive-complexity ceiling.
+func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *pollStats) error {
+	if res.err != nil {
+		return r.handleFailedEntry(ctx, res, stats)
+	}
+	if err := kout.TransitionState(kout.StateClaiming, kout.StatePublished); err != nil {
+		return err
+	}
+	updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		// Lease lost — entry was reclaimed (or its row vanished). At-least-
+		// once delivery means the broker may already have the message;
+		// silently skip and let the new lease owner re-issue if needed.
+		stats.skipped++
+	} else {
+		stats.published++
+	}
+	return nil
 }
 
 // handleFailedEntry handles a single failed publish result, updating stats.
@@ -627,6 +632,9 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
 	if newAttempts >= r.cfg.MaxAttempts {
+		if err := kout.TransitionState(kout.StateClaiming, kout.StateDead); err != nil {
+			return err
+		}
 		updated, err := r.store.MarkDead(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, errMsg)
 		if err != nil {
 			return err
@@ -655,6 +663,9 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 
 	// Retry: back to pending with exponential backoff + jitter,
 	// preventing thundering herd in multi-relay-instance deployments.
+	if err := kout.TransitionState(kout.StateClaiming, kout.StatePending); err != nil {
+		return err
+	}
 	delay := r.retryDelay(newAttempts)
 	nextRetryAt := r.clk().Now().Add(delay)
 	updated, err := r.store.MarkRetry(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, nextRetryAt, errMsg)

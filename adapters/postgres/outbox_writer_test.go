@@ -126,8 +126,9 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	_, hasReqID := meta["request_id"]
 	assert.False(t, hasReqID, "request_id must not be in business metadata column — it belongs in observability column")
 
-	// Observability column (arg index 8): carries trace context from ctx.
-	obsJSON, obsOK := tx.execCalls[0].args[8].([]byte)
+	// Observability column (arg index 9): carries trace context from ctx.
+	// ($1=id $2=agg_id $3=agg_type $4=event_type $5=topic $6=payload $7=metadata $8=created_at $9=status $10=observability)
+	obsJSON, obsOK := tx.execCalls[0].args[9].([]byte)
 	require.True(t, obsOK)
 	var obs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(obsJSON, &obs))

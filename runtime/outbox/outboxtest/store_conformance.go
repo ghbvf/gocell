@@ -111,8 +111,8 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("CleanupPublished_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupPublished(t, factory) })
 	t.Run("CleanupPublished_BatchLimit", func(t *testing.T) { conformCleanupPublishedBatch(t, factory) })
 	t.Run("CleanupDead_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupDead(t, factory) })
-	t.Run("OldestEligibleAt_PublishedEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "published") })
-	t.Run("OldestEligibleAt_DeadEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "dead") })
+	t.Run("OldestEligibleAt_PublishedEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, kout.StatePublished) })
+	t.Run("OldestEligibleAt_DeadEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, kout.StateDead) })
 	t.Run("OldestEligibleAt_Published_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtPublished(t, factory) })
 	t.Run("OldestEligibleAt_Dead_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtDead(t, factory) })
 	t.Run("OldestEligibleAt_InvalidStatus_ReturnsError", func(t *testing.T) { conformOldestEligibleAtInvalid(t, factory) })
@@ -580,8 +580,8 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 		if len(snap) != 1 {
 			t.Fatalf("FakeStore snapshot: expected 1 row, got %d", len(snap))
 		}
-		if snap[0].Status != "dead" {
-			t.Errorf("FakeStore: expected status=dead, got %s", snap[0].Status)
+		if snap[0].Status != kout.StateDead.String() {
+			t.Errorf("FakeStore: expected status=%s, got %s", kout.StateDead, snap[0].Status)
 		}
 		if snap[0].Attempts != 5 {
 			t.Errorf("FakeStore: expected attempts=5, got %d", snap[0].Attempts)
@@ -686,17 +686,17 @@ func conformCleanupDead(t *testing.T, factory StoreFactory) {
 // rows in the requested status) returns ok=false and a nil error — the
 // "idle table" branch the relay's nextCleanupWait relies on to back off to
 // the safety ceiling instead of tight-looping.
-func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status string) {
+func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status kout.State) {
 	t.Helper()
 	ctx := t.Context()
 	store := factory(t, nil)
 
 	at, ok, err := store.OldestEligibleAt(ctx, status)
 	if err != nil {
-		t.Fatalf("OldestEligibleAt(%q) on empty: %v", status, err)
+		t.Fatalf("OldestEligibleAt(%s) on empty: %v", status, err)
 	}
 	if ok {
-		t.Errorf("OldestEligibleAt(%q) on empty: ok=true, at=%v; want ok=false", status, at)
+		t.Errorf("OldestEligibleAt(%s) on empty: ok=true, at=%v; want ok=false", status, at)
 	}
 }
 
@@ -731,7 +731,7 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	}
 
 	beforeFirst := now.Add(-time.Minute)
-	at, ok, err := store.OldestEligibleAt(ctx, "published")
+	at, ok, err := store.OldestEligibleAt(ctx, kout.StatePublished)
 	if err != nil {
 		t.Fatalf("OldestEligibleAt: %v", err)
 	}
@@ -763,7 +763,7 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 		t.Fatalf("MarkDead: %v", err)
 	}
 
-	at, ok, err := store.OldestEligibleAt(ctx, "dead")
+	at, ok, err := store.OldestEligibleAt(ctx, kout.StateDead)
 	if err != nil {
 		t.Fatalf("OldestEligibleAt: %v", err)
 	}
@@ -848,18 +848,20 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 }
 
-// conformOldestEligibleAtInvalid verifies that statuses other than "published"
-// or "dead" return an error (the contract narrows the surface to exactly the
+// conformOldestEligibleAtInvalid verifies that States other than StatePublished
+// or StateDead return an error (the contract narrows the surface to exactly the
 // two cleanup-eligible statuses).
 func conformOldestEligibleAtInvalid(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	store := factory(t, nil)
 
-	for _, bad := range []string{"pending", "claiming", "", "unknown"} {
+	// StatePending and StateClaiming are valid State values but must be rejected.
+	// State(0) and State(99) are invalid State values and must also be rejected.
+	for _, bad := range []kout.State{kout.StatePending, kout.StateClaiming, kout.State(0), kout.State(99)} {
 		_, _, err := store.OldestEligibleAt(ctx, bad)
 		if err == nil {
-			t.Errorf("OldestEligibleAt(%q): expected error, got nil", bad)
+			t.Errorf("OldestEligibleAt(%s): expected error, got nil", bad)
 		}
 	}
 }

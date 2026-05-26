@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -48,9 +49,9 @@ func TestPGOutboxStore_MarkPublished_Updated(t *testing.T) {
 	assert.Contains(t, ec.sql, "status = $3", "should include optimistic lock on status")
 	assert.Contains(t, ec.sql, "lease_id = $4", "should fence on lease_id")
 	// args: $1=statusPublished, $2=id, $3=statusClaiming, $4=leaseID
-	assert.Equal(t, statusPublished, ec.args[0])
+	assert.Equal(t, kout.StatePublished.String(), ec.args[0])
 	assert.Equal(t, "e-1", ec.args[1])
-	assert.Equal(t, statusClaiming, ec.args[2])
+	assert.Equal(t, kout.StateClaiming.String(), ec.args[2])
 	assert.Equal(t, testLease, ec.args[3])
 }
 
@@ -98,10 +99,10 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	assert.Contains(t, ec.sql, "last_error = $4", "should set last_error")
 	assert.Contains(t, ec.sql, "lease_id = $7", "should fence on lease_id")
 	// args: $1=pending, $2=attempts, $3=interval, $4=errMsg, $5=id, $6=claiming, $7=leaseID
-	assert.Equal(t, statusPending, ec.args[0])
+	assert.Equal(t, kout.StatePending.String(), ec.args[0])
 	assert.Equal(t, 2, ec.args[1])
 	assert.Equal(t, "e-1", ec.args[4])
-	assert.Equal(t, statusClaiming, ec.args[5])
+	assert.Equal(t, kout.StateClaiming.String(), ec.args[5])
 	assert.Equal(t, testLease, ec.args[6])
 
 	// Interval arg ($3) should be a non-empty string with microseconds
@@ -185,10 +186,10 @@ func TestPGOutboxStore_MarkDead_Updated(t *testing.T) {
 	assert.Contains(t, ec.sql, "dead_at = now()", "should set dead_at")
 	assert.Contains(t, ec.sql, "lease_id = $6", "should fence on lease_id")
 	// args: $1=dead, $2=attempts, $3=errMsg, $4=id, $5=claiming, $6=leaseID
-	assert.Equal(t, statusDead, ec.args[0])
+	assert.Equal(t, kout.StateDead.String(), ec.args[0])
 	assert.Equal(t, 5, ec.args[1])
 	assert.Equal(t, "e-1", ec.args[3])
-	assert.Equal(t, statusClaiming, ec.args[4])
+	assert.Equal(t, kout.StateClaiming.String(), ec.args[4])
 	assert.Equal(t, testLease, ec.args[5])
 }
 
@@ -264,9 +265,9 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	// args: $1=claimTTLInterval, $2=maxAttempts, $3=dead, $4=pending,
 	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros, $8=callerBatchSize
 	assert.Equal(t, 5, ec.args[1], "maxAttempts")
-	assert.Equal(t, statusDead, ec.args[2], "dead status")
-	assert.Equal(t, statusPending, ec.args[3], "pending status")
-	assert.Equal(t, statusClaiming, ec.args[5], "claiming status for WHERE clause")
+	assert.Equal(t, kout.StateDead.String(), ec.args[2], "dead status")
+	assert.Equal(t, kout.StatePending.String(), ec.args[3], "pending status")
+	assert.Equal(t, kout.StateClaiming.String(), ec.args[5], "claiming status for WHERE clause")
 	assert.Equal(t, callerBatch, ec.args[7], "ReclaimStale must pass through the caller's batchSize")
 
 	// claimTTL interval text
@@ -318,7 +319,7 @@ func TestPGOutboxStore_CleanupPublished_ReturnsCount(t *testing.T) {
 	ec := db.execCalls[0]
 	assert.Contains(t, ec.sql, "published_at", "should filter by published_at")
 	assert.Contains(t, ec.sql, "LIMIT", "should have LIMIT for batched execution")
-	assert.Equal(t, statusPublished, ec.args[0])
+	assert.Equal(t, kout.StatePublished.String(), ec.args[0])
 }
 
 func TestPGOutboxStore_CleanupPublished_ExecError(t *testing.T) {
@@ -351,7 +352,7 @@ func TestPGOutboxStore_CleanupDead_ReturnsCount(t *testing.T) {
 	ec := db.execCalls[0]
 	assert.Contains(t, ec.sql, "dead_at", "should filter by dead_at")
 	assert.Contains(t, ec.sql, "LIMIT", "should have LIMIT for batched execution")
-	assert.Equal(t, statusDead, ec.args[0])
+	assert.Equal(t, kout.StateDead.String(), ec.args[0])
 }
 
 func TestPGOutboxStore_CleanupDead_ExecError(t *testing.T) {
@@ -418,8 +419,8 @@ func TestPGOutboxStore_ClaimPending_SQLContainsSkipLocked(t *testing.T) {
 	assert.Contains(t, sql, "ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id")
 
 	args := db.queryCalls[0].args
-	assert.Equal(t, statusClaiming, args[0])
-	assert.Equal(t, statusPending, args[1])
+	assert.Equal(t, kout.StateClaiming.String(), args[0])
+	assert.Equal(t, kout.StatePending.String(), args[1])
 	assert.Equal(t, 5, args[2])
 }
 
@@ -533,7 +534,7 @@ func TestPGOutboxStore_CountPending_ReturnsCount(t *testing.T) {
 	require.Len(t, db.queryRowSQLs, 1)
 	assert.Contains(t, db.queryRowSQLs[0].sql, "count(*)")
 	assert.Contains(t, db.queryRowSQLs[0].sql, "WHERE status = $1")
-	assert.Equal(t, statusPending, db.queryRowSQLs[0].args[0])
+	assert.Equal(t, kout.StatePending.String(), db.queryRowSQLs[0].args[0])
 }
 
 func TestPGOutboxStore_CountPending_ScanError(t *testing.T) {

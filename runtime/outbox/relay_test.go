@@ -758,11 +758,11 @@ func (s *failingStore) CleanupPublished(ctx context.Context, cutoff time.Time, b
 
 // OldestEligibleAt returns a fake "very recent past" time for published status
 // when a cleanupPubErr is set, so nextCleanupWait schedules quickly via floor.
-func (s *failingStore) OldestEligibleAt(ctx context.Context, status string) (time.Time, bool, error) {
+func (s *failingStore) OldestEligibleAt(ctx context.Context, status kout.State) (time.Time, bool, error) {
 	s.mu.Lock()
 	cpErr := s.cleanupPubErr
 	s.mu.Unlock()
-	if cpErr != nil && status == "published" {
+	if cpErr != nil && status == kout.StatePublished {
 		// Return a time just barely in the past so nextCleanupWait computes
 		// near-zero and falls to cleanupWaitFloor (set to 5ms in tests).
 		return time.Now().Add(-testtime.D1ms), true, nil
