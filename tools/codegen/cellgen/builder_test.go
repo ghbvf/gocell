@@ -298,13 +298,17 @@ func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	if spec.RenderedMetaLiteral == "" {
 		t.Errorf("expected sliceMeta literal to be rendered")
 	}
-	if !strings.Contains(spec.RenderedMetaLiteral, `ID:               "alpha"`) {
+	// RenderedMetaLiteral is the raw pre-gofumpt literal (column alignment is
+	// applied when the whole generated file is formatted), so assert on the
+	// single-space form — matching the reflect-driven renderMetaFields output
+	// shared with the cell printer.
+	if !strings.Contains(spec.RenderedMetaLiteral, `ID: "alpha"`) {
 		t.Errorf("rendered literal missing ID: %q", spec.RenderedMetaLiteral)
 	}
 	if !strings.Contains(spec.RenderedMetaLiteral, `ConsistencyLevel: "L0"`) {
 		t.Errorf("rendered literal missing ConsistencyLevel: %q", spec.RenderedMetaLiteral)
 	}
-	if !strings.Contains(spec.RenderedMetaLiteral, `BelongsToCell:    "demo"`) {
+	if !strings.Contains(spec.RenderedMetaLiteral, `BelongsToCell: "demo"`) {
 		t.Errorf("rendered literal missing BelongsToCell: %q", spec.RenderedMetaLiteral)
 	}
 	// ContractUsages is omitted from the literal when empty (renderSliceMetaLiteral

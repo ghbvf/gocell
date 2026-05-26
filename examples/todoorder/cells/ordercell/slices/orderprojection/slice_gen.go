@@ -19,6 +19,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "orderprojection",
 	BelongsToCell:    "ordercell",
 	ConsistencyLevel: "L3",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleOrderCreated"},
 		{Contract: "event.order-status-changed.v1", Role: "subscribe", Handler: "HandleOrderStatusChanged"},

@@ -24,6 +24,7 @@ var cellMeta = &metadata.CellMeta{
 	Type:             "core",
 	ConsistencyLevel: "L3",
 	DurabilityMode:   "durable",
+	Lifecycle:        "experimental",
 	Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "orders"},
 	Verify: metadata.CellVerifyMeta{Smoke: []string{

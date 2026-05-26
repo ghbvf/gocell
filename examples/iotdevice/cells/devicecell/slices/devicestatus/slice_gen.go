@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "devicestatus",
 	BelongsToCell:    "devicecell",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.device.status.v1", Role: "serve"},
 	},

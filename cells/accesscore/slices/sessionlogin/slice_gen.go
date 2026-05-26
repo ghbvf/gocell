@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "sessionlogin",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.login.v1", Role: "serve"},
 		{Contract: "event.session.created.v1", Role: "publish"},

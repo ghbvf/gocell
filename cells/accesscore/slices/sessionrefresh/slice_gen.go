@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "sessionrefresh",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L1",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.refresh.v1", Role: "serve"},
 	},

@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "rbaccheck",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.role.list.v1", Role: "serve"},
 		{Contract: "http.auth.role.check.v1", Role: "serve"},

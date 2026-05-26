@@ -19,6 +19,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "sessionlogout",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.auth.session.delete.v1", Role: "serve"},
 		{Contract: "event.session.revoked.v1", Role: "publish"},

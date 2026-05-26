@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "orderprojectionrebuild",
 	BelongsToCell:    "ordercell",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.order.internal.projection-rebuild.v1", Role: "serve"},
 	},

@@ -35,6 +35,7 @@ var cellMeta = &metadata.CellMeta{
 	Type:             "core",
 	ConsistencyLevel: "L2",
 	DurabilityMode:   "durable",
+	Lifecycle:        "asset",
 	Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 	Verify: metadata.CellVerifyMeta{Smoke: []string{

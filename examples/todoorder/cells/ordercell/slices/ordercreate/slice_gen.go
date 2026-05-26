@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "ordercreate",
 	BelongsToCell:    "ordercell",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.order.create.v1", Role: "serve"},
 		{Contract: "event.order-created.v1", Role: "publish"},

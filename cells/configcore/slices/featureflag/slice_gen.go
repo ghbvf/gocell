@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "featureflag",
 	BelongsToCell:    "configcore",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.config.flags.list.v1", Role: "serve"},
 		{Contract: "http.config.flags.get.v1", Role: "serve"},
