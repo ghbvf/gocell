@@ -16,13 +16,17 @@ package archtest
 // 不在 Soft 层打补丁"): scanReflectStringArgCalls identifies a violation through
 // TYPE information, not a string anchor —
 //
-//	1. typed receiver: ResolveMethodCall must resolve the call to a method of
+//	1. typed receiver: the call's *types.Selection.Obj() must be a method of
 //	   reflect.Value (pkg=="reflect", receiver type=="Value"). This excludes
 //	   non-reflect types that happen to expose a FieldByName/MethodByName
 //	   method, and reflect.Type.FieldByName (which returns StructField metadata
 //	   and cannot read a field VALUE — not a bypass vector; see the legitimate
 //	   use in contract_subscribers_funnel_test.go).
-//	2. typed arg: EvaluateConstString folds the single argument (covers raw
+//	2. selection kind → arg offset: types.MethodVal `v.FieldByName(name)` carries
+//	   the name at Args[0]; types.MethodExpr `reflect.Value.FieldByName(recv,
+//	   name)` shifts the receiver into Args[0] so the name is at Args[1] (Go spec
+//	   §Method expressions). Keying the offset on the kind covers both call forms.
+//	3. typed arg: EvaluateConstString folds the name argument (covers raw
 //	   string / const ident / concatenation / cross-package const), replacing
 //	   the incumbent *ast.BasicLit + strings.Trim that was blind to all but the
 //	   plain double-quoted literal (issue #948 / PR #542).
@@ -91,8 +95,9 @@ type reflectStringArgHit struct {
 // (method ∈ {"FieldByName","MethodByName"}) whose single argument is a banned
 // constant string. See the package-level INVARIANT doc for the type-aware
 // two-gate design and grading. The sel.Sel.Name == method check is only a cheap
-// pre-filter; the real gate is isReflectValueMethod (typed receiver) +
-// EvaluateConstString (typed arg).
+// pre-filter; the real gate is reflectValueMethodFunc (typed receiver) +
+// EvaluateConstString (typed arg), with the name-argument position chosen by
+// the selection kind.
 func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned func(string) bool) []reflectStringArgHit {
 	var out []reflectStringArgHit
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -100,13 +105,32 @@ func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned fu
 		if !ok || sel.Sel == nil || sel.Sel.Name != method {
 			return
 		}
-		if len(call.Args) != 1 {
+		selection := p.TypesInfo.Selections[sel]
+		if selection == nil {
 			return
 		}
-		if !isReflectValueMethod(p.TypesInfo, sel) {
+		fn, ok := selection.Obj().(*types.Func)
+		if !ok || !reflectValueMethodFunc(fn) {
 			return
 		}
-		name, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
+		// The name-argument position depends on how the method is reached (Go
+		// spec §Method expressions): a method value `v.FieldByName(name)` carries
+		// the name at Args[0]; a method expression `reflect.Value.FieldByName(
+		// recv, name)` makes the receiver the explicit first arg, shifting the
+		// name to Args[1].
+		var nameIdx int
+		switch selection.Kind() {
+		case types.MethodVal:
+			nameIdx = 0
+		case types.MethodExpr:
+			nameIdx = 1
+		default:
+			return
+		}
+		if len(call.Args) != nameIdx+1 {
+			return
+		}
+		name, ok := EvaluateConstString(p.TypesInfo, call.Args[nameIdx])
 		if !ok || !banned(name) {
 			return
 		}
@@ -118,13 +142,14 @@ func scanReflectStringArgCalls(p *Pass, file *ast.File, method string, banned fu
 	return out
 }
 
-// isReflectValueMethod reports whether sel typed-resolves to a method of
-// reflect.Value (pkg "reflect", receiver named type "Value"). This is the typed
-// receiver gate that separates a genuine reflect bypass from a non-reflect type
-// exposing a same-named method and from reflect.Type.FieldByName metadata reads.
-func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
-	fn, ok := ResolveMethodCall(info, sel)
-	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != reflectPkgPath {
+// reflectValueMethodFunc reports whether fn is a method of reflect.Value (pkg
+// "reflect", receiver named type "Value"). This is the typed receiver gate that
+// separates a genuine reflect value-read bypass from a non-reflect type exposing
+// a same-named method and from reflect.Type.{Field,Method}ByName metadata reads.
+// It inspects the method object's signature receiver, so it is identical for
+// both method-value and method-expression selections.
+func reflectValueMethodFunc(fn *types.Func) bool {
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != reflectPkgPath {
 		return false
 	}
 	sig, ok := fn.Type().(*types.Signature)
