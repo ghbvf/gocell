@@ -11,7 +11,7 @@
 // dot-separated contract id (with every "internal" segment rewritten to
 // "internalapi" to keep the generated package importable from cells/ and
 // examples/ — Go's internal package rule otherwise blocks cross-tree imports;
-// see tools/codegen/internal/pathx).
+// see pkg/contractpath).
 //
 // # Artifact matrix
 //
@@ -129,8 +129,9 @@
 //
 // # Cross-tooling references
 //
-//   - tools/codegen/internal/pathx — contract id → generated package path
-//     (single source of truth for the internal→internalapi rewrite).
+//   - pkg/contractpath — contract id → generated package path
+//     (single source of truth for the internal→internalapi rewrite, shared
+//     with kernel/governance CH-04/05/06 and archtest).
 //   - tools/codegen/cellgen — cell scaffolding generator (peer pass; shares
 //     the codegen.Render plumbing).
 //   - tools/archtest/handler_inline_limit_parse_test.go — HANDLER-NO-INLINE-

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 )
 
 // =============================================================================
@@ -366,7 +367,7 @@ func buildHTTPAlignmentProject(contractID, sliceRelDir string, noHandler bool) *
 //   - func (h *Handler) handle(…) containing the provided statusBody
 func writeGeneratedHandlerFile(t *testing.T, root, contractID, statusBody string) string {
 	t.Helper()
-	segments := generatedContractPathSegments(contractID)
+	segments := contractpath.Segments(contractID)
 	parts := append([]string{root, "generated", "contracts"}, segments...)
 	dir := filepath.Join(parts...)
 	require.NoError(t, os.MkdirAll(dir, 0o755))

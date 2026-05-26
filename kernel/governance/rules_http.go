@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -397,7 +398,7 @@ func findHandlerFile(project *metadata.ProjectMeta, contractID, projectRoot stri
 // another package or escaping the repo (F1) — or when the file is absent
 // (Codegen=true is the single source of truth; no legacy fallback).
 func findCodegenHandlerFile(projectRoot, contractID string) string {
-	segments := generatedContractPathSegments(contractID)
+	segments := contractpath.Segments(contractID)
 	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
 	if !safe {
 		return ""
@@ -1205,38 +1206,20 @@ func typedEnvelopeDeclaredStatuses(c *metadata.ContractMeta) map[int]struct{} {
 }
 
 // typedEnvelopeTypesGenPath resolves the absolute path to the generated
-// types_gen.go file for the given contract. The contract ID path mapping is
-// shared with findCodegenHandlerFile through generatedContractPathSegments so
-// CH-04/05 and CH-06 cannot drift on generated artifact layout.
+// types_gen.go file for the given contract. Path segments come from
+// pkg/contractpath.Segments so CH-04/05 and CH-06 share the same internal→
+// internalapi rewrite source-of-truth as contractgen / cellgen.
 //
 // Returns "" when the contract ID yields an unsafe path segment or the
 // assembled path would escape projectRoot (F1); scanTypedResponseStructs treats
 // "" as a missing file and CH-06 skips the contract.
 func typedEnvelopeTypesGenPath(projectRoot, contractID string) string {
-	segments := generatedContractPathSegments(contractID)
+	segments := contractpath.Segments(contractID)
 	dir, safe := safeJoinUnderRoot(projectRoot, append([]string{"generated", "contracts"}, segments...)...)
 	if !safe {
 		return ""
 	}
 	return filepath.Join(dir, "types_gen.go")
-}
-
-// generatedContractPathSegments mirrors
-// tools/codegen/internal/pathx.ContractIDToPackagePath for generated HTTP
-// artifacts outside tools/: dotted contract IDs become path segments, with each
-// "internal" segment rewritten to "internalapi" so generated packages stay
-// importable by cells and examples.
-func generatedContractPathSegments(contractID string) []string {
-	parts := strings.Split(contractID, ".")
-	segments := make([]string, len(parts))
-	for i, p := range parts {
-		if p == "internal" {
-			segments[i] = "internalapi"
-		} else {
-			segments[i] = p
-		}
-	}
-	return segments
 }
 
 // scanTypedResponseStructs parses types_gen.go and returns the set of HTTP
