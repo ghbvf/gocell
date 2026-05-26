@@ -310,14 +310,10 @@ func leadGatesDrive(body *ast.BlockStmt, leadVar string) bool {
 
 // condReferences reports whether expr contains an identifier named want.
 func condReferences(expr ast.Expr, want string) bool {
-	found := false
-	ast.Inspect(expr, func(n ast.Node) bool {
-		if id, isID := n.(*ast.Ident); isID && id.Name == want {
-			found = true
-		}
-		return !found
+	_, ok := FindFirstInSubtree[ast.Ident](expr, func(id *ast.Ident) bool {
+		return id.Name == want
 	})
-	return found
+	return ok
 }
 
 // ifBodyEarlyExits reports whether body contains a continue/break/return that
