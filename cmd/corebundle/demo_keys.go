@@ -36,8 +36,11 @@ func isRealMode(adapterMode string) bool {
 // ref: kubernetes/kubernetes — kube-apiserver refuses to start when signing
 // material is missing / insecure.
 var wellKnownDemoKeys = []string{
-	// HMAC (audit hash chain)
+	// HMAC (audit hash chain — auditcore relay namespace)
 	"dev-hmac-key-replace-in-prod!!!!",
+
+	// HMAC (audit hash chain — bootstrap auth-fail namespace, issue #1121)
+	"dev-hmac-bootstrap-replace-32b!!",
 
 	// Cursor HMAC secrets (historical per-cell demo keys)
 	"gocell-demo-AUDIT--CORE-key-32!!",

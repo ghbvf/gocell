@@ -278,6 +278,7 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
@@ -312,6 +313,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	// Secrets required in real mode (would otherwise fail earlier than
 	// the verbose-token check; we want verbose-token to be the trip-wire).
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -343,6 +345,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -374,6 +377,7 @@ func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -578,6 +582,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 			t.Setenv(auth.EnvJWTPrevPublicKey, "")
 			t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", freshHMAC)
+			t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 			// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 			t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 			t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")

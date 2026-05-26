@@ -68,8 +68,18 @@ type bootstrapAuthFailPayload struct {
 }
 
 // AppendBootstrapAuthFail constructs a bootstrap.auth.fail ledger entry and
-// persists it via store.Append. clientIP may be empty when the request did
-// not flow through middleware that sets ctxkeys.RealIP (e.g. health probes).
+// persists it via the sealed *BootstrapLedgerStore. clientIP may be empty
+// when the request did not flow through middleware that sets ctxkeys.RealIP
+// (e.g. health probes).
+//
+// Consistency level: L1 LocalTx — store.Append runs in a single PG transaction
+// with the advisory-lock-fenced chain tail read; no outbox emit follows, so
+// L2 atomicity coverage does not apply. The bootstrap chain is physically
+// distinct from the auditcore relay chain via BootstrapNamespace(): the
+// *BootstrapLedgerStore typed handle makes accidental injection of the
+// auditcore-namespace store a compile error rather than a runtime fork
+// (issue #1121 / ADR 202605270230 — Vault per-device-salt + Trillian per-tree
+// partition patterns).
 //
 // Payload JSON shape (camelCase, additive evolution):
 //
@@ -82,10 +92,10 @@ type bootstrapAuthFailPayload struct {
 //   - The wrapped Append error otherwise — most commonly ledger duplicate
 //     fingerprint or chain-write failure; callers (typically the observer
 //     in NewBootstrapAuthFailObserver) log and continue.
-func AppendBootstrapAuthFail(ctx context.Context, store ledger.Store, clk clock.Clock, reason, clientIP string) error {
-	if validation.IsNilInterface(store) {
+func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, clk clock.Clock, reason, clientIP string) error {
+	if store == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit: AppendBootstrapAuthFail requires non-nil ledger.Store",
+			"audit: AppendBootstrapAuthFail requires non-nil *BootstrapLedgerStore",
 			errcode.WithInternal("nil store"))
 	}
 	if validation.IsNilInterface(clk) {
