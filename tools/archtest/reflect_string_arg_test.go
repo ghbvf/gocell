@@ -139,14 +139,20 @@ func isReflectValueMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 
 // TestReflectStringArgScanner_TypedReceiverAndConstArg is the reverse
 // self-check for REFLECT-STRING-ARG-SCANNER-01. It loads the shared RED fixture
-// and asserts exact hit counts: each const-form is detected, and neither
-// boundary call is. The exact count of 3 simultaneously proves the positive
-// forms AND excludes both boundaries:
-//   - receiver boundary: a leaking receiver gate would push FieldByName to 4
-//     via the non-reflect fakeReflect{}.FieldByName("RevokedAt") plain literal.
-//   - arg boundary: the runtime-value call FieldByName(runtimeName) folds to no
+// and asserts exact hit counts of 4 (3 method-value const-forms — raw/const/
+// concat — plus 1 method-expression form), simultaneously proving the positive
+// forms AND excluding every boundary call (any boundary leaking in would push
+// the count to 5+):
+//   - method expression: reflect.Value.FieldByName(recv, "X") puts the name at
+//     Args[1] (Go spec §Method expressions); the incumbent len(Args)!=1 scan
+//     missed it. This is the count's 4th member.
+//   - receiver boundary (non-reflect): fakeReflect{}.FieldByName("RevokedAt") —
+//     excluded by the reflect.Value-only receiver gate.
+//   - receiver boundary (reflect.Type): reflect.TypeOf(x).FieldByName("X")
+//     returns metadata, not a value — excluded (Type, not Value).
+//   - arg boundary (runtime-value): FieldByName(runtimeName) folds to no
 //     constant (EvaluateConstString → false), so it never enters the banned
-//     check; a regression that mistook it for a constant would also push to 4.
+//     check.
 func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 	t.Parallel()
 
@@ -172,11 +178,12 @@ func TestReflectStringArgScanner_TypedReceiverAndConstArg(t *testing.T) {
 		return nil
 	})
 
-	assert.Len(t, fieldHits, 3,
-		"REFLECT-STRING-ARG-SCANNER-01: FieldByName(RevokedAt) must detect exactly the "+
-			"raw/const/concat forms (3) — not the runtime-value arg, not the non-reflect "+
-			"receiver. Got %d.", len(fieldHits))
-	assert.Len(t, methodHits, 3,
-		"REFLECT-STRING-ARG-SCANNER-01: MethodByName(CanAuthenticate) must detect exactly the "+
-			"raw/const/concat forms (3). Got %d.", len(methodHits))
+	assert.Len(t, fieldHits, 4,
+		"REFLECT-STRING-ARG-SCANNER-01: FieldByName(RevokedAt) must detect exactly the 3 "+
+			"method-value forms (raw/const/concat) + 1 method-expression form — not the "+
+			"runtime-value arg, not the non-reflect receiver, not reflect.Type. Got %d.",
+		len(fieldHits))
+	assert.Len(t, methodHits, 4,
+		"REFLECT-STRING-ARG-SCANNER-01: MethodByName(CanAuthenticate) must detect exactly the 3 "+
+			"method-value forms + 1 method-expression form. Got %d.", len(methodHits))
 }
