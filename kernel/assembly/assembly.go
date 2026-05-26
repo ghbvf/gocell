@@ -66,13 +66,6 @@ type Config struct {
 	ID             string
 	DurabilityMode outbox.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
 
-	// Clock is the time source used for hook-runtime measurement and any
-	// other time-dependent assembly bookkeeping. Required: New panics when
-	// Clock is nil so that missing wiring fails fast at construction time
-	// rather than masquerading as wall-clock-driven flakiness in tests.
-	// Production wiring passes clock.Real(); tests inject clockmock.New(...).
-	Clock clock.Clock
-
 	// HookTimeout bounds every BeforeStart/AfterStart/BeforeStop/AfterStop
 	// hook invocation. Zero uses DefaultHookTimeout. Set to a negative value
 	// to disable per-hook timeouts entirely (hook inherits parent ctx only).
@@ -136,6 +129,7 @@ type Config struct {
 type CoreAssembly struct {
 	mu                sync.Mutex
 	id                string
+	clk               clock.Clock
 	cfg               Config
 	cells             []cell.Cell
 	cellMap           map[string]cell.Cell
@@ -147,7 +141,7 @@ type CoreAssembly struct {
 
 // New creates a CoreAssembly with the given configuration.
 //
-// cfg.Clock is required: assembly.New panics when Clock is nil OR a
+// clk is required: assembly.New panics when clk is nil OR a
 // typed-nil interface (e.g. (*realClock)(nil) wrapped in a clock.Clock
 // value). The single root clock is constructed once at the composition
 // root via clock.Real() and threaded through every assembly + cell;
@@ -158,8 +152,8 @@ type CoreAssembly struct {
 // hook call sites can emit unconditionally.
 // If cfg.HookTimeout is zero, DefaultHookTimeout is applied. Negative value
 // disables per-hook timeout entirely.
-func New(cfg Config) *CoreAssembly {
-	clock.MustHaveClock(cfg.Clock, "assembly.New")
+func New(clk clock.Clock, cfg Config) *CoreAssembly {
+	clock.MustHaveClock(clk, "assembly.New")
 	// Normalise nil + typed-nil (interface wrapping a nil pointer) to
 	// NopHookObserver. A typed nil that slips through would dispatch to a
 	// nil receiver on every hook and only manifest as panic-recover log
@@ -177,9 +171,10 @@ func New(cfg Config) *CoreAssembly {
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Shutdown to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher := newHookDispatcher(newDispatcherConfig(cfg, nil))
+	dispatcher := newHookDispatcher(clk, newDispatcherConfig(clk, cfg, nil))
 	return &CoreAssembly{
 		id:                cfg.ID,
+		clk:               clk,
 		cfg:               cfg,
 		cellMap:           make(map[string]cell.Cell),
 		snapshots:         make(map[string]cell.RegistrySnapshot),
@@ -188,14 +183,14 @@ func New(cfg Config) *CoreAssembly {
 	}
 }
 
-func newDispatcherConfig(cfg Config, dropped metrics.CounterVec) dispatcherConfig {
+func newDispatcherConfig(clk clock.Clock, cfg Config, dropped metrics.CounterVec) dispatcherConfig {
 	return dispatcherConfig{
 		Observer:    cfg.HookObserver,
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
 		Dropped:     dropped,
-		Clock:       cfg.Clock,
+		Clock:       clk,
 	}
 }
 
@@ -203,7 +198,7 @@ func (a *CoreAssembly) ensureDispatcherLocked() {
 	if a.dispatcher != nil {
 		return
 	}
-	a.dispatcher = newHookDispatcher(newDispatcherConfig(a.cfg, a.dispatcherDropped))
+	a.dispatcher = newHookDispatcher(a.clk, newDispatcherConfig(a.clk, a.cfg, a.dispatcherDropped))
 	if a.dispatcherDropped == nil {
 		a.dispatcherDropped = a.dispatcher.dropped
 	}
@@ -638,7 +633,7 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 	// after the deadline timer arms, making Duration < HookTimeout even when
 	// the hook blocked until the deadline fired — breaks assertions like
 	// Duration >= HookTimeout under scheduling jitter.
-	start := a.cfg.Clock.Now()
+	start := a.clk.Now()
 	hookCtx := ctx
 	if a.cfg.HookTimeout > 0 {
 		var cancel context.CancelFunc
@@ -647,7 +642,7 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 	}
 
 	err, panicked := callHookSafe(func() error { return fn(hookCtx) })
-	dur := a.cfg.Clock.Since(start)
+	dur := a.clk.Since(start)
 
 	outcome := cell.OutcomeSuccess
 	timedOut := hookCtx.Err() != nil && errors.Is(hookCtx.Err(), context.DeadlineExceeded)
@@ -704,12 +699,12 @@ func (a *CoreAssembly) ID() string {
 
 // Clock returns the single root [clock.Clock] used by the assembly for
 // lifecycle hook timing. Exposed so that Bootstrap can fail-fast when a
-// caller passes both WithAssembly and WithClock with non-identical clock
-// instances.
+// caller passes both WithAssembly and a positional clock with non-identical
+// clock instances.
 //
 // Always non-nil — assembly.New rejects nil and typed-nil at construction.
 func (a *CoreAssembly) Clock() clock.Clock {
-	return a.cfg.Clock
+	return a.clk
 }
 
 // ReloadTimeout returns the per-invocation deadline applied to each

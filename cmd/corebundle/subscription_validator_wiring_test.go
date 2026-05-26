@@ -75,10 +75,9 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 
 	// Build an assembly that contains our misbehaving test cell.
-	asm := assembly.New(assembly.Config{
+	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "test-validator-wiring",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(newConfigSubscriberWithoutOwner()))
 

@@ -48,12 +48,9 @@ func summarize(events []cell.HookEvent) []string {
 
 func TestObserver_HappyPath_SuccessOutcomes(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, Config{
-		ID:             "obs-happy",
+	a := newTestAssembly(t, clock.Real(), Config{ID:             "obs-happy",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs,
-		Clock:          clock.Real(),
-	})
+		HookObserver:   obs})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Register(newHookOrderCell("B", &calls, "")))
@@ -94,7 +91,7 @@ func TestObserver_FailureOutcome(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := &captureObserver{}
-			a := newTestAssembly(t, Config{ID: "obs-fail", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real(), HookObserver: obs})
+			a := newTestAssembly(t, clock.Real(), Config{ID: "obs-fail", DurabilityMode: outbox.DurabilityDemo, HookObserver: obs})
 			var calls []string
 			require.NoError(t, a.Register(newHookOrderCell("X", &calls, tc.failOn)))
 
@@ -132,7 +129,7 @@ func TestObserver_PanicOutcome(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obs := &captureObserver{}
-			a := newTestAssembly(t, Config{ID: "obs-panic", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real(), HookObserver: obs})
+			a := newTestAssembly(t, clock.Real(), Config{ID: "obs-panic", DurabilityMode: outbox.DurabilityDemo, HookObserver: obs})
 			var calls []string
 			require.NoError(t, a.Register(newPanicHookCell("P", &calls, tc.panicOn)))
 
@@ -157,7 +154,7 @@ func TestObserver_PanicOutcome(t *testing.T) {
 
 func TestObserver_StopPhasePanic(t *testing.T) {
 	obs := &captureObserver{}
-	a := newTestAssembly(t, Config{ID: "obs-stop-panic", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real(), HookObserver: obs})
+	a := newTestAssembly(t, clock.Real(), Config{ID: "obs-stop-panic", DurabilityMode: outbox.DurabilityDemo, HookObserver: obs})
 	var calls []string
 	require.NoError(t, a.Register(newPanicHookCell("P", &calls, "AfterStop")))
 	require.NoError(t, a.Start(context.Background()))
@@ -178,11 +175,10 @@ func TestObserver_StopPhasePanic(t *testing.T) {
 
 func TestObserver_NilDefaultsToNop(t *testing.T) {
 	// Nil observer must not panic; Config zero-value is valid.
-	a := newTestAssembly(t, Config{
+	a := newTestAssembly(t, clock.Real(), Config{
 		ID:             "obs-nil",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
-		// HookObserver: nil,
+		// HookObserver: nil → NopHookObserver substituted by New.
 	})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
@@ -199,7 +195,7 @@ func (badObserver) OnHookEvent(cell.HookEvent) {
 
 func TestObserver_PanicInSink_IsIsolated(t *testing.T) {
 	// A panicking observer must not crash the assembly lifecycle.
-	a := newTestAssembly(t, Config{ID: "obs-bad", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real(), HookObserver: badObserver{}})
+	a := newTestAssembly(t, clock.Real(), Config{ID: "obs-bad", DurabilityMode: outbox.DurabilityDemo, HookObserver: badObserver{}})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Start(context.Background()))

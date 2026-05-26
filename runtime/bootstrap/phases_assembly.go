@@ -172,7 +172,7 @@ func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
 //
 // Callers must pass the same clock.Clock instance to both:
 //
-//	bootstrap.WithClock(clk) and assembly.New(assembly.Config{Clock: clk})
+//	bootstrap.WithClock(clk) and assembly.New(clk, assembly.Config{})
 func (b *Bootstrap) validateAssemblyClockAlignment() error {
 	if b.assemblyCore == nil {
 		return nil
@@ -295,11 +295,11 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
 	asm := b.assemblyCore
 	if asm == nil {
-		cfg := assembly.Config{ID: "default", DurabilityMode: outbox.DurabilityDemo, Clock: b.clock}
+		cfg := assembly.Config{ID: "default", DurabilityMode: outbox.DurabilityDemo}
 		if b.metricsProvider != nil {
 			cfg.MetricsProvider = b.metricsProvider
 		}
-		asm = assembly.New(cfg)
+		asm = assembly.New(b.clock, cfg)
 	}
 
 	// Register Shutdown BEFORE StartWithConfig: CoreAssembly.New eagerly spawns

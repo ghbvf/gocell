@@ -162,9 +162,8 @@ func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	// The dispatcher must return immediately; only the observer goroutine
 	// is blocked.
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D10ms,
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -186,9 +185,8 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// one DropReasonQueueFull is certain regardless of scheduler jitter.
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -216,9 +214,8 @@ func TestHookDispatcher_QueueFullDropLogsWarnFallback(t *testing.T) {
 	buf := captureDefaultSlog(t)
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -245,9 +242,8 @@ func TestHookDispatcher_QueueFullDropLogsWarnFallback(t *testing.T) {
 func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D20ms, Provider: &spyProvider{cv: cv},
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -273,13 +269,11 @@ func (p panicValueObserver) OnHookEvent(cell.HookEvent) { panic(p.value) }
 
 func TestHookDispatcher_PanicIsCountedAndIsolated(t *testing.T) {
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer:    panicObserver{},
 		QueueSize:   8,
 		SinkTimeout: testtime.D1s,
 		Provider:    &spyProvider{cv: cv},
-
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() { d.stop(context.Background(), testtime.D500ms) })
 
@@ -303,13 +297,11 @@ func TestHookDispatcher_ObserverPanicLogValueIsRedactedAndTruncated(t *testing.T
 	secret := "super-secret-token-value"
 	tail := "panic-tail-must-not-appear"
 	panicValue := "observer panic token=" + secret + " " + strings.Repeat("x", 300) + tail
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer:    panicValueObserver{value: panicValue},
 		QueueSize:   8,
 		SinkTimeout: testtime.D1s,
 		Provider:    &spyProvider{cv: cv},
-
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() { d.stop(context.Background(), testtime.D500ms) })
 
@@ -350,9 +342,8 @@ func (c *collectObserver) len() int {
 
 func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 	obs := &collectObserver{}
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: obs, QueueSize: 32, SinkTimeout: testtime.D1s,
-		Clock: clock.Real(),
 	})
 
 	for i := range 10 {
@@ -367,9 +358,8 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clk, dispatcherConfig{
 		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-		Clock: clk,
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -415,9 +405,8 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clk, dispatcherConfig{
 		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-		Clock: clk,
 	})
 	t.Cleanup(bo.release)
 
@@ -454,9 +443,8 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clk, dispatcherConfig{
 		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-		Clock: clk,
 	})
 	t.Cleanup(bo.release)
 
@@ -506,18 +494,16 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 }
 
 func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
-		Clock: clock.Real(),
 	})
 	d.stop(context.Background(), testtime.D200ms)
 	d.stop(context.Background(), testtime.D200ms) // second call must be a no-op, no panic
 }
 
 func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: testtime.D1s,
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() { d.stop(context.Background(), testtime.D200ms) })
 
@@ -532,11 +518,9 @@ func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
 func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 	buf := captureDefaultSlog(t)
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4,
 		SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
-
-		Clock: clock.Real(),
 	})
 
 	d.stop(context.Background(), testtime.D200ms)
@@ -559,9 +543,8 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 // not assert that a timed-out stop drained observer sinks; sink drain is
 // covered by the dedicated stop tests above.
 func TestHookDispatcher_FlushAfterStopIsNoOpSuccess(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
-		Clock: clock.Real(),
 	})
 	d.stop(context.Background(), testtime.D200ms)
 
@@ -575,9 +558,8 @@ func TestHookDispatcher_FlushAfterStopIsNoOpSuccess(t *testing.T) {
 // shared-timer behavior documented in flush().
 func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{
+	d := newHookDispatcher(clock.Real(), dispatcherConfig{
 		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s,
-		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
 		bo.release()
@@ -605,12 +587,9 @@ func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 // on process exit).
 func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 	obs := &collectObserver{}
-	a := newTestAssembly(t, Config{
-		ID:             "drain-test",
+	a := newTestAssembly(t, clock.Real(), Config{ID:             "drain-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs,
-		Clock:          clock.Real(),
-	})
+		HookObserver:   obs})
 	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
 	require.NoError(t, a.Start(context.Background()))
 	require.NoError(t, a.Stop(context.Background()))
@@ -622,12 +601,9 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 
 func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
 	obs := &collectObserver{}
-	a := newTestAssembly(t, Config{
-		ID:             "restart-dispatcher-test",
+	a := newTestAssembly(t, clock.Real(), Config{ID:             "restart-dispatcher-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		HookObserver:   obs,
-		Clock:          clock.Real(),
-	})
+		HookObserver:   obs})
 	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
 
 	require.NoError(t, a.Start(context.Background()))
@@ -653,14 +629,11 @@ func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
 func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	obs := newBlockingObserver()
-	a := newTestAssembly(t, Config{
-		ID:                       "ctx-drain-test",
+	a := newTestAssembly(t, clk, Config{ID:                       "ctx-drain-test",
 		DurabilityMode:           outbox.DurabilityDemo,
 		HookObserver:             obs,
 		HookObserverSinkTimeout:  testtime.D10s,
-		HookObserverDrainTimeout: testtime.D10s,
-		Clock:                    clk,
-	})
+		HookObserverDrainTimeout: testtime.D10s})
 	var calls []string
 	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
 	require.NoError(t, a.Start(context.Background()))
