@@ -215,7 +215,7 @@ func NewCoordinator(
 	}
 	if c.leaderElectNil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"runtime/saga: WithLeaderElect locker must not be nil")
+			"runtime/saga: WithLeaderElect locker must not be nil; pass a non-nil distlock.Locker or omit the option")
 	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
@@ -252,7 +252,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			slog.String("mode", UnsafeModeLabel))
 	} else {
 		c.logger.InfoContext(ctx, "saga coordinator: started with distlock leader election",
-			slog.String("mode", LeaderElectModeLabel))
+			slog.String("mode", LeaderElectModeLabel),
+			slog.Duration("lease_ttl", c.cfg.LeaseDuration))
 	}
 
 	defer func() {

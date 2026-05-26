@@ -28,11 +28,18 @@ const LeaderElectModeLabel = "leader_elect"
 // ClaimPending-d instance, the Coordinator acquires a per-instance distributed
 // lock keyed "saga:{definitionID}:{instanceID}"; instances whose lock is held
 // by another process are skipped this tick (no-lock → skip), and the lock is
-// released after the drive. The lock TTL equals Config.LeaseDuration so a
-// crashed leader's distlock key and journal lease expire together (TTL
-// backstop). The distlock is auto-renewed by distlock's shared manager
-// goroutine; the journal lease is renewed independently by heartbeatLoop —
-// both during the hold.
+// released after the drive. The lock TTL is Config.LeaseDuration; distlock is
+// auto-renewed by distlock's shared manager goroutine and the journal lease is
+// renewed independently by heartbeatLoop, both during the hold.
+//
+// distlock here is an efficiency lock, NOT the correctness boundary: it shrinks
+// the window in which two coordinators concurrently run a Step.Run body, but if
+// distlock renewal fails mid-drive the drive continues — correctness is
+// guaranteed by the journal lease_id CAS fencing (a stale leader's Append /
+// MarkTerminal is rejected at commit). The distlock TTL and the journal lease
+// share the same LeaseDuration but start at different instants (acquireLead vs
+// ClaimPending), so on crash the distlock key may expire slightly before the
+// journal lease; this is safe — the journal CAS still fences the old leader.
 //
 // This is a strong-dependency wiring option (see runtime-api.md Option 范式分层):
 // a nil locker — both bare-nil and typed-nil — sets the leaderElectNil sentinel
@@ -63,8 +70,11 @@ func WithLeaderElect(locker distlock.Locker) Option {
 //     a release closure invoked after driveOne. On contention (ErrLockTimeout)
 //     or any other acquire error it returns lead=false (skip) — fail-closed: a
 //     Coordinator that cannot confirm leadership must not drive. ErrLockTimeout
-//     is the normal multi-coordinator handoff signal (Debug); other errors
-//     (ctx cancel / backend I/O) are operationally interesting (Warn).
+//     (contention) and ctx cancellation (normal shutdown) are expected (Debug);
+//     backend I/O errors are operationally interesting (Warn).
+//
+// release is non-nil iff lead is true; callers MUST NOT call release when lead
+// is false.
 func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstance) (release func(), lead bool) {
 	if c.locker == nil {
 		return func() {}, true
@@ -79,19 +89,24 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 		if rerr := lock.Release(); rerr != nil {
 			c.logger.WarnContext(ctx, "saga: distlock release failed",
 				slog.String("instance_id", string(ci.Instance.ID)),
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("lock_key", key),
 				slog.Any("error", rerr))
 		}
 	}, true
 }
 
-// logLeaderSkip logs an acquireLead miss at the level matching its cause:
-// ErrLockTimeout (another coordinator holds the lock — expected during handoff)
-// → Debug; any other error (backend I/O, ctx cancel) → Warn.
+// logLeaderSkip logs an acquireLead miss at the level matching its cause.
+// Contention (ErrLockTimeout — another coordinator holds the lock) and ctx
+// cancellation (normal Stop()/shutdown of the tick loop) are expected
+// operational signals, not faults → Debug. Anything else (backend I/O) → Warn.
 func (c *Coordinator) logLeaderSkip(ctx context.Context, ci journal.ClaimedInstance, key string, err error) {
 	level := slog.LevelWarn
 	var ec *errcode.Error
-	if errors.As(err, &ec) && ec.Code == errcode.ErrDistlockTimeout {
+	switch {
+	case errors.As(err, &ec) && ec.Code == errcode.ErrDistlockTimeout:
+		level = slog.LevelDebug
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		level = slog.LevelDebug
 	}
 	c.logger.Log(ctx, level, "saga: leader-elect skip (lock not acquired)",

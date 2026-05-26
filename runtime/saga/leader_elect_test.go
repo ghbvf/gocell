@@ -71,12 +71,12 @@ func newLeaderElectCoordinator(
 	return c, disp
 }
 
-// claimedFixture returns a ClaimedInstance with deterministic IDs for direct
-// acquireLead unit tests.
-func claimedFixture(defID, instID idutil.SafeID, now time.Time) journal.ClaimedInstance {
+// claimedFixture returns a ClaimedInstance with deterministic IDs
+// (def1/inst1 → lock key "saga:def1:inst1") for direct acquireLead unit tests.
+func claimedFixture(now time.Time) journal.ClaimedInstance {
 	return journal.ClaimedInstance{
-		Instance: ksaga.NewInstance(instID, defID, now),
-		LeaseID:  "lease-" + instID,
+		Instance: ksaga.NewInstance("inst1", "def1", now),
+		LeaseID:  "lease-inst1",
 	}
 }
 
@@ -149,7 +149,7 @@ func TestAcquireLead_SingleProcess_AlwaysLeads(t *testing.T) {
 	if c.locker != nil {
 		t.Fatal("expected nil locker for single-process coordinator")
 	}
-	release, lead := c.acquireLead(context.Background(), claimedFixture("def1", "inst1", clk.Now()))
+	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
 	if !lead {
 		t.Fatal("single-process acquireLead lead=false, want true")
 	}
@@ -185,7 +185,7 @@ func TestAcquireLead_MutualExclusion(t *testing.T) {
 	c2, _ := newLeaderElectCoordinator(t, j, clk, reg, locker2)
 
 	ctx := context.Background()
-	ci := claimedFixture("def1", "inst1", clk.Now())
+	ci := claimedFixture(clk.Now())
 
 	// c1 acquires.
 	release1, lead1 := c1.acquireLead(ctx, ci)
@@ -244,7 +244,7 @@ func TestAcquireLead_IOError_FailClosed(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry()
 	c, _ := newLeaderElectCoordinator(t, j, clk, reg, locker)
 
-	release, lead := c.acquireLead(context.Background(), claimedFixture("def1", "inst1", clk.Now()))
+	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
 	if lead {
 		t.Fatal("acquireLead lead=true on I/O error, want false (fail-closed)")
 	}
@@ -401,5 +401,132 @@ func TestStart_LeaderElect_EmitsLeaderElectMode(t *testing.T) {
 	}
 	if strings.Contains(logs, UnsafeModeLabel) {
 		t.Errorf("start logs contain %s for a leader-elect coordinator; logs=%s", UnsafeModeLabel, logs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// log-level discipline
+// ---------------------------------------------------------------------------
+
+// captureLeaderCoord builds a leader-elect coordinator whose logger writes JSON
+// to buf at Debug level, for log-level assertions. Not started — acquireLead /
+// release run without the tick loop.
+func captureLeaderCoord(t *testing.T, clk *clockmock.FakeClock, locker distlock.Locker, buf *bytes.Buffer) *Coordinator {
+	t.Helper()
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	j, _ := journal.NewMemJournal(clk)
+	reg, _ := ksaga.NewInMemoryRegistry()
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	return c
+}
+
+// TestLogLeaderSkip_Levels asserts acquireLead logs the skip at the level
+// matching its cause: contention (ErrLockTimeout) and ctx cancellation → Debug
+// (expected operational signals); backend I/O error → Warn (fault).
+func TestLogLeaderSkip_Levels(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		locker    func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker
+		ctx       func() context.Context
+		wantLevel string
+	}{
+		{
+			name: "contention_debug",
+			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+				fd := locktest.NewFakeDriverWithClock(clk.Now)
+				fd.SetNextSetNX(false)
+				l, err := distlock.New(fd, clk)
+				if err != nil {
+					t.Fatalf("distlock.New: %v", err)
+				}
+				return l
+			},
+			ctx:       context.Background,
+			wantLevel: "DEBUG",
+		},
+		{
+			name: "ctx_canceled_debug",
+			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+				l, err := distlock.New(locktest.NewFakeDriverWithClock(clk.Now), clk)
+				if err != nil {
+					t.Fatalf("distlock.New: %v", err)
+				}
+				return l
+			},
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			wantLevel: "DEBUG",
+		},
+		{
+			name: "io_error_warn",
+			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+				l, err := distlock.New(errSetNXDriver{}, clk)
+				if err != nil {
+					t.Fatalf("distlock.New: %v", err)
+				}
+				return l
+			},
+			ctx:       context.Background,
+			wantLevel: "WARN",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+			var buf bytes.Buffer
+			c := captureLeaderCoord(t, clk, tc.locker(t, clk), &buf)
+			_, lead := c.acquireLead(tc.ctx(), claimedFixture(clk.Now()))
+			if lead {
+				t.Fatal("expected lead=false (acquire should fail)")
+			}
+			logs := buf.String()
+			if !strings.Contains(logs, `"level":"`+tc.wantLevel+`"`) {
+				t.Errorf("want level %s; logs=%s", tc.wantLevel, logs)
+			}
+			if !strings.Contains(logs, "leader-elect skip") {
+				t.Errorf("missing skip message; logs=%s", logs)
+			}
+		})
+	}
+}
+
+// TestAcquireLead_ReleaseFail_LogsWarn asserts the release closure logs a Warn
+// (with definition_id) when lock.Release() fails (FakeDriver-injected error).
+func TestAcquireLead_ReleaseFail_LogsWarn(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	locker, err := distlock.New(fd, clk)
+	if err != nil {
+		t.Fatalf("distlock.New: %v", err)
+	}
+	var buf bytes.Buffer
+	c := captureLeaderCoord(t, clk, locker, &buf)
+
+	release, lead := c.acquireLead(context.Background(), claimedFixture(clk.Now()))
+	if !lead {
+		t.Fatal("expected lead=true")
+	}
+	fd.SetNextReleaseError(errors.New("simulated release I/O failure"))
+	release()
+
+	logs := buf.String()
+	if !strings.Contains(logs, "distlock release failed") {
+		t.Errorf("missing release-failed log; logs=%s", logs)
+	}
+	if !strings.Contains(logs, `"level":"WARN"`) {
+		t.Errorf("release failure should log WARN; logs=%s", logs)
+	}
+	if !strings.Contains(logs, `"definition_id":"def1"`) {
+		t.Errorf("release-failed log missing definition_id; logs=%s", logs)
 	}
 }

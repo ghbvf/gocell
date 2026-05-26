@@ -157,11 +157,33 @@ func TestSagaLeaderElect_TwoCoordinators_PG_ExactlyOnce(t *testing.T) {
 		},
 		testtime.D10s, testtime.D5ms)
 
-	// Safety: each instance's Step.Run executed exactly once (no split-brain).
+	// Safety (execution side): each instance's Step.Run executed exactly once
+	// (no split-brain side effect).
 	mu.Lock()
-	defer mu.Unlock()
 	for _, id := range instIDs {
 		require.Equalf(t, 1, runs[id], "instance %s Step.Run count", id)
+	}
+	mu.Unlock()
+
+	// Safety (journal side): each instance committed exactly one StepCompleted
+	// and zero StepFailed — proving neither coordinator double-committed (the
+	// distlock gate + journal lease_id CAS held). This is stronger than the
+	// Step.Run counter, which alone could not distinguish "only one drove" from
+	// "both drove but the second's commit was CAS-fenced".
+	for _, id := range instIDs {
+		evs, err := j.Load(ctx, id)
+		require.NoError(t, err)
+		completed, failed := 0, 0
+		for i := range evs {
+			switch evs[i].Kind {
+			case journal.KindStepCompleted:
+				completed++
+			case journal.KindStepFailed:
+				failed++
+			}
+		}
+		require.Equalf(t, 1, completed, "instance %s KindStepCompleted count", id)
+		require.Zerof(t, failed, "instance %s KindStepFailed count", id)
 	}
 
 	// The distlock path was exercised (acquire + release on the shared backend).

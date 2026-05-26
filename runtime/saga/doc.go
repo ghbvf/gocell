@@ -38,9 +38,10 @@
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.
-//   - Metrics emission (tick / heartbeat / drive counters) deferred to a
-//     future PR. PR-03's slog Warn logs provide minimal observability until
-//     then.
+//   - Metrics emission (tick / heartbeat / drive counters, plus the PR-05
+//     leader-elect skip / lock-acquire-failure counters) deferred to a future
+//     PR (tracked in #1109). Until then slog provides minimal observability:
+//     leader-elect skips and ctx-cancel are Debug, backend I/O errors Warn.
 //
 // # Coordinator lifecycle
 //

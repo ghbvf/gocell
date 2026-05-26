@@ -36,7 +36,7 @@
 //     caller from invoking an unexported method. Same ceiling rationale as
 //     SAGA-JOURNAL-HOLDER-SEAL-01 (gh #981) and the SPAN holder-seal (gh #851).
 //     Hard upgrade path (typed gate token threaded through driveOne's signature,
-//     still package-internal) tracked in gh issue (see PR-05 godoc / backlog).
+//     still package-internal) tracked in gh issue #1110.
 //   - B1 (over-firing): A1 matches `.driveOne(` by selector name only. A method
 //     named driveOne on a *different* type in runtime/saga would also be checked.
 //     runtime/saga has exactly one driveOne (Coordinator); over-firing is
