@@ -36,7 +36,7 @@ func TestClassifyProbeFailure_DifferentErrcode_ReturnsInfraInternal(t *testing.T
 	require.True(t, errors.As(infraErr, &ec))
 	assert.Equal(t, errcode.KindInternal, ec.Kind, "infra failure must map to KindInternal (500), not KindNotFound (404)")
 	assert.Equal(t, errcode.ErrInternal, ec.Code)
-	assert.Contains(t, ec.InternalMessage, "config_entry repo: Update probe failed key=key1",
+	assert.Contains(t, ec.Error(), "config_entry repo: Update probe failed key=key1",
 		"Internal must carry op/key/entity for ops correlation")
 	assert.Equal(t, errcode.CategoryInfra, ec.Category,
 		"infra failures must be tagged CategoryInfra for routing")
@@ -55,7 +55,7 @@ func TestClassifyProbeFailure_PlainGoError_ReturnsInfraInternal(t *testing.T) {
 	assert.Equal(t, errcode.KindInternal, ec.Kind)
 	assert.True(t, errors.Is(infraErr, io.ErrUnexpectedEOF),
 		"wrapped infra error must preserve the underlying cause via %%w")
-	assert.Contains(t, ec.InternalMessage, "feature_flag repo: Delete probe failed key=flag.x")
+	assert.Contains(t, ec.Error(), "feature_flag repo: Delete probe failed key=flag.x")
 }
 
 // TestClassifyProbeFailure_DifferentNotFoundCodes: passing the wrong notFoundCode
@@ -84,7 +84,7 @@ func TestClassifyProbeFailure_InternalDoesNotLeakDetails(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(infraErr, &ec))
 	// secret.key must appear ONLY in Internal, not the public Details slice.
-	assert.NotEmpty(t, ec.InternalMessage)
+	assert.NotEmpty(t, ec.InternalDetails)
 	if _, ok := ec.FindAttr("key"); ok {
 		t.Error("key must not leak via Details on infra fault")
 	}

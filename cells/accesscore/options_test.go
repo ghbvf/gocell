@@ -233,7 +233,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 	require.Error(t, err)
 	var ecErrOutbox *errcode.Error
 	require.True(t, errors.As(err, &ecErrOutbox))
-	assert.Contains(t, ecErrOutbox.Message+" "+ecErrOutbox.InternalMessage, "outboxWriter")
+	assert.Contains(t, ecErrOutbox.Message+" "+ecErrOutbox.Error(), "outboxWriter")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
@@ -256,7 +256,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "durable mode")
+	assert.Contains(t, ecErr.Message+" "+ecErr.Error(), "durable mode")
 }
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {

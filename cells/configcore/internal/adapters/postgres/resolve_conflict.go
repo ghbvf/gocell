@@ -32,7 +32,7 @@ func classifyProbeFailure(probeErr error, notFoundCode errcode.Code, op, key, en
 	}
 	return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 		"repository probe failed during CAS conflict resolution", probeErr,
-		errcode.WithInternal(fmt.Sprintf("%s repo: %s probe failed key=%s", entityName, op, key)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s repo: %s probe failed key=%s", entityName, op, key))),
 		errcode.WithCategory(errcode.CategoryInfra),
 	)
 }

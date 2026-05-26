@@ -175,7 +175,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "sort scope mismatch", reasonAttr.Value.String())
+	assert.Equal(t, "sort scope mismatch", reasonAttr.Value().(string))
 }
 
 func TestService_List_ContextMismatch(t *testing.T) {
@@ -196,7 +196,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
 }
 
 func TestService_List_LastPage(t *testing.T) {

@@ -49,7 +49,7 @@ func (r *ConfigRepository) Create(_ context.Context, entry *domain.ConfigEntry) 
 
 	if _, exists := r.entries[entry.Key]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrConfigDuplicate, "config key already exists",
-			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, entry.Key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, entry.Key))))
 	}
 	clone := *entry
 	r.entries[entry.Key] = &clone
@@ -63,7 +63,7 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 	entry, ok := r.entries[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
-			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	clone := *entry
 	return &clone, nil
@@ -76,7 +76,7 @@ func (r *ConfigRepository) Update(_ context.Context, key string, expectedVersion
 	existing, ok := r.entries[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
-			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
 		return nil, cas.CheckVersionMatch(0, "config_entry", key)
@@ -98,7 +98,7 @@ func (r *ConfigRepository) UpdateForRollback(
 	existing, ok := r.entries[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
-			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
 		return nil, cas.CheckVersionMatch(0, "config_entry", key)
@@ -118,7 +118,7 @@ func (r *ConfigRepository) Delete(_ context.Context, key string, expectedVersion
 	existing, ok := r.entries[key]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, msgConfigNotFound,
-			errcode.WithInternal(fmt.Sprintf(configInternalKeyQuotedFmt, key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(configInternalKeyQuotedFmt, key))))
 	}
 	if existing.Version != expectedVersion {
 		return nil, cas.CheckVersionMatch(0, "config_entry", key)

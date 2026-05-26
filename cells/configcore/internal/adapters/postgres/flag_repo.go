@@ -98,12 +98,12 @@ func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row RowScanner, o
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found", err,
-			errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: %s miss key=%s", op, key))),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, err,
-		errcode.WithInternal(fmt.Sprintf("flag repo: %s scan error key=%s", op, key)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: %s scan error key=%s", op, key))),
 		errcode.WithCategory(errcode.CategoryInfra),
 	)
 }
@@ -155,7 +155,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		// InternalMessage carries the key for operator triage; the public
 		// Message stays generic so user input never echoes in API responses.
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo: create failed", err,
-			errcode.WithInternal("flag repo: Create failed (key="+flag.Key+")"),
+			errcode.WithInternal(errcode.InternalAttr("_", "flag repo: Create failed (key="+flag.Key+")")),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -197,7 +197,7 @@ func (r *FlagRepository) Update(
 			return nil, r.resolveUpdateConflict(ctx, "Update", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
-			errcode.WithInternal(fmt.Sprintf("flag repo: Update scan error key=%s", key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Update scan error key=%s", key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -262,7 +262,7 @@ func (r *FlagRepository) Delete(ctx context.Context, key string, expectedVersion
 			return nil, r.resolveUpdateConflict(ctx, "Delete", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
-			errcode.WithInternal(fmt.Sprintf("flag repo: Delete scan error key=%s", key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Delete scan error key=%s", key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -301,7 +301,7 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, expectedVersion
 			return nil, r.resolveUpdateConflict(ctx, "Toggle", key)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, msgFlagRepoQueryFailed, scanErr,
-			errcode.WithInternal(fmt.Sprintf("flag repo: Toggle scan error key=%s", key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: Toggle scan error key=%s", key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -328,7 +328,7 @@ func (r *FlagRepository) resolveUpdateConflict(ctx context.Context, op, key stri
 		// Confirmed key absent → 404.
 		return errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound,
 			"flag not found", probeErr,
-			errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag repo: %s miss key=%s", op, key))),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}

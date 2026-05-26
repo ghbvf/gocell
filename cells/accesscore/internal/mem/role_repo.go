@@ -63,7 +63,7 @@ func (r *RoleRepository) GetByID(ctx context.Context, id string) (*domain.Role, 
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 	}
 	clone := *role
 	return &clone, nil
@@ -103,7 +103,7 @@ func (r *RoleRepository) AssignToUser(ctx context.Context, userID, roleID string
 	if _, ok := r.store.roles[roleID]; !ok {
 		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("role_id=%s", roleID))))
 	}
 
 	if r.store.userRoles[userID] == nil {
@@ -188,7 +188,7 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, userID, ro
 				// path so client handlers match a single business invariant.
 				return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 					"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
-					errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("role_id=%q user_id=%q", roleID, userID))))
 			}
 		}
 	}

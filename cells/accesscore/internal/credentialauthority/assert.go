@@ -35,13 +35,13 @@ func Assert(user *domain.User, checks ...Check) error {
 	if !user.CanAuthenticate() {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"credential not authoritative",
-			errcode.WithInternal("credentialauthority: baseline CanAuthenticate=false"))
+			errcode.WithInternal(errcode.InternalAttr("_", "credentialauthority: baseline CanAuthenticate=false")))
 	}
 	for i, c := range checks {
 		if c == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"credentialauthority.Assert: nil Check in variadic",
-				errcode.WithInternal("credentialauthority: nil check at index "+strconv.Itoa(i)))
+				errcode.WithInternal(errcode.InternalAttr("_", "credentialauthority: nil check at index "+strconv.Itoa(i))))
 		}
 		if err := c.apply(user); err != nil {
 			return err

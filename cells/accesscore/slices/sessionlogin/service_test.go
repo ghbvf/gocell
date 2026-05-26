@@ -516,8 +516,8 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 				"message must be a const literal")
 			var gotField string
 			for _, attr := range ec.Details {
-				if attr.Key == "field" {
-					gotField = attr.Value.String()
+				if attr.Key() == "field" {
+					gotField, _ = attr.Value().(string)
 					break
 				}
 			}

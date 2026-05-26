@@ -371,8 +371,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"status value not allowed in Update; use Lock for the locked state",
 			errcode.WithDetails(
-				slog.String("field", "status"),
-				slog.String("allowedValues", string(domain.StatusActive)+","+string(domain.StatusSuspended)),
+				errcode.PublicAttr("field", "status"),
+				errcode.PublicAttr("allowedValues", string(domain.StatusActive)+","+string(domain.StatusSuspended)),
 			))
 	}
 	// S4.0 P1-A: status is an admin-only field. The route policy is
@@ -384,7 +384,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	if input.Status != nil && !callerHasRole(ctx, auth.RoleAdmin) {
 		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthIdentityInvalidInput,
 			"updating status requires admin role",
-			errcode.WithDetails(slog.String("field", "status")))
+			errcode.WithDetails(errcode.PublicAttr("field", "status")))
 	}
 
 	actor, err := actorFromContext(ctx)

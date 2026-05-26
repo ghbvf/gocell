@@ -230,7 +230,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	require.Error(t, err)
 	var ecErrTxPair *errcode.Error
 	require.True(t, errors.As(err, &ecErrTxPair))
-	assert.Contains(t, ecErrTxPair.Message+" "+ecErrTxPair.InternalMessage, "outboxWriter and txRunner")
+	assert.Contains(t, ecErrTxPair.Message+" "+ecErrTxPair.Error(), "outboxWriter and txRunner")
 }
 
 func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
@@ -280,7 +280,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
-	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.InternalMessage, "explicit event sink")
+	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.Error(), "explicit event sink")
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
@@ -432,7 +432,7 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
-	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.InternalMessage, "mutually exclusive")
+	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.Error(), "mutually exclusive")
 }
 
 // TestInit_WithEmitter_DurableRequiresDurableEmitter guards the production
@@ -459,7 +459,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
-	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.InternalMessage, "durable")
+	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.Error(), "durable")
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {

@@ -182,8 +182,8 @@ func TestHandler_Logout_BlankID(t *testing.T) {
 	assert.Equal(t, "validation: required field missing", coded.Message)
 	var gotField string
 	for _, attr := range coded.Details {
-		if attr.Key == "field" {
-			gotField = attr.Value.String()
+		if attr.Key() == "field" {
+			gotField, _ = attr.Value().(string)
 			break
 		}
 	}

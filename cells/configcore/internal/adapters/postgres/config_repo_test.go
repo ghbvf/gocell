@@ -56,7 +56,7 @@ func TestConfigRepository_Create_Error(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 	assert.NotContains(t, ec.Message, "secret_user_key", "public Message must not leak entry.Key")
-	assert.Contains(t, ec.InternalMessage, "key=secret_user_key", "InternalMessage must carry key for triage")
+	assert.Contains(t, ec.Error(), "key=secret_user_key", "InternalMessage must carry key for triage")
 }
 
 func TestConfigRepository_GetByKey(t *testing.T) {
@@ -167,7 +167,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			"Canceled→ErrClientCanceled (499) / DeadlineExceeded→ErrServerTimeout (504)")
 		assert.Equal(t, expected4xx, errcode.IsExpected4xx(err),
 			"499 routes through log4xx → slog.Warn; 504 routes through log5xx → slog.Error")
-		require.Contains(t, ec.InternalMessage, "ctx canceled",
+		require.Contains(t, ec.Error(), "ctx canceled",
 			"must hit wrapCtxCancel path, not generic scan-error fallthrough")
 	}
 	for _, tc := range tests {
@@ -315,7 +315,7 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 					"unclassified KMS / tamper failures must be CategoryAuth")
 				assert.False(t, errcode.IsInfraError(ec),
 					"CategoryAuth must NOT match IsInfraError (separates KMS auth from infra)")
-				assert.Contains(t, ec.InternalMessage, tc.op,
+				assert.Contains(t, ec.Error(), tc.op,
 					"InternalMessage must carry the PascalCase op label for operator triage")
 			})
 		}
@@ -361,9 +361,9 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 		"Update not-found must have Category=CategoryDomain")
-	assert.Contains(t, ec.InternalMessage, opUpdate,
+	assert.Contains(t, ec.Error(), opUpdate,
 		"Update path InternalMessage must carry opUpdate label")
-	assert.NotContains(t, ec.InternalMessage, opUpdateForRollback,
+	assert.NotContains(t, ec.Error(), opUpdateForRollback,
 		"Update path must not be mislabeled as UpdateForRollback (op argument hardcode regression)")
 }
 
@@ -404,7 +404,7 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 		"UpdateForRollback not-found must have Category=CategoryDomain")
 	require.False(t, errcode.IsInfraError(err),
 		"domain not-found must not be treated as infra")
-	assert.Contains(t, ec.InternalMessage, opUpdateForRollback,
+	assert.Contains(t, ec.Error(), opUpdateForRollback,
 		"UpdateForRollback path InternalMessage must carry opUpdateForRollback label")
 }
 

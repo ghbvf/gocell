@@ -65,8 +65,8 @@ func TestNewUser(t *testing.T) {
 					"message must be a const literal")
 				var gotField string
 				for _, attr := range coded.Details {
-					if attr.Key == "field" {
-						gotField = attr.Value.String()
+					if attr.Key() == "field" {
+						gotField, _ = attr.Value().(string)
 						break
 					}
 				}

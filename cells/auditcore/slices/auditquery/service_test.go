@@ -249,7 +249,7 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
 }
 
 func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {

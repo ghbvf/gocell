@@ -46,7 +46,7 @@ func TestFlagRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			"Canceled→ErrClientCanceled (499) / DeadlineExceeded→ErrServerTimeout (504)")
 		assert.Equal(t, expected4xx, errcode.IsExpected4xx(err),
 			"499 routes through log4xx → slog.Warn; 504 routes through log5xx → slog.Error")
-		assert.Contains(t, ec.InternalMessage, "ctx canceled",
+		assert.Contains(t, ec.Error(), "ctx canceled",
 			"must hit wrapCtxCancel path")
 	}
 	for _, tc := range tests {

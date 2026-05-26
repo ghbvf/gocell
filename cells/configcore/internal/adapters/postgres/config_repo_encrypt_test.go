@@ -1032,7 +1032,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code)
 		assert.True(t, errcode.IsInfraError(ec),
 			"transient cause must preserve CategoryInfra")
-		assert.Contains(t, ec.InternalMessage, "Encrypt",
+		assert.Contains(t, ec.Error(), "Encrypt",
 			"InternalMessage must carry the PascalCase op label")
 	})
 

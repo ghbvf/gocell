@@ -49,7 +49,7 @@ func (w withPasswordVersionPin) apply(u *domain.User) error {
 	if !w.valid || u.PasswordVersion != w.expected {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"credential not authoritative",
-			errcode.WithInternal("credentialauthority: password version stale"))
+			errcode.WithInternal(errcode.InternalAttr("_", "credentialauthority: password version stale")))
 	}
 	return nil
 }
