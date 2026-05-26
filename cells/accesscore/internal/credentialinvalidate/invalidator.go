@@ -2,19 +2,25 @@
 // revocation events: it bumps the user's authz_epoch, revokes all active
 // sessions, and revokes all refresh chains in one ambient transaction.
 //
-// AI-robust archtest (Hard, see tools/archtest/credential_invalidate_funnel_test.go):
-//   - CREDENTIAL-INVALIDATE-FUNNEL-01:  session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
-//   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:  UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, *_test.go}
-//   - REFRESH-REVOKE-USER-FUNNEL-01:    refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
-//   - FENCE-TOKEN-MINT-FUNNEL-01:       credentialfence.Mint callers ⊆ {this pkg, storetest/conformance, *_test.go}
+// AI-robust archtest (all Hard post #1033, see
+// tools/archtest/credential_invalidate_funnel_invariants_test.go +
+// tools/archtest/fence_token_mint_funnel_test.go):
+//   - CREDENTIAL-INVALIDATE-FUNNEL-01:    session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
+//   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:    UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, conformance, *_test.go}
+//   - REFRESH-REVOKE-USER-FUNNEL-01:      refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
+//   - CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: Invalidator.Apply callers ⊆ {this pkg, authzmutate, identitymanage, sessionrefresh, rbacassign, *_test.go}
+//   - FENCE-TOKEN-MINT-FUNNEL-01:         credentialfence.Mint callers ⊆ {this pkg, storetest/conformance, *_test.go}
 //
 // The three mutation methods take a credentialfence.FenceToken capability
 // proof (#1033). Apply mints a FenceToken via credentialfence.Mint and
-// passes it to each downstream call — combined with the type-system seal on
-// FenceToken (external packages cannot implement the interface or construct
-// the unexported impl), this closes the upstream half of the funnel: only
-// code reachable from this package can produce the token argument the
-// mutation methods require.
+// passes the same value to each of the three calls. Combined with the
+// type-system seal on FenceToken (external packages cannot implement the
+// interface or construct the unexported impl) plus the runtime nil-guard
+// (credentialfence.MustHave at the top of every mutation impl), the
+// upstream half of the funnel is now Hard: external packages cannot
+// produce a FenceToken value, so the mutation methods cannot be invoked
+// from outside the funnel even at compile time. See ADR §A16 for the
+// closure proof and threat-matrix re-evaluation.
 //
 // Apply must be called inside an ambient transaction (txCtx derived from
 // persistence.CellTxManager.RunInTx). All three operations commit atomically;

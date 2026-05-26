@@ -10,21 +10,44 @@ package archtest
 // INVARIANT: REFRESH-REVOKE-USER-FUNNEL-01
 // INVARIANT: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01
 //
-// S4d note (upstream rule): UPSTREAM-CALLER-01 is graded Medium —
-// `Invalidator.Apply`'s caller set is enforced by archtest, but the rule
-// catches "wrong call site" (the existing P1 patches handle the "missing
-// call site" hole at the identitymanage entry). Promoting to Hard requires
-// privatizing domain.User authz fields + sealed Mutation funnel; tracked
-// via domain.User authz field privatization and a sealed Mutation funnel.
+// # AI-robust grade (post #1033)
 //
-// AI-robust grade: Hard (closed-caller-set enforced via ResolveMethodCall;
-// form uniqueness = "call resolves to this exact *types.Func identity" — no gray zone).
+// All four rules are Hard. UPSTREAM-CALLER-01's grade upgraded from
+// Medium to Hard once the sealed FenceToken capability proof (#1033)
+// closed the type-system half of the upstream funnel:
 //
-// Hard property: any direct call to session.Store.RevokeForSubject /
-// ports.UserRepository.BumpAuthzEpoch / refresh.Store.RevokeUser outside the
-// credentialinvalidate funnel causes archtest to fail in CI.
-// The honesty caveat (matching SESSIONREFRESH-NO-SESSION-CREATE-01):
-// Go does not prevent the calls at compile time; enforcement is archtest-bound.
+//  1. DOWNSTREAM (rules 1–3) — Hard via ResolveMethodCall call-site
+//     form-uniqueness. Any direct call to RevokeForSubject /
+//     BumpAuthzEpoch / RevokeUser outside the allowlisted paths
+//     resolves to the exact *types.Func identity and fails archtest.
+//     The honesty caveat (matching SESSIONREFRESH-NO-SESSION-CREATE-01):
+//     Go does not prevent the calls at compile time; enforcement is
+//     archtest-bound.
+//
+//  2. UPSTREAM (rule 4) — Hard via the combined seal:
+//       (a) FenceToken interface seal: types declared outside
+//           runtime/auth/credentialfence cannot implement FenceToken
+//           (unexported isCredentialFenceToken marker method); the
+//           concrete fenceToken is itself unexported, so external
+//           composite literals cannot construct it. Compile-time
+//           guarantee.
+//       (b) FENCE-TOKEN-MINT-FUNNEL-01 archtest: credentialfence.Mint
+//           callers are locked to the credentialinvalidate funnel,
+//           storetest / conformance suites, and *_test.go files via
+//           ResolvePackageRef form-uniqueness. Combined with (a), no
+//           non-test production package outside the funnel can produce
+//           a FenceToken value.
+//       (c) Runtime nil-guard: credentialfence.MustHave at the top of
+//           every mutation impl converts the residual "pass nil" form
+//           into an immediate panic via panicregister.Approved +
+//           errcode.Assertion, surfaced as a 500. Closes the archtest
+//           blindspots (function-value capture / reflect.MethodByName)
+//           that the type-system seal alone cannot prevent.
+//
+// See tools/archtest/fence_token_mint_funnel_test.go for the
+// FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
+// docs/architecture/202605101400-adr-credential-session-protocol.md §A16
+// for the closure proof and threat-matrix re-evaluation.
 //
 // Scanning tool: ResolveMethodCall + EachInSubtree[ast.CallExpr].
 // Resolver scope: targeted package trees (not full module ./...) to keep RAM
@@ -363,7 +386,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 	)
 }
 
-// ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (S4d, Medium) ─────
+// ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Hard, post #1033) ──
 
 // TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01 enforces
 // CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every call to
@@ -373,13 +396,21 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // itself. New callers must justify their addition via a PR that updates
 // upstreamCallerAllowlistPrefixes — this puts the funnel's surface area on
 // the reviewer's radar instead of relying on string convention.
-// See ADR §A10 for the canonical allowlist and co-tx atomicity rationale.
+// See ADR §A10 + §A16 for the canonical allowlist and co-tx atomicity
+// rationale, and the type-system seal that brings this rule to Hard.
 //
-// AI-robust grade: Medium. The rule catches "wrong caller" (cells outside
-// the allowlist invoking Apply directly) but NOT "missing caller" (a new
-// user-authz mutator forgetting to call Apply at all). The latter is what
-// P1-#1 in PR #490 review was — fixed in this PR by the identitymanage
-// service.go change.
+// AI-robust grade (post #1033): Hard. The rule's call-site allowlist
+// catches "wrong caller" (cells outside the allowlist invoking Apply
+// directly). The "missing caller" problem — a new user-authz mutator
+// forgetting to call Apply at all — is now closed structurally by the
+// sealed FenceToken capability proof: any mutation method (BumpAuthzEpoch
+// / RevokeForSubject / RevokeUser) requires a credentialfence.FenceToken
+// that only credentialfence.Mint can produce, and Mint's callers are
+// locked by FENCE-TOKEN-MINT-FUNNEL-01 to the funnel + storetest +
+// conformance + *_test.go. A new mutator that tries to revoke without
+// going through Invalidator.Apply cannot mint a FenceToken — production
+// archtest fails. See the package godoc and ADR §A16 for the full
+// closure proof.
 //
 // RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
