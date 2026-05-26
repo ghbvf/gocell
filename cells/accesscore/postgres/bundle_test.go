@@ -8,18 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestNewBundle_FailFast verifies the three nil-validation branches of
 // accesspg.NewBundle. Mirrors the internal/adapters/postgres role_repo_test.go
-// pattern: non-nil zero-value pool/txMgr reach the next guard without needing
-// a real PG connection.
+// pattern: non-nil zero-value pool + outbox.DemoTxRunner reach the next guard
+// without needing a real PG connection (outbox.DemoTxRunner is the canonical
+// in-mem persistence.TxRunner; CELL-TEST-NO-ADAPTER-IMPORT-01).
 func TestNewBundle_FailFast(t *testing.T) {
-	fakePool := new(pgxpool.Pool)       // non-nil zero value, no real PG needed
-	fakeTxm := new(adapterpg.TxManager) // non-nil zero value, reaches clock guard
+	fakePool := new(pgxpool.Pool)    // non-nil zero value, no real PG needed
+	fakeTxm := outbox.DemoTxRunner{} // non-nil TxRunner, reaches clock guard
 
 	assertValidationFailed := func(t *testing.T, err error) {
 		t.Helper()
@@ -35,7 +36,7 @@ func TestNewBundle_FailFast(t *testing.T) {
 	})
 
 	t.Run("nil_txMgr_typed_nil", func(t *testing.T) {
-		var nilTxm *adapterpg.TxManager
+		var nilTxm *outbox.DemoTxRunner
 		_, err := NewBundle(fakePool, nilTxm, clock.Real())
 		assertValidationFailed(t, err)
 	})
@@ -53,7 +54,7 @@ func TestNewBundle_FailFast(t *testing.T) {
 // methods return non-nil after a successful NewBundle call.
 func TestNewBundle_HappyPath(t *testing.T) {
 	fakePool := new(pgxpool.Pool)
-	fakeTxm := new(adapterpg.TxManager)
+	fakeTxm := outbox.DemoTxRunner{}
 
 	b, err := NewBundle(fakePool, fakeTxm, clock.Real())
 	require.NoError(t, err)
