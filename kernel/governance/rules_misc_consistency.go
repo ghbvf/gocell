@@ -221,9 +221,11 @@ func (v *Validator) runPerContractPhase(
 	return results
 }
 
-// isExamplePath returns true if the path is under an examples/ subtree.
+// isExamplePath reports whether p is under the examples/ subtree. Delegates
+// to metadata.IsExamplePath so the conventional-layout literal "examples/"
+// stays inside the Locator funnel (LOCATOR-DISCOVERY-FUNNEL-01).
 func isExamplePath(p string) bool {
-	return strings.HasPrefix(p, "examples/")
+	return metadata.IsExamplePath(p)
 }
 
 // checkConsistencyConstraints12 validates constraints 1 and 2 for a contract.

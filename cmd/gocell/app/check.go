@@ -123,6 +123,7 @@ func checkContractHealth(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("check contract-health", flag.ContinueOnError)
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -132,7 +133,12 @@ func checkContractHealth(ctx context.Context, args []string) error {
 		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)
@@ -259,6 +265,7 @@ func checkSliceCoverage(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdSliceCoverage, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all cells)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -268,7 +275,12 @@ func checkSliceCoverage(args []string) error {
 		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)
@@ -412,6 +424,7 @@ func checkAssemblyCompleteness(args []string) error {
 	fs := flag.NewFlagSet("check assembly-completeness", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -424,7 +437,12 @@ func checkAssemblyCompleteness(args []string) error {
 		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)
@@ -475,6 +493,7 @@ func checkJourneyReadiness(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdJourneyReadiness, flag.ContinueOnError)
 	journeyID := fs.String("journey", "", "restrict check to this journey ID (empty = all)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -484,7 +503,12 @@ func checkJourneyReadiness(args []string) error {
 		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)
@@ -610,6 +634,7 @@ func checkL0Imports(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdL0Imports, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all L0 cells)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -619,7 +644,12 @@ func checkL0Imports(args []string) error {
 		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)

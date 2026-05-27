@@ -4153,6 +4153,12 @@ func TestREF16(t *testing.T) {
 				Entrypoint: "cmd/evil/main.go",
 				Binary:     "evil",
 			},
+			// File is set so REF-16's defense-in-depth IsWithinRoot check
+			// sees a traversal-bearing path. Post-M1 (#1082), Locator rejects
+			// ".." in manifest module paths at parse time, so this attack
+			// vector cannot reach REF-16 in production — the test directly
+			// injects the meta to verify REF-16 still catches it.
+			File: "assemblies/../../etc/assembly.yaml",
 		}
 
 		val := NewValidator(pm, srcDir, clock.Real())

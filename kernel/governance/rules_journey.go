@@ -32,6 +32,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // validBoardLifecycleMatrix maps board.state → set of allowed J-*.yaml
@@ -72,7 +74,7 @@ func (v *Validator) validateJOURNEYCONTRACTEXISTENCE01() []ValidationResult {
 		if c.Lifecycle != "active" {
 			continue
 		}
-		if strings.HasPrefix(c.File, "examples/") {
+		if metadata.IsExamplePath(c.File) {
 			continue
 		}
 		if referenced[c.ID] {

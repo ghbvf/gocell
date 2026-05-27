@@ -106,11 +106,16 @@ func (ts *TargetSelector) SelectFromSlice(sliceKey string) *AffectedTargets {
 	return ts.expandFromSlices(sliceSet)
 }
 
-// matchSliceFromCellsPath handles paths under parsed cell directories
-// (cells/* and examples/*/cells/*).
-// Returns true if the path was consumed (matched a known cell path).
-// fileCellSet tracks which cells are directly hit by file paths
-// (used for L0 dependency propagation).
+// matchSliceFromCellsPath handles paths that live under any parsed slice
+// or cell directory. After M1 (#1082)'s Locator funnel, this is the SOLE
+// matcher for cell/slice file changes — the prior matchLegacyCellsPath
+// fallback (which hardcoded HasPrefix("cells/")) was removed because
+// Locator already provides authoritative .File values for every cell and
+// slice, and the manifest-mode layout may not start with "cells/".
+//
+// Returns true if the path was consumed (matched a known cell or slice
+// directory). fileCellSet tracks cells directly hit by file paths so that
+// expandL0Dependents can propagate to slices depending on those L0 cells.
 func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet, fileCellSet map[string]struct{}) bool {
 	for key, s := range ts.project.Slices {
 		if s.File == "" {
@@ -138,41 +143,18 @@ func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet, fileCellSe
 		}
 		return true
 	}
-	return ts.matchLegacyCellsPath(f, sliceSet, fileCellSet)
+	return false
 }
 
-func (ts *TargetSelector) matchLegacyCellsPath(f string, sliceSet, fileCellSet map[string]struct{}) bool {
-	if !strings.HasPrefix(f, "cells/") {
-		return false
-	}
-	parts := strings.Split(f, "/")
-	if len(parts) < 2 {
-		return true
-	}
-	cellID := parts[1]
-	if _, ok := ts.project.Cells[cellID]; !ok {
-		return true
-	}
-	fileCellSet[cellID] = struct{}{}
-	if len(parts) >= 4 && parts[2] == "slices" {
-		key := cellID + "/" + parts[3]
-		if _, ok := ts.project.Slices[key]; ok {
-			sliceSet[key] = struct{}{}
-		}
-		return true
-	}
-	for key, s := range ts.project.Slices {
-		if s.BelongsToCell == cellID {
-			sliceSet[key] = struct{}{}
-		}
-	}
-	return true
-}
-
-// matchSlicesFromContractPath handles paths under contracts/.
-// It derives the contract ID from the directory path and finds all slices
-// that reference that contract via contractUsages.
-// Returns true if the path was consumed (matched contracts/ prefix).
+// matchSlicesFromContractPath handles paths that live inside a parsed
+// contract directory (or one of its schemaRefs). After M1 (#1082)'s
+// Locator funnel, this is the SOLE matcher for contract file changes —
+// the prior HasPrefix("contracts/") + contractIDFromPath fallback was
+// removed because Locator already provides authoritative .File and .Dir
+// values for every contract, and the manifest-mode layout may not start
+// with "contracts/".
+//
+// Returns true if the path was consumed (matched a known contract).
 func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[string]struct{}) bool {
 	matched := false
 	for contractID, c := range ts.project.Contracts {
@@ -181,29 +163,7 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 			matched = true
 		}
 	}
-	if matched {
-		return true
-	}
-
-	if !strings.HasPrefix(f, "contracts/") {
-		return false
-	}
-
-	// Contract directory: contracts/{kind}/{domain...}/{version}/
-	// Contract ID: {kind}.{domain...}.{version}
-	// Example: contracts/http/auth/login/v1/contract.yaml -> http.auth.login.v1
-	contractID := ts.contractIDFromPath(f)
-	if contractID == "" {
-		return true
-	}
-
-	// Check that contract exists.
-	if _, ok := ts.project.Contracts[contractID]; !ok {
-		return true
-	}
-
-	ts.addSlicesForContract(contractID, sliceSet)
-	return true
+	return matched
 }
 
 func contractPathMatches(c *metadata.ContractMeta, f string) bool {
@@ -237,10 +197,12 @@ func (ts *TargetSelector) addSlicesForContract(contractID string, sliceSet map[s
 	}
 }
 
-// matchFromJourneyPath handles paths under journeys/.
-// Only J-*.yaml files are treated as journey files; other files (e.g.
-// status-board.yaml) are ignored.
-// Returns true if the path was consumed (matched journeys/ prefix).
+// matchFromJourneyPath handles paths under a parsed journey file. After
+// M1 (#1082)'s Locator funnel, the prior HasPrefix("journeys/") + filename
+// derivation fallback was removed because Locator already provides
+// authoritative JourneyMeta.File for every journey.
+//
+// Returns true if the path matched a known journey file.
 func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]struct{}, contractSet map[string]struct{}) bool {
 	for _, journey := range ts.project.Journeys {
 		if journey.File == "" || f != journey.File {
@@ -249,29 +211,7 @@ func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]stru
 		ts.addJourneyTargets(journey, cellSet, contractSet)
 		return true
 	}
-
-	if !strings.HasPrefix(f, "journeys/") {
-		return false
-	}
-
-	// Extract filename: journeys/J-ssologin.yaml -> J-ssologin.yaml
-	base := path.Base(f)
-
-	// Only J-*.yaml files are journey definitions.
-	if !strings.HasPrefix(base, "J-") || !strings.HasSuffix(base, ".yaml") {
-		return true
-	}
-
-	// Journey ID is the filename without the .yaml extension.
-	journeyID := strings.TrimSuffix(base, ".yaml")
-
-	journey, ok := ts.project.Journeys[journeyID]
-	if !ok {
-		return true
-	}
-
-	ts.addJourneyTargets(journey, cellSet, contractSet)
-	return true
+	return false
 }
 
 func (ts *TargetSelector) addJourneyTargets(journey *metadata.JourneyMeta, cellSet map[string]struct{}, contractSet map[string]struct{}) {
@@ -283,53 +223,27 @@ func (ts *TargetSelector) addJourneyTargets(journey *metadata.JourneyMeta, cellS
 	}
 }
 
-// matchFromAssemblyPath handles paths under assemblies/ or examples/.
-// Expects: assemblies/{id}/assembly.yaml or examples/{id}/assembly.yaml
-// Returns true if the path was consumed (matched assemblies/ or examples/ prefix).
+// matchFromAssemblyPath handles paths that live inside a parsed assembly
+// directory. After M1 (#1082)'s Locator funnel, the prior
+// HasPrefix("assemblies/") + HasPrefix("examples/") + position-based ID
+// derivation fallback was removed because Locator already provides
+// authoritative AssemblyMeta.File for every assembly.
+//
+// Returns true if the path was inside (or equal to) a known assembly
+// directory.
 func (ts *TargetSelector) matchFromAssemblyPath(f string, cellSet map[string]struct{}) bool {
-	if !strings.HasPrefix(f, "assemblies/") && !strings.HasPrefix(f, "examples/") {
-		return false
+	for _, asm := range ts.project.Assemblies {
+		if asm == nil || asm.File == "" {
+			continue
+		}
+		if pathWithin(f, path.Dir(asm.File)) {
+			for _, cellID := range asm.Cells {
+				cellSet[cellID] = struct{}{}
+			}
+			return true
+		}
 	}
-
-	parts := strings.Split(f, "/")
-	// parts[0] = "assemblies" or "examples", parts[1] = assemblyID, ...
-	if len(parts) < 2 {
-		return true
-	}
-	assemblyID := parts[1]
-
-	asm, ok := ts.project.Assemblies[assemblyID]
-	if !ok {
-		return true
-	}
-
-	// Add assembly's cells to the cell set.
-	for _, cellID := range asm.Cells {
-		cellSet[cellID] = struct{}{}
-	}
-
-	return true
-}
-
-// contractIDFromPath extracts a contract ID from a file path under contracts/.
-// It takes everything between "contracts/" and the filename, strips the trailing
-// slash, and joins with dots.
-// Example: "contracts/http/auth/login/v1/contract.yaml" -> "http.auth.login.v1".
-func (ts *TargetSelector) contractIDFromPath(f string) string {
-	// Remove the "contracts/" prefix.
-	rest := strings.TrimPrefix(f, "contracts/")
-	if rest == "" || rest == f {
-		return ""
-	}
-
-	// Get the directory part (remove the filename).
-	dir := path.Dir(rest)
-	if dir == "." || dir == "" {
-		return ""
-	}
-
-	// Replace slashes with dots to form the contract ID.
-	return strings.ReplaceAll(dir, "/", ".")
+	return false
 }
 
 func pathWithin(file, dir string) bool {

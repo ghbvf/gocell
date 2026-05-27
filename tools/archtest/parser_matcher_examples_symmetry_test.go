@@ -1,6 +1,6 @@
 // INVARIANT: PARSER-MATCHER-EXAMPLES-SYMMETRY-01
 //
-// Every match{Kind}YAML function in kernel/metadata/parser.go must accept both
+// Every match{Kind}YAML function in kernel/metadata/locator_conventional.go must accept both
 // the root form (<root>/<kind>/...) and the examples form
 // (examples/*/<kind>/...). The archtest uses typed AST const evaluation to walk
 // each matcher body (and its directly-called package-private helper functions
@@ -74,17 +74,25 @@ import (
 	"testing"
 )
 
-// matcherRootSegment maps each match*YAML function name to the expected root
-// segment literal for the non-examples form. E.g. matchAssemblyYAML → "assemblies".
+// matcherRootSegment maps each match*Path function name (in
+// kernel/metadata/locator_conventional.go, post-M1 Locator funnel) to the
+// expected root segment literal for the non-examples form. E.g.
+// matchAssemblyPath → "assemblies". Before M1 these matchers lived in
+// kernel/metadata/locator_conventional.go as match*YAML; the rename + file move
+// accompanied the LOCATOR-DISCOVERY-FUNNEL-01 refactor (#1082).
 var matcherRootSegment = map[string]string{
-	"matchCellYAML":     "cells",
-	"matchSliceYAML":    "cells",
-	"matchContractYAML": "contracts",
-	"matchJourneyYAML":  "journeys",
-	"matchAssemblyYAML": "assemblies",
+	"matchCellPath":     "cells",
+	"matchSlicePath":    "cells",
+	"matchContractPath": "contracts",
+	"matchJourneyPath":  "journeys",
+	"matchAssemblyPath": "assemblies",
 }
 
-var matchYAMLFuncRE = regexp.MustCompile(`^match.+YAML$`)
+var matchYAMLFuncRE = regexp.MustCompile(`^match.+Path$`)
+
+// matcherFile is the path of the file inside kernel/metadata that hosts
+// the match*Path matchers after the M1 Locator funnel refactor.
+const matcherFile = "kernel/metadata/locator_conventional.go"
 
 // matcherAndCalleeBodies returns the function body block-statements that should
 // be inspected for blind-spot probes — the matcher itself plus its direct
@@ -121,7 +129,7 @@ func matcherAndCalleeBodies(file *ast.File, matcher *ast.FuncDecl) []*ast.BlockS
 }
 
 // TestParserMatcherExamplesSymmetry01 asserts that every match*YAML function in
-// kernel/metadata/parser.go includes both "examples" AND its kind root segment
+// kernel/metadata/locator_conventional.go includes both "examples" AND its kind root segment
 // (e.g. "assemblies") in the parts[0] comparison set — either directly in the
 // matcher body or in the package-private helper functions called directly from it.
 //
@@ -147,7 +155,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 		// We need this to look up helper bodies when a matcher delegates to one.
 		parserFuncs := make(map[string]*ast.FuncDecl)
 		for _, f := range p.Files {
-			if p.Rel(f) != "kernel/metadata/parser.go" {
+			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -201,7 +209,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 		}
 
 		for _, f := range p.Files {
-			if p.Rel(f) != "kernel/metadata/parser.go" {
+			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -243,7 +251,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 		r, found := results[funcName]
 		if !found {
 			t.Errorf("INVARIANT PARSER-MATCHER-EXAMPLES-SYMMETRY-01 violated: "+
-				"matcher %s not found in kernel/metadata/parser.go", funcName)
+				"matcher %s not found in kernel/metadata/locator_conventional.go", funcName)
 			continue
 		}
 		if !r.foundRoot {
@@ -268,7 +276,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 			return nil
 		}
 		for _, f := range p.Files {
-			if p.Rel(f) != "kernel/metadata/parser.go" {
+			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -314,7 +322,7 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 			return nil
 		}
 		for _, f := range p.Files {
-			if p.Rel(f) != "kernel/metadata/parser.go" {
+			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -387,7 +395,7 @@ func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 			return nil
 		}
 		for _, f := range p.Files {
-			if p.Rel(f) != "kernel/metadata/parser.go" {
+			if p.Rel(f) != "kernel/metadata/locator_conventional.go" {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {

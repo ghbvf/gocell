@@ -12,6 +12,11 @@ import (
 // targetsProject returns a ProjectMeta for impact-analysis tests.
 // 2 cells, 3 slices (some with contractUsages), 2 contracts, 2 journeys, 1 assembly.
 func targetsProject() *metadata.ProjectMeta {
+	// File fields are populated so targets.matchSliceFromCellsPath /
+	// matchFromJourneyPath / matchFromAssemblyPath / contractPathMatches
+	// can resolve changed file paths against parsed metadata. After M1
+	// (#1082)'s Locator funnel, TargetSelector no longer falls back to
+	// path-prefix derivation when File is empty.
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			metadatatest.CellIDAccessCore: {
@@ -19,12 +24,14 @@ func targetsProject() *metadata.ProjectMeta {
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				File:             "cells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
 			},
 			metadatatest.CellIDAuditCore: {
 				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				File:             "cells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -35,6 +42,7 @@ func targetsProject() *metadata.ProjectMeta {
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
 				},
+				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
 			},
 			"accesscore/session-refresh": {
 				ID:            "session-refresh",
@@ -42,6 +50,7 @@ func targetsProject() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "call"},
 				},
+				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-refresh/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
@@ -49,6 +58,7 @@ func targetsProject() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe"},
 				},
+				File: "cells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -57,12 +67,16 @@ func targetsProject() *metadata.ProjectMeta {
 				Kind:      "http",
 				OwnerCell: metadatatest.CellIDAccessCore,
 				Lifecycle: "active",
+				Dir:       "contracts/http/auth/login/v1",
+				File:      "contracts/http/auth/login/v1/contract.yaml",
 			},
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
 				OwnerCell: metadatatest.CellIDAccessCore,
 				Lifecycle: "active",
+				Dir:       "contracts/event/session/created/v1",
+				File:      "contracts/event/session/created/v1/contract.yaml",
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
@@ -71,11 +85,13 @@ func targetsProject() *metadata.ProjectMeta {
 				Goal:      "SSO login flow",
 				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
+				File:      "journeys/J-ssologin.yaml",
 			},
 			"J-audit-trail": {
 				ID:    "J-audit-trail",
 				Goal:  "Audit trail for login",
 				Cells: []string{metadatatest.CellIDAuditCore},
+				File:  "journeys/J-audit-trail.yaml",
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
@@ -86,6 +102,7 @@ func targetsProject() *metadata.ProjectMeta {
 					Entrypoint: "cmd/corebundle/main.go",
 					Binary:     "corebundle",
 				},
+				File: "assemblies/corebundle/assembly.yaml",
 			},
 		},
 	}
@@ -175,10 +192,17 @@ func TestSelectFromFiles_UnknownSlice(t *testing.T) {
 		"cells/accesscore/slices/nonexistent-slice/handler.go",
 	})
 
-	assert.Nil(t, result.Slices)
-	assert.Nil(t, result.Cells)
-	assert.Nil(t, result.Journeys)
-	assert.Nil(t, result.Contracts)
+	// After M1 (#1082)'s Locator funnel, TargetSelector no longer tries to
+	// resolve a slice ID from path segments — it uses parsed
+	// SliceMeta.File / CellMeta.File directly. A file inside the accesscore
+	// cell directory therefore propagates impact to all of that cell's
+	// known slices (the safe over-selection direction), even when the
+	// specific slice path doesn't match any parsed slice. The prior fallback
+	// silently dropped the file change, which under-selected.
+	assert.Equal(t, []string{"accesscore/session-login", "accesscore/session-refresh"}, result.Slices)
+	assert.Equal(t, []string{"accesscore"}, result.Cells)
+	assert.Equal(t, []string{"J-ssologin"}, result.Journeys)
+	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
 }
 
 func TestSelectFromFiles_UnknownContract(t *testing.T) {
@@ -333,18 +357,24 @@ func TestSelectFromFiles_NonexistentJourney(t *testing.T) {
 // l0Project returns a ProjectMeta with L0 cells (with and without slices)
 // and dependent cells, plus a journey referencing the L0 cell.
 func l0Project() *metadata.ProjectMeta {
+	// File fields are populated so targets.matchSliceFromCellsPath can
+	// match changed file paths against parsed cell/slice/journey metadata
+	// — after M1 (#1082)'s Locator funnel, TargetSelector relies on parsed
+	// .File values rather than HasPrefix("cells/")-style path derivation.
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			metadatatest.CellIDSharedCrypto: {
 				ID:               metadatatest.CellIDSharedCrypto,
 				Type:             "support",
 				ConsistencyLevel: "L0",
+				File:             "cells/" + metadatatest.CellIDSharedCrypto + "/cell.yaml",
 			},
 			metadatatest.CellIDSharedValidate: {
 				ID:               metadatatest.CellIDSharedValidate,
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				// L0 cell with NO slices — tests propagation for slice-less cells.
+				File: "cells/" + metadatatest.CellIDSharedValidate + "/cell.yaml",
 			},
 			metadatatest.CellIDAccessCore: {
 				ID:               metadatatest.CellIDAccessCore,
@@ -354,12 +384,14 @@ func l0Project() *metadata.ProjectMeta {
 					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 					{Cell: metadatatest.CellIDSharedValidate, Reason: "input validation"},
 				},
+				File: "cells/" + metadatatest.CellIDAccessCore + "/cell.yaml",
 			},
 			metadatatest.CellIDAuditCore: {
 				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				// no L0 dependencies
+				File: "cells/" + metadatatest.CellIDAuditCore + "/cell.yaml",
 			},
 			metadatatest.CellIDBillingCore: {
 				ID:               metadatatest.CellIDBillingCore,
@@ -370,12 +402,14 @@ func l0Project() *metadata.ProjectMeta {
 				},
 				// NOT referenced by J-l0-test journey — used to test
 				// that journey changes don't trigger L0 propagation.
+				File: "cells/" + metadatatest.CellIDBillingCore + "/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"sharedcrypto/hasher": {
 				ID:            "hasher",
 				BelongsToCell: metadatatest.CellIDSharedCrypto,
+				File:          "cells/" + metadatatest.CellIDSharedCrypto + "/slices/hasher/slice.yaml",
 			},
 			// sharedvalidate has NO slices (intentional).
 			"accesscore/session-login": {
@@ -384,26 +418,32 @@ func l0Project() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
+				File: "cells/" + metadatatest.CellIDAccessCore + "/slices/session-login/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
 				BelongsToCell: metadatatest.CellIDAuditCore,
+				File:          "cells/" + metadatatest.CellIDAuditCore + "/slices/audit-write/slice.yaml",
 			},
 			"billingcore/payment": {
 				ID:            "payment",
 				BelongsToCell: metadatatest.CellIDBillingCore,
+				File:          "cells/" + metadatatest.CellIDBillingCore + "/slices/payment/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
 			"http.auth.login.v1": {
 				ID:   "http.auth.login.v1",
 				Kind: "http",
+				Dir:  "contracts/http/auth/login/v1",
+				File: "contracts/http/auth/login/v1/contract.yaml",
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-l0-test": {
 				ID:    "J-l0-test",
 				Cells: []string{metadatatest.CellIDSharedCrypto, metadatatest.CellIDAccessCore},
+				File:  "journeys/J-l0-test.yaml",
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},

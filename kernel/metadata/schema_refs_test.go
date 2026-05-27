@@ -15,10 +15,12 @@ func TestContractDirFromMeta(t *testing.T) {
 		ID:  "http.auth.login.v1",
 		Dir: "examples/demo/contracts/http/auth/login/v1",
 	}))
-	assert.Equal(t, "contracts/http/auth/login/v1", ContractDirFromMeta(&ContractMeta{
+	// c.Dir empty returns "" — no derive-from-ID fallback after M1 (#1082).
+	// The Locator funnel guarantees c.Dir is set during ParseFS; callers
+	// observing "" should treat it as a missing-meta condition.
+	assert.Empty(t, ContractDirFromMeta(&ContractMeta{
 		ID: "http.auth.login.v1",
 	}))
-	assert.Equal(t, "contracts/http/auth/login/v1", ContractDirFromID("http.auth.login.v1"))
 }
 
 func TestContractSchemaRefsDeterministicOrder(t *testing.T) {

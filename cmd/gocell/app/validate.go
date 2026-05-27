@@ -34,6 +34,7 @@ func runValidate(ctx context.Context, args []string) error {
 	strict := fs.Bool("strict", false, strictFlagUsage())
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,8 +53,13 @@ func runValidate(ctx context.Context, args []string) error {
 		return err
 	}
 
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return err
+	}
+
 	// Parse all metadata.
-	parser := metadata.NewParser(rootDir)
+	parser := metadata.NewParser(rootDir, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf("metadata parse: %w", err)

@@ -477,6 +477,13 @@ func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 			Binary:         spec.ID.String(),
 			DeployTemplate: deployTemplate,
 		},
+		// File is set so that metadata.AssemblyGeneratedDir derives
+		// path.Dir(File)+"/generated" => "assemblies/<id>/generated".
+		// Before M1's Locator funnel, AssemblyGeneratedDir had an internal
+		// "if no examples/ prefix then assemblies/<id>" fallback that masked
+		// missing-File; the fallback was removed so synthesized meta must
+		// declare File explicitly.
+		File: "assemblies/" + spec.ID.String() + "/assembly.yaml",
 	}
 }
 

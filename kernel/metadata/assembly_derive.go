@@ -9,17 +9,17 @@ package metadata
 
 import (
 	"log/slog"
+	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 )
 
 // AssemblyGeneratedDir returns the project-relative path of the generated/
-// directory for an assembly. For assemblies whose source file lives under
-// examples/ (e.g. examples/todoorder/assembly.yaml) the generated directory
-// follows the same prefix: examples/{id}/generated/. All other assemblies
-// use assemblies/{id}/generated/.
+// directory for an assembly. It is derived uniformly as
+// path.Dir(asm.File) + "/generated", which works for the conventional
+// assemblies/<id>/ layout, the examples/<id>/ subtree, and arbitrary paths
+// emitted by Locator manifest mode.
 //
 // This is the single source of truth shared by:
 //   - kernel/assembly Generator.appendGeneratedFiles (boundary.yaml write path)
@@ -28,12 +28,12 @@ import (
 //   - kernel/governance validateREF16 (boundary.yaml existence check)
 //
 // asm.File is the path as loaded by the parser — relative to the project
-// root, using the OS path separator. ToSlash normalises for the prefix check.
+// root, with forward slashes (parser already normalised via filepath.ToSlash).
 func AssemblyGeneratedDir(asm *AssemblyMeta) string {
-	if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
-		return filepath.ToSlash(filepath.Join("examples", asm.ID, "generated"))
+	if asm == nil || asm.File == "" {
+		return ""
 	}
-	return filepath.ToSlash(filepath.Join("assemblies", asm.ID, "generated"))
+	return path.Join(path.Dir(filepath.ToSlash(asm.File)), "generated")
 }
 
 // applyAssemblyDerivations fills derived AssemblyMeta fields after parsing.
@@ -62,7 +62,9 @@ func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) {
 		// examples/{id}/main.go to match the "identity by location" principle
 		// (helm/helm pkg/chartutil/create.go, kustomize-sigs pkg/types/kustomization.go).
 		// All other assemblies default to cmd/{id}/main.go.
-		if strings.HasPrefix(filepath.ToSlash(asm.File), "examples/") {
+		// IsExamplePath funnels the "examples/" literal through locator.go
+		// (LOCATOR-DISCOVERY-FUNNEL-01).
+		if IsExamplePath(asm.File) {
 			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("examples", asm.ID, "main.go"))
 		} else {
 			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))

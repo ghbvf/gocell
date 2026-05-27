@@ -168,10 +168,16 @@ func TestAssemblyGeneratedDir(t *testing.T) {
 			wantPath: "assemblies/corebundle/generated",
 		},
 		{
-			name:     "empty_file_defaults_to_assemblies",
+			// Post-M1 (#1082) Locator funnel: empty File is a parsing-contract
+			// violation, not a recoverable fallback condition. AssemblyGeneratedDir
+			// returns "" so callers detect the missing-meta condition rather than
+			// silently producing a derived path that could collide with real
+			// output. Scaffold (kernel/assembly.synthesizeAssemblyMeta) now sets
+			// File explicitly to "assemblies/<id>/assembly.yaml".
+			name:     "empty_file_returns_empty",
 			asmID:    "newasm",
 			file:     "",
-			wantPath: "assemblies/newasm/generated",
+			wantPath: "",
 		},
 	}
 	for _, tc := range cases {

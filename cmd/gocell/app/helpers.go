@@ -2,11 +2,14 @@ package app
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // findRoot walks up from the current working directory to find the directory
@@ -53,4 +56,40 @@ func readModule(root string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module directive not found in go.mod")
+}
+
+// buildLocatorOptions translates the validate/check --layout and --manifest
+// flags into LocatorOption values for kernel/metadata.NewParser. Empty flag
+// values mean "use defaults" (auto-detect mode + .gocell/manifest.yaml path).
+//
+// CLI flag wiring is currently restricted to `gocell validate` and `gocell check`
+// (M1 #1082 scope). Other subcommands (generate / verify / export / scaffold /
+// codegen) inherit auto-detect behaviour transparently: if .gocell/manifest.yaml
+// exists at root, manifest mode kicks in without a flag.
+func buildLocatorOptions(layout, manifest string) ([]metadata.LocatorOption, error) {
+	var opts []metadata.LocatorOption
+	mode, err := metadata.ParseLocatorMode(layout)
+	if err != nil {
+		return nil, err
+	}
+	if mode != metadata.LocatorAuto {
+		opts = append(opts, metadata.WithLocatorMode(mode))
+	}
+	if manifest != "" {
+		opts = append(opts, metadata.WithManifestPath(manifest))
+	}
+	return opts, nil
+}
+
+// addLocatorFlags registers --layout and --manifest on fs and returns
+// pointers to their string values. Used by `gocell validate` and the five
+// `gocell check ...` subcommands to share a single flag schema (M1 #1082).
+func addLocatorFlags(fs *flag.FlagSet) (layout, manifestPath *string) {
+	layout = fs.String("layout", "",
+		"locator mode: empty=auto (default) | conventional | manifest. "+
+			"auto detects .gocell/manifest.yaml at root.")
+	manifestPath = fs.String("manifest", "",
+		"explicit manifest path (default: <root>/.gocell/manifest.yaml). "+
+			"Only consulted when manifest mode applies.")
+	return layout, manifestPath
 }

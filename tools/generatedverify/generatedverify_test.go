@@ -398,6 +398,9 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 			Entrypoint: "cmd/fixture/main.go",
 			Binary:     "bin/fixture",
 		},
+		// File mirrors the post-M1 (#1082) Locator-emitted path so
+		// AssemblyGeneratedDir resolves "assemblies/fixture/generated".
+		File: "assemblies/fixture/assembly.yaml",
 	}
 	return root, project
 }
@@ -537,6 +540,12 @@ func runFixture(context.Context, string, []string) error {
 			Entrypoint: "cmd/fixture/main.go",
 			Binary:     "bin/fixture",
 		},
+		// File is set so metadata.AssemblyGeneratedDir derives
+		// "assemblies/fixture/generated" (path.Dir(File)+"/generated").
+		// Before M1 (#1082), the helper had an internal fallback that
+		// defaulted to this path when File was empty; the fallback was
+		// removed when the Locator funnel made File authoritative.
+		File: "assemblies/fixture/assembly.yaml",
 	}
 	return root, project
 }

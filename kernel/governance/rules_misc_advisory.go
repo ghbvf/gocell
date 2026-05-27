@@ -55,7 +55,7 @@ func (v *Validator) validateADV01() []ValidationResult {
 	}
 
 	for _, j := range v.project.Journeys {
-		if strings.HasPrefix(journeyFile(j), "examples/") {
+		if metadata.IsExamplePath(journeyFile(j)) {
 			continue
 		}
 		if !sbJourneys[j.ID] {
