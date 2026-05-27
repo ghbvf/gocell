@@ -41,10 +41,17 @@ func WithLeaseDuration(d time.Duration) Option {
 }
 
 // withJitterSource is an internal test-only injection seam. Category: builder-noop.
-// Injects a custom jitter source (e.g. a deterministic seeded source in tests).
-// A nil source is silently ignored; the constructor's default random source is kept.
-// Not exported because jitterSource is an unexported type; callers outside
-// this package cannot construct a valid argument.
+// Injects a custom jitter source (e.g. a fixed-seed source for exact-value
+// backoff assertions in package tests). A nil source is silently ignored; the
+// constructor's default random source is kept.
+//
+// Intentionally unexported — there is no production or external consumer.
+// The default jitter is seeded from the injected clock (newDefaultJitter uses
+// clk.Now()), so external callers already get a reproducible backoff sequence
+// under a fixed FakeClock without injecting anything; only in-package tests that
+// assert exact jitter values need this seam. Exporting it would add zero-consumer
+// public API surface (and jitterSource is unexported, so the parameter type
+// would be unnameable by callers anyway).
 func withJitterSource(j jitterSource) Option {
 	return func(e *Executor) {
 		if j != nil {
