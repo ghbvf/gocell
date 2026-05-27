@@ -39,12 +39,11 @@ var _ outbox.Publisher = discardPublisher{}
 func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "memory"}
 	// Pass an empty Config; PG nil is correct in memory mode.
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err)
@@ -83,13 +82,12 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 	writer := adapterpg.NewOutboxWriter(clock.Real())
 	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
 
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		PG:               pgProvider,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err)
@@ -106,12 +104,11 @@ func TestBuildConfigCoreOpts_PGMode_BootstrapOptsShape(t *testing.T) {
 // the defense-in-depth behavior.
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err)
@@ -126,13 +123,12 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		PG:               nil, // nil provider simulates missing provisionCapabilities
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with nil PGProvider must return an error")

@@ -172,13 +172,12 @@ func TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 	// Inject a PGProvider whose DB() returns a non-*pgxpool.Pool value to
 	// trigger the pgxPoolFromProvider type-assertion failure branch.
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		PG:               capability.NewPGProvider(nil, nil, "wrong-type"),
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with wrong PG DB() type must return an error")

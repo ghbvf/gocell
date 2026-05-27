@@ -143,13 +143,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		e2ePool.DB(),
 	)
 
-	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	modResult, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
 		PG:               e2ePGProvider,
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	cellAdapterOpts := modResult.CellOptions
@@ -473,13 +472,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		e2ePool.DB(),
 	)
 
-	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	modResult, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
 		PG:               e2ePGProvider,
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	cellAdapterOpts := modResult.CellOptions

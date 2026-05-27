@@ -85,7 +85,7 @@ func (m ConfigCoreModule) Provide(
 	// 4. PG storage: consume the assembly's postgres capability provider
 	// (provisionCapabilities opened the pool before BuildApp). In memory mode
 	// shared.PG is nil and buildConfigCoreOpts takes the in-memory path.
-	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	modResult, err := buildConfigCoreOpts(shared.Clock, ConfigCoreModuleConfig{
 		Topology:         shared.Topology,
 		PG:               shared.PG,
 		Publisher:        shared.EventBus,
@@ -94,7 +94,6 @@ func (m ConfigCoreModule) Provide(
 		OnStaleCipher: func(_, _, _ string) {
 			staleCipherCounter.Inc()
 		},
-		Clock: shared.Clock,
 	})
 	if err != nil {
 		return nil, nil, nil, err

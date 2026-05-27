@@ -41,7 +41,6 @@ type ConfigCoreModuleConfig struct {
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
 	OnStaleCipher    func(key, storedKeyID, currentKeyID string)
-	Clock            clock.Clock
 }
 
 // ConfigCoreModuleResult bundles the outputs from buildConfigCoreOpts. Using a
@@ -75,10 +74,11 @@ type ConfigCoreModuleResult struct {
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
+func buildConfigCoreOpts(clk clock.Clock, cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
+	clock.MustHaveClock(clk, "corebundle.buildConfigCoreOpts")
 	switch cfg.Topology.StorageBackend {
 	case "postgres":
-		return buildConfigCorePostgresOpts(cfg)
+		return buildConfigCorePostgresOpts(clk, cfg)
 
 	case "memory":
 		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
@@ -103,7 +103,7 @@ func buildConfigCoreOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, er
 // "postgres" StorageBackend. The pool is provisioned by the assembly
 // (provisionCapabilities); this function consumes the injected capability.PGProvider —
 // it no longer opens a pool, runs preconditions, or owns the pool lifecycle.
-func buildConfigCorePostgresOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
+func buildConfigCorePostgresOpts(clk clock.Clock, cfg ConfigCoreModuleConfig) (ConfigCoreModuleResult, error) {
 	if cfg.PG == nil {
 		return ConfigCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"configcore postgres mode requires the postgres capability provider "+
@@ -116,12 +116,12 @@ func buildConfigCorePostgresOpts(cfg ConfigCoreModuleConfig) (ConfigCoreModuleRe
 	txMgr := cfg.PG.TxManager()
 	outboxWriter := cfg.PG.OutboxWriter()
 
-	relayWorker, rwErr := buildConfigCorePGRelay(db, cfg)
+	relayWorker, rwErr := buildConfigCorePGRelay(clk, db, cfg)
 	if rwErr != nil {
 		return ConfigCoreModuleResult{}, rwErr
 	}
 
-	storageOpt, storageErr := buildConfigCorePGStorage(db, cfg)
+	storageOpt, storageErr := buildConfigCorePGStorage(clk, db, cfg)
 	if storageErr != nil {
 		return ConfigCoreModuleResult{}, storageErr
 	}
@@ -168,7 +168,7 @@ func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
 // buildConfigCorePGRelay constructs the configcore PG relay with per-cell
 // pending-depth observer (cell label = "configcore", not the _runtime sentinel
 // that bootstrap auto-wire would have used).
-func buildConfigCorePGRelay(db *pgxpool.Pool, cfg ConfigCoreModuleConfig) (*outboxruntime.Relay, error) {
+func buildConfigCorePGRelay(clk clock.Clock, db *pgxpool.Pool, cfg ConfigCoreModuleConfig) (*outboxruntime.Relay, error) {
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayMetrics, rmErr := outbox.NewProviderRelayCollector(cfg.MetricsProvider, "configcore")
 	if rmErr != nil {
@@ -181,8 +181,8 @@ func buildConfigCorePGRelay(db *pgxpool.Pool, cfg ConfigCoreModuleConfig) (*outb
 		return nil, fmt.Errorf("configcore pending-depth collector: %w", pdErr)
 	}
 
-	pgStore := adapterpg.NewOutboxStore(db, cfg.Clock)
-	relayWorker := outboxruntime.NewRelay(cfg.Clock, pgStore, cfg.Publisher, relayCfg)
+	pgStore := adapterpg.NewOutboxStore(db, clk)
+	relayWorker := outboxruntime.NewRelay(clk, pgStore, cfg.Publisher, relayCfg)
 	relayWorker.WithPendingDepthObserver(pendingDepth)
 	return relayWorker, nil
 }
@@ -203,9 +203,9 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 }
 
 func buildConfigCorePGStorage(
-	db *pgxpool.Pool, cfg ConfigCoreModuleConfig,
+	clk clock.Clock, db *pgxpool.Pool, cfg ConfigCoreModuleConfig,
 ) (configcore.Option, error) {
-	storageOpt, err := configpg.WithPool(db, cfg.Clock,
+	storageOpt, err := configpg.WithPool(db, clk,
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
 	)
