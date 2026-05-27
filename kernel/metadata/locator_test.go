@@ -43,22 +43,22 @@ func TestLocator_AutoDetect(t *testing.T) {
 // are emitted for a conventional layout.
 func TestLocator_ConventionalDiscover(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cells/accesscore/cell.yaml":                                       &fstest.MapFile{Data: []byte("id: accesscore\n")},
-		"cells/accesscore/slices/login/slice.yaml":                         &fstest.MapFile{Data: []byte("id: login\n")},
-		"cells/auditcore/cell.yaml":                                        &fstest.MapFile{Data: []byte("id: auditcore\n")},
-		"contracts/http/auth/login/v1/contract.yaml":                       &fstest.MapFile{Data: []byte("id: http.auth.login.v1\n")},
-		"contracts/event/session/created/v1/contract.yaml":                 &fstest.MapFile{Data: []byte("id: event.session.created.v1\n")},
-		"journeys/J-ssologin.yaml":                                         &fstest.MapFile{Data: []byte("id: J-ssologin\n")},
-		"journeys/status-board.yaml":                                       &fstest.MapFile{Data: []byte("- journey: J-ssologin\n")},
-		"assemblies/platform/assembly.yaml":                                &fstest.MapFile{Data: []byte("id: platform\n")},
-		"actors.yaml":                                                      &fstest.MapFile{Data: []byte("- id: external\n")},
-		"examples/ssobff/cells/foo/cell.yaml":                              &fstest.MapFile{Data: []byte("id: foo\n")},
-		"examples/ssobff/cells/foo/slices/bar/slice.yaml":                  &fstest.MapFile{Data: []byte("id: bar\n")},
-		"examples/ssobff/contracts/http/x/y/v1/contract.yaml":              &fstest.MapFile{Data: []byte("id: http.x.y.v1\n")},
-		"examples/ssobff/journeys/J-flow.yaml":                             &fstest.MapFile{Data: []byte("id: J-flow\n")},
-		"examples/ssobff/assembly.yaml":                                    &fstest.MapFile{Data: []byte("id: ssobff\n")},
-		"README.md":                                                        &fstest.MapFile{Data: []byte("ignored\n")},
-		"cells/accesscore/slices/login/handler.go":                         &fstest.MapFile{Data: []byte("// ignored\n")},
+		"cells/accesscore/cell.yaml":                          &fstest.MapFile{Data: []byte("id: accesscore\n")},
+		"cells/accesscore/slices/login/slice.yaml":            &fstest.MapFile{Data: []byte("id: login\n")},
+		"cells/auditcore/cell.yaml":                           &fstest.MapFile{Data: []byte("id: auditcore\n")},
+		"contracts/http/auth/login/v1/contract.yaml":          &fstest.MapFile{Data: []byte("id: http.auth.login.v1\n")},
+		"contracts/event/session/created/v1/contract.yaml":    &fstest.MapFile{Data: []byte("id: event.session.created.v1\n")},
+		"journeys/J-ssologin.yaml":                            &fstest.MapFile{Data: []byte("id: J-ssologin\n")},
+		"journeys/status-board.yaml":                          &fstest.MapFile{Data: []byte("- journey: J-ssologin\n")},
+		"assemblies/platform/assembly.yaml":                   &fstest.MapFile{Data: []byte("id: platform\n")},
+		"actors.yaml":                                         &fstest.MapFile{Data: []byte("- id: external\n")},
+		"examples/ssobff/cells/foo/cell.yaml":                 &fstest.MapFile{Data: []byte("id: foo\n")},
+		"examples/ssobff/cells/foo/slices/bar/slice.yaml":     &fstest.MapFile{Data: []byte("id: bar\n")},
+		"examples/ssobff/contracts/http/x/y/v1/contract.yaml": &fstest.MapFile{Data: []byte("id: http.x.y.v1\n")},
+		"examples/ssobff/journeys/J-flow.yaml":                &fstest.MapFile{Data: []byte("id: J-flow\n")},
+		"examples/ssobff/assembly.yaml":                       &fstest.MapFile{Data: []byte("id: ssobff\n")},
+		"README.md":                                           &fstest.MapFile{Data: []byte("ignored\n")},
+		"cells/accesscore/slices/login/handler.go":            &fstest.MapFile{Data: []byte("// ignored\n")},
 	}
 	l, err := NewLocatorFS(fsys, WithLocatorMode(LocatorConventional))
 	if err != nil {
@@ -98,14 +98,14 @@ modules:
   - path: .
 `
 	fsys := fstest.MapFS{
-		".gocell/manifest.yaml":                    &fstest.MapFile{Data: []byte(manifest)},
-		"cells/payment/cell.yaml":                  &fstest.MapFile{Data: []byte("id: payment\n")},
-		"cells/payment/slices/charge/slice.yaml":   &fstest.MapFile{Data: []byte("id: charge\n")},
+		".gocell/manifest.yaml":                          &fstest.MapFile{Data: []byte(manifest)},
+		"cells/payment/cell.yaml":                        &fstest.MapFile{Data: []byte("id: payment\n")},
+		"cells/payment/slices/charge/slice.yaml":         &fstest.MapFile{Data: []byte("id: charge\n")},
 		"contracts/http/payment/charge/v1/contract.yaml": &fstest.MapFile{Data: []byte("id: http.payment.charge.v1\n")},
-		"journeys/J-payment.yaml":                  &fstest.MapFile{Data: []byte("id: J-payment\n")},
-		"assemblies/payment-svc/assembly.yaml":     &fstest.MapFile{Data: []byte("id: payment-svc\n")},
-		"actors.yaml":                              &fstest.MapFile{Data: []byte("- id: bank\n")},
-		"journeys/status-board.yaml":               &fstest.MapFile{Data: []byte("- journey: J-payment\n")},
+		"journeys/J-payment.yaml":                        &fstest.MapFile{Data: []byte("id: J-payment\n")},
+		"assemblies/payment-svc/assembly.yaml":           &fstest.MapFile{Data: []byte("id: payment-svc\n")},
+		"actors.yaml":                                    &fstest.MapFile{Data: []byte("- id: bank\n")},
+		"journeys/status-board.yaml":                     &fstest.MapFile{Data: []byte("- journey: J-payment\n")},
 	}
 	l, err := NewLocatorFS(fsys)
 	if err != nil {
@@ -200,9 +200,9 @@ func TestLocator_ManifestRejectsBadPaths(t *testing.T) {
 			wantSub: "actors.yaml is a workspace-level singleton",
 		},
 		{
-			name: "unsupported version",
+			name:     "unsupported version",
 			manifest: "version: v2\nmodules:\n  - path: .\n",
-			wantSub: "unsupported version",
+			wantSub:  "unsupported version",
 		},
 		{
 			name:     "empty modules",
@@ -239,9 +239,9 @@ modules:
       - "cells/skip/**"
 `
 	fsys := fstest.MapFS{
-		".gocell/manifest.yaml":    &fstest.MapFile{Data: []byte(manifest)},
-		"cells/keep/cell.yaml":     &fstest.MapFile{Data: []byte("id: keep\n")},
-		"cells/skip/cell.yaml":     &fstest.MapFile{Data: []byte("id: skip\n")},
+		".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
+		"cells/keep/cell.yaml":  &fstest.MapFile{Data: []byte("id: keep\n")},
+		"cells/skip/cell.yaml":  &fstest.MapFile{Data: []byte("id: skip\n")},
 	}
 	l, err := NewLocatorFS(fsys)
 	if err != nil {
@@ -316,5 +316,5 @@ func summariseSources(sources []MetadataSource) []string {
 // path, used to verify Locator propagates probe failures.
 type errFS struct{ err error }
 
-func (e errFS) Open(name string) (fs.File, error)    { return nil, e.err }
+func (e errFS) Open(name string) (fs.File, error)     { return nil, e.err }
 func (e errFS) Stat(name string) (fs.FileInfo, error) { return nil, e.err }

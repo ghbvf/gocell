@@ -158,7 +158,7 @@ const DefaultManifestPath = ".gocell/manifest.yaml"
 type LocatorOption func(*Locator)
 
 // WithLocatorMode overrides the auto-detected mode. Use this in CI to lock
-// the locator behaviour against accidental manifest detection.
+// the locator behavior against accidental manifest detection.
 func WithLocatorMode(m LocatorMode) LocatorOption {
 	return func(l *Locator) { l.requestedMode = m }
 }
@@ -244,7 +244,7 @@ func (l *Locator) Root() string { return l.root }
 // path-prefix literal "examples/" stays inside the Locator funnel —
 // see LOCATOR-DISCOVERY-FUNNEL-01. External-repo callers that follow
 // Manifest mode without an examples/ subtree get false uniformly,
-// which is the desired behaviour for skip-style rules that key off the
+// which is the desired behavior for skip-style rules that key off the
 // gocell self-repo's examples/ scope.
 func IsExamplePath(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "examples/")

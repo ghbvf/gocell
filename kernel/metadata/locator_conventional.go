@@ -58,7 +58,7 @@ func classifyConventionalPath(path string) (MetadataSource, bool) {
 	if cellID, ok := matchCellPath(path); ok {
 		return MetadataSource{Path: path, Kind: SourceCell, CellID: cellID}, true
 	}
-	if cellID, _, ok := matchSlicePath(path); ok {
+	if cellID, ok := matchSlicePath(path); ok {
 		return MetadataSource{Path: path, Kind: SourceSlice, CellID: cellID}, true
 	}
 	if _, ok := matchContractPath(path); ok {
@@ -93,16 +93,19 @@ func matchCellPath(path string) (string, bool) {
 }
 
 // matchSlicePath matches cells/*/slices/*/slice.yaml and
-// examples/*/cells/*/slices/*/slice.yaml. Returns (cellID, sliceID).
-func matchSlicePath(path string) (cellDir, sliceDir string, ok bool) {
+// examples/*/cells/*/slices/*/slice.yaml. Returns the cellID (== parent
+// cell directory name) when matched. sliceID is intentionally not returned
+// — parser derives the slice directory directly via path.Base(path.Dir())
+// since slice.ID is the YAML-declared id, not a path-derived identity.
+func matchSlicePath(path string) (cellDir string, ok bool) {
 	parts := splitConventionalPath(path)
 	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
-		return parts[1], parts[3], true
+		return parts[1], true
 	}
 	if len(parts) == 7 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "slices" && parts[6] == "slice.yaml" {
-		return parts[3], parts[5], true
+		return parts[3], true
 	}
-	return "", "", false
+	return "", false
 }
 
 // matchContractPath matches contracts/{kind}/{...}/contract.yaml and

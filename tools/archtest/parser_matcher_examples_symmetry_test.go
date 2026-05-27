@@ -90,10 +90,6 @@ var matcherRootSegment = map[string]string{
 
 var matchYAMLFuncRE = regexp.MustCompile(`^match.+Path$`)
 
-// matcherFile is the path of the file inside kernel/metadata that hosts
-// the match*Path matchers after the M1 Locator funnel refactor.
-const matcherFile = "kernel/metadata/locator_conventional.go"
-
 // matcherAndCalleeBodies returns the function body block-statements that should
 // be inspected for blind-spot probes — the matcher itself plus its direct
 // callees within the same file. This mirrors the scope used by the main check

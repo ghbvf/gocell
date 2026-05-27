@@ -64,7 +64,7 @@ func readModule(root string) (string, error) {
 //
 // CLI flag wiring is currently restricted to `gocell validate` and `gocell check`
 // (M1 #1082 scope). Other subcommands (generate / verify / export / scaffold /
-// codegen) inherit auto-detect behaviour transparently: if .gocell/manifest.yaml
+// codegen) inherit auto-detect behavior transparently: if .gocell/manifest.yaml
 // exists at root, manifest mode kicks in without a flag.
 func buildLocatorOptions(layout, manifest string) ([]metadata.LocatorOption, error) {
 	var opts []metadata.LocatorOption

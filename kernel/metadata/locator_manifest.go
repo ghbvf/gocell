@@ -83,6 +83,20 @@ const manifestSchemaVersion = "v1"
 // validating the schema version, module path safety, and singleton
 // uniqueness invariants.
 func loadManifest(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
+	spec, err := readManifestSpec(fsys, manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateManifestSpec(manifestPath, spec); err != nil {
+		return nil, err
+	}
+	return spec, nil
+}
+
+// readManifestSpec performs only the file IO + YAML decode steps for
+// loadManifest, keeping validation in validateManifestSpec to satisfy the
+// kernel/-layer 15-complexity budget.
+func readManifestSpec(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 	data, err := fs.ReadFile(fsys, manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
@@ -93,38 +107,55 @@ func loadManifest(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 	if err := dec.Decode(&spec); err != nil {
 		return nil, fmt.Errorf("decode manifest %s: %w", manifestPath, err)
 	}
+	return &spec, nil
+}
+
+// validateManifestSpec applies the schema-version + module-path + singleton
+// invariants. Split out from loadManifest to keep cognitive complexity below
+// the kernel/-layer 15 budget.
+func validateManifestSpec(manifestPath string, spec *ManifestSpec) error {
 	if spec.Version != manifestSchemaVersion {
-		return nil, fmt.Errorf("manifest %s: unsupported version %q (want %q)",
+		return fmt.Errorf("manifest %s: unsupported version %q (want %q)",
 			manifestPath, spec.Version, manifestSchemaVersion)
 	}
 	if len(spec.Modules) == 0 {
-		return nil, fmt.Errorf("manifest %s: at least one module entry required", manifestPath)
+		return fmt.Errorf("manifest %s: at least one module entry required", manifestPath)
 	}
 	seenPaths := make(map[string]int)
 	for i, m := range spec.Modules {
 		if err := validateManifestModulePath(m.Path); err != nil {
-			return nil, fmt.Errorf("manifest %s: modules[%d].path: %w", manifestPath, i, err)
+			return fmt.Errorf("manifest %s: modules[%d].path: %w", manifestPath, i, err)
 		}
 		normPath := path.Clean(m.Path)
 		if dup, ok := seenPaths[normPath]; ok {
-			return nil, fmt.Errorf("manifest %s: modules[%d].path %q duplicates modules[%d]",
+			return fmt.Errorf("manifest %s: modules[%d].path %q duplicates modules[%d]",
 				manifestPath, i, m.Path, dup)
 		}
 		seenPaths[normPath] = i
-		if i > 0 {
-			if m.Includes.Actors != "" {
-				return nil, fmt.Errorf("manifest %s: modules[%d].includes.actors set; "+
-					"actors.yaml is a workspace-level singleton and may only be declared on modules[0]",
-					manifestPath, i)
-			}
-			if m.Includes.StatusBoard != "" {
-				return nil, fmt.Errorf("manifest %s: modules[%d].includes.statusBoard set; "+
-					"status-board.yaml is a workspace-level singleton and may only be declared on modules[0]",
-					manifestPath, i)
-			}
+		if err := validateManifestSingleton(manifestPath, i, m); err != nil {
+			return err
 		}
 	}
-	return &spec, nil
+	return nil
+}
+
+// validateManifestSingleton rejects actors / statusBoard declarations on
+// modules other than modules[0] (the workspace root).
+func validateManifestSingleton(manifestPath string, i int, m ManifestModule) error {
+	if i == 0 {
+		return nil
+	}
+	if m.Includes.Actors != "" {
+		return fmt.Errorf("manifest %s: modules[%d].includes.actors set; "+
+			"actors.yaml is a workspace-level singleton and may only be declared on modules[0]",
+			manifestPath, i)
+	}
+	if m.Includes.StatusBoard != "" {
+		return fmt.Errorf("manifest %s: modules[%d].includes.statusBoard set; "+
+			"status-board.yaml is a workspace-level singleton and may only be declared on modules[0]",
+			manifestPath, i)
+	}
+	return nil
 }
 
 // validateManifestModulePath rejects absolute paths and any path containing
@@ -139,7 +170,7 @@ func validateManifestModulePath(p string) error {
 	}
 	for _, seg := range strings.Split(p, "/") {
 		if seg == ".." {
-			return fmt.Errorf("path escape not allowed: %s contains ..", p)
+			return fmt.Errorf("path escape not allowed: %s contains parent reference", p)
 		}
 	}
 	return nil
@@ -171,10 +202,47 @@ func (l *Locator) discoverManifest() ([]MetadataSource, error) {
 	return out, nil
 }
 
+// manifestEmission groups one set of glob patterns by destination
+// SourceKind plus an optional cell-ID derivation strategy.
+type manifestEmission struct {
+	patterns   []string
+	kind       SourceKind
+	deriveCell func(p string) string
+}
+
+// manifestModulePlan packages the per-emission plan + the singleton paths +
+// the compiled exclude set + the (already-normalised) module base path.
+// Building the plan in one place keeps discoverManifestModule itself a
+// straight three-line walk over the plan.
+type manifestModulePlan struct {
+	base            string
+	excludes        *manifestExcludeSet
+	emissions       []manifestEmission
+	actorsPath      string
+	statusBoardPath string
+	allowSingletons bool
+}
+
 // discoverManifestModule walks one manifest module: expands each include
 // pattern, classifies matching files, and applies excludes. allowSingletons
 // gates actors / status-board emission to the first module (workspace root).
 func (l *Locator) discoverManifestModule(mod ManifestModule, allowSingletons bool) ([]MetadataSource, error) {
+	plan := buildManifestModulePlan(mod, allowSingletons)
+	out, err := l.discoverManifestPlanEmissions(plan)
+	if err != nil {
+		return nil, err
+	}
+	singletons, err := l.discoverManifestPlanSingletons(plan)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, singletons...), nil
+}
+
+// buildManifestModulePlan normalises the include defaults + base path and
+// produces the per-emission plan executed by discoverManifestPlanEmissions /
+// discoverManifestPlanSingletons.
+func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestModulePlan {
 	includes := mod.Includes
 	if manifestIncludesEmpty(includes) {
 		includes = defaultManifestIncludes()
@@ -183,65 +251,119 @@ func (l *Locator) discoverManifestModule(mod ManifestModule, allowSingletons boo
 	if base == "." {
 		base = ""
 	}
-	excludes := compileManifestExcludes(base, mod.Excludes)
-	type emission struct {
-		patterns   []string
-		kind       SourceKind
-		deriveCell func(p string) string
-	}
-	plan := []emission{
-		{patterns: includes.Cells, kind: SourceCell, deriveCell: func(p string) string {
-			rel := stripBase(p, base)
-			id, _ := matchCellPath(rel)
-			return id
-		}},
-		{patterns: includes.Slices, kind: SourceSlice, deriveCell: func(p string) string {
-			rel := stripBase(p, base)
-			cellID, _, _ := matchSlicePath(rel)
-			return cellID
-		}},
-		{patterns: includes.Contracts, kind: SourceContract},
-		{patterns: includes.Journeys, kind: SourceJourney},
-		{patterns: includes.Assemblies, kind: SourceAssembly},
-	}
-	var out []MetadataSource
-	for _, em := range plan {
-		for _, g := range em.patterns {
-			matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g))
-			if err != nil {
-				return nil, fmt.Errorf("glob %s: %w", g, err)
-			}
-			for _, m := range matches {
-				if excludes.match(m) {
-					continue
-				}
-				src := MetadataSource{Path: m, Kind: em.kind}
-				if em.deriveCell != nil {
-					src.CellID = em.deriveCell(m)
-				}
-				out = append(out, src)
-			}
-		}
+	plan := manifestModulePlan{
+		base:            base,
+		excludes:        compileManifestExcludes(base, mod.Excludes),
+		allowSingletons: allowSingletons,
+		emissions: []manifestEmission{
+			{patterns: includes.Cells, kind: SourceCell, deriveCell: func(p string) string {
+				id, _ := matchCellPath(stripBase(p, base))
+				return id
+			}},
+			{patterns: includes.Slices, kind: SourceSlice, deriveCell: func(p string) string {
+				cellID, _ := matchSlicePath(stripBase(p, base))
+				return cellID
+			}},
+			{patterns: includes.Contracts, kind: SourceContract},
+			{patterns: includes.Journeys, kind: SourceJourney},
+			{patterns: includes.Assemblies, kind: SourceAssembly},
+		},
 	}
 	if allowSingletons {
 		if includes.Actors != "" {
-			full := joinManifestPath(base, includes.Actors)
-			if exists, err := fileExists(l.fsys, full); err != nil {
-				return nil, fmt.Errorf("stat actors %s: %w", full, err)
-			} else if exists && !excludes.match(full) {
-				out = append(out, MetadataSource{Path: full, Kind: SourceActors})
-			}
+			plan.actorsPath = joinManifestPath(base, includes.Actors)
 		}
 		if includes.StatusBoard != "" {
-			full := joinManifestPath(base, includes.StatusBoard)
-			if exists, err := fileExists(l.fsys, full); err != nil {
-				return nil, fmt.Errorf("stat statusBoard %s: %w", full, err)
-			} else if exists && !excludes.match(full) {
-				out = append(out, MetadataSource{Path: full, Kind: SourceStatusBoard})
+			plan.statusBoardPath = joinManifestPath(base, includes.StatusBoard)
+		}
+	}
+	return plan
+}
+
+// discoverManifestPlanEmissions runs each emission's glob expansion and
+// excludes filter, producing MetadataSources for cells / slices / contracts
+// / journeys / assemblies.
+func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]MetadataSource, error) {
+	var out []MetadataSource
+	for _, em := range plan.emissions {
+		emitted, err := l.discoverEmission(plan.base, plan.excludes, em)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, emitted...)
+	}
+	return out, nil
+}
+
+// discoverEmission expands one emission's glob patterns against l.fsys,
+// filters excludes, and emits MetadataSources with derived CellID where
+// applicable. Split out so discoverManifestPlanEmissions itself stays a
+// straight three-line walk under the kernel/-layer 15-complexity budget.
+func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
+	var out []MetadataSource
+	for _, g := range em.patterns {
+		matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g))
+		if err != nil {
+			return nil, fmt.Errorf("glob %s: %w", g, err)
+		}
+		for _, m := range matches {
+			if excludes.match(m) {
+				continue
 			}
+			src := MetadataSource{Path: m, Kind: em.kind}
+			if em.deriveCell != nil {
+				src.CellID = em.deriveCell(m)
+			}
+			out = append(out, src)
 		}
 	}
 	return out, nil
+}
+
+// discoverManifestPlanSingletons emits actors.yaml + status-board.yaml when
+// allowSingletons was set and the files exist; absent files are skipped
+// silently, errors other than not-exist surface up.
+func (l *Locator) discoverManifestPlanSingletons(plan manifestModulePlan) ([]MetadataSource, error) {
+	if !plan.allowSingletons {
+		return nil, nil
+	}
+	var out []MetadataSource
+	actors, ok, err := l.maybeManifestSingleton(plan.actorsPath, SourceActors, plan.excludes, "actors")
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		out = append(out, actors)
+	}
+	sb, ok, err := l.maybeManifestSingleton(plan.statusBoardPath, SourceStatusBoard, plan.excludes, "statusBoard")
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		out = append(out, sb)
+	}
+	return out, nil
+}
+
+// maybeManifestSingleton returns (MetadataSource, true, nil) when the
+// singleton path exists and is not excluded; (zero, false, nil) when the
+// path is empty, file is missing, or excluded; (zero, false, err) only for
+// unexpected stat errors. The triple return avoids the (nil, nil) nilnil
+// linter complaint.
+func (l *Locator) maybeManifestSingleton(
+	p string, kind SourceKind, excludes *manifestExcludeSet, label string,
+) (MetadataSource, bool, error) {
+	if p == "" {
+		return MetadataSource{}, false, nil
+	}
+	exists, err := fileExists(l.fsys, p)
+	if err != nil {
+		return MetadataSource{}, false, fmt.Errorf("stat %s %s: %w", label, p, err)
+	}
+	if !exists || excludes.match(p) {
+		return MetadataSource{}, false, nil
+	}
+	return MetadataSource{Path: p, Kind: kind}, true, nil
 }
 
 // manifestIncludesEmpty reports whether all include fields are unset.
@@ -344,30 +466,44 @@ func matchManifestPattern(pattern, name string) bool {
 // matchManifestSegments performs the recursive glob match. Supports "**" as
 // a multi-segment wildcard and falls back to path.Match for single segments.
 func matchManifestSegments(pat, name []string) bool {
-	for {
-		if len(pat) == 0 {
-			return len(name) == 0
-		}
+	for len(pat) > 0 {
 		if pat[0] == "**" {
-			rest := pat[1:]
-			if len(rest) == 0 {
-				return true
-			}
-			for i := 0; i <= len(name); i++ {
-				if matchManifestSegments(rest, name[i:]) {
-					return true
-				}
-			}
+			return matchDoubleStarTail(pat[1:], name)
+		}
+		if !consumeSingleSegment(&pat, &name) {
 			return false
 		}
-		if len(name) == 0 {
-			return false
-		}
-		matched, err := path.Match(pat[0], name[0])
-		if err != nil || !matched {
-			return false
-		}
-		pat = pat[1:]
-		name = name[1:]
 	}
+	return len(name) == 0
+}
+
+// matchDoubleStarTail handles the "**" wildcard: try matching the remaining
+// pattern against every suffix of name, including the empty suffix when
+// "**" appears at the end of the pattern.
+func matchDoubleStarTail(rest, name []string) bool {
+	if len(rest) == 0 {
+		return true
+	}
+	for i := 0; i <= len(name); i++ {
+		if matchManifestSegments(rest, name[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// consumeSingleSegment advances pat and name one segment when the leading
+// segments match path.Match. Returns false (and leaves pat / name
+// unchanged) when there is no match or name is exhausted.
+func consumeSingleSegment(pat, name *[]string) bool {
+	if len(*name) == 0 {
+		return false
+	}
+	matched, err := path.Match((*pat)[0], (*name)[0])
+	if err != nil || !matched {
+		return false
+	}
+	*pat = (*pat)[1:]
+	*name = (*name)[1:]
+	return true
 }
