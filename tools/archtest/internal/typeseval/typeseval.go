@@ -4,7 +4,7 @@
 // kernel/governance enforces stdlib-only and runtime/cells/adapters have no
 // reason to evaluate AST constants.
 //
-// The helpers cover two patterns:
+// The helpers cover three patterns:
 //
 //  1. EvaluateConstString — collapse BasicLit / Ident / SelectorExpr / BinaryExpr
 //     to their compile-time string constant value via go/types' built-in
@@ -14,6 +14,12 @@
 //     packages.Package. Both accept a `tests` flag (true loads test variant
 //     packages, including *_test.go files) and a `tags` slice (joined into
 //     -tags=a,b,c BuildFlags).
+//  3. ResolveMethodCall / ResolvePackageRef / ResolveEnclosingFunc — given a
+//     SelectorExpr / Expr / Node, return the canonical *types.Func or
+//     (pkg, symbol) identity for callee-side and caller-side checks.
+//     ResolveEnclosingFunc is the caller-side helper: walk a file's top-level
+//     FuncDecls and return the one that lexically contains the node, mapped to
+//     its *types.Func (used as callsite identity for funnel allowlists).
 //
 // ref: golang.org/x/tools/go/packages — NeedTypesInfo + constant folding
 // ref: go/types TypesInfo.Types — maps ast.Expr to TypeAndValue (incl. const)

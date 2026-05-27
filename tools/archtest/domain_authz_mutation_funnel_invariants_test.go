@@ -186,6 +186,15 @@ var authzSetterPrefixes = []string{"Set", "Mark", "Clear", "Lock", "Unlock"}
 // TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive (meta-invariant),
 // forcing the entry to be deleted in the same PR — no stale allowance.
 //
+// CI failure messages print the exact key to copy: look for
+// `direct call to domain.User.X from caller "<KEY>" not in setMutatorCallsiteAllowlist`.
+// Paste the quoted "<KEY>" verbatim into this map.
+//
+// Verified zero production CallExprs to these setters in authzmutate/ and
+// domain/ packages (PR #1196 issue #732 verification); package-level carve-outs
+// removed in this PR. The two creation-time entries are the only legitimate
+// callsites outside the authzmutate funnel.
+//
 // Test files (*_test.go) bypass this check unconditionally.
 var setMutatorCallsiteAllowlist = map[string]string{
 	"(*github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision.Provisioner).createAdminUser": "" +
@@ -433,7 +442,8 @@ func scanSetMutatorViolationsPass(
 		}
 		out = append(out, fmt.Sprintf(
 			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: direct call to domain.User.%s "+
-				"from caller %q not in setMutatorCallsiteAllowlist",
+				"from caller %q not in setMutatorCallsiteAllowlist "+
+				"(copy the quoted key verbatim into the map to allow)",
 			rel, line, targetMethod, callerID,
 		))
 	})
@@ -516,6 +526,13 @@ func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 // enclosing FuncDecl matching the allowlist. Calls outside any FuncDecl, or
 // inside non-allowlisted callers, are ignored — this counter is only used by
 // the meta-invariant to detect stale entries.
+//
+// Note: hits[callerID] accumulates across all callsites within a single
+// FuncDecl — if `Service.Create` calls SetStatus twice, hits["…Service.Create"]
+// is 2. The meta-invariant only asserts ≥1, so an entry is considered stale
+// only when ALL callsites in its FuncDecl are removed. This is intentional:
+// the allowlist tracks "this function is a legitimate caller", not "exactly N
+// callsites within this function".
 func countAllowlistHits(p *Pass, file *ast.File, targetMethod string, hits map[string]int) {
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -761,40 +778,42 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 
 // TestDomainAuthzMutation_BlindSpot_VarInitCall asserts (positively) that
 // scanSetMutatorViolationsPass fires when a setter call is inside a
-// package-level var-init expression (no enclosing FuncDecl). The RED fixture
-// for this blind-spot does NOT need to exist in the production tree — what
-// must be confirmed is the scanner's response: ResolveEnclosingFunc returns
-// (nil, false) → automatic violation, "outside any FuncDecl".
+// package-level var-init expression (no enclosing FuncDecl).
 //
-// Implementation: synthesize a *types.Info + *ast.File via the same fixture
-// helper used by typeseval tests, then run scanSetMutatorViolationsPass and
-// assert ≥ 1 violation with the "outside any FuncDecl" substring.
-//
-// This is the §6 blind-spot entry in the package godoc.
+// This is the §6 blind-spot entry in the package godoc. Implementation: load
+// the RED fixture `var_init_setstatus_red` whose package-level var init
+// invokes domain.User.SetStatus from outside any FuncDecl. The scanner must
+// emit a violation containing "outside any FuncDecl" — proving
+// ResolveEnclosingFunc → (nil, false) → automatic violation works end-to-end.
 func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
 	t.Parallel()
 
-	// Reuse the existing rbacassign RED fixture which has a top-level
-	// FuncDecl calling SetStatus — that confirms the standard violation
-	// path. The var-init bypass form is asserted by the AST shape contract
-	// of ResolveEnclosingFunc (covered in typeseval/enclosing_func_test.go
-	// TestResolveEnclosingFunc_PackageLevelVarInit_ReturnsFalse), which
-	// guarantees (nil, false) for any node outside FuncDecl. The scan loop
-	// in scanSetMutatorViolationsPass treats (nil, false) as an automatic
-	// "outside any FuncDecl" violation.
-	//
-	// Coverage chain (reverse self-check):
-	//   typeseval.ResolveEnclosingFunc returns (nil, false) for var-init
-	//     ← guaranteed by TestResolveEnclosingFunc_PackageLevelVarInit_ReturnsFalse
-	//   AND
-	//   scanSetMutatorViolationsPass treats (nil, false) as a violation
-	//     ← guaranteed by the conditional `if !ok { out = append(..., "outside any FuncDecl"); return }`
-	//   ⟹ a var-init setter call WOULD be flagged in production AST today
-	//
-	// This test docs the chain; the production-AST assertion is the
-	// allowlist-meta + Rule(a) tests above (zero hits today = invariant holds).
-	t.Log("var-init blind-spot is covered by ResolveEnclosingFunc (nil,false) → " +
-		"scanSetMutatorViolationsPass 'outside any FuncDecl' branch. " +
-		"See typeseval enclosing_func_test.go TestResolveEnclosingFunc_PackageLevelVarInit_ReturnsFalse " +
-		"for the AST-shape guarantee.")
+	var found []string
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			found = append(found,
+				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+		}
+		return nil
+	})
+
+	var hasOutsideFuncDecl bool
+	for _, v := range found {
+		t.Log(v)
+		if strings.Contains(v, "outside any FuncDecl") {
+			hasOutsideFuncDecl = true
+		}
+	}
+	assert.True(t, hasOutsideFuncDecl,
+		"var-init blind-spot RED fixture must produce ≥ 1 violation containing "+
+			"'outside any FuncDecl' — proves the scanner treats package-level "+
+			"setter calls as automatic violations when ResolveEnclosingFunc "+
+			"returns (nil, false). Got %d violation(s) without the expected substring.",
+		len(found))
 }

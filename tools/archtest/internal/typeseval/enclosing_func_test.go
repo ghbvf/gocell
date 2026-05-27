@@ -193,6 +193,42 @@ func (c *Container[T]) Show() { fmt.Println(c.v) }
 	assert.Equal(t, "Show", fn.Name())
 }
 
+func TestResolveEnclosingFunc_FuncLitInStructLiteral_ReturnsOuter(t *testing.T) {
+	// A FuncLit nested inside a struct literal (e.g. http.HandlerFunc(func() {...})
+	// assigned to a struct field) is the same lexical-containment case as a
+	// FuncLit assigned to a local variable: position is inside the outer
+	// FuncDecl, identity collapses to the outer FuncDecl.
+	src := `package fixture
+import "fmt"
+type Handler struct{ Fn func() }
+func MountHandler() {
+	_ = Handler{Fn: func() { fmt.Println("inside struct literal funclit") }}
+}
+`
+	pkg, file := buildFakePkg(t, src)
+	var target *ast.CallExpr
+	ast.Inspect(file, func(n ast.Node) bool {
+		if target != nil {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Println" {
+			target = call
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, target)
+
+	fn, ok := ResolveEnclosingFunc(pkg.TypesInfo, file, target)
+	require.True(t, ok, "FuncLit inside struct literal must resolve to outer FuncDecl")
+	assert.Equal(t, "MountHandler", fn.Name(),
+		"identity must be outer FuncDecl, not the anonymous FuncLit nested in the struct literal")
+}
+
 func TestResolveEnclosingFunc_NestedFuncLits_ReturnsOutermost(t *testing.T) {
 	// Two levels of FuncLit nesting → identity is the outermost FuncDecl.
 	src := `package fixture

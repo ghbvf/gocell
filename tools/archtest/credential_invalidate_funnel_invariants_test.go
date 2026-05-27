@@ -202,6 +202,11 @@ const (
 // callsites remain locked.
 // Allowlist keys are types.Func.FullName() values; split via string concat
 // to keep lines under the lll limit while preserving the literal key.
+//
+// CI failure messages print the exact key to copy: look for
+// `reference to credentialinvalidate.Apply from caller "<KEY>" not in
+// upstreamCallerCallsiteAllowlist`. Paste the quoted "<KEY>" verbatim into
+// this map.
 var upstreamCallerCallsiteAllowlist = map[string]string{
 	"(*github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate.Mutator).ApplyInTx": "" +
 		"primary funnel — routes all live-aggregate authz mutations",
@@ -467,12 +472,37 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // caller MUST add an explicit allowlist entry, putting the funnel surface
 // directly on the reviewer's diff.
 //
-// AI-robust grade (post #1033 + #732): Hard. The callsite-level allowlist
-// catches "wrong caller" with type-resolved (callee, caller) form-uniqueness.
-// The "missing caller" problem is closed structurally by the sealed
-// FenceToken capability proof (see package godoc + ADR §A16) — a new
-// mutator that tries to revoke without going through Invalidator.Apply
-// cannot mint a FenceToken.
+// AI-robust grade (post #1033 + #732), per ai-robust.md §"Funnel 双向锁评级":
+//
+//   - Direct-typed callsites (caller holds `*credentialinvalidate.Invalidator`
+//     as a concrete field type) — **Hard**: callsite identity is type-resolved
+//     via (ResolveMethodCall callee identity) + (ResolveEnclosingFunc caller
+//     identity); form-uniqueness applies. 4 of 5 known production callers fall
+//     into this category and ARE in upstreamCallerCallsiteAllowlist.
+//
+//   - Interface-indirection callsites (caller holds a locally-defined
+//     interface like sessionrefresh.invalidatorApplier as the field type) —
+//     **Soft for that channel**: info.Selections resolves the call to the
+//     local interface's method, NOT to credentialinvalidate.(*Invalidator).Apply,
+//     so the scanner cannot match the (targetPkg, targetMethod) filter. The
+//     only known instance is sessionrefresh.handleReuseDetected (see the
+//     comment above upstreamCallerCallsiteAllowlist for the architectural
+//     justification: testability via spy substitution).
+//
+// Per ai-robust.md the Hard-upstream / Soft-channel mix is a transitional
+// posture and requires a tracking issue for Hard-ification — gh issue #1198
+// (ARCHTEST-FUNNEL-INTERFACE-INDIRECTION-HARD). Proposed resolution:
+// introduce a `WithConcreteInvalidator(*Invalidator)` option alongside the
+// current `WithInvalidator(invalidatorApplier)`, then archtest against the
+// concrete field type. Until that lands, the Soft channel is documented and
+// the RED fixture (sessionlogin_direct_apply_red) covers all direct-typed
+// paths.
+//
+// The "missing caller" problem (a new mutator forgetting to call Apply at
+// all) is closed structurally by the sealed FenceToken capability proof
+// (see package godoc + ADR §A16) — a new mutator that tries to revoke
+// without going through Invalidator.Apply cannot mint a FenceToken,
+// independent of the interface-indirection blind spot.
 //
 // RED fixture: cells/accesscore/internal/credentialinvalidate/testdata/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
@@ -575,7 +605,8 @@ func scanUpstreamCallerViolationsPass(
 		}
 		out = append(out, fmt.Sprintf(
 			"%s:%d: %s: reference to %s.%s from caller %q not in "+
-				"upstreamCallerCallsiteAllowlist (direct call or function-value capture)",
+				"upstreamCallerCallsiteAllowlist (direct call or function-value capture) "+
+				"(copy the quoted key verbatim into the map to allow)",
 			rel, line, ruleID, filepath.Base(targetPkg), targetMethod, callerID,
 		))
 	})

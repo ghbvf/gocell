@@ -99,6 +99,12 @@ func ResolveMethodCall(info *types.Info, sel *ast.SelectorExpr) (*types.Func, bo
 // author = FuncDecl author; allowlisting the outer FuncDecl implicitly trusts
 // any FuncLit inside it).
 //
+// The signature is asymmetric to [ResolveMethodCall] / [ResolvePackageRef]
+// (which take only info + expression): the lookup iterates `file.Decls` for
+// *ast.FuncDecl, because typesInfo.Defs has no file-scope index from which to
+// recover the enclosing FuncDecl by position alone. Pass the same *ast.File
+// from `pass.Files` that produced node.
+//
 // info must come from the same packages.Load result that produced file.
 func ResolveEnclosingFunc(info *types.Info, file *ast.File, node ast.Node) (*types.Func, bool) {
 	return typeseval.ResolveEnclosingFunc(info, file, node)
