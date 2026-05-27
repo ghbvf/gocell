@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **readyz wire**: `/readyz?verbose` dependency names for 3 outbox relay probes
+  renamed from hyphen to underscore form (typed `ProbeName` funnel — see PR #1187):
+  - `outbox-relay-poll` → `outbox_relay_poll`
+  - `outbox-relay-reclaim` → `outbox_relay_reclaim`
+  - `outbox-relay-cleanup` → `outbox_relay_cleanup`
+
+  Operators with hard-coded references in Prometheus rules / Grafana dashboards /
+  alerting rules / startup-validation scripts must update. Recommended order:
+  update monitoring config first, then roll out new binary. See ADR
+  `docs/architecture/202605271100-adr-probename-sealed-funnel.md` §F1 amendment
+  §3 + `docs/ops/readyz.md` "Recent breaking changes".
+
 - **ADV-05 (dead event) reclassified `error` → `warning`** (PR for #687, M3-RULE-ENGINE):
   an active event contract with no subscribers no longer fails `gocell validate` (exit 1);
   it is now an advisory warning (exit 0), fixing the ADR-noted SeverityError

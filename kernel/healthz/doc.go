@@ -31,9 +31,20 @@
 // and HEALTHZ-TYPED-REGISTER-01 (the latter two retired because Registrar.Healthz()
 // no longer exists — calling it is a compile error).
 //
+// # Dependencies (kernel/ layer)
+//
+//   - kernel/clock — clock.Clock injected into WrapCtxSafe / watchLateOutcome
+//     for ctx-racing watcher cancellation lag observation (added by PR #1187
+//     round-3 ctxsafe.go sink; ctxSafeProbe.Check uses the clock to measure
+//     how long the inner probe ran after the outer deadline fired)
+//   - pkg/redaction — RedactAny / RedactString masking for panic payloads
+//     in ctxSafeProbe.Check recover path (prevents raw error strings with
+//     sensitive substrings from reaching slog / trace on pathological probes)
+//
 // # Layering invariants
 //
-//   - kernel/healthz has zero runtime/ or adapters/ dependencies (stdlib + pkg/errcode).
+//   - kernel/healthz depends on kernel/clock and pkg/redaction in addition to
+//     stdlib + pkg/errcode (see §Dependencies above).
 //   - Implementations are registered through Aggregator.Register only — no
 //     parallel back-channel maps. See HEALTHZ-WRITE-01.
 //
