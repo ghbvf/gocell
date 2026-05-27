@@ -128,6 +128,18 @@ var allowedPkgCtxkeysValueDeclNames = map[string]struct{}{
 	"traceParent":   {},
 	"requestID":     {},
 	"realIP":        {},
+	// Principal namespace — OAuth/OIDC identity carried as cross-service
+	// convention (actor=token "act.sub", subject="sub", tenant=multi-tenant
+	// boundary, session=server-side session binding). Not Cell-model
+	// architectural concepts (cell/slice/journey/contract live in
+	// kernel/ctxkeys); these are JWT-driven principal identity that any
+	// HTTP service in any framework conveys via similar ctx keys. Added
+	// for issue #1042 (W0 wire envelope Principal 族, mirroring the
+	// Correlation 族's pkg/ctxkeys placement).
+	"actor":   {},
+	"subject": {},
+	"tenant":  {},
+	"session": {},
 }
 
 // allowedPkgCtxkeysFuncNames is the golden allowlist of function declaration
@@ -143,6 +155,12 @@ var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 	"WithSpanID": {}, "SpanIDFrom": {},
 	"WithRequestID": {}, "RequestIDFrom": {},
 	"WithRealIP": {}, "RealIPFrom": {},
+	// Principal namespace getter/setter pairs (see allowedPkgCtxkeysValueDeclNames
+	// for rationale). issue #1042 W0.
+	"WithActor": {}, "ActorFrom": {},
+	"WithSubject": {}, "SubjectFrom": {},
+	"WithTenant": {}, "TenantFrom": {},
+	"WithSession": {}, "SessionFrom": {},
 }
 
 // allowedPkgCtxkeysTypeNames is the golden allowlist of top-level type
@@ -163,6 +181,12 @@ var allowedPkgCtxkeysKeyStringValues = map[string]struct{}{
 	"traceparent":    {},
 	"request_id":     {},
 	"real_ip":        {},
+	// Principal namespace wire string values (see allowedPkgCtxkeysValueDeclNames
+	// for rationale). issue #1042 W0.
+	"actor_id":   {},
+	"subject_id": {},
+	"tenant_id":  {},
+	"session_id": {},
 }
 
 // goldenSelfFile is the module-relative slash path of this file; used as the

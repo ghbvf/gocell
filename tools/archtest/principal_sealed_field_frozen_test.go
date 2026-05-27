@@ -159,13 +159,9 @@ func collectPrincipalSealedSymbols(file *ast.File) []string {
 		want[s] = struct{}{}
 	}
 	seen := map[string]struct{}{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if _, expected := want[fn.Name.Name]; !expected {
-			continue
+			return
 		}
 		// Receiver disambiguation: PrincipalMetadata methods land at value
 		// receiver; InjectPrincipalFromContext is a *Entry method;
@@ -173,19 +169,19 @@ func collectPrincipalSealedSymbols(file *ast.File) []string {
 		switch fn.Name.Name {
 		case "IsZero", "Validate", "RestoreToContext":
 			if !receiverIsType(fn.Recv, "PrincipalMetadata", false) {
-				continue
+				return
 			}
 		case "InjectPrincipalFromContext":
 			if !receiverIsType(fn.Recv, "Entry", true) {
-				continue
+				return
 			}
 		case "ContextPrincipal":
 			if fn.Recv != nil {
-				continue
+				return
 			}
 		}
 		seen[fn.Name.Name] = struct{}{}
-	}
+	})
 	out := make([]string, 0, len(seen))
 	for k := range seen {
 		out = append(out, k)
