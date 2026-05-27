@@ -46,12 +46,36 @@ package archtest
 // backstop for the residual "pass nil" form; it does NOT elevate any static
 // grade, and the static Hard claims above stand on (1)+(2)+(3) alone.
 //
-// UPSTREAM-CALLER-01 (rule 4) upgraded Medium → Hard once (2)+(3) closed the
-// "missing caller" hole structurally (a new mutator cannot revoke without a
-// FenceToken it cannot mint). See tools/archtest/fence_token_mint_funnel_test.go
-// for the FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
-// docs/architecture/202605101400-adr-credential-session-protocol.md §A16 for
-// the closure proof and threat-matrix re-evaluation.
+// UPSTREAM-CALLER-01 (rule 4) is mixed-grade post #1033 + #732 — split per
+// caller channel (direct-typed vs interface-routed):
+//
+//   - Direct-typed callers (4 of 5 known production sites: identitymanage
+//     Delete + changePasswordInTx, rbacassign persistChange, authzmutate
+//     ApplyInTx) hold `*credentialinvalidate.Invalidator` as a concrete
+//     field. The callsite-level allowlist + FenceToken seal (2)+(3) close
+//     these as **Hard**: a new mutator cannot revoke without a FenceToken
+//     it cannot mint, and any direct-typed reference (call or capture) outside
+//     the allowlist fails archtest. ADR §A16 closure proof applies here.
+//
+//   - Interface-routed callers (1 of 5: sessionrefresh.handleReuseDetected
+//     via the local invalidatorApplier interface, chosen for unit-test spy
+//     injection) — info.Selections resolves the call to the local interface
+//     method, NOT to credentialinvalidate.(*Invalidator).Apply, so the
+//     scanner cannot match the (targetPkg, targetMethod) filter. This
+//     channel is **Soft for archtest** (no machine verification of the
+//     enclosing FuncDecl identity), tracked by gh issue #1198
+//     (ARCHTEST-FUNNEL-INTERFACE-INDIRECTION-HARD) for Hard-ification.
+//     ADR §A16 closure proof does NOT apply here — a FenceToken is still
+//     required at runtime, but archtest cannot statically verify the caller
+//     identity. Until #1198 lands, the Soft channel is documented and the
+//     RED fixture (sessionlogin_direct_apply_red) uses a concrete
+//     *Invalidator type so all direct-typed paths remain locked.
+//
+// See tools/archtest/fence_token_mint_funnel_test.go for the
+// FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
+// docs/architecture/202605101400-adr-credential-session-protocol.md §A16
+// for the closure proof and threat-matrix re-evaluation (note: §A16
+// covers direct-typed channel only).
 //
 // Scanning tool: ResolveMethodCall + EachInSubtree[ast.SelectorExpr]. The scan
 // is form-complete — it resolves EVERY SelectorExpr (not only the Fun of a
