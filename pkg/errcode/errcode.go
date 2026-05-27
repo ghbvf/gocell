@@ -778,17 +778,20 @@ func WithInternal(details ...InternalDetail) Option {
 // list as a JSON array of {"key","value"} objects, and strips the list
 // from 5xx errors so server-side runtime context never leaks to clients.
 //
-// Construction goes exclusively through errcode.PublicAttr. The sealed
-// PublicDetail newtype (see details.go) makes the prior DETAILS-SLOG-ATTR-01
-// archtest unnecessary: map literals and slog.Any/slog.Group constructors
-// no longer compile through this signature.
+// Construction goes exclusively through the typed PublicString / PublicInt /
+// PublicBool / PublicDuration / PublicTime constructors (see details.go).
+// PublicDetail.value is a sealed marker interface, so wire-unsafe types
+// (channels, functions, NaN/Inf floats, maps, structs, pointers) are a
+// Go compile error — the prior DETAILS-SLOG-ATTR-01 archtest and the
+// MustValidateDetailsKinds runtime allowlist are both superseded by the
+// type-system invariant.
 //
 // Multiple WithDetails calls accumulate; entries append in call order.
 //
 // Example:
 //
 //	errcode.New(KindNotFound, ErrCellNotFound, "cell not found",
-//	    errcode.WithDetails(errcode.PublicAttr("cellId", id)))
+//	    errcode.WithDetails(errcode.PublicString("cellId", id)))
 func WithDetails(details ...PublicDetail) Option {
 	return func(e *Error) {
 		if len(details) == 0 {
@@ -857,10 +860,13 @@ func (e *Error) FindAttr(key string) (PublicDetail, bool) {
 // client. InternalDetails and Cause are never marshaled because they may
 // contain sensitive runtime data.
 //
-// Wire safety is enforced upstream by the sealed PublicDetail newtype:
-// callers can only construct PublicDetail via PublicAttr (see details.go),
-// so the wire-unsafe slog.Attr kinds the prior MustValidateDetailsKinds
-// validator rejected are no longer expressible through this entry point.
+// Wire safety is enforced upstream by the sealed PublicDetail newtype and
+// its sealed publicValue marker interface: callers can only construct
+// PublicDetail via the typed PublicString / PublicInt / PublicBool /
+// PublicDuration / PublicTime constructors (see details.go), so the
+// wire-unsafe kinds the prior MustValidateDetailsKinds validator rejected
+// (channels, functions, NaN/Inf floats, maps, structs, pointers) are a
+// Go compile error rather than a runtime panic.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.PublicProjection())
 }
@@ -1063,10 +1069,14 @@ func fallbackProjection(err error, surface projectionSurface) PublicError {
 	}
 }
 
-// PublicString renders err for user-facing public output. It preserves the
+// RenderPublic renders err for user-facing public output. It preserves the
 // public Code, Message, and 4xx Details, but never uses InternalDetails or
 // Cause from *Error because those may carry runtime diagnostics.
-func PublicString(err error) string {
+//
+// Distinct namespace from the typed PublicDetail constructor PublicString
+// (see details.go): one renders an error chain to text, the other constructs
+// a sealed key/value pair for WithDetails.
+func RenderPublic(err error) string {
 	if err == nil {
 		return ""
 	}
@@ -1163,12 +1173,15 @@ func appendDetail(details, detail string) string {
 	return details + ", " + detail
 }
 
-func formatPublicDetailValue(value any) string {
-	raw, err := json.Marshal(value)
+func formatPublicDetailValue(value publicValue) string {
+	if value == nil {
+		return "null"
+	}
+	raw, err := value.marshalJSONValue()
 	if err == nil {
 		return string(raw)
 	}
-	return strconv.Quote(fmt.Sprint(value))
+	return strconv.Quote(fmt.Sprint(value.rawAny()))
 }
 
 // Unwrap returns the underlying Cause, enabling errors.Is / errors.As chains.

@@ -34,7 +34,7 @@ func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 	if _, exists := r.orders[order.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"order already exists",
-			errcode.WithDetails(errcode.PublicAttr("orderId", order.ID)))
+			errcode.WithDetails(errcode.PublicString("orderId", order.ID)))
 	}
 	// Store a copy to avoid external mutation.
 	stored := *order
@@ -51,7 +51,7 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
 			"order not found",
-			errcode.WithDetails(errcode.PublicAttr("orderId", id)))
+			errcode.WithDetails(errcode.PublicString("orderId", id)))
 	}
 	// Return a copy.
 	out := *o
@@ -71,15 +71,15 @@ func (r *OrderRepository) UpdateStatus(_ context.Context, id, expectedStatus, ne
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
 			"order not found",
-			errcode.WithDetails(errcode.PublicAttr("orderId", id)))
+			errcode.WithDetails(errcode.PublicString("orderId", id)))
 	}
 	if o.Status != expectedStatus {
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"order status precondition failed",
 			errcode.WithDetails(
-				errcode.PublicAttr("orderId", id),
-				errcode.PublicAttr("expected", expectedStatus),
-				errcode.PublicAttr("actual", o.Status),
+				errcode.PublicString("orderId", id),
+				errcode.PublicString("expected", expectedStatus),
+				errcode.PublicString("actual", o.Status),
 			))
 	}
 	o.Status = newStatus

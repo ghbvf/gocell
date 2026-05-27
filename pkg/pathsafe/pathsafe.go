@@ -75,13 +75,13 @@ func WriteFileForce(realRoot, absPath string, content []byte, mode os.FileMode) 
 		// is not meaningful; require explicit realRoot from caller.
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: WriteFileForce requires non-empty realRoot",
-			errcode.WithDetails(errcode.PublicAttr("path", absPath)))
+			errcode.WithDetails(errcode.PublicString("path", absPath)))
 	}
 	targetRel, err := filepath.Rel(realRoot, absPath)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: cannot relativize path", err,
-			errcode.WithDetails(errcode.PublicAttr("path", absPath)))
+			errcode.WithDetails(errcode.PublicString("path", absPath)))
 	}
 	if _, err := ContainPath(realRoot, targetRel); err != nil {
 		return err
@@ -183,7 +183,7 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 	if filepath.IsAbs(targetRel) {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: target must be relative",
-			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
+			errcode.WithDetails(errcode.PublicString("target", targetRel)))
 	}
 
 	sep := string(filepath.Separator)
@@ -193,7 +193,7 @@ func ContainPath(realRoot, targetRel string) (string, error) {
 	if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: target escapes root",
-			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
+			errcode.WithDetails(errcode.PublicString("target", targetRel)))
 	}
 
 	// Walk existing parent components from filepath.Dir(cleanTarget) up to realRoot.
@@ -244,7 +244,7 @@ func checkSymlinkContained(symlinkPath, realRoot, targetRel, sep string) error {
 	if !strings.HasPrefix(resolved, realRoot+sep) && resolved != realRoot {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: parent symlink escapes root",
-			errcode.WithDetails(errcode.PublicAttr("target", targetRel)))
+			errcode.WithDetails(errcode.PublicString("target", targetRel)))
 	}
 	return nil
 }
@@ -270,7 +270,7 @@ func NewPlanSet(items []PlannedFile) (PlanSet, error) {
 		if _, dup := seen[f.AbsPath]; dup {
 			return PlanSet{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"pathsafe: duplicate AbsPath in plan",
-				errcode.WithDetails(errcode.PublicAttr("absPath", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicString("absPath", f.AbsPath)))
 		}
 		seen[f.AbsPath] = struct{}{}
 	}
@@ -354,13 +354,13 @@ func planContainmentPass(realRoot string, plan []PlannedFile) error {
 		if err != nil {
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"pathsafe: cannot relativize path", err,
-				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicString("path", f.AbsPath)))
 		}
 		cleanTarget := filepath.Clean(filepath.Join(realRoot, targetRel))
 		if !strings.HasPrefix(cleanTarget, realRoot+sep) && cleanTarget != realRoot {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"pathsafe: target escapes root",
-				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicString("path", f.AbsPath)))
 		}
 	}
 	return nil
@@ -392,11 +392,11 @@ func conflictPass(plan []PlannedFile) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"pathsafe: target is a symlink (rejected)",
-				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicString("path", f.AbsPath)))
 		}
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"pathsafe: file already exists",
-			errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
+			errcode.WithDetails(errcode.PublicString("path", f.AbsPath)))
 	}
 	return nil
 }
@@ -466,7 +466,7 @@ func captureOriginal(path string) (writeRecord, error) {
 	if !forceOverwriteRestorable(mode) {
 		return writeRecord{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgForceOverwriteKindGate,
-			errcode.WithDetails(errcode.PublicAttr("path", path)))
+			errcode.WithDetails(errcode.PublicString("path", path)))
 	}
 	if mode.IsRegular() {
 		// path already passed planContainmentPass + caller-side ContainPath;
@@ -542,7 +542,7 @@ func forceOverwritePreflightPass(plan []PlannedFile) error {
 		if !forceOverwriteRestorable(info.Mode()) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgForceOverwriteKindGate,
-				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)))
+				errcode.WithDetails(errcode.PublicString("path", f.AbsPath)))
 		}
 	}
 	return nil

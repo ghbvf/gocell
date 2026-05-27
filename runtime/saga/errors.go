@@ -11,7 +11,7 @@ import (
 func errDefinitionNotRegistered(definitionID idutil.SafeID) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga coordinator: definition not registered",
-		errcode.WithDetails(errcode.PublicAttr("definitionId", string(definitionID))),
+		errcode.WithDetails(errcode.PublicString("definitionId", string(definitionID))),
 	)
 }
 
@@ -26,7 +26,7 @@ func errFoldEventMismatch(instanceID idutil.SafeID, reason string) error {
 	return errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"saga coordinator: replayed events inconsistent with state machine",
 		errcode.WithDetails(
-			errcode.PublicAttr("instanceId", string(instanceID)),
+			errcode.PublicString("instanceId", string(instanceID)),
 		),
 		errcode.WithInternal(errcode.InternalAttr("_", reason)),
 	)

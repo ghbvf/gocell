@@ -99,7 +99,7 @@ func validateObservabilitySafeID(name string, id idutil.SafeID) error {
 	if err := id.Validate(); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: observability field invalid", err,
-			errcode.WithDetails(errcode.PublicAttr("field", name)))
+			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	return nil
 }

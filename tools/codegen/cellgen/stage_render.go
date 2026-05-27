@@ -76,7 +76,7 @@ func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsaf
 	if err != nil {
 		return pathsafe.PlannedFile{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: rebase derived artifact", err,
-			errcode.WithDetails(errcode.PublicAttr("artifactPath", relSlashPath)))
+			errcode.WithDetails(errcode.PublicString("artifactPath", relSlashPath)))
 	}
 	existing, readErr := os.ReadFile(absReal) //nolint:gosec // contained path under realRoot (ContainPath above); governance-gate read
 	switch {
@@ -85,7 +85,7 @@ func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsaf
 			return pathsafe.PlannedFile{}, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"scaffold stage: refusing to overwrite non-generated file "+
 					"(remove the file or move hand-written code to a sibling file (e.g., run.go or app.go in the same package), then re-run scaffold)",
-				errcode.WithDetails(errcode.PublicAttr("artifactPath", relSlashPath)))
+				errcode.WithDetails(errcode.PublicString("artifactPath", relSlashPath)))
 		}
 	case os.IsNotExist(readErr):
 		// Absent → fresh write. ForceOverwrite is still set (uniform plan
@@ -94,7 +94,7 @@ func planDerivedArtifact(realRoot, relSlashPath string, content []byte) (pathsaf
 	default:
 		return pathsafe.PlannedFile{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: stat derived artifact target", readErr,
-			errcode.WithDetails(errcode.PublicAttr("artifactPath", relSlashPath)))
+			errcode.WithDetails(errcode.PublicString("artifactPath", relSlashPath)))
 	}
 	return pathsafe.DerivedOverwrite(absReal, content), nil
 }
@@ -154,7 +154,7 @@ func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFi
 		if relErr != nil {
 			err = errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: rebase skeleton path", relErr,
-				errcode.WithDetails(errcode.PublicAttr("path", f.AbsPath)),
+				errcode.WithDetails(errcode.PublicString("path", f.AbsPath)),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stageRoot=%s", stageRoot))))
 			return "", err
 		}
@@ -226,7 +226,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: parse staged metadata", err,
-			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)),
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stageRoot=%s", stageRoot))))
 	}
 
@@ -237,7 +237,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 		if artErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: render contract artifacts", artErr,
-				errcode.WithDetails(errcode.PublicAttr("contractID", cid)),
+				errcode.WithDetails(errcode.PublicString("contractID", cid)),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stageRoot=%s", stageRoot))))
 		}
 		for _, a := range artifacts {
@@ -257,7 +257,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: render cell artifacts", err,
-			errcode.WithDetails(errcode.PublicAttr("cellID", cellID)),
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stageRoot=%s", stageRoot))))
 	}
 	for _, a := range cellArtifacts {

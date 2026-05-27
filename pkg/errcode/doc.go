@@ -8,19 +8,26 @@
 //
 //   - Message: a compile-time const literal describing the failure shape.
 //     Visible to clients in HTTP responses for both 4xx and 5xx.
-//   - Details ([]PublicDetail via WithDetails(PublicAttr(k, v))): typed
-//     runtime fields visible to clients on 4xx responses; stripped from
-//     5xx by Error.MarshalJSON.
+//   - Details ([]PublicDetail via WithDetails(PublicString(k, v) | PublicInt(k, n) | …)):
+//     typed runtime fields visible to clients on 4xx responses; stripped
+//     from 5xx by Error.MarshalJSON.
 //   - InternalDetails ([]InternalDetail via WithInternal(InternalAttr(k, v))):
 //     server-side runtime context that never appears in any HTTP response,
 //     only in slog records and traces.
 //
 // PublicDetail and InternalDetail are sealed newtypes (unexported fields)
-// so outside-package construction of either type is a Go compile error;
-// callers route through PublicAttr / InternalAttr. The const-literal
-// restriction on New/Wrap message is enforced statically by archtest
-// MESSAGE-CONST-LITERAL-01 outside this package; InternalAttr is exempt
-// and may carry fmt.Sprintf-formatted strings.
+// so outside-package struct-literal construction of either type is a Go
+// compile error. PublicDetail's value field is additionally typed as the
+// sealed publicValue marker interface so callers can only construct it via
+// the typed PublicString / PublicInt / PublicBool / PublicDuration /
+// PublicTime constructors — wire-unsafe types (channels, functions,
+// NaN/Inf floats, maps, structs, pointers) are inexpressible at compile
+// time. InternalAttr keeps an untyped any value because the entire
+// channel is server-only.
+//
+// The const-literal restriction on New/Wrap message is enforced
+// statically by archtest MESSAGE-CONST-LITERAL-01 outside this package;
+// InternalAttr is exempt and may carry fmt.Sprintf-formatted strings.
 //
 // # Assertion ctor for production panics
 //

@@ -68,13 +68,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "key"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(errcode.PublicAttr("field", "key"), errcode.PublicAttr("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "key"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		req.Key = v

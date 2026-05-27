@@ -163,7 +163,7 @@ func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 	require.True(t, errors.As(err, &ecErr))
 	bitsAttr, ok := ecErr.FindAttr("bits")
 	require.True(t, ok, "expected details to contain 'bits'")
-	assert.Equal(t, 1024, bitsAttr.Value())
+	assert.Equal(t, int64(1024), bitsAttr.Value())
 }
 
 func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
@@ -182,7 +182,7 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 	require.True(t, errors.As(err, &ecErr))
 	bitsAttr, ok := ecErr.FindAttr("bits")
 	require.True(t, ok, "expected details to contain 'bits'")
-	assert.Equal(t, 1024, bitsAttr.Value())
+	assert.Equal(t, int64(1024), bitsAttr.Value())
 	kindAttr, ok := ecErr.FindAttr("kind")
 	require.True(t, ok, "expected details to contain 'kind'")
 	assert.Equal(t, "verification", kindAttr.Value())
@@ -685,7 +685,7 @@ func TestLoadRSAKeyPairFromPEM_RejectsWeakKey(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
 	bitsAttr, ok := ecErr.FindAttr("bits")
 	require.True(t, ok, "expected details to contain 'bits'")
-	assert.Equal(t, 1024, bitsAttr.Value())
+	assert.Equal(t, int64(1024), bitsAttr.Value())
 }
 
 func generateTestKeyPairPEM(t *testing.T) (privPEM, pubPEM []byte) {

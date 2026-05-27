@@ -78,5 +78,5 @@ func ParseCellLifecycle(s string) (CellLifecycle, error) {
 	}
 	return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"invalid lifecycle phase",
-		errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 }

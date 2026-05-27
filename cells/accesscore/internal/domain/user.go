@@ -286,14 +286,14 @@ func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid status",
 			errcode.WithDetails(
-				errcode.PublicAttr("status", string(p.Status)),
+				errcode.PublicString("status", string(p.Status)),
 			))
 	}
 	if !ValidUserSource(p.Source) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid source",
 			errcode.WithDetails(
-				errcode.PublicAttr("source", string(p.Source)),
+				errcode.PublicString("source", string(p.Source)),
 			))
 	}
 	if p.AuthzEpoch <= 0 {

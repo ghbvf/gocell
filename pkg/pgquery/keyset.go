@@ -156,6 +156,6 @@ func cursorInvalid(reason string) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 		"invalid cursor; restart from first page (client should discard stored cursor)",
 		errcode.WithInternal(errcode.InternalAttr("_", reason)),
-		errcode.WithDetails(errcode.PublicAttr("reason", reason)),
+		errcode.WithDetails(errcode.PublicString("reason", reason)),
 	)
 }

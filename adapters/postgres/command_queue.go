@@ -252,7 +252,7 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 	if pgquery.IsForeignKeyViolation(insertErr) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
-			errcode.WithDetails(errcode.PublicAttr("deviceId", entry.DeviceID)))
+			errcode.WithDetails(errcode.PublicString("deviceId", entry.DeviceID)))
 	}
 	slog.Error("command_queue: pg write failed",
 		slog.String("operation", "insert"),

@@ -273,7 +273,7 @@ func validateCallerCell(callerCell string) error {
 	if !metadata.MatchCellID(callerCell) {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
 			msgCallerCellInvalid,
-			errcode.WithDetails(errcode.PublicAttr("callerCell", callerCell)))
+			errcode.WithDetails(errcode.PublicString("callerCell", callerCell)))
 	}
 	return nil
 }

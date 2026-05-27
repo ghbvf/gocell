@@ -149,7 +149,7 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	if actual != expected {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
 			"schema version mismatch",
-			errcode.WithDetails(errcode.PublicAttr("db", actual), errcode.PublicAttr("binary", expected)))
+			errcode.WithDetails(errcode.PublicInt("db", actual), errcode.PublicInt("binary", expected)))
 	}
 
 	slog.Info("schema_guard: schema version matched",
@@ -193,7 +193,7 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 	return errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
 		"schema_guard: invalid indexes detected",
 		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%d invalid index(es): %s", len(indexes), strings.Join(names, ", ")))),
-		errcode.WithDetails(errcode.PublicAttr("invalidCount", len(indexes))))
+		errcode.WithDetails(errcode.PublicInt("invalidCount", len(indexes))))
 }
 
 // VerifyExpectedShape checks that the post-migration column / table shape
@@ -605,9 +605,9 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: required column missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "column"),
-					errcode.PublicAttr("table", ec.Table),
-					errcode.PublicAttr("column", ec.Column),
+					errcode.PublicString("dimension", "column"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
 			)
@@ -617,9 +617,9 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: column type mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "column_type"),
-					errcode.PublicAttr("table", ec.Table),
-					errcode.PublicAttr("column", ec.Column),
+					errcode.PublicString("dimension", "column_type"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %q want %q", gotType, ec.Type))),
 			)
@@ -629,9 +629,9 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: column nullability mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "column_nullability"),
-					errcode.PublicAttr("table", ec.Table),
-					errcode.PublicAttr("column", ec.Column),
+					errcode.PublicString("dimension", "column_nullability"),
+					errcode.PublicString("table", ec.Table),
+					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got not_null=%v want %v", gotNotNull, ec.NotNull))),
 			)
@@ -652,9 +652,9 @@ func verifyForbiddenColumns(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: forbidden legacy column present (partial migration)",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "forbidden_column"),
-					errcode.PublicAttr("table", r.table),
-					errcode.PublicAttr("column", r.column),
+					errcode.PublicString("dimension", "forbidden_column"),
+					errcode.PublicString("table", r.table),
+					errcode.PublicString("column", r.column),
 				),
 			)
 		}
@@ -711,8 +711,8 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: primary key missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "primary_key"),
-					errcode.PublicAttr("table", pk.Table),
+					errcode.PublicString("dimension", "primary_key"),
+					errcode.PublicString("table", pk.Table),
 				),
 			)
 		}
@@ -721,8 +721,8 @@ func verifyPrimaryKeys(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: primary key column mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "primary_key"),
-					errcode.PublicAttr("table", pk.Table),
+					errcode.PublicString("dimension", "primary_key"),
+					errcode.PublicString("table", pk.Table),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %v want %v", got, pk.Columns))),
 			)
@@ -756,9 +756,9 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected index missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "index"),
-					errcode.PublicAttr("table", idx.Table),
-					errcode.PublicAttr("index", idx.Name),
+					errcode.PublicString("dimension", "index"),
+					errcode.PublicString("table", idx.Table),
+					errcode.PublicString("index", idx.Name),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
 			)
@@ -768,9 +768,9 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: index uniqueness mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "index_unique"),
-					errcode.PublicAttr("table", idx.Table),
-					errcode.PublicAttr("index", idx.Name),
+					errcode.PublicString("dimension", "index_unique"),
+					errcode.PublicString("table", idx.Table),
+					errcode.PublicString("index", idx.Name),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got unique=%v want %v", gotUnique, idx.Unique))),
 			)
@@ -827,9 +827,9 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: expected foreign key missing",
 			errcode.WithDetails(
-				errcode.PublicAttr("dimension", "foreign_key"),
-				errcode.PublicAttr("table", fk.Table),
-				errcode.PublicAttr("constraint", fk.Constraint),
+				errcode.PublicString("dimension", "foreign_key"),
+				errcode.PublicString("table", fk.Table),
+				errcode.PublicString("constraint", fk.Constraint),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
 		)
@@ -839,9 +839,9 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key references wrong table",
 			errcode.WithDetails(
-				errcode.PublicAttr("dimension", "foreign_key"),
-				errcode.PublicAttr("table", fk.Table),
-				errcode.PublicAttr("constraint", fk.Constraint),
+				errcode.PublicString("dimension", "foreign_key"),
+				errcode.PublicString("table", fk.Table),
+				errcode.PublicString("constraint", fk.Constraint),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got ref_table=%q want %q", gotRefTable, fk.RefTable))),
 		)
@@ -851,9 +851,9 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key on-delete action mismatch",
 			errcode.WithDetails(
-				errcode.PublicAttr("dimension", "foreign_key"),
-				errcode.PublicAttr("table", fk.Table),
-				errcode.PublicAttr("constraint", fk.Constraint),
+				errcode.PublicString("dimension", "foreign_key"),
+				errcode.PublicString("table", fk.Table),
+				errcode.PublicString("constraint", fk.Constraint),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got on_delete=%q want %q", gotOnDelete, fk.OnDelete))),
 		)
@@ -888,9 +888,9 @@ func verifyFKRefColumns(ctx context.Context, pool *Pool, fk expectedFK, refColsQ
 			errcode.KindInternal, ErrAdapterPGSchemaShape,
 			"schema_guard: foreign key ref columns mismatch",
 			errcode.WithDetails(
-				errcode.PublicAttr("dimension", "foreign_key"),
-				errcode.PublicAttr("table", fk.Table),
-				errcode.PublicAttr("constraint", fk.Constraint),
+				errcode.PublicString("dimension", "foreign_key"),
+				errcode.PublicString("table", fk.Table),
+				errcode.PublicString("constraint", fk.Constraint),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %v want %v", gotRefCols, fk.RefColumns))),
 		)
@@ -928,9 +928,9 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected trigger missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "trigger"),
-					errcode.PublicAttr("table", tr.Table),
-					errcode.PublicAttr("trigger", tr.Name),
+					errcode.PublicString("dimension", "trigger"),
+					errcode.PublicString("table", tr.Table),
+					errcode.PublicString("trigger", tr.Name),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(queryErrFmt, err))),
 			)
@@ -941,9 +941,9 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: trigger enabled state mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "trigger_enabled"),
-					errcode.PublicAttr("table", tr.Table),
-					errcode.PublicAttr("trigger", tr.Name),
+					errcode.PublicString("dimension", "trigger_enabled"),
+					errcode.PublicString("table", tr.Table),
+					errcode.PublicString("trigger", tr.Name),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 					"tgenabled=%q (enabled=%v) want enabled=%v",
@@ -955,9 +955,9 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: trigger function mismatch",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "trigger_function"),
-					errcode.PublicAttr("table", tr.Table),
-					errcode.PublicAttr("trigger", tr.Name),
+					errcode.PublicString("dimension", "trigger_function"),
+					errcode.PublicString("table", tr.Table),
+					errcode.PublicString("trigger", tr.Name),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got fn=%q want %q", gotFn, tr.Function))),
 			)
@@ -992,8 +992,8 @@ func verifyFunctions(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected function missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "function"),
-					errcode.PublicAttr("function", fn.Name),
+					errcode.PublicString("dimension", "function"),
+					errcode.PublicString("function", fn.Name),
 				),
 			)
 		}
@@ -1030,9 +1030,9 @@ func verifyChecks(ctx context.Context, pool *Pool) error {
 				errcode.KindInternal, ErrAdapterPGSchemaShape,
 				"schema_guard: expected check constraint missing",
 				errcode.WithDetails(
-					errcode.PublicAttr("dimension", "check"),
-					errcode.PublicAttr("table", chk.Table),
-					errcode.PublicAttr("constraint", chk.Name),
+					errcode.PublicString("dimension", "check"),
+					errcode.PublicString("table", chk.Table),
+					errcode.PublicString("constraint", chk.Name),
 				),
 			)
 		}
@@ -1105,7 +1105,7 @@ func VerifyNoInvalidIndexes(ctx context.Context, pool *Pool) error {
 	}
 	return errcode.New(errcode.KindInternal, ErrAdapterPGInvalidIndex,
 		"schema_guard: invalid indexes present at startup",
-		errcode.WithDetails(errcode.PublicAttr("count", len(indexes))),
+		errcode.WithDetails(errcode.PublicInt("count", len(indexes))),
 		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("invalid indexes: %s", strings.Join(names, ", ")))))
 }
 

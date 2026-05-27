@@ -112,7 +112,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: invalid JSON payload",
-				errcode.WithDetails(errcode.PublicAttr("slice", s.spec.name)))))
+				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
 	actorID, ok := extractActor(entry.Payload, s.spec.mode)
@@ -123,7 +123,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: event payload missing required actor identity",
-				errcode.WithDetails(errcode.PublicAttr("slice", s.spec.name)))))
+				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
 	e := &ledger.Entry{

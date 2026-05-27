@@ -97,7 +97,7 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 			err,
 			errcode.WithCategory(errcode.CategoryInfra),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s ctx canceled %s", op, identifier))),
-			errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonDeadlineExceeded)),
+			errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonDeadlineExceeded)),
 		)
 	}
 	return errcode.Wrap(
@@ -107,7 +107,7 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 		err,
 		errcode.WithCategory(errcode.CategoryInfra),
 		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s ctx canceled %s", op, identifier))),
-		errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonCanceled)),
+		errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonCanceled)),
 	)
 }
 

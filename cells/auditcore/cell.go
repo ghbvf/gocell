@@ -318,7 +318,7 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 	if !valid {
 		return errcode.New(errcode.KindInternal, errcode.ErrAuditChainBroken,
 			"auditcore: chain integrity broken on startup",
-			errcode.WithDetails(errcode.PublicAttr("first_invalid_seq", firstInvalid)))
+			errcode.WithDetails(errcode.PublicInt("first_invalid_seq", firstInvalid)))
 	}
 	c.logger.Info("auditcore: tail verify passed", slog.Int64("seq_no", tail.SeqNo))
 	return nil

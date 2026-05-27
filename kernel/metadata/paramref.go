@@ -95,7 +95,7 @@ func ResolveParamRef(
 			errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"param $ref target not found or unreadable",
 			err,
-			errcode.WithDetails(errcode.PublicAttr("param", paramName), errcode.PublicAttr("ref", param.Ref)),
+			errcode.WithDetails(errcode.PublicString("param", paramName), errcode.PublicString("ref", param.Ref)),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("param=%q ref=%q dir=%q", paramName, param.Ref, contractDir))),
 		)
 	}

@@ -199,7 +199,7 @@ func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, 1, idxAttr.Value())
+	assert.Equal(t, int64(1), idxAttr.Value())
 }
 
 func TestNoopWriter_Noop(t *testing.T) {
@@ -858,7 +858,7 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, 1, idxAttr.Value())
+	assert.Equal(t, int64(1), idxAttr.Value())
 
 	// Cause chain must remain reachable: the inner Entry.Validate failure
 	// (a *errcode.Error from kernel/outbox/entry.go) is wrapped into the
@@ -918,7 +918,7 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 
 	idxAttr, ok := ecErr.FindAttr("entry_index")
 	require.True(t, ok, "expected entry_index attribute in Details")
-	assert.Equal(t, 1, idxAttr.Value())
+	assert.Equal(t, int64(1), idxAttr.Value())
 
 	idAttr, ok := ecErr.FindAttr("entry_id")
 	require.True(t, ok, "expected entry_id attribute in Details")

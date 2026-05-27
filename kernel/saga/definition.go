@@ -67,27 +67,27 @@ func (p RetryPolicy) Validate() error {
 	if p.MaxAttempts < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxAttempts must be >= 0",
-			errcode.WithDetails(errcode.PublicAttr("maxAttempts", p.MaxAttempts)),
+			errcode.WithDetails(errcode.PublicInt("maxAttempts", p.MaxAttempts)),
 		)
 	}
 	if p.BaseInterval < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: BaseInterval must be >= 0",
-			errcode.WithDetails(errcode.PublicAttr("baseInterval", p.BaseInterval)),
+			errcode.WithDetails(errcode.PublicDuration("baseInterval", p.BaseInterval)),
 		)
 	}
 	if p.MaxInterval < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxInterval must be >= 0",
-			errcode.WithDetails(errcode.PublicAttr("maxInterval", p.MaxInterval)),
+			errcode.WithDetails(errcode.PublicDuration("maxInterval", p.MaxInterval)),
 		)
 	}
 	if p.BaseInterval > 0 && p.MaxInterval > 0 && p.MaxInterval < p.BaseInterval {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxInterval must be >= BaseInterval",
 			errcode.WithDetails(
-				errcode.PublicAttr("baseInterval", p.BaseInterval),
-				errcode.PublicAttr("maxInterval", p.MaxInterval),
+				errcode.PublicDuration("baseInterval", p.BaseInterval),
+				errcode.PublicDuration("maxInterval", p.MaxInterval),
 			),
 		)
 	}
@@ -151,25 +151,25 @@ func (d *Definition) Validate() error {
 	if err := d.ID.Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid ID",
-			errcode.WithDetails(errcode.PublicAttr("id", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("id", string(d.ID))),
 		)
 	}
 	if len(d.Steps) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: must have at least one step",
-			errcode.WithDetails(errcode.PublicAttr("definitionId", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 		)
 	}
 	if d.Timeout < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: Timeout must be >= 0",
-			errcode.WithDetails(errcode.PublicAttr("definitionId", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 		)
 	}
 	if err := d.RetryPolicy.Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid RetryPolicy",
-			errcode.WithDetails(errcode.PublicAttr("definitionId", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 			errcode.WithInternal(errcode.InternalAttr("_", err.Error())),
 		)
 	}
@@ -182,10 +182,10 @@ func (d *Definition) Validate() error {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"saga definition: duplicate step Name",
 				errcode.WithDetails(
-					errcode.PublicAttr("definitionId", string(d.ID)),
-					errcode.PublicAttr("stepName", string(step.Name)),
-					errcode.PublicAttr("firstIndex", prev),
-					errcode.PublicAttr("duplicateIndex", i),
+					errcode.PublicString("definitionId", string(d.ID)),
+					errcode.PublicString("stepName", string(step.Name)),
+					errcode.PublicInt("firstIndex", prev),
+					errcode.PublicInt("duplicateIndex", i),
 				),
 			)
 		}
@@ -201,17 +201,17 @@ func (d *Definition) Validate() error {
 func (d *Definition) validateStep(i int, step Step) error {
 	stepDetails := func() []errcode.PublicDetail {
 		return []errcode.PublicDetail{
-			errcode.PublicAttr("definitionId", string(d.ID)),
-			errcode.PublicAttr("stepIndex", i),
-			errcode.PublicAttr("stepName", string(step.Name)),
+			errcode.PublicString("definitionId", string(d.ID)),
+			errcode.PublicInt("stepIndex", i),
+			errcode.PublicString("stepName", string(step.Name)),
 		}
 	}
 	if step.Name == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: step missing Name",
 			errcode.WithDetails(
-				errcode.PublicAttr("definitionId", string(d.ID)),
-				errcode.PublicAttr("stepIndex", i),
+				errcode.PublicString("definitionId", string(d.ID)),
+				errcode.PublicInt("stepIndex", i),
 			),
 		)
 	}
@@ -280,7 +280,7 @@ func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 		if d == nil {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"saga registry: nil definition",
-				errcode.WithDetails(errcode.PublicAttr("definitionIndex", i)),
+				errcode.WithDetails(errcode.PublicInt("definitionIndex", i)),
 			)
 		}
 		if err := d.Validate(); err != nil {
@@ -289,7 +289,7 @@ func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 		if _, exists := r.defs[d.ID]; exists {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"saga registry: duplicate definition ID",
-				errcode.WithDetails(errcode.PublicAttr("definitionId", string(d.ID))),
+				errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 			)
 		}
 		r.defs[d.ID] = d

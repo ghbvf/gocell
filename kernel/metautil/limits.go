@@ -96,7 +96,7 @@ func Truncate(s string, n int) string {
 // what is structurally guarded code.
 
 func newKeyCountErr(prefix string, count int) error {
-	details := errcode.WithDetails(errcode.PublicAttr("count", count), errcode.PublicAttr("max", MaxMetadataKeys))
+	details := errcode.WithDetails(errcode.PublicInt("count", count), errcode.PublicInt("max", MaxMetadataKeys))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -110,7 +110,7 @@ func newKeyCountErr(prefix string, count int) error {
 }
 
 func newKeyLenErr(prefix, key string) error {
-	details := errcode.WithDetails(errcode.PublicAttr("length", len(key)), errcode.PublicAttr("max", MaxMetadataKeyLen))
+	details := errcode.WithDetails(errcode.PublicInt("length", len(key)), errcode.PublicInt("max", MaxMetadataKeyLen))
 	internal := errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyQuotedFmt, Truncate(key, maxInternalQuotedBytes))))
 	switch prefix {
 	case DomainOutbox:
@@ -125,7 +125,7 @@ func newKeyLenErr(prefix, key string) error {
 }
 
 func newValueLenErr(prefix, key, value string) error {
-	details := errcode.WithDetails(errcode.PublicAttr("length", len(value)), errcode.PublicAttr("max", MaxMetadataValueLen))
+	details := errcode.WithDetails(errcode.PublicInt("length", len(value)), errcode.PublicInt("max", MaxMetadataValueLen))
 	// Use distinct labels so operators can tell apart "key too long" from
 	// "value too long" by looking at the Internal field alone.
 	internal := errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s %s",
@@ -145,7 +145,7 @@ func newValueLenErr(prefix, key, value string) error {
 }
 
 func newTotalSizeErr(prefix string, total int) error {
-	details := errcode.WithDetails(errcode.PublicAttr("total", total), errcode.PublicAttr("max", MaxMetadataTotalSize))
+	details := errcode.WithDetails(errcode.PublicInt("total", total), errcode.PublicInt("max", MaxMetadataTotalSize))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

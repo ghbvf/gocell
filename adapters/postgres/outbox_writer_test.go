@@ -448,7 +448,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 		assert.Contains(t, ecErrEmptyID.Message, "must not be empty")
 		attr, found := ecErrEmptyID.FindAttr("index")
 		require.True(t, found, "expected index detail")
-		assert.Equal(t, 1, attr.Value())
+		assert.Equal(t, int64(1), attr.Value())
 		assert.Empty(t, tx.execCalls)
 	})
 
@@ -464,7 +464,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 		assert.Contains(t, ecErrZeroID.Message, "all-zeros")
 		attr, found := ecErrZeroID.FindAttr("index")
 		require.True(t, found, "expected index detail")
-		assert.Equal(t, 1, attr.Value())
+		assert.Equal(t, int64(1), attr.Value())
 		assert.Empty(t, tx.execCalls)
 	})
 }

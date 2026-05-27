@@ -363,7 +363,7 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
-			errcode.WithDetails(errcode.PublicAttr("seqNo", seq)),
+			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
 	if err != nil {
@@ -524,7 +524,7 @@ func (s *LedgerStore) verifyBaseline(ctx context.Context, ns string, fromSeq int
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: Verify baseline entry not found",
-			errcode.WithDetails(errcode.PublicAttr("baselineSeqNo", fromSeq-1)))
+			errcode.WithDetails(errcode.PublicInt("baselineSeqNo", fromSeq-1)))
 	}
 	if err != nil {
 		return "", ctxcancel.WrapOrInfra(err, "verify_baseline", ns,
@@ -574,7 +574,7 @@ func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq
 	if expectedSeq <= toSeq {
 		return false, expectedSeq, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found during Verify",
-			errcode.WithDetails(errcode.PublicAttr("missingSeqNo", expectedSeq)),
+			errcode.WithDetails(errcode.PublicInt("missingSeqNo", expectedSeq)),
 		)
 	}
 	return true, -1, nil

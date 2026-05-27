@@ -197,7 +197,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 		}
 		return errcode.New(errcode.KindInternal, ErrAdapterPGMigrate,
 			"postgres: refusing to migrate: invalid indexes detected",
-			errcode.WithDetails(errcode.PublicAttr("count", len(invalid))),
+			errcode.WithDetails(errcode.PublicInt("count", len(invalid))),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("indexes=%v", names))))
 	}
 	if _, err := m.provider.Up(ctx); err != nil {

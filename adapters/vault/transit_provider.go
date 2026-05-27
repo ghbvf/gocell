@@ -74,12 +74,12 @@ func resolveStartupTimeout() (time.Duration, error) {
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: invalid startup timeout (expected time.ParseDuration format, e.g. 45s)", err,
-			errcode.WithDetails(errcode.PublicAttr("env", startupTimeoutEnvVar)))
+			errcode.WithDetails(errcode.PublicString("env", startupTimeoutEnvVar)))
 	}
 	if d <= 0 {
 		return 0, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: startup timeout must be positive",
-			errcode.WithDetails(errcode.PublicAttr("env", startupTimeoutEnvVar)))
+			errcode.WithDetails(errcode.PublicString("env", startupTimeoutEnvVar)))
 	}
 	return d, nil
 }

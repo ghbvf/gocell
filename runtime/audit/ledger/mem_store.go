@@ -158,7 +158,7 @@ func (m *MemStore) GetBySeq(_ context.Context, seq int64) (*Entry, error) {
 	if seq < 1 || int(seq) > len(m.entries) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 			"audit ledger: entry not found",
-			errcode.WithDetails(errcode.PublicAttr("seqNo", seq)),
+			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
 	return copyEntry(m.entries[seq-1]), nil

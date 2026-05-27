@@ -246,12 +246,36 @@ type Error struct {
 }
 ```
 
-`MustValidateDetailsKinds` / `isWireSafeAttrKind` / wire-unsafe sentinels (`<UNSUPPORTED_KIND>`
-/ `<UNSUPPORTED_VALUE>`) are deleted: outside-package construction of `PublicDetail`
-is impossible in Go's type system, so the bypass paths the validators guarded no
-longer exist. JSON-marshalability remains enforced by `json.Marshal` at the wire
-boundary (errors surface as `Error.MarshalJSON` failures, caught by
-`pkg/httputil.writeErrorBody`'s sentinel fallback).
+`MustValidateDetailsKinds` / `isWireSafeAttrKind` / wire-unsafe sentinels
+(`<UNSUPPORTED_KIND>` / `<UNSUPPORTED_VALUE>`) are deleted, and so is
+`PublicAttr(key string, value any)`. Outside-package construction of
+`PublicDetail` is impossible at two axes:
+
+1. **Field shape** — both `key` and `value` are unexported, so
+   `errcode.PublicDetail{...}` cannot be written outside `pkg/errcode`.
+2. **Value type** — `PublicDetail.value` is the sealed `publicValue`
+   marker interface (unexported method `publicValue()`). Only the typed
+   wrappers `publicString` / `publicInt` / `publicBool` / `publicDuration`
+   / `publicTime` implement it, and only the typed exported constructors
+   `errcode.PublicString` / `PublicInt[T]` / `PublicBool` /
+   `PublicDuration` / `PublicTime` can produce a non-zero one.
+
+The wire-unsafe kinds the prior runtime allowlist rejected (channels,
+functions, NaN/Inf float64, maps, structs, pointers) are inexpressible
+at compile time — a Hard type-system invariant replaces a Medium
+runtime kind check. JSON-marshalability stays enforced by `json.Marshal`
+at the wire boundary as a defense-in-depth layer (a typed value that
+fails to marshal — e.g. a hypothetical future `publicXxx` impl — would
+trigger `pkg/httputil.writeErrorBody`'s sentinel fallback), but no
+currently-shipped scalar can hit that path.
+
+`float64` is intentionally excluded from the constructor surface
+because NaN/Inf are valid `float64` values yet wire-unsafe; callers
+needing fractional values must `strconv.FormatFloat` to string at the
+call site (forcing them to make the precision choice explicit).
+`uint64` is excluded for the same reason at the truncation axis — no
+GoCell callsite uses unsigned integers; future need must cast at the
+call site.
 
 ### Three-layer table revision
 
@@ -260,23 +284,34 @@ The Decision 4 channel table is restated for the new types:
 | 通道 | API | 4xx wire | 5xx wire | server-side slog |
 |------|-----|---------|---------|------------------|
 | Message | `errcode.New(kind, code, "literal", ...)` — const literal | ✓ | ✓ | ✓ |
-| Details | `WithDetails(errcode.PublicAttr("k", v))` — sealed `[]PublicDetail` | ✓ | strip → `[]` | ✓ |
-| Internal | `WithInternal(errcode.InternalAttr("k", v))` — sealed `[]InternalDetail` | ✗ | ✗ | ✓ |
+| Details | `WithDetails(errcode.PublicString \| PublicInt \| PublicBool \| PublicDuration \| PublicTime)` — sealed `[]PublicDetail` with sealed `publicValue` marker | ✓ | strip → `[]` | ✓ |
+| Internal | `WithInternal(errcode.InternalAttr("k", v))` — sealed `[]InternalDetail` (value `any`, server-only) | ✗ | ✗ | ✓ |
 
-`InternalAttr` accepts arbitrary key/value pairs (the channel is server-only;
-runtime data including `fmt.Sprintf` output flows here). For free-form
-diagnostic strings, callers may use the conventional `_` sentinel key
-(`InternalAttr("_", fmt.Sprintf(...))`) — `Error.Error()` renders a single
-`_`-keyed entry as the bare value, preserving the pre-amendment Error() output
-format.
+The Public-channel constructor set is closed: PublicDetail.value is a
+sealed marker interface so adding a new scalar kind requires (a) a new
+concrete `publicXxx` impl + typed `PublicXxx` constructor in
+`pkg/errcode/details.go`, (b) the wire schema update at
+`contracts/shared/errors/error-response-v1.schema.json`, and (c)
+extending `DETAILS-SEALED-FIELD-FROZEN-01` archtest in
+`tools/archtest/errcode_invariants_test.go`. The asymmetry between
+Public (typed-only) and Internal (untyped `any`) is intentional: the
+Internal channel never reaches the wire so wire-safety does not
+constrain accepted types; `InternalAttr` accepts arbitrary key/value
+pairs and runtime data including `fmt.Sprintf` output flows here. For
+free-form diagnostic strings, callers may use the conventional `_`
+sentinel key (`InternalAttr("_", fmt.Sprintf(...))`) — `Error.Error()`
+renders a single `_`-keyed entry as the bare value, preserving the
+pre-amendment Error() output format.
 
 ### Archtest fate
 
 | Archtest | Before | After | Rationale |
 |----------|--------|-------|-----------|
-| `DETAILS-SLOG-ATTR-01` | Medium AST scanner | **retired** | Compile-time check via sealed `WithDetails(...PublicDetail)`; wire-unsafe inputs are not expressible |
+| `DETAILS-SLOG-ATTR-01` | Medium AST scanner | **retired** | Compile-time check via sealed `WithDetails(...PublicDetail)` + sealed `publicValue` marker interface; wire-unsafe inputs (chan, func, NaN/Inf, map, struct, pointer) are not expressible through any typed constructor |
+| `DETAILS-SEALED-FIELD-FROZEN-01` | — | **new (Medium reflect lock)** | Reverse-fence the sealed shape against in-package drift: reflect-check that `PublicDetail` / `InternalDetail` keep exactly `{key, value}` unexported and that `PublicDetail.value` stays the `publicValue` marker interface. Reverse self-check on synthetic structs proves the lock has teeth. Pairs with the type-system Hard above. |
 | `MESSAGE-CONST-LITERAL-01` | Medium (typed) | Medium (unchanged) | Guards `errcode.New/Wrap` `message string` parameter — Go cannot express "const literal only" at type level; archtest remains the only enforcement |
 | `errcodeKindLiteralCarveOuts` registry + `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` | Hard | Hard (unchanged) | Carve-outs target `Message` channel, not Details / Internal |
+| `kernel/mustctor` allowlist entry `pkg/errcode.MustValidateDetailsKinds` | Medium | **removed** | The validator function was deleted with `PublicAttr(any)`; the stale allowlist entry is removed in the same PR (tools/archtest/kernel_mustctor_production_decl_test.go) |
 
 The Decision-2 sentence "archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]any`
 形式调用 `WithDetails` 的旧式代码" is **superseded by this amendment**;
@@ -286,23 +321,26 @@ references to that archtest in `.claude/rules/gocell/error-handling.md` and
 ### Known bypass: `Error.Details` is an exported field
 
 `errcode.Error.Details` ([]PublicDetail) remains an exported field, so
-external code can write `e.Details = append(e.Details, errcode.PublicAttr("k", v))`
-or replace the slice entirely with PublicDetail values constructed via the
-public PublicAttr constructor. The sealed-construction Hard claim is "no
-outside-package code can construct a non-zero PublicDetail without going
-through PublicAttr", **not** "no outside code can mutate Error.Details".
+external code can `append` to it or replace the slice entirely with
+PublicDetail values produced by the typed `errcode.PublicString` /
+`PublicInt` / `PublicBool` / `PublicDuration` / `PublicTime`
+constructors. The sealed-construction Hard claim is "no outside-package
+code can construct a non-zero PublicDetail without going through the
+typed Public* constructors", **not** "no outside code can mutate
+Error.Details".
 
-This bypass surface is **acceptable** because the wire-side 5xx Details-strip
-invariant (Error.MarshalJSON → project() → `Details = []PublicDetail{}`) is
-the canonical defense against runtime data leaking onto the wire — the
-defense is independent of append source. Tests that synthesize stress
-conditions (e.g. `pkg/httputil/response_test.go::TestEncodeErrorEnvelopeTo_*`)
-intentionally exercise this path to verify wire fail-closed.
+This bypass surface is **acceptable** because the wire-side 5xx
+Details-strip invariant (Error.MarshalJSON → project() →
+`Details = []PublicDetail{}`) is the canonical defense against runtime
+data leaking onto the wire — the defense is independent of append
+source. Tests that synthesize stress conditions
+(`pkg/httputil/response_test.go::TestEncodeErrorEnvelopeTo_*`) exercise
+this path to verify wire fail-closed.
 
 Future hardening would seal `Error.Details` via an unexported `details
-[]PublicDetail` field + read-only accessor + `addDetails(...)` mutator — but
-that requires reworking the existing field reads (test files, the 2 direct
-`Error{}` literal carve-outs in `pkg/httputil.WritePublic` /
+[]PublicDetail` field + read-only accessor + `addDetails(...)` mutator —
+but that requires reworking the existing field reads (test files, the
+2 direct `Error{}` literal carve-outs in `pkg/httputil.WritePublic` /
 `pkg/ctxcancel.WrapOrInfra`) and is out of scope for #1035.
 
 ### Why MESSAGE-CONST-LITERAL-01 does not retire
@@ -316,12 +354,23 @@ carveout registry; no scope change in this amendment.
 ### Consequences delta
 
 Positive (new):
-- **Hard sealing**: outside-package construction of `PublicDetail` /
-  `InternalDetail` is a Go compile error; one Hard type-system invariant
-  replaces one Medium AST archtest.
-- **`MustValidateDetailsKinds` deleted**: ~30 LOC of runtime validation gone,
-  no behavior change at the wire boundary (json.Marshal errors continue to
-  trigger `sentinelInternalErrorBody`).
+- **Hard sealing (two axes)**: outside-package construction of
+  `PublicDetail` / `InternalDetail` is a Go compile error (field axis);
+  PublicDetail.value is the sealed `publicValue` marker interface so
+  wire-unsafe types (chan, func, NaN/Inf, map, struct, pointer) are
+  inexpressible through any typed constructor (value-type axis). One
+  Hard type-system invariant replaces one Medium AST archtest plus the
+  prior runtime kind-allowlist (`MustValidateDetailsKinds`).
+- **4xx → 500 downgrade closed**: pre-#1035 `PublicAttr(any)` accepted
+  wire-unsafe values that surfaced at `json.Marshal` time, dropping
+  legitimate 4xx responses through the sentinel fallback to 500.
+  Typed constructors (`PublicString`, `PublicInt[T]`, `PublicBool`,
+  `PublicDuration`, `PublicTime`) make this product-visible bug
+  unreachable.
+- **`MustValidateDetailsKinds` deleted**: ~30 LOC of runtime validation
+  gone, with no behavior loss at the wire boundary — the typed
+  constructor surface is strictly narrower than the prior runtime
+  allowlist.
 
 Negative (new, accepted):
 - **`Error.InternalMessage` field renamed to `Error.InternalDetails`** with
@@ -333,3 +382,18 @@ Negative (new, accepted):
   strings now require a sentinel key. Convention is `_`; future PRs may
   introduce semantic keys (`op`, `query`, `reason`) where structure aids
   triage.
+- **`PublicAttr(any)` deleted, ~390 callsites migrated to typed
+  constructors**: each callsite picks the scalar API matching the value
+  type (`PublicString` / `PublicInt` / `PublicBool` / `PublicDuration` /
+  `PublicTime`). Migration is mechanical (single-token rename per call)
+  and was done in the same PR as the sealing.
+- **No `PublicFloat`**: fractional values must be `strconv.FormatFloat`-ed
+  to string at the call site. NaN/Inf are valid `float64` values but
+  wire-unsafe; deleting the constructor forces the precision/format
+  choice to live at the call site, not in `errcode`.
+- **`RenderPublic(err error) string` rename**: the package-level
+  pretty-printer formerly named `PublicString(err)` is renamed to
+  `RenderPublic(err)` to disambiguate from the new typed-detail
+  constructor `errcode.PublicString(key, value)`. Method
+  `(*Error).PublicString() string` is unchanged (different namespace).
+  No external callers (verified by repo grep).

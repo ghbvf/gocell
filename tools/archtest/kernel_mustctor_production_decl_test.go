@@ -117,9 +117,6 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	"runtime/auth/credentialfence": {
 		"MustHave": {},
 	},
-	"pkg/errcode": {
-		"MustValidateDetailsKinds": {},
-	},
 	// (b) codegen / sealed funnel
 	"cells/auditcore/internal/appender": {
 		"MustNewSpec": {},

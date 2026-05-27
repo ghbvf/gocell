@@ -143,7 +143,7 @@ func TestVerifyPrinter_ErrcodeUsesPublicMessage(t *testing.T) {
 				errcode.ErrZeroTestMatch,
 				"pattern matched no tests — check your YAML ref",
 				errcode.WithInternal(errcode.InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
-				errcode.WithDetails(errcode.PublicAttr("ref", "journey.J-login.auto")),
+				errcode.WithDetails(errcode.PublicString("ref", "journey.J-login.auto")),
 			),
 		},
 	}
@@ -186,7 +186,7 @@ func TestVerifyJSONPrinter_EmitsSkippedOnlyAndStructuredErrors(t *testing.T) {
 				errcode.KindNotFound,
 				errcode.ErrZeroTestMatch,
 				"pattern matched only skipped tests — replace stubs with executable checks",
-				errcode.WithDetails(errcode.PublicAttr("pattern", "^TestOnlySkip$")),
+				errcode.WithDetails(errcode.PublicString("pattern", "^TestOnlySkip$")),
 			),
 		},
 	}
@@ -218,7 +218,7 @@ func TestVerifyJSONPrinter_InternalErrcodeUsesOperatorProjection(t *testing.T) {
 				errcode.ErrTestExecution,
 				"go test execution failed: dsn=postgres://user:secret@example/db",
 				errcode.WithInternal(errcode.InternalAttr("_", "token=hunter2")),
-				errcode.WithDetails(errcode.PublicAttr("pkg", "./cells/private")),
+				errcode.WithDetails(errcode.PublicString("pkg", "./cells/private")),
 			),
 		},
 	}

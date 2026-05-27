@@ -68,7 +68,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 		if s.Statter == nil || s.System == "" {
 			return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
 				"otel messaging channel collector: statter missing System or Statter",
-				errcode.WithDetails(errcode.PublicAttr("statterIndex", i)))
+				errcode.WithDetails(errcode.PublicInt("statterIndex", i)))
 		}
 	}
 
@@ -80,7 +80,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel messaging channel collector: create counter failed", err,
-			errcode.WithDetails(errcode.PublicAttr("metric", metricNameChannelCount)))
+			errcode.WithDetails(errcode.PublicString("metric", metricNameChannelCount)))
 	}
 	chanMax, err := meter.Int64ObservableUpDownCounter(
 		metricNameChannelMax,
@@ -90,7 +90,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel messaging channel collector: create counter failed", err,
-			errcode.WithDetails(errcode.PublicAttr("metric", metricNameChannelMax)))
+			errcode.WithDetails(errcode.PublicString("metric", metricNameChannelMax)))
 	}
 
 	reg, err := meter.RegisterCallback(

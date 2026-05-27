@@ -119,19 +119,19 @@ func registerOrReuse[T prom.Collector](
 		if !errors.As(err, &are) {
 			return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 				"prometheus metric provider: register failed", err,
-				errcode.WithDetails(errcode.PublicAttr("kind", kindLabel), errcode.PublicAttr("metric", name)))
+				errcode.WithDetails(errcode.PublicString("kind", kindLabel), errcode.PublicString("metric", name)))
 		}
 		existing, castOK := are.ExistingCollector.(T)
 		if !castOK {
 			return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 				"prometheus metric provider: existing collector type mismatch", err,
-				errcode.WithDetails(errcode.PublicAttr("kind", kindLabel), errcode.PublicAttr("metric", name)))
+				errcode.WithDetails(errcode.PublicString("kind", kindLabel), errcode.PublicString("metric", name)))
 		}
 		if existingLabels := lookupLabels(existing); existingLabels != nil {
 			if !slices.Equal(existingLabels, requestedLabels) {
 				return zero, errcode.New(errcode.KindInternal, ErrAdapterPromRegister,
 					"prometheus metric provider: label name mismatch",
-					errcode.WithDetails(errcode.PublicAttr("kind", kindLabel), errcode.PublicAttr("metric", name)),
+					errcode.WithDetails(errcode.PublicString("kind", kindLabel), errcode.PublicString("metric", name)),
 					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("existing=%s requested=%s", join(existingLabels), join(requestedLabels)))))
 			}
 		}

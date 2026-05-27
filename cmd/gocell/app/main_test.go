@@ -162,7 +162,7 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 			errcode.ErrValidationFailed,
 			"invalid generated metadata",
 			errcode.WithInternal(errcode.InternalAttr("_", "token=hunter2 raw=/private/generated.yaml")),
-			errcode.WithDetails(errcode.PublicAttr("field", "cell.id")),
+			errcode.WithDetails(errcode.PublicString("field", "cell.id")),
 		)
 	})
 

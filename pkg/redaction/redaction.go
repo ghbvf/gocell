@@ -235,7 +235,7 @@ func RedactPanic(v any) string {
 //  1. Key-aware: if attr.Key names a sensitive field (per IsSensitiveKey),
 //     the value is replaced with Mask regardless of slog.Value kind. This
 //     covers the structured leak where a caller writes
-//     errcode.WithDetails(errcode.PublicAttr("password", userInput)) — the value
+//     errcode.WithDetails(errcode.PublicString("password", userInput)) — the value
 //     is a bare string, so the free-form regex in RedactString never
 //     matches, and prior to this branch the password was forwarded to slog
 //     verbatim.
@@ -252,7 +252,7 @@ func RedactPanic(v any) string {
 //
 // KindLogValuer 与 KindAny 走 passthrough 不做递归扫描，是 fail-open 设计：
 // runtime 数据进入 errcode.Error 必须经 WithDetails / WithInternal sealed
-// newtype (errcode.PublicAttr / InternalAttr)，PublicDetail.AsSlogAttr() 与
+// newtype (errcode.PublicString / InternalAttr)，PublicDetail.AsSlogAttr() 与
 // InternalDetail.AsSlogAttr() 对 string value 返回 slog.String（KindString
 // 走 RedactString 扫描），非 string value 才进入 KindAny passthrough。这是
 // 第一道防线（sealed type + AsSlogAttr KindString preference）。如未来直接

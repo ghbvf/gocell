@@ -99,8 +99,8 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 		return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold contract: --owner does not match IdentifierPattern", err,
 			errcode.WithDetails(
-				errcode.PublicAttr("flag", "--owner"),
-				errcode.PublicAttr("pattern", scaffoldid.IdentifierPattern),
+				errcode.PublicString("flag", "--owner"),
+				errcode.PublicString("pattern", scaffoldid.IdentifierPattern),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--owner value=%q pattern=%s",
 				owner, scaffoldid.IdentifierPattern))))
@@ -157,8 +157,8 @@ func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 			return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 				"scaffold journey: --cells[] entry does not match IdentifierPattern", err,
 				errcode.WithDetails(
-					errcode.PublicAttr("flag", "--cells[]"),
-					errcode.PublicAttr("pattern", scaffoldid.IdentifierPattern),
+					errcode.PublicString("flag", "--cells[]"),
+					errcode.PublicString("pattern", scaffoldid.IdentifierPattern),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
 					c, scaffoldid.IdentifierPattern))))
@@ -439,8 +439,8 @@ func scaffoldCell(root string, args []string) error {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--id does not match metadata AssemblyIDPattern", err,
 			errcode.WithDetails(
-				errcode.PublicAttr("flag", "--id"),
-				errcode.PublicAttr("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--id"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--id value=%q pattern=%s",
 				*id, metadata.AssemblyIDPattern))))
@@ -544,8 +544,8 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --id does not match AssemblyIDPattern", err,
 			errcode.WithDetails(
-				errcode.PublicAttr("flag", "--id"),
-				errcode.PublicAttr("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--id"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--id value=%q pattern=%s",
 				id, metadata.AssemblyIDPattern))))
@@ -554,8 +554,8 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --cell does not match AssemblyIDPattern", err,
 			errcode.WithDetails(
-				errcode.PublicAttr("flag", "--cell"),
-				errcode.PublicAttr("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--cell"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q pattern=%s",
 				cellID, metadata.AssemblyIDPattern))))

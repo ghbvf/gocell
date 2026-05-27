@@ -50,7 +50,7 @@ func RequireNotEmpty(code errcode.Code, fields ...NamedValue) error {
 	for _, f := range fields {
 		if f.Value == "" {
 			return errcode.New(errcode.KindInvalid, code, "validation: required field missing",
-				errcode.WithDetails(errcode.PublicAttr("field", f.Name)))
+				errcode.WithDetails(errcode.PublicString("field", f.Name)))
 		}
 	}
 	return nil

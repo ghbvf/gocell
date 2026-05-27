@@ -108,7 +108,7 @@ func (r *PGDeviceRepository) GetByID(ctx context.Context, id string) (*domain.De
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 				"device not found",
-				errcode.WithDetails(errcode.PublicAttr("deviceId", id)))
+				errcode.WithDetails(errcode.PublicString("deviceId", id)))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -267,7 +267,7 @@ func scanDevice(row pgx.Row) (*domain.Device, error) {
 	if !validDeviceStatus(status) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"device row has invalid status enum",
-			errcode.WithDetails(errcode.PublicAttr("table", "devices"), errcode.PublicAttr("column", "status")),
+			errcode.WithDetails(errcode.PublicString("table", "devices"), errcode.PublicString("column", "status")),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	d.Status = status
@@ -287,7 +287,7 @@ func scanDeviceFromRows(rows pgx.Rows) (*domain.Device, error) {
 	if !validDeviceStatus(status) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"device row has invalid status enum",
-			errcode.WithDetails(errcode.PublicAttr("table", "devices"), errcode.PublicAttr("column", "status")),
+			errcode.WithDetails(errcode.PublicString("table", "devices"), errcode.PublicString("column", "status")),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	d.Status = status

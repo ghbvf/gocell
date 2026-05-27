@@ -50,7 +50,7 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
-			errcode.WithDetails(errcode.PublicAttr("deviceId", id)))
+			errcode.WithDetails(errcode.PublicString("deviceId", id)))
 	}
 	out := *d
 	return &out, nil

@@ -127,7 +127,7 @@ func openRootDirNoFollow(realRoot string) (int, error) {
 	if err != nil {
 		return -1, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: open root for fd-walk", err,
-			errcode.WithDetails(errcode.PublicAttr("root", realRoot)))
+			errcode.WithDetails(errcode.PublicString("root", realRoot)))
 	}
 	return fd, nil
 }

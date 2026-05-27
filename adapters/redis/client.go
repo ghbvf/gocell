@@ -539,7 +539,7 @@ func mergeFailoverStringField(dst *string, incoming, name string) error {
 	if *dst != "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: conflicting Sentinel URL field values",
-			errcode.WithDetails(errcode.PublicAttr("field", name)))
+			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -552,7 +552,7 @@ func mergeFailoverIntField(dst *int, incoming int, name string) error {
 	if *dst != 0 {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: conflicting Sentinel URL field values",
-			errcode.WithDetails(errcode.PublicAttr("field", name)))
+			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -658,7 +658,7 @@ func mergeClusterStringField(dst *string, incoming, name string) error {
 	if *dst != "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: conflicting Cluster URL field values",
-			errcode.WithDetails(errcode.PublicAttr("field", name)))
+			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -669,7 +669,7 @@ func (c *Client) Health(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: health check failed", err,
-			errcode.WithDetails(errcode.PublicAttr("mode", string(c.config.Mode))))
+			errcode.WithDetails(errcode.PublicString("mode", string(c.config.Mode))))
 	}
 	return nil
 }

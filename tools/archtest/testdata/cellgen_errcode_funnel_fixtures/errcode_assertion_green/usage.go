@@ -21,7 +21,7 @@ func foo() *errcode.Error {
 
 func bar() *errcode.Error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "validation",
-		errcode.WithDetails(errcode.PublicAttr("field", "value")))
+		errcode.WithDetails(errcode.PublicString("field", "value")))
 }
 
 func baz(cause error) *errcode.Error {

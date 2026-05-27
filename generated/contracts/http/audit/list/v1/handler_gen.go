@@ -75,13 +75,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if req.ActorID != "" && len(req.ActorID) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "actorId"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "actorId"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	if len(req.ActorID) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "actorId"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "actorId"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 
@@ -89,13 +89,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if req.EventType != "" && len(req.EventType) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "eventType"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "eventType"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	if len(req.EventType) > 256 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "eventType"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "eventType"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 
@@ -103,13 +103,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if req.From != "" && len(req.From) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "from"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "from"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	if len(req.From) > 64 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "from"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "from"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 
@@ -117,13 +117,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if req.To != "" && len(req.To) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "to"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "to"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	if len(req.To) > 64 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicAttr("field", "to"), errcode.PublicAttr("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "to"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 	resp, err := h.svc.List(r.Context(), req)

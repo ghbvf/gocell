@@ -95,9 +95,9 @@ func Parse(raw string) (ScaffoldID, error) {
 		return ScaffoldID{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffoldid: identifier does not match IdentifierPattern",
 			errcode.WithDetails(
-				errcode.PublicAttr("id", raw),
-				errcode.PublicAttr("pattern", IdentifierPattern),
-				errcode.PublicAttr("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
+				errcode.PublicString("id", raw),
+				errcode.PublicString("pattern", IdentifierPattern),
+				errcode.PublicString("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
 			))
 	}
 	return ScaffoldID{value: raw}, nil

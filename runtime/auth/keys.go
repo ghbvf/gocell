@@ -30,7 +30,7 @@ func validateRSAKeySize(n int, keyKind string) error {
 	if n < MinRSAKeyBits {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"RSA key size below minimum",
-			errcode.WithDetails(errcode.PublicAttr("kind", keyKind), errcode.PublicAttr("bits", n), errcode.PublicAttr("min", MinRSAKeyBits)))
+			errcode.WithDetails(errcode.PublicString("kind", keyKind), errcode.PublicInt("bits", n), errcode.PublicInt("min", MinRSAKeyBits)))
 	}
 	return nil
 }
@@ -303,28 +303,28 @@ func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, er
 	if privPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			"jwt key env not set",
-			errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrivateKey)))
+			errcode.WithDetails(errcode.PublicString("env", EnvJWTPrivateKey)))
 	}
 
 	pubPEM := os.Getenv(EnvJWTPublicKey)
 	if pubPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			"jwt key env not set",
-			errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPublicKey)))
+			errcode.WithDetails(errcode.PublicString("env", EnvJWTPublicKey)))
 	}
 
 	privateKey, err = parseRSAPrivateKey([]byte(privPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrivateKey)))
+			err, errcode.WithDetails(errcode.PublicString("env", EnvJWTPrivateKey)))
 	}
 
 	publicKey, err = parseRSAPublicKey([]byte(pubPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPublicKey)))
+			err, errcode.WithDetails(errcode.PublicString("env", EnvJWTPublicKey)))
 	}
 
 	return privateKey, publicKey, nil
@@ -350,21 +350,21 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrevPublicKey)))
+			err, errcode.WithDetails(errcode.PublicString("env", EnvJWTPrevPublicKey)))
 	}
 
 	expiresStr := os.Getenv(EnvJWTPrevKeyExpires)
 	if expiresStr == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"prev key set without expiry",
-			errcode.WithDetails(errcode.PublicAttr("envPub", EnvJWTPrevPublicKey), errcode.PublicAttr("envExpiry", EnvJWTPrevKeyExpires)))
+			errcode.WithDetails(errcode.PublicString("envPub", EnvJWTPrevPublicKey), errcode.PublicString("envExpiry", EnvJWTPrevKeyExpires)))
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			msgJWTKeyParseFailed,
-			err, errcode.WithDetails(errcode.PublicAttr("env", EnvJWTPrevKeyExpires)))
+			err, errcode.WithDetails(errcode.PublicString("env", EnvJWTPrevKeyExpires)))
 	}
 
 	vk := VerificationKey{

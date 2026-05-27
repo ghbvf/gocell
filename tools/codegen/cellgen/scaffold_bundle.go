@@ -152,10 +152,10 @@ func validateBundleConsistencyLevel(spec ScaffoldSpec) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold bundle: cell consistencyLevel is below minimum required by bundle variants",
 			errcode.WithDetails(
-				errcode.PublicAttr("declared", spec.ConsistencyLevel),
-				errcode.PublicAttr("minimum", minLevel),
-				errcode.PublicAttr("withHTTP", withHTTP),
-				errcode.PublicAttr("withEvents", withEvents),
+				errcode.PublicString("declared", spec.ConsistencyLevel),
+				errcode.PublicString("minimum", minLevel),
+				errcode.PublicBool("withHTTP", withHTTP),
+				errcode.PublicBool("withEvents", withEvents),
 			))
 	}
 	return nil
@@ -396,7 +396,7 @@ func planBundleFiles(
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold bundle: plan path failed", err,
-			errcode.WithDetails(errcode.PublicAttr("kind", kindLabel)))
+			errcode.WithDetails(errcode.PublicString("kind", kindLabel)))
 	}
 
 	rendered, err := renderBundleSections(tpl, files, data, kindLabel)
@@ -424,8 +424,8 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold bundle: render artifact failed", err,
 				errcode.WithDetails(
-					errcode.PublicAttr("kind", kindLabel),
-					errcode.PublicAttr("artifact", f.Description),
+					errcode.PublicString("kind", kindLabel),
+					errcode.PublicString("artifact", f.Description),
 				))
 		}
 		out := buf.Bytes()
@@ -435,8 +435,8 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 					"scaffold bundle: format artifact failed", err,
 					errcode.WithDetails(
-						errcode.PublicAttr("kind", kindLabel),
-						errcode.PublicAttr("artifact", f.Name),
+						errcode.PublicString("kind", kindLabel),
+						errcode.PublicString("artifact", f.Name),
 					))
 			}
 			out = formatted
@@ -488,6 +488,6 @@ func contractBundleFiles(kind string) ([]bundleFileSpec, error) {
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold contract: unsupported kind",
-			errcode.WithDetails(errcode.PublicAttr("kind", kind)))
+			errcode.WithDetails(errcode.PublicString("kind", kind)))
 	}
 }

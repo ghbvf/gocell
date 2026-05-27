@@ -38,7 +38,7 @@ func TestNewWrapAndOptions(t *testing.T) {
 		"service unavailable",
 		cause,
 		WithInternal(InternalAttr("_", "postgres pool exhausted")),
-		WithDetails(PublicAttr("retry", true)),
+		WithDetails(PublicBool("retry", true)),
 		WithCategory(CategoryInfra),
 	)
 
@@ -209,7 +209,7 @@ func TestAssertion(t *testing.T) {
 
 func TestWithDetailsAttrs(t *testing.T) {
 	t.Run("singleAttr", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(PublicAttr("field", "name")))
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(PublicString("field", "name")))
 		require.Len(t, err.Details, 1)
 		assert.Equal(t, "field", err.Details[0].Key())
 		assert.Equal(t, "name", err.Details[0].Value())
@@ -217,9 +217,9 @@ func TestWithDetailsAttrs(t *testing.T) {
 
 	t.Run("multiOrdering", func(t *testing.T) {
 		details := []PublicDetail{
-			PublicAttr("a", "1"),
-			PublicAttr("b", 2),
-			PublicAttr("c", true),
+			PublicString("a", "1"),
+			PublicInt("b", 2),
+			PublicBool("c", true),
 		}
 		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(details...))
 		require.Len(t, err.Details, 3)
@@ -235,8 +235,8 @@ func TestWithDetailsAttrs(t *testing.T) {
 
 	t.Run("appendCumulative", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("a", "1")),
-			WithDetails(PublicAttr("b", "2")),
+			WithDetails(PublicString("a", "1")),
+			WithDetails(PublicString("b", "2")),
 		)
 		require.Len(t, err.Details, 2)
 		assert.Equal(t, "a", err.Details[0].Key())
@@ -245,7 +245,7 @@ func TestWithDetailsAttrs(t *testing.T) {
 
 	t.Run("findAttrHit", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("reason", "expired")),
+			WithDetails(PublicString("reason", "expired")),
 		)
 		d, ok := err.FindAttr("reason")
 		require.True(t, ok)
@@ -254,7 +254,7 @@ func TestWithDetailsAttrs(t *testing.T) {
 
 	t.Run("findAttrMiss", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("a", "1")),
+			WithDetails(PublicString("a", "1")),
 		)
 		_, ok := err.FindAttr("missing")
 		assert.False(t, ok)
@@ -292,7 +292,7 @@ func TestErrorMarshalJSON(t *testing.T) {
 
 	t.Run("singleAttrClient", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found",
-			WithDetails(PublicAttr("cellId", "abc")))
+			WithDetails(PublicString("cellId", "abc")))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -305,9 +305,9 @@ func TestErrorMarshalJSON(t *testing.T) {
 	t.Run("multiAttrClient", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
 			WithDetails(
-				PublicAttr("field", "name"),
-				PublicAttr("len", 0),
-				PublicAttr("required", true),
+				PublicString("field", "name"),
+				PublicInt("len", 0),
+				PublicBool("required", true),
 			))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
@@ -335,7 +335,7 @@ func TestErrorMarshalJSON(t *testing.T) {
 
 	t.Run("serverErrStripsDetails", func(t *testing.T) {
 		err := New(KindInternal, ErrInternal, "boom",
-			WithDetails(PublicAttr("dsn", "secret"), PublicAttr("retries", 3)))
+			WithDetails(PublicString("dsn", "secret"), PublicInt("retries", 3)))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -350,7 +350,7 @@ func TestErrorMarshalJSON(t *testing.T) {
 	})
 }
 
-func TestPublicString(t *testing.T) {
+func TestRenderPublic(t *testing.T) {
 	t.Run("directErrcode", func(t *testing.T) {
 		cause := errors.New("postgres://user:secret@example/db")
 		err := Wrap(
@@ -359,10 +359,10 @@ func TestPublicString(t *testing.T) {
 			"pattern matched no tests — check your YAML ref",
 			cause,
 			WithInternal(InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
-			WithDetails(PublicAttr("ref", "journey.J-login.auto")),
+			WithDetails(PublicString("ref", "journey.J-login.auto")),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
 		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
 		assert.Contains(t, got, `ref="journey.J-login.auto"`)
@@ -379,7 +379,7 @@ func TestPublicString(t *testing.T) {
 			WithInternal(InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
 		)
 
-		got := PublicString(fmt.Errorf("verify journey --active: %w", inner))
+		got := RenderPublic(fmt.Errorf("verify journey --active: %w", inner))
 		assert.Contains(t, got, "verify journey --active")
 		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
 		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
@@ -395,7 +395,7 @@ func TestPublicString(t *testing.T) {
 			WithInternal(InternalAttr("_", "token=hunter2")),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Equal(t, "[ERR_INTERNAL] internal server error", got)
 		assert.NotContains(t, got, "ERR_AUTH_ROLE_FETCH_FAILED")
 		assert.NotContains(t, got, "postgres://")
@@ -422,7 +422,7 @@ func TestPublicString(t *testing.T) {
 			ErrValidationFailed,
 			"invalid config",
 			WithInternal(InternalAttr("_", "token=first-secret")),
-			WithDetails(PublicAttr("field", "cell.id")),
+			WithDetails(PublicString("field", "cell.id")),
 		)
 		second := Wrap(
 			KindInternal,
@@ -432,7 +432,7 @@ func TestPublicString(t *testing.T) {
 			WithInternal(InternalAttr("_", "token=second-secret")),
 		)
 
-		got := PublicString(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
+		got := RenderPublic(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
 		assert.Contains(t, got, "verify generated:")
 		assert.Contains(t, got, "[ERR_VALIDATION_FAILED] invalid config")
 		assert.Contains(t, got, `field="cell.id"`)
@@ -453,10 +453,10 @@ func TestPublicString(t *testing.T) {
 			KindInvalid,
 			ErrValidationFailed,
 			"invalid config",
-			WithDetails(PublicAttr("field", "cell.id,owner\nname"), PublicAttr("limit", 2)),
+			WithDetails(PublicString("field", "cell.id,owner\nname"), PublicInt("limit", 2)),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, `field="cell.id,owner\nname"`)
 		assert.Contains(t, got, "limit=2")
 	})
@@ -467,10 +467,10 @@ func TestPublicString(t *testing.T) {
 			KindInvalid,
 			ErrValidationFailed,
 			"invalid config",
-			WithDetails(PublicAttr("timeout", time.Second), PublicAttr("at", at)),
+			WithDetails(PublicDuration("timeout", time.Second), PublicTime("at", at)),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, "timeout=1000000000")
 		assert.Contains(t, got, `at="2026-05-06T01:02:03Z"`)
 	})
@@ -481,7 +481,7 @@ func TestOperatorProjection(t *testing.T) {
 		KindInvalid,
 		ErrValidationFailed,
 		"invalid config",
-		WithDetails(PublicAttr("field", "cell.id")),
+		WithDetails(PublicString("field", "cell.id")),
 	)
 	second := New(
 		KindInternal,
@@ -509,7 +509,7 @@ func TestOperatorProjection(t *testing.T) {
 func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
 	assert.Nil(t, PublicProjection(nil))
 	assert.Nil(t, OperatorProjection(nil))
-	assert.Empty(t, PublicString(nil))
+	assert.Empty(t, RenderPublic(nil))
 	assert.Empty(t, OperatorString(nil))
 
 	publicPlain := PublicProjection(errors.New("dsn=postgres://user:secret@example/db"))
@@ -532,7 +532,7 @@ func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
 		KindInvalid,
 		ErrValidationFailed,
 		"invalid config",
-		WithDetails(PublicAttr("field", "cell.id")),
+		WithDetails(PublicString("field", "cell.id")),
 	)
 	matchedProjection := PublicProjection(errcodeAsError{target: matched})
 	require.Len(t, matchedProjection, 1)

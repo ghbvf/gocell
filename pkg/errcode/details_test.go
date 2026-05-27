@@ -3,7 +3,6 @@ package errcode
 import (
 	"encoding/json"
 	"log/slog"
-	"math"
 	"testing"
 	"time"
 
@@ -12,8 +11,8 @@ import (
 )
 
 func TestPublicDetailConstruction(t *testing.T) {
-	t.Run("publicAttrCarriesKeyValue", func(t *testing.T) {
-		d := PublicAttr("cellId", "abc-123")
+	t.Run("publicStringCarriesKeyValue", func(t *testing.T) {
+		d := PublicString("cellId", "abc-123")
 		assert.Equal(t, "cellId", d.Key())
 		assert.Equal(t, "abc-123", d.Value())
 	})
@@ -24,30 +23,19 @@ func TestPublicDetailConstruction(t *testing.T) {
 		assert.Nil(t, d.Value())
 	})
 
-	t.Run("acceptsAnyValueType", func(t *testing.T) {
-		cases := []struct {
-			name  string
-			value any
-		}{
-			{"string", "v"},
-			{"int", 42},
-			{"int64", int64(42)},
-			{"float64", 3.14},
-			{"bool", true},
-			{"duration", time.Second},
-			{"time", time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)},
-		}
-		for _, tc := range cases {
-			tc := tc
-			t.Run(tc.name, func(t *testing.T) {
-				d := PublicAttr("k", tc.value)
-				assert.Equal(t, tc.value, d.Value())
-			})
-		}
+	t.Run("typedConstructorsCoverWireSafeScalars", func(t *testing.T) {
+		assert.Equal(t, "v", PublicString("k", "v").Value())
+		assert.Equal(t, int64(42), PublicInt("k", 42).Value())
+		assert.Equal(t, int64(42), PublicInt("k", int64(42)).Value())
+		assert.Equal(t, int64(42), PublicInt("k", int32(42)).Value())
+		assert.Equal(t, true, PublicBool("k", true).Value())
+		assert.Equal(t, time.Second, PublicDuration("k", time.Second).Value())
+		ts := time.Date(2026, 5, 27, 0, 0, 0, 0, time.UTC)
+		assert.Equal(t, ts, PublicTime("k", ts).Value())
 	})
 
 	t.Run("asSlogAttr", func(t *testing.T) {
-		d := PublicAttr("k", "v")
+		d := PublicString("k", "v")
 		attr := d.AsSlogAttr()
 		assert.Equal(t, "k", attr.Key)
 		assert.Equal(t, "v", attr.Value.Any())
@@ -63,31 +51,39 @@ func TestPublicDetailMarshalJSON(t *testing.T) {
 	})
 
 	t.Run("stringValue", func(t *testing.T) {
-		d := PublicAttr("deviceId", "abc-123")
+		d := PublicString("deviceId", "abc-123")
 		raw, err := json.Marshal(d)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"key":"deviceId","value":"abc-123"}`, string(raw))
 	})
 
 	t.Run("intValue", func(t *testing.T) {
-		d := PublicAttr("retryCount", 3)
+		d := PublicInt("retryCount", 3)
 		raw, err := json.Marshal(d)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"key":"retryCount","value":3}`, string(raw))
 	})
 
 	t.Run("boolValue", func(t *testing.T) {
-		d := PublicAttr("retry", true)
+		d := PublicBool("retry", true)
 		raw, err := json.Marshal(d)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"key":"retry","value":true}`, string(raw))
 	})
 
 	t.Run("durationValueRendersAsNanoseconds", func(t *testing.T) {
-		d := PublicAttr("timeout", time.Second)
+		d := PublicDuration("timeout", time.Second)
 		raw, err := json.Marshal(d)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"key":"timeout","value":1000000000}`, string(raw))
+	})
+
+	t.Run("timeValueRendersAsRFC3339Nano", func(t *testing.T) {
+		ts := time.Date(2026, 5, 27, 12, 34, 56, 0, time.UTC)
+		d := PublicTime("at", ts)
+		raw, err := json.Marshal(d)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"key":"at","value":"2026-05-27T12:34:56Z"}`, string(raw))
 	})
 }
 
@@ -115,8 +111,8 @@ func TestInternalDetailConstruction(t *testing.T) {
 func TestWithDetailsAndWithInternalAccumulate(t *testing.T) {
 	t.Run("withDetailsAppendsAcrossCalls", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("a", 1)),
-			WithDetails(PublicAttr("b", 2), PublicAttr("c", 3)),
+			WithDetails(PublicInt("a", 1)),
+			WithDetails(PublicInt("b", 2), PublicInt("c", 3)),
 		)
 		require.Len(t, err.Details, 3)
 		assert.Equal(t, "a", err.Details[0].Key())
@@ -168,7 +164,7 @@ func TestErrorStringFormatsInternalDetails(t *testing.T) {
 func TestFindAttrReturnsPublicDetail(t *testing.T) {
 	t.Run("hitReturnsKeyAndValue", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("reason", "expired")))
+			WithDetails(PublicString("reason", "expired")))
 		d, ok := err.FindAttr("reason")
 		require.True(t, ok)
 		assert.Equal(t, "reason", d.Key())
@@ -177,7 +173,7 @@ func TestFindAttrReturnsPublicDetail(t *testing.T) {
 
 	t.Run("missReturnsZeroPublicDetail", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("a", "1")))
+			WithDetails(PublicString("a", "1")))
 		d, ok := err.FindAttr("missing")
 		assert.False(t, ok)
 		assert.Equal(t, "", d.Key())
@@ -195,7 +191,7 @@ func TestFindAttrReturnsPublicDetail(t *testing.T) {
 func TestErrorMarshalJSON5xxStripsDetails(t *testing.T) {
 	t.Run("clientErrorPreservesDetails", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found",
-			WithDetails(PublicAttr("cellId", "abc")))
+			WithDetails(PublicString("cellId", "abc")))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -210,7 +206,7 @@ func TestErrorMarshalJSON5xxStripsDetails(t *testing.T) {
 
 	t.Run("serverErrorEmitsEmptyDetailsArray", func(t *testing.T) {
 		err := New(KindInternal, ErrInternal, "boom",
-			WithDetails(PublicAttr("dsn", "secret")))
+			WithDetails(PublicString("dsn", "secret")))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -231,31 +227,30 @@ func TestErrorMarshalJSON5xxStripsDetails(t *testing.T) {
 	})
 }
 
-// Compile-time assertion: WithDetails / WithInternal only accept their sealed
-// newtypes. Passing raw slog.Attr or string would fail to compile, which is
-// the Hard sealing invariant this refactor replaces DETAILS-SLOG-ATTR-01 with.
-// This test is a positive smoke — the negative cases are not expressible.
-func TestSealedSignatureSmoke(t *testing.T) {
-	_ = WithDetails(PublicAttr("k", "v"))
-	_ = WithInternal(InternalAttr("k", "v"))
-	// Sanity: PublicDetail constructed via PublicAttr can be used with AsSlogAttr
-	// for slog forwarding (HTTP error-logging middleware).
-	d := PublicAttr("k", "v")
-	attr := d.AsSlogAttr()
-	assert.IsType(t, slog.Attr{}, attr)
-}
-
-func TestAsSlogAttrKindForStringValue(t *testing.T) {
-	// String values must produce KindString so that
-	// pkg/redaction.RedactSlogAttr's free-form RedactString scan can mask
-	// embedded key=value secrets inside the value text. The pre-#1035
-	// archtest DETAILS-SLOG-ATTR-01 banned slog.Any for the same reason;
-	// after sealing, the equivalent guard is upstream in AsSlogAttr.
-	t.Run("publicDetailStringValueProducesKindString", func(t *testing.T) {
-		attr := PublicAttr("k", "v").AsSlogAttr()
-		assert.Equal(t, slog.KindString, attr.Value.Kind(),
-			"string-valued PublicDetail must surface as slog.KindString for redaction coverage")
-	})
+// TestAsSlogAttrKindByValue verifies AsSlogAttr routes each scalar kind
+// through the matching slog.Value constructor. String values must surface
+// as slog.KindString so pkg/redaction.RedactSlogAttr's free-form
+// RedactString scan can mask embedded key=value secrets — same invariant
+// the retired DETAILS-SLOG-ATTR-01 archtest enforced via AST scan on
+// slog.Any callsites.
+func TestAsSlogAttrKindByValue(t *testing.T) {
+	cases := []struct {
+		name string
+		d    PublicDetail
+		kind slog.Kind
+	}{
+		{"string", PublicString("k", "v"), slog.KindString},
+		{"int", PublicInt("k", 42), slog.KindInt64},
+		{"bool", PublicBool("k", true), slog.KindBool},
+		{"duration", PublicDuration("k", time.Second), slog.KindDuration},
+		{"time", PublicTime("k", time.Now()), slog.KindTime},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.kind, tc.d.AsSlogAttr().Value.Kind())
+		})
+	}
 
 	t.Run("internalDetailStringValueProducesKindString", func(t *testing.T) {
 		attr := InternalAttr("k", "v").AsSlogAttr()
@@ -263,50 +258,11 @@ func TestAsSlogAttrKindForStringValue(t *testing.T) {
 			"string-valued InternalDetail must surface as slog.KindString for redaction coverage")
 	})
 
-	t.Run("publicDetailNonStringValuePassesAsKindAny", func(t *testing.T) {
-		attr := PublicAttr("count", 42).AsSlogAttr()
-		// slog.Any may resolve int to KindInt64 or KindAny depending on
-		// the value type; the documented contract is "non-string values
-		// pass through as slog.Any". The exact Kind is implementation
-		// detail of slog, but it is never KindString for a non-string.
+	t.Run("internalDetailNonStringValueAny", func(t *testing.T) {
+		attr := InternalAttr("count", 42).AsSlogAttr()
+		// InternalDetail keeps untyped any; non-string surfaces via
+		// slog.Any (resolved to KindInt64 for int by slog internals,
+		// but the contract is "not KindString").
 		assert.NotEqual(t, slog.KindString, attr.Value.Kind())
-	})
-}
-
-func TestPublicDetailWireUnsafeValues(t *testing.T) {
-	// Wire-unsafe values pre-#1035 were rejected at WithDetails construction
-	// by MustValidateDetailsKinds; post-#1035 they surface as json.Marshal
-	// errors at serialization time. The HTTP error-response writer's
-	// sentinelInternalErrorBody fallback (HTTP 500) is the wire fail-closed.
-	// This test documents the boundary: MarshalJSON errors are the expected
-	// failure mode, not panics or silent corruption.
-	t.Run("nanFloat64ProducesMarshalError", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("ratio", math.NaN())))
-		_, mErr := json.Marshal(err)
-		require.Error(t, mErr, "json.Marshal must reject NaN float64 in PublicDetail.value")
-		assert.Contains(t, mErr.Error(), "unsupported value",
-			"error must be encoding/json's UnsupportedValueError for NaN/Inf")
-	})
-
-	t.Run("positiveInfProducesMarshalError", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("ratio", math.Inf(1))))
-		_, mErr := json.Marshal(err)
-		require.Error(t, mErr)
-	})
-
-	t.Run("channelValueProducesMarshalError", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("ch", make(chan int))))
-		_, mErr := json.Marshal(err)
-		require.Error(t, mErr, "json.Marshal must reject channel value in PublicDetail.value")
-	})
-
-	t.Run("funcValueProducesMarshalError", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(PublicAttr("fn", func() {})))
-		_, mErr := json.Marshal(err)
-		require.Error(t, mErr, "json.Marshal must reject function value in PublicDetail.value")
 	})
 }

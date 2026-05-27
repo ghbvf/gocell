@@ -86,7 +86,7 @@ func (v *validator) Validate(_ context.Context, body []byte) error {
 		if errors.As(err, &verr) {
 			msg := buildSafeMessage(verr)
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "request body validation failed",
-				errcode.WithDetails(errcode.PublicAttr("detail", msg)))
+				errcode.WithDetails(errcode.PublicString("detail", msg)))
 		}
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid request body")
 	}

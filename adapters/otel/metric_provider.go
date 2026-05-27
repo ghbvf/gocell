@@ -85,7 +85,7 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create counter failed", err,
-			errcode.WithDetails(errcode.PublicAttr("metric", opts.Name)))
+			errcode.WithDetails(errcode.PublicString("metric", opts.Name)))
 	}
 	return &otelCounterVec{
 		inner:  c,
@@ -116,7 +116,7 @@ func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create gauge failed", err,
-			errcode.WithDetails(errcode.PublicAttr("metric", opts.Name)))
+			errcode.WithDetails(errcode.PublicString("metric", opts.Name)))
 	}
 	return &otelGaugeVec{
 		inner:  c,
@@ -147,7 +147,7 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create histogram failed", err,
-			errcode.WithDetails(errcode.PublicAttr("metric", opts.Name)))
+			errcode.WithDetails(errcode.PublicString("metric", opts.Name)))
 	}
 	return &otelHistogramVec{
 		inner:  h,

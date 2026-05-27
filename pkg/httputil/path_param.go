@@ -34,7 +34,7 @@ func ParseUUIDPathParam(w http.ResponseWriter, r *http.Request, name string) (st
 			errcode.KindInvalid,
 			errcode.ErrValidationInvalidUUID,
 			"path parameter must be a valid UUID",
-			errcode.WithDetails(errcode.PublicAttr("param", name)),
+			errcode.WithDetails(errcode.PublicString("param", name)),
 		))
 		return "", false
 	}

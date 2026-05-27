@@ -779,7 +779,7 @@ func safeRun(ctx context.Context, fn ksaga.StepFunc, inst *ksaga.Instance, prev 
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"saga: step panicked",
-				errcode.WithDetails(errcode.PublicAttr("instanceId", string(inst.ID))),
+				errcode.WithDetails(errcode.PublicString("instanceId", string(inst.ID))),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))))
 		}
 	}()

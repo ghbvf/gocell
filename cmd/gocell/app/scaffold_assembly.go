@@ -139,8 +139,8 @@ func validateAssemblyFlags(id, cells, team, role string) (scaffoldid.ScaffoldID,
 		return scaffoldid.ScaffoldID{}, nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--id does not match metadata AssemblyIDPattern", err,
 			errcode.WithDetails(
-				errcode.PublicAttr("flag", "--id"),
-				errcode.PublicAttr("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--id"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--id value=%q pattern=%s",
 				id, metadata.AssemblyIDPattern))))
@@ -166,8 +166,8 @@ func validateAssemblyFlags(id, cells, team, role string) (scaffoldid.ScaffoldID,
 			return scaffoldid.ScaffoldID{}, nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 				"--cells[] entry does not match metadata CellIDPattern", err,
 				errcode.WithDetails(
-					errcode.PublicAttr("flag", "--cells[]"),
-					errcode.PublicAttr("pattern", metadata.CellIDPattern),
+					errcode.PublicString("flag", "--cells[]"),
+					errcode.PublicString("pattern", metadata.CellIDPattern),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
 					c, metadata.CellIDPattern))))

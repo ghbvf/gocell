@@ -46,7 +46,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 	if len(current) < minCursorKeyBytes {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 			"cursor HMAC key too short",
-			errcode.WithDetails(errcode.PublicAttr("got", len(current)), errcode.PublicAttr("min", minCursorKeyBytes)))
+			errcode.WithDetails(errcode.PublicInt("got", len(current)), errcode.PublicInt("min", minCursorKeyBytes)))
 	}
 	var prev []byte
 	if len(previous) > 0 && len(previous[0]) > 0 {
@@ -54,7 +54,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 		if len(prev) < minCursorKeyBytes {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 				"previous cursor HMAC key too short",
-				errcode.WithDetails(errcode.PublicAttr("got", len(prev)), errcode.PublicAttr("min", minCursorKeyBytes)))
+				errcode.WithDetails(errcode.PublicInt("got", len(prev)), errcode.PublicInt("min", minCursorKeyBytes)))
 		}
 		if bytes.Equal(current, prev) {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
@@ -187,7 +187,7 @@ func cursorInvalid(reason string) error {
 		errcode.ErrCursorInvalid,
 		cursorInvalidMsg,
 		errcode.WithInternal(errcode.InternalAttr("_", reason)),
-		errcode.WithDetails(errcode.PublicAttr("reason", reason)),
+		errcode.WithDetails(errcode.PublicString("reason", reason)),
 	)
 }
 
@@ -197,7 +197,7 @@ func cursorInvalid(reason string) error {
 func cursorInvalidExtra(reason string, extra ...errcode.PublicDetail) error {
 	attrs := make([]errcode.PublicDetail, 0, len(extra)+1)
 	attrs = append(attrs, extra...)
-	attrs = append(attrs, errcode.PublicAttr("reason", reason))
+	attrs = append(attrs, errcode.PublicString("reason", reason))
 	return errcode.New(
 		errcode.KindInvalid,
 		errcode.ErrCursorInvalid,
@@ -217,14 +217,14 @@ func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
 	}
 	if expected := SortScope(sort); cur.Scope != expected {
 		return cursorInvalidExtra("sort scope mismatch",
-			errcode.PublicAttr("got", cur.Scope), errcode.PublicAttr("want", expected))
+			errcode.PublicString("got", cur.Scope), errcode.PublicString("want", expected))
 	}
 	if cur.Context == "" {
 		return cursorInvalid("query context is required")
 	}
 	if cur.Context != queryCtx {
 		return cursorInvalidExtra("query context mismatch",
-			errcode.PublicAttr("got", cur.Context), errcode.PublicAttr("want", queryCtx))
+			errcode.PublicString("got", cur.Context), errcode.PublicString("want", queryCtx))
 	}
 	if len(cur.Values) != len(sort) {
 		return cursorInvalid(fmt.Sprintf("has %d values but expected %d sort columns", len(cur.Values), len(sort)))

@@ -107,7 +107,7 @@ func ParseState(s string) (State, error) {
 	default:
 		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid outbox entry state",
-			errcode.WithInternal(fmt.Sprintf("value=%q", s)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("value=%q", s))))
 	}
 }
 
@@ -176,5 +176,5 @@ func Transition(from, to State) error {
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"outbox: invalid entry state transition",
-		errcode.WithInternal(fmt.Sprintf("from=%s to=%s", from, to)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("from=%s to=%s", from, to))))
 }

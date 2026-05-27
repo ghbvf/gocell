@@ -65,7 +65,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 		errcode.ErrValidationFailed,
 		"invalid cursor",
 		errcode.WithInternal(errcode.InternalAttr("_", "cursor token failed signature check")),
-		errcode.WithDetails(errcode.PublicAttr("reason", "signature")),
+		errcode.WithDetails(errcode.PublicString("reason", "signature")),
 	)
 
 	rec := httptest.NewRecorder()
@@ -147,7 +147,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 		"config query failed for tenant admin@example.com",
 		cause,
 		errcode.WithInternal(errcode.InternalAttr("_", "select config_entries failed")),
-		errcode.WithDetails(errcode.PublicAttr("tenant", "admin@example.com")),
+		errcode.WithDetails(errcode.PublicString("tenant", "admin@example.com")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-5xx")
 
@@ -188,7 +188,7 @@ func TestWriteErrorWithStatus_4xxKeepsBodyAndLogsAtWarn(t *testing.T) {
 
 	ecErr := errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
 		"session not found",
-		errcode.WithDetails(errcode.PublicAttr("sessionId", "s-7")))
+		errcode.WithDetails(errcode.PublicString("sessionId", "s-7")))
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-404")
 	ctx = WithClientErrorLogSamplingEvery(ctx, "test", 1)
 
@@ -220,7 +220,7 @@ func TestWriteErrorWithStatus_500MasksBodyWithStatusDerivedPublicCode(t *testing
 		"config query failed",
 		errors.New("postgres pool exhausted"),
 		errcode.WithInternal(errcode.InternalAttr("_", "select config_entries failed")),
-		errcode.WithDetails(errcode.PublicAttr("tenant", "admin@example.com")),
+		errcode.WithDetails(errcode.PublicString("tenant", "admin@example.com")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-typed-500")
 
@@ -524,39 +524,20 @@ func (erroringResponseWriter) Write([]byte) (int, error) {
 
 func (erroringResponseWriter) WriteHeader(int) {}
 
-// TestWriteError_DetailsBypassFencedBySentinel verifies that an
-// *errcode.Error whose Details slice was mutated to include a wire-unsafe
-// value (bypassing WithDetails' sealed PublicDetail type via direct field
-// assignment) triggers the fail-closed sentinel path. PublicDetail.MarshalJSON
-// delegates value marshaling to encoding/json; a non-serializable value
-// (e.g. chan int) causes json.Marshal to fail, which encodeErrorEnvelopeTo
-// propagates to writeErrorBody, which falls through to writeInternalErrorSentinel
-// (HTTP 500 + canonical error envelope). This is the layer-3 fail-closed
-// defense — layer-2 (slog.Attr kind substitution) no longer exists because
-// the sealed PublicDetail newtype makes slog.Attr construction inexpressible.
-func TestWriteError_DetailsBypassFencedBySentinel(t *testing.T) {
-	bad := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad")
-	// Direct field write — sidesteps the sealed PublicDetail newtype invariant
-	// so we can inject a non-JSON-serializable value. Field assignment is the
-	// only path that bypasses PublicAttr's type safety at the Go level.
-	bad.Details = []errcode.PublicDetail{errcode.PublicAttr("ch", make(chan int))}
-
-	rec := httptest.NewRecorder()
-	WriteError(context.Background(), rec, bad)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code,
-		"non-serializable detail triggers fail-closed 500 sentinel")
-	assert.JSONEq(t,
-		`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`,
-		rec.Body.String(),
-		"fail-closed sentinel body must be the canonical error envelope")
-}
-
 // TestWriteInternalErrorSentinel_BodyAndStatus verifies the layer-3
 // last-resort fallback: the sentinel writer always emits HTTP 500 + the
 // canonical error envelope, regardless of upstream marshal state. The
 // sentinel body is a hard-coded byte slice so it cannot itself fail to
 // marshal — the failure mode it covers is exactly the case where
 // encoding/json has just failed.
+//
+// The prior TestWriteError_DetailsBypassFencedBySentinel test injected a
+// chan int into Error.Details via direct field write to exercise the
+// sentinel from the public API surface. That bypass is no longer
+// expressible: PublicDetail.value is typed as the sealed publicValue
+// marker interface, so wire-unsafe types (chan, func, NaN/Inf floats,
+// maps, structs, pointers) cannot reach Error.Details through any
+// constructor. The sentinel path itself remains tested directly below.
 func TestWriteInternalErrorSentinel_BodyAndStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeInternalErrorSentinel(rec)
@@ -620,7 +601,7 @@ func TestWriteErrorWithStatus_5xxKindNormalize(t *testing.T) {
 			name:   "503 with KindNotFound (4xx Kind) details stripped",
 			status: http.StatusServiceUnavailable,
 			ecErr: errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound, "x",
-				errcode.WithDetails(errcode.PublicAttr("dsn", "postgres://u:p@h"))),
+				errcode.WithDetails(errcode.PublicString("dsn", "postgres://u:p@h"))),
 			wantWireCode:   errcode.ErrServiceUnavailable,
 			wantDetailsLen: 0,
 		},
@@ -674,7 +655,7 @@ func TestLog5xx_DetailsRedacted(t *testing.T) {
 		errcode.KindInternal,
 		errcode.ErrInternal,
 		"upstream failed",
-		errcode.WithDetails(errcode.PublicAttr("config", "host=h password=secret123 port=5432")),
+		errcode.WithDetails(errcode.PublicString("config", "host=h password=secret123 port=5432")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-redact")
 
@@ -703,7 +684,7 @@ func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
 
 	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"too big",
-		errcode.WithDetails(errcode.PublicAttr("size", bigInt)))
+		errcode.WithDetails(errcode.PublicInt("size", bigInt)))
 
 	rec := httptest.NewRecorder()
 	writeErrorBody(context.Background(), rec, http.StatusBadRequest, ec)

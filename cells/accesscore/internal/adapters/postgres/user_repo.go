@@ -542,19 +542,19 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	if !domain.ValidUserStatus(domain.UserStatus(status)) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid status from DB",
-			errcode.WithDetails(errcode.PublicAttr("table", "users"), errcode.PublicAttr("column", "status")),
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "status")),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	if !domain.ValidUserSource(domain.UserSource(source)) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid creation_source from DB",
-			errcode.WithDetails(errcode.PublicAttr("table", "users"), errcode.PublicAttr("column", "creation_source")),
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "creation_source")),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned source=%q", source))))
 	}
 	if failedLoginCount < 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: failed_login_count must be >= 0",
-			errcode.WithDetails(errcode.PublicAttr("table", "users"), errcode.PublicAttr("column", "failed_login_count")),
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "failed_login_count")),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned value=%d", failedLoginCount))))
 	}
 	u, reconErr := domain.ReconstituteUser(domain.ReconstituteUserParams{

@@ -33,7 +33,7 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 		if n > query.MaxPageSize {
 			return pr, errcode.New(errcode.KindInvalid, errcode.ErrPageSizeExceeded,
 				"limit exceeds maximum page size",
-				errcode.WithDetails(errcode.PublicAttr("limit", n), errcode.PublicAttr("max", query.MaxPageSize)))
+				errcode.WithDetails(errcode.PublicInt("limit", n), errcode.PublicInt("max", query.MaxPageSize)))
 		}
 		pr.Limit = n
 	}

@@ -116,30 +116,42 @@ func TestReasonFromDetails(t *testing.T) {
 		{name: "no details → empty", err: mkErr(), want: ""},
 		{
 			name: "non-string value → empty",
-			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, 42))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicInt(DetailsKeyReason, 42))),
 			want: "",
 		},
 		{
 			name: "empty-string value → empty",
-			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ""))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ""))),
 			want: "",
 		},
 		{
 			name: "ReasonCanceled accepted",
-			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonCanceled))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonCanceled))),
 			want: ReasonCanceled,
 		},
 		{
 			name: "ReasonDeadlineExceeded accepted",
-			err:  mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, ReasonDeadlineExceeded))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonDeadlineExceeded))),
 			want: ReasonDeadlineExceeded,
 		},
-		{name: "arbitrary string rejected", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, "future-enum-value"))), want: ""},
-		{name: "user-derived string rejected", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, "key=admin"))), want: ""},
-		{name: "case mismatch rejected", err: mkErr(errcode.WithDetails(errcode.PublicAttr(DetailsKeyReason, "Canceled"))), want: ""},
+		{
+			name: "arbitrary string rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "future-enum-value"))),
+			want: "",
+		},
+		{
+			name: "user-derived string rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "key=admin"))),
+			want: "",
+		},
+		{
+			name: "case mismatch rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "Canceled"))),
+			want: "",
+		},
 		{
 			name: "extra unrelated keys ignored",
-			err:  mkErr(errcode.WithDetails(errcode.PublicAttr("other", "x"), errcode.PublicAttr(DetailsKeyReason, ReasonCanceled))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString("other", "x"), errcode.PublicString(DetailsKeyReason, ReasonCanceled))),
 			want: ReasonCanceled,
 		},
 	}
