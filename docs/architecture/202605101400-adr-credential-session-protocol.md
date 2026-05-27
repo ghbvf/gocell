@@ -10,7 +10,7 @@
 
 ---
 
-## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）；2026-05-25 — §A15 refresh user-not-active 收口 401（回退 post-§A13 漂入的 403）+ cascade fail-closed void 签名升 Hard（issue #940）；2026-05-26 — §A16 credential-invalidate sealed FenceToken 关闭 UPSTREAM-CALLER-01 上游半边，三 mutation 方法签名要求 `credentialfence.FenceToken`，funnel 上游 Medium → Hard（issue #1033，同时关闭 042 §3a row 3 + §4 ROI row 2 + 043 §1 row 4）
+## 0. Amendments（S4b 落地后修订；2026-05-14 — S4d 重写；2026-05-15；S4e mutation funnel landed PR #494；2026-05-15；PR #501 RC-A/B/C/D/E 闭环（RoleRevoked 死代码 + §A10 Medium 天花板锁定 + schema_guard CHECK 注册 + login error path 归一化 + Reconstitute params + storetest const）；2026-05-16；Wave 5 P1-1 authzmutator.ApplyInTx 单入口 Hard funnel；2026-05-17；2026-05-17 — §A11 重写：session-revoke 出 funnel + 上游 4 勿一 Hard 化 + 新增 §A13 wire-uniformity 防枚举载体（PR #542 P1-A/P1-B/P2-A/P2-B/P2-C 闭环）；2026-05-17 Wave 4 — value-capture detector 升级到 typed-parent-check（form uniqueness）+ scope 扩到 cells/+cmd/+runtime/ + TYPESUTIL-IMPLEMENTS-FUNNEL-01 合规 + Sonar TestAssert 复杂度 20→1 + checkOK godoc）；2026-05-25 — §A15 refresh user-not-active 收口 401（回退 post-§A13 漂入的 403）+ cascade fail-closed void 签名升 Hard（issue #940）；2026-05-26 — §A16 credential-invalidate sealed FenceToken 关闭 UPSTREAM-CALLER-01 上游半边，三 mutation 方法签名要求 `credentialfence.FenceToken`，funnel 上游 Medium → Hard（issue #1033，同时关闭 042 §3a row 3 + §4 ROI row 2 + 043 §1 row 4）；2026-05-27 — §A17 ChangePassword inactive gate 前移到 mutation 前：`identitymanage` 加入 credentialauthority.Assert caller allowlist（caller-only，不入上游 funnel scope），新增 Medium archtest `CHANGEPASSWORD-INACTIVE-GATE-01` 守 gate 放置（Assert 必在 UpdatePassword 前），§3 威胁矩阵新增 "suspended/locked → ChangePassword 改写凭证" row（issue #1017，#940 follow-up）
 
 S4b PR 落地后实际实现与 §2/§3 描述出现漂移。**S4d (PR S4d) 之后实际行为以本节 +
 §A8 / §D1 / §D2 / §D4.2 同 PR 重写后的描述为准。** 与 amendment 矛盾的原文段落
@@ -359,7 +359,11 @@ INVARIANT: `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01`：
 - **下游 Hard**（caller allowlist）：`typeseval.ResolvePackageRef` 解析
   `credentialauthority.Assert` 的 `*types.Func` 身份；caller 限定
   `cells/accesscore/{internal/credentialauthority/, slices/sessionlogin/,
-   slices/sessionrefresh/, slices/sessionvalidate/}`。
+   slices/sessionrefresh/, slices/sessionvalidate/, slices/identitymanage/}`。
+  `slices/identitymanage/` 是 caller-only（issue #1017）——见 §A17：它在 caller
+  allowlist 内但**不在**上游 mandatory funnel scope（下条）内，因为
+  `changePasswordInTx` 合法直读 `user.PasswordVersion` 做 CAS 写；其 gate 放置
+  由独立 archtest `CHANGEPASSWORD-INACTIVE-GATE-01` 守护。
 - **上游 Hard direct**（mandatory funnel）：扫 3 slice 目录 production 文件，
   禁止 `domain.(*User).CanAuthenticate` typed method call、
   `domain.User.PasswordVersion` typed field selector 在 funnel 外出现；通过
@@ -704,6 +708,66 @@ for unbounded ops"。
 
 ---
 
+### A17 ChangePassword inactive gate 前移到 mutation 前（2026-05-27, issue #1017, #940 follow-up）
+
+**背景漂移**：`identitymanage.ChangePassword` 的非活跃账户 gate（suspended/locked
+校验）此前发生在**写事务提交之后**。`changePasswordInTx`（`service.go`）顺序为
+`GetByID` → `bcrypt.CompareHashAndPassword` → `UpdatePassword`（提交新密码）→
+`inv.Apply` → commit；唯一的 active 校验在事务提交后的 `IssueForUser`
+（`sessionlogin/service.go` 的 `credentialauthority.Assert`）。后果（P1 安全）：一个
+被 suspended/locked 的账户（典型：admin 为冻结账户改密，或 self 在 auth 与执行间被
+冻结的竞态）的**密码会被成功改写并提交**，随后才返回 403 `ERR_AUTH_USER_NOT_ACTIVE`。
+失败响应 + 持久副作用 = 非活跃账户的凭证仍可被改写。PR #1007（#940 P2-2）已把该 403
+正式化为 declared+mapped+contract，本节修正其 gate **执行时机**（post-commit →
+pre-mutation）。对标 Django `PasswordChangeView`：`login_required` + 表单校验通过后才
+`form.save()`，失败路径不在 mutation 之后。
+
+**决策**：
+
+1. **gate 前移**：`changePasswordInTx` 在 `GetByID` 之后、`bcrypt`/`UpdatePassword`
+   之前调 `credentialauthority.Assert(user)`。inactive 直接返回 403
+   `ErrAuthUserNotActive`（errcode 构造形态对齐 `sessionlogin.IssueForUser`，两路径
+   wire envelope 一致），旧 hash 不被改写、`inv.Apply` / `IssueForUser` 不被调用。
+   `IssueForUser` 内的 `Assert` **保留为 belt-and-braces**——覆盖 admin-改密-then-
+   用户在 commit 与 token issue 之间被冻结的窄窗口（不同时间窗，非冗余兼容路径；且
+   `IssueForUser` 是 `sessionlogin` 拥有的共享依赖，identitymanage 不可删）。
+
+2. **caller allowlist 扩展（§A11.2 下游 prong）**：`cells/accesscore/slices/identitymanage/`
+   加入 `CREDENTIAL-AUTHORITY-ASSERT-FUNNEL-01` 的 `assertCallerAllowlist`。
+
+3. **故意不入上游 funnel scope（`sliceFunnelScopes`）**：identitymanage 是
+   **caller-only**。上游 mandatory prong 禁止 funnel scope 内直读
+   `domain.User.PasswordVersion`，但 `changePasswordInTx` 合法直读
+   `user.PasswordVersion` 做 CAS 写（乐观锁版本号，与 credential-pin 语义正交）。
+   把 identitymanage 纳入上游 scope 会对该 CAS 读 false-positive。因此 gate 的
+   **放置**（presence + ordering）由独立 archtest 守护：
+
+   **`CHANGEPASSWORD-INACTIVE-GATE-01`（Medium）**——扫
+   `cells/accesscore/slices/identitymanage/` production 文件，定位
+   `changePasswordInTx`，断言其 body 含 typed-resolved（`ResolvePackageRef`）的
+   `credentialauthority.Assert` CallExpr **且** 该调用 `token.Pos` 早于
+   `UpdatePassword` mutation anchor（gate 在写之后即失败，正是本 bug 形态）。
+   3 RED fixture（green / red_no_gate / red_gate_after_mutation，位于
+   `cells/accesscore/slices/identitymanage/testdata/` 因需 import internal
+   credentialauthority）。**AI-robust 评级 Medium**：security-critical callee 类型
+   解析（非字符串锚点）；ordering 为同函数体内 AST Pos 比较。Hard 不可低成本达到
+   （type-state 证明 Assert 已运行 = 对单一调用点过度工程）→ Medium 为文档化天花板，
+   不开升级 issue（won't-do，同 `HEALTHZ-HOLDER-SEAL-01` #893）。residual escape
+   （跨函数 helper 抽取）见 archtest package godoc 盲区清单。
+
+**威胁矩阵重评（§3）**：新增 row "suspended/locked 账户 → ChangePassword 改写凭证"。
+该格 **修复前为 ❌**（gate 在 post-commit `IssueForUser`，密码已提交才返 403），
+**修复后为 ✅**（pre-mutation Assert gate + Medium archtest 守放置）。无 ✅→⚠️/❌
+回退格子。
+
+ref: `cells/accesscore/slices/identitymanage/service.go::changePasswordInTx`。
+ref: `tools/archtest/changepassword_inactive_gate_test.go`
+(CHANGEPASSWORD-INACTIVE-GATE-01)。
+ref: `tools/archtest/credential_authority_assert_funnel_test.go`
+（`assertCallerAllowlist` += identitymanage）。
+
+---
+
 ## 1. Context
 
 ### 1.1 触发因素
@@ -981,6 +1045,7 @@ sealed `FingerprintMode` 当前仅含 `FingerprintJTIRef` 单实现。未来 opa
 | Role downgrade 后旧 refresh 升级到新 epoch (P1-#2) | — | ✅ user.epoch != refresh.epoch_at_issue → sessionrefresh cascade（A6 stale-epoch 入口） | ✅ Invalidator.Apply 撤所有 refresh chain | ✅ 同上 | ✅ 失效原子 |
 | Device theft → user lock | ✅ session lookup 拒 | ✅ row.epoch 同步 stale → validate 双层防 | ✅ Lock event 同 tx 撤 session+refresh | ✅ identitymanage.Update authz demotion 走 authzmutate funnel（tx2 path；tx1/tx2 TOCTOU accepted-by-design，见 §A10） | ✅ 失效原子 |
 | Password reset → 旧 access/refresh 仍可用 | — | ✅ epoch bump 让 row stale | ✅ ChangePassword event 同 tx 撤 session+refresh | ✅ changePasswordInTx 直调 inv.Apply（co-tx 必需，见 §A10） | ✅ 失效原子 |
+| suspended/locked 账户 → ChangePassword 改写凭证（#940 follow-up #1017，§A17）| — | — | — | ✅ Hard（pre-fix ❌）：`changePasswordInTx` 在 `GetByID` 后、`bcrypt`/`UpdatePassword` 前调 `credentialauthority.Assert`，inactive 直接返 403 `ErrAuthUserNotActive`，旧 hash 不被改写、`inv.Apply`/`IssueForUser` 不运行。**修复前 gate 在 post-commit `IssueForUser`，该格为 ❌：密码已提交才返 403。** gate 放置由 Medium archtest `CHANGEPASSWORD-INACTIVE-GATE-01` 守（Assert 必在 `UpdatePassword` 前 + RED fixture）；caller 由 §A11.2 扩 `identitymanage`（caller-only，**不入**上游 funnel scope，因 CAS `PasswordVersion` 直读与 credential-pin 正交）| ✅ gate 在 tx 内、mutation 前 |
 | PATCH RequirePasswordReset=true 不立即生效 (P1-#1) | — | ✅ epoch bump → row stale | ✅ 复用 `CredentialEventPasswordReset` event（false→true transition 等价于 credential-weakening，无需新增独立事件） | ✅ identitymanage false→true transition 走 authzmutate.Mutator.Apply → inv.Apply（co-tx tx2 path；见 §A10） | ✅ 失效原子 |
 | Account delete → 残留 session 攻击面 | — | — | ✅ Delete event 同 tx 撤所有 | ✅ identitymanage.Delete 直调 inv.Apply（co-tx 必需，见 §A10） | ✅ 失效原子 |
 | 并发 login 与 role revoke (P1-#3) | — | ✅ login 持 user 行 FOR UPDATE 写锁，revoke 期 BumpAuthzEpoch 也持同行写锁 → PG read-committed + row lock 天然串行化 | — | — | ✅ 失效原子 |

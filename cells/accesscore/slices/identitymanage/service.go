@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -860,6 +861,20 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	user, err := s.repo.GetByID(txCtx, input.UserID)
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
+	}
+
+	// Inactive-account gate BEFORE any credential mutation (issue #1017).
+	// A suspended/locked account must never have its password rewritten, so the
+	// active check fails-closed here — before the bcrypt verify, the CAS write,
+	// and the session sweep — rather than post-commit inside IssueForUser. The
+	// IssueForUser Assert is retained as belt-and-braces for the narrow window
+	// where an admin freezes the account between this commit and the token issue.
+	// Mirrors sessionlogin.IssueForUser's (Assert-gate → 403 ErrAuthUserNotActive)
+	// shape so both paths return an identical wire envelope.
+	if err := credentialauthority.Assert(user); err != nil {
+		return "", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active",
+			errcode.WithInternal(errcode.InternalAttr("_", "identity-manage: change-password baseline assert failed")))
 	}
 
 	// Step 3: Verify old password (expensive — inside tx by design, see ChangePassword godoc).
