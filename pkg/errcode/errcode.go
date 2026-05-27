@@ -735,9 +735,7 @@ type PublicError struct {
 func (p PublicError) MarshalJSON() ([]byte, error) {
 	type publicError PublicError
 	out := publicError(p)
-	if out.Details == nil {
-		out.Details = []PublicDetail{}
-	}
+	out.Details = copyDetails(p.Details)
 	return json.Marshal(out)
 }
 
@@ -797,7 +795,11 @@ func WithDetails(details ...PublicDetail) Option {
 		if len(details) == 0 {
 			return
 		}
-		e.Details = append(e.Details, details...)
+		for _, detail := range details {
+			if detail.valid() {
+				e.Details = append(e.Details, detail)
+			}
+		}
 	}
 }
 
@@ -957,8 +959,12 @@ func copyDetails(details []PublicDetail) []PublicDetail {
 	if len(details) == 0 {
 		return []PublicDetail{}
 	}
-	out := make([]PublicDetail, len(details))
-	copy(out, details)
+	out := make([]PublicDetail, 0, len(details))
+	for _, detail := range details {
+		if detail.valid() {
+			out = append(out, detail)
+		}
+	}
 	return out
 }
 

@@ -119,6 +119,6 @@ errcode.WithInternal(
 )
 ```
 
-archtest `DETAILS-SLOG-ATTR-01` 已退役（type system 已表达 invariant）；新加 `DETAILS-SEALED-FIELD-FROZEN-01`（reflect lock）反向守卫 PublicDetail/InternalDetail 字段集 + 可见性 + publicValue 类型身份，防止包内漂移（如 value 字段被改回 `any`、字段大写化、重命名）。`MustValidateDetailsKinds` 同样退役（typed value 已使非 scalar 在 type system 不可表达）。`PublicAttr(any)` 删除：调用方按 value 类型选 typed scalar 构造器（不再有 `any` 入口）；为强制 caller 自行 format 浮点数（NaN/Inf 风险），**故意不提供** `PublicFloat`。
+archtest `DETAILS-SLOG-ATTR-01` 已退役（type system 已表达 invariant）；新加 `DETAILS-SEALED-FIELD-FROZEN-01`（reflect + AST lock）反向守卫 PublicDetail/InternalDetail 字段集 + 可见性 + publicValue 类型身份 + publicValue 实现集合 + PublicDetail constructor 集合，防止包内漂移（如 value 字段被改回 `any`、字段大写化、重命名、悄悄新增 `PublicFloat`）。`MustValidateDetailsKinds` 同样退役（typed value 已使非 scalar 在 type system 不可表达）。`PublicAttr(any)` 删除：调用方按 value 类型选 typed scalar 构造器（不再有 `any` 入口）；为强制 caller 自行 format 浮点数（NaN/Inf 风险），**故意不提供** `PublicFloat`。
 
 详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §Amendment 2026-05-27。

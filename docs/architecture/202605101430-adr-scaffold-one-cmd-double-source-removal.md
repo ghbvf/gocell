@@ -78,7 +78,7 @@ PR #442 round-4 closes the remaining safety + reliability gaps via a single funn
 2. **All-or-nothing conflict detection** — every `AbsPath` is `os.Stat`-checked before any write. A conflict on `contract.yaml` no longer leaves `cells/<id>/cell.go` half-written.
 3. **Atomic write with rollback** — on the first write/mkdir failure, every file written and every directory created during the call is removed; the original error is wrapped with the rollback outcome.
 
-Conflict errors use `errcode.ErrConflict` (HTTP 409) and put the failing path in `WithDetails(slog.String("path", …))` so 4xx CLI output and the public envelope both surface it (round-2 used `ErrValidationFailed` + `WithInternal`, hiding the path from CLI users).
+Conflict errors use `errcode.ErrConflict` (HTTP 409) and put the failing path in `WithDetails(errcode.PublicString("path", ...))` so 4xx CLI output and the public envelope both surface it (round-2 used `ErrValidationFailed` + `WithInternal`, hiding the path from CLI users).
 
 ### AI-Hard archtest funnel
 

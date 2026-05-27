@@ -1841,6 +1841,16 @@ func TestDetailsSealedFieldFrozen01(t *testing.T) {
 			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicString(...) produced value Kind %s, want Interface",
 				probeValue.Kind())
 		}
+
+		root := findModuleRoot(t)
+		detailsPath := filepath.Join(root, "pkg", "errcode", "details.go")
+		file := mustParseGoFile(t, detailsPath)
+		assertExactStringSet(t, "DETAILS-SEALED-FIELD-FROZEN-01 publicValue implementers",
+			collectPublicValueImplementers(file),
+			[]string{"publicBool", "publicDuration", "publicInt", "publicString", "publicTime"})
+		assertExactStringSet(t, "DETAILS-SEALED-FIELD-FROZEN-01 PublicDetail constructors",
+			collectPublicDetailConstructors(file),
+			[]string{"PublicBool", "PublicDuration", "PublicInt", "PublicString", "PublicTime"})
 	})
 
 	t.Run("InternalDetail", func(t *testing.T) {
@@ -1861,6 +1871,73 @@ func TestDetailsSealedFieldFrozen01(t *testing.T) {
 				valueField.Type.String())
 		}
 	})
+}
+
+func mustParseGoFile(t *testing.T, path string) *ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	require.NoError(t, err, "DETAILS-SEALED-FIELD-FROZEN-01: parse %s", path)
+	return file
+}
+
+func collectPublicValueImplementers(file *ast.File) []string {
+	seen := map[string]struct{}{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Name.Name != "publicValue" || len(fn.Recv.List) == 0 {
+			continue
+		}
+		if name := detailReceiverTypeName(fn.Recv.List[0].Type); name != "" {
+			seen[name] = struct{}{}
+		}
+	}
+	return sortedSetKeys(seen)
+}
+
+func collectPublicDetailConstructors(file *ast.File) []string {
+	seen := map[string]struct{}{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
+			continue
+		}
+		for _, result := range fn.Type.Results.List {
+			if ident, ok := result.Type.(*ast.Ident); ok && ident.Name == "PublicDetail" {
+				seen[fn.Name.Name] = struct{}{}
+			}
+		}
+	}
+	return sortedSetKeys(seen)
+}
+
+func detailReceiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return detailReceiverTypeName(t.X)
+	default:
+		return ""
+	}
+}
+
+func sortedSetKeys(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for key := range set {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func assertExactStringSet(t *testing.T, name string, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want %v. Adding/removing a public detail scalar kind must update "+
+			"details.go, error-response-v1.schema.json, the ADR, and this archtest together.",
+			name, got, want)
+	}
 }
 
 // checkSealedKeyValueShape returns one violation message per shape axis

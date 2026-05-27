@@ -43,11 +43,11 @@ func TestPublicDetailConstruction(t *testing.T) {
 }
 
 func TestPublicDetailMarshalJSON(t *testing.T) {
-	t.Run("zeroValueWireShape", func(t *testing.T) {
+	t.Run("zeroValueRejected", func(t *testing.T) {
 		var d PublicDetail
-		raw, err := json.Marshal(d)
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"key":"","value":null}`, string(raw))
+		_, err := json.Marshal(d)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid PublicDetail")
 	})
 
 	t.Run("stringValue", func(t *testing.T) {
@@ -134,6 +134,14 @@ func TestWithDetailsAndWithInternalAccumulate(t *testing.T) {
 	t.Run("withDetailsEmptyVariadicIsNoop", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails())
 		assert.Nil(t, err.Details)
+	})
+
+	t.Run("withDetailsDropsZeroValue", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(PublicDetail{}, PublicString("field", "name")))
+		require.Len(t, err.Details, 1)
+		assert.Equal(t, "field", err.Details[0].Key())
+		assert.Equal(t, "name", err.Details[0].Value())
 	})
 
 	t.Run("withInternalEmptyVariadicIsNoop", func(t *testing.T) {

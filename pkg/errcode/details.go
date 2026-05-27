@@ -2,6 +2,7 @@ package errcode
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -23,12 +24,12 @@ import (
 // Known bypass surface: errcode.Error.Details is exported as []PublicDetail.
 // External code can overwrite or append the slice with values constructed
 // via the typed Public* constructors. The wire-side 5xx Details-strip
-// invariant (Error.MarshalJSON → project() → []PublicDetail{}) is the
-// defense for leakage regardless of append source; the sealed-construction
-// Hard claim is "no outside code can construct a non-zero PublicDetail
-// without going through the typed constructors", not "no outside code can
-// mutate Error.Details". Callers should still route input through
-// WithDetails(...PublicDetail).
+// invariant (Error.MarshalJSON → project() → []PublicDetail{}) and the
+// projection-side zero-value filter are the defenses for leakage/schema drift
+// regardless of append source; the sealed-construction Hard claim is "no
+// outside code can construct a non-zero PublicDetail without going through the
+// typed constructors", not "no outside code can mutate Error.Details". Callers
+// should still route input through WithDetails(...PublicDetail).
 type PublicDetail struct {
 	key   string
 	value publicValue
@@ -143,6 +144,10 @@ func (d PublicDetail) Value() any {
 	return d.value.rawAny()
 }
 
+func (d PublicDetail) valid() bool {
+	return d.key != "" && d.value != nil
+}
+
 // AsSlogAttr converts the public detail to a slog.Attr for structured
 // logging. Used by HTTP error-logging middleware (pkg/httputil log4xx /
 // log5xx) that fans Details into slog.Record alongside other attributes;
@@ -165,20 +170,17 @@ func (d PublicDetail) AsSlogAttr() slog.Attr {
 // encoding/json. Wire-unsafe values (NaN/Inf, channels, etc.) cannot reach
 // this point — the typed constructor surface excludes them at compile time.
 func (d PublicDetail) MarshalJSON() ([]byte, error) {
-	var raw json.RawMessage
-	if d.value == nil {
-		raw = json.RawMessage("null")
-	} else {
-		b, err := d.value.marshalJSONValue()
-		if err != nil {
-			return nil, err
-		}
-		raw = b
+	if !d.valid() {
+		return nil, errors.New("errcode: invalid PublicDetail")
+	}
+	b, err := d.value.marshalJSONValue()
+	if err != nil {
+		return nil, err
 	}
 	return json.Marshal(struct {
 		Key   string          `json:"key"`
 		Value json.RawMessage `json:"value"`
-	}{Key: d.key, Value: raw})
+	}{Key: d.key, Value: b})
 }
 
 // InternalDetail is the sealed server-only diagnostic key/value attribute

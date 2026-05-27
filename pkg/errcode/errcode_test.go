@@ -279,6 +279,24 @@ func TestErrorMarshalJSON(t *testing.T) {
 		assert.Equal(t, []any{}, got["details"])
 	})
 
+	t.Run("publicErrorLiteralDropsZeroValueDetails", func(t *testing.T) {
+		raw, mErr := json.Marshal(PublicError{
+			Code:    ErrValidationFailed,
+			Message: "bad",
+			Details: []PublicDetail{
+				{},
+				PublicString("field", "name"),
+			},
+		})
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{
+			map[string]any{"key": "field", "value": "name"},
+		}, got["details"])
+		assert.NotContains(t, string(raw), "null")
+	})
+
 	t.Run("noDetailsClient", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found")
 		raw, mErr := json.Marshal(err)
@@ -300,6 +318,19 @@ func TestErrorMarshalJSON(t *testing.T) {
 		assert.Equal(t, []any{
 			map[string]any{"key": "cellId", "value": "abc"},
 		}, got["details"])
+	})
+
+	t.Run("directDetailsMutationDropsZeroValueDetails", func(t *testing.T) {
+		err := New(KindNotFound, ErrCellNotFound, "cell not found")
+		err.Details = []PublicDetail{{}, PublicString("cellId", "abc")}
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{
+			map[string]any{"key": "cellId", "value": "abc"},
+		}, got["details"])
+		assert.NotContains(t, string(raw), "null")
 	})
 
 	t.Run("multiAttrClient", func(t *testing.T) {
