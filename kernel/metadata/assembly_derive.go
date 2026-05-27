@@ -58,14 +58,18 @@ func applyAssemblyDerivations(pm *ProjectMeta) {
 
 func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) {
 	if asm.Build.Entrypoint == "" {
-		// Assemblies under examples/ derive their entrypoint as
-		// examples/{id}/main.go to match the "identity by location" principle
-		// (helm/helm pkg/chartutil/create.go, kustomize-sigs pkg/types/kustomization.go).
-		// All other assemblies default to cmd/{id}/main.go.
-		// IsExamplePath funnels the "examples/" literal through locator.go
-		// (LOCATOR-DISCOVERY-FUNNEL-01).
+		// Assemblies under examples/ derive their entrypoint adjacent to
+		// the assembly.yaml file ({assembly_dir}/main.go) — preserves the
+		// "identity by location" principle without re-naming the
+		// "examples" path literal outside the Locator funnel
+		// (LOCATOR-DISCOVERY-FUNNEL-01). IsExamplePath funnels the
+		// classification decision through locator.go. All other assemblies
+		// default to cmd/{id}/main.go.
+		//
+		// ref: helm/helm pkg/chartutil/create.go, kustomize-sigs
+		// pkg/types/kustomization.go — identity by location.
 		if IsExamplePath(asm.File) {
-			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("examples", asm.ID, "main.go"))
+			asm.Build.Entrypoint = path.Join(path.Dir(filepath.ToSlash(asm.File)), "main.go")
 		} else {
 			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))
 		}

@@ -93,7 +93,7 @@ endpoints:
 gocell validate
 ```
 
-预期输出：metadata 解析通过，governance rules 在 conventional-mode-specific 规则上 skip（因 examples/ 不存在），其余按 cell.yaml / slice.yaml / contract.yaml 内容评估。
+预期：退出码 0，stderr/stdout 中出现 `INFO metadata: locator mode resolved mode=manifest`，stdout 输出 `PASS: no errors` 或仅 advisory warnings；governance rules 在 conventional-mode-specific 规则上自动 skip（因 `examples/` 子树在外部 repo 不存在）。
 
 需要显式 override 时：
 
@@ -104,11 +104,14 @@ gocell validate --layout=manifest --manifest=./config/manifest.yaml
 
 ### 5. Workspace 模式
 
-如需同时联调 gocell 自身 + 业务 cell module，用 Go workspace：
+如需同时联调 gocell 自身 + 业务 cell module，用 Go workspace。Workspace 根目录是包含 `go.work` + `.gocell/manifest.yaml` 的目录；所有 `modules[].path` 必须**相对该目录** 且不含 `..`（Locator 会拒绝 `../foo` 形式的 module path，逃逸保护）。
 
 ```bash
 mkdir -p ~/work/platform-workspace && cd ~/work/platform-workspace
-go work init ../gocell ../acme-payment-cell
+# Clone or symlink dependencies inside the workspace root (NOT siblings)
+git clone https://github.com/ghbvf/gocell.git ./gocell
+git clone https://github.com/acme/payment-cell.git ./acme-payment-cell
+go work init ./gocell ./acme-payment-cell
 ```
 
 workspace 根放 `.gocell/manifest.yaml`：
@@ -116,11 +119,11 @@ workspace 根放 `.gocell/manifest.yaml`：
 ```yaml
 version: v1
 modules:
-  - path: ../gocell                  # workspace root 持 actors / status-board singleton
-  - path: ../acme-payment-cell       # 外部业务 module
+  - path: gocell                     # workspace 根的子目录，持 actors / status-board singleton
+  - path: acme-payment-cell          # 第二个 module
 ```
 
-`gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。
+`gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。预期退出码 0，输出末尾包含 `PASS: no errors` 或仅 advisory warnings。
 
 ## 已知限制（M1 范围）
 

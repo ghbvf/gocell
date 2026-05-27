@@ -86,10 +86,11 @@ func buildLocatorOptions(layout, manifest string) ([]metadata.LocatorOption, err
 // `gocell check ...` subcommands to share a single flag schema (M1 #1082).
 func addLocatorFlags(fs *flag.FlagSet) (layout, manifestPath *string) {
 	layout = fs.String("layout", "",
-		"locator mode: empty=auto (default) | conventional | manifest. "+
-			"auto detects .gocell/manifest.yaml at root.")
+		"locator mode: auto (default; empty also resolves to auto) | conventional | manifest. "+
+			"auto probes <root>/.gocell/manifest.yaml; manifest forces the manifest path.")
 	manifestPath = fs.String("manifest", "",
-		"explicit manifest path (default: <root>/.gocell/manifest.yaml). "+
-			"Only consulted when manifest mode applies.")
+		"explicit manifest file path (default: <root>/.gocell/manifest.yaml). "+
+			"Honored under --layout=manifest and under --layout=auto when the manifest file is detected; "+
+			"silently ignored under --layout=conventional.")
 	return layout, manifestPath
 }

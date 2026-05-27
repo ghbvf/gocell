@@ -114,15 +114,13 @@ func newSliceRef(key string, s *metadata.SliceMeta) sliceRef {
 			}
 		}
 	}
-	cellDir := s.CellDir
-	if cellDir == "" {
-		cellDir = cellID
-	}
-	sliceDir := s.Dir
-	if sliceDir == "" {
-		sliceDir = sliceID
-	}
-	dir := filepath.ToSlash(filepath.Join("cells", cellDir, "slices", sliceDir))
+	// Post-M1 (#1082): slice.File is authoritative (populated by Locator).
+	// The dir is derived from File directly. The legacy
+	// filepath.Join("cells", cellDir, "slices", sliceDir) fallback was
+	// removed when the Locator funnel made File mandatory — keeping the
+	// fallback would re-leak the conventional layout "cells" literal into
+	// governance, violating LOCATOR-DISCOVERY-FUNNEL-01.
+	dir := ""
 	if s.File != "" {
 		dir = filepath.ToSlash(filepath.Dir(s.File))
 	}

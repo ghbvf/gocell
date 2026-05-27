@@ -246,10 +246,18 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 //   - A2a: strings.HasPrefix(_, "<token>/")
 //   - A2b: x == "<token>" or x != "<token>"
 //
-// Not directly locked (blind spots), enforced as negative invariants:
+// Not directly locked (blind spots), enforced as negative invariants
+// in this test function:
 //   - String concatenation rebuilding a forbidden literal (e.g.
 //     "cell" + "s/")
 //   - Regex anchors (regexp.MustCompile(`^cells/`))
+//   - filepath.Join("<token>", ...) reconstructing a layout path
+//   - strings.Contains(_, "<token>/") substring scanning
+//
+// Upstream Hard is a Go-language won't-do (sealed cross-package
+// interface with private constructor is structurally unreachable in
+// Go) — see SPAN-SETATTR-HOLDER-SEAL-01 #851 same precedent; no
+// tracking issue is opened for the Medium upstream ceiling.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	root := findModuleRoot(t)
 	concatDiags := Run(t, DirsScope(root, locatorScanDirs()),
@@ -330,6 +338,98 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			return d
 		})
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.REGEX", regexDiags)
+
+	// Blind-spot #3: filepath.Join("<token>", ...) — reconstructs a
+	// conventional-layout path without any HasPrefix or ==/!= shape.
+	// Originally caught a `filepath.Join("cells", ...)` leak in
+	// kernel/governance/rules_misc_consistency.go after the M1 refactor.
+	joinDiags := Run(t, DirsScope(root, locatorScanDirs()),
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if len(call.Args) < 1 {
+						return
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok {
+						return
+					}
+					if (ident.Name != "filepath" && ident.Name != "path") || sel.Sel.Name != "Join" {
+						return
+					}
+					lit, ok := locatorStringLiteral(call.Args[0])
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutTokens {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(call.Pos()).Line,
+								Message: "blind-spot #3 (filepath.Join): " + ident.Name + ".Join(" +
+									strconv.Quote(lit) + ", ...) reconstructs a conventional-layout path",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.JOIN", joinDiags)
+
+	// Blind-spot #4: strings.Contains(_, "<token>/") — substring scan for
+	// a conventional-layout prefix. Not caught by A2a (HasPrefix) because
+	// the callee differs.
+	containsDiags := Run(t, DirsScope(root, locatorScanDirs()),
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if len(call.Args) < 2 {
+						return
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "strings" || sel.Sel.Name != "Contains" {
+						return
+					}
+					lit, ok := locatorStringLiteral(call.Args[1])
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutPrefixes {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(call.Pos()).Line,
+								Message: "blind-spot #4 (strings.Contains): strings.Contains(_, " +
+									strconv.Quote(lit) + ") substring-scans a conventional-layout prefix",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONTAINS", containsDiags)
 }
 
 // --- internal helpers ---

@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -251,38 +252,70 @@ func IsExamplePath(p string) bool {
 }
 
 // resolveMode applies the requested mode (or auto-detection) and pre-loads
-// the manifest if Manifest mode is selected.
+// the manifest if Manifest mode is selected. Emits a structured slog.Info
+// once the mode is decided so CI logs make the active layout explicit (CI
+// debugging value when external-repo runs silently switch into manifest
+// mode); emits slog.Error before returning a manifest-load failure so
+// operators get a structured record alongside the wrapped error.
 func (l *Locator) resolveMode() error {
 	switch l.requestedMode {
 	case LocatorConventional:
 		l.resolvedMode = LocatorConventional
+		l.logResolved()
 		return nil
 	case LocatorManifest:
 		spec, err := loadManifest(l.fsys, l.manifestPath)
 		if err != nil {
+			slog.Error("metadata: locator manifest load failed",
+				slog.String("manifest_path", l.manifestPath),
+				slog.String("requested_mode", l.requestedMode.String()),
+				slog.String("err", err.Error()))
 			return fmt.Errorf("metadata: locator: explicit manifest mode but manifest load failed: %w", err)
 		}
 		l.manifestSpec = spec
 		l.resolvedMode = LocatorManifest
+		l.logResolved()
 		return nil
 	case LocatorAuto:
 		// Probe for manifest presence.
 		if _, err := fs.Stat(l.fsys, l.manifestPath); err == nil {
 			spec, lerr := loadManifest(l.fsys, l.manifestPath)
 			if lerr != nil {
+				slog.Error("metadata: locator manifest load failed (auto-detected)",
+					slog.String("manifest_path", l.manifestPath),
+					slog.String("requested_mode", l.requestedMode.String()),
+					slog.String("err", lerr.Error()))
 				return fmt.Errorf("metadata: locator: manifest %s detected but load failed: %w", l.manifestPath, lerr)
 			}
 			l.manifestSpec = spec
 			l.resolvedMode = LocatorManifest
+			l.logResolved()
 			return nil
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("metadata: locator: probe manifest %s: %w", l.manifestPath, err)
 		}
 		l.resolvedMode = LocatorConventional
+		l.logResolved()
 		return nil
 	default:
 		return fmt.Errorf("metadata: locator: invalid mode %d", l.requestedMode)
 	}
+}
+
+// logResolved emits a single structured slog.Info noting the active
+// locator mode. Aligns with the observability rule "Info: 生命周期" —
+// surfaces the layout decision in CI logs so external-repo operators
+// can confirm whether manifest detection succeeded.
+func (l *Locator) logResolved() {
+	modules := 0
+	if l.manifestSpec != nil {
+		modules = len(l.manifestSpec.Modules)
+	}
+	slog.Info("metadata: locator mode resolved",
+		slog.String("mode", l.resolvedMode.String()),
+		slog.String("manifest_path", l.manifestPath),
+		slog.Int("manifest_modules", modules),
+		slog.String("requested_mode", l.requestedMode.String()))
 }
 
 // Discover walks the locator root and emits one MetadataSource per metadata

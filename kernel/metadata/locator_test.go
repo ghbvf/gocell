@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"reflect"
 	"sort"
@@ -200,6 +201,35 @@ func TestLocator_ManifestRejectsBadPaths(t *testing.T) {
 			wantSub: "actors.yaml is a workspace-level singleton",
 		},
 		{
+			name: "secondary singleton statusBoard",
+			manifest: "version: v1\nmodules:\n  - path: .\n  - path: sub\n" +
+				"    includes:\n      statusBoard: journeys/status-board.yaml\n",
+			wantSub: "status-board.yaml is a workspace-level singleton",
+		},
+		{
+			name: "excludes with parent escape",
+			manifest: "version: v1\nmodules:\n  - path: .\n" +
+				"    excludes:\n      - ../../secret/**\n",
+			wantSub: "path escape not allowed",
+		},
+		{
+			name: "include glob with parent escape",
+			manifest: "version: v1\nmodules:\n  - path: .\n" +
+				"    includes:\n      cells:\n        - ../../secret/cell.yaml\n",
+			wantSub: "path escape not allowed",
+		},
+		{
+			name: "manifest too large rejected",
+			// Repeat a valid module line until the YAML exceeds the 64 KiB cap.
+			manifest: largeManifestExceedingSizeLimit(),
+			wantSub:  "exceeds size limit",
+		},
+		{
+			name:     "too many modules rejected",
+			manifest: tooManyModulesManifest(),
+			wantSub:  "too many modules",
+		},
+		{
 			name:     "unsupported version",
 			manifest: "version: v2\nmodules:\n  - path: .\n",
 			wantSub:  "unsupported version",
@@ -256,6 +286,61 @@ modules:
 	}
 }
 
+// TestLocator_ManifestGlobNoMatch verifies that a custom include glob
+// that matches zero files is not an error and produces an empty result
+// (the slog.Warn surface is the operator-facing signal, not a hard
+// failure — gocell validate succeeds with zero discovered cells).
+func TestLocator_ManifestGlobNoMatch(t *testing.T) {
+	manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/bar/cell.yaml"
+`
+	fsys := fstest.MapFS{
+		".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
+		"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
+	}
+	l, err := NewLocatorFS(fsys)
+	if err != nil {
+		t.Fatalf("NewLocatorFS: %v", err)
+	}
+	sources, err := l.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(sources) != 0 {
+		t.Errorf("Discover with non-matching glob produced %d sources, want 0", len(sources))
+	}
+}
+
+// TestLocator_GeneratedExcludeDefault verifies that a manifest module
+// without an explicit excludes list still excludes generated/** so
+// codegen output doesn't re-enter the metadata scan (ADR threat
+// matrix promise).
+func TestLocator_GeneratedExcludeDefault(t *testing.T) {
+	manifest := "version: v1\nmodules:\n  - path: .\n"
+	fsys := fstest.MapFS{
+		".gocell/manifest.yaml":             &fstest.MapFile{Data: []byte(manifest)},
+		"cells/real/cell.yaml":              &fstest.MapFile{Data: []byte("id: real\n")},
+		"generated/contracts/foo/cell.yaml": &fstest.MapFile{Data: []byte("id: shouldnotappear\n")},
+		"generated/cells/foo/cell.yaml":     &fstest.MapFile{Data: []byte("id: shouldnotappear\n")},
+	}
+	l, err := NewLocatorFS(fsys)
+	if err != nil {
+		t.Fatalf("NewLocatorFS: %v", err)
+	}
+	sources, err := l.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	want := []string{"cell:cells/real/cell.yaml:real"}
+	if got := summariseSources(sources); !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
 // TestParseLocatorMode covers the CLI flag string round trip.
 func TestParseLocatorMode(t *testing.T) {
 	cases := []struct {
@@ -299,6 +384,30 @@ func TestLocator_AutoDetectStatErrorPropagates(t *testing.T) {
 	if !strings.Contains(err.Error(), "probe manifest") {
 		t.Errorf("error does not mention probe: %v", err)
 	}
+}
+
+// largeManifestExceedingSizeLimit builds a manifest whose size exceeds the
+// 64 KiB cap by repeating a comment line.
+func largeManifestExceedingSizeLimit() string {
+	var b strings.Builder
+	b.WriteString("version: v1\nmodules:\n  - path: .\n")
+	// Filler comment lines until we exceed the cap.
+	filler := "# " + strings.Repeat("x", 200) + "\n"
+	for b.Len() < (65 << 10) {
+		b.WriteString(filler)
+	}
+	return b.String()
+}
+
+// tooManyModulesManifest builds a manifest with more than maxManifestModules
+// module entries to exercise the WalkDir-amplification guard.
+func tooManyModulesManifest() string {
+	var b strings.Builder
+	b.WriteString("version: v1\nmodules:\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&b, "  - path: m%d\n", i)
+	}
+	return b.String()
 }
 
 // summariseSources renders a deterministic sorted "kind:path:cellID" view of

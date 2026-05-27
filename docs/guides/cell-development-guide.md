@@ -696,7 +696,9 @@ gocell validate --layout=manifest --manifest=./config/.gocell/manifest.yaml
 gocell validate --layout=conventional
 ```
 
-其他 12 个 CLI 子命令（`generate / verify / export / scaffold-assembly / codegen / graph` 等）通过 auto-detect 自动工作——`<root>/.gocell/manifest.yaml` 存在即用，无需显式 flag。
+其他 11 个 CLI 子命令（`generate / verify / export / scaffold-assembly / codegen / graph` 等）通过 auto-detect 自动工作——`<root>/.gocell/manifest.yaml` 存在即用，无需显式 flag。
+
+> **例外**：`gocell check unconditional-skip` 不走 metadata.Locator（它直接通过 `go/packages` 扫描 Go 代码做静态分析），其行为完全由 Go 包路径决定，manifest 配置不影响其扫描范围。
 
 ### Manifest 模式下的 slice belongsToCell
 

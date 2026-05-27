@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -77,7 +78,21 @@ func defaultManifestIncludes() ManifestIncludes {
 	}
 }
 
-const manifestSchemaVersion = "v1"
+const (
+	manifestSchemaVersion = "v1"
+
+	// maxManifestFileSize caps the .gocell/manifest.yaml file at 64 KiB.
+	// Real manifests are well under 1 KiB (a handful of module entries);
+	// 64 KiB leaves headroom for very large workspaces while preventing
+	// memory exhaustion from an adversarial multi-MB manifest.
+	maxManifestFileSize = 64 << 10 // 64 KiB
+
+	// maxManifestModules caps the number of module entries to prevent
+	// O(modules × glob_patterns) WalkDir amplification. 256 is well
+	// above any realistic workspace size and below the threshold where
+	// glob expansion becomes a DoS vector.
+	maxManifestModules = 256
+)
 
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
 // validating the schema version, module path safety, and singleton
@@ -95,11 +110,17 @@ func loadManifest(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 
 // readManifestSpec performs only the file IO + YAML decode steps for
 // loadManifest, keeping validation in validateManifestSpec to satisfy the
-// kernel/-layer 15-complexity budget.
+// kernel/-layer 15-complexity budget. The 64 KiB size cap prevents a
+// huge-manifest DoS at the wire boundary, mirroring unmarshalFile's
+// maxMetadataFileSize policy for cell/slice/contract YAML.
 func readManifestSpec(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 	data, err := fs.ReadFile(fsys, manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
+	}
+	if len(data) > maxManifestFileSize {
+		return nil, fmt.Errorf("manifest %s: exceeds size limit (size=%d limit=%d)",
+			manifestPath, len(data), maxManifestFileSize)
 	}
 	var spec ManifestSpec
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -121,19 +142,72 @@ func validateManifestSpec(manifestPath string, spec *ManifestSpec) error {
 	if len(spec.Modules) == 0 {
 		return fmt.Errorf("manifest %s: at least one module entry required", manifestPath)
 	}
+	if len(spec.Modules) > maxManifestModules {
+		return fmt.Errorf(
+			"manifest %s: too many modules (count=%d limit=%d) — risk WalkDir amplification",
+			manifestPath, len(spec.Modules), maxManifestModules)
+	}
 	seenPaths := make(map[string]int)
 	for i, m := range spec.Modules {
-		if err := validateManifestModulePath(m.Path); err != nil {
-			return fmt.Errorf("manifest %s: modules[%d].path: %w", manifestPath, i, err)
-		}
-		normPath := path.Clean(m.Path)
-		if dup, ok := seenPaths[normPath]; ok {
-			return fmt.Errorf("manifest %s: modules[%d].path %q duplicates modules[%d]",
-				manifestPath, i, m.Path, dup)
-		}
-		seenPaths[normPath] = i
-		if err := validateManifestSingleton(manifestPath, i, m); err != nil {
+		if err := validateManifestModuleEntry(manifestPath, i, m, seenPaths); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateManifestModuleEntry applies all per-module invariants: path
+// safety (no absolute / no parent escape), duplicate detection, singleton
+// uniqueness, and exclude/include glob safety.
+func validateManifestModuleEntry(manifestPath string, i int, m ManifestModule, seenPaths map[string]int) error {
+	if err := validateManifestModulePath(m.Path); err != nil {
+		return fmt.Errorf("manifest %s: modules[%d].path: %w", manifestPath, i, err)
+	}
+	normPath := path.Clean(m.Path)
+	if dup, ok := seenPaths[normPath]; ok {
+		return fmt.Errorf("manifest %s: modules[%d].path %q duplicates modules[%d]",
+			manifestPath, i, m.Path, dup)
+	}
+	seenPaths[normPath] = i
+	if err := validateManifestSingleton(manifestPath, i, m); err != nil {
+		return err
+	}
+	return validateManifestGlobs(manifestPath, i, m)
+}
+
+// validateManifestGlobs rejects glob patterns in includes/excludes that
+// contain parent-escape ("..") segments. Without this guard, an exclude
+// like "../../other-module/cells/**" could suppress entries from a
+// sibling module in Workspace mode, breaking cell-scan isolation, while
+// includes leaking outside the module root would silently match nothing
+// (WalkDir doesn't surface "..") and confuse the user.
+func validateManifestGlobs(manifestPath string, i int, m ManifestModule) error {
+	for _, p := range m.Excludes {
+		if err := validateManifestModulePath(p); err != nil {
+			return fmt.Errorf("manifest %s: modules[%d].excludes %q: %w", manifestPath, i, p, err)
+		}
+	}
+	includeBuckets := [][]string{
+		m.Includes.Cells, m.Includes.Slices, m.Includes.Contracts,
+		m.Includes.Journeys, m.Includes.Assemblies,
+	}
+	for _, bucket := range includeBuckets {
+		for _, p := range bucket {
+			if err := validateManifestModulePath(p); err != nil {
+				return fmt.Errorf("manifest %s: modules[%d].includes %q: %w", manifestPath, i, p, err)
+			}
+		}
+	}
+	if m.Includes.Actors != "" {
+		if err := validateManifestModulePath(m.Includes.Actors); err != nil {
+			return fmt.Errorf("manifest %s: modules[%d].includes.actors %q: %w",
+				manifestPath, i, m.Includes.Actors, err)
+		}
+	}
+	if m.Includes.StatusBoard != "" {
+		if err := validateManifestModulePath(m.Includes.StatusBoard); err != nil {
+			return fmt.Errorf("manifest %s: modules[%d].includes.statusBoard %q: %w",
+				manifestPath, i, m.Includes.StatusBoard, err)
 		}
 	}
 	return nil
@@ -242,6 +316,11 @@ func (l *Locator) discoverManifestModule(mod ManifestModule, allowSingletons boo
 // buildManifestModulePlan normalises the include defaults + base path and
 // produces the per-emission plan executed by discoverManifestPlanEmissions /
 // discoverManifestPlanSingletons.
+//
+// When the module does not declare any excludes, the ADR-promised
+// "generated/**" exclude is applied so codegen output never silently
+// re-enters the metadata scan. Users who genuinely want generated/ in
+// scope must declare a non-empty Excludes list (the default does not fire).
 func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestModulePlan {
 	includes := mod.Includes
 	if manifestIncludesEmpty(includes) {
@@ -251,9 +330,13 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 	if base == "." {
 		base = ""
 	}
+	excludes := mod.Excludes
+	if len(excludes) == 0 {
+		excludes = []string{"generated/**"}
+	}
 	plan := manifestModulePlan{
 		base:            base,
-		excludes:        compileManifestExcludes(base, mod.Excludes),
+		excludes:        compileManifestExcludes(base, excludes),
 		allowSingletons: allowSingletons,
 		emissions: []manifestEmission{
 			{patterns: includes.Cells, kind: SourceCell, deriveCell: func(p string) string {
@@ -299,6 +382,11 @@ func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]Meta
 // filters excludes, and emits MetadataSources with derived CellID where
 // applicable. Split out so discoverManifestPlanEmissions itself stays a
 // straight three-line walk under the kernel/-layer 15-complexity budget.
+//
+// A glob pattern that matches zero files emits a structured slog.Warn —
+// zero matches is almost always a manifest typo (e.g. `cell.yml` instead
+// of `cell.yaml`) and silent skipping would hide the misconfiguration
+// behind a "PASS, but 0 cells found" outcome.
 func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
 	var out []MetadataSource
 	for _, g := range em.patterns {
@@ -306,6 +394,7 @@ func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em
 		if err != nil {
 			return nil, fmt.Errorf("glob %s: %w", g, err)
 		}
+		emitted := 0
 		for _, m := range matches {
 			if excludes.match(m) {
 				continue
@@ -315,6 +404,13 @@ func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em
 				src.CellID = em.deriveCell(m)
 			}
 			out = append(out, src)
+			emitted++
+		}
+		if emitted == 0 {
+			slog.Warn("metadata: locator manifest include pattern matched zero files",
+				slog.String("pattern", g),
+				slog.String("kind", em.kind.String()),
+				slog.String("module_base", base))
 		}
 	}
 	return out, nil
