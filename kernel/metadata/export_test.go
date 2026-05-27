@@ -1,0 +1,12 @@
+// Package metadata export_test.go exposes unexported functions to the
+// external test package (package metadata_test) without creating an import
+// cycle. Test files that need these functions must use package metadata_test.
+package metadata
+
+// ExportedDeriveEventSubscribers exposes the unexported deriveEventSubscribers
+// function for use in package metadata_test test files.
+var ExportedDeriveEventSubscribers = deriveEventSubscribers
+
+// ExportedApplyAssemblyDerivations exposes the unexported applyAssemblyDerivations
+// function for use in package metadata_test test files.
+var ExportedApplyAssemblyDerivations = applyAssemblyDerivations

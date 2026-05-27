@@ -1,4 +1,4 @@
-package metadata
+package metadata_test
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 )
 
@@ -18,7 +20,7 @@ func TestContractUsage_HandlerAndGroupUnmarshal(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
-		wantCU ContractUsage
+		wantCU metadata.ContractUsage
 	}{
 		{
 			name: "subscribe with handler and group",
@@ -26,7 +28,7 @@ func TestContractUsage_HandlerAndGroupUnmarshal(t *testing.T) {
 role: subscribe
 handler: HandleSessionCreated
 group: accesscore-sync`,
-			wantCU: ContractUsage{
+			wantCU: metadata.ContractUsage{
 				Contract: "event.session.created.v1",
 				Role:     "subscribe",
 				Handler:  "HandleSessionCreated",
@@ -38,7 +40,7 @@ group: accesscore-sync`,
 			input: `contract: event.session.created.v1
 role: subscribe
 handler: HandleSessionCreated`,
-			wantCU: ContractUsage{
+			wantCU: metadata.ContractUsage{
 				Contract: "event.session.created.v1",
 				Role:     "subscribe",
 				Handler:  "HandleSessionCreated",
@@ -49,7 +51,7 @@ handler: HandleSessionCreated`,
 			name: "publish role — no handler or group",
 			input: `contract: event.session.created.v1
 role: publish`,
-			wantCU: ContractUsage{
+			wantCU: metadata.ContractUsage{
 				Contract: "event.session.created.v1",
 				Role:     "publish",
 				Handler:  "",
@@ -60,7 +62,7 @@ role: publish`,
 			name: "serve role — no handler or group",
 			input: `contract: http.auth.login.v1
 role: serve`,
-			wantCU: ContractUsage{
+			wantCU: metadata.ContractUsage{
 				Contract: "http.auth.login.v1",
 				Role:     "serve",
 			},
@@ -68,7 +70,7 @@ role: serve`,
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got ContractUsage
+			var got metadata.ContractUsage
 			require.NoError(t, yaml.Unmarshal([]byte(tt.input), &got))
 			assert.Equal(t, tt.wantCU, got)
 		})
@@ -78,96 +80,96 @@ role: serve`,
 // --- deriveEventSubscribers tests ---
 
 // buildSubscribeProject builds a ProjectMeta for subscriber derivation tests.
-func buildSubscribeProject(slices map[string]*SliceMeta, contracts map[string]*ContractMeta) *ProjectMeta {
-	return &ProjectMeta{
-		Cells:      make(map[string]*CellMeta),
+func buildSubscribeProject(slices map[string]*metadata.SliceMeta, contracts map[string]*metadata.ContractMeta) *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells:      make(map[string]*metadata.CellMeta),
 		Slices:     slices,
 		Contracts:  contracts,
-		Journeys:   make(map[string]*JourneyMeta),
-		Assemblies: make(map[string]*AssemblyMeta),
+		Journeys:   make(map[string]*metadata.JourneyMeta),
+		Assemblies: make(map[string]*metadata.AssemblyMeta),
 	}
 }
 
 func TestDeriveEventSubscribers_SingleSubscriber(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
-				Endpoints: EndpointsMeta{Publisher: "accesscore", Subscribers: []string{}},
+				Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.CellIDAccessCore, Subscribers: []string{}},
 			},
 		},
 	)
 
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	subs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"auditcore"}, subs)
+	assert.Equal(t, []string{metadatatest.CellIDAuditCore}, subs)
 }
 
 func TestDeriveEventSubscribers_MultiCellDedupedSorted(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 			"configcore/configaudit": {
 				ID:            "configaudit",
-				BelongsToCell: "configcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDConfigCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
-				Endpoints: EndpointsMeta{Publisher: "accesscore", Subscribers: []string{}},
+				Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.CellIDAccessCore, Subscribers: []string{}},
 			},
 		},
 	)
 
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	subs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"auditcore", "configcore"}, subs, "must be deduped and sorted")
+	assert.Equal(t, []string{metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore}, subs, "must be deduped and sorted")
 }
 
 func TestDeriveEventSubscribers_NonEventContractSkipped(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "accesscore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAccessCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "subscribe", Handler: "HandleLogin"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"http.auth.login.v1": {
 				ID:        "http.auth.login.v1",
 				Kind:      "http", // NOT "event"
-				Endpoints: EndpointsMeta{Server: "accesscore", Subscribers: []string{}},
+				Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore, Subscribers: []string{}},
 			},
 		},
 	)
 
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	// Subscribers must remain empty — non-event contract skipped
 	subs := pm.Contracts["http.auth.login.v1"].Endpoints.Subscribers
@@ -176,21 +178,21 @@ func TestDeriveEventSubscribers_NonEventContractSkipped(t *testing.T) {
 
 func TestDeriveEventSubscribers_MissingContractSkipped(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.does.not.exist.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 		},
-		map[string]*ContractMeta{}, // contract missing
+		map[string]*metadata.ContractMeta{}, // contract missing
 	)
 
 	// Must not error; missing contract is simply skipped
 	assert.NotPanics(t, func() {
-		deriveEventSubscribers(pm)
+		metadata.ExportedDeriveEventSubscribers(pm)
 	})
 }
 
@@ -201,66 +203,66 @@ func TestDeriveEventSubscribers_MissingContractSkipped(t *testing.T) {
 // the same BelongsToCell value from multiple slices before dedupSorted runs.
 func TestDeriveEventSubscribers_SameCellTwoSlices_Deduped(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 			"auditcore/auditreplay": {
 				ID:            "auditreplay",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleReplay"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
-				Endpoints: EndpointsMeta{Publisher: "accesscore", Subscribers: []string{}},
+				Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.CellIDAccessCore, Subscribers: []string{}},
 			},
 		},
 	)
 
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	subs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"auditcore"}, subs,
+	assert.Equal(t, []string{metadatatest.CellIDAuditCore}, subs,
 		"two slices in the same cell subscribing to the same contract must yield exactly one subscriber entry")
 }
 
 func TestDeriveEventSubscribers_IdempotentWhenAlreadyListed(t *testing.T) {
-	// contract.yaml already declares "auditcore" — derive must not duplicate it
+	// contract.yaml already declares auditcore — derive must not duplicate it
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.session.created.v1": {
 				ID:   "event.session.created.v1",
 				Kind: "event",
-				Endpoints: EndpointsMeta{
-					Publisher:   "accesscore",
-					Subscribers: []string{"auditcore"}, // already declared
+				Endpoints: metadata.EndpointsMeta{
+					Publisher:   metadatatest.CellIDAccessCore,
+					Subscribers: []string{metadatatest.CellIDAuditCore}, // already declared
 				},
 			},
 		},
 	)
 
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	subs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"auditcore"}, subs, "union+dedup must not create duplicate")
+	assert.Equal(t, []string{metadatatest.CellIDAuditCore}, subs, "union+dedup must not create duplicate")
 }
 
 // --- slice.schema.json validation tests ---

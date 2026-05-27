@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestBaseCell_Lifecycle covers the lifecycle funnel in NewBaseCell:
@@ -35,7 +36,7 @@ func TestBaseCell_Lifecycle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			c, err := NewBaseCell(&metadata.CellMeta{ID: "c", Lifecycle: tt.lifecycle})
+			c, err := NewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDCC, Lifecycle: tt.lifecycle})
 			if tt.wantErr {
 				require.Error(t, err)
 				return

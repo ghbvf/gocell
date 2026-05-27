@@ -1,4 +1,4 @@
-package metadata
+package metadata_test
 
 import (
 	"encoding/json"
@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 )
 
@@ -26,14 +28,14 @@ func roundTrip[T any](t *testing.T, v T) ([]byte, T) {
 }
 
 func TestCellMetaRoundTrip(t *testing.T) {
-	orig := CellMeta{
-		ID:               "accesscore",
+	orig := metadata.CellMeta{
+		ID:               metadatatest.CellIDAccessCore,
 		Type:             "core",
 		ConsistencyLevel: "L2",
-		Owner:            OwnerMeta{Team: "platform", Role: "cell-owner"},
-		Schema:           SchemaMeta{Primary: "cell_access_core"},
-		Verify:           CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
-		L0Dependencies:   []L0DepMeta{{Cell: "shared-crypto", Reason: "hashing"}},
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+		L0Dependencies:   []metadata.L0DepMeta{{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"}},
 		Requires:         []string{"postgres", "redis"},
 	}
 	_, got := roundTrip(t, orig)
@@ -44,8 +46,8 @@ func TestCellMetaRoundTrip(t *testing.T) {
 // Requires slice (Design Y, #855): mutating the clone's Requires must not leak
 // into the original. Mirrors the L0Dependencies / Verify.Smoke deep-copy guard.
 func TestCellMeta_Clone_RequiresIndependence(t *testing.T) {
-	src := &CellMeta{
-		ID:       "accesscore",
+	src := &metadata.CellMeta{
+		ID:       metadatatest.CellIDAccessCore,
 		Requires: []string{"postgres", "redis"},
 	}
 	clone := src.Clone()
@@ -58,31 +60,31 @@ func TestCellMeta_Clone_RequiresIndependence(t *testing.T) {
 }
 
 func TestCellMetaEmptyL0Dependencies(t *testing.T) {
-	orig := CellMeta{
-		ID:               "configcore",
+	orig := metadata.CellMeta{
+		ID:               metadatatest.CellIDConfigCore,
 		Type:             "core",
 		ConsistencyLevel: "L2",
-		Owner:            OwnerMeta{Team: "platform", Role: "cell-owner"},
-		Schema:           SchemaMeta{Primary: "cell_config_core"},
-		Verify:           CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
-		L0Dependencies:   []L0DepMeta{},
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Schema:           metadata.SchemaMeta{Primary: "cell_config_core"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
+		L0Dependencies:   []metadata.L0DepMeta{},
 	}
 	_, got := roundTrip(t, orig)
 	assert.Equal(t, orig, got)
 }
 
 func TestSliceMetaRoundTrip(t *testing.T) {
-	orig := SliceMeta{
+	orig := metadata.SliceMeta{
 		ID:            "session-login",
-		BelongsToCell: "accesscore",
-		ContractUsages: []ContractUsage{
+		BelongsToCell: metadatatest.CellIDAccessCore,
+		ContractUsages: []metadata.ContractUsage{
 			{Contract: "http.auth.login.v1", Role: "serve"},
 			{Contract: "event.session.created.v1", Role: "publish"},
 		},
-		Verify: SliceVerifyMeta{
+		Verify: metadata.SliceVerifyMeta{
 			Unit:     []string{"unit.session-login.service"},
 			Contract: []string{"contract.http.auth.login.v1.serve"},
-			Waivers: []WaiverMeta{
+			Waivers: []metadata.WaiverMeta{
 				{
 					Contract:  "http.config.get.v1",
 					Owner:     "platform-team",
@@ -97,17 +99,17 @@ func TestSliceMetaRoundTrip(t *testing.T) {
 }
 
 func TestContractMetaHTTPRoundTrip(t *testing.T) {
-	orig := ContractMeta{
+	orig := metadata.ContractMeta{
 		ID:               "http.auth.login.v1",
 		Kind:             "http",
-		OwnerCell:        "accesscore",
+		OwnerCell:        metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
-		Endpoints: EndpointsMeta{
-			Server:  "accesscore",
-			Clients: []string{"edge-bff"},
+		Endpoints: metadata.EndpointsMeta{
+			Server:  metadatatest.CellIDAccessCore,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
 		},
-		SchemaRefs: SchemaRefsMeta{
+		SchemaRefs: metadata.SchemaRefsMeta{
 			Request:  "request.schema.json",
 			Response: "response.schema.json",
 		},
@@ -122,23 +124,23 @@ func TestContractMetaHTTPRoundTrip(t *testing.T) {
 }
 
 func TestContractMetaHTTPTransportRoundTrip(t *testing.T) {
-	orig := ContractMeta{
+	orig := metadata.ContractMeta{
 		ID:               "http.auth.user.delete.v1",
 		Kind:             "http",
-		OwnerCell:        "accesscore",
+		OwnerCell:        metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
-		Endpoints: EndpointsMeta{
-			Server:  "accesscore",
-			Clients: []string{"edge-bff"},
-			HTTP: &HTTPTransportMeta{
+		Endpoints: metadata.EndpointsMeta{
+			Server:  metadatatest.CellIDAccessCore,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
+			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "DELETE",
 				Path:          "/api/v1/auth/users/{userId}",
 				SuccessStatus: 204,
 				NoContent:     true,
 			},
 		},
-		SchemaRefs: SchemaRefsMeta{
+		SchemaRefs: metadata.SchemaRefsMeta{
 			Request: "request.schema.json",
 		},
 	}
@@ -155,14 +157,14 @@ func TestContractMetaEventRoundTrip(t *testing.T) {
 	replayable := true
 	// Subscribers is yaml:"-" (derived, not persisted). Round-trip via
 	// actorSubscribers only; cell subscribers are derived at parse time.
-	orig := ContractMeta{
+	orig := metadata.ContractMeta{
 		ID:               "event.session.created.v1",
 		Kind:             "event",
-		OwnerCell:        "accesscore",
+		OwnerCell:        metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints: EndpointsMeta{
-			Publisher:        "accesscore",
+		Endpoints: metadata.EndpointsMeta{
+			Publisher:        metadatatest.CellIDAccessCore,
 			ActorSubscribers: []string{"external-sink"},
 		},
 		Replayable:        &replayable,
@@ -186,14 +188,14 @@ func TestContractMetaEventRoundTrip(t *testing.T) {
 }
 
 func TestContractMetaOmitEmptySchemaRefs(t *testing.T) {
-	orig := ContractMeta{
+	orig := metadata.ContractMeta{
 		ID:               "http.test.v1",
 		Kind:             "http",
-		OwnerCell:        "test-cell",
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: "L1",
 		Lifecycle:        "draft",
-		Endpoints: EndpointsMeta{
-			Server: "test-cell",
+		Endpoints: metadata.EndpointsMeta{
+			Server: metadatatest.CellIDTestCell,
 		},
 	}
 	data, _ := roundTrip(t, orig)
@@ -208,7 +210,7 @@ func TestSchemaRefsInlinePrecedence(t *testing.T) {
 response: res.json
 custom: extra.json
 `
-	var sr SchemaRefsMeta
+	var sr metadata.SchemaRefsMeta
 	require.NoError(t, yaml.Unmarshal([]byte(raw), &sr))
 
 	// Named fields populated
@@ -226,7 +228,7 @@ custom: extra.json
 
 // TestSchemaRefsExtraRoundTrip verifies that Extra keys survive marshal→unmarshal.
 func TestSchemaRefsExtraRoundTrip(t *testing.T) {
-	orig := SchemaRefsMeta{
+	orig := metadata.SchemaRefsMeta{
 		Request: "req.json",
 		Extra:   map[string]string{"custom": "extra.json"},
 	}
@@ -237,14 +239,14 @@ func TestSchemaRefsExtraRoundTrip(t *testing.T) {
 }
 
 func TestContractMetaNilReplayable(t *testing.T) {
-	orig := ContractMeta{
+	orig := metadata.ContractMeta{
 		ID:               "http.test.v1",
 		Kind:             "http",
-		OwnerCell:        "test-cell",
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: "L1",
 		Lifecycle:        "draft",
-		Endpoints: EndpointsMeta{
-			Server: "test-cell",
+		Endpoints: metadata.EndpointsMeta{
+			Server: metadatatest.CellIDTestCell,
 		},
 	}
 	data, got := roundTrip(t, orig)
@@ -253,17 +255,17 @@ func TestContractMetaNilReplayable(t *testing.T) {
 }
 
 func TestJourneyMetaRoundTrip(t *testing.T) {
-	orig := JourneyMeta{
+	orig := metadata.JourneyMeta{
 		ID:        "J-ssologin",
 		Goal:      "User completes SSO login",
 		Lifecycle: "active",
-		Owner:     OwnerMeta{Team: "platform", Role: "journey-owner"},
-		Cells:     []string{"accesscore", "auditcore"},
+		Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
+		Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 		Contracts: []string{
 			"http.auth.login.v1",
 			"event.session.created.v1",
 		},
-		PassCriteria: []PassCriterion{
+		PassCriteria: []metadata.PassCriterion{
 			{Text: "OIDC redirect completed", Mode: "auto", CheckRef: "journey.J-ssologin.oidc-redirect"},
 			{Text: "Security review", Mode: "manual"},
 		},
@@ -277,7 +279,7 @@ func TestJourneyMetaRoundTrip(t *testing.T) {
 }
 
 func TestPassCriterionOmitEmptyCheckRef(t *testing.T) {
-	orig := PassCriterion{Text: "Manual check", Mode: "manual"}
+	orig := metadata.PassCriterion{Text: "Manual check", Mode: "manual"}
 	data, got := roundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.NotContains(t, string(data), "checkRef")
@@ -352,10 +354,10 @@ func loadJourneySchema(t *testing.T) *jsonschema.Schema {
 }
 
 func TestAssemblyMetaRoundTrip(t *testing.T) {
-	orig := AssemblyMeta{
+	orig := metadata.AssemblyMeta{
 		ID:    "corebundle",
-		Cells: []string{"accesscore", "auditcore", "configcore"},
-		Build: BuildMeta{
+		Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
+		Build: metadata.BuildMeta{
 			Entrypoint:     "cmd/corebundle/main.go",
 			Binary:         "corebundle",
 			DeployTemplate: "k8s",
@@ -366,7 +368,7 @@ func TestAssemblyMetaRoundTrip(t *testing.T) {
 }
 
 func TestStatusBoardEntryRoundTrip(t *testing.T) {
-	orig := StatusBoardEntry{
+	orig := metadata.StatusBoardEntry{
 		JourneyID: "J-ssologin",
 		State:     "doing",
 		Risk:      "low",
@@ -378,7 +380,7 @@ func TestStatusBoardEntryRoundTrip(t *testing.T) {
 }
 
 func TestActorMetaRoundTrip(t *testing.T) {
-	orig := ActorMeta{
+	orig := metadata.ActorMeta{
 		ID:                  "edge-bff",
 		MaxConsistencyLevel: "L1",
 	}
@@ -387,12 +389,12 @@ func TestActorMetaRoundTrip(t *testing.T) {
 }
 
 func TestHTTPTransportMetaResponsesRoundTrip(t *testing.T) {
-	orig := HTTPTransportMeta{
+	orig := metadata.HTTPTransportMeta{
 		Method:        "POST",
 		Path:          "/api/v1/test",
 		SuccessStatus: 200,
 		NoContent:     false,
-		Responses: map[int]HTTPResponseMeta{
+		Responses: map[int]metadata.HTTPResponseMeta{
 			401: {Description: "Unauthorized", SchemaRef: "error.json"},
 			403: {Description: "Forbidden", SchemaRef: "error.json"},
 		},
@@ -404,7 +406,7 @@ func TestHTTPTransportMetaResponsesRoundTrip(t *testing.T) {
 }
 
 func TestHTTPTransportMetaResponsesOmitEmpty(t *testing.T) {
-	orig := HTTPTransportMeta{
+	orig := metadata.HTTPTransportMeta{
 		Method:        "GET",
 		Path:          "/api/v1/test",
 		SuccessStatus: 200,
@@ -417,22 +419,22 @@ func TestHTTPTransportMetaResponsesOmitEmpty(t *testing.T) {
 func TestEndpointsMetaOmitEmpty(t *testing.T) {
 	tests := []struct {
 		name    string
-		meta    EndpointsMeta
+		meta    metadata.EndpointsMeta
 		present []string
 		absent  []string
 	}{
 		{
 			name:    "http only",
-			meta:    EndpointsMeta{Server: "cell-a", Clients: []string{"cell-b"}},
+			meta:    metadata.EndpointsMeta{Server: metadatatest.NewCellID("cella"), Clients: []string{metadatatest.NewCellID("cellb")}},
 			present: []string{"server", "clients"},
 			absent:  []string{"http", "publisher", "subscribers", "handler", "invokers", "provider", "readers"},
 		},
 		{
 			name: "http with transport",
-			meta: EndpointsMeta{
-				Server:  "cell-a",
-				Clients: []string{"cell-b"},
-				HTTP: &HTTPTransportMeta{
+			meta: metadata.EndpointsMeta{
+				Server:  metadatatest.NewCellID("cella"),
+				Clients: []string{metadatatest.NewCellID("cellb")},
+				HTTP: &metadata.HTTPTransportMeta{
 					Method:        "GET",
 					Path:          "/api/v1/test",
 					SuccessStatus: 200,
@@ -446,19 +448,19 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 			// Subscribers is yaml:"-" (derived, not persisted in YAML).
 			// Use actorSubscribers to exercise the event endpoints round-trip.
 			name:    "event only",
-			meta:    EndpointsMeta{Publisher: "cell-a", ActorSubscribers: []string{"external-sink"}},
+			meta:    metadata.EndpointsMeta{Publisher: metadatatest.NewCellID("cella"), ActorSubscribers: []string{"external-sink"}},
 			present: []string{"publisher", "actorSubscribers"},
 			absent:  []string{"server", "clients", "http", "handler", "invokers", "provider", "readers", "subscribers"},
 		},
 		{
 			name:    "command only",
-			meta:    EndpointsMeta{Handler: "cell-a", Invokers: []string{"cell-b"}},
+			meta:    metadata.EndpointsMeta{Handler: metadatatest.NewCellID("cella"), Invokers: []string{metadatatest.NewCellID("cellb")}},
 			present: []string{"handler", "invokers"},
 			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "provider", "readers"},
 		},
 		{
 			name:    "projection only",
-			meta:    EndpointsMeta{Provider: "cell-a", Readers: []string{"cell-b"}},
+			meta:    metadata.EndpointsMeta{Provider: metadatatest.NewCellID("cella"), Readers: []string{metadatatest.NewCellID("cellb")}},
 			present: []string{"provider", "readers"},
 			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "handler", "invokers"},
 		},
@@ -480,14 +482,14 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 }
 
 func TestStatusBoardSliceRoundTrip(t *testing.T) {
-	orig := []StatusBoardEntry{
+	orig := []metadata.StatusBoardEntry{
 		{JourneyID: "J-ssologin", State: "doing", Risk: "low", Blocker: "", UpdatedAt: "2026-04-04"},
 		{JourneyID: "J-sessionrefresh", State: "todo", Risk: "low", Blocker: "", UpdatedAt: "2026-04-05"},
 	}
 	data, err := yaml.Marshal(orig)
 	require.NoError(t, err)
 
-	var got []StatusBoardEntry
+	var got []metadata.StatusBoardEntry
 	err = yaml.Unmarshal(data, &got)
 	require.NoError(t, err)
 	assert.Equal(t, orig, got)
@@ -496,15 +498,31 @@ func TestStatusBoardSliceRoundTrip(t *testing.T) {
 func TestContractMeta_ProviderEndpoint(t *testing.T) {
 	tests := []struct {
 		name string
-		meta ContractMeta
+		meta metadata.ContractMeta
 		want string
 	}{
-		{"http returns server", ContractMeta{Kind: "http", Endpoints: EndpointsMeta{Server: "cell-a"}}, "cell-a"},
-		{"event returns publisher", ContractMeta{Kind: "event", Endpoints: EndpointsMeta{Publisher: "cell-b"}}, "cell-b"},
-		{"command returns handler", ContractMeta{Kind: "command", Endpoints: EndpointsMeta{Handler: "cell-c"}}, "cell-c"},
-		{"projection returns provider", ContractMeta{Kind: "projection", Endpoints: EndpointsMeta{Provider: "cell-d"}}, "cell-d"},
-		{"unknown kind returns empty", ContractMeta{Kind: "grpc"}, ""},
-		{"empty kind returns empty", ContractMeta{}, ""},
+		{
+			"http returns server",
+			metadata.ContractMeta{Kind: "http", Endpoints: metadata.EndpointsMeta{Server: metadatatest.NewCellID("cella")}},
+			metadatatest.NewCellID("cella"),
+		},
+		{
+			"event returns publisher",
+			metadata.ContractMeta{Kind: "event", Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.NewCellID("cellb")}},
+			metadatatest.NewCellID("cellb"),
+		},
+		{
+			"command returns handler",
+			metadata.ContractMeta{Kind: "command", Endpoints: metadata.EndpointsMeta{Handler: metadatatest.NewCellID("cellc")}},
+			metadatatest.NewCellID("cellc"),
+		},
+		{
+			"projection returns provider",
+			metadata.ContractMeta{Kind: "projection", Endpoints: metadata.EndpointsMeta{Provider: metadatatest.NewCellID("celld")}},
+			metadatatest.NewCellID("celld"),
+		},
+		{"unknown kind returns empty", metadata.ContractMeta{Kind: "grpc"}, ""},
+		{"empty kind returns empty", metadata.ContractMeta{}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -517,18 +535,18 @@ func TestContractMeta_ProviderEndpoint(t *testing.T) {
 // deep copy — mutations to the source do not affect the clone and vice-versa.
 // This mirrors the K8s zz_generated.deepcopy.go independence guarantee.
 func TestSliceMeta_Clone_Independence(t *testing.T) {
-	src := &SliceMeta{
+	src := &metadata.SliceMeta{
 		ID:               "sessionlogin",
-		BelongsToCell:    "accesscore",
+		BelongsToCell:    metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L2",
-		ContractUsages: []ContractUsage{
+		ContractUsages: []metadata.ContractUsage{
 			{Contract: "http.auth.login.v1", Role: "serve"},
 			{Contract: "event.session.created.v1", Role: "publish"},
 		},
-		Verify: SliceVerifyMeta{
+		Verify: metadata.SliceVerifyMeta{
 			Unit:     []string{"unit.sessionlogin.service"},
 			Contract: []string{"contract.http.auth.login.v1.serve"},
-			Waivers: []WaiverMeta{
+			Waivers: []metadata.WaiverMeta{
 				{
 					Contract: "http.config.get.v1", Owner: "platform-team",
 					Reason: "read-only config call", ExpiresAt: "2026-06-01",
@@ -567,9 +585,9 @@ func TestSliceMeta_Clone_Independence(t *testing.T) {
 	assert.Equal(t, "cells/accesscore/slices/sessionlogin/**", clone.AllowedFiles[0], "clone AllowedFiles must be independent")
 
 	// Mutate clone — source must be unaffected (values already mutated above, reset check on a fresh pair).
-	src2 := &SliceMeta{
-		ContractUsages: []ContractUsage{{Contract: "c.v1", Role: "serve"}},
-		Verify:         SliceVerifyMeta{Unit: []string{"u1"}, Contract: []string{"c1"}},
+	src2 := &metadata.SliceMeta{
+		ContractUsages: []metadata.ContractUsage{{Contract: "c.v1", Role: "serve"}},
+		Verify:         metadata.SliceVerifyMeta{Unit: []string{"u1"}, Contract: []string{"c1"}},
 		AllowedFiles:   []string{"files/**"},
 	}
 	clone2 := src2.Clone()
@@ -584,18 +602,18 @@ func TestSliceMeta_Clone_Independence(t *testing.T) {
 
 // TestSliceMeta_Clone_Nil asserts that nil.Clone() returns nil without panicking.
 func TestSliceMeta_Clone_Nil(t *testing.T) {
-	var s *SliceMeta
+	var s *metadata.SliceMeta
 	assert.Nil(t, s.Clone(), "nil SliceMeta.Clone() must return nil")
 }
 
 func TestActorSliceRoundTrip(t *testing.T) {
-	orig := []ActorMeta{
+	orig := []metadata.ActorMeta{
 		{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 	}
 	data, err := yaml.Marshal(orig)
 	require.NoError(t, err)
 
-	var got []ActorMeta
+	var got []metadata.ActorMeta
 	err = yaml.Unmarshal(data, &got)
 	require.NoError(t, err)
 	assert.Equal(t, orig, got)

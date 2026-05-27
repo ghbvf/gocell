@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
@@ -45,8 +46,8 @@ func TestMerge_MarkerPath(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"markercell": {
-				ID:   "markercell",
+			metadatatest.NewCellID("markercell"): {
+				ID:   metadatatest.NewCellID("markercell"),
 				File: "cells/markercell/cell.yaml",
 			},
 		},
@@ -84,8 +85,8 @@ func TestMerge_EmptyBundleWhenNoCellGo(t *testing.T) {
 	// cell.File references a dir that has no cell.go sibling.
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"nocellgo": {
-				ID:   "nocellgo",
+			metadatatest.NewCellID("nocellgo"): {
+				ID:   metadatatest.NewCellID("nocellgo"),
 				File: "cells/nocellgo/cell.yaml",
 			},
 		},
@@ -136,7 +137,7 @@ func TestMerge_StatErrorClassified(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"locked": {ID: "locked", File: "cells/locked/cell.yaml"},
+			metadatatest.NewCellID("locked"): {ID: metadatatest.NewCellID("locked"), File: "cells/locked/cell.yaml"},
 		},
 		map[string]*metadata.SliceMeta{},
 	)
@@ -165,8 +166,8 @@ func TestMerge_EmptyBundleWhenNoMarkers(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"emptycell": {
-				ID: "emptycell",
+			metadatatest.NewCellID("emptycell"): {
+				ID: metadatatest.NewCellID("emptycell"),
 			},
 		},
 		map[string]*metadata.SliceMeta{},
@@ -196,7 +197,7 @@ func TestMerge_ErrorAccumulation(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"badcell": {},
+			metadatatest.NewCellID("badcell"): {},
 		},
 		map[string]*metadata.SliceMeta{},
 	)
@@ -248,8 +249,8 @@ func TestMerge_GhostSliceRoute(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"ghostcell": {
-				ID:   "ghostcell",
+			metadatatest.NewCellID("ghostcell"): {
+				ID:   metadatatest.NewCellID("ghostcell"),
 				File: "cells/ghostcell/cell.yaml",
 			},
 		},
@@ -291,8 +292,8 @@ func TestMerge_SliceTypoFieldSuggestion(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"typocell": {
-				ID:   "typocell",
+			metadatatest.NewCellID("typocell"): {
+				ID:   metadatatest.NewCellID("typocell"),
 				File: "cells/typocell/cell.yaml",
 			},
 		},
@@ -326,8 +327,8 @@ func TestMerge_ValidSliceOwnership(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"markercell2": {
-				ID:   "markercell2",
+			metadatatest.NewCellID("markercell2"): {
+				ID:   metadatatest.NewCellID("markercell2"),
 				File: "cells/markercell2/cell.yaml",
 			},
 		},
@@ -361,8 +362,8 @@ func TestMerge_ListenerOnField(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"badlistener": {
-				ID:   "badlistener",
+			metadatatest.NewCellID("badlistener"): {
+				ID:   metadatatest.NewCellID("badlistener"),
 				File: "cells/badlistener/cell.yaml",
 			},
 		},
@@ -395,8 +396,8 @@ func TestMerge_RouteOnType(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"routeontype": {
-				ID:   "routeontype",
+			metadatatest.NewCellID("routeontype"): {
+				ID:   metadatatest.NewCellID("routeontype"),
 				File: "cells/routeontype/cell.yaml",
 			},
 		},
@@ -426,8 +427,8 @@ func TestMerge_ContractUsageRoleServe(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"missingserve": {
-				ID:   "missingserve",
+			metadatatest.NewCellID("missingserve"): {
+				ID:   metadatatest.NewCellID("missingserve"),
 				File: "cells/missingserve/cell.yaml",
 			},
 		},
@@ -473,8 +474,8 @@ func TestMerge_ContractUsageRoleValid(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"validroles": {
-				ID:   "validroles",
+			metadatatest.NewCellID("validroles"): {
+				ID:   metadatatest.NewCellID("validroles"),
 				File: "cells/validroles/cell.yaml",
 			},
 		},
@@ -508,8 +509,8 @@ func TestMerge_ContractUsageRoleSkippedWhenNilMeta(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"nilmeta": {
-				ID:   "nilmeta",
+			metadatatest.NewCellID("nilmeta"): {
+				ID:   metadatatest.NewCellID("nilmeta"),
 				File: "cells/nilmeta/cell.yaml",
 			},
 		},
@@ -542,8 +543,8 @@ func TestMerge_SubscribeMarkerIsUnknown(t *testing.T) {
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"subscribemarkercell": {
-				ID:   "subscribemarkercell",
+			metadatatest.NewCellID("subscribemarkercell"): {
+				ID:   metadatatest.NewCellID("subscribemarkercell"),
 				File: "cells/subscribemarkercell/cell.yaml",
 			},
 		},

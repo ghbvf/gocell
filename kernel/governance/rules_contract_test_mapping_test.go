@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- CONTRACT-ENDPOINT-TEST-MAPPING-01 ---
@@ -128,7 +129,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract(t *testing.T) {
 		ID:        eventID,
 		Kind:      "event",
 		Lifecycle: "active",
-		Endpoints: metadata.EndpointsMeta{Server: "accesscore"},
+		Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 		Dir:       "contracts/event/session/created/v1",
 		File:      "contracts/event/session/created/v1/contract.yaml",
 	}
@@ -186,7 +187,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) 
 		Kind:      "http",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server: "ordercell",
+			Server: metadatatest.CellIDOrderCell,
 			HTTP:   &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201},
 		},
 		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
@@ -218,9 +219,9 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesContract(t *testing.T) 
 // layers (CLAUDE.md "依赖规则").
 func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesSelf(t *testing.T) {
 	pm := minimalHTTPProject()
-	const exampleCell = "ordercell"
+	exampleCell := metadatatest.CellIDOrderCell
 	pm.Cells[exampleCell] = &metadata.CellMeta{
-		ID:               exampleCell,
+		ID:               metadatatest.CellIDOrderCell,
 		Type:             "core",
 		ConsistencyLevel: "L1",
 		Owner:            metadata.OwnerMeta{Team: "demo", Role: "cell-owner"},
@@ -234,7 +235,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesSelf(t *testing.T) {
 		Kind:      "http",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server: exampleCell,
+			Server: metadatatest.CellIDOrderCell,
 			HTTP:   &metadata.HTTPTransportMeta{Method: "POST", Path: "/api/v1/orders", SuccessStatus: 201},
 		},
 		Dir:  "examples/todoorder/contracts/http/todo/order/create/v1",
@@ -243,7 +244,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeExamplesSelf(t *testing.T) {
 	// Examples slice serving the examples contract within the same project.
 	pm.Slices[exampleCell+"/ordercreate"] = &metadata.SliceMeta{
 		ID:            "ordercreate",
-		BelongsToCell: exampleCell,
+		BelongsToCell: metadatatest.CellIDOrderCell,
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: exampleContract, Role: "serve"},
 		},
@@ -274,9 +275,9 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeServerMismatch(t *testing.T) {
 	// slice belongs to "accesscore", but contract endpoints.server is also "accesscore"
 	// in minimalHTTPProject. To create a mismatch: change the slice to belong to a
 	// different cell but still declare the .serve entry for the contract.
-	const otherCell = "configcore"
+	otherCell := metadatatest.CellIDConfigCore
 	pm.Cells[otherCell] = &metadata.CellMeta{
-		ID:               otherCell,
+		ID:               metadatatest.CellIDConfigCore,
 		Type:             "core",
 		ConsistencyLevel: "L1",
 		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -287,7 +288,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeServerMismatch(t *testing.T) {
 	// Add a second slice in configcore that declares .serve for a contract owned by accesscore.
 	pm.Slices[otherCell+"/flag-read"] = &metadata.SliceMeta{
 		ID:            "flag-read",
-		BelongsToCell: otherCell,
+		BelongsToCell: metadatatest.CellIDConfigCore,
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: "http.auth.login.v1", Role: "serve"},
 		},
@@ -335,9 +336,9 @@ func TestCONTRACTENDPOINTTESTMAPPING01_CandidateSliceHint(t *testing.T) {
 	t.Run("no candidate when cell has no slices", func(t *testing.T) {
 		pm := minimalHTTPProject()
 		// Change server to a cell that exists but has no slices.
-		pm.Contracts["http.auth.login.v1"].Endpoints.Server = "auditcore"
-		pm.Cells["auditcore"] = &metadata.CellMeta{
-			ID:   "auditcore",
+		pm.Contracts["http.auth.login.v1"].Endpoints.Server = metadatatest.CellIDAuditCore
+		pm.Cells[metadatatest.CellIDAuditCore] = &metadata.CellMeta{
+			ID:   metadatatest.CellIDAuditCore,
 			Type: "core",
 			File: "cells/auditcore/cell.yaml",
 		}
@@ -376,14 +377,14 @@ func TestCONTRACTENDPOINTTESTMAPPING01_Integrated(t *testing.T) {
 // varying them would require a richer fixture and is not needed for this
 // rule's coverage. Tests mutate the returned project to set up each scenario.
 func minimalHTTPProject() *metadata.ProjectMeta {
-	const (
-		cellID     = "accesscore"
+	var (
+		cellID     = metadatatest.CellIDAccessCore
 		contractID = "http.auth.login.v1"
 	)
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellID: {
-				ID:               cellID,
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -395,7 +396,7 @@ func minimalHTTPProject() *metadata.ProjectMeta {
 		Slices: map[string]*metadata.SliceMeta{
 			cellID + "/session-login": {
 				ID:            "session-login",
-				BelongsToCell: cellID,
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: contractID, Role: "serve"},
 				},
@@ -414,11 +415,11 @@ func minimalHTTPProject() *metadata.ProjectMeta {
 			contractID: {
 				ID:               contractID,
 				Kind:             "http",
-				OwnerCell:        cellID,
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  cellID,
+					Server:  metadatatest.CellIDAccessCore,
 					Clients: []string{},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",

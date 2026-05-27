@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -36,17 +37,17 @@ func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 	// reaching the blocking last cell. This creates the same writer pressure
 	// as the original bug without making snapshots visible before stateStarted.
 	for i := 0; i < 3; i++ {
-		id := "fast-" + string(rune('a'+i))
-		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
-		})))
+		id := "fast" + string(rune('a'+i))
+		m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+		m.ID = id
+		require.NoError(t, a.Register(cell.MustNewBaseCell(m)))
 	}
 
 	// Last cell parks Init until initGate is closed.
 	initGate := make(chan struct{})
 	require.NoError(t, a.Register(&configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "blocking", Type: "core", ConsistencyLevel: "L0",
+			ID: metadatatest.NewCellID("blocking"), Type: "core", ConsistencyLevel: "L0",
 		}),
 		onInit: func(_ cell.Registrar) error {
 			<-initGate
@@ -147,7 +148,7 @@ func registerGatedInitCell(t *testing.T, a *CoreAssembly, initGate <-chan struct
 	enteredInit := make(chan struct{})
 	require.NoError(t, a.Register(&configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "gated", Type: "core", ConsistencyLevel: "L0",
+			ID: metadatatest.NewCellID("gated"), Type: "core", ConsistencyLevel: "L0",
 		}),
 		onInit: func(_ cell.Registrar) error {
 			close(enteredInit)
@@ -161,11 +162,11 @@ func registerGatedInitCell(t *testing.T, a *CoreAssembly, initGate <-chan struct
 func registerSlowInitCells(t *testing.T, a *CoreAssembly, count int) {
 	t.Helper()
 	for i := 0; i < count; i++ {
-		id := fmt.Sprintf("slow-%02d", i)
+		id := fmt.Sprintf("slow%02d", i)
+		m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+		m.ID = id
 		require.NoError(t, a.Register(&configMutatingCell{
-			BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-				ID: id, Type: "core", ConsistencyLevel: "L0",
-			}),
+			BaseCell: cell.MustNewBaseCell(m),
 			onInit: func(_ cell.Registrar) error {
 				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Init completions to widen the race window against internal readers
 				return nil
@@ -264,10 +265,10 @@ func registerConcurrentRaceCells(t *testing.T, a *CoreAssembly, count int) []str
 	t.Helper()
 	ids := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		id := "c-" + string(rune('a'+i))
-		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
-		})))
+		id := "c" + string(rune('a'+i))
+		m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+		m.ID = id
+		require.NoError(t, a.Register(cell.MustNewBaseCell(m)))
 		ids = append(ids, id)
 	}
 	return ids

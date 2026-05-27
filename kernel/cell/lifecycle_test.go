@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // ---------------------------------------------------------------------------
@@ -21,7 +22,7 @@ type hookCell struct {
 
 func newHookCell() *hookCell {
 	return &hookCell{
-		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: "hook-cell", Type: "core"}),
+		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("hookcell"), Type: "core"}),
 	}
 }
 
@@ -52,8 +53,10 @@ type partialHookCell struct {
 }
 
 func newPartialHookCell(id string) *partialHookCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &partialHookCell{
-		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: *MustNewBaseCell(m),
 	}
 }
 
@@ -122,7 +125,7 @@ func TestAfterStopper_TypeAssertion(t *testing.T) {
 }
 
 func TestLifecycleHook_NegativeTypeAssertion(t *testing.T) {
-	plain := MustNewBaseCell(&metadata.CellMeta{ID: "plain-cell"})
+	plain := MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("plaincell")})
 	var c Cell = plain
 
 	_, ok1 := c.(BeforeStarter)

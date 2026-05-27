@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
 )
 
@@ -109,7 +110,7 @@ func TestAssemblyMetaSynthesisFieldGuard_DetectsViolation(t *testing.T) {
 		// All top-level set but BuildMeta.Binary missing.
 		partial := metadata.AssemblyMeta{
 			ID:    "x",
-			Cells: []string{"y"},
+			Cells: []string{metadatatest.CellIDYY},
 			Owner: metadata.OwnerMeta{Team: "t", Role: "r"},
 			Build: metadata.BuildMeta{Entrypoint: "cmd/x/main.go", DeployTemplate: "k8s"},
 		}
@@ -126,7 +127,7 @@ func TestAssemblyMetaSynthesisFieldGuard_DetectsViolation(t *testing.T) {
 		// sibling must still surface.
 		partial := metadata.AssemblyMeta{
 			ID:    "x",
-			Cells: []string{"y"},
+			Cells: []string{metadatatest.CellIDYY},
 			Owner: metadata.OwnerMeta{Team: "t", Role: "r"},
 			Build: metadata.BuildMeta{Entrypoint: "cmd/x/main.go"}, // missing Binary and DeployTemplate
 		}

@@ -44,8 +44,10 @@ type ctxRecordingCell struct {
 }
 
 func newCtxRecordingCell(id string, failStart bool) *ctxRecordingCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &ctxRecordingCell{
-		BaseCell:  cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell:  cell.MustNewBaseCell(m),
 		failStart: failStart,
 	}
 }
@@ -84,8 +86,10 @@ type afterStartFailingCell struct {
 }
 
 func newAfterStartFailingCell(id string) *afterStartFailingCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &afterStartFailingCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -117,8 +121,10 @@ type beforeStartFailingCell struct {
 }
 
 func newBeforeStartFailingCell(id string) *beforeStartFailingCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &beforeStartFailingCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -181,8 +187,8 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 				HookTimeout:    tc.hookTimeout,
 			})
 
-			good := newCtxRecordingCell("A", false)
-			bad := newCtxRecordingCell("B", true)
+			good := newCtxRecordingCell("aa", false)
+			bad := newCtxRecordingCell("bb", true)
 			require.NoError(t, a.Register(good))
 			require.NoError(t, a.Register(bad))
 
@@ -224,8 +230,8 @@ func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 		DurabilityMode: outbox.DurabilityDemo,
 	})
 
-	prior := newCtxRecordingCell("A", false)
-	failing := newAfterStartFailingCell("B")
+	prior := newCtxRecordingCell("aa", false)
+	failing := newAfterStartFailingCell("bb")
 	require.NoError(t, a.Register(prior))
 	require.NoError(t, a.Register(failing))
 
@@ -271,7 +277,7 @@ func TestRollbackCells_I0BeforeStartFails(t *testing.T) {
 		DurabilityMode: outbox.DurabilityDemo,
 	})
 
-	failing := newBeforeStartFailingCell("A")
+	failing := newBeforeStartFailingCell("aa")
 	require.NoError(t, a.Register(failing))
 
 	err := a.Start(context.Background())

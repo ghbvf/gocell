@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestLocation_REF01_SliceBelongsToCell verifies that a REF-01 finding
@@ -221,27 +222,27 @@ func TestLocation_DEP02_ScopeNotFile(t *testing.T) {
 	// itself circular.
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"a": {ID: "a", ConsistencyLevel: "L1"},
-			"b": {ID: "b", ConsistencyLevel: "L1"},
+			metadatatest.CellIDAA: {ID: metadatatest.CellIDAA, ConsistencyLevel: "L1"},
+			metadatatest.CellIDBB: {ID: metadatatest.CellIDBB, ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"a/as": {ID: "as", BelongsToCell: "a", ContractUsages: []metadata.ContractUsage{
+			metadatatest.CellIDAA + "/as": {ID: "as", BelongsToCell: metadatatest.CellIDAA, ContractUsages: []metadata.ContractUsage{
 				{Contract: "http.ab.v1", Role: "serve"},
 				{Contract: "http.ba.v1", Role: "call"},
 			}},
-			"b/bs": {ID: "bs", BelongsToCell: "b", ContractUsages: []metadata.ContractUsage{
+			metadatatest.CellIDBB + "/bs": {ID: "bs", BelongsToCell: metadatatest.CellIDBB, ContractUsages: []metadata.ContractUsage{
 				{Contract: "http.ba.v1", Role: "serve"},
 				{Contract: "http.ab.v1", Role: "call"},
 			}},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
 			"http.ab.v1": {
-				ID: "http.ab.v1", Kind: "http", OwnerCell: "a",
-				Endpoints: metadata.EndpointsMeta{Server: "a", Clients: []string{"b"}},
+				ID: "http.ab.v1", Kind: "http", OwnerCell: metadatatest.CellIDAA,
+				Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDAA, Clients: []string{metadatatest.CellIDBB}},
 			},
 			"http.ba.v1": {
-				ID: "http.ba.v1", Kind: "http", OwnerCell: "b",
-				Endpoints: metadata.EndpointsMeta{Server: "b", Clients: []string{"a"}},
+				ID: "http.ba.v1", Kind: "http", OwnerCell: metadatatest.CellIDBB,
+				Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDBB, Clients: []string{metadatatest.CellIDAA}},
 			},
 		},
 	}
@@ -270,7 +271,7 @@ func TestLocation_NoNodes_NoCrash(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 		Slices: map[string]*metadata.SliceMeta{
-			"x/s": {ID: "s", BelongsToCell: "ghost"},
+			"x/s": {ID: "s", BelongsToCell: metadatatest.NewCellID("ghost")},
 		},
 		Contracts: map[string]*metadata.ContractMeta{},
 	}

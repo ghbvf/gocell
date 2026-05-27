@@ -11,18 +11,17 @@ import (
 // used to satisfy validateAssemblyScaffoldSpec cell-existence pre-condition
 // when the test focuses on ID/text metadata rules instead of cell existence.
 func projectWithCell(id string) *metadata.ProjectMeta {
-	return &metadata.ProjectMeta{
-		Cells: map[string]*metadata.CellMeta{
-			id: {
-				ID:               id,
-				Type:             "core",
-				ConsistencyLevel: "L1",
-				Owner:            metadata.OwnerMeta{Team: "platform", Role: "maintainer"},
-				Schema:           metadata.SchemaMeta{Primary: id},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + id}},
-			},
-		},
+	c := &metadata.CellMeta{
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "maintainer"},
+		Schema:           metadata.SchemaMeta{Primary: id},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + id}},
 	}
+	c.ID = id
+	cells := map[string]*metadata.CellMeta{}
+	cells[id] = c
+	return &metadata.ProjectMeta{Cells: cells}
 }
 
 // ID and Cells pattern coverage moved to kernel/scaffoldid/scaffoldid_test.go

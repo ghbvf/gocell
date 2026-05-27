@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
 
@@ -32,8 +33,8 @@ import (
 func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -44,7 +45,7 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -97,8 +98,8 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -109,7 +110,7 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -210,8 +211,8 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 	// FMT-16 in strict mode.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -223,7 +224,7 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -269,8 +270,8 @@ func TestValidateNonStrictFailFast(t *testing.T) {
 	// if strict gating were broken.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -282,7 +283,7 @@ func TestValidateNonStrictFailFast(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:             "session-login",
-				BelongsToCell:  "accesscore",
+				BelongsToCell:  metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.session-login.service"},
@@ -321,8 +322,8 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 	// slice key uses a kebab-case directory that strict mode (FMT-16) must flag.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				DurabilityMode:   "demo",
@@ -334,7 +335,7 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:             "session-login",
-				BelongsToCell:  "accesscore",
+				BelongsToCell:  metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.session-login.service"},
@@ -405,8 +406,8 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 	// standard rules actually fire some results.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -417,7 +418,7 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -478,8 +479,8 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 func TestStrictValidator_NodashSliceClean(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -490,7 +491,7 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -527,8 +528,8 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -542,7 +543,7 @@ func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 			// walked directory is the kebab-case "session-login".
 			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "accesscore",
+				BelongsToCell:  metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
@@ -580,8 +581,8 @@ func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -593,7 +594,7 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "accesscore",
+				BelongsToCell:  metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
@@ -742,8 +743,8 @@ func fmtBoolName(b bool) string {
 func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"foobar": {
-				ID:               "foobar",
+			metadatatest.CellIDFoobar: {
+				ID:               metadatatest.CellIDFoobar,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -814,8 +815,8 @@ func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -830,7 +831,7 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{"accesscore"},
+				Cells: []string{metadatatest.CellIDAccessCore},
 				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
 				Dir:   "corebundle",
 			},
@@ -857,8 +858,8 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -870,7 +871,7 @@ func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "accesscore",
+				BelongsToCell:  metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
@@ -989,7 +990,7 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 					tc.contractID: {
 						ID:        tc.contractID,
 						Kind:      "http",
-						OwnerCell: "testcell",
+						OwnerCell: metadatatest.CellIDTestCell,
 						Lifecycle: "active",
 						Dir:       tc.contractDir,
 						File:      tc.contractDir + "/contract.yaml",
@@ -1055,7 +1056,7 @@ func TestFMTContractDirIDMatch01_ExamplesPrefix(t *testing.T) {
 					tc.contractID: {
 						ID:        tc.contractID,
 						Kind:      "http",
-						OwnerCell: "testcell",
+						OwnerCell: metadatatest.CellIDTestCell,
 						Lifecycle: "active",
 						Dir:       tc.contractDir,
 						File:      tc.contractDir + "/contract.yaml",
@@ -1203,7 +1204,7 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 					"http.test.deprecated.v1": {
 						ID:           "http.test.deprecated.v1",
 						Kind:         "http",
-						OwnerCell:    "testcell",
+						OwnerCell:    metadatatest.CellIDTestCell,
 						Lifecycle:    tc.lifecycle,
 						DeprecatedAt: tc.deprecatedAt,
 						Dir:          "contracts/http/test/deprecated/v1",
@@ -1290,7 +1291,7 @@ func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
 					"http.test.old.v1": {
 						ID:           "http.test.old.v1",
 						Kind:         "http",
-						OwnerCell:    "testcell",
+						OwnerCell:    metadatatest.CellIDTestCell,
 						Lifecycle:    "deprecated",
 						DeprecatedAt: deprecatedDate,
 						Dir:          "contracts/http/test/old/v1",
@@ -1485,7 +1486,7 @@ func fmt25Project(queryParams, pathParams map[string]metadata.ParamSchema) *meta
 	cm := &metadata.ContractMeta{
 		ID:        contractID,
 		Kind:      "http",
-		OwnerCell: "testcell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		SchemaRefs: metadata.SchemaRefsMeta{
 			Request: "request.schema.json",
@@ -1524,7 +1525,8 @@ func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts", "http", "test"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "contracts", "http", "test", "outside.schema.json"),
-		[]byte(`{"type":"object","additionalProperties":false}`), 0o644))
+		[]byte(`{"type":"object","additionalProperties":false}`), 0o644,
+	))
 	pm := fmt25Project(nil, nil)
 	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
 
@@ -1907,7 +1909,8 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"cursor": {Type: "string"}, // missing minLength + maxLength
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1926,7 +1929,8 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"limit": {Type: "integer"}, // missing minimum + maximum
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1945,7 +1949,8 @@ func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"ratio": {Type: "number"},
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1964,7 +1969,8 @@ func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -2122,7 +2128,8 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 		map[string]metadata.ParamSchema{
 			"id":  {Type: "string", Format: "uuid"},                           // uuid exempt
 			"key": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix}, // plain string with constraints
-		})
+		},
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -2141,7 +2148,7 @@ func TestFMT25_NonHTTPContractIgnored(t *testing.T) {
 			"event.test.v1": {
 				ID:        "event.test.v1",
 				Kind:      "event",
-				OwnerCell: "testcell",
+				OwnerCell: metadatatest.CellIDTestCell,
 				Lifecycle: "active",
 				SchemaRefs: metadata.SchemaRefsMeta{
 					Payload: "payload.schema.json",
@@ -2205,7 +2212,8 @@ func TestFMT25_CrossFileRef(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(mixinDir, "expected_version.schema.json"),
 			[]byte(`{"type":"integer","minimum":0,"maximum":2147483647}`),
-			0o644))
+			0o644,
+		))
 
 		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
 		require.NoError(t, err)
@@ -2227,7 +2235,8 @@ func TestFMT25_CrossFileRef(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(mixinDir, "expected_version.schema.json"),
 			[]byte(`{"type":"integer","minimum":0}`),
-			0o644))
+			0o644,
+		))
 
 		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
 		require.NoError(t, err)
@@ -2478,7 +2487,8 @@ func TestFMT20_EndpointResponsesSchemaRefIgnored(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(contractDir, "error-404.schema.json"),
 		[]byte(`{"type":"object","properties":{"message":{"type":"string"}}}`),
-		0o644))
+		0o644,
+	))
 
 	pm := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -2487,7 +2497,7 @@ func TestFMT20_EndpointResponsesSchemaRefIgnored(t *testing.T) {
 			"http.errtest.v1": {
 				ID:        "http.errtest.v1",
 				Kind:      "http",
-				OwnerCell: "testcell",
+				OwnerCell: metadatatest.CellIDTestCell,
 				Lifecycle: "active",
 				Endpoints: metadata.EndpointsMeta{
 					HTTP: &metadata.HTTPTransportMeta{
@@ -2525,7 +2535,7 @@ func TestFMT20_NonHTTPContractIgnored(t *testing.T) {
 			"event.test.v1": {
 				ID:        "event.test.v1",
 				Kind:      "event",
-				OwnerCell: "testcell",
+				OwnerCell: metadatatest.CellIDTestCell,
 				Lifecycle: "active",
 				SchemaRefs: metadata.SchemaRefsMeta{
 					Payload: "payload.schema.json",
@@ -2552,7 +2562,8 @@ func TestFMT20_MalformedRequestSchemaEmitsIssueInvalid(t *testing.T) {
 	require.NoError(t, os.MkdirAll(contractDir, 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(contractDir, "request.schema.json"),
-		[]byte(`not valid json {{{`), 0o644))
+		[]byte(`not valid json {{{`), 0o644,
+	))
 
 	pm := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -2561,7 +2572,7 @@ func TestFMT20_MalformedRequestSchemaEmitsIssueInvalid(t *testing.T) {
 			"http.badschema.v1": {
 				ID:        "http.badschema.v1",
 				Kind:      "http",
-				OwnerCell: "testcell",
+				OwnerCell: metadatatest.CellIDTestCell,
 				Lifecycle: "active",
 				SchemaRefs: metadata.SchemaRefsMeta{
 					Request: "request.schema.json",
@@ -2594,7 +2605,7 @@ func TestFMT20_MissingSchemaFileSkipped(t *testing.T) {
 			"http.missing.schema.v1": {
 				ID:        "http.missing.schema.v1",
 				Kind:      "http",
-				OwnerCell: "testcell",
+				OwnerCell: metadatatest.CellIDTestCell,
 				Lifecycle: "active",
 				SchemaRefs: metadata.SchemaRefsMeta{
 					Request: "nonexistent.schema.json",
@@ -2631,7 +2642,7 @@ func fmt20Fixture(t *testing.T, dir, name, schema string) *metadata.ProjectMeta 
 			id: {
 				ID:         id,
 				Kind:       "http",
-				OwnerCell:  "testcell",
+				OwnerCell:  metadatatest.CellIDTestCell,
 				Lifecycle:  "active",
 				SchemaRefs: metadata.SchemaRefsMeta{Request: "request.schema.json"},
 				Dir:        "contracts/http/" + name + "/v1",
@@ -2658,7 +2669,7 @@ func fmt20ResponseFixture(t *testing.T, dir, name, schema string) *metadata.Proj
 			id: {
 				ID:         id,
 				Kind:       "http",
-				OwnerCell:  "testcell",
+				OwnerCell:  metadatatest.CellIDTestCell,
 				Lifecycle:  "active",
 				SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 				Dir:        "contracts/http/" + name + "/v1",

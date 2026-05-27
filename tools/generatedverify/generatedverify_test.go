@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 const fixtureModule = "example.com/generatedfixture"
@@ -382,8 +383,8 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 
 	// Add a placeholder cell with GoStructName and Dir/File set so cellgen
 	// can derive Package and SourceFile for the template.
-	project.Cells["placeholder"] = &metadata.CellMeta{
-		ID:           "placeholder",
+	project.Cells[metadatatest.NewCellID("placeholder")] = &metadata.CellMeta{
+		ID:           metadatatest.NewCellID("placeholder"),
 		Type:         "core",
 		GoStructName: metadata.MustNewGoIdentifier("Placeholder"),
 		Dir:          "placeholder",                 // used as Go package name
@@ -392,7 +393,7 @@ func (PlaceholderModule) ID() string { return "placeholder" }
 	// Update the fixture assembly to include the placeholder cell.
 	project.Assemblies["fixture"] = &metadata.AssemblyMeta{
 		ID:    "fixture",
-		Cells: []string{"placeholder"},
+		Cells: []string{metadatatest.NewCellID("placeholder")},
 		Build: metadata.BuildMeta{
 			Entrypoint: "cmd/fixture/main.go",
 			Binary:     "bin/fixture",
