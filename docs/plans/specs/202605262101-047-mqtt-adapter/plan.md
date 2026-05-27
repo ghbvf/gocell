@@ -15,9 +15,9 @@
 
 | 模块 | 参考 | 取用 |
 |------|------|------|
-| autopaho client lifecycle | `eclipse/paho.golang/autopaho` v0.12 godoc | reconnect / SessionExpiry / WaitConnected |
+| autopaho client lifecycle | `eclipse/paho.golang/autopaho` v0.23.0 godoc | reconnect / SessionExpiry / WaitConnected |
 | Connection wrap 模式 | `adapters/rabbitmq/connection.go` | reconnect goroutine / health / closeCh |
-| Backoff | `kernel/outbox.ExponentialDelay` + `adapters/rabbitmq/backoff.go` 的 jitter | 直接复用，**不**引第三方库 |
+| Backoff | `adapters/adapterutil/backoff.go` 共享 helper（从 rabbitmq 提取）+ jitter | 单源治理，rabbitmq 同步重构使用同一实现，**不**引第三方库 |
 | KeyNamespace funnel | `adapters/redis/keyns.go` + archtest `REDIS-KEY-NAMESPACE-01` | clientID + topic 两个 typed namespace |
 | Readyz typed probe | `adapters/postgres.ProbeReady` + `kernel/healthz.ReadyProbeName` | `mqtt_ready` const |
 | Metrics cell label | `adapters/otel/metric_provider.go` + `kernel/observability/metrics` | 6 个 metric 注册 |
@@ -37,14 +37,14 @@
 |------|---------|------|
 | `doc.go` | 80 | package godoc + INVARIANT 锚点（archtest 入口） |
 | `config.go` | 250 | `Config{ClientID, Brokers, TLS, SessionExpiry, Auth, Backoff, ...}` + `Validate()` |
-| `clientid.go` | 100 | `type ClientID string` + `ParseClientID(cellID, role string) (ClientID, error)` + `Validate()` |
-| `topicns.go` | 130 | `type TopicNamespace string` + `Bind(cellID) → publishOK(topic) error` funnel |
+| `clientid.go` | 100 | `type ClientID struct{value string}` (sealed struct) + `ParseClientID(cellID, role string) (ClientID, error)` |
+| `topicns.go` | 130 | `type TopicNamespace struct{value string}` (sealed struct) + `ParseTopicNamespace(ns string) (TopicNamespace, error)` + `PublishOK` / `SubscribeOK` funnel |
 | `connection.go` | 550 | autopaho wrap + reconnect 循环 + `Health() error` + `Close(ctx)` + permanentErr 状态机 |
 | `publisher.go` | 220 | `Publisher` 实现：`Publish(ctx, topic, payload) error`，QoS 1 + WaitConnected + 超时 |
 | `subscriber.go` | 380 | `Subscriber` 三段式（Setup/Ready/Subscribe），handler 三态 Disposition 路由 |
 | `deadletter.go` | 100 | `routeReject(originalTopic, entry) error`，publish 到 `$dead/<topic>` |
-| `metrics.go` | 220 | 6 个 metric 注册 + cell label 注入 |
-| `healthz.go` | 80 | `ProbeReady ReadyProbeName = "mqtt_ready"` const + `HealthToCheckers` |
+| `metrics.go` | 220 | PR-1 仅注册 `reconnect_total` metric（其余 5 个随 emitter 在 PR-2/3/4 落地；见 AC-8 note） |
+| `healthz.go` | 80 | `const ProbeReady healthz.ProbeName = "mqtt_ready"` + `Probes()` on Connection |
 | `redact.go` | 80 | `redactPayloadForLog` / `redactConnectURL`（小 wrapper，单源 `pkg/redaction`） |
 | `errors.go` | 120 | `ErrAdapterMQTTPayloadTooLarge` 等 sentinel + `classifyConnackReason` |
 
@@ -76,7 +76,7 @@
 
 | 文件 | 估算行数 | 内容 |
 |------|---------|------|
-| `tools/archtest/mqtt_funnel_test.go` | 280 | `MQTT-CLIENT-ID-NAMESPACE-01` + `MQTT-TOPIC-NAMESPACE-01` |
+| `tools/archtest/mqtt_funnel_test.go` | 280 | `MQTT-CLIENT-ID-NAMESPACE-01` + `MQTT-TOPIC-NAMESPACE-01`（sealed-struct field freeze + construction allowlist + no alias）；下游 callsite funnel deferred to PR-2/3 (#1225) |
 
 ### 2.4 ADR / 文档
 

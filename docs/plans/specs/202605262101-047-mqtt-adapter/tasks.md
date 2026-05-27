@@ -11,18 +11,18 @@
 
 | ID | 子任务 | 文件 | LOC | 前置 | TDD |
 |----|--------|------|-----|------|-----|
-| T-1.0 | go.mod 添加 paho.golang/autopaho v0.12+, paho.golang/paho v0.21+, mochi-mqtt/server/v2 v2.7+ | `go.mod` `go.sum` | 30 | — | impl |
+| T-1.0 | go.mod 添加 paho.golang/autopaho v0.23.0, paho.golang/paho v0.21+, mochi-mqtt/server/v2 v2.7+（注：v0.23.0 较 spec 草稿 v0.12 更新，含 WaitConnected/AwaitConnection 等接口） | `go.mod` `go.sum` | 30 | — | impl |
 | T-1.1 | 写 `errors.go` — 定义 `ErrAdapterMQTTPayloadTooLarge` / `ErrAdapterMQTTSubscribePermanent` 等 sentinel (errcode.New) | `adapters/mqtt/errors.go` `errors_test.go` | 240 | T-1.0 | both |
 | T-1.2 | 写 `redact.go` — `redactConnectURL(string) string` / payload log helper (单源 `pkg/redaction`) | `adapters/mqtt/redact.go` `redact_test.go` | 180 | T-1.0 | both |
-| T-1.3 | 写 `clientid.go` — `type ClientID string` + `ParseClientID(cellID, role string) (ClientID, error)` + `Validate()` | `adapters/mqtt/clientid.go` `clientid_test.go` | 200 | T-1.0 | test-first |
-| T-1.4 | 写 `topicns.go` — `type TopicNamespace string` + `Bind(cellID) *BoundTopics` + `PublishOK(topic) error` / `SubscribeOK(filter) error` | `adapters/mqtt/topicns.go` `topicns_test.go` | 270 | T-1.0 | test-first |
+| T-1.3 | 写 `clientid.go` — `type ClientID struct{value string}` (sealed struct) + `ParseClientID(cellID, role string) (ClientID, error)` | `adapters/mqtt/clientid.go` `clientid_test.go` | 200 | T-1.0 | test-first |
+| T-1.4 | 写 `topicns.go` — `type TopicNamespace struct{value string}` (sealed struct) + `ParseTopicNamespace(ns string) (TopicNamespace, error)` + `PublishOK(topic) error` / `SubscribeOK(filter) error` | `adapters/mqtt/topicns.go` `topicns_test.go` | 270 | T-1.0 | test-first |
 | T-1.5 | 写 `config.go` — `Config{ClientID, Brokers, TLS, SessionExpiry, Auth, Backoff, MaximumPacketSize, ConnectTimeout, ...}` + `Validate()` | `adapters/mqtt/config.go` `config_test.go` | 400 | T-1.3, T-1.4 | test-first |
-| T-1.6 | 写 `healthz.go` — `const ProbeReady healthz.ReadyProbeName = "mqtt_ready"` + `RegisterReady(reg, conn)` | `adapters/mqtt/healthz.go` `healthz_test.go` | 160 | T-1.0 | both |
-| T-1.7 | 写 `metrics.go` — 6 个 metric 注册（publish_total / ack_duration / reconnect_total / subscribe_inflight / dlx_total / packet_too_large_total）含 cell label | `adapters/mqtt/metrics.go` `metrics_test.go` | 450 | T-1.0 | both |
+| T-1.6 | 写 `healthz.go` — `const ProbeReady healthz.ProbeName = "mqtt_ready"` + `Probes()` method on Connection | `adapters/mqtt/healthz.go` `healthz_test.go` | 160 | T-1.0 | both |
+| T-1.7 | 写 `metrics.go` — PR-1 注册 `reconnect_total` metric（含 cell label）；其余 5 metric（publish_total / ack_duration / subscribe_inflight / dlx_total / packet_too_large_total）随各自 emitter 在 PR-2/3/4 落地（AC-8 split）| `adapters/mqtt/metrics.go` `metrics_test.go` | 450 | T-1.0 | both |
 | T-1.8 | 写 `connection.go` — autopaho client wrap：`Open(ctx, Config) (*Connection, error)` / `Client()` / `Health() error` / `Close(ctx)`；reconnect 由 autopaho 内置，adapter 仅注入 backoff + permanentErr 状态机 | `adapters/mqtt/connection.go` `connection_test.go` | 950 | T-1.5, T-1.6, T-1.7 | test-first |
 | T-1.9 | 写 `doc.go` — package godoc + 文件头 `// INVARIANT:` 锚点（archtest 入口） | `adapters/mqtt/doc.go` | 80 | T-1.1..1.8 | impl |
-| T-1.10 | 写 archtest `MQTT-CLIENT-ID-NAMESPACE-01` + `MQTT-TOPIC-NAMESPACE-01`（funnel 双向锁：声明集 + 调用点身份）| `tools/archtest/mqtt_funnel_test.go` | 280 | T-1.3, T-1.4 | test-first |
-| T-1.11 | `mqtt_ready` 加入 `OPS-CONTRACT-STRING-FUNNEL-01` inventory + 验证 | `tools/archtest/ops_contract_string_funnel_test.go` (改) | +20 | T-1.6 | impl |
+| T-1.10 | 写 archtest `MQTT-CLIENT-ID-NAMESPACE-01` + `MQTT-TOPIC-NAMESPACE-01`（sealed-struct field freeze A1 + construction allowlist A2 + no alias A3）；下游 callsite funnel deferred to PR-2/3, tracked #1225 | `tools/archtest/mqtt_funnel_test.go` | 280 | T-1.3, T-1.4 | test-first |
+| T-1.11 | `mqtt_ready` 加入 `PROBENAME-SEALED-FUNNEL-01` inventory（probeNameSanctionedPkgs + adapterSanctionedPkgs + goldenProbeNames）| `tools/archtest/probename_sealed_funnel_test.go` (改) | +10 | T-1.6 | impl |
 | T-1.12 | 写 ADR `<TS>-adr-mqtt-adapter.md` — v5 选型 / autopaho / DLT app-level / clientId 唯一 / 威胁矩阵 | `docs/architecture/<TS>-adr-mqtt-adapter.md` | 240 | T-1.0..1.10 | impl |
 | T-1.13 | 更新 `docs/references/framework-comparison.md` 加 paho.golang 行 | `docs/references/framework-comparison.md` | 15 | T-1.12 | impl |
 

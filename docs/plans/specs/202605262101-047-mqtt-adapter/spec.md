@@ -89,8 +89,8 @@ external MDM 控制台 publish "command.device.reboot.v1"
 | AC-4 | TLS 1.2+ 强制、mTLS 经 `tls.Config` 注入 Vault PKI cert 路径可工作 | integration,mqtt_tls (nightly) |
 | AC-5 | clientId 必须 `{cellID}-{role}-{uuid}` 格式；构造期 `Validate()` 校验 | unit + archtest `MQTT-CLIENT-ID-NAMESPACE-01` |
 | AC-6 | adapter 内 topic 前缀 funnel（cell 只能 publish/subscribe 自己 namespace 的 topic） | unit + archtest `MQTT-TOPIC-NAMESPACE-01` |
-| AC-7 | readyz 注册 `mqtt_ready` typed probe，列入 `OPS-CONTRACT-STRING-FUNNEL-01` inventory | unit + archtest |
-| AC-8 | 6 个 metric (publish_total / ack_duration / reconnect_total / subscribe_inflight / dlx_total / packet_too_large_total)，带 `cell` label | unit |
+| AC-7 | readyz 注册 `mqtt_ready` typed probe，列入 `PROBENAME-SEALED-FUNNEL-01` inventory | unit + archtest |
+| AC-8 | 6 个 metric (publish_total / ack_duration / reconnect_total / subscribe_inflight / dlx_total / packet_too_large_total)，带 `cell` label；PR-1 仅注册 `reconnect_total`，其余 5 个随其 emitter 在 PR-2/3/4 落地 | unit |
 | AC-9 | payload 与 last_error 经 `pkg/redaction` 单源 redact；span attribute 经 `safeStringAttr` | unit + 既有 `SPAN-SETATTR-REDACT-01` 覆盖 |
 | AC-10 | Reject → publish 到 `$dead/<topic>` 可观测、可由独立 subscriber 验证 | integration |
 | AC-11 | examples/iotdevice 增加一条 MQTT 演示路径（事件发布或命令订阅，详 plan），smoke 通过 | example smoke |
@@ -101,7 +101,7 @@ external MDM 控制台 publish "command.device.reboot.v1"
 | 决策 | 值 | 出处 |
 |------|---|------|
 | 协议版本 | MQTT v5 | clarify Q1 |
-| 客户端库 | `github.com/eclipse/paho.golang/autopaho` | clarify Q1 |
+| 客户端库 | `github.com/eclipse/paho.golang/autopaho` v0.23.0 | clarify Q1 (updated from v0.12) |
 | 范围 | Adapter + iotdevice 演示 | clarify Q2 |
 | DLT 形态 | adapter app-level publish 到 `$dead/<topic>` | clarify Q3 |
 | PR 切片 | 5 个 PR（详 plan.md），每片 ≤2000 行 net diff | clarify Q4 + 估算 |
@@ -130,9 +130,9 @@ external MDM 控制台 publish "command.device.reboot.v1"
 
 | Archtest ID | 评级 | 作用 |
 |-------------|------|------|
-| `MQTT-CLIENT-ID-NAMESPACE-01` | Medium archtest + Hard codegen | 构造函数顶部 `clientID.Validate()` 强制；引用 redis `REDIS-KEY-NAMESPACE-01` 范本 |
-| `MQTT-TOPIC-NAMESPACE-01` | Medium archtest | publish/subscribe 路径 topic 前缀属于 cell namespace |
-| `OPS-CONTRACT-STRING-FUNNEL-01` | 既有 Hard，纳入 inventory | `mqtt_ready` const 入册 |
+| `MQTT-CLIENT-ID-NAMESPACE-01` | Hard 上游（包外 compile gate）+ Medium 上游（包内 archtest A2）| sealed-struct field freeze (A1) + construction allowlist (A2) + no alias (A3)；下游 callsite funnel 延迟 PR-2/3 (#1225) |
+| `MQTT-TOPIC-NAMESPACE-01` | Hard 上游（包外 compile gate）+ Medium 上游（包内 archtest A2）| 同上；下游 callsite funnel 延迟 PR-2/3 (#1225) |
+| `PROBENAME-SEALED-FUNNEL-01` | 既有 Hard downstream，纳入 inventory | `mqtt_ready` const 入册（probeNameSanctionedPkgs + adapterSanctionedPkgs + goldenProbeNames）|
 | `MESSAGE-CONST-LITERAL-01` | 既有 Hard | 新 errcode 调用站点零违例 |
 
 无新 Soft 约束。
