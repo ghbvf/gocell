@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/audit"
@@ -92,4 +93,25 @@ func TestVerifyBootstrapTailOnStartup_RejectsNilStore(t *testing.T) {
 	var coded *errcode.Error
 	require.ErrorAs(t, err, &coded)
 	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
+}
+
+// TestBootstrapLedgerStore_RepoReady_Conformance enrolls *BootstrapLedgerStore
+// in the cross-cell repo-readiness conformance suite (CELL-REPO-READYZ-PROBE-01).
+// The wrapper delegates RepoReady to the inner Store; this binds that contract
+// — corebundle and ssobff wire the wrapper as a healthz.RepoProber even though
+// the relay-chain probe currently shares the audit_entries table.
+func TestBootstrapLedgerStore_RepoReady_Conformance(t *testing.T) {
+	t.Parallel()
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
+		ledger.WithNamespace(audit.BootstrapNamespace()),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	mem, err := ledger.NewMemStore(p, clockmock.New(testNow))
+	require.NoError(t, err)
+	wrapped, err := audit.NewBootstrapLedgerStore(mem)
+	require.NoError(t, err)
+	celltest.RunRepoReadinessConformance(t, "bootstrap-ledger", wrapped, nil)
 }

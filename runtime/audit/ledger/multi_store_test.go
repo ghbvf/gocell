@@ -21,6 +21,20 @@ import (
 // Conformance suite for ledger.MultiStore — the read-side aggregator that
 // fans Query across multiple Stores (issue #1121 / ADR 202605270230).
 
+// Test-data timestamp offsets used by the interleaving fixtures below.
+// File-local package-level consts (not pkg/testutil/testtime.* — these are
+// site-specific test fixture data, not cross-cutting timeouts) per
+// TEST-TIME-LITERAL-01.
+const (
+	offset5s  = 5 * time.Second
+	offset10s = 10 * time.Second
+	offset20s = 20 * time.Second
+	offset30s = 30 * time.Second
+	offset40s = 40 * time.Second
+	offset50s = 50 * time.Second
+	offset60s = 60 * time.Second
+)
+
 func mustNamespace(t *testing.T, s string) ledger.NamespaceID {
 	t.Helper()
 	ns, err := ledger.ParseNamespaceID(s)
@@ -118,11 +132,11 @@ func TestMultiStore_Query_MergesAcrossNamespaces(t *testing.T) {
 
 	// Interleave timestamps across the two stores so a single-namespace read
 	// would observe a strict subset; only the merge can return all five.
-	appendAt(t, a, "evt-a1", "event.user.created.v1", "user:1", base.Add(50*time.Second))
-	appendAt(t, b, "evt-b1", "bootstrap.auth.fail", "system:bootstrap", base.Add(40*time.Second))
-	appendAt(t, a, "evt-a2", "event.session.created.v1", "user:1", base.Add(30*time.Second))
-	appendAt(t, b, "evt-b2", "bootstrap.auth.fail", "system:bootstrap", base.Add(20*time.Second))
-	appendAt(t, a, "evt-a3", "event.user.locked.v1", "user:1", base.Add(10*time.Second))
+	appendAt(t, a, "evt-a1", "event.user.created.v1", "user:1", base.Add(offset50s))
+	appendAt(t, b, "evt-b1", "bootstrap.auth.fail", "system:bootstrap", base.Add(offset40s))
+	appendAt(t, a, "evt-a2", "event.session.created.v1", "user:1", base.Add(offset30s))
+	appendAt(t, b, "evt-b2", "bootstrap.auth.fail", "system:bootstrap", base.Add(offset20s))
+	appendAt(t, a, "evt-a3", "event.user.locked.v1", "user:1", base.Add(offset10s))
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
@@ -149,9 +163,9 @@ func TestMultiStore_Query_FiltersByEventType(t *testing.T) {
 	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(base))
 	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(base))
 
-	appendAt(t, a, "evt-user", "event.user.created.v1", "user:1", base.Add(20*time.Second))
-	appendAt(t, b, "evt-fail1", "bootstrap.auth.fail", "system:bootstrap", base.Add(10*time.Second))
-	appendAt(t, b, "evt-fail2", "bootstrap.auth.fail", "system:bootstrap", base.Add(5*time.Second))
+	appendAt(t, a, "evt-user", "event.user.created.v1", "user:1", base.Add(offset20s))
+	appendAt(t, b, "evt-fail1", "bootstrap.auth.fail", "system:bootstrap", base.Add(offset10s))
+	appendAt(t, b, "evt-fail2", "bootstrap.auth.fail", "system:bootstrap", base.Add(offset5s))
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
@@ -199,7 +213,7 @@ func TestMultiStore_Query_OneEmptyOneNonEmpty(t *testing.T) {
 	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(base))
 	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(base))
 
-	appendAt(t, a, "evt-a1", "event.user.created.v1", "user:1", base.Add(10*time.Second))
+	appendAt(t, a, "evt-a1", "event.user.created.v1", "user:1", base.Add(offset10s))
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
@@ -270,12 +284,12 @@ func TestMultiStore_Query_AppliesCursor(t *testing.T) {
 
 	// 6 entries with strictly-decreasing timestamps: a1(60), b1(50), a2(40),
 	// b2(30), a3(20), b3(10). DESC-sorted full order = [a1, b1, a2, b2, a3, b3].
-	appendAt(t, a, "a1", "event.x.v1", "actor", base.Add(60*time.Second))
-	appendAt(t, b, "b1", "event.y.v1", "actor", base.Add(50*time.Second))
-	appendAt(t, a, "a2", "event.x.v1", "actor", base.Add(40*time.Second))
-	appendAt(t, b, "b2", "event.y.v1", "actor", base.Add(30*time.Second))
-	appendAt(t, a, "a3", "event.x.v1", "actor", base.Add(20*time.Second))
-	appendAt(t, b, "b3", "event.y.v1", "actor", base.Add(10*time.Second))
+	appendAt(t, a, "a1", "event.x.v1", "actor", base.Add(offset60s))
+	appendAt(t, b, "b1", "event.y.v1", "actor", base.Add(offset50s))
+	appendAt(t, a, "a2", "event.x.v1", "actor", base.Add(offset40s))
+	appendAt(t, b, "b2", "event.y.v1", "actor", base.Add(offset30s))
+	appendAt(t, a, "a3", "event.x.v1", "actor", base.Add(offset20s))
+	appendAt(t, b, "b3", "event.y.v1", "actor", base.Add(offset10s))
 
 	ms, err := ledger.NewMultiStore(a, b)
 	require.NoError(t, err)
