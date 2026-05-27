@@ -16,9 +16,22 @@ import (
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// vaultProbe returns the vault_transit_ready probe from p.Probes().
+func vaultProbe(t *testing.T, p *vaultadapter.TransitKeyProvider) healthz.Probe {
+	t.Helper()
+	for _, probe := range p.Probes() {
+		if probe.Name() == vaultadapter.ProbeReady {
+			return probe
+		}
+	}
+	t.Fatalf("Probes() missing %q", vaultadapter.ProbeReady)
+	return nil
+}
 
 const vaultReadinessCtxTimeout = 600 * time.Millisecond
 
@@ -47,14 +60,9 @@ func TestTransitReadiness_Healthy(t *testing.T) {
 
 	p := newProviderFromEnv(t, addr, token)
 
-	checkers := p.Checkers()
-	require.NotNil(t, checkers, "Checkers must not return nil")
+	probe := vaultProbe(t, p)
 
-	probe, ok := checkers[string(vaultadapter.ProbeReady)]
-	require.True(t, ok, "Checkers must contain 'vault_transit_ready' key")
-	require.NotNil(t, probe, "vault_transit_ready probe must not be nil")
-
-	err := probe(context.Background())
+	err := probe.Check(context.Background())
 	assert.NoError(t, err, "vault_transit_ready probe should return nil for healthy vault")
 }
 
@@ -88,11 +96,9 @@ func TestTransitReadiness_MountDeleted(t *testing.T) {
 	err = rawClient.Sys().UnmountWithContext(ctx, "transit")
 	require.NoError(t, err, "Unmount transit must succeed (dev root token has sys capability)")
 
-	checkers := p.Checkers()
-	probe := checkers[string(vaultadapter.ProbeReady)]
-	require.NotNil(t, probe)
+	probe := vaultProbe(t, p)
 
-	probeErr := probe(context.Background())
+	probeErr := probe.Check(context.Background())
 	require.Error(t, probeErr, "vault_transit_ready must return error when transit mount is deleted")
 
 	// classifyVaultReadError routes 404 → ErrKeyProviderKeyNotFound (mount absent).
@@ -161,10 +167,8 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		rootClient.SetToken(token)
 		err = rootClient.Sys().UnmountWithContext(context.Background(), "transit")
 		require.NoError(t, err, "Unmount transit must succeed")
-		checkers := p.Checkers()
-		probe := checkers[string(vaultadapter.ProbeReady)]
-		require.NotNil(t, probe)
-		probeErr := probe(context.Background())
+		probe := vaultProbe(t, p)
+		probeErr := probe.Check(context.Background())
 		require.Error(t, probeErr, "probe must return error after transit unmount")
 		isKeyNotFound := isErrCode(probeErr, errcode.ErrKeyProviderKeyNotFound)
 		isTransient := isErrCode(probeErr, errcode.ErrKeyProviderTransient)
@@ -173,13 +177,11 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		return
 	}
 
-	checkers := pUnreachable.Checkers()
-	probe := checkers[string(vaultadapter.ProbeReady)]
-	require.NotNil(t, probe)
+	probe := vaultProbe(t, pUnreachable)
 
 	// The probe internally uses context.WithTimeout(3s), but since we also set
 	// a 500ms HTTP client timeout, it will fail fast.
-	probeErr := probe(context.Background())
+	probeErr := probe.Check(context.Background())
 	require.Error(t, probeErr, "probe must return error when vault is unreachable")
 
 	assert.True(t, isErrCode(probeErr, errcode.ErrKeyProviderTransient),
@@ -263,10 +265,8 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	require.NoError(t, err, "NewTransitKeyProvider with child token must succeed")
 
 	// Verify the probe works before revocation (confirms the policy grants access).
-	checkers := p.Checkers()
-	probe := checkers[string(vaultadapter.ProbeReady)]
-	require.NotNil(t, probe)
-	require.NoError(t, probe(context.Background()), "probe must succeed with valid child token (policy grants transit read)")
+	probe := vaultProbe(t, p)
+	require.NoError(t, probe.Check(context.Background()), "probe must succeed with valid child token (policy grants transit read)")
 
 	// Revoke the child token via revoke-accessor using the high-level API.
 	// Root token can revoke any accessor without knowing the child token value.
@@ -276,7 +276,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	// After revocation, Vault returns HTTP 403 → classifyVaultReadError maps to
 	// ErrKeyProviderAuthFailed (token revoked / permission denied), which is
 	// semantically distinct from ErrKeyProviderKeyNotFound (404 / missing key).
-	probeErr := probe(context.Background())
+	probeErr := probe.Check(context.Background())
 	require.Error(t, probeErr, "probe must fail after token is revoked")
 
 	assert.True(t, isErrCode(probeErr, errcode.ErrKeyProviderAuthFailed),

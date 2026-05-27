@@ -1198,7 +1198,7 @@ var _ lifecycle.ManagedResource = (*Connection)(nil)
 // healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
 const ProbeReady healthz.ProbeName = "rabbitmq_ready"
 
-// Checkers returns the rabbitmq_ready probe for /readyz integration.
+// Probes returns the typed rabbitmq_ready probe for /readyz integration.
 //
 // The probe wraps Health(ctx) which honors ctx (early cancel) and reads the
 // in-memory state machine fed by NotifyClose. No broker round-trip per probe —
@@ -1209,11 +1209,11 @@ const ProbeReady healthz.ProbeName = "rabbitmq_ready"
 // probes (vault_transit_ready, etc.); operator dashboards and alert rules
 // consuming /readyz?verbose dependencies must reference the suffixed name.
 //
-// ref: kernel/lifecycle/managed_resource.go::Checkers — contract: nil = healthy.
-// ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
-func (c *Connection) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		string(ProbeReady): c.Health,
+// ref: kernel/lifecycle/managed_resource.go::Probes — contract: nil = healthy.
+// ref: adapters/vault/transit_provider.go::Probes — sibling adapter pattern.
+func (c *Connection) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(ProbeReady, c.Health),
 	}
 }
 

@@ -147,13 +147,18 @@ func TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) 
 
 	pgRes := shared.poolMR
 
-	// Verify the ManagedResource exposes a "postgres_ready" checker (the name used by
+	// Verify the ManagedResource exposes a "postgres_ready" probe (the name used by
 	// adapterpg.Pool, which directly implements ManagedResource) and that it
 	// reports healthy against the live container started by setupPostgresForMain.
-	checkers := pgRes.Checkers()
-	pgChecker, ok := checkers["postgres_ready"]
-	require.True(t, ok, "pool ManagedResource must expose a \"postgres_ready\" checker (adapterpg.Pool)")
-	require.NoError(t, pgChecker(ctx), "postgres_ready checker must pass for the live container DSN")
+	var pgProbe interface{ Check(context.Context) error }
+	for _, p := range pgRes.Probes() {
+		if p.Name() == "postgres_ready" {
+			pgProbe = p
+			break
+		}
+	}
+	require.NotNil(t, pgProbe, "pool ManagedResource must expose a \"postgres_ready\" probe (adapterpg.Pool)")
+	require.NoError(t, pgProbe.Check(ctx), "postgres_ready probe must pass for the live container DSN")
 
 	// Close the resource to avoid leaking the connection pool.
 	// Ignore the error — the test has already passed at this point and pool

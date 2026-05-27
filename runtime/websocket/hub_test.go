@@ -185,7 +185,7 @@ func waitForHubPingTicker(t *testing.T, fc *clockmock.FakeClock) {
 // ManagedResource Tests (T4 / T5 / T6)
 // ---------------------------------------------------------------------------
 
-// T4: Hub.Checkers() state machine — Idle/Stopping/Stopped return non-nil;
+// T4: Hub.Probes() state machine — Idle/Stopping/Stopped return non-nil;
 // Running returns nil (healthy).
 func TestHub_Checkers_StateMachine(t *testing.T) {
 	tests := []struct {
@@ -202,11 +202,10 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 			hub.state.Store(tt.state)
-			checkers := hub.Checkers()
-			require.NotEmpty(t, checkers, "Checkers must return a non-empty map")
-			fn, ok := checkers[string(ProbeReady)]
-			require.True(t, ok, "must have 'websocket_hub_ready' key")
-			err := fn(context.Background())
+			probes := hub.Probes()
+			require.NotEmpty(t, probes, "Probes must return a non-empty slice")
+			require.Equal(t, ProbeReady, probes[0].Name(), "must have 'websocket_hub_ready' probe")
+			err := probes[0].Check(context.Background())
 			if tt.wantNil {
 				assert.NoError(t, err)
 			} else {
@@ -240,11 +239,11 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 			return hub.state.Load() >= stateStopping
 		}, testtime.EventuallyShort, testtime.D1ms)
 
-		// Checkers must report non-nil while stopping.
-		checkers := hub.Checkers()
-		fn, ok := checkers[string(ProbeReady)]
-		require.True(t, ok)
-		assert.Error(t, fn(context.Background()), "Checkers must return error while hub is stopping")
+		// Probes must report non-nil while stopping.
+		probes := hub.Probes()
+		require.Len(t, probes, 1)
+		require.Equal(t, ProbeReady, probes[0].Name())
+		assert.Error(t, probes[0].Check(context.Background()), "Probes must return error while hub is stopping")
 
 		// Unblock the stuck conn so Stop can complete.
 		close(stuck.closeCh)

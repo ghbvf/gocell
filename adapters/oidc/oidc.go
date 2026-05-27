@@ -207,12 +207,14 @@ func (a *Adapter) Verifier(ctx context.Context) (*gooidc.IDTokenVerifier, error)
 // healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
 const ProbeReady healthz.ProbeName = "oidc_ready"
 
-// Checkers returns a readyz probe for the OIDC provider. The probe verifies
-// that the cached provider is populated without re-discovering.
+// Probes returns the typed readyz probe for the OIDC provider. The probe
+// verifies that the cached provider is populated without re-discovering.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
-func (a *Adapter) Checkers() map[string]func(context.Context) error {
-	return adapterutil.HealthToCheckers(ProbeReady, a.healthProbe, adapterutil.DefaultProbeTimeout)
+func (a *Adapter) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		adapterutil.HealthToProbe(ProbeReady, a.healthProbe, adapterutil.DefaultProbeTimeout),
+	}
 }
 
 // Worker returns a worker.Worker that drives the periodic OIDC re-discovery

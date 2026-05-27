@@ -14,6 +14,7 @@
 //   - adapters/s3 — ProbeReady
 //   - adapters/vault — ProbeReady
 //   - adapters/oidc — ProbeReady
+//   - runtime/outbox — ProbePoll, ProbeReclaim, ProbeCleanup (relay operation probes, no _ready suffix)
 //   - runtime/websocket — ProbeReady
 //   - runtime/saga — ProbeCoordinatorReady
 //   - cells/{configcore,auditcore,accesscore}/healthz_gen.go — ProbeRepoReady (cellgen marker required)
@@ -34,9 +35,10 @@
 //     package-scoped so a seal at the type-system level is inexpressible.
 //   - A2 downstream (callsite resolves to declared const):
 //     Hard downstream — NewProbe(name ProbeName, ...) / RegisterReadiness(name
-//     ProbeName, ...) make passing a raw string a compile error; archtest
-//     additionally bans ProbeName(expr) casts where expr is not a sanctioned
-//     const (string-conversion bypass). Type system closes the form gap.
+//     ProbeName, ...) / HealthToProbe(name ProbeName, ...) make passing a raw
+//     string a compile error; archtest additionally bans ProbeName(expr) casts
+//     where expr is not a sanctioned const (string-conversion bypass). Type
+//     system closes the form gap.
 //   - A3 downstream (Aggregator.Register allowlist):
 //     Hard downstream via type system (Registrar.Healthz() removed — any
 //     attempt is a compile error). Archtest enforces the residual direct-
@@ -60,9 +62,9 @@
 //     is a function call (Sprintf, Join, etc.) — expected absent in production AST.
 //   - B4 (MustProbeName production bypass): healthz.MustProbeName(runtimeStr) calls
 //     in non-allowlist production files — availability risk since MustProbeName
-//     panics on invalid input, and adapter Checkers() map keys are runtime-supplied.
-//     Covered by A4b scanner (caller allowlist). Post-F1A/F1B, zero production
-//     callers outside kernel/healthz/probename.go + healthztest/conformance.go.
+//     panics on invalid input. Covered by A4b scanner (caller allowlist).
+//     Post-F1A/F1B, zero production callers outside kernel/healthz/probename.go
+//     + healthztest/conformance.go.
 //
 // ref: kernel/healthz.ProbeName — typed concept type
 // ref: kernel/healthz.NewProbeName — sole validated entry point
@@ -103,7 +105,7 @@ const (
 	cellRegistrarPkgPath = "github.com/ghbvf/gocell/kernel/cell"
 
 	// adapterutilPkgPath is the import path of the adapterutil package,
-	// which provides HealthToCheckers (consumes ProbeName as first arg).
+	// which provides HealthToProbe (consumes ProbeName as first arg).
 	adapterutilPkgPath = "github.com/ghbvf/gocell/adapters/adapterutil"
 )
 
@@ -121,6 +123,7 @@ var probeNameSanctionedPkgs = map[string]bool{
 	"github.com/ghbvf/gocell/adapters/vault":    true,
 	"github.com/ghbvf/gocell/adapters/oidc":     true,
 	// Runtime-level probe owners
+	"github.com/ghbvf/gocell/runtime/outbox":    true,
 	"github.com/ghbvf/gocell/runtime/websocket": true,
 	"github.com/ghbvf/gocell/runtime/saga":      true,
 	// Platform cells (cellgen healthz_gen.go — marker required)
@@ -177,14 +180,12 @@ var aggregatorRegisterAllowlist = map[string]bool{
 
 // newProbeNameAllowlist is the set of module-relative path suffixes that are
 // allowed to call healthz.NewProbeName directly in production code (non-test).
-// kernel/healthz/probename.go is the validator implementation; the bootstrap
-// managed_resource.go is the single composition-root callsite that converts
-// runtime-supplied ManagedResource.Checkers() map keys (bare strings from
-// adapter implementations) into typed ProbeName values at the funnel boundary
-// (A4 allowlist; see F1A fix in PR #1034).
+// kernel/healthz/probename.go is the validator implementation; all other
+// production code constructs typed ProbeName values via declared typed consts
+// (A4 allowlist; post-F1A/F1B, ManagedResource.Probes() returns typed
+// healthz.Probe values directly — no bare-string ingress at the boundary).
 var newProbeNameAllowlist = map[string]bool{
-	"kernel/healthz/probename.go":           true,
-	"runtime/bootstrap/managed_resource.go": true,
+	"kernel/healthz/probename.go": true,
 }
 
 // mustProbeNameAllowlist is the set of module-relative path suffixes that are
@@ -230,6 +231,10 @@ func goldenProbeNames() []string {
 		"adapters/redis.ProbeReady=redis_ready",
 		"adapters/s3.ProbeReady=s3_ready",
 		"adapters/vault.ProbeReady=vault_transit_ready",
+		// runtime probes — outbox relay probes (no _ready suffix: relay operation, not dep availability)
+		"runtime/outbox.ProbeCleanup=outbox_relay_cleanup",
+		"runtime/outbox.ProbePoll=outbox_relay_poll",
+		"runtime/outbox.ProbeReclaim=outbox_relay_reclaim",
 		// runtime probes (all _ready suffix)
 		"runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
 		"runtime/websocket.ProbeReady=websocket_hub_ready",
@@ -307,11 +312,11 @@ func isNewProbeCall(call *ast.CallExpr, info *types.Info) bool {
 	return ok && pkgPath == healthzPkgPath && name == "NewProbe"
 }
 
-// isHealthToCheckersCall reports whether call is a call to
-// adapterutil.HealthToCheckers.
-func isHealthToCheckersCall(call *ast.CallExpr, info *types.Info) bool {
+// isHealthToProbeCall reports whether call is a call to
+// adapterutil.HealthToProbe.
+func isHealthToProbeCall(call *ast.CallExpr, info *types.Info) bool {
 	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-	return ok && pkgPath == adapterutilPkgPath && name == "HealthToCheckers"
+	return ok && pkgPath == adapterutilPkgPath && name == "HealthToProbe"
 }
 
 // firstArgResolvesToConst reports whether the first argument of call resolves,
@@ -322,8 +327,8 @@ func firstArgResolvesToConst(call *ast.CallExpr, info *types.Info) bool {
 	}
 	arg := call.Args[0]
 	// Unwrap a single-level ProbeName(...) cast — adapter callsites write
-	// adapterutil.HealthToCheckers(string(postgres.ProbeReady), ...) or
-	// adapterutil.HealthToCheckers(postgres.ProbeReady, ...) — both are
+	// adapterutil.HealthToProbe(string(postgres.ProbeReady), ...) or
+	// adapterutil.HealthToProbe(postgres.ProbeReady, ...) — both are
 	// legitimate only when the inner value is a sanctioned const.
 	if castCall, ok := arg.(*ast.CallExpr); ok {
 		if inner, isCast := isProbeNameTypeConversion(castCall, info); isCast {
@@ -480,6 +485,10 @@ func scanA1DeclarationSanction(
 // caller-side contract for *consumer* code; the funnel implementation is the
 // authority that consumers terminate against.
 var a2FunnelInternalAllowlist = map[string]struct{}{
+	// adapterutil.HealthToProbe wraps its ProbeName parameter through to
+	// healthz.NewProbe — the parameter originates as a sanctioned const at
+	// the caller's adapter declaration site (e.g. redis.ProbeReady).
+	"adapters/adapterutil/health.go":                           {},
 	"kernel/cell/healthz.go":                                   {},
 	"kernel/cell/registry.go":                                  {},
 	"kernel/outbox/emitter.go":                                 {},
@@ -489,7 +498,7 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 }
 
 // scanA2CallsiteResolves scans file for RegisterReadiness / NewProbe /
-// HealthToCheckers calls where the name argument does not resolve to a
+// HealthToProbe calls where the name argument does not resolve to a
 // sanctioned *types.Const.  Also catches ProbeName(callExpr) casts where the
 // argument is not a const (string-conversion bypass).
 //
@@ -549,15 +558,15 @@ func scanA2CallsiteResolves(
 			return
 		}
 
-		// Case 3: adapterutil.HealthToCheckers(name, ...) — name must be sanctioned const.
-		if isHealthToCheckersCall(call, info) {
+		// Case 3: adapterutil.HealthToProbe(name, ...) — name must be sanctioned const.
+		if isHealthToProbeCall(call, info) {
 			if !firstArgResolvesToConst(call, info) {
 				pos := fset.Position(call.Pos())
 				out = append(out, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
 					Message: fmt.Sprintf(
-						"PROBENAME-SEALED-FUNNEL-01/A2: HealthToCheckers name arg at %s:%d "+
+						"PROBENAME-SEALED-FUNNEL-01/A2: HealthToProbe name arg at %s:%d "+
 							"does not resolve to a declared ProbeName const "+
 							"(bare string, var, or dynamic expr prohibited)",
 						rel, pos.Line,
@@ -851,7 +860,7 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 //   - A1_GoldenInventory — the full set of ProbeName consts must exactly match
 //     goldenProbeNames(); additions or removals must be acknowledged in the
 //     same PR by updating the golden list.
-//   - A2_CallsiteResolves — every RegisterReadiness / NewProbe / HealthToCheckers
+//   - A2_CallsiteResolves — every RegisterReadiness / NewProbe / HealthToProbe
 //     name arg must resolve to a declared ProbeName const; ProbeName(callExpr)
 //     casts are rejected.
 //   - A3_AggregatorRegisterAllowlist — direct Aggregator.Register calls outside

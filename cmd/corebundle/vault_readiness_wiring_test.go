@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -27,7 +28,7 @@ import (
 
 // fakeKeyProvider satisfies kcrypto.KeyProvider AND
 // kernellifecycle.ManagedResource. It drives the A19 wiring test:
-// ConfigCoreModule must register the provider's Checkers() with bootstrap so
+// ConfigCoreModule must register the provider's Probes() with bootstrap so
 // an unhealthy probe flips /readyz to 503.
 //
 // Encrypt/Decrypt are unreachable in this test because memory topology does
@@ -53,9 +54,9 @@ func (f *fakeKeyProvider) Rotate(_ context.Context) (string, error) {
 
 // --- kernellifecycle.ManagedResource ---
 
-func (f *fakeKeyProvider) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"fake_key_provider_ready": func(context.Context) error { return f.probeErr },
+func (f *fakeKeyProvider) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("fake_key_provider_ready"), func(context.Context) error { return f.probeErr }),
 	}
 }
 
@@ -181,7 +182,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"/readyz must be 503 when the KeyProvider readiness probe fails "+
-			"(proves ConfigCoreModule wires kp.Checkers() into bootstrap)")
+			"(proves ConfigCoreModule wires kp.Probes() into bootstrap)")
 
 	// /readyz?verbose request triggers the verbose slog record; the wire
 	// body is the canonical errcode envelope with empty details array

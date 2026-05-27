@@ -16,13 +16,14 @@ package bootstrap
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // relayAdapter wraps a *runtimeoutbox.Relay so the bootstrap managed-resource
-// pipeline can drive its lifecycle (Checkers / Worker / Close) without exposing
+// pipeline can drive its lifecycle (Probes / Worker / Close) without exposing
 // ManagedResource on the relay surface itself.
 type relayAdapter struct {
 	relay *runtimeoutbox.Relay
@@ -38,9 +39,9 @@ func newRelayAdapter(r *runtimeoutbox.Relay) *relayAdapter {
 	return &relayAdapter{relay: r}
 }
 
-// Checkers forwards to the relay's failure-budget probes.
-func (a *relayAdapter) Checkers() map[string]func(context.Context) error {
-	return a.relay.Checkers()
+// Probes forwards to the relay's typed failure-budget probes.
+func (a *relayAdapter) Probes() []healthz.Probe {
+	return a.relay.Probes()
 }
 
 // Worker returns the relay itself as the background worker; bootstrap drives

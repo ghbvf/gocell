@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -13,7 +12,7 @@ import (
 // WithManagedResource registers an external resource with the bootstrap
 // lifecycle. At Run() time, bootstrap:
 //
-//  1. Registers each Checkers() entry as a named /readyz health probe.
+//  1. Registers each Probes() entry as a typed /readyz health probe.
 //  2. Registers the Worker() (when non-nil) with the bootstrap WorkerGroup.
 //  3. Appends a LIFO teardown that calls Close() during shutdown.
 //
@@ -39,36 +38,34 @@ func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 }
 
 // expandManagedResources converts the registered ManagedResources into concrete
-// bootstrap fields: health checkers, workers, and LIFO teardown closures.
+// bootstrap fields: typed health probes, workers, and LIFO teardown closures.
 // It is called at the beginning of Run() before any startup step so that
-// health checker validation (Step 0) covers resource-contributed checkers too.
+// health checker validation (Step 0) covers resource-contributed probes too.
 //
-// Returns an error if two resources register the same checker key (duplicate
-// checker fail-fast): silently shadowing a checker would cause health
+// Returns an error if two resources register the same probe name (duplicate
+// probe fail-fast): silently shadowing a probe would cause health
 // misreporting that is very difficult to debug at runtime.
+//
+// Since ManagedResource.Probes() returns typed healthz.Probe values (each
+// carrying a sanctioned healthz.ProbeName), there is no bare-string ingress
+// here — every probe name reaching /readyz originates as a typed const at
+// the adapter/runtime declaration site (PROBENAME-SEALED-FUNNEL-01 funnel).
 //
 // LIFO teardown: resources are appended to b.managedResourceTeardowns in
 // registration order; Run() iterates teardowns in reverse to achieve LIFO.
 func (b *Bootstrap) expandManagedResources() error {
 	seen := make(map[string]struct{})
 	for _, r := range b.managedResources {
-		// Expand health checkers: r.Checkers() returns
-		// map[string]func(context.Context) error; convert each key to a typed
-		// healthz.ProbeName at the funnel boundary (ManagedResource.Checkers is
-		// a kernel/ interface that cannot import kernel/healthz.ProbeName without
-		// a circular dependency; conversion happens here in runtime/bootstrap).
-		for name, fn := range r.Checkers() {
-			if _, exists := seen[name]; exists {
-				return fmt.Errorf("bootstrap: duplicate checker key %q from ManagedResource %T — "+
-					"each managed resource must expose unique checker names", name, r)
+		for _, probe := range r.Probes() {
+			name := probe.Name()
+			key := string(name)
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("bootstrap: duplicate probe name %q from ManagedResource %T — "+
+					"each managed resource must expose unique probe names", key, r)
 			}
-			seen[name] = struct{}{}
-			fn := fn // capture
-			probeName, err := healthz.NewProbeName(name)
-			if err != nil {
-				return fmt.Errorf("bootstrap: invalid probe name %q from %T.Checkers(): %w", name, r, err)
-			}
-			b.healthCheckers = append(b.healthCheckers, namedChecker{name: probeName, fn: fn})
+			seen[key] = struct{}{}
+			p := probe // capture
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: p.Check})
 		}
 		// Expand worker (skip nil).
 		if w := r.Worker(); w != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -41,9 +42,9 @@ type fakeResource struct {
 	closed   bool
 }
 
-func (f *fakeResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		f.name: func(_ context.Context) error { return f.checkErr },
+func (f *fakeResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(f.name), func(_ context.Context) error { return f.checkErr }),
 	}
 }
 
@@ -231,9 +232,9 @@ type trackingResource struct {
 	closeOrder *[]string
 }
 
-func (r *trackingResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *trackingResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -457,12 +458,12 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 	return s.FakeStore.ClaimPending(ctx, batchSize)
 }
 
-// TM2: TestWithRelay_RegistersCheckers verifies that a Relay registered via
-// WithRelay contributes its three health checkers to /readyz?verbose. The
+// TM2: TestWithRelay_RegistersProbes verifies that a Relay registered via
+// WithRelay contributes its three health probes to /readyz?verbose. The
 // relay enters the ManagedResource pipeline through the package-private
 // relayAdapter (sole sanctioned holder; ADR 202605201400 +
 // RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
-func TestWithRelay_RegistersCheckers(t *testing.T) {
+func TestWithRelay_RegistersProbes(t *testing.T) {
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
 
@@ -688,9 +689,9 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 // nilWorkerResource is a ManagedResource whose Worker() always returns nil.
 type nilWorkerResource struct{}
 
-func (nilWorkerResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"nil_worker_checker": func(_ context.Context) error { return nil },
+func (nilWorkerResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("nil_worker_checker"), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -716,9 +717,9 @@ func TestExpandManagedResources_NilWorker_Skip(t *testing.T) {
 // duplicateCheckerResource provides a single checker under a fixed key name.
 type duplicateCheckerResource struct{ key string }
 
-func (r duplicateCheckerResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.key: func(_ context.Context) error { return nil },
+func (r duplicateCheckerResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.key), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -739,8 +740,8 @@ func TestExpandManagedResources_DuplicateChecker_Phase0Error(t *testing.T) {
 	}
 
 	err := b.expandManagedResources()
-	require.Error(t, err, "duplicate checker key must cause expandManagedResources to fail")
-	assert.Contains(t, err.Error(), "duplicate checker",
+	require.Error(t, err, "duplicate probe name must cause expandManagedResources to fail")
+	assert.Contains(t, err.Error(), "duplicate probe name",
 		"error message must name the conflict so operators can identify the culprit")
 }
 
@@ -821,9 +822,9 @@ type orderedCloseResource struct {
 	closeFn func(context.Context) error
 }
 
-func (r *orderedCloseResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *orderedCloseResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -852,9 +853,9 @@ type sequencedResource struct {
 	closeSeq atomic.Int64  // sequence number captured at Close(); 0 = not yet closed
 }
 
-func (r *sequencedResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *sequencedResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 

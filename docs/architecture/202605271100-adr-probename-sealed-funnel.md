@@ -301,3 +301,63 @@ char 上限，emitter 构造直接 fail。生产 cell 名 ≤18 char 实际零�
 威胁矩阵 reassessment（amendment 必查项）：原 ADR §"Threat" 段未列长 cellID 回归，
 amendment 后无 ✅→⚠️ 项；新增 invariant "EmitterFailOpenProbeName 对任意 32-char
 合法 cellID 必成功" 由上面 long-cellID 测试守。
+
+## Amendment 2026-05-27 — ManagedResource.Probes() typed signature (round-2 review F1)
+
+Round-2 review (gh issue #1187 review F1) 指出 PR 落地后仍存在一条 bare-string ingress：
+`kernel/lifecycle.ManagedResource.Checkers() map[string]func(context.Context) error`
+返回裸字符串 key，由 `runtime/bootstrap.expandManagedResources` 在 composition root
+调 `healthz.NewProbeName(name)` 做 runtime 转 typed。这层"边界 validator"虽 fail-fast
+拒不合规字符串，但与 ADR 原文 §"sealed funnel" 声称的"不存在 bare-string ingress"
+有 wording 差距：
+
+1. `runtime/outbox.Relay` / `runtime/websocket.Hub` / `runtime/saga.Coordinator` 等
+   ManagedResource 实现的 probe 名以裸 string literal 维护（`"outbox_relay_poll"` 等），
+   不在 `goldenProbeNames` inventory，新增 probe 名无 archtest 强制登记。
+2. AI co-author 在 `Checkers()` map 里加新 key 不触发 archtest 红——只要
+   `expandManagedResources` 边界 validator 接受即可，缺一致的"声明站点 typed const"
+   纪律。
+
+修复（同 PR）：
+
+1. `kernel/lifecycle.ManagedResource.Checkers() map[string]func` →
+   `Probes() []healthz.Probe`（typed slice 替换 map）。`kernel/lifecycle` 可 import
+   `kernel/healthz`（同 kernel/ 内单向依赖，无循环）；裸 string ingress 在 type
+   system 层消除。
+2. `adapters/adapterutil.HealthToCheckers(name, fn, timeout) map[string]func` →
+   `HealthToProbe(name, fn, timeout) healthz.Probe`。
+3. `runtime/outbox` 新增 typed const `ProbePoll / ProbeReclaim / ProbeCleanup`
+   （values 不变：`outbox_relay_poll` 等，运维 dashboard / alert 零迁移）。
+4. `runtime/bootstrap/managed_resource.go::expandManagedResources` 删
+   `healthz.NewProbeName` 转换分支，直接迭代 `r.Probes()` 并 register。
+5. archtest `PROBENAME-SEALED-FUNNEL-01`：
+   - 删 `newProbeNameAllowlist["runtime/bootstrap/managed_resource.go"]`（NewProbeName
+     production callers 从 2 收敛到 1，仅剩 kernel/healthz/probename.go 自身）。
+   - `probeNameSanctionedPkgs` 增 `runtime/outbox`。
+   - `goldenProbeNames()` 增 3 个 relay typed const inventory 条目。
+   - `a2FunnelInternalAllowlist` 增 `adapters/adapterutil/health.go`（实现
+     `HealthToProbe` funnel）。
+6. `tools/archtest/health_aggregation_test.go` 全部 `Checkers/exposesHealthCheckerMethod`
+   重命名为 `Probes/exposesHealthProbeMethod`（archtest 自身的接口形状识别更新）。
+
+威胁矩阵 reassessment：
+
+- 原 §"sealed funnel" 段 ✅ 项"adapter probe 名在 type system 层不可绕过" 现在**真正**满足：
+  composition root NewProbeName production caller 计数从 2 → 1，从 "validator boundary"
+  升级为 "type-system gate"。
+- ⚠️ "bare-string ingress at composition root" 项已**消除**（不再需要补偿措施，gate
+  本身上移到 ManagedResource interface）。
+- 新增 invariant "每个 ManagedResource 派生 probe 必须在 goldenProbeNames inventory"
+  由 archtest A1 sub-rule + golden lock 双向锁；runtime/outbox 3 个 typed const 全部入表。
+
+AI-robust 评级（升级）：
+
+| 轴 | 形态（amendment 后） | 评级 |
+|----|---------------------|------|
+| ManagedResource 上游 type system | `Probes() []healthz.Probe` 让 `map[string]func` 编译错 | **Hard 上游** |
+| 下游 const 声明 + golden inventory | `runtime/outbox` typed const + sanctionedPkgs + golden | **Hard 下游** |
+
+PR 调用接口形态变更：`bootstrap.WithManagedResource(r)` caller 一个 option 不变；只是
+resource 实现侧把 `Checkers() map` 改为 `Probes() []healthz.Probe`。生产 cellID 都不含
+hyphen，已知场景零行为变更。`adapters/prometheus/exposition_test.go` 的 `"test-cell"`
+（hyphen）原 PR 漏 fixup 由本 amendment 修复（改为 `"testcell"`）。

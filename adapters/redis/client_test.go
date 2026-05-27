@@ -774,10 +774,9 @@ func TestClient_CheckersReturnsRedisReady(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
 
-	checkers := client.Checkers()
-	require.Len(t, checkers, 1, "Checkers must return exactly one entry")
-	_, ok := checkers["redis_ready"]
-	assert.True(t, ok, "Checkers must contain key redis_ready")
+	probes := client.Probes()
+	require.Len(t, probes, 1, "Probes must return exactly one entry")
+	assert.Equal(t, ProbeReady, probes[0].Name(), "Probes must contain probe redis_ready")
 }
 
 func TestClient_WorkerReturnsNil(t *testing.T) {
@@ -792,9 +791,9 @@ func TestClient_CheckerInvokesHealth(t *testing.T) {
 		mock := newMockCmdable()
 		client := newClientFromCmdable(mock, Config{})
 
-		checker := client.Checkers()["redis_ready"]
-		require.NotNil(t, checker)
-		assert.NoError(t, checker(context.Background()))
+		probes := client.Probes()
+		require.Len(t, probes, 1)
+		assert.NoError(t, probes[0].Check(context.Background()))
 	})
 
 	t.Run("failure path — probe surfaces Health error", func(t *testing.T) {
@@ -802,9 +801,9 @@ func TestClient_CheckerInvokesHealth(t *testing.T) {
 		mock.pingErr = errMock
 		client := newClientFromCmdable(mock, Config{})
 
-		checker := client.Checkers()["redis_ready"]
-		require.NotNil(t, checker)
-		err := checker(context.Background())
+		probes := client.Probes()
+		require.Len(t, probes, 1)
+		err := probes[0].Check(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
 	})

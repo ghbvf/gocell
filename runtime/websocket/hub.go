@@ -838,23 +838,23 @@ func (h *Hub) ConnCount() int {
 // healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
 const ProbeReady healthz.ProbeName = "websocket_hub_ready"
 
-// Checkers implements lifecycle.ManagedResource. It returns a single probe
-// "websocket_hub_ready" that reports nil (healthy) only when the Hub is in
-// the running state. Any other state (idle/stopping/stopped) returns
-// errHubNotRunning.
+// Probes implements lifecycle.ManagedResource. It returns a single typed
+// probe ProbeReady ("websocket_hub_ready") that reports nil (healthy) only
+// when the Hub is in the running state. Any other state (idle/stopping/
+// stopped) returns errHubNotRunning.
 //
 // probe name "websocket_hub_ready" follows the observability rule:
 // snake_case + "_ready" suffix.
 //
-// ref: adapters/rabbitmq/connection.go Checkers — probe name + pre-allocated error pattern.
-func (h *Hub) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		string(ProbeReady): func(_ context.Context) error {
+// ref: adapters/rabbitmq/connection.go Probes — probe name + pre-allocated error pattern.
+func (h *Hub) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(ProbeReady, func(_ context.Context) error {
 			if h.state.Load() == stateRunning {
 				return nil
 			}
 			return errHubNotRunning
-		},
+		}),
 	}
 }
 

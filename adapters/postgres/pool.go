@@ -181,33 +181,29 @@ func (p *Pool) Close(ctx context.Context) error {
 	})
 }
 
-// Checkers returns two health probes that contribute to /readyz:
+// Probes returns two typed readiness probes that contribute to /readyz:
 //
-//  1. "postgres_ready" — pings the PG pool connection via Pool.Health.
-//  2. "postgres_indexes_valid_ready" — calls InvalidIndexCheck to surface
-//     any indexes left invalid by an interrupted CREATE INDEX CONCURRENTLY.
+//  1. ProbeReady (= "postgres_ready") — pings the PG pool connection via
+//     Pool.Health.
+//  2. ProbeIndexesValidReady (= "postgres_indexes_valid_ready") — calls
+//     InvalidIndexCheck to surface any indexes left invalid by an interrupted
+//     CREATE INDEX CONCURRENTLY.
 //
 // Both probes cap their inner wait at adapterutil.DefaultProbeTimeout (5 s)
 // so a slow PG does not hold the /readyz response indefinitely.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 // ref: uber-go/fx app.go StopTimeout — shared shutdown budget via ctx.
-func (p *Pool) Checkers() map[string]func(context.Context) error {
+func (p *Pool) Probes() []healthz.Probe {
 	healthFn := p.checkerHealthFnForTest
 	if healthFn == nil {
 		healthFn = p.Health
 	}
-	return map[string]func(context.Context) error{
-		string(ProbeReady): func(ctx context.Context) error {
-			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
-			defer cancel()
-			return healthFn(probeCtx)
-		},
-		string(ProbeIndexesValidReady): func(ctx context.Context) error {
-			probeCtx, cancel := context.WithTimeout(ctx, adapterutil.DefaultProbeTimeout)
-			defer cancel()
-			return InvalidIndexCheck(probeCtx, p)
-		},
+	return []healthz.Probe{
+		adapterutil.HealthToProbe(ProbeReady, healthFn, adapterutil.DefaultProbeTimeout),
+		adapterutil.HealthToProbe(ProbeIndexesValidReady, func(ctx context.Context) error {
+			return InvalidIndexCheck(ctx, p)
+		}, adapterutil.DefaultProbeTimeout),
 	}
 }
 

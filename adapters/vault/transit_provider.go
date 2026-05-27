@@ -1168,18 +1168,18 @@ var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
 // 3 seconds is sufficient for LAN Vault deployments. Intentionally tighter than
 // adapterutil.DefaultProbeTimeout (5s): a transit/keys/{name} metadata read is a
 // single fast round-trip, so a slow Vault should mark the probe down quickly
-// rather than hold /readyz near the aggregator deadline. This is why the Checkers
-// map is built directly here instead of via adapterutil.HealthToCheckers (which
-// would apply the 5s default).
+// rather than hold /readyz near the aggregator deadline. This is why the probe
+// is built directly here instead of via adapterutil.HealthToProbe (which would
+// apply the 5s default).
 const transitReadinessTimeout = 3 * time.Second
 
 // ProbeReady is the ops-contract name for the Vault transit readiness probe.
 // healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
 const ProbeReady healthz.ProbeName = "vault_transit_ready"
 
-// Checkers returns a map of readiness probe functions for TransitKeyProvider.
-// The single probe "vault_transit_ready" reads transit/keys/{keyName} metadata
-// (the same path used by readLatestVersion) to verify that:
+// Probes returns the typed readiness probes for TransitKeyProvider. The single
+// probe ProbeReady ("vault_transit_ready") reads transit/keys/{keyName}
+// metadata (the same path used by readLatestVersion) to verify that:
 //   - The Vault token is valid and not revoked.
 //   - The transit mount is enabled.
 //   - The named key exists.
@@ -1195,14 +1195,14 @@ const ProbeReady healthz.ProbeName = "vault_transit_ready"
 // ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore
 //
 //	uses auth/token/lookup-self + business-path probe, not sys/health
-func (p *TransitKeyProvider) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		string(ProbeReady): func(ctx context.Context) error {
+func (p *TransitKeyProvider) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(ProbeReady, func(ctx context.Context) error {
 			probeCtx, cancel := context.WithTimeout(ctx, transitReadinessTimeout)
 			defer cancel()
 			_, err := p.readLatestVersion(probeCtx)
 			return err
-		},
+		}),
 	}
 }
 

@@ -16,11 +16,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
+
+// s3IntegProbe returns the s3_ready probe from client.Probes().
+func s3IntegProbe(t *testing.T, client *Client) healthz.Probe {
+	t.Helper()
+	for _, p := range client.Probes() {
+		if p.Name() == ProbeReady {
+			return p
+		}
+	}
+	t.Fatalf("Probes() missing %q", ProbeReady)
+	return nil
+}
 
 const (
 	integrationBucket = "gocell-s3-test"
@@ -100,10 +113,9 @@ func startWorkerWithTickProof(t *testing.T, ctx context.Context, client *Client,
 	sentinel := errors.New("worker-tick-proof-sentinel: must be cleared by worker")
 	client.state.Store(&sentinel)
 
-	checkers := client.Checkers()
-	require.Contains(t, checkers, string(ProbeReady))
+	probe := s3IntegProbe(t, client)
 	testwait.External(t, "s3-worker-tick-executed", func() bool {
-		return checkers[string(ProbeReady)](ctx) == nil
+		return probe.Check(ctx) == nil
 	}, timeout, testtime.SlowPoll,
 		"s3_ready should clear worker-tick-proof sentinel once worker probes healthy MinIO")
 }
@@ -149,9 +161,7 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 	assert.NoError(t, client.Health(ctx), "Health should be nil after successful upload")
 
 	// State-machine probe: reads atomic state, no network I/O.
-	checkers := client.Checkers()
-	require.Contains(t, checkers, string(ProbeReady))
-	assert.NoError(t, checkers[string(ProbeReady)](ctx), "s3_ready checker should be nil")
+	assert.NoError(t, s3IntegProbe(t, client).Check(ctx), "s3_ready probe should be nil")
 }
 
 // TestIntegration_S3_RecoveryAfterContainerRestart verifies the stop/start
@@ -261,7 +271,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	// Initial healthy wait: poison state, prove worker tick clears it.
 	startWorkerWithTickProof(t, ctx, client, testtime.EventuallyLong)
 
-	checkers := client.Checkers()
+	probe := s3IntegProbe(t, client)
 
 	// Stop the container. Worker tick will call HeadBucket and update state to
 	// non-nil. We assert the probe becomes non-nil.
@@ -269,7 +279,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	require.NoError(t, ctr.Stop(ctx, &stopTimeout), "stop container for worker test")
 
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		return checkers[string(ProbeReady)](ctx) != nil
+		return probe.Check(ctx) != nil
 	}, testtime.EventuallyExtraLong, testtime.SlowPoll,
 		"s3_ready should flip to non-nil error while container is stopped")
 

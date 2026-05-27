@@ -11,12 +11,26 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/observability"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/worker"
+)
+
+// ProbePoll / ProbeReclaim / ProbeCleanup are the typed healthz.ProbeName
+// consts for the three relay failure-budget probes. They participate in the
+// PROBENAME-SEALED-FUNNEL-01 typed funnel so the composition root no longer
+// translates bare strings from ManagedResource — the names flow as typed
+// const all the way from Relay.Probes() to /readyz registration. Wire values
+// are preserved (no "_ready" suffix; relay budgets are not adapter
+// dependency-availability probes — see adapterSanctionedPkgs convention).
+const (
+	ProbePoll    healthz.ProbeName = "outbox_relay_poll"
+	ProbeReclaim healthz.ProbeName = "outbox_relay_reclaim"
+	ProbeCleanup healthz.ProbeName = "outbox_relay_cleanup"
 )
 
 // Compile-time interface checks.
@@ -192,13 +206,13 @@ func NewRelay(clk clock.Clock, store Store, pub kout.Publisher, cfg RelayConfig)
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {
-		r.pollBudget = NewFailureBudget("outbox_relay_poll", cfg.PollFailureBudget)
+		r.pollBudget = NewFailureBudget(string(ProbePoll), cfg.PollFailureBudget)
 	}
 	if cfg.ReclaimFailureBudget > 0 {
-		r.reclaimBudget = NewFailureBudget("outbox_relay_reclaim", cfg.ReclaimFailureBudget)
+		r.reclaimBudget = NewFailureBudget(string(ProbeReclaim), cfg.ReclaimFailureBudget)
 	}
 	if cfg.CleanupFailureBudget > 0 {
-		r.cleanupBudget = NewFailureBudget("outbox_relay_cleanup", cfg.CleanupFailureBudget)
+		r.cleanupBudget = NewFailureBudget(string(ProbeCleanup), cfg.CleanupFailureBudget)
 	}
 	return r
 }
@@ -833,31 +847,32 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // Health and readiness
 // ---------------------------------------------------------------------------
 
-// Checkers returns a map of named health checker functions, one per
-// enabled failure budget. The returned functions implement the
-// health.Checker contract: nil return = healthy; non-nil = unhealthy.
+// Probes returns the typed health probes contributed by the Relay, one per
+// enabled failure budget. Each Probe carries a healthz.ProbeName-typed const
+// (ProbePoll / ProbeReclaim / ProbeCleanup) and a Check function with the
+// healthz contract: nil return = healthy; non-nil = unhealthy.
 //
 // Only budgets with a positive threshold are included; threshold=0 (disabled)
-// budgets are excluded from the map so callers can safely iterate all entries
-// and register them unconditionally.
+// budgets are excluded from the slice so callers can iterate and register
+// every returned probe unconditionally.
 //
 // Consumed by runtime/bootstrap.relayAdapter to satisfy ManagedResource on
 // behalf of *Relay (see ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md).
 //
 // ref: controller-runtime/pkg/healthz AddReadyzCheck — named-checker aggregation.
-func (r *Relay) Checkers() map[string]func(context.Context) error {
-	m := make(map[string]func(context.Context) error)
+func (r *Relay) Probes() []healthz.Probe {
+	var probes []healthz.Probe
 	if r.pollBudget != nil {
-		m["outbox_relay_poll"] = r.pollBudget.Checker()
+		probes = append(probes, healthz.NewProbe(ProbePoll, r.pollBudget.Checker()))
 	}
 	if r.reclaimBudget != nil {
-		m["outbox_relay_reclaim"] = r.reclaimBudget.Checker()
+		probes = append(probes, healthz.NewProbe(ProbeReclaim, r.reclaimBudget.Checker()))
 	}
 	if r.cleanupBudget != nil {
-		m["outbox_relay_cleanup"] = r.cleanupBudget.Checker()
+		probes = append(probes, healthz.NewProbe(ProbeCleanup, r.cleanupBudget.Checker()))
 	}
-	return m
+	return probes
 }
 
 // Worker returns the Relay itself as the background worker.

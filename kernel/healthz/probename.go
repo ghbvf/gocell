@@ -1,7 +1,6 @@
 package healthz
 
 import (
-	"log/slog"
 	"regexp"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -88,14 +87,14 @@ func NewProbeName(s string) (ProbeName, error) {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"healthz: probe name exceeds length budget",
 			errcode.WithDetails(
-				slog.Int("max", probeNameMaxLen),
-				slog.Int("got", len(s)),
+				errcode.PublicInt("max", probeNameMaxLen),
+				errcode.PublicInt("got", len(s)),
 			))
 	}
 	if !probeNamePattern.MatchString(s) {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"healthz: probe name must match snake_case lowercase regex",
-			errcode.WithDetails(slog.String("name", s)))
+			errcode.WithDetails(errcode.PublicString("name", s)))
 	}
 	return ProbeName(s), nil
 }

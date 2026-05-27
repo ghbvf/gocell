@@ -19,11 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
+
+// healthzProbe is a local alias to make the s3Probe helper signature readable.
+type healthzProbe = healthz.Probe
 
 // Compile-time assertion: *Client implements lifecycle.ManagedResource.
 var _ lifecycle.ManagedResource = (*Client)(nil)
@@ -360,16 +364,27 @@ func TestNew_SucceedsWhenHeadBucketSucceeds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Checkers tests
+// Probes tests
 // ---------------------------------------------------------------------------
+
+// s3Probe returns the s3_ready probe from c.Probes(). Fails the test if absent.
+func s3Probe(t *testing.T, c *Client) healthzProbe {
+	t.Helper()
+	probes := c.Probes()
+	for _, p := range probes {
+		if p.Name() == ProbeReady {
+			return p
+		}
+	}
+	t.Fatalf("Probes() missing %q", ProbeReady)
+	return nil
+}
 
 func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 	mock := &mockHeadBucket{}
 	c := newTestClient(clock.Real(), validConfig(), mock)
 	// state is nil (healthy by default after zero-value)
-	checkers := c.Checkers()
-	require.Contains(t, checkers, string(ProbeReady))
-	require.NoError(t, checkers[string(ProbeReady)](context.Background()))
+	require.NoError(t, s3Probe(t, c).Check(context.Background()))
 }
 
 func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
@@ -380,9 +395,7 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 	sentinel := errors.New("injected health failure")
 	c.state.Store(&sentinel)
 
-	checkers := c.Checkers()
-	require.Contains(t, checkers, string(ProbeReady))
-	err := checkers[string(ProbeReady)](context.Background())
+	err := s3Probe(t, c).Check(context.Background())
 	require.Error(t, err)
 	assert.Equal(t, sentinel, err)
 }
@@ -392,10 +405,9 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 func TestCheckers_NoNetworkCall(t *testing.T) {
 	mock := &mockHeadBucket{}
 	c := newTestClient(clock.Real(), validConfig(), mock)
-	checkers := c.Checkers()
 
-	_ = checkers[string(ProbeReady)](context.Background())
-	assert.EqualValues(t, 0, mock.callCount.Load(), "Checkers probe must not call HeadBucket")
+	_ = s3Probe(t, c).Check(context.Background())
+	assert.EqualValues(t, 0, mock.callCount.Load(), "Probes probe must not call HeadBucket")
 }
 
 // ---------------------------------------------------------------------------
@@ -453,10 +465,10 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	go func() { _ = w.Start(ctx) }()
 
 	// Wait until the probe reports unhealthy.
-	checkers := c.Checkers()
+	probe := s3Probe(t, c)
 	var lastErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		lastErr = checkers[string(ProbeReady)](context.Background())
+		lastErr = probe.Check(context.Background())
 		return lastErr != nil
 	}, testtime.D250ms, testtime.FastPoll)
 
@@ -494,10 +506,10 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	go func() { _ = w.Start(ctx) }()
 
 	// Wait for the state to recover (second tick → nil).
-	checkers := c.Checkers()
+	probe := s3Probe(t, c)
 	var lastErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		lastErr = checkers[string(ProbeReady)](context.Background())
+		lastErr = probe.Check(context.Background())
 		return callN.Load() >= 2 && lastErr == nil
 	}, testtime.D300ms, testtime.FastPoll)
 
@@ -838,10 +850,10 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 
 	go func() { _ = w.Start(ctx) }()
 
-	checkers := c.Checkers()
+	probe := s3Probe(t, c)
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[string(ProbeReady)](context.Background())
+		stateErr = probe.Check(context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 403 tick")
 
@@ -875,10 +887,10 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 
 	go func() { _ = w.Start(ctx) }()
 
-	checkers := c.Checkers()
+	probe := s3Probe(t, c)
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[string(ProbeReady)](context.Background())
+		stateErr = probe.Check(context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after 503 tick")
 
@@ -917,12 +929,12 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 
 	go func() { _ = w.Start(ctx) }()
 
-	checkers := c.Checkers()
+	probe := s3Probe(t, c)
 
 	// Phase 1: wait for state to become unhealthy with a transient error.
 	var stateErr error
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		stateErr = checkers[string(ProbeReady)](context.Background())
+		stateErr = probe.Check(context.Background())
 		return stateErr != nil
 	}, testtime.D250ms, testtime.FastPoll, "state must become unhealthy after timeout ticks")
 	assert.True(t, errcode.IsTransient(stateErr), "timeout tick error must be transient")
@@ -930,7 +942,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	// Phase 2: wait for state to recover to healthy (nil).
 	// Budget widened to D500ms to absorb CI scheduler jitter between ticks 2 and 3.
 	testwait.External(t, "s3-health-probe-ok", func() bool {
-		return checkers[string(ProbeReady)](context.Background()) == nil
+		return probe.Check(context.Background()) == nil
 	}, testtime.D500ms, testtime.FastPoll, "state must recover to healthy after success ticks")
 
 	cancel()

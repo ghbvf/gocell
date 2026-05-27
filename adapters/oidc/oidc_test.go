@@ -90,13 +90,14 @@ func TestCheckers_OIDCReadyHealthyAfterConstruction(t *testing.T) {
 	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
-	checkers := adapter.Checkers()
-	require.Contains(t, checkers, "oidc_ready")
+	probes := adapter.Probes()
+	require.Len(t, probes, 1, "Probes must return exactly one entry")
+	require.Equal(t, ProbeReady, probes[0].Name(), "probe must be oidc_ready")
 
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer probeCancel()
 
-	err = checkers["oidc_ready"](probeCtx)
+	err = probes[0].Check(probeCtx)
 	require.NoError(t, err, "oidc_ready probe should pass after successful construction")
 }
 

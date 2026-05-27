@@ -18,6 +18,7 @@ import (
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -371,7 +372,7 @@ const bootstrapRateLimitBurst = 10
 // contract so phase10 shutdown stops the cleanup goroutine.
 type bootstrapLimiterResource struct{ lim *ratelimit.Limiter }
 
-func (bootstrapLimiterResource) Checkers() map[string]func(context.Context) error {
+func (bootstrapLimiterResource) Probes() []healthz.Probe {
 	return nil
 }
 func (bootstrapLimiterResource) Worker() worker.Worker { return nil }

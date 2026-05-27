@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -194,9 +195,9 @@ type fakeManagedResource struct {
 	w           kworker.Worker
 }
 
-func (f *fakeManagedResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		f.name: func(context.Context) error { return nil },
+func (f *fakeManagedResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("fake_resource_ready"), func(context.Context) error { return nil }),
 	}
 }
 
@@ -751,7 +752,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 // Note: despite the name, this test does NOT exercise the Postgres code path —
 // StorageBackend is fixed to "memory". The test name is historical. Its sole
 // purpose is verifying the WithManagedResource lifecycle hooks
-// (Checkers / Worker / Close).
+// (Probes / Worker / Close).
 func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 

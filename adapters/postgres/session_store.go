@@ -274,11 +274,11 @@ func (s *PGSessionStore) RepoReady(ctx context.Context) error {
 // PGSessionStore's responsibility via RepoReady — it detects schema/migration
 // drift and table-level permission loss that a pool ping cannot.
 
-// Checkers returns nil: pool-level connection liveness is *Pool's concern.
+// Probes returns nil: pool-level connection liveness is *Pool's concern.
 // Cell-level differentiated readiness is exposed through RepoReady, which is
 // registered as "accesscore_repo_ready" via the cellgen-emitted typed helper in the
 // accesscore cell init path.
-func (s *PGSessionStore) Checkers() map[string]func(context.Context) error {
+func (s *PGSessionStore) Probes() []healthz.Probe {
 	return nil
 }
 

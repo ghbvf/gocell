@@ -140,7 +140,7 @@ func TestNewPoolMetricsResource_ImplementsManagedResource(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = res.Close(context.Background()) })
 
-	assert.Nil(t, res.Checkers(),
+	assert.Empty(t, res.Probes(),
 		"pool collector has no out-of-band health probe")
 	assert.Nil(t, res.Worker(),
 		"pool collector has no background worker")
