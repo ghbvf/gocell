@@ -66,8 +66,10 @@ paths:
 - 构造函数出口必须经 `s.validateRequired()`（由 `gocell generate required-deps`
   从 Service struct 字段 `gocell:"required"` tag 生成）。可选依赖（logger /
   emitter）在构造函数内 fallback。clock 是**强制位置参** `clk clock.Clock`
-  （首参，或 `ctx` 之后；漏传 = 编译错误，由 `CLOCK-POSITIONAL-INJECTION-01`
-  form-lock 守正向形态），构造函数体内 `clock.MustHaveClock(clk, ...)` 保留为
+  （漏传 = 编译错误，由 `CLOCK-POSITIONAL-INJECTION-01` form-lock 守正向形态；
+  新增构造函数推荐首参或紧跟 `ctx`，pre-existing 位置不重排——见 ADR
+  `docs/architecture/202605270000-adr-clock-positional-injection-funnel.md` §1
+  "no reordering churn"），构造函数体内 `clock.MustHaveClock(clk, ...)` 保留为
   typed-nil panic 豁免（programmer error 语义，#883 Option A）——禁 `WithClock`
   option、禁输入 Config 的 `Clock` 字段（详见 ADR `202605270000`）。由
   `REQUIRED-DEP-NIL-GUARD-01` 三件套 archtest 静态守卫。OUTBOX-SERVICE-01
