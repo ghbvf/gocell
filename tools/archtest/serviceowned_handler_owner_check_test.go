@@ -17,10 +17,13 @@
 //     struct — those method names are the contract's *real* execution
 //     entries. BFS closure over intra-file function/method calls
 //     determines reachability. Rejects:
-//       * dead code at file scope (`var _ = auth.CheckOwner[any]{...}`)
-//       * unexported helpers no entry transitively calls
-//       * unexported/exported methods NOT invoked by the adapter (B1
-//         binds to the contract's actual path, not "any Service method")
+//
+//   - dead code at file scope (`var _ = auth.CheckOwner[any]{...}`)
+//
+//   - unexported helpers no entry transitively calls
+//
+//   - unexported/exported methods NOT invoked by the adapter (B1
+//     binds to the contract's actual path, not "any Service method")
 //     Package-path resolution via ResolvePackageRef prevents
 //     import-alias / dot-import / same-named CheckOwner in another
 //     package from evading. The conservative-entry-set fallback was
@@ -55,13 +58,21 @@
 //     own body lives in runtime/, not cells/, and is therefore out of
 //     B3 scope by construction.
 //
-//     Known SSA-pending blindspot (#1199): runtime-value alias such as
-//     `local := errcode.KindNotFound; errcode.New(local, ...)` is not
-//     caught — ResolvePackageRef cannot follow runtime variable values.
-//     A typed const alias `const k = errcode.KindNotFound; errcode.New(k,
-//     ...)` IS caught via go/types constant folding. The runtime alias
-//     escape requires dataflow analysis (SSA), tracked at gh #1199
-//     alongside the B1 callgraph upgrade.
+//     Typed const alias `const k = errcode.KindNotFound; errcode.New(k,
+//     ...)` IS caught: isKindNotFoundArg first compares the const-folded
+//     value of arg (via types.Info.Types[arg].Value) against the constant
+//     value of errcode.KindNotFound looked up from pass.Pkg's imports.
+//     This branch fires before ResolvePackageRef, covering the const
+//     alias path that bare package-ref resolution misses (red fixture
+//     red_b3_const_alias_kindnotfound demonstrates).
+//
+//     Known SSA-pending blindspot (#1199): runtime-var alias `local :=
+//     errcode.KindNotFound; errcode.New(local, ...)` is NOT caught —
+//     local is a *types.Var (not *types.Const), so Types[local].Value
+//     is nil and the const-folding branch skips it; ResolvePackageRef
+//     also returns false (local is not a package-level symbol). SSA
+//     dataflow is required to follow runtime variable values; tracked
+//     at gh #1199 alongside the B1 callgraph upgrade.
 //
 // Hard 范本目录 mapping: this funnel realizes "typed function choice" +
 // "typed marker funnel for unbounded ops" — `auth.CheckOwner` is the
@@ -114,6 +125,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
+	"go/token"
 	"go/types"
 	"os"
 	"path"
@@ -340,6 +353,10 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 		// B3 RED via errcode.Wrap (not New) + B1 silent cross-check
 		{subdir: "red_b3_wrap_kindnotfound", pred: predB1, wantViolations: false},
 		{subdir: "red_b3_wrap_kindnotfound", pred: predB3, wantViolations: true},
+		// B3 RED via typed const alias (const k = errcode.KindNotFound)
+		// — caught by const-folding branch, NOT package-ref resolution
+		{subdir: "red_b3_const_alias_kindnotfound", pred: predB1, wantViolations: false},
+		{subdir: "red_b3_const_alias_kindnotfound", pred: predB3, wantViolations: true},
 		// B1 reachability RED fixtures (file-scope dead code + unreachable helper)
 		{subdir: "red_b1_dead_callsite", pred: predB1, wantViolations: true},
 		{subdir: "red_b1_dead_callsite", pred: predB3, wantViolations: false},
@@ -564,7 +581,7 @@ func checkServiceFileZeroToleranceBan(pass *Pass, file *ast.File, rel, contractI
 		if len(call.Args) == 0 {
 			return
 		}
-		if !isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
+		if !isKindNotFoundArg(pass, call.Args[0]) {
 			return
 		}
 		diags = append(diags, Diagnostic{
@@ -635,7 +652,7 @@ func checkFunnelBody(pass *Pass, file *ast.File, rel string) []Diagnostic {
 		if len(call.Args) == 0 {
 			return
 		}
-		if isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
+		if isKindNotFoundArg(pass, call.Args[0]) {
 			notFoundCalls++
 			return
 		}
@@ -701,7 +718,7 @@ func checkFunnelGuardCondition(pass *Pass, fn *ast.FuncDecl, file *ast.File, rel
 	var diags []Diagnostic
 	guardCount := 0
 	EachInChildren[ast.IfStmt](fn.Body, func(ifStmt *ast.IfStmt) {
-		if !ifBodyReturnsCanonicalNotFound(pass.TypesInfo, ifStmt.Body) {
+		if !ifBodyReturnsCanonicalNotFound(pass, ifStmt.Body) {
 			return
 		}
 		guardCount++
@@ -738,9 +755,9 @@ func checkFunnelGuardCondition(pass *Pass, fn *ast.FuncDecl, file *ast.File, rel
 
 // ifBodyReturnsCanonicalNotFound reports whether the IF body contains a
 // ReturnStmt with at least one errcode.New call whose first argument
-// type-resolves to errcode.KindNotFound. Used to identify the funnel's
-// guard IF for the condition-lock predicate.
-func ifBodyReturnsCanonicalNotFound(typesInfo *types.Info, body *ast.BlockStmt) bool {
+// resolves to errcode.KindNotFound (constant folding or package-ref).
+// Used to identify the funnel's guard IF for the condition-lock predicate.
+func ifBodyReturnsCanonicalNotFound(pass *Pass, body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
@@ -751,13 +768,13 @@ func ifBodyReturnsCanonicalNotFound(typesInfo *types.Info, body *ast.BlockStmt) 
 		}
 		for _, expr := range ret.Results {
 			call, ok := expr.(*ast.CallExpr)
-			if !ok || !isErrCodeNewCall(typesInfo, call) {
+			if !ok || !isErrCodeNewCall(pass.TypesInfo, call) {
 				continue
 			}
 			if len(call.Args) == 0 {
 				continue
 			}
-			if isKindNotFoundArg(typesInfo, call.Args[0]) {
+			if isKindNotFoundArg(pass, call.Args[0]) {
 				found = true
 				return
 			}
@@ -996,7 +1013,7 @@ func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnost
 				})
 				continue
 			}
-			if len(call.Args) == 0 || !isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
+			if len(call.Args) == 0 || !isKindNotFoundArg(pass, call.Args[0]) {
 				// already covered by the otherCalls (Kind drift) accumulator
 				// above with a more specific message; skip to avoid duplicate
 				continue
@@ -1051,14 +1068,68 @@ func resolveErrcodeCtor(typesInfo *types.Info, call *ast.CallExpr) (pkgPath, nam
 	return ResolvePackageRef(typesInfo, ref)
 }
 
-// isKindNotFoundArg reports whether arg resolves via go/types to
-// errcode.KindNotFound from pkg/errcode.
-func isKindNotFoundArg(typesInfo *types.Info, arg ast.Expr) bool {
-	pkgPath, name, ok := ResolvePackageRef(typesInfo, arg)
+// isKindNotFoundArg reports whether arg evaluates to errcode.KindNotFound,
+// covering three resolution paths:
+//
+//  1. Constant value comparison via go/types constant folding — catches
+//     `const k = errcode.KindNotFound; errcode.New(k, ...)` (typed const
+//     alias). Types[arg].Value resolves to the integer constant value of
+//     errcode.KindNotFound through go/types' constant folding, which we
+//     compare against the actual value looked up from the pkg/errcode
+//     types.Package.
+//
+//  2. Package-ref resolution via ResolvePackageRef — catches direct
+//     `errcode.KindNotFound` (qualified SelectorExpr) and bare
+//     `KindNotFound` after dot-import.
+//
+// Known blindspot (#1199): runtime-var aliasing `local :=
+// errcode.KindNotFound; errcode.New(local, ...)` is NOT caught — local
+// is a *types.Var, not a *types.Const, so Types[local].Value is nil and
+// ResolvePackageRef returns false (local is not a package-level symbol).
+// SSA dataflow is required to follow runtime variable values; tracked at
+// gh #1199 alongside the B1 callgraph upgrade.
+func isKindNotFoundArg(pass *Pass, arg ast.Expr) bool {
+	// 1. Constant folding — covers typed const aliases.
+	if tv, ok := pass.TypesInfo.Types[arg]; ok && tv.Value != nil {
+		if expected := lookupErrcodeKindNotFoundValue(pass); expected != nil {
+			if constant.Compare(tv.Value, token.EQL, expected) {
+				return true
+			}
+		}
+	}
+	// 2. Package-ref resolution — covers direct and dot-import forms.
+	pkgPath, name, ok := ResolvePackageRef(pass.TypesInfo, arg)
 	if !ok {
 		return false
 	}
 	return pkgPath == serviceOwnedErrcodePkg && name == serviceOwnedKindNotFoundSym
+}
+
+// lookupErrcodeKindNotFoundValue returns the constant.Value of
+// errcode.KindNotFound by walking pass.Pkg's transitive imports until it
+// finds the pkg/errcode types.Package. Returns nil when pkg/errcode is
+// not imported by the current pass (in which case isKindNotFoundArg's
+// const-folding branch is skipped — the package-ref branch handles
+// direct references when the import IS present).
+//
+// Implementation note: types.Package.Imports() returns the direct
+// imports of pass.Pkg. pkg/errcode is a leaf utility package that any
+// package using errcode.* will import directly, so walking direct
+// imports suffices.
+func lookupErrcodeKindNotFoundValue(pass *Pass) constant.Value {
+	if pass.Pkg == nil {
+		return nil
+	}
+	for _, imp := range pass.Pkg.Imports() {
+		if imp.Path() != serviceOwnedErrcodePkg {
+			continue
+		}
+		obj := imp.Scope().Lookup(serviceOwnedKindNotFoundSym)
+		if c, ok := obj.(*types.Const); ok {
+			return c.Val()
+		}
+	}
+	return nil
 }
 
 // fileCallsAuthCheckOwnerFromEntries reports whether file contains a
