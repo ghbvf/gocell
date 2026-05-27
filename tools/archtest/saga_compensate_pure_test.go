@@ -88,6 +88,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const (
@@ -191,53 +193,48 @@ func collectCompensateAssignments(p *Pass, file *ast.File) []compensateFuncAssig
 	info := p.TypesInfo
 	var out []compensateFuncAssignment
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.ValueSpec:
-			// var c saga.CompensateFunc = <expr>
-			typ := info.TypeOf(node.Type)
-			if typ == nil || !isCompensateFuncType(typ) {
-				return true
-			}
-			for _, val := range node.Values {
-				out = append(out, classifyExpr(val))
-			}
-
-		case *ast.AssignStmt:
-			// c = <expr> — match each LHS/RHS pair
-			for i, lhs := range node.Lhs {
-				if i >= len(node.Rhs) {
-					break
-				}
-				lhsType := info.TypeOf(lhs)
-				if lhsType == nil || !isCompensateFuncType(lhsType) {
-					continue
-				}
-				out = append(out, classifyExpr(node.Rhs[i]))
-			}
-
-		case *ast.CompositeLit:
-			// saga.Step{Compensate: <expr>}
-			for _, elt := range node.Elts {
-				kv, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok || key.Name != sagaCompensateFieldName {
-					continue
-				}
-				// Verify the field's declared type is CompensateFunc via struct
-				// field lookup (TypeOf on a CompositeLit KV value may return the
-				// underlying func signature, not the named alias).
-				if !compensateKVFieldIsCompensateFunc(info, node) {
-					continue
-				}
-				out = append(out, classifyExpr(kv.Value))
-			}
+	// var c saga.CompensateFunc = <expr>
+	scanner.EachInSubtree[ast.ValueSpec](file, func(node *ast.ValueSpec) {
+		typ := info.TypeOf(node.Type)
+		if typ == nil || !isCompensateFuncType(typ) {
+			return
 		}
-		return true
+		for _, val := range node.Values {
+			out = append(out, classifyExpr(val))
+		}
 	})
+
+	// c = <expr> where c is CompensateFunc
+	scanner.EachInSubtree[ast.AssignStmt](file, func(node *ast.AssignStmt) {
+		for i, lhs := range node.Lhs {
+			if i >= len(node.Rhs) {
+				break
+			}
+			lhsType := info.TypeOf(lhs)
+			if lhsType == nil || !isCompensateFuncType(lhsType) {
+				continue
+			}
+			out = append(out, classifyExpr(node.Rhs[i]))
+		}
+	})
+
+	// saga.Step{Compensate: <expr>}
+	scanner.EachInSubtree[ast.CompositeLit](file, func(node *ast.CompositeLit) {
+		scanner.EachInChildren[ast.KeyValueExpr](node, func(kv *ast.KeyValueExpr) {
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok || key.Name != sagaCompensateFieldName {
+				return
+			}
+			// Verify the field's declared type is CompensateFunc via struct
+			// field lookup (TypeOf on a CompositeLit KV value may return the
+			// underlying func signature, not the named alias).
+			if !compensateKVFieldIsCompensateFunc(info, node) {
+				return
+			}
+			out = append(out, classifyExpr(kv.Value))
+		})
+	})
+
 	return out
 }
 
@@ -291,17 +288,16 @@ func classifyExpr(expr ast.Expr) compensateFuncAssignment {
 func sagaFuncDeclsByObject(p *Pass) map[*types.Func]*ast.FuncDecl {
 	out := make(map[*types.Func]*ast.FuncDecl)
 	for _, f := range p.Files {
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
+		scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Body == nil {
+				return
 			}
 			obj, ok := p.TypesInfo.Defs[fd.Name].(*types.Func)
 			if !ok {
-				continue
+				return
 			}
 			out[obj] = fd
-		}
+		})
 	}
 	return out
 }

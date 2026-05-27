@@ -24,12 +24,17 @@ func (e *DirsScopeEscapeError) Error() string {
 }
 
 // defaultSkipDirs is the set of directory base-names that are never walked.
+// `.venv` covers Python virtualenv directories that developers may create at
+// the repo root for tooling (e.g. spec-kit scripts); the dir is gitignored,
+// absent on CI, and contains symlinks that the walker would otherwise refuse
+// via walk.go's errSymlink fail-closed contract.
 var defaultSkipDirs = map[string]struct{}{
 	"vendor":       {},
 	"testdata":     {},
 	"worktrees":    {},
 	"generated":    {},
 	".git":         {},
+	".venv":        {},
 	"node_modules": {},
 }
 
@@ -142,7 +147,7 @@ type Scope struct {
 
 // ModuleScope creates a Scope rooted at modRoot that walks the entire module,
 // skipping the default directory set: vendor, testdata, worktrees, generated,
-// .git, node_modules.
+// .git, .venv, node_modules.
 func ModuleScope(modRoot string, opts ...Option) Scope {
 	cfg := applyOptions(opts)
 	return newScope(modRoot, []string{modRoot}, cfg)
@@ -211,7 +216,7 @@ func newScope(modRoot string, roots []string, cfg scopeConfig) Scope {
 // buildSkipDirs returns the directory-name skip set for this scope. When
 // IncludeTestdata is set, "testdata" is removed from the default set; when
 // IncludeGenerated is set, "generated" is removed. Other entries
-// (vendor / worktrees / .git / node_modules) are never opt-in-able.
+// (vendor / worktrees / .git / .venv / node_modules) are never opt-in-able.
 func buildSkipDirs(cfg scopeConfig) map[string]struct{} {
 	if !cfg.includeTestdata && !cfg.includeGenerated {
 		return defaultSkipDirs

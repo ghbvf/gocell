@@ -80,6 +80,7 @@ func TestEachContentFile_HonorsDefaultSkipDirs(t *testing.T) {
 	writeFile(t, tmp, "vendor/skip.yaml", "skip")
 	writeFile(t, tmp, "generated/skip.yaml", "skip")
 	writeFile(t, tmp, ".git/skip.yaml", "skip")
+	writeFile(t, tmp, ".venv/skip.yaml", "skip")
 
 	scope := DirsScope(tmp, []string{"."})
 	var got []string

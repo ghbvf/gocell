@@ -145,11 +145,16 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 		// must be inline at the test site (archtest does not follow helpers).
 		errcodetest.AssertCode(t, err, errcode.ErrAuthUserNotFound)
 	})
-	// USERREPO-METHOD-SET-FROZEN-01 narrow-write surface (issue #828):
-	// generic Update(*User) is removed. Each narrow method touches a disjoint
-	// column set; the conformance sub-tests below pin column isolation in mem
-	// + PG so a regression that re-introduces field bleed surfaces here, not
-	// in production.
+	runNarrowWriteSurfaceConformance(t, factory)
+}
+
+// runNarrowWriteSurfaceConformance covers USERREPO-METHOD-SET-FROZEN-01
+// (issue #828): generic Update(*User) is removed. Each narrow method touches
+// a disjoint column set; the sub-tests below pin column isolation in mem + PG
+// so a regression that re-introduces field bleed surfaces here, not in
+// production.
+func runNarrowWriteSurfaceConformance(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
 	t.Run("UpdateProfile_Succeeds", func(t *testing.T) {
 		conformUpdateProfileSucceeds(t, factory)
 	})
