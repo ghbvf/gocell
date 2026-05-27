@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // assertNoCode fails when any result carries the given code.
@@ -31,7 +32,7 @@ func eventContractWithActorSubs(id string, actorSubs []string) *metadata.Contrac
 		Kind:      "event",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:        "somecell",
+			Publisher:        metadatatest.NewCellID("somecell"),
 			ActorSubscribers: actorSubs,
 		},
 		File: "contracts/event/x/v1/contract.yaml",
@@ -53,7 +54,7 @@ func TestREF18_RegisteredExternalActor_Passes(t *testing.T) {
 // actorSubscribers re-opens a hand-written cell subscriber and must be rejected.
 func TestREF18_CellID_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
-	project.Cells["accesscore"] = &metadata.CellMeta{ID: "accesscore"}
+	project.Cells[metadatatest.CellIDAccessCore] = &metadata.CellMeta{ID: metadatatest.CellIDAccessCore}
 	project.Contracts["event.session.created.v1"] = eventContractWithActorSubs("event.session.created.v1", []string{"accesscore"})
 
 	results := NewValidator(project, "", clock.Real()).validateREF18()
@@ -84,7 +85,7 @@ func TestREF18_UnregisteredActor_Rejected(t *testing.T) {
 func sliceWithCU(cu metadata.ContractUsage) *metadata.SliceMeta {
 	return &metadata.SliceMeta{
 		ID:             "subs",
-		BelongsToCell:  "demo",
+		BelongsToCell:  metadatatest.CellIDDemo,
 		File:           "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{cu},
 	}

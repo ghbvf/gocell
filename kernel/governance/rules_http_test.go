@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/contractpath"
 )
 
@@ -79,7 +80,7 @@ func makeContract(id, contractFile string, responses map[int]metadata.HTTPRespon
 	return &metadata.ContractMeta{
 		ID:        id,
 		Kind:      "http",
-		OwnerCell: "testcell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		File:      contractFile,
 		Endpoints: metadata.EndpointsMeta{
@@ -98,12 +99,12 @@ func makeContract(id, contractFile string, responses map[int]metadata.HTTPRespon
 func makeProject(contractID, sliceDir string) *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"testcell": {ID: "testcell", File: "cells/testcell/cell.yaml"},
+			metadatatest.CellIDTestCell: {ID: metadatatest.CellIDTestCell, File: "cells/testcell/cell.yaml"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"testcell/testslice": {
 				ID:            "testslice",
-				BelongsToCell: "testcell",
+				BelongsToCell: metadatatest.CellIDTestCell,
 				File:          sliceDir + "/slice.yaml",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: contractID, Role: "serve"},
@@ -881,7 +882,7 @@ func makeUUIDContract(id, contractFile string, uuidParams []string) *metadata.Co
 	return &metadata.ContractMeta{
 		ID:        id,
 		Kind:      "http",
-		OwnerCell: "testcell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		File:      contractFile,
 		Endpoints: metadata.EndpointsMeta{
@@ -1026,7 +1027,7 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 				c = &metadata.ContractMeta{
 					ID:        contractID,
 					Kind:      "http",
-					OwnerCell: "testcell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					File:      "contracts/http/test/uuid/v1/contract.yaml",
 					Endpoints: metadata.EndpointsMeta{
@@ -1168,12 +1169,12 @@ import (
 	// Two slices serving two contracts in the same handler.go.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"testcell": {ID: "testcell", File: "cells/testcell/cell.yaml"},
+			metadatatest.CellIDTestCell: {ID: metadatatest.CellIDTestCell, File: "cells/testcell/cell.yaml"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"testcell/testslice": {
+			metadatatest.CellIDTestCell + "/testslice": {
 				ID:            "testslice",
-				BelongsToCell: "testcell",
+				BelongsToCell: metadatatest.CellIDTestCell,
 				File:          sliceRelDir + "/slice.yaml",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: contractA, Role: "serve"},
@@ -1248,7 +1249,7 @@ type Get404ErrorResponse struct{}
 	contract := &metadata.ContractMeta{
 		ID:        "http.test.get.v1",
 		Kind:      "http",
-		OwnerCell: "test-cell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		Codegen:   true,
 		Endpoints: metadata.EndpointsMeta{
@@ -1287,7 +1288,7 @@ type List401ErrorResponse struct{}
 	contract := &metadata.ContractMeta{
 		ID:        "http.test.list.v1",
 		Kind:      "http",
-		OwnerCell: "test-cell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		Codegen:   true,
 		Endpoints: metadata.EndpointsMeta{
@@ -1332,7 +1333,7 @@ type Delete403ErrorResponse struct{} // orphan — contract.yaml has no 403
 	contract := &metadata.ContractMeta{
 		ID:        "http.test.delete.v1",
 		Kind:      "http",
-		OwnerCell: "test-cell",
+		OwnerCell: metadatatest.CellIDTestCell,
 		Lifecycle: "active",
 		Codegen:   true,
 		Endpoints: metadata.EndpointsMeta{

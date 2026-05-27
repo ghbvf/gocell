@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -33,24 +34,24 @@ import (
 func buildTestProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "identity", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "users"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.auth", "smoke.accesscore.session"}},
 			},
-			"auditcore": {
-				ID:               "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "compliance", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "audit_logs"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.audit"}},
 			},
-			"configcore": {
-				ID:               "configcore",
+			metadatatest.CellIDConfigCore: {
+				ID:               metadatatest.CellIDConfigCore,
 				Type:             "support",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "maintainer"},
@@ -63,36 +64,36 @@ func buildTestProject() *metadata.ProjectMeta {
 			"http/auth/login/v1": {
 				ID:        "http/auth/login/v1",
 				Kind:      "http",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"configcore"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDConfigCore},
 				},
 			},
 			"event/session/created/v1": {
 				ID:        "event/session/created/v1",
 				Kind:      "event",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "accesscore",
-					Subscribers: []string{"auditcore"},
+					Publisher:   metadatatest.CellIDAccessCore,
+					Subscribers: []string{metadatatest.CellIDAuditCore},
 				},
 			},
 			"event/config/changed/v1": {
 				ID:        "event/config/changed/v1",
 				Kind:      "event",
-				OwnerCell: "configcore",
+				OwnerCell: metadatatest.CellIDConfigCore,
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "configcore",
-					Subscribers: []string{"accesscore"},
+					Publisher:   metadatatest.CellIDConfigCore,
+					Subscribers: []string{metadatatest.CellIDAccessCore},
 				},
 			},
 			"http/auth/me/v1": {
 				ID:        "http/auth/me/v1",
 				Kind:      "http",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
+					Server:  metadatatest.CellIDAccessCore,
 					Clients: []string{},
 				},
 			},
@@ -101,7 +102,7 @@ func buildTestProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ssobff": {
 				ID:    "ssobff",
-				Cells: []string{"accesscore", "auditcore"},
+				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Build: metadata.BuildMeta{
 					Entrypoint:     "cmd/ssobff/main.go",
 					Binary:         "ssobff",
@@ -383,7 +384,7 @@ func TestSourceFingerprint_MissingCellInAssembly(t *testing.T) {
 	// Add an assembly that references a cell not in project.Cells.
 	project.Assemblies["ghost-bundle"] = &metadata.AssemblyMeta{
 		ID:    "ghost-bundle",
-		Cells: []string{"ghost-cell"},
+		Cells: []string{metadatatest.NewCellID("ghostcell")},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 	fp, err := gen.sourceFingerprint("ghost-bundle", nil, nil)
@@ -465,7 +466,7 @@ func TestSourceFingerprint_CellOrderIsStructural(t *testing.T) {
 	baseline, err := gen.sourceFingerprint("ssobff", exported, imported)
 	require.NoError(t, err)
 
-	project.Assemblies["ssobff"].Cells = []string{"auditcore", "accesscore"}
+	project.Assemblies["ssobff"].Cells = []string{metadatatest.CellIDAuditCore, metadatatest.CellIDAccessCore}
 	got, err := gen.sourceFingerprint("ssobff", exported, imported)
 	require.NoError(t, err)
 	assert.NotEqual(t, baseline, got, "assembly cells order is runtime order and must change fingerprint")
@@ -491,10 +492,10 @@ func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 	project.Contracts["command/audit/archive/v1"] = &metadata.ContractMeta{
 		ID:        "command/audit/archive/v1",
 		Kind:      "command",
-		OwnerCell: "auditcore",
+		OwnerCell: metadatatest.CellIDAuditCore,
 		Endpoints: metadata.EndpointsMeta{
-			Handler:  "auditcore",
-			Invokers: []string{"configcore"},
+			Handler:  metadatatest.CellIDAuditCore,
+			Invokers: []string{metadatatest.CellIDConfigCore},
 		},
 	}
 
@@ -502,10 +503,10 @@ func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 	project.Contracts["projection/config/snapshot/v1"] = &metadata.ContractMeta{
 		ID:        "projection/config/snapshot/v1",
 		Kind:      "projection",
-		OwnerCell: "configcore",
+		OwnerCell: metadatatest.CellIDConfigCore,
 		Endpoints: metadata.EndpointsMeta{
-			Provider: "configcore",
-			Readers:  []string{"auditcore"},
+			Provider: metadatatest.CellIDConfigCore,
+			Readers:  []string{metadatatest.CellIDAuditCore},
 		},
 	}
 
@@ -533,8 +534,8 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 	project.Contracts["unknown.kind.v1"] = &metadata.ContractMeta{
 		ID:        "unknown.kind.v1",
 		Kind:      "grpc", // unknown kind
-		OwnerCell: "accesscore",
-		Endpoints: metadata.EndpointsMeta{Server: "accesscore"},
+		OwnerCell: metadatatest.CellIDAccessCore,
+		Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 

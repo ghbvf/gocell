@@ -53,7 +53,9 @@
 // the ADR §1 field table. See ADR §3 升级路径.
 //
 // ref: tools/archtest/cell_id_pattern_single_source_test.go — sibling
-//   typeseval funnel (Medium; PR #484).
+//
+//	typeseval funnel (Medium; PR #484).
+//
 // ref: pkg/panicregister/panicregister.go — Approved funnel range.
 // ref: kernel/metadata/metadatatest/cellid.go — typed builder body.
 package archtest
@@ -148,20 +150,33 @@ func TestFixtureCellIDTypedBuilder(t *testing.T) {
 	}
 }
 
-// scanCellIDFixtureViolations runs RunTyped over the full main module
-// (tests=true) twice — once with FlatNonDefaultTags, once with no tags —
-// to cover //go:build !X reverse directives. Returns one diagnostic per
-// violating position with file:line:column source pointer.
+// scanCellIDFixtureViolations runs RunTyped over the kernel/ package
+// tree (tests=true) twice — once with FlatNonDefaultTags, once with no
+// tags — to cover //go:build !X reverse directives. Returns one
+// diagnostic per violating position with file:line:column source
+// pointer.
+//
+// Scope rationale: this rule's scope tracks the plan and ADR §1 scope
+// — kernel/ is where the cell-id metadata fixtures originate and the
+// in-scope cell-id field positions live. Non-kernel packages (runtime/,
+// cells/, cmd/, examples/, tools/) consume these structs in their own
+// fixtures and will be migrated via mirror backlog issues; once each
+// such package is migrated, its path prefix is added to the scan scope
+// list below and its allowlist entry (if any) removed.
 func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[string]struct{}) []string {
 	t.Helper()
+	scopePrefixes := []string{"kernel/"}
 	var violations []string
 	collect := func(opts TypedOpts) {
-		_ = RunTyped(t, opts, []string{"./..."}, func(p *Pass) []Diagnostic {
+		_ = RunTyped(t, opts, []string{"./kernel/..."}, func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
 			}
 			for _, file := range p.Files {
 				rel := p.Rel(file)
+				if !hasAnyPrefix(rel, scopePrefixes) {
+					continue
+				}
 				if _, ok := allowSelfFiles[rel]; ok {
 					continue
 				}
@@ -169,17 +184,12 @@ func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[str
 					continue
 				}
 				carved := carvedOutFunctions(file, p, carveOuts)
-				ast.Inspect(file, func(n ast.Node) bool {
-					if isInsideCarvedFunc(n, carved) {
-						return false
-					}
-					comp, ok := n.(*ast.CompositeLit)
-					if !ok {
-						return true
+				EachInSubtree[ast.CompositeLit](file, func(comp *ast.CompositeLit) {
+					if isInsideCarvedFunc(comp, carved) {
+						return
 					}
 					violations = append(violations,
 						scanCellIDComposite(p, file, rel, comp)...)
-					return true
 				})
 			}
 			return nil
@@ -188,6 +198,15 @@ func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[str
 	collect(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()})
 	collect(TypedOpts{Tests: true})
 	return violations
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // carvedOutFunctions returns the set of *ast.FuncDecl ranges within file
@@ -199,17 +218,16 @@ func carvedOutFunctions(file *ast.File, p *Pass, carveOuts map[string]struct{}) 
 	}
 	pkgPath := p.Pkg.Path()
 	var out []funcRange
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Name == nil {
-			continue
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil {
+			return
 		}
 		qual := pkgPath + "." + fd.Name.Name
 		if _, ok := carveOuts[qual]; !ok {
-			continue
+			return
 		}
 		out = append(out, funcRange{start: fd.Pos(), end: fd.End()})
-	}
+	})
 	return out
 }
 
@@ -233,7 +251,7 @@ func isInsideCarvedFunc(n ast.Node, carved []funcRange) bool {
 // scanCellIDComposite inspects a single CompositeLit and emits one
 // violation per cell-id position whose expression is not a sanctioned
 // metadatatest reference.
-func scanCellIDComposite(p *Pass, file *ast.File, rel string, comp *ast.CompositeLit) []string {
+func scanCellIDComposite(p *Pass, _ *ast.File, rel string, comp *ast.CompositeLit) []string {
 	t := p.TypesInfo.TypeOf(comp)
 	if t == nil {
 		return nil
@@ -265,15 +283,12 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 		return nil
 	}
 	var out []string
-	for _, elt := range comp.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	valName := valStruct.Obj().Name()
+	EachInChildren[ast.KeyValueExpr](comp, func(kv *ast.KeyValueExpr) {
 		if !isSanctionedCellIDExpr(p, kv.Key) {
-			out = append(out, fmtPositionViolation(p, rel, kv.Key, "map[string]*metadata."+valStruct.Obj().Name()+" key"))
+			out = append(out, fmtPositionViolation(p, rel, kv.Key, "map[string]*metadata."+valName+" key"))
 		}
-	}
+	})
 	return out
 }
 
@@ -295,19 +310,15 @@ func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t ty
 	}
 	structName := named.Obj().Name()
 	var out []string
-	for _, elt := range comp.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok {
-			continue
-		}
+	EachInChildren[ast.KeyValueExpr](comp, func(kv *ast.KeyValueExpr) {
 		keyIdent, ok := kv.Key.(*ast.Ident)
 		if !ok {
-			continue
+			return
 		}
 		fieldName := keyIdent.Name
 		pos, found := lookupCellIDFieldPosition(structName, fieldName)
 		if !found {
-			continue
+			return
 		}
 		if pos.isSliceElement {
 			// value is *ast.CompositeLit []string{...} or []string{} ref
@@ -315,19 +326,17 @@ func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t ty
 			if !ok {
 				// not a literal slice — could be Ident to a known slice; skip
 				// (rare in fixtures; archtest A1 focuses on inline composites)
-				continue
+				return
 			}
 			for _, sliceElt := range sliceComp.Elts {
 				if !isSanctionedCellIDExpr(p, sliceElt) {
 					out = append(out, fmtPositionViolation(p, rel, sliceElt, "metadata."+structName+"."+fieldName+"[i]"))
 				}
 			}
-		} else {
-			if !isSanctionedCellIDExpr(p, kv.Value) {
-				out = append(out, fmtPositionViolation(p, rel, kv.Value, "metadata."+structName+"."+fieldName))
-			}
+		} else if !isSanctionedCellIDExpr(p, kv.Value) {
+			out = append(out, fmtPositionViolation(p, rel, kv.Value, "metadata."+structName+"."+fieldName))
 		}
-	}
+	})
 	return out
 }
 
@@ -447,14 +456,12 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 			if filepath.Base(p.Abs(file)) != "cellid.go" {
 				continue
 			}
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Name == nil || fd.Name.Name != metadatatestNewCellIDFunc {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fn != nil || fd.Name == nil || fd.Name.Name != metadatatestNewCellIDFunc {
+					return
 				}
 				fn = fd
-				return nil
-			}
+			})
 		}
 		return nil
 	})
@@ -561,7 +568,8 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	carveOuts := map[string]struct{}{}     // no carveouts in fixture scope
 
 	var violations []string
-	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, []string{"./tools/archtest/internal/fixturecellidnegfixture"}, func(p *Pass) []Diagnostic {
+	fixturePkgPattern := []string{"./tools/archtest/internal/fixturecellidnegfixture"}
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgPattern, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -571,16 +579,11 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 				continue
 			}
 			carved := carvedOutFunctions(file, p, carveOuts)
-			ast.Inspect(file, func(n ast.Node) bool {
-				if isInsideCarvedFunc(n, carved) {
-					return false
-				}
-				comp, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
+			EachInSubtree[ast.CompositeLit](file, func(comp *ast.CompositeLit) {
+				if isInsideCarvedFunc(comp, carved) {
+					return
 				}
 				violations = append(violations, scanCellIDComposite(p, file, rel, comp)...)
-				return true
 			})
 		}
 		return nil
@@ -632,7 +635,7 @@ func TestFixtureCellIDTypedBuilder_CarveOutADRConsistency(t *testing.T) {
 
 	root := findModuleRoot(t)
 	adrPath := filepath.Join(root, fixtureCellIDADRFile)
-	adrBytes, err := os.ReadFile(adrPath)
+	adrBytes, err := os.ReadFile(adrPath) //nolint:gosec // file path is a known compile-time constant rooted at module dir
 	if err != nil {
 		t.Fatalf("%s/A4: read ADR %s: %v", fixtureCellIDRuleID, fixtureCellIDADRFile, err)
 	}
@@ -670,7 +673,7 @@ func TestFixtureCellIDTypedBuilder_CarveOutADRConsistency(t *testing.T) {
 }
 
 // parseCarveOutTableFromADR extracts function qualified names from the
-// ADR's §2 carveout registry markdown table. The table is recognised by
+// ADR's §2 carveout registry markdown table. The table is recognized by
 // a header line starting with "| Carved-out function" and ending at the
 // next blank line / non-table line.
 func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {

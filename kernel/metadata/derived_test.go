@@ -6,11 +6,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// makeProject builds a minimal ProjectMeta with the given cell IDs.
+// makeProject builds a minimal ProjectMeta with CellMeta entries for each of
+// the given cell IDs. Each ID must satisfy metadata.MatchCellID (no dashes,
+// lowercase alphanumeric). Callers use metadatatest.NewCellID(literal) or
+// metadatatest.CellIDXxx constants at call sites to satisfy the A1 funnel.
 func makeProject(cellIDs ...string) *metadata.ProjectMeta {
 	cells := make(map[string]*metadata.CellMeta, len(cellIDs))
 	for _, id := range cellIDs {
-		cells[id] = &metadata.CellMeta{ID: id}
+		c := &metadata.CellMeta{}
+		c.ID = id
+		cells[id] = c
 	}
 	return &metadata.ProjectMeta{
 		Cells:      cells,

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- JOURNEY-CONTRACT-EXISTENCE-01 (inverse direction of REF-07) ---
@@ -72,10 +73,10 @@ func TestJOURNEYCONTRACTEXISTENCE01_ExampleContractExempt(t *testing.T) {
 	pm.Contracts["event.order.created.v1"] = &metadata.ContractMeta{
 		ID:               "event.order.created.v1",
 		Kind:             "event",
-		OwnerCell:        "ordercreate",
+		OwnerCell:        metadatatest.NewCellID("ordercreate"),
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Publisher: "ordercreate"},
+		Endpoints:        metadata.EndpointsMeta{Publisher: metadatatest.NewCellID("ordercreate")},
 		Dir:              "examples/todoorder/contracts/event/order/created/v1",
 		File:             "examples/todoorder/contracts/event/order/created/v1/contract.yaml",
 	}

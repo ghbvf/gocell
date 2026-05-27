@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // projectWithEarlyAndLateError constructs a fixture that violates both REF-01
@@ -34,14 +35,14 @@ func projectWithEarlyAndLateError(t *testing.T) *metadata.ProjectMeta {
 	pm.Contracts["event.dead.v1"] = &metadata.ContractMeta{
 		ID:                "event.dead.v1",
 		Kind:              "event",
-		OwnerCell:         "accesscore",
+		OwnerCell:         metadatatest.CellIDAccessCore,
 		ConsistencyLevel:  "L2",
 		Lifecycle:         "active",
 		Replayable:        &replayable,
 		IdempotencyKey:    "id",
 		DeliverySemantics: "at-least-once",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:   "accesscore",
+			Publisher:   metadatatest.CellIDAccessCore,
 			Subscribers: nil,
 		},
 		Dir:  "contracts/event/dead/v1",

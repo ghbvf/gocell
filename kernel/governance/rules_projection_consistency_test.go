@@ -5,6 +5,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -15,21 +16,21 @@ func buildProjectionProject(consistencyLevel string) *metadata.ProjectMeta {
 	c := &metadata.ContractMeta{
 		ID:               "projection.test.summary.v1",
 		Kind:             "projection",
-		OwnerCell:        "testcell",
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: consistencyLevel,
 		Lifecycle:        "active",
 		Replayable:       boolPtr(true),
 		Endpoints: metadata.EndpointsMeta{
-			Provider: "testcell",
-			Readers:  []string{"edge-bff"},
+			Provider: metadatatest.CellIDTestCell,
+			Readers:  []string{metadatatest.CellIDEdgeBFF},
 		},
 		Dir:  "contracts/projection/test/summary/v1",
 		File: "contracts/projection/test/summary/v1/contract.yaml",
 	}
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"testcell": {
-				ID:               "testcell",
+			metadatatest.CellIDTestCell: {
+				ID:               metadatatest.CellIDTestCell,
 				Type:             "core",
 				ConsistencyLevel: "L3",
 				DurabilityMode:   "durable",
@@ -53,20 +54,20 @@ func buildNonProjectionProject(kind, consistencyLevel string) *metadata.ProjectM
 	c := &metadata.ContractMeta{
 		ID:               "http.test.action.v1",
 		Kind:             kind,
-		OwnerCell:        "testcell",
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: consistencyLevel,
 		Lifecycle:        "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server:  "testcell",
-			Clients: []string{"edge-bff"},
+			Server:  metadatatest.CellIDTestCell,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
 		},
 		Dir:  "contracts/" + kind + "/test/action/v1",
 		File: "contracts/" + kind + "/test/action/v1/contract.yaml",
 	}
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"testcell": {
-				ID:               "testcell",
+			metadatatest.CellIDTestCell: {
+				ID:               metadatatest.CellIDTestCell,
 				Type:             "core",
 				ConsistencyLevel: "L0",
 				DurabilityMode:   "durable",

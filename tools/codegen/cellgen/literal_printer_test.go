@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
@@ -64,7 +65,7 @@ var accesscoreGolden = strings.TrimSpace(`&metadata.CellMeta{
 
 func TestRenderCellMetaLiteral_AccesscoreGreenBaseline(t *testing.T) {
 	cell := &metadata.CellMeta{
-		ID:               "accesscore",
+		ID:               metadatatest.CellIDAccessCore,
 		Type:             "core",
 		ConsistencyLevel: "L2",
 		DurabilityMode:   "durable",
@@ -431,7 +432,7 @@ func TestRenderSliceMetaLiteral_LifecycleProjected(t *testing.T) {
 	t.Parallel()
 	s := &metadata.SliceMeta{
 		ID:               "myslice",
-		BelongsToCell:    "mycell",
+		BelongsToCell:    metadatatest.CellIDMyCell,
 		ConsistencyLevel: "L1",
 		Lifecycle:        "candidate", // slice ≤ cell: cell=asset allows candidate
 	}
@@ -447,7 +448,7 @@ func TestRenderSliceMetaLiteral_LifecycleProjected(t *testing.T) {
 func TestRenderCellMetaLiteral_LifecycleProjected(t *testing.T) {
 	t.Parallel()
 	c := &metadata.CellMeta{
-		ID:               "assetcell",
+		ID:               metadatatest.NewCellID("assetcell"),
 		Type:             "core",
 		ConsistencyLevel: "L2",
 		DurabilityMode:   "durable",

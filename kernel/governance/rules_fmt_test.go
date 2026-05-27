@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestFMT13_MissingEndpointsHTTP verifies that an HTTP contract without
@@ -13,8 +14,8 @@ import (
 func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -29,12 +30,12 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 			"http.test.missing.v1": {
 				ID:               "http.test.missing.v1",
 				Kind:             "http",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					// HTTP is nil — missing endpoints.http
 				},
 				Dir:  "contracts/http/test/missing/v1",
@@ -76,12 +77,12 @@ func TestFMT13_NonHTTPContractSkipped(t *testing.T) {
 			"event.test.created.v1": {
 				ID:               "event.test.created.v1",
 				Kind:             "event",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "accesscore",
-					Subscribers: []string{"auditcore"},
+					Publisher:   metadatatest.CellIDAccessCore,
+					Subscribers: []string{metadatatest.CellIDAuditCore},
 				},
 				Dir:  "contracts/event/test/created/v1",
 				File: "contracts/event/test/created/v1/contract.yaml",
@@ -116,8 +117,8 @@ func TestFMT26_BothTrue(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/auth/bad",
@@ -173,8 +174,8 @@ func TestFMT26_OnlyPublic(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/auth/sessions",
@@ -215,8 +216,8 @@ func TestFMT26_OnlyPasswordResetExempt(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "DELETE",
 						Path:          "/api/v1/auth/sessions/{sessionId}",
@@ -256,8 +257,8 @@ func TestFMT26_NeitherSet(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",
 						Path:          "/api/v1/users",
@@ -292,12 +293,12 @@ func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {
 			"http.test.ok.v1": {
 				ID:               "http.test.ok.v1",
 				Kind:             "http",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",
 						Path:          "/api/v1/test",
@@ -340,8 +341,8 @@ func fmt27ProjectWithAuth(auth metadata.HTTPAuthMeta) *metadata.ProjectMeta {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/internal/v1/access/auth-mode-fixture",
@@ -468,8 +469,8 @@ func TestFMT28_BootstrapOnNonSetupAdminPath(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "somecore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDSomeCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/some/other/endpoint",
@@ -516,8 +517,8 @@ func TestFMT28_BootstrapOnSubstringMatchPath(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "somecore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDSomeCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/setup/admin/foo",
@@ -564,8 +565,8 @@ func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/access/setup/admin",
@@ -634,7 +635,7 @@ func fmt28ProjectWithClientsOnlyPath(path string, clients []string) *metadata.Pr
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "samplecore",
+					Server:  metadatatest.CellIDSampleCore,
 					Clients: clients,
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",
@@ -737,7 +738,7 @@ func fmt31Project(kind, path string, clients []string, lifecycle string, httpNil
 		lifecycle = "active"
 	}
 	endpoints := metadata.EndpointsMeta{
-		Server:  "samplecore",
+		Server:  metadatatest.CellIDSampleCore,
 		Clients: clients,
 	}
 	if !httpNil {
@@ -881,7 +882,7 @@ func TestFMT31_MultipleContracts_Aggregate(t *testing.T) {
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server: "samplecore",
+			Server: metadatatest.CellIDSampleCore,
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "GET",
 				Path:          "/internal/v1/bar",
@@ -927,8 +928,8 @@ func fmt32Project(
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "samplecore",
-					Clients: []string{"edgecell"},
+					Server:  metadatatest.CellIDSampleCore,
+					Clients: []string{metadatatest.NewCellID("edgecell")},
 					HTTP:    h,
 				},
 				Dir:  "contracts/http/resource/get/v1",
@@ -1111,8 +1112,8 @@ func TestFMT32_MultipleContracts_Aggregate(t *testing.T) {
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server:  "samplecore",
-			Clients: []string{"edgecell"},
+			Server:  metadatatest.CellIDSampleCore,
+			Clients: []string{metadatatest.NewCellID("edgecell")},
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "POST",
 				Path:          "/api/v1/resource",
@@ -1170,7 +1171,7 @@ func fmt33Project(usages []fmt33Usage) *metadata.ProjectMeta {
 		}
 		if u.kind == "http" && u.path != "" {
 			cm.Endpoints = metadata.EndpointsMeta{
-				Server: "samplecore",
+				Server: metadatatest.CellIDSampleCore,
 				HTTP: &metadata.HTTPTransportMeta{
 					Method: "GET", Path: u.path, SuccessStatus: 200,
 				},
@@ -1180,7 +1181,7 @@ func fmt33Project(usages []fmt33Usage) *metadata.ProjectMeta {
 	}
 	p.Slices["samplecore/sampleslice"] = &metadata.SliceMeta{
 		ID:             "sampleslice",
-		BelongsToCell:  "samplecore",
+		BelongsToCell:  metadatatest.CellIDSampleCore,
 		ContractUsages: cus,
 		File:           "cells/samplecore/slices/sampleslice/slice.yaml",
 	}
@@ -1452,7 +1453,7 @@ func runFMT34Case(t *testing.T, tt fmt34TestCase) {
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
 		Endpoints: metadata.EndpointsMeta{
-			Server:  "accesscore",
+			Server:  metadatatest.CellIDAccessCore,
 			Clients: tt.clients,
 		},
 		Dir:  "contracts/http/fmt34/" + tt.name + "/v1",
@@ -1539,8 +1540,8 @@ func collectFMT34Fields(matches []ValidationResult) map[string]bool {
 func buildFMT36Project(requires []string) *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"testcell": {
-				ID:       "testcell",
+			metadatatest.CellIDTestCell: {
+				ID:       metadatatest.CellIDTestCell,
 				Requires: requires,
 				Owner:    metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Dir:      "testcell",
@@ -1657,7 +1658,7 @@ func TestFMT36_MultipleErrors(t *testing.T) {
 func TestFMT36_NilCell(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"nilcell": nil,
+			metadatatest.NewCellID("nilcell"): nil,
 		},
 		Slices:     map[string]*metadata.SliceMeta{},
 		Contracts:  map[string]*metadata.ContractMeta{},

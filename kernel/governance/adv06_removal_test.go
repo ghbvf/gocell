@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 func minimalGovernanceProject() *metadata.ProjectMeta {
@@ -48,7 +49,7 @@ func TestADV05_EmptySubscribers_NoActors(t *testing.T) {
 		Kind:      "event",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:        "somecell",
+			Publisher:        metadatatest.NewCellID("somecell"),
 			ActorSubscribers: nil,
 			Subscribers:      nil, // derived = empty (no cells, no actors)
 		},
@@ -75,7 +76,7 @@ func TestADV05_ActorSubscribers_PopulatesSubscribers(t *testing.T) {
 		Kind:      "event",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:        "auditcore",
+			Publisher:        metadatatest.CellIDAuditCore,
 			ActorSubscribers: []string{"external-audit-sink"},
 			// Subscribers is the derived field; simulate post-derive state:
 			Subscribers: []string{"external-audit-sink"},
@@ -104,7 +105,7 @@ func TestADV06_NotInRules(t *testing.T) {
 		ID:        "event.test.v1",
 		Kind:      "event",
 		Lifecycle: "active",
-		Endpoints: metadata.EndpointsMeta{Publisher: "testcell"},
+		Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.CellIDTestCell},
 		File:      "contracts/event/test/v1/contract.yaml",
 	}
 

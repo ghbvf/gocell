@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/registry"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
@@ -18,14 +19,14 @@ import (
 func testProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "identity", Role: "backend"},
 			},
-			"auditcore": {
-				ID:               "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "compliance", Role: "backend"},
@@ -34,52 +35,52 @@ func testProject() *metadata.ProjectMeta {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-create": {
 				ID:            "session-create",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 			},
 			"accesscore/session-refresh": {
 				ID:            "session-refresh",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "auditcore",
+				BelongsToCell: metadatatest.CellIDAuditCore,
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
 			"http-auth-login-v1": {
 				ID:        "http-auth-login-v1",
 				Kind:      "http",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"edge-gateway", "admin-bff"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.NewCellID("edgegateway"), metadatatest.NewCellID("adminbff")},
 				},
 			},
 			"event-session-created-v1": {
 				ID:        "event-session-created-v1",
 				Kind:      "event",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "accesscore",
-					Subscribers: []string{"auditcore", "configcore"},
+					Publisher:   metadatatest.CellIDAccessCore,
+					Subscribers: []string{metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
 				},
 			},
 			"command-audit-archive-v1": {
 				ID:        "command-audit-archive-v1",
 				Kind:      "command",
-				OwnerCell: "auditcore",
+				OwnerCell: metadatatest.CellIDAuditCore,
 				Endpoints: metadata.EndpointsMeta{
-					Handler:  "auditcore",
-					Invokers: []string{"accesscore"},
+					Handler:  metadatatest.CellIDAuditCore,
+					Invokers: []string{metadatatest.CellIDAccessCore},
 				},
 			},
 			"projection-audit-summary-v1": {
 				ID:        "projection-audit-summary-v1",
 				Kind:      "projection",
-				OwnerCell: "auditcore",
+				OwnerCell: metadatatest.CellIDAuditCore,
 				Endpoints: metadata.EndpointsMeta{
-					Provider: "auditcore",
-					Readers:  []string{"accesscore", "configcore"},
+					Provider: metadatatest.CellIDAuditCore,
+					Readers:  []string{metadatatest.CellIDAccessCore, metadatatest.CellIDConfigCore},
 				},
 			},
 		},
@@ -189,7 +190,7 @@ func TestContractRegistry_Consumers(t *testing.T) {
 		contractID string
 		want       []string
 	}{
-		{"http consumers are clients", "http-auth-login-v1", []string{"edge-gateway", "admin-bff"}},
+		{"http consumers are clients", "http-auth-login-v1", []string{metadatatest.NewCellID("edgegateway"), metadatatest.NewCellID("adminbff")}},
 		{"event consumers are subscribers", "event-session-created-v1", []string{"auditcore", "configcore"}},
 		{"command consumers are invokers", "command-audit-archive-v1", []string{"accesscore"}},
 		{"projection consumers are readers", "projection-audit-summary-v1", []string{"accesscore", "configcore"}},
@@ -391,35 +392,35 @@ func TestContractRegistry_NilContractInMap(t *testing.T) {
 func TestCellRegistry_NilEntries(t *testing.T) {
 	proj := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"valid": {ID: "valid"},
-			"nil":   nil,
+			metadatatest.NewCellID("valid"): {ID: metadatatest.NewCellID("valid")},
+			metadatatest.NewCellID("nil"):   nil,
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"valid/s1":  {ID: "s1", BelongsToCell: "valid"},
+			"valid/s1":  {ID: "s1", BelongsToCell: metadatatest.NewCellID("valid")},
 			"valid/nil": nil,
 		},
 	}
 	reg := registry.NewCellRegistry(proj)
 	assert.Equal(t, 1, reg.Count())
 	assert.Nil(t, reg.Get("nil"))
-	assert.Len(t, reg.SlicesFor("valid"), 1)
+	assert.Len(t, reg.SlicesFor(metadatatest.NewCellID("valid")), 1)
 }
 
 func TestCellRegistry_SliceFallbackCellID(t *testing.T) {
 	// Slice with empty BelongsToCell should fall back to parsing composite key.
 	proj := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"fallback-cell": {ID: "fallback-cell"},
+			metadatatest.NewCellID("fallbackcell"): {ID: metadatatest.NewCellID("fallbackcell")},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"fallback-cell/orphan-slice": {
+			"fallbackcell/orphan-slice": {
 				ID:            "orphan-slice",
 				BelongsToCell: "", // empty on purpose
 			},
 		},
 	}
 	reg := registry.NewCellRegistry(proj)
-	assert.Len(t, reg.SlicesFor("fallback-cell"), 1)
+	assert.Len(t, reg.SlicesFor(metadatatest.NewCellID("fallbackcell")), 1)
 }
 
 // --- Deep-copy mutation tests ---

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // buildConsistencyProject creates a minimal ProjectMeta for CONTRACT-CONSISTENCY-EMIT-01 tests.
@@ -24,7 +25,7 @@ func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMet
 		}
 		for _, trigger := range c.Triggers {
 			if _, exists := contractMap[trigger]; !exists {
-				contractMap[trigger] = eventContract(trigger, ownerCell)
+				contractMap[trigger] = eventContract(trigger)
 			}
 		}
 	}
@@ -32,8 +33,8 @@ func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMet
 	addSliceUsages(slices, ownerCell, "testslice", defaultContractUsages(contracts)...)
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			ownerCell: {
-				ID:               ownerCell,
+			metadatatest.CellIDTestCell: {
+				ID:               metadatatest.CellIDTestCell,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				DurabilityMode:   "durable",
@@ -52,17 +53,17 @@ func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMet
 }
 
 // httpContract creates a ContractMeta for an HTTP contract.
-func httpContract(id, ownerCell, consistencyLevel string, triggers []string) *metadata.ContractMeta {
+func httpContract(id, consistencyLevel string, triggers []string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:               id,
 		Kind:             "http",
-		OwnerCell:        ownerCell,
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: consistencyLevel,
 		Lifecycle:        "active",
 		Triggers:         triggers,
 		Endpoints: metadata.EndpointsMeta{
-			Server:  ownerCell,
-			Clients: []string{"edge-bff"},
+			Server:  metadatatest.CellIDTestCell,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "POST",
 				Path:          "/api/v1/test",
@@ -76,17 +77,17 @@ func httpContract(id, ownerCell, consistencyLevel string, triggers []string) *me
 
 // eventContract creates a ContractMeta for an event contract whose id is also
 // the outbox topic string.
-func eventContract(id, ownerCell string) *metadata.ContractMeta {
+func eventContract(id string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:               id,
 		Kind:             "event",
-		OwnerCell:        ownerCell,
+		OwnerCell:        metadatatest.CellIDTestCell,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher: ownerCell,
+			Publisher: metadatatest.CellIDTestCell,
 			Subscribers: []string{
-				"auditcore",
+				metadatatest.CellIDAuditCore,
 			},
 		},
 		Dir:  strings.ReplaceAll(id, ".", "/"),
@@ -117,7 +118,7 @@ func addSliceUsages(slices map[string]*metadata.SliceMeta, ownerCell, sliceID st
 	key := ownerCell + "/" + sliceID
 	slices[key] = &metadata.SliceMeta{
 		ID:             sliceID,
-		BelongsToCell:  ownerCell,
+		BelongsToCell:  metadatatest.CellIDTestCell,
 		ContractUsages: usages,
 		Verify: metadata.SliceVerifyMeta{
 			Unit:     []string{"unit." + sliceID + ".service"},
@@ -205,7 +206,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -222,7 +223,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseB(t *testing.T) {
 	topic := "event.test.created.v1"
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L1", []string{topic}),
+		httpContract("http.test.action.v1", "L1", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -248,7 +249,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseC(t *testing.T) {
 	ownerCell := "testcell"
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", nil),
+		httpContract("http.test.action.v1", "L2", nil),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -292,7 +293,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{declaredTopic}),
+		httpContract("http.test.action.v1", "L2", []string{declaredTopic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -358,7 +359,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	// Contract only declares one trigger.
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{declaredTopic}),
+		httpContract("http.test.action.v1", "L2", []string{declaredTopic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -402,7 +403,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, v string) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -458,7 +459,7 @@ func doEmit(ctx context.Context, e emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.done.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.done.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -500,7 +501,7 @@ func doEmit(ctx context.Context, e emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.done.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.done.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -542,7 +543,7 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -581,8 +582,8 @@ func TestCONTRACTCONSISTENCYEMIT01_ExamplesSkipped(t *testing.T) {
 
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"ordercell": {
-				ID:               "ordercell",
+			metadatatest.CellIDOrderCell: {
+				ID:               metadatatest.CellIDOrderCell,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				DurabilityMode:   "durable",
@@ -598,13 +599,13 @@ func TestCONTRACTCONSISTENCYEMIT01_ExamplesSkipped(t *testing.T) {
 			"http.order.create.v1": {
 				ID:               "http.order.create.v1",
 				Kind:             "http",
-				OwnerCell:        "ordercell",
+				OwnerCell:        metadatatest.CellIDOrderCell,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Triggers:         nil, // no triggers — would fail if not skipped
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "ordercell",
-					Clients: []string{"edge-bff"},
+					Server:  metadatatest.CellIDOrderCell,
+					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
 						Path:          "/api/v1/orders/",
@@ -685,7 +686,7 @@ func register(sub handler) {
 
 	// Contract declares only TopicA as trigger (L2).
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.a.v1", ownerCell, "L2", []string{topicA}),
+		httpContract("http.test.a.v1", "L2", []string{topicA}),
 	})
 	project.Slices = map[string]*metadata.SliceMeta{}
 	addSliceUsages(project.Slices, ownerCell, "emitterslice",
@@ -724,7 +725,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseE_NoOpPassthrough(t *testing.T) {
 
 	// L0 HTTP contract — no triggers, no cells/<ownerCell>/slices directory.
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.noop.v1", ownerCell, "L0", nil),
+		httpContract("http.test.noop.v1", "L0", nil),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -772,7 +773,7 @@ func doEmit(ctx context.Context, e emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.y.v1", ownerCell, "L2", []string{declaredTopic}),
+		httpContract("http.test.y.v1", "L2", []string{declaredTopic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -835,8 +836,8 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	// Two L2 contracts, each declaring one of the two topics.
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.one.v1", ownerCell, "L2", []string{topic1}),
-		httpContract("http.test.two.v1", ownerCell, "L2", []string{topic2}),
+		httpContract("http.test.one.v1", "L2", []string{topic1}),
+		httpContract("http.test.two.v1", "L2", []string{topic2}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -913,7 +914,7 @@ func check(topic string) bool {
 
 	// Contract declares trigger event.foo.y.v1 (L2).
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.foo.x.v1", ownerCell, "L2", []string{topicY}),
+		httpContract("http.foo.x.v1", "L2", []string{topicY}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -972,7 +973,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract(httpID, ownerCell, "L2", []string{topic}),
+		httpContract(httpID, "L2", []string{topic}),
 	})
 	project.Slices = map[string]*metadata.SliceMeta{}
 	addSliceUsages(project.Slices, ownerCell, "httpslice",
@@ -1013,7 +1014,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 	delete(project.Contracts, topic)
 
@@ -1047,15 +1048,15 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 		{
 			ID:               topic,
 			Kind:             "command",
-			OwnerCell:        ownerCell,
+			OwnerCell:        metadatatest.CellIDTestCell,
 			ConsistencyLevel: "L2",
 			Lifecycle:        "active",
 			Endpoints: metadata.EndpointsMeta{
-				Handler: ownerCell,
+				Handler: metadatatest.CellIDTestCell,
 			},
 			Dir:  "contracts/command/test/created/v1",
 			File: "contracts/command/test/created/v1/contract.yaml",
@@ -1093,7 +1094,7 @@ func doEmit(ctx context.Context, e emitter, suffix string) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -1133,7 +1134,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, suffix string) error {
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		httpContract("http.test.action.v1", "L2", []string{topic}),
 	})
 
 	v := NewValidator(project, root, clock.Real())
@@ -1189,7 +1190,7 @@ func publish(ctx context.Context, e outbox.Emitter, topic string) error {
 `)
 
 		project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+			httpContract("http.test.action.v1", "L2", []string{topic}),
 		})
 
 		v := NewValidator(project, root, clock.Real())
@@ -1231,7 +1232,7 @@ func doEmit(ctx context.Context, e emitter) error {
 `)
 
 		project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+			httpContract("http.test.action.v1", "L2", []string{topic}),
 		})
 
 		v := NewValidator(project, root, clock.Real())
@@ -1329,7 +1330,7 @@ func doEmit(ctx context.Context, receiver emitter, out outbox.Emitter, ch <-chan
 `)
 
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
-		httpContract("http.test.control.v1", ownerCell, "L2", topics),
+		httpContract("http.test.control.v1", "L2", topics),
 	})
 
 	v := NewValidator(project, root, clock.Real())

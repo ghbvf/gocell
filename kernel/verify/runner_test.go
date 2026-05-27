@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 )
@@ -383,11 +384,11 @@ func TestIsSkipOnly(t *testing.T) {
 func TestVerifyCell_NoSmoke(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"demo": {ID: "demo", Verify: metadata.CellVerifyMeta{}},
+			metadatatest.NewCellID("demo"): {ID: metadatatest.NewCellID("demo"), Verify: metadata.CellVerifyMeta{}},
 		},
 	}, t.TempDir())
 
-	result, err := r.VerifyCell(context.Background(), "demo")
+	result, err := r.VerifyCell(context.Background(), metadatatest.NewCellID("demo"))
 	require.NoError(t, err)
 	assert.True(t, result.Passed, "no smoke refs = warning but pass")
 	require.Len(t, result.Results, 1, "should have a warning TestResult")
@@ -397,9 +398,9 @@ func TestVerifyCell_NoSmoke(t *testing.T) {
 func TestRunRefs_AllInvalid(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{
-			"c/s": {
+			"cc/s": {
 				ID:            "s",
-				BelongsToCell: "c",
+				BelongsToCell: metadatatest.CellIDCC,
 				Verify: metadata.SliceVerifyMeta{
 					Unit: []string{"bad-ref", "also-bad"},
 				},
@@ -407,7 +408,7 @@ func TestRunRefs_AllInvalid(t *testing.T) {
 		},
 	}, t.TempDir())
 
-	result, err := r.VerifySlice(context.Background(), "c/s")
+	result, err := r.VerifySlice(context.Background(), "cc/s")
 	require.NoError(t, err)
 	assert.False(t, result.Passed, "all invalid refs should fail")
 	assert.Len(t, result.Errors, 2, "two invalid refs = two errors")

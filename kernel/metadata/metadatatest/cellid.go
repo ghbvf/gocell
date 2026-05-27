@@ -67,13 +67,13 @@ var (
 	// the constant. The legacy non-compliant literal is recorded in a
 	// trailing comment for grep-traceability.
 	CellIDFoobar     = NewCellID("foobar")
-	CellIDAA         = NewCellID("aa")         // legacy "a"
-	CellIDBB         = NewCellID("bb")         // legacy "b"
-	CellIDCC         = NewCellID("cc")         // legacy "c"
-	CellIDXX         = NewCellID("xx")         // legacy "x"
-	CellIDYY         = NewCellID("yy")         // legacy "y"
+	CellIDAA         = NewCellID("aa") // legacy "a"
+	CellIDBB         = NewCellID("bb") // legacy "b"
+	CellIDCC         = NewCellID("cc") // legacy "c"
+	CellIDXX         = NewCellID("xx") // legacy "x"
+	CellIDYY         = NewCellID("yy") // legacy "y"
 	CellIDDemo       = NewCellID("demo")
-	CellIDTestCell   = NewCellID("testcell")   // legacy "test-cell"
+	CellIDTestCell   = NewCellID("testcell") // legacy "test-cell"
 	CellIDOrderCell  = NewCellID("ordercell")
 	CellIDSampleCore = NewCellID("samplecore")
 	CellIDAlpha      = NewCellID("alpha")

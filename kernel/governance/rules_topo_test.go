@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- TOPO-09: assembly.MaxConsistencyLevel matches cells max ---
@@ -17,8 +18,7 @@ import (
 func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel string) *metadata.ProjectMeta {
 	cells := make(map[string]*metadata.CellMeta, len(cellIDs))
 	for i, id := range cellIDs {
-		cells[id] = &metadata.CellMeta{
-			ID:               id,
+		cm := &metadata.CellMeta{
 			Type:             "core",
 			ConsistencyLevel: cellLevels[i],
 			Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -27,6 +27,8 @@ func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel strin
 			Dir:              id,
 			File:             "cells/" + id + "/cell.yaml",
 		}
+		cm.ID = id
+		cells[id] = cm
 	}
 	return &metadata.ProjectMeta{
 		Cells:     cells,
@@ -51,7 +53,7 @@ func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel strin
 func TestTOPO09_AssemblyMaxConsistencyMatchesCells(t *testing.T) {
 	// cells: L1 + L4 → expected max = L4
 	pm := buildTOPO09Project(
-		[]string{"cellA", "cellB"},
+		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB},
 		[]string{"L1", "L4"},
 		"L4", // correct derived value
 	)
@@ -64,7 +66,7 @@ func TestTOPO09_AssemblyMaxConsistencyMatchesCells(t *testing.T) {
 // manually set to "L1" but cells contain an L4 cell → 1 finding, severity Error.
 func TestTOPO09_AssemblyMaxConsistencyDriftedFromCells(t *testing.T) {
 	pm := buildTOPO09Project(
-		[]string{"cellA", "cellB"},
+		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB},
 		[]string{"L1", "L4"},
 		"L1", // wrong: cells max is L4
 	)
@@ -108,8 +110,8 @@ func TestTOPO09_AssemblyEmptyCells(t *testing.T) {
 func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"badlevelcell": {
-				ID:               "badlevelcell",
+			metadatatest.NewCellID("badlevelcell"): {
+				ID:               metadatatest.NewCellID("badlevelcell"),
 				ConsistencyLevel: "L9", // invalid — FMT-03 covers this
 				Type:             "core",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},

@@ -18,6 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // =============================================================================
@@ -82,15 +83,15 @@ func TestValidateSliceConsistency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			project := &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"testcell": {
-						ID:               "testcell",
+					metadatatest.CellIDTestCell: {
+						ID:               metadatatest.CellIDTestCell,
 						ConsistencyLevel: tt.cellLevel,
 					},
 				},
 				Slices: map[string]*metadata.SliceMeta{
-					"testcell/testslice": {
+					metadatatest.CellIDTestCell + "/testslice": {
 						ID:               "testslice",
-						BelongsToCell:    "testcell",
+						BelongsToCell:    metadatatest.CellIDTestCell,
 						ConsistencyLevel: tt.sliceLevel,
 					},
 				},
@@ -123,7 +124,7 @@ func TestValidateSliceConsistency_MissingParentCell(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"ghostcell/testslice": {
 				ID:               "testslice",
-				BelongsToCell:    "ghostcell",
+				BelongsToCell:    metadatatest.NewCellID("ghostcell"),
 				ConsistencyLevel: "L3",
 			},
 		},
@@ -214,12 +215,12 @@ func TestValidateSliceConsistencyContractUsages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			project := &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"testcell": {ID: "testcell", ConsistencyLevel: "L4"},
+					metadatatest.CellIDTestCell: {ID: metadatatest.CellIDTestCell, ConsistencyLevel: "L4"},
 				},
 				Slices: map[string]*metadata.SliceMeta{
-					"testcell/testslice": {
+					metadatatest.CellIDTestCell + "/testslice": {
 						ID:               "testslice",
-						BelongsToCell:    "testcell",
+						BelongsToCell:    metadatatest.CellIDTestCell,
 						ConsistencyLevel: tt.sliceLevel,
 						ContractUsages:   tt.usages,
 					},

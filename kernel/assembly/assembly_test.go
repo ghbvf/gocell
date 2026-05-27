@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 )
@@ -31,8 +32,10 @@ type orderCell struct {
 }
 
 func newOrderCell(id string, order *[]string) *orderCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L1"}
+	m.ID = id
 	return &orderCell{
-		BaseCell:  cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		BaseCell:  cell.MustNewBaseCell(m),
 		stopOrder: order,
 	}
 }
@@ -48,8 +51,10 @@ type failInitCell struct {
 }
 
 func newFailInitCell(id string) *failInitCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+	m.ID = id
 	return &failInitCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -65,7 +70,7 @@ type emptyIDCell struct {
 
 func newEmptyIDCell() *emptyIDCell {
 	return &emptyIDCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "placeholder-for-empty-id-test", Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("placeholderforemptyidtest"), Type: "core"}),
 	}
 }
 
@@ -77,8 +82,10 @@ type failStartCell struct {
 }
 
 func newFailStartCell(id string) *failStartCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &failStartCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -93,8 +100,10 @@ type failStopCell struct {
 }
 
 func newFailStopCell(id string) *failStopCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &failStopCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -112,8 +121,10 @@ type gatedStartCell struct {
 }
 
 func newGatedStartCell(id string) *gatedStartCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+	m.ID = id
 	return &gatedStartCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
@@ -142,8 +153,10 @@ type gatedStopCell struct {
 }
 
 func newGatedStopCell(id string) *gatedStopCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+	m.ID = id
 	return &gatedStopCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
@@ -170,8 +183,8 @@ func (c *gatedStopCell) releaseStop() {
 func TestAssemblyStartStopHealthy(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "test-assembly", DurabilityMode: outbox.DurabilityDemo})
 
-	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L1"})
-	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "edge", ConsistencyLevel: "L2"})
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core", ConsistencyLevel: "L1"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c2"), Type: "edge", ConsistencyLevel: "L2"})
 
 	require.NoError(t, a.Register(c1))
 	require.NoError(t, a.Register(c2))
@@ -208,8 +221,8 @@ func TestAssemblyStopReverseOrder(t *testing.T) {
 
 func TestAssemblyDuplicateCellID(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "dup-test", DurabilityMode: outbox.DurabilityDemo})
-	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "same", Type: "core"})
-	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "same", Type: "core"})
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("same"), Type: "core"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("same"), Type: "core"})
 
 	require.NoError(t, a.Register(c1))
 
@@ -253,7 +266,7 @@ func TestAssemblyFlushHookEventsWithoutDispatcher(t *testing.T) {
 func TestAssemblyInitFailure(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "init-fail", DurabilityMode: outbox.DurabilityDemo})
 
-	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
+	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDGood, Type: "core"})
 	bad := newFailInitCell("bad")
 
 	require.NoError(t, a.Register(good))
@@ -274,7 +287,7 @@ func TestAssemblyInitFailure(t *testing.T) {
 
 func TestAssemblyStopWithoutStart(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "no-start", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDCC, Type: "core"})
 	require.NoError(t, a.Register(c))
 
 	// Stop before Start is a no-op (state guard: only Started allows Stop).
@@ -337,7 +350,7 @@ func TestAssemblyStartFailureRollback(t *testing.T) {
 func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	// ref: uber-go/fx lifecycle.go — 状态机防止重入
 	a := newTestAssembly(t, clock.Real(), Config{ID: "double-start", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDCC, Type: "core"})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.Start(context.Background()))
 
@@ -397,11 +410,11 @@ func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
 
 func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "reg-after-start", DurabilityMode: outbox.DurabilityDemo})
-	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core"})
 	require.NoError(t, a.Register(c1))
 	require.NoError(t, a.Start(context.Background()))
 
-	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "core"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c2"), Type: "core"})
 	err := a.Register(c2)
 	require.Error(t, err, "register after start should fail")
 	var ec *ecErr.Error
@@ -415,7 +428,7 @@ func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 func TestAssemblyStopContinuesOnError(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "stop-err", DurabilityMode: outbox.DurabilityDemo})
 
-	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
+	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDGood, Type: "core"})
 	bad1 := newFailStopCell("bad1")
 	bad2 := newFailStopCell("bad2")
 
@@ -440,7 +453,7 @@ func TestAssemblyStopContinuesOnError(t *testing.T) {
 
 func TestAssemblyStartWithConfig(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "config-test", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core"})
 	require.NoError(t, a.Register(c))
 
 	cfgMap := map[string]any{"key": "value"}
@@ -453,7 +466,7 @@ func TestAssemblyStartWithConfig(t *testing.T) {
 
 func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "double-cfg", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core"})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.StartWithConfig(context.Background(), nil))
 
@@ -487,11 +500,11 @@ func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
 
 func TestAssemblyCellIDs(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "ids-test", DurabilityMode: outbox.DurabilityDemo})
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "a", Type: "core"})))
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "b", Type: "core"})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDAA, Type: "core"})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDBB, Type: "core"})))
 
 	ids := a.CellIDs()
-	assert.Equal(t, []string{"a", "b"}, ids)
+	assert.Equal(t, []string{metadatatest.CellIDAA, metadatatest.CellIDBB}, ids)
 }
 
 func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
@@ -499,10 +512,10 @@ func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
 
 	// Pre-register some cells.
 	for i := range 5 {
-		id := "pre-" + string(rune('a'+i))
-		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
-		})))
+		id := "pre" + string(rune('a'+i))
+		m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L0"}
+		m.ID = id
+		require.NoError(t, a.Register(cell.MustNewBaseCell(m)))
 	}
 
 	// Concurrently call Health() from multiple goroutines while the assembly
@@ -524,12 +537,12 @@ func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
 
 func TestAssemblyCellLookup(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "lookup-test", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "x", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDXX, Type: "core"})
 	require.NoError(t, a.Register(c))
 
-	found := a.Cell("x")
+	found := a.Cell(metadatatest.CellIDXX)
 	assert.NotNil(t, found)
-	assert.Equal(t, "x", found.ID())
+	assert.Equal(t, metadatatest.CellIDXX, found.ID())
 
 	assert.Nil(t, a.Cell("nonexistent"))
 }
@@ -537,7 +550,7 @@ func TestAssemblyCellLookup(t *testing.T) {
 func TestAssemblyStart_ZeroDurabilityMode_FailsAtAssemblyLevel(t *testing.T) {
 	// Zero DurabilityMode is rejected at assembly.Start — before any cell.Init runs.
 	a := newTestAssembly(t, clock.Real(), Config{ID: "test-zero-durability"}) // zero DurabilityMode (unset)
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "any-cell", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("anycell"), Type: "core"})
 	require.NoError(t, a.Register(c))
 
 	err := a.Start(context.Background())
@@ -551,7 +564,7 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 	// Non-zero, non-valid mode (e.g., 99) rejected at assembly level.
 	// ref: Kubernetes allowlist validation, Uber fx fail-fast
 	a := newTestAssembly(t, clock.Real(), Config{ID: "test-invalid-mode", DurabilityMode: outbox.DurabilityMode(99)})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "any-cell", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("anycell"), Type: "core"})
 	require.NoError(t, a.Register(c))
 
 	err := a.Start(context.Background())
@@ -572,7 +585,7 @@ func TestAssembly_Snapshots_NilAfterInitFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, clock.Real(), Config{ID: "snap-init-fail", DurabilityMode: outbox.DurabilityDemo})
-	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
+	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDGood, Type: "core"})
 	bad := newFailInitCell("bad")
 
 	require.NoError(t, a.Register(good))
@@ -592,7 +605,7 @@ func TestAssembly_Snapshots_NilAfterStartFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, clock.Real(), Config{ID: "snap-start-fail", DurabilityMode: outbox.DurabilityDemo})
-	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: "good", Type: "core"})
+	good := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDGood, Type: "core"})
 	bad := newFailStartCell("bad")
 
 	require.NoError(t, a.Register(good))
@@ -611,7 +624,7 @@ func TestAssembly_Snapshots_NilAfterStop(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, clock.Real(), Config{ID: "snap-after-stop", DurabilityMode: outbox.DurabilityDemo})
-	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c", Type: "core"})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDCC, Type: "core"})
 
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.Start(context.Background()))
@@ -684,7 +697,7 @@ func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
 	var firstSeen string
 	firstCell := &configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "first", Type: "core", ConsistencyLevel: "L0",
+			ID: metadatatest.NewCellID("first"), Type: "core", ConsistencyLevel: "L0",
 		}),
 		onInit: func(reg cell.Registrar) error {
 			firstSeen = fmt.Sprintf("%v", reg.Config()[key])
@@ -698,7 +711,7 @@ func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
 	var secondSeen string
 	secondCell := &configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: "second", Type: "core", ConsistencyLevel: "L0",
+			ID: metadatatest.NewCellID("second"), Type: "core", ConsistencyLevel: "L0",
 		}),
 		onInit: func(reg cell.Registrar) error {
 			secondSeen = fmt.Sprintf("%v", reg.Config()[key])
@@ -746,8 +759,10 @@ type sentinelStopCell struct {
 }
 
 func newSentinelStopCell(id string, stopErr error) *sentinelStopCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L1"}
+	m.ID = id
 	return &sentinelStopCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		stopErr:  stopErr,
 	}
 }
@@ -766,8 +781,10 @@ type afterStartSentinelStopCell struct {
 }
 
 func newAfterStartSentinelStopCell(id string, afterStartErr, stopErr error) *afterStartSentinelStopCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L1"}
+	m.ID = id
 	return &afterStartSentinelStopCell{
-		BaseCell:      cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		BaseCell:      cell.MustNewBaseCell(m),
 		afterStartErr: afterStartErr,
 		stopErr:       stopErr,
 	}
@@ -791,8 +808,10 @@ type sentinelStartCell struct {
 }
 
 func newSentinelStartCell(id string, startErr error) *sentinelStartCell {
+	m := &metadata.CellMeta{Type: "core", ConsistencyLevel: "L1"}
+	m.ID = id
 	return &sentinelStartCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L1"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		startErr: startErr,
 	}
 }

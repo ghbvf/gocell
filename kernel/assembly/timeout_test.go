@@ -29,8 +29,10 @@ type slowHookCell struct {
 }
 
 func newSlowHookCell(id, slowOn string) *slowHookCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &slowHookCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		slowOn:   slowOn,
 	}
 }
@@ -100,7 +102,7 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
-	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStart")))
+	require.NoError(t, a.Register(newSlowHookCell("ss", "BeforeStart")))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
@@ -111,7 +113,7 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 
 	var seen bool
 	for _, e := range obs.snapshot() {
-		if e.CellID == "S" && e.Hook == cell.HookBeforeStart {
+		if e.CellID == "ss" && e.Hook == cell.HookBeforeStart {
 			assert.Equal(t, cell.OutcomeTimeout, e.Outcome)
 			assert.True(t, errors.Is(e.Err, context.DeadlineExceeded))
 			assert.GreaterOrEqual(t, e.Duration, testtime.D20ms)
@@ -129,7 +131,7 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
-	require.NoError(t, a.Register(newSlowHookCell("S", "AfterStart")))
+	require.NoError(t, a.Register(newSlowHookCell("ss", "AfterStart")))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
@@ -139,7 +141,7 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 
 	var seen bool
 	for _, e := range obs.snapshot() {
-		if e.CellID == "S" && e.Hook == cell.HookAfterStart {
+		if e.CellID == "ss" && e.Hook == cell.HookAfterStart {
 			assert.Equal(t, cell.OutcomeTimeout, e.Outcome)
 			seen = true
 		}
@@ -156,8 +158,10 @@ type wrappedCtxCell struct {
 }
 
 func newWrappedCtxCell(id string) *wrappedCtxCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &wrappedCtxCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -181,8 +185,10 @@ type deadlineCheckCell struct {
 }
 
 func newDeadlineCheckCell(id string) *deadlineCheckCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &deadlineCheckCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 	}
 }
 
@@ -198,7 +204,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 	// see no deadline. This locks the documented semantics of WithHookTimeout
 	// godoc ("Negative values disable per-hook timeouts entirely") against
 	// accidental regression.
-	dc := newDeadlineCheckCell("D")
+	dc := newDeadlineCheckCell("dd")
 	a := newTestAssembly(t, clock.Real(), Config{
 		ID:             "no-deadline",
 		DurabilityMode: outbox.DurabilityDemo,
@@ -213,7 +219,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 
 func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 	// Counter-test: HookTimeout>0 MUST wrap ctx with a deadline.
-	dc := newDeadlineCheckCell("D")
+	dc := newDeadlineCheckCell("dd")
 	a := newTestAssembly(t, clock.Real(), Config{
 		ID:             "with-deadline",
 		DurabilityMode: outbox.DurabilityDemo,
@@ -234,7 +240,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
-	require.NoError(t, a.Register(newWrappedCtxCell("W")))
+	require.NoError(t, a.Register(newWrappedCtxCell("ww")))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
@@ -243,7 +249,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 
 	var seen bool
 	for _, e := range obs.snapshot() {
-		if e.CellID == "W" && e.Hook == cell.HookBeforeStart {
+		if e.CellID == "ww" && e.Hook == cell.HookBeforeStart {
 			// Hook returned context.Canceled (not DeadlineExceeded), but the
 			// hookCtx hit its deadline, so outcome must be Timeout.
 			assert.Equal(t, cell.OutcomeTimeout, e.Outcome,
@@ -262,7 +268,7 @@ func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
-	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStop")))
+	require.NoError(t, a.Register(newSlowHookCell("ss", "BeforeStop")))
 	require.NoError(t, a.Start(context.Background()))
 
 	err := a.Stop(context.Background())
@@ -271,7 +277,7 @@ func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	// BeforeStop timed out but Stop + AfterStop must still run.
 	var before, after bool
 	for _, e := range obs.snapshot() {
-		if e.CellID != "S" {
+		if e.CellID != "ss" {
 			continue
 		}
 		switch e.Hook {

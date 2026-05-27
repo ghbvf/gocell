@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -46,7 +47,7 @@ func TestCellInit_Signature_AcceptsRegistrar(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCellInit_BaseCell_AcceptsRegistrar(t *testing.T) {
-	b := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell"})
+	b := MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.CellIDTestCell})
 	rec := NewRegistryRecorder(map[string]any{"k": "v"}, outbox.DurabilityDurable)
 
 	err := b.Init(context.Background(), rec)
@@ -83,7 +84,7 @@ var _ Cell = (*errorInitCell)(nil)
 func TestCellInit_ErrorPropagates(t *testing.T) {
 	sentinel := errors.New("init failed: db unreachable")
 	cell := &errorInitCell{
-		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: "failing-cell"}),
+		BaseCell: *MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("failingcell")}),
 		initErr:  sentinel,
 	}
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // PR-A22 ISP 拆分守卫 — 通过编译期断言验证四子接口可独立 mock，复合 Cell
@@ -101,7 +102,7 @@ func TestCellSubInterfaces_IndependentMockability(t *testing.T) {
 		t.Error("CellStatus.Ready() = false, want true")
 	}
 
-	meta := &metadata.CellMeta{ID: "y"}
+	meta := &metadata.CellMeta{ID: metadatatest.CellIDYY}
 	var cv CellInventory = inventoryMock{meta: meta}
 	if cv.Metadata() != meta {
 		t.Error("CellInventory.Metadata() did not return injected meta pointer")
