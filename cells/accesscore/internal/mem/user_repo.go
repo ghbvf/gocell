@@ -427,6 +427,15 @@ func (r *UserRepository) UpdatePassword(
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
+	// Status guard (#1017 F1): mirror the SQL `AND status='active'` predicate.
+	// Checked before the version guard so a concurrent freeze is reported as
+	// 403 (ErrAuthUserNotActive) even if the version also advanced.
+	if u.Status() != domain.StatusActive {
+		return 0, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
+	}
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
 	}

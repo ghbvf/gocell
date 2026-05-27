@@ -142,13 +142,20 @@ const (
 )
 
 // assertCallerAllowlist limits callers of credentialauthority.Assert to
-// these three slice prefixes + the funnel package itself. _test.go files
-// always pass (test helpers may call Assert to construct expectations).
+// these slice prefixes + the funnel package itself. _test.go files always
+// pass (test helpers may call Assert to construct expectations).
+//
+// identitymanage is an allowed CALLER (downstream prong) but is deliberately
+// NOT in sliceFunnelScopes (upstream prong): changePasswordInTx legitimately
+// reads user.PasswordVersion for the CAS write, which the upstream prong would
+// false-positive on. Its gate PLACEMENT is governed independently by
+// CHANGEPASSWORD-INACTIVE-GATE-01. See ADR §A11.2 + §A16.
 var assertCallerAllowlist = []string{
 	"cells/accesscore/internal/credentialauthority/", // funnel itself
 	"cells/accesscore/slices/sessionlogin/",
 	"cells/accesscore/slices/sessionrefresh/",
 	"cells/accesscore/slices/sessionvalidate/",
+	"cells/accesscore/slices/identitymanage/", // #1017 pre-mutation inactive gate
 }
 
 // sliceFunnelScopes are the slice prefixes whose production files MUST route

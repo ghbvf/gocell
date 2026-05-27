@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -458,13 +459,19 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 		"email-only Update must not cascade-revoke (only status demotion does)")
 }
 
-// stubTokenIssuer is a test double for TokenIssuer.
+// stubTokenIssuer is a test double for TokenIssuer. calls records how many
+// times IssueForUser was invoked so tests can assert the post-commit token
+// issue does NOT run when an upstream gate rejects (see #1017). calls is
+// atomic because the package-level minimalStubIssuer is shared across tests,
+// including the concurrent goroutines in identitymanage_credential_race_test.go.
 type stubTokenIssuer struct {
-	pair dto.TokenPair
-	err  error
+	pair  dto.TokenPair
+	err   error
+	calls atomic.Int64
 }
 
 func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
+	s.calls.Add(1)
 	return s.pair, s.err
 }
 
@@ -479,6 +486,21 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 	if markReset {
 		user.SetPasswordResetRequired(true, time.Now())
 	}
+	require.NoError(t, repo.Create(context.Background(), user))
+	return user
+}
+
+// seedInactiveUserWithHash creates a user with a known bcrypt hash and a
+// non-active account status (suspended/locked) persisted before Create, so the
+// ChangePassword inactive-gate regression (#1017) sees a real inactive row.
+func seedInactiveUserWithHash(t *testing.T, repo *mem.UserRepository, username, password string, status domain.UserStatus) *domain.User {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	require.NoError(t, err)
+	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-" + username
+	user.SetStatus(status, time.Now())
 	require.NoError(t, repo.Create(context.Background(), user))
 	return user
 }
@@ -706,6 +728,124 @@ func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 	// No side effects: hash unchanged.
 	orig, _ := repo.GetByID(context.Background(), "usr-cp-bad")
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(orig.PasswordHash), []byte("correctpass")))
+}
+
+// TestService_ChangePassword_InactiveUser_RejectsPreMutation pins the #1017
+// fix: a suspended/locked account's ChangePassword must be rejected by the
+// credentialauthority.Assert gate BEFORE any credential mutation — the old hash
+// must not be rewritten, PasswordVersion must not advance, and the post-commit
+// token issue (IssueForUser) must not run.
+func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
+	cases := []struct {
+		name   string
+		status domain.UserStatus
+	}{
+		{name: "suspended", status: domain.StatusSuspended},
+		{name: "locked", status: domain.StatusLocked},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "must-not-issue"}}
+			svc, repo := newServiceWithIssuer(t, stub)
+			user := seedInactiveUserWithHash(t, repo, "cp-"+tc.name, "oldpass", tc.status)
+			beforeHash := user.PasswordHash
+			beforePV := user.PasswordVersion
+
+			_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+				UserID:      user.ID,
+				OldPassword: "oldpass",
+				NewPassword: "newpass",
+			})
+
+			// 403 ERR_AUTH_USER_NOT_ACTIVE, gate fires before mutation.
+			require.Error(t, err)
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce), "expected *errcode.Error, got %T", err)
+			assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
+
+			// Old hash NOT rewritten + version unchanged (UpdatePassword not committed).
+			after, gerr := repo.GetByID(context.Background(), user.ID)
+			require.NoError(t, gerr)
+			assert.Equal(t, beforeHash, after.PasswordHash,
+				"inactive account password hash must be unchanged")
+			assert.NoError(t, bcrypt.CompareHashAndPassword(
+				[]byte(after.PasswordHash), []byte("oldpass")),
+				"stored hash must still match the old password")
+			assert.Equal(t, beforePV, after.PasswordVersion,
+				"passwordVersion must not advance when gate rejects")
+
+			// IssueForUser must not run after a pre-mutation rejection.
+			assert.Equal(t, int64(0), stub.calls.Load(),
+				"IssueForUser must not be called when inactive gate rejects pre-mutation")
+		})
+	}
+}
+
+// freezeAfterReadRepo models the #1017 F1 concurrent-freeze window: a
+// Lock/Suspend commits right after changePasswordInTx's non-locking GetByID
+// (which returns the stale active snapshot) and before the write. UpdatePassword's
+// `status='active'` predicate must then reject, so the now-frozen account's
+// credential is not rewritten.
+type freezeAfterReadRepo struct {
+	ports.UserRepository
+	target string
+	froze  bool
+}
+
+func (r *freezeAfterReadRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	u, err := r.UserRepository.GetByID(ctx, id)
+	if err == nil && id == r.target && !r.froze {
+		r.froze = true
+		// simulate a concurrent Lock committing immediately after this read;
+		// the store row is now frozen while the caller holds a stale active view.
+		// UpdateLockState is not overridden, so the promoted method writes the
+		// underlying store directly.
+		_ = r.UpdateLockState(ctx, id, domain.StatusLocked, time.Now())
+	}
+	return u, err // stale active snapshot
+}
+
+// TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard pins #1017 F1:
+// when a freeze commits between the (non-locking) read and the write, the
+// write-time status guard in UpdatePassword rejects with ErrAuthUserNotActive
+// and the credential is not rewritten. The read-time Assert gate saw the stale
+// active snapshot and passed — the write guard is the backstop.
+func TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard(t *testing.T) {
+	memRepo := mem.NewStore(clock.Real()).UserRepository()
+	user := seedUserWithHash(t, memRepo, "cp-freeze", "oldpass", false) // active at seed
+	spy := &freezeAfterReadRepo{UserRepository: memRepo, target: user.ID}
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "must-not-issue"}}
+	svc, err := NewService(clock.Real(), spy,
+		newInvalidator(t, memRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(stub), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+	require.NoError(t, err)
+
+	beforeHash := user.PasswordHash
+	beforePV := user.PasswordVersion
+
+	_, cpErr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      user.ID,
+		OldPassword: "oldpass",
+		NewPassword: "newpass",
+	})
+
+	// Write-time status guard rejects the freeze-during-tx window.
+	require.Error(t, cpErr)
+	var ce *errcode.Error
+	require.True(t, errors.As(cpErr, &ce), "expected *errcode.Error, got %T", cpErr)
+	assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
+
+	after, gerr := memRepo.GetByID(context.Background(), user.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, beforeHash, after.PasswordHash,
+		"credential must not be rewritten when a freeze committed before the write")
+	assert.Equal(t, beforePV, after.PasswordVersion,
+		"passwordVersion must not advance when the write guard rejects")
+	assert.Equal(t, int64(0), stub.calls.Load(),
+		"IssueForUser must not run when the write guard rejects")
 }
 
 func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
