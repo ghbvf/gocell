@@ -40,6 +40,23 @@ func WithLeaseDuration(d time.Duration) Option {
 	}
 }
 
+// WithObserver is a cumulative builder option. Category: builder-noop.
+// Sets the Observer that receives outcome / retry / heartbeat-failure events.
+// A nil observer is silently ignored; the constructor's default (NopObserver)
+// is kept. Safe to call multiple times; last non-nil value wins.
+//
+// Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md): Observer
+// is an optional best-effort sink, not a wiring-required dependency. NopObserver
+// is a correct zero-value default. New composition roots may attach a metrics
+// collector without forcing every test to inject one.
+func WithObserver(o Observer) Option {
+	return func(e *Executor) {
+		if o != nil {
+			e.observer = o
+		}
+	}
+}
+
 // withJitterSource is an internal test-only injection seam. Category: builder-noop.
 // Injects a custom jitter source (e.g. a fixed-seed source for exact-value
 // backoff assertions in package tests). A nil source is silently ignored; the

@@ -29,19 +29,31 @@ type Heartbeater interface {
 
 // runHeartbeat runs in its own goroutine and beats the lease at each ticker
 // interval until:
-//   - ctx is canceled (clean shutdown — Execute called stopHB), or
+//   - ctx is canceled (clean shutdown — caller called stopHB), or
 //   - Heartbeat returns ok=false (stale lease — another coordinator took over).
 //
-// On a stale lease it invokes onStale (which the executor wires to cancel the
-// running step's context with errLeaseLost) before returning, so the orphaned
-// step stops executing rather than racing to commit under a lost lease. The
-// lease-lost log is Warn (degraded operation per observability.md), not Info.
+// On a stale lease it invokes onStale (which the caller wires to cancel the
+// running step's / fn's context with errLeaseLost) before returning, so the
+// orphaned work stops executing rather than racing to commit under a lost
+// lease. The lease-lost log is Warn (degraded operation per
+// observability.md), not Info.
 //
 // Infrastructure errors from Heartbeat are logged as Warn and the goroutine
-// continues to the next tick (fail-open for transient infra issues).
+// continues to the next tick (fail-open for transient infra issues, matching
+// Temporal's heartbeat semantics — see ref note).
+//
+// onHBFailure is invoked synchronously on every tick that fails or observes a
+// stale lease, with the reason classified. It is best-effort: it MUST NOT
+// block (observers must be non-blocking — see Observer godoc); a slow observer
+// would delay the next heartbeat tick and risk dropping the lease.
 //
 // The ticker is stopped before the function returns; callers using
-// clockmock.FakeClock can assert PendingTickers()==0 after joining this goroutine.
+// clockmock.FakeClock can assert PendingTickers()==0 after joining this
+// goroutine.
+//
+// ref: temporalio/sdk-go internal_task_handlers.go — transient heartbeat
+// failures are logged and retried on the next interval; only server-side
+// CancelRequested (≈ ok=false) cancels the activity ctx.
 func runHeartbeat(
 	ctx context.Context,
 	clk clock.Clock,
@@ -50,6 +62,7 @@ func runHeartbeat(
 	interval, leaseDuration time.Duration,
 	logger *slog.Logger,
 	onStale func(),
+	onHBFailure func(reason HeartbeatFailureReason),
 ) {
 	ticker := clk.NewTicker(interval)
 	defer ticker.Stop()
@@ -66,6 +79,7 @@ func runHeartbeat(
 					slog.String("lease_id", string(leaseID)),
 					slog.Any("error", err),
 				)
+				onHBFailure(HeartbeatFailureInfraError)
 				continue
 			}
 			if !ok {
@@ -73,6 +87,7 @@ func runHeartbeat(
 					slog.String("instance_id", string(instanceID)),
 					slog.String("lease_id", string(leaseID)),
 				)
+				onHBFailure(HeartbeatFailureStaleLease)
 				onStale()
 				return
 			}
