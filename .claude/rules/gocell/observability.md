@@ -88,7 +88,8 @@ ref: `pkg/redaction/redaction.go`；archtest `SPAN-RECORD-ERROR-REDACT-01`（sib
 
 - Adapter readiness probe 使用 stable snake_case，并以后缀 `_ready` 表示依赖可用性，例如 `rabbitmq_ready`、`vault_transit_ready`。
 - 一个 adapter 只有单一外部依赖时，禁止同时暴露多个同义 ready probe；多角色 worker 可用 `component-role` 拆分不同失败域。
-- probe 名是运维契约；改名必须同步 dashboard / alert / 文档。
+- 运行时操作 probe（outbox relay 等非依赖可用性、而是操作健康度）不带 `_ready` 后缀；当前 inventory：`outbox_relay_poll` / `outbox_relay_reclaim` / `outbox_relay_cleanup`（PR #1187 round-3 由旧 wire key `outbox-relay-*` rename 为 underscore 形态，因 `ProbeName` regex 禁连字符；外部 dashboard / alert / startup-validation script 若硬编码旧 hyphen key 需同步更新）。
+- probe 名是运维契约；改名必须同步 dashboard / alert / 文档；ADR `docs/architecture/202605271100-adr-probename-sealed-funnel.md` F1 amendment §3 记录 outbox relay wire rename 明细。
 - Adapter probe 名是 `kernel/healthz.ProbeName` typed-string funnel：各 adapter 声明 typed const（如 `postgres.ProbeReady`），构造点（`adapterutil.HealthToProbe` 首参收 typed、`reg.RegisterReadiness` 首参收 typed）只能引用声明的 const，裸字面量在 type system 层不可表达。archtest `PROBENAME-SEALED-FUNNEL-01` 双向锁（下游构造解析 + 上游声明站点锁）+ golden inventory；符号清单活在该 archtest 的 package godoc。框架 probe（`config_watcher` / `config_drift`）使用 `healthz.ConfigWatcherProbeName` / `healthz.ConfigDriftProbeName` typed const；emitter probe（`outbox_failopen_rate_<cell>`）使用 `healthz.EmitterFailOpenProbeName(cellID)` typed 构造器，全部接入同一 funnel，不存在 bare-string 逃生口。注册路径统一收口：emitter probe 经 kernel `cell.RegisterEmitterHealthProbes(reg, emitter)` 共享 funnel（内部做 `healthz.ProbeSet` 断言 + typed-nil 守卫，调 `reg.RegisterReadiness(p.Name(), p)`）；cell repo probe 由 cellgen `RegisterReadiness` funnel（`healthz_gen.go` 生成产物）。
 
 ### Cell 级别 Repo Readiness Probe

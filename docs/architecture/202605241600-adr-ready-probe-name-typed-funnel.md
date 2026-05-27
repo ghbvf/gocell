@@ -1,3 +1,10 @@
+> **Superseded note (2026-05-28, PR #1216)**: The outbox relay probe wire keys
+> documented in this ADR (`outbox-relay-poll` / `outbox-relay-reclaim` /
+> `outbox-relay-cleanup`) were renamed to underscore form (`outbox_relay_poll`
+> etc.) by PR #1187 round-3 (typed `ProbeName` funnel — regex prohibits hyphens).
+> This ADR is preserved as historical context; for current wire keys see
+> `docs/architecture/202605271100-adr-probename-sealed-funnel.md` F1 amendment §3.
+
 # ADR: Adapter readiness-probe 名 typed-string concept funnel（Soft → Hard）
 
 - Status: Accepted

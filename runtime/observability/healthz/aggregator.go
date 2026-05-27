@@ -19,10 +19,6 @@ const (
 	// defaultDeadline is the per-probe execution budget. Matches the Kubernetes
 	// readiness probe default periodSeconds=10 / timeoutSeconds=5 convention.
 	defaultDeadline = 5 * time.Second
-
-	// probeLogKey is the slog field key used to record the probe name in all
-	// aggregator diagnostic log messages (consolidating 3 occurrences).
-	probeLogKey = "probe"
 )
 
 // Option configures a [aggregator] at construction time.
@@ -85,6 +81,10 @@ func (a *aggregator) Register(p healthz.Probe) error {
 		return fmt.Errorf("%w: nil probe", healthz.ErrInvalidProbeName)
 	}
 	name := p.Name()
+	// Defense-in-depth for the (post-sealed-Probe) unreachable case: every Probe
+	// in sanctioned construction paths (NewProbe / WrapCtxSafe) has non-empty name
+	// by construction. Kept as safety belt; not directly testable without a
+	// sealed-marker bypass.
 	if name == "" {
 		return fmt.Errorf("%w: empty probe name", healthz.ErrInvalidProbeName)
 	}
@@ -93,7 +93,7 @@ func (a *aggregator) Register(p healthz.Probe) error {
 	if _, exists := a.probes[name]; exists {
 		return fmt.Errorf("%w: probe %q", healthz.ErrDuplicateProbe, name)
 	}
-	a.probes[name] = wrapProbeCtxSafe(p, a.clk)
+	a.probes[name] = healthz.WrapCtxSafe(p, a.clk)
 	return nil
 }
 
@@ -188,7 +188,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 		pr.Latency = a.clk.Since(start)
 		if r := recover(); r != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String(probeLogKey, pr.Name.String()),
+				slog.String("probe", pr.Name.String()),
 				slog.Any("panic", redaction.RedactAny(r)),
 			)
 			pr.Status = healthz.StatusDown
@@ -211,102 +211,4 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 		pr.Err = err
 	}
 	return pr
-}
-
-// probeOutcome carries the return value of the inner Check call so that
-// wrapProbeCtxSafe and its late-result watcher share a typed channel element.
-type probeOutcome struct {
-	err    error
-	panicV any
-}
-
-// wrapProbeCtxSafe wraps a [healthz.Probe] so that its Check method returns
-// as soon as ctx is canceled, regardless of whether the underlying function
-// cooperates with ctx.Done. This preserves the PR-A35 guarantee from
-// runtime/http/health.wrapCtxSafe.
-//
-// Semantics:
-//   - If the inner Check returns before ctx.Done, its return value is used.
-//   - If ctx is canceled first, the wrapper returns ctx.Err() immediately.
-//     The inner goroutine continues running; its eventual return (or panic) is
-//     consumed by a background watcher that logs surprising outcomes.
-//   - For realistic I/O-bound probes (DB ping, HTTP call) the inner goroutine
-//     terminates at the next I/O boundary. A pathological probe that ignores
-//     ctx may leak its goroutine, but the outer contract is structurally held.
-func wrapProbeCtxSafe(p healthz.Probe, clk clock.Clock) healthz.Probe {
-	return &ctxSafeProbe{inner: p, clk: clk}
-}
-
-// ctxSafeProbe implements [healthz.Probe] with ctx-racing semantics.
-type ctxSafeProbe struct {
-	inner healthz.Probe
-	clk   clock.Clock
-}
-
-func (w *ctxSafeProbe) Name() healthz.ProbeName { return w.inner.Name() }
-
-func (w *ctxSafeProbe) Check(ctx context.Context) error {
-	done := make(chan probeOutcome, 1)
-	start := w.clk.Now()
-	go func() {
-		var out probeOutcome
-		defer func() {
-			if r := recover(); r != nil {
-				out.panicV = r
-			}
-			done <- out
-		}()
-		out.err = w.inner.Check(ctx)
-	}()
-	select {
-	case <-ctx.Done():
-		// Background watcher: observes the eventual inner outcome so panic
-		// values are not silently dropped and operators can grep slog for
-		// probes that take a long time to honor cancellation.
-		cancelAt := w.clk.Now()
-		go watchLateOutcome(w.inner.Name().String(), ctx.Err(), start, cancelAt, done, w.clk)
-		return ctx.Err()
-	case o := <-done:
-		if o.panicV != nil {
-			slog.Warn("healthz: probe panicked",
-				slog.String(probeLogKey, w.inner.Name().String()),
-				slog.Any("panic", redaction.RedactAny(o.panicV)),
-			)
-			return fmt.Errorf("panic: %v", redaction.RedactAny(o.panicV))
-		}
-		return o.err
-	}
-}
-
-// watchLateOutcome runs in its own goroutine after the outer Check returned
-// ctx.Err(). It observes the inner goroutine's eventual result and logs
-// cancel_lag so operators can identify uncooperative probes.
-func watchLateOutcome(name string, ctxErr error, start, cancelAt time.Time, done <-chan probeOutcome, clk clock.Clock) {
-	o := <-done
-	cancelLag := clk.Since(cancelAt)
-	probeTotal := clk.Since(start)
-	switch {
-	case o.panicV != nil:
-		slog.Warn("healthz: probe panicked after ctx cancellation; result discarded",
-			slog.String(probeLogKey, name),
-			slog.Any("panic", redaction.RedactAny(o.panicV)),
-			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", cancelLag),
-			slog.Duration("probe_total", probeTotal),
-		)
-	case cancelLag > time.Second:
-		slog.Warn("healthz: probe did not honor ctx cancellation promptly",
-			slog.String(probeLogKey, name),
-			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", cancelLag),
-			slog.Duration("probe_total", probeTotal),
-		)
-	default:
-		slog.Debug("healthz: probe canceled, inner fn returned shortly after",
-			slog.String(probeLogKey, name),
-			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", cancelLag),
-			slog.Duration("probe_total", probeTotal),
-		)
-	}
 }
