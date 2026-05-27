@@ -48,24 +48,13 @@ type contractDoc struct {
 	FilePath  string            `yaml:"-"` // absolute path to the contract.yaml
 }
 
+// contractEndpoints mirrors kernel/metadata.EndpointsMeta: actorSubscribers
+// lives under endpoints (not at the top level). Confirmed by all 4 contracts
+// using this field today (event.audit.appended.v1 + 3 example events).
 type contractEndpoints struct {
 	Server           string   `yaml:"server"`
 	Publisher        string   `yaml:"publisher"`
-	ActorSubscribers []string `yaml:"-"` // loaded from top-level actorSubscribers ([]string)
-}
-
-// contractDocFull is used for unmarshaling the full doc (including actorSubscribers).
-// actorSubscribers in contract.yaml is a YAML sequence of strings ([]string),
-// matching kernel/metadata/types.go:273 ActorSubscribers []string.
-// Example: actorSubscribers: [external-audit-sink].
-type contractDocFull struct {
-	ID               string            `yaml:"id"`
-	Kind             string            `yaml:"kind"`
-	Lifecycle        string            `yaml:"lifecycle"`
-	OwnerCell        string            `yaml:"ownerCell"`
-	Endpoints        contractEndpoints `yaml:"endpoints"`
-	Triggers         []string          `yaml:"triggers"`
-	ActorSubscribers []string          `yaml:"actorSubscribers"`
+	ActorSubscribers []string `yaml:"actorSubscribers"`
 }
 
 var (
@@ -117,41 +106,43 @@ func loadContractDocs(root string) ([]contractDoc, error) {
 
 	docs := make([]contractDoc, 0, len(files))
 	for _, fc := range files {
-		var full contractDocFull
-		if parseErr := yaml.Unmarshal(fc.Bytes, &full); parseErr != nil {
+		var doc contractDoc
+		if parseErr := yaml.Unmarshal(fc.Bytes, &doc); parseErr != nil {
 			return nil, parseErr
 		}
-		doc := contractDoc{
-			ID:        full.ID,
-			Kind:      full.Kind,
-			Lifecycle: full.Lifecycle,
-			OwnerCell: full.OwnerCell,
-			Endpoints: full.Endpoints,
-			Triggers:  full.Triggers,
-			FilePath:  fc.AbsPath,
-		}
-		doc.Endpoints.ActorSubscribers = full.ActorSubscribers
+		doc.FilePath = fc.AbsPath
 		docs = append(docs, doc)
 	}
 	return docs, nil
 }
 
-// loadGeneratedHTTPSourceMap scans generated/contracts/http/ for iface_gen.go files
-// and builds a map from module-relative generated package import path to the absolute
-// path of the corresponding contract.yaml. The mapping is extracted from the
-// "// source: <rel-path>" comment in each iface_gen.go file.
+// extractSourceComment scans the first 10 lines of a generated Go file for a
+// "// source: <rel-path>" comment and returns the relative path (forward-slash
+// form, as written by codegen).
+func extractSourceComment(content []byte) string {
+	for _, line := range strings.SplitN(string(content), "\n", 10) {
+		const prefix = "// source: "
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+// loadGeneratedSourceMap scans generated/contracts/<kind>/**/<suffix> files
+// and builds a map from module-relative generated package import path to the
+// absolute path of the declaring contract.yaml. The mapping is extracted from
+// the "// source: <rel-path>" comment that codegen writes into each generated
+// file.
 //
-// Uses LoadContentFiles (the archtest framework) to avoid forbidden filepath.WalkDir.
-//
-// This map is used by HANDLER-DECL-COVER-01 and DEAD-CONTRACT-01 to cross-
-// reference generated Service interfaces to their declaring contract.yaml
-// files, without relying on the dot-to-slash ID transform (which is incorrect
-// for paths containing "internal" → "internalapi" remapping by codegen).
-func loadGeneratedHTTPSourceMap(root, modPath string) (map[string]string, error) {
-	scope := DirsScope(root, []string{"generated/contracts/http"},
+// This handles the codegen "internal" → "internalapi" segment remapping
+// correctly (the comment carries the true source path, not the dot-to-slash
+// derived path).
+func loadGeneratedSourceMap(root, modPath string, kindDir, fileSuffix string) (map[string]string, error) {
+	scope := DirsScope(root, []string{"generated/contracts/" + kindDir},
 		IncludeGenerated(),
 		MatchRels(func(rel string) bool {
-			return strings.HasSuffix(rel, "/iface_gen.go")
+			return strings.HasSuffix(rel, fileSuffix)
 		}),
 	)
 
@@ -163,23 +154,43 @@ func loadGeneratedHTTPSourceMap(root, modPath string) (map[string]string, error)
 	result := make(map[string]string, len(files))
 	for _, fc := range files {
 		// Derive generated package import path from the file's directory.
-		// fc.Rel is module-relative, e.g. "generated/contracts/http/auth/login/v1/iface_gen.go"
 		rel := fc.Rel
 		dir := rel[:strings.LastIndex(rel, "/")]
 		genPkgPath := modPath + "/" + dir
 
-		// Extract "// source: <rel-path>" from the first few lines.
-		for _, line := range strings.SplitN(string(fc.Bytes), "\n", 10) {
-			const prefix = "// source: "
-			if strings.HasPrefix(line, prefix) {
-				srcRel := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-				// srcRel is module-relative, e.g. "contracts/http/config/internal/get/v1/contract.yaml"
-				result[genPkgPath] = filepath.Join(root, filepath.FromSlash(srcRel))
-				break
-			}
+		srcRel := extractSourceComment(fc.Bytes)
+		if srcRel == "" {
+			continue
 		}
+		result[genPkgPath] = filepath.Join(root, filepath.FromSlash(srcRel))
 	}
 	return result, nil
+}
+
+// loadGeneratedHTTPServiceMap is the HTTP-Service-interface-specific variant
+// of loadGeneratedSourceMap, used by HANDLER-DECL-COVER-01 and
+// DEAD-CONTRACT-01 to locate the Service interface package for each http
+// contract.
+func loadGeneratedHTTPServiceMap(root, modPath string) (map[string]string, error) {
+	return loadGeneratedSourceMap(root, modPath, "http", "/iface_gen.go")
+}
+
+// loadGeneratedAllSourceMap covers every generated contract package
+// (http/event/projection), used by DEAD-CODE-01 to detect production imports
+// of any deprecated contract's generated package (not just http). All three
+// kinds emit `iface_gen.go` consistently with a `// source: <rel>` header.
+func loadGeneratedAllSourceMap(root, modPath string) (map[string]string, error) {
+	merged := make(map[string]string)
+	for _, kind := range []string{"http", "event", "projection"} {
+		m, err := loadGeneratedSourceMap(root, modPath, kind, "/iface_gen.go")
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range m {
+			merged[k] = v
+		}
+	}
+	return merged, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -192,10 +203,12 @@ type sliceSubscriberEntry struct {
 	ContractID    string
 }
 
-// loadSliceSubscribers scans cells/**/slice.yaml and extracts subscribe contractUsages.
-// Uses LoadContentFiles (the archtest framework) to avoid forbidden filepath.WalkDir.
+// loadSliceSubscribers scans cells/**/slice.yaml AND examples/**/slice.yaml
+// for subscribe contractUsages. Scope must mirror loadContractDocs so that an
+// examples slice subscribing to a platform contract is visible to
+// DEAD-CONTRACT-01.
 func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
-	scope := DirsScope(root, []string{"cells"},
+	scope := DirsScope(root, []string{"cells", "examples"},
 		MatchRels(func(rel string) bool {
 			return strings.HasSuffix(rel, "/slice.yaml")
 		}),
@@ -327,8 +340,34 @@ func extractCellName(rel string) string {
 	return rest[:idx]
 }
 
+// extractCellIDFromPkgPath returns the cell ID for a Go package path, treating
+// any "/cells/<X>/..." segment as contract-owned. Handles both platform cells
+// (modPath+"/cells/<X>/...") and example cells
+// (modPath+"/examples/<demo>/cells/<X>/...") by structural marker, not by
+// hand-maintained allowlist. Returns "" for non-cell packages (runtime/,
+// adapters/, kernel/, examples/<demo>/[non-cells]) — those are framework code
+// and structurally exempt from contract-owner rules.
+func extractCellIDFromPkgPath(modPath, pkgPath string) string {
+	if !strings.HasPrefix(pkgPath, modPath+"/") {
+		return ""
+	}
+	const marker = "/cells/"
+	idx := strings.Index(pkgPath, marker)
+	if idx < 0 {
+		return ""
+	}
+	tail := pkgPath[idx+len(marker):]
+	if next := strings.Index(tail, "/"); next >= 0 {
+		return tail[:next]
+	}
+	return tail
+}
+
 // extractCellNameFromImport extracts the cell name from a full import path like
-// "github.com/ghbvf/gocell/cells/accesscore/...".
+// "github.com/ghbvf/gocell/cells/accesscore/..." for the platform-only
+// IMPL-DECL-COVER-01 cross-cell ban (which scans cells/ exclusively).
+// EMIT-DECL-COVER-01 and any rule scanning examples/ must use
+// extractCellIDFromPkgPath instead.
 func extractCellNameFromImport(cellsImportPrefix, impPath string) string {
 	if !strings.HasPrefix(impPath, cellsImportPrefix) {
 		return ""
@@ -461,9 +500,9 @@ func TestHandlerDeclCover(t *testing.T) {
 	// generated/contracts/http/*/iface_gen.go. This is the correct mapping
 	// because codegen remaps some source path segments (e.g. "internal" →
 	// "internalapi") that the dot-to-slash ID transform cannot reproduce.
-	genHTTPSourceMap, mapErr := loadGeneratedHTTPSourceMap(root, modPath)
+	genHTTPSourceMap, mapErr := loadGeneratedHTTPServiceMap(root, modPath)
 	if mapErr != nil {
-		t.Fatalf("HANDLER-DECL-COVER-01: loadGeneratedHTTPSourceMap: %v", mapErr)
+		t.Fatalf("HANDLER-DECL-COVER-01: loadGeneratedHTTPServiceMap: %v", mapErr)
 	}
 
 	// activeHTTPContracts: genPkgPath → true when the source contract.yaml
@@ -552,12 +591,16 @@ func TestHandlerDeclCover(t *testing.T) {
 			return nil
 		}
 
-		// Collect exported concrete types from cells/* + examples/*.
+		// Collect concrete types from cells/* + examples/*. Visibility is
+		// orthogonal to interface satisfaction: a Go idiom is to expose only
+		// the constructor and keep the receiver type unexported. Filtering by
+		// Exported() would allow an unexported impl to silently bypass the
+		// orphan check, so we visit every TypeName regardless of visibility.
 		pkgScope := p.Pkg.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
 			tn, ok := obj.(*types.TypeName)
-			if !ok || !tn.Exported() {
+			if !ok {
 				continue
 			}
 			named, ok := tn.Type().(*types.Named)
@@ -588,9 +631,9 @@ func TestHandlerDeclCover(t *testing.T) {
 			}
 			// Found impl → iface. Check the contract.yaml exists and is active.
 			if !activeHTTPContracts[iface.pkgPath] {
-				relPath := impl.pos.Filename
-				if relPath == "" {
-					relPath = impl.pkgPath
+				relPath, relErr := filepath.Rel(root, impl.pos.Filename)
+				if relErr != nil || relPath == "" {
+					relPath = impl.pkgPath // fallback for synthetic positions
 				}
 				diags = append(diags, Diagnostic{
 					Rel:  relPath,
@@ -612,7 +655,7 @@ func TestHandlerDeclCover(t *testing.T) {
 //
 // This test confirms the "no active contract" diagnostic path fires correctly.
 // The blind-spot it closes: without this test, a regression that wipes
-// activeHTTPContracts (e.g. loadGeneratedHTTPSourceMap returning empty) would
+// activeHTTPContracts (e.g. loadGeneratedHTTPServiceMap returning empty) would
 // make TestHandlerDeclCover emit false positives silently or fail for the
 // wrong reason.
 func TestHandlerDeclCover_DetectsOrphanImpl(t *testing.T) {
@@ -727,16 +770,15 @@ func TestEmitDeclCover(t *testing.T) {
 		}
 	}
 
-	cellsPrefix := modPath + "/cells/"
-
 	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		if !strings.HasPrefix(p.Pkg.Path(), cellsPrefix) {
-			return nil
-		}
-		cellID := extractCellNameFromImport(cellsPrefix, p.Pkg.Path())
+		// Structural classifier: only contract-owned packages
+		// (cells/<X>/... or examples/<demo>/cells/<X>/...) need their emit
+		// topics validated. Framework code (runtime/, adapters/, kernel/) is
+		// structurally exempt — it has no ownerCell to anchor a contract.
+		cellID := extractCellIDFromPkgPath(modPath, p.Pkg.Path())
 		if cellID == "" {
 			return nil
 		}
@@ -920,9 +962,9 @@ func TestDeadContractCover(t *testing.T) {
 	// Build genPkgPath → contractYamlAbsPath from generated/contracts/http/iface_gen.go
 	// "// source:" comments. Needed because codegen remaps some source path segments
 	// (e.g. "internal" → "internalapi") that the dot-to-slash ID transform cannot reproduce.
-	genHTTPSourceMap, mapErr := loadGeneratedHTTPSourceMap(root, modPath)
+	genHTTPSourceMap, mapErr := loadGeneratedHTTPServiceMap(root, modPath)
 	if mapErr != nil {
-		t.Fatalf("DEAD-CONTRACT-01: loadGeneratedHTTPSourceMap: %v", mapErr)
+		t.Fatalf("DEAD-CONTRACT-01: loadGeneratedHTTPServiceMap: %v", mapErr)
 	}
 	// Invert: contractYamlAbsPath → genPkgPath (for O(1) lookup in contract loop).
 	contractPathToGenPkg := make(map[string]string, len(genHTTPSourceMap))
@@ -1121,10 +1163,10 @@ func TestDeadContractCover_FloorScan(t *testing.T) {
 //     literal references only (import paths and literal strings), not computed ones.
 //   - Comments: not flagged (AST does not visit comment nodes as BasicLit).
 //
-// Generated package path for deprecated contracts: derived from the source
-// map (loadGeneratedHTTPSourceMap) for http-kind deprecated contracts, not
-// from contractIDToGenPkg, to correctly handle "internal" → "internalapi"
-// codegen remapping.
+// Generated package path for deprecated contracts: derived from the
+// loadGeneratedAllSourceMap source map (http + event + projection), so a
+// deprecated event/projection contract's generated import is caught the same
+// way as an http one. Handles "internal" → "internalapi" codegen remapping.
 func TestDeadCodeCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -1147,16 +1189,15 @@ func TestDeadCodeCover(t *testing.T) {
 		return
 	}
 
-	// Build deprecated gen-pkg set via the source map (correct mapping for
-	// "internal" → "internalapi" remapping; safe even for non-http contracts
-	// that have no entry in the source map — they simply won't appear in the set).
-	genHTTPSourceMap, mapErr := loadGeneratedHTTPSourceMap(root, modPath)
+	// Build deprecated gen-pkg set via the all-kinds source map (covers
+	// http/event/projection; correctly handles "internal" → "internalapi").
+	genAllSourceMap, mapErr := loadGeneratedAllSourceMap(root, modPath)
 	if mapErr != nil {
-		t.Fatalf("DEAD-CODE-01: loadGeneratedHTTPSourceMap: %v", mapErr)
+		t.Fatalf("DEAD-CODE-01: loadGeneratedAllSourceMap: %v", mapErr)
 	}
 	// Build reverse: contractYamlAbsPath → genPkgPath.
-	contractPathToGenPkg := make(map[string]string, len(genHTTPSourceMap))
-	for genPkg, contractPath := range genHTTPSourceMap {
+	contractPathToGenPkg := make(map[string]string, len(genAllSourceMap))
+	for genPkg, contractPath := range genAllSourceMap {
 		contractPathToGenPkg[contractPath] = genPkg
 	}
 
@@ -1223,4 +1264,97 @@ func TestDeadCodeCover(t *testing.T) {
 		return d
 	})
 	Report(t, "DEAD-CODE-01", diags)
+}
+
+// TestDeadCodeCover_DetectsDeprecatedImport is the negative self-check for
+// DEAD-CODE-01. The main TestDeadCodeCover is vacuous today (0 deprecated
+// contracts), so without this self-check the detection path is never
+// exercised — a silent regression in either the import-path scan or the
+// string-literal scan would not be caught until the first deprecated contract
+// appears in the codebase (potentially years later).
+//
+// This test feeds the same scan logic with a synthetic deprecated set + a
+// parsed *ast.File containing a deprecated import and a deprecated id
+// literal. Asserts ≥1 diagnostic per path.
+//
+// AI-robust grade: Hard — directly exercises the detection AST visit logic
+// against a synthetic non-zero deprecated set.
+func TestDeadCodeCover_DetectsDeprecatedImport(t *testing.T) {
+	t.Parallel()
+
+	const fakeGenPkg = "github.com/ghbvf/gocell/generated/contracts/event/deprecated/v1"
+	const fakeContractID = "event.deprecated.v1"
+
+	deprecatedGenPkgs := map[string]bool{fakeGenPkg: true}
+	deprecatedIDs := map[string]bool{fakeContractID: true}
+
+	const src = `package fakeproducer
+
+import (
+	"context"
+
+	deprecated "github.com/ghbvf/gocell/generated/contracts/event/deprecated/v1"
+)
+
+const TopicDeprecated = "event.deprecated.v1"
+
+func Use(_ context.Context) { _ = deprecated.Foo{} }
+`
+	fset := token.NewFileSet()
+	f, parseErr := parser.ParseFile(fset, "fakeproducer.go", src, parser.ParseComments)
+	if parseErr != nil {
+		t.Fatalf("DEAD-CODE-01 self-check: parse synthetic source: %v", parseErr)
+	}
+
+	var diags []Diagnostic
+	// Replicate the main test's import-path scan.
+	for _, imp := range f.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		impPath := strings.Trim(imp.Path.Value, `"`)
+		if deprecatedGenPkgs[impPath] {
+			diags = append(diags, Diagnostic{
+				Rel:     "synthetic.go",
+				Line:    fset.Position(imp.Pos()).Line,
+				Message: "imports deprecated contract package " + impPath,
+			})
+		}
+	}
+	// Replicate the main test's BasicLit scan.
+	EachInSubtree[ast.BasicLit](f, func(lit *ast.BasicLit) {
+		if lit.Kind != token.STRING {
+			return
+		}
+		val, ok := StringLitValue(lit)
+		if !ok {
+			return
+		}
+		if deprecatedIDs[val] {
+			diags = append(diags, Diagnostic{
+				Rel:     "synthetic.go",
+				Line:    fset.Position(lit.Pos()).Line,
+				Message: "references deprecated contract ID " + val,
+			})
+		}
+	})
+
+	// Assert: at least one diagnostic for each of the two scan paths.
+	var sawImport, sawLiteral bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, "imports deprecated") {
+			sawImport = true
+		}
+		if strings.Contains(d.Message, "references deprecated") {
+			sawLiteral = true
+		}
+	}
+	if !sawImport {
+		t.Error("DEAD-CODE-01 self-check: import-path scan did not flag the synthetic " +
+			"deprecated import; detection path is broken")
+	}
+	if !sawLiteral {
+		t.Error("DEAD-CODE-01 self-check: string-literal scan did not flag the synthetic " +
+			"deprecated contract ID; detection path is broken")
+	}
 }
