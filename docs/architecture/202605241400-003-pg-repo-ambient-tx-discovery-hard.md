@@ -39,33 +39,44 @@ Hard"原则，两处 Soft 必须同 PR 升级。
 
 ## Decision
 
+> **2026-05-27 重写**：原 §轴 A "上游 type-aware 自动发现（Soft → Medium）"决策已被 amendment 取代。原文（discoverPGAdapterPackages + TestPGRepoAmbientTx_DiscoveryCoverage + expectedPGAdapterPackageMin floor）描述的全部机制已在本 PR 删除。下方为重写后的 §轴 A。
+>
+> 原文历史脉络归入版本控制（git show <pre-amendment-commit>:docs/architecture/202605241400-003...md），不留在文档主线避免双真理源。
+
 双轴升级：
 
-### 轴 A — 上游 type-aware 自动发现（Soft → Medium）
+### 轴 A — 上游 sub-package seal（Medium → Hard，amended 2026-05-27）
 
-**发现信号**：production package 在 archtest 扫描范围内 ⇔ 该包 scope 内
-声明了名为 `pgExecutor` 的类型。
+**核心改造**：把 `pgExecutor` struct + `*pgxpool.Pool` 字段移到每个 PG adapter 包的 `internal/pgexec/` 子包内，并保持类型与字段 unexported。
 
-实现：`discoverPGAdapterPackages(t) []string` 用 `RunTyped` 遍历
-`prodscan.Patterns(root)` 加载的所有生产包，过滤
-`p.Pkg.Scope().Lookup(pgExecutorName) != nil` 的包返回其 import path 集合。
-`TestPGRepoAmbientTx` 用该集合代替原人工维护列表。
+| 形态属性 | Pre-amendment（2026-05-24） | Post-amendment（2026-05-27） |
+|---------|---------------------------|---------------------------|
+| `pgExecutor` struct 位置 | 各 PG adapter 包顶层（包 private） | `<adapter>/internal/pgexec/pgexec.go`（sub-pkg private）|
+| 构造路径 | `newPGExecutor(pool)` 包内私有 | `pgexec.New(pool) PGExecutor` 跨包 typed factory |
+| Parent-pkg 字段类型 | `db pgExecutor`（concrete struct value）| `db pgexec.PGExecutor`（interface）|
+| ExecDirect 形态 | `(e pgExecutor) ExecDirect(...)` method | `pgexec.ExecDirect(e PGExecutor, ...)` top-level function（F2-Hard，无 subset-interface bypass）|
+| `.pool` 字段可达性（包外）| 同包 sibling 文件可达 | **compile-time impossible**：unexported struct + unexported field + cross-pkg unreachable |
+| Discovery 机制 | type-aware scope lookup `pgExecutor` | **删除**——R1/R2/R3 改为全局谓词 |
 
-理由：
+**Hard 实现机制**（ai-robust.md §Hard 范本 #6 "sealed construction"）：
 
-- 当前 3 个在册包都声明 `pgExecutor` 作为包局部 funnel；这本就是 R1/R2/R3
-  依赖的结构性不变量，把它升级为发现信号 = 让"funnel 入口"与"扫描范围"
-  共用同一类型符号，从根上消除"列表漏同步"失败模式。
-- 不声明 `pgExecutor` 的包无 funnel 符号可拦截，扫描无意义。
-- configcore (`Session` + `DBTX` 另一套 funnel) 被信号正确排除 — 这是另一种
-  funnel 模式，需独立 ADR + 独立 archtest，不在 PG-REPO-AMBIENT-TX-01 范围。
-- 新作者要么沿用 `pgExecutor` 范式（自动发现，R1/R2/R3 自动覆盖），要么发明新
-  funnel（需 ADR + 新 archtest）。
+- `internal/pgexec/` 子包受 Go `internal/` 可见性规则约束——只有以 `<adapter>/internal/pgexec/` 为前缀的祖先包可 import；外部包无法 import，无法引用 unexported `pgExecutor` 类型名。
+- `pgExecutor` struct 与 `*pgxpool.Pool` 字段在 sub-pkg 内 unexported——parent-pkg 包外无法字段声明、type assertion、composite literal 构造。
+- 唯一获取 `pgexec.PGExecutor` 实例的路径是 `pgexec.New(*pgxpool.Pool)` exported factory——其返回的 interface 不暴露 `.pool` 字段。
+- 与 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01`（`SlogDependencyEntry` unexported fields）同款形态。
 
-**Coverage floor**：`TestPGRepoAmbientTx` 在调用 rule 前断言
-`len(discovered) ≥ 3`，防 discovery signal 被破坏的静默回归。
-`TestPGRepoAmbientTx_DiscoveryCoverage` 进一步断言发现集 == 当前 3 个已知包
-精确集合（diff-friendly 失败模式）。`expectedPGAdapterPackageMin` 是固定下限（不随新包自动增大）。`TestPGRepoAmbientTx_DiscoveryCoverage` 的 exact-set match 才是主保护；floor 仅防 `prodscan.Patterns` 被破坏导致 discovery 静默返回空。新增 PG 包时需手动同时更新 `expected` slice 和 `expectedPGAdapterPackageMin`。
+**Discovery 删除后的 archtest scope**：
+
+- R1（pool field）、R3（ExecDirect callsite）走全局谓词 + `*_repo.go` / `*_store.go` 文件后缀过滤——文件后缀是 **pre-existing Soft scope boundary**（PR #917 时就在），本 amendment 未触碰也未引入新 Soft；其升级路径见 §"已知 Soft scope" + backlog issue 跟踪。
+- R2（pool wrap funnel）走全局谓词 + 同 file extension 过滤——callee 解析到 `pgexec.New` cross-package typed function。
+- R3 callsite identity（amendment 之前是 `pgExecutor.ExecDirect` 方法 receiver type；amendment 之后是 `pgexec.ExecDirect` 函数 callee identity）—— **F2-Hard 闭合 subset-interface bypass 漏洞**。
+
+**配套 archtest 变化**：
+
+- 删除 `discoverPGAdapterPackages` + `TestPGRepoAmbientTx_DiscoveryCoverage` + `expectedPGAdapterPackageMin` 常量——sub-pkg seal 提供 compile-time identity，archtest 无需 type-aware 发现层。
+- 删除 R3(a)（`.pool` 字段直接访问）—— interface 不暴露 `.pool`，compile-time 不可表达；archtest 检查冗余。
+- 删除 BS-7（pool 局部赋值反向自检）—— 同 R3(a) 退役。
+- BS-6 形态从"method-value indirection of pgExecutor.ExecDirect"改写为"function-value indirection of pgexec.ExecDirect"——与 BS-3（pgexec.New function value）同源 helper。
 
 ### 轴 B — 下游 R3 allowlist typed marker（Soft → Hard）
 
@@ -119,25 +130,47 @@ marker（marker 存在但同 scope 无 ExecDirect → audit-trail 退化）。
 
 | 维度 | 原始（2026-05-24） | Amended（2026-05-27） | 形态 |
 |------|--------|--------|------|
-| 上游（package discovery） | Medium（archtest type-aware：`Scope().Lookup("pgExecutor")`） | **Hard** | sealed `internal/pgexec/` sub-package：`pgExecutor` 结构体 + `*pgxpool.Pool` 字段在不可导出符号下；parent-pkg 包外无法引用类型，无法 type-assert，无 .pool 访问路径。Discovery 已删除（rules 改为全局谓词，按 `*_repo.go` / `*_store.go` 文件扩展名过滤层边界）|
-| 下游 R1（pool field in repo/store layer） | Hard（`*types.Info` 字段类型解析） | Hard | `*types.Info` 字段类型解析（不变）+ 全局 predicate（删除 hand-maintained list） |
-| 下游 R2（wrap funnel `New*` → `pgexec.New`） | Hard | Hard | `*types.Info` callee 解析至 `*types.Func`，要求 `Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"` |
-| 下游 R3(a)（pool field access） | Hard（archtest-bound） | **retired** | compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段；parent-pkg `.pool` 访问编译错误 |
-| 下游 R3(b)（ExecDirect callsite） | Hard（typed marker funnel） | Hard | typed marker funnel（不变）；receiver 类型解析从 same-pkg `pgExecutor` struct 改为 cross-pkg `pgexec.PGExecutor` interface |
+| **上游 — pgExecutor 形态包外不可达** | Medium（archtest type-aware：`Scope().Lookup("pgExecutor")`）| **Hard**（compile-time，Go visibility）| sealed `internal/pgexec/` sub-package：`pgExecutor` 结构体 + `*pgxpool.Pool` 字段 unexported；parent-pkg 包外无法引用类型，无 type-assert 路径，无 .pool 访问路径 |
+| **下游 R1 — pool field in repo/store layer** | Hard（`*types.Info` 字段类型解析）| Hard via `*types.Info` 字段解析（不变），**archtest scope by `*_repo.go`/`*_store.go` file extension is pre-existing Soft**（见 §已知 Soft scope）| 全局谓词 + Soft file-extension scope；compile-time Hard 来自 sub-pkg seal，archtest 是 defense-in-depth |
+| **下游 R2 — wrap funnel `New*` → `pgexec.New`** | Hard | Hard via callee identity（`Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"`）；同 Soft file extension scope | 全局谓词 + Soft file-extension scope |
+| **下游 R3(a) — pool field access** | Hard（archtest-bound）| **retired** | compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` |
+| **下游 R3(b) — ExecDirect callsite** | Hard（typed marker funnel，**method receiver type check**）| **Hard via callee identity**（F2-Hard：`pgexec.ExecDirect` top-level function）| ExecDirect 从 method 改为 `pgexec.ExecDirect(e, ctx, sql, args...)` 顶层函数；callee identity 检查 `Pkg().Path()` ending `/internal/pgexec` AND `Name() == "ExecDirect"`；**关闭 subset-interface bypass**——local interface re-shape 无法 invoke 一个 method 不存在的函数 |
 
 **Amendment compensation column**（per ai-robust.md §"ADR amendment 落地必查"）：
 
-- 上游 Medium → Hard：升级（无 ✅→⚠️ 回退），不需要补偿措施。
-- R3(a) retired：升级到 compile-time（不可表达性优于 archtest form-uniqueness）；BS-7（pool 局部赋值反向自检）一并删除——若 sub-pkg 内部新增 sibling 文件触发 .pool 局部赋值，单一 sub-pkg 文件内部小范围，code review 兜底，不再单独 archtest。
+- 上游 Medium → Hard：升级，无 ✅→⚠️ 回退。
+- R3(a) retired：升级到 compile-time（不可表达性优于 archtest form-uniqueness）；BS-7 一并退役。
+- R3(b) receiver-type 检查 → callee-identity 检查：**关闭 PR 引入的 subset-interface bypass surface**——pre-PR pgExecutor 是 unexported struct，外部不可获取值；post-PR PGExecutor 是 exported interface，外部 `pgexec.New(pool)` 可拿到值，理论上声明 subset interface 即可绕过 receiver-type 检查。F2-Hard 把 ExecDirect 从 method 提到 top-level function，subset interface 无法 invoke 不存在的 method——bypass 在 type system 层不可表达。
+- R1/R2 archtest scope（file extension）保持 pre-existing Soft 状态——本 amendment 未触碰，亦未引入新 Soft。升级路径见 §已知 Soft scope + backlog issue。
 
 **上游 Hard 实现机制**：
+
 - `internal/pgexec/pgexec.go` 是包外不可 import 的位置（Go `internal/` 可见性规则）。
 - `pgExecutor` struct 与 `*pgxpool.Pool` 字段在 sub-pkg 内 unexported；parent-pkg 包外无法引用类型名进行字段声明、类型断言、composite literal 构造。
-- 唯一获取 `pgexec.PGExecutor` 实例的路径是 `pgexec.New(*pgxpool.Pool)` 工厂；其返回的 interface 类型不暴露 `.pool` 字段。
-- 4 个 PG adapter package（adapters/postgres、adapters/postgres/saga、cells/accesscore/internal/adapters/postgres、examples/iotdevice/cells/devicecell/internal/adapters/postgres）各自有一份镜像 `internal/pgexec/` 子包（CLAUDE.md 分层规则 `cells/ ❌ adapters/` 阻止单一共享位置）。
-- archtest R1/R2 retained as defense-in-depth：global predicate over production module，scoped by `*_repo.go` / `*_store.go` file extension（基础设施层 `pool.go`/`tx_manager.go` 与 composition root pass-through helpers 通过文件后缀过滤排除）。
+- 唯一获取 `pgexec.PGExecutor` 实例的路径是 `pgexec.New(*pgxpool.Pool)` 工厂；其返回的 interface 类型不暴露 `.pool` 字段，也不暴露 `ExecDirect` 方法。
+- 4 个 PG adapter package（adapters/postgres、adapters/postgres/saga、cells/accesscore/internal/adapters/postgres、examples/iotdevice/cells/devicecell/internal/adapters/postgres）各自一份镜像 `internal/pgexec/` 子包（CLAUDE.md 分层规则 `cells/ ❌ adapters/` 阻止单一共享位置）。
 
-**与同形态 funnel 的对照**：HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 的 `SlogDependencyEntry` unexported fields 是同款"sealed construction" Hard 形态（ai-robust.md §Hard 范本 #6 "sealed construction"）。
+**与同形态 funnel 的对照**：HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 的 `SlogDependencyEntry` unexported fields 是同款"sealed construction" Hard 形态（ai-robust.md §Hard 范本 #6 "sealed construction"）；F2-Hard `pgexec.ExecDirect` top-level function 与 `panicregister.Approved` / `pgrepoapproved.ApprovedExecDirect` 同款 "typed marker funnel for unbounded ops"（ai-robust.md §Hard 范本 #2）。
+
+## 已知 Soft scope（pre-existing，allowed暂留 + backlog 跟踪）
+
+本 ADR amendment **未引入**新 Soft，但显化记录 pre-existing Soft scope 边界 + 升级路径。
+
+### Pre-existing Soft #1: archtest file-extension scope filter
+
+- **位置**：`tools/archtest/pg_repo_ambient_tx_test.go::isRepoOrStoreFile()`——R1/R2/R3 仅扫描 `*_repo.go` / `*_store.go` 后缀文件。
+- **历史**：PR #917（2026-05-24，本 ADR 原始版本时）就已存在；本 amendment 未触碰。
+- **为什么是 Soft**：file 名是字符串约定，per ai-robust.md §"Soft 形态" / §"Soft → Hard 改造方向 字符串锚点 → typed function call"。
+- **当前实际影响**：infrastructure 层（`pool.go` / `tx_manager.go`）合法持有 `*pgxpool.Pool`，文件名后缀的"非 _repo.go/_store.go = 基础设施层"约定承担了 scope 区分职责。
+- **真 Hard 升级路径**：把 6 种 pool-holder 形态（Executor / Pool / TxManager / Bundle pass-through / cmd composition wiring / configcore Session parallel funnel）全部 seal 到各自的 `internal/<noun>/` 子包，R1/R2 改为"任何 `*pgxpool.Pool` 字段的 package path 必须在 sealed sub-pkg 集合内"——全局谓词无文件名 scope。
+- **Backlog 跟踪**：gh issue [#1206 PG-INFRA-FULL-SEAL-01](https://github.com/ghbvf/gocell/issues/1206)（labels: `backlog pri-p2 cap-14 flag-cond type-arch-opt`）。
+
+### Pre-existing Medium #2: same-pkg sibling 绕过（intra-sub-pkg）
+
+- **形态**：sub-pkg `internal/pgexec/` 内部 sibling 文件（如未来加 `pgexec_helper.go`）可直接访问 `pgExecutor.pool` field。Go visibility 在同包内不限制。
+- **当前实际影响**：sub-pkg 极小（每个仅 1 个 pgexec.go 文件 ~80 行），review 范围可控。
+- **真 Hard 升级路径**：把 `pgExecutor.pool` 字段放入更深的 `internal/pgexec/internal/<storage>/` 子子包——但收益边际递减，未规划。
+- **Backlog 跟踪**：暂不立项（acceptable threat per code review）。
 
 ## Out of scope
 

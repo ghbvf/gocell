@@ -45,28 +45,29 @@ func NewGoodRepo(pool *pgxpool.Pool) pgexec.PGExecutor { //nolint:unused // GREE
 	return pgexec.New(pool)
 }
 
-// badR3ExecDirect calls ExecDirect without a sibling marker. R3 must flag the
-// call line.
+// badR3ExecDirect calls pgexec.ExecDirect without a sibling marker. R3 must
+// flag the call line. Note: ExecDirect is now a top-level function — there
+// is no method form to bypass via local interface re-shape.
 func (r goodRepo) badR3ExecDirect(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
 // badR3MarkerInNestedClosure: marker placed inside a nested FuncLit cannot
-// approve an ExecDirect call in the outer FuncDecl scope. R3 must flag the
-// outer call.
+// approve a pgexec.ExecDirect call in the outer FuncDecl scope. R3 must
+// flag the outer call.
 func (r goodRepo) badR3MarkerInNestedClosure(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = r.db.ExecDirect(ctx, "OUTER")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "OUTER")
 	_ = func() {
 		pgrepoapproved.ApprovedExecDirect("inner-marker-cannot-approve-outer")
 	}
 }
 
 // badR3MarkerOuterExecInNestedClosure: outer-scope marker cannot approve
-// ExecDirect inside a nested FuncLit. R3 must flag the inner call.
+// pgexec.ExecDirect inside a nested FuncLit. R3 must flag the inner call.
 func (r goodRepo) badR3MarkerOuterExecInNestedClosure(ctx context.Context) { //nolint:unused // RED fixture
 	pgrepoapproved.ApprovedExecDirect("outer-marker-cannot-approve-inner")
 	_ = func() {
-		_, _ = r.db.ExecDirect(ctx, "INNER")
+		_, _ = pgexec.ExecDirect(r.db, ctx, "INNER")
 	}
 }
 
@@ -75,37 +76,37 @@ const fixtureReasonConst = "kebab-from-const"
 
 func (r goodRepo) badR3ApprovedConstIdent(ctx context.Context) { //nolint:unused // RED fixture
 	pgrepoapproved.ApprovedExecDirect(fixtureReasonConst)
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
 // badR3ApprovedConcat: marker reason is "a" + "b" BinaryExpr, not BasicLit.
 func (r goodRepo) badR3ApprovedConcat(ctx context.Context) { //nolint:unused // RED fixture
 	pgrepoapproved.ApprovedExecDirect("ab-" + "cd-concat")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
 // badR3ApprovedEmpty: empty-string reason fails the kebab-case regex.
 func (r goodRepo) badR3ApprovedEmpty(ctx context.Context) { //nolint:unused // RED fixture
 	pgrepoapproved.ApprovedExecDirect("")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
 // badR3ApprovedPlaceholder: "todo" matches the placeholder reject regex.
 func (r goodRepo) badR3ApprovedPlaceholder(ctx context.Context) { //nolint:unused // RED fixture
 	pgrepoapproved.ApprovedExecDirect("todo")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
 // goodApprovedSingleExecDirect is GREEN: marker + 1 ExecDirect in same scope.
 func (r goodRepo) goodApprovedSingleExecDirect(ctx context.Context) { //nolint:unused // GREEN fixture
 	pgrepoapproved.ApprovedExecDirect("fixture-green-single")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
-// goodApprovedMultiExecDirect is GREEN: one marker covers multiple ExecDirect
-// calls in the same approval scope.
+// goodApprovedMultiExecDirect is GREEN: one marker covers multiple
+// pgexec.ExecDirect calls in the same approval scope.
 func (r goodRepo) goodApprovedMultiExecDirect(ctx context.Context) { //nolint:unused // GREEN fixture
 	pgrepoapproved.ApprovedExecDirect("fixture-green-multi")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 1")
-	_, _ = r.db.ExecDirect(ctx, "SELECT 2")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 2")
 }

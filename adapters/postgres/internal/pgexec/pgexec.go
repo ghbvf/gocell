@@ -34,17 +34,19 @@ import (
 // outside this package by Go visibility — type-asserting back to the concrete
 // type is impossible because the type name is unexported.
 //
-// ExecDirect is the explicit bypass path reserved for ADR-approved
-// compensation paths that must commit independently of the ambient tx (e.g.
-// adapters/postgres/refresh_store.go::revokeSessionDetachedAt cascade-revoke).
-// Each callsite is form-checked by archtest R3(b): a sibling
-// pgrepoapproved.ApprovedExecDirect("<kebab-case-reason>") marker must
-// co-locate in the same approval scope.
+// ExecDirect is intentionally NOT a method on this interface — it is a
+// top-level function pgexec.ExecDirect(e PGExecutor, ctx, sql, args...). This
+// closes the subset-interface bypass vector (R3-Hard form, ai-robust.md §Hard
+// 范本 #2 typed marker funnel): a caller cannot declare a local interface
+// re-shape with the same method set and call ExecDirect through it, because
+// ExecDirect simply isn't a method anywhere. The only sanctioned callsite
+// form is `pgexec.ExecDirect(s.db, ctx, ...)`, identified by archtest R3 via
+// callee-identity resolution. Sibling deployment of
+// pgrepoapproved.ApprovedExecDirect.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -87,6 +89,42 @@ func (e *pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 	return e.pool.Query(ctx, sql, args...)
 }
 
-func (e *pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return e.pool.Exec(ctx, sql, args...)
+// ExecDirect bypasses the ambient transaction and executes directly against
+// the underlying pool. It is the explicit compensation-path bypass reserved
+// for ADR-approved cascade-revoke and similar independent-commit semantics.
+//
+// Form is a top-level function, not a method, to make the call shape
+// `pgexec.ExecDirect(e, ctx, sql, args...)` the sole sanctioned callsite
+// identity. Local interface re-shape (subset / same-method-set redecl) cannot
+// invoke ExecDirect because it is not defined as a method on any interface.
+//
+// archtest R3 enforces:
+//  1. callsite must call pgexec.ExecDirect (callee-identity check via
+//     *types.Info.Uses + Pkg().Path() ending /internal/pgexec + Name() == "ExecDirect")
+//  2. same approval scope (FuncDecl/FuncLit body) must contain sibling
+//     pgrepoapproved.ApprovedExecDirect("<kebab-case-reason>") marker
+//
+// Currently exactly one production callsite holds a marker:
+// adapters/postgres/refresh_store.go::revokeSessionDetachedAt.
+func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	impl, ok := e.(*pgExecutor)
+	if !ok {
+		// Programmer error: PGExecutor was produced outside pgexec.New (impossible
+		// in production because pgExecutor is unexported; only fixtures / tests
+		// could construct a satisfying mock). Fail loudly rather than corrupt
+		// ambient-tx semantics silently.
+		return pgconn.CommandTag{}, errExecDirectOnNonSealedExecutor
+	}
+	return impl.pool.Exec(ctx, sql, args...)
+}
+
+// errExecDirectOnNonSealedExecutor reports a misuse — a PGExecutor whose
+// dynamic type isn't *pgExecutor (e.g. a test mock). Sealed in this file via
+// unexported var to prevent caller-side construction with the same identity.
+var errExecDirectOnNonSealedExecutor = &execDirectMisuseError{}
+
+type execDirectMisuseError struct{}
+
+func (*execDirectMisuseError) Error() string {
+	return "pgexec.ExecDirect: PGExecutor must originate from pgexec.New (mock impls cannot bypass ambient-tx routing via this function)"
 }

@@ -602,7 +602,7 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
 	defer cancelCascade()
-	_, err := s.db.ExecDirect(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+	_, err := pgexec.ExecDirect(s.db, cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
 	return err
 }
 

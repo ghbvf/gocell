@@ -40,38 +40,31 @@
 //     adapters/postgres/refresh_store.go::revokeSessionDetachedAt (the
 //     intentional independent-commit cascade-revoke compensation path).
 //
-// # AI-robust grading (Funnel 双向锁评级)
+// # AI-robust grading (Funnel 双向锁评级, amended 2026-05-27)
 //
-// 下游 Hard / 上游 Hard.
+// **上游 — pgExecutor 形态包外不可达**: **Hard** (compile-time, Go visibility).
+// pgExecutor struct + *pgxpool.Pool field unexported in per-adapter
+// internal/pgexec/ sub-package; parent-package files cannot reference the
+// concrete type name to declare a field, accept a parameter, or perform a
+// type assertion — sealed construction (ai-robust.md §Hard 范本 #6, same form
+// as HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 SlogDependencyEntry unexported fields).
 //
-// 上游 Hard via Go type-system sealing (closes gh #738 / #916, retired the
-// upstream Medium ceiling documented in ADR 202605241400-003 prior amendment):
+// **下游 R1 / R2 — pool field + wrap funnel**: archtest via *types.Info global
+// predicate, **scoped by *_repo.go / *_store.go file extension which is a
+// pre-existing Soft scope boundary** (PR #917). archtest is defense-in-depth;
+// the compile-time Hard comes from sub-pkg seal above. File-extension Soft
+// scope升级路径 backlog: PG-INFRA-FULL-SEAL-01 (track 6 pool-holder forms seal).
 //
-//   - pgExecutor struct is unexported in a per-adapter internal/pgexec/
-//     sub-package. Parent-package files CANNOT reference the concrete type
-//     name to declare a field, accept a parameter, or perform a type assertion
-//     — the symbol is package-private to /internal/pgexec/. This is the same
-//     "sealed construction" Hard pattern as HEALTH-REDACTED-ERROR-MSG-FUNNEL-01
-//     (SlogDependencyEntry unexported fields) per ai-robust.md §Hard 范本 #6.
-//
-//   - The pool field is unreachable from the PGExecutor interface (no method
-//     exposes it). Parent-package files holding pgexec.PGExecutor as a field
-//     can only invoke interface methods. Direct access to .pool from the
-//     parent package is a compile error.
-//
-//   - R1 / R2 archtest defense-in-depth: R1 catches any new repo/store file
-//     that accidentally re-introduces *pgxpool.Pool as a field; R2 catches
-//     any New-prefixed constructor that bypasses pgexec.New. Both rules are
-//     global predicates over the production module (no discovery, no
-//     hand-maintained allowlist) using *types.Info resolution.
-//
-// 下游 Hard via form-uniqueness (archtest-bound):
-//
-//   - R3 ExecDirect marker funnel: typed function call
-//     pkg/pgrepoapproved.ApprovedExecDirect with arg-form uniqueness
-//     (BasicLit + token.STRING + kebab-case regex + non-placeholder). Sibling
-//     deployment of panic(panicregister.Approved(...)) per ai-robust.md
-//     §Hard 范本 #2 "typed marker funnel for unbounded ops".
+// **下游 R3 — ExecDirect callsite**: **Hard via callee identity** (F2-Hard).
+// ExecDirect is a top-level function pgexec.ExecDirect(e, ctx, sql, args...),
+// NOT a method. Subset-interface bypass (local interface re-shape with same
+// method set + structural-typing-satisfying value) is closed at the type
+// system level — there is no ExecDirect method on any interface to invoke.
+// Callsite identity via *types.Info.Uses → *types.Func with Pkg().Path()
+// ending /internal/pgexec AND Name() == "ExecDirect". Sibling marker funnel
+// pgrepoapproved.ApprovedExecDirect (typed marker, ai-robust.md §Hard 范本
+// #2 "typed marker funnel for unbounded ops") with arg-form uniqueness
+// (BasicLit + token.STRING + kebab-case regex + non-placeholder).
 //
 // # RED fixtures
 //
@@ -384,37 +377,55 @@ func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *typ
 	return diags
 }
 
-// scanR3ExecDirectInScope flags CallExpr `<x>.ExecDirect(...)` in body where
-// <x> resolves to the sealed pgexec.PGExecutor interface, unless the SAME
-// approval scope contains a sibling ApprovedExecDirect marker call.
+// scanR3ExecDirectInScope flags CallExpr `pgexec.ExecDirect(...)` in body
+// where the callee resolves via *types.Info.Uses to a *types.Func with
+// Pkg().Path() ending /internal/pgexec AND Name() == "ExecDirect", unless the
+// SAME approval scope contains a sibling ApprovedExecDirect marker call.
+//
+// ExecDirect is a top-level function (not a method) — this closes the
+// subset-interface bypass vector (F2-Hard). A local interface re-shape with
+// same method set has no way to invoke pgexec.ExecDirect: there is no
+// ExecDirect method on any interface; the only call form is the package-
+// qualified function call, identified by callee identity.
 func scanR3ExecDirectInScope(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info) []Diagnostic {
 	if bodyHasApprovedExecDirectMarker(body, info) {
 		return nil
 	}
 	var diags []Diagnostic
 	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != execDirectName {
-			return
-		}
-		if !isPGExecutorInterfaceType(sel.X, info) {
+		if !isPgexecExecDirectCall(call, info) {
 			return
 		}
 		line := fset.Position(call.Pos()).Line
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
 			Line: line,
-			Message: "R3: pgexec.PGExecutor.ExecDirect call requires sibling " +
+			Message: "R3: pgexec.ExecDirect call requires sibling " +
 				"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker in the same " +
 				"approval scope (FuncDecl/FuncLit body, not nested closure) to document the " +
 				"ADR-approved bypass of ambient tx; " +
 				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before the " +
-				"ExecDirect call; see pkg/pgrepoapproved; " +
-				"example: pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in same func body before the ExecDirect call; only one production callsite exists at adapters/postgres/refresh_store.go::revokeSessionDetachedAt. " +
+				"pgexec.ExecDirect call; see pkg/pgrepoapproved; " +
+				"example: pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in same func body before the call; only one production callsite exists at adapters/postgres/refresh_store.go::revokeSessionDetachedAt. " +
 				"ADR docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
 	})
 	return diags
+}
+
+// isPgexecExecDirectCall reports whether call's callee resolves via
+// *types.Info.Uses to a *types.Func with Pkg().Path() ending /internal/pgexec
+// AND Name() == "ExecDirect". This is the F2-Hard callsite-identity check
+// that replaces the former receiver-type-only check.
+func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
+	fn := resolveCalleeFunc(call.Fun, info)
+	if fn == nil || fn.Name() != execDirectName {
+		return false
+	}
+	if fn.Pkg() == nil {
+		return false
+	}
+	return strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix)
 }
 
 // bodyHasApprovedExecDirectMarker reports whether body contains a CallExpr
@@ -462,10 +473,10 @@ func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool
 	return found
 }
 
-// isPGExecutorInterfaceType reports whether expr's static type resolves to a
-// named interface called "PGExecutor" declared in a package whose import path
-// ends /internal/pgexec. This is the cross-package receiver-identity check
-// for R3's ExecDirect marker requirement after the sealed-sub-package upgrade.
+// isPGExecutorInterfaceType is retained for archtest helpers that need to
+// identify the sealed pgexec.PGExecutor interface type (e.g. future BS
+// reverse checks). Not used by R3 post-F2-Hard — R3 uses callee identity
+// (isPgexecExecDirectCall), not receiver type.
 func isPGExecutorInterfaceType(expr ast.Expr, info *types.Info) bool {
 	if info == nil {
 		return false
@@ -491,6 +502,9 @@ func isPGExecutorInterfaceType(expr ast.Expr, info *types.Info) bool {
 	}
 	return strings.HasSuffix(obj.Pkg().Path(), pgexecPkgSuffix)
 }
+
+// Compile-time anchor: prevent dead-code elimination of isPGExecutorInterfaceType.
+var _ = isPGExecutorInterfaceType
 
 // collectPGPoolParams returns the names of fn's parameters whose type resolves
 // to *pgxpool.Pool.
@@ -601,14 +615,15 @@ var expectedFixtureViolations = []fixtureViolation{
 	// R2 RED (fixture_repo.go) — pointer to FuncDecl name pos.
 	{"R2:", 31}, // badR2NonNew
 	{"R2:", 37}, // NewBadR2NoWrap
-	// R3 RED (fixture_repo.go) — pointer to call pos.
-	{"R3:", 51}, // badR3ExecDirect
-	{"R3:", 58}, // badR3MarkerInNestedClosure (outer call, marker in nested closure)
-	{"R3:", 69}, // badR3MarkerOuterExecInNestedClosure (inner call, marker in outer)
-	{"R3:", 78}, // badR3ApprovedConstIdent (marker reason is *ast.Ident)
-	{"R3:", 84}, // badR3ApprovedConcat (marker reason is BinaryExpr)
-	{"R3:", 90}, // badR3ApprovedEmpty (marker reason "" fails kebab regex)
-	{"R3:", 96}, // badR3ApprovedPlaceholder (marker reason "todo")
+	// R3 RED (fixture_repo.go) — pointer to call pos. After F2-Hard:
+	// pgexec.ExecDirect callsite identity (not method receiver type).
+	{"R3:", 52}, // badR3ExecDirect
+	{"R3:", 59}, // badR3MarkerInNestedClosure (outer call, marker in nested closure)
+	{"R3:", 70}, // badR3MarkerOuterExecInNestedClosure (inner call, marker in outer)
+	{"R3:", 79}, // badR3ApprovedConstIdent (marker reason is *ast.Ident)
+	{"R3:", 85}, // badR3ApprovedConcat (marker reason is BinaryExpr)
+	{"R3:", 91}, // badR3ApprovedEmpty (marker reason "" fails kebab regex)
+	{"R3:", 97}, // badR3ApprovedPlaceholder (marker reason "todo")
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches every RED
@@ -786,8 +801,12 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 			"*pgxpool.Pool — PGBundle must hold only derived primitives "+
 			"(userRepo/roleRepo/setupLock/txRunner)")
 
-	// BS-6: ExecDirect must not appear as a method value (used as a value
-	// rather than directly called) in any production _repo.go / _store.go.
+	// BS-6: pgexec.ExecDirect must not appear as a function value (used as a
+	// value rather than directly called) in any production file. Same identity
+	// resolution as BS-3 (pgexec.New) but for the ExecDirect typed function.
+	// Method-value form (BS-6 pre-F2-Hard) is OBSOLETE — ExecDirect is no
+	// longer a method on any interface, so method-value indirection is
+	// compile-impossible.
 	var bs6Violations []string
 	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -798,16 +817,13 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 				continue
 			}
 			rel := p.Rel(file)
-			if !isRepoOrStoreFile(rel) {
-				continue
-			}
 			bs6Violations = append(bs6Violations,
-				findExecDirectValueUses(p.Fset, file, rel, p.TypesInfo)...)
+				findPgexecFuncValueUses(p.Fset, file, rel, p.TypesInfo, execDirectName)...)
 		}
 		return nil
 	})
 	assert.Empty(t, bs6Violations,
-		"BS-6 self-check: pgexec.PGExecutor.ExecDirect must not be used as a method value")
+		"BS-6 self-check: pgexec.ExecDirect must not be used as a function value in production")
 
 	// BS-8: pgrepoapproved.ApprovedExecDirect markers must only appear in
 	// approval scopes that also contain a sibling pgexec ExecDirect call.
@@ -856,33 +872,41 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 }
 
 // bodyCallsPGExecutorExecDirect reports whether body contains a CallExpr
-// `<x>.ExecDirect(...)` whose receiver `<x>` resolves to the sealed
-// pgexec.PGExecutor interface.
+// `pgexec.ExecDirect(...)` whose callee resolves to a *types.Func with
+// Pkg().Path() ending /internal/pgexec AND Name() == "ExecDirect".
+//
+// Used by BS-8 spurious-marker reverse check: a marker is spurious if its
+// approval scope does NOT also contain a pgexec.ExecDirect call.
 func bodyCallsPGExecutorExecDirect(body *ast.BlockStmt, info *types.Info) bool {
 	found := false
 	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
 		if found {
 			return
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != execDirectName {
-			return
-		}
-		if isPGExecutorInterfaceType(sel.X, info) {
+		if isPgexecExecDirectCall(call, info) {
 			found = true
 		}
 	})
 	return found
 }
 
-// findPgexecNewValueUses returns BS-3 violations: any Ident in the file that
-// resolves to a *types.Func whose Name()=="New" and Pkg().Path() ends
-// /internal/pgexec AND is NOT in the callee position of a direct call.
+// findPgexecNewValueUses returns BS-3 violations.
 func findPgexecNewValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
+	return findPgexecFuncValueUses(fset, file, rel, info, pgexecFactoryName)
+}
+
+// findPgexecFuncValueUses returns violations for any Ident in the file that
+// resolves to a *types.Func whose Name() == funcName AND Pkg().Path() ends
+// /internal/pgexec AND is NOT in the callee position of a direct call.
+//
+// Covers BS-3 (funcName == "New") and BS-6 (funcName == "ExecDirect"). Both
+// are top-level functions in pgexec sub-packages; their identity check is
+// uniform.
+func findPgexecFuncValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info, funcName string) []string {
 	calleePos := make(map[token.Pos]struct{})
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		fn := resolveCalleeFunc(call.Fun, info)
-		if fn == nil || fn.Name() != pgexecFactoryName {
+		if fn == nil || fn.Name() != funcName {
 			return
 		}
 		if fn.Pkg() == nil || !strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix) {
@@ -905,7 +929,7 @@ func findPgexecNewValueUses(fset *token.FileSet, file *ast.File, rel string, inf
 		if !ok {
 			return
 		}
-		if fn.Name() != pgexecFactoryName {
+		if fn.Name() != funcName {
 			return
 		}
 		if fn.Pkg() == nil || !strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix) {
@@ -915,67 +939,9 @@ func findPgexecNewValueUses(fset *token.FileSet, file *ast.File, rel string, inf
 			return
 		}
 		violations = append(violations,
-			fmt.Sprintf("%s:%d: pgexec.New used as function value (not a direct call) "+
-				"(BS-3 blind spot — R2 would not detect indirect calls)",
-				rel, fset.Position(id.Pos()).Line))
-	})
-	return violations
-}
-
-// findExecDirectValueUses returns BS-6 violations: any Ident resolving to the
-// ExecDirect method on a pgexec.PGExecutor receiver that is NOT in the callee
-// position of a direct call.
-func findExecDirectValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
-	calleePos := make(map[token.Pos]struct{})
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != execDirectName {
-			return
-		}
-		if !isPGExecutorInterfaceType(sel.X, info) {
-			return
-		}
-		calleePos[sel.Sel.Pos()] = struct{}{}
-	})
-	var violations []string
-	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
-		if id.Name != execDirectName {
-			return
-		}
-		obj, ok := info.Uses[id]
-		if !ok {
-			return
-		}
-		fn, ok := obj.(*types.Func)
-		if !ok {
-			return
-		}
-		sig, ok := fn.Type().(*types.Signature)
-		if !ok || sig.Recv() == nil {
-			return
-		}
-		recv := sig.Recv().Type()
-		if ptr, ok := recv.(*types.Pointer); ok {
-			recv = ptr.Elem()
-		}
-		named, ok := recv.(*types.Named)
-		if !ok || named.Obj() == nil {
-			return
-		}
-		if named.Obj().Name() != pgExecutorInterfaceName {
-			return
-		}
-		if named.Obj().Pkg() == nil ||
-			!strings.HasSuffix(named.Obj().Pkg().Path(), pgexecPkgSuffix) {
-			return
-		}
-		if _, isCallee := calleePos[id.Pos()]; isCallee {
-			return
-		}
-		violations = append(violations,
-			fmt.Sprintf("%s:%d: pgexec.PGExecutor.ExecDirect used as method value "+
-				"(BS-6 blind spot — R3 would not detect this)",
-				rel, fset.Position(id.Pos()).Line))
+			fmt.Sprintf("%s:%d: pgexec.%s used as function value (not a direct call) "+
+				"— would bypass R2/R3 archtest direct-call detection",
+				rel, fset.Position(id.Pos()).Line, funcName))
 	})
 	return violations
 }

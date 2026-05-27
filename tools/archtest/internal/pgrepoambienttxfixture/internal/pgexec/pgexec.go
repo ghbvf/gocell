@@ -3,9 +3,8 @@
 // Package pgexec is the fixture-side sealed PostgreSQL executor funnel,
 // mirroring the production form at adapters/postgres/internal/pgexec.
 // Parent fixture packages hold pgexec.PGExecutor (interface) and obtain
-// instances via pgexec.New(pool); the concrete pgExecutor struct and the
-// *pgxpool.Pool field are package-private here so the only sanctioned
-// construction path is the New factory.
+// instances via pgexec.New(pool); ExecDirect is a top-level function (not a
+// method), mirroring the production Hard form.
 package pgexec
 
 import (
@@ -16,13 +15,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PGExecutor mirrors the production interface (Exec / Query / QueryRow /
-// ExecDirect) so the fixture can exercise R3's ExecDirect marker rule.
+// PGExecutor mirrors the production interface (Exec / Query / QueryRow).
+// ExecDirect is intentionally NOT a method — it is the top-level function
+// pgexec.ExecDirect(e, ctx, sql, args...), closing the subset-interface
+// bypass vector. R3 archtest checks the callsite identity via callee
+// resolution, not receiver type.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // pgExecutor is the sanctioned holder of *pgxpool.Pool. Two gates keep this
@@ -52,6 +53,13 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
-func (e *pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return e.pool.Exec(ctx, sql, args...)
+// ExecDirect mirrors the production top-level function. R3 archtest checks
+// callee identity (Pkg().Path() ending /internal/pgexec AND Name() ==
+// "ExecDirect"), not method receiver.
+func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	impl, ok := e.(*pgExecutor)
+	if !ok {
+		return pgconn.CommandTag{}, nil
+	}
+	return impl.pool.Exec(ctx, sql, args...)
 }
