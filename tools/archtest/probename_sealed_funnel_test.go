@@ -13,6 +13,7 @@
 //   - adapters/rabbitmq — ProbeReady
 //   - adapters/s3 — ProbeReady
 //   - adapters/vault — ProbeReady
+//   - adapters/mqtt — ProbeReady
 //   - adapters/oidc — ProbeReady
 //   - runtime/outbox — ProbePoll, ProbeReclaim, ProbeCleanup (relay operation probes, no _ready suffix)
 //   - runtime/websocket — ProbeReady
@@ -167,6 +168,7 @@ var probeNameSanctionedPkgs = map[string]bool{
 	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
 	"github.com/ghbvf/gocell/adapters/s3":       true,
 	"github.com/ghbvf/gocell/adapters/vault":    true,
+	"github.com/ghbvf/gocell/adapters/mqtt":     true,
 	"github.com/ghbvf/gocell/adapters/oidc":     true,
 	// Runtime-level probe owners
 	"github.com/ghbvf/gocell/runtime/outbox":    true,
@@ -200,6 +202,7 @@ var adapterSanctionedPkgs = map[string]bool{
 	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
 	"github.com/ghbvf/gocell/adapters/s3":       true,
 	"github.com/ghbvf/gocell/adapters/vault":    true,
+	"github.com/ghbvf/gocell/adapters/mqtt":     true,
 	"github.com/ghbvf/gocell/adapters/oidc":     true,
 	"github.com/ghbvf/gocell/runtime/websocket": true,
 	"github.com/ghbvf/gocell/runtime/saga":      true,
@@ -270,6 +273,7 @@ func goldenProbeNames() []string {
 		"kernel/healthz.ConfigWatcherProbeName=config_watcher",
 		"kernel/healthz.EventRouterProbeName=event_router",
 		// adapter probes (all _ready suffix)
+		"adapters/mqtt.ProbeReady=mqtt_ready",
 		"adapters/oidc.ProbeReady=oidc_ready",
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",
 		"adapters/postgres.ProbeReady=postgres_ready",
