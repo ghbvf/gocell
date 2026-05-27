@@ -8,15 +8,16 @@ import (
 	"testing"
 
 	"github.com/eclipse/paho.golang/autopaho"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestClassifyConnackReason(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		reasonCode byte
-		wantClass connackClass
-		wantCode  errcode.Code
+		wantClass  connackClass
+		wantCode   errcode.Code
 	}{
 		// Transient codes
 		{"server-unavailable-0x88", 0x88, classTransient, ErrAdapterMQTTConnect},

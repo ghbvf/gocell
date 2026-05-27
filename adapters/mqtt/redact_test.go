@@ -13,13 +13,13 @@ func TestRedactConnectURL_WithCredentials(t *testing.T) {
 		wantOut string // substring that must NOT appear
 		desc    string
 	}{
-		{
+		{ //nolint:gosec // test fixture: intentional fake credential URL
 			name:    "tcp-with-credentials",
 			rawURL:  "tcp://user:pass@host:1883",
 			wantOut: "pass",
 			desc:    "password must not appear in output",
 		},
-		{
+		{ //nolint:gosec // test fixture: intentional fake credential URL
 			name:    "mqtt-with-credentials",
 			rawURL:  "mqtt://admin:secretpassword@broker.example.com:1883",
 			wantOut: "secretpassword",
