@@ -2,6 +2,7 @@ package sessionlogout
 
 import (
 	"context"
+	"errors"
 
 	deletegen "github.com/ghbvf/gocell/generated/contracts/http/auth/session/delete/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
@@ -31,14 +32,32 @@ type DeleteAdapter struct{ S *Service }
 func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (deletegen.DeleteResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		// Auth middleware guarantees subject presence on protected routes.
-		// Reaching this branch means the route was misconfigured as public —
-		// fail closed rather than leak a revoke op to an unauthenticated caller.
-		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")
+		// Reaching this branch means no principal in context, or a principal
+		// with no user Subject. The latter happens for service principals
+		// (auth.PrincipalService.Subject == "" by design — service tokens
+		// identify a callerCell, not a user) and would also occur if this
+		// route were misconfigured as public. Either way, sessionlogout is
+		// user-owned; fail closed rather than leak a revoke op to a
+		// non-user caller.
+		return deletegen.Delete401ErrorResponse{Body: *errcode.New(
+			errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")}, nil
 	}
 	callerUserID := p.Subject
 
 	if err := a.S.Logout(ctx, req.ID, callerUserID); err != nil {
+		// Map declared business errors (400/404) to generated typed responses
+		// per cell-patterns.md §typed response envelope adapter. Undeclared
+		// kinds (503 KindUnavailable from infra Wrap, or genuine framework
+		// 500) flow through `return nil, err` for httputil.WriteError fallback.
+		var ec *errcode.Error
+		if errors.As(err, &ec) {
+			switch ec.Kind {
+			case errcode.KindInvalid:
+				return deletegen.Delete400ErrorResponse{Body: *ec}, nil
+			case errcode.KindNotFound:
+				return deletegen.Delete404ErrorResponse{Body: *ec}, nil
+			}
+		}
 		return nil, err
 	}
 	return deletegen.Delete204NoContentResponse{}, nil

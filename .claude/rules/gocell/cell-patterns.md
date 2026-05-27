@@ -230,9 +230,31 @@ auth:
 
 **owner-guard 必须在 service 层，不可上移 handler**：
 
-owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层比对 `sess.SubjectID != subjectID` 时返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
+owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层通过 `auth.CheckOwner` typed funnel 比对，funnel 内统一返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
 
-archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` type-aware 守该形态：扫描 serving slice 的 **service.go**，若**不包含**满足条件的 owner-guard IfStmt（条件为非 nil 的 `!=` 比较（如 `sess.SubjectID != callerUserID`），body 返回 `errcode.New(errcode.KindNotFound, ...)`），则 fail。删除 service 层 guard、guard 使用错误的 errcode Kind（如 `KindPermissionDenied`）均会触发 fail。注意：该 archtest 扫 service.go 而非 handler.go；handler 层本身不含 owner-guard 代码。当前评级 Medium（跨函数 helper 封装形态存在理论逃逸空间）。
+**单源 funnel**：`runtime/auth.CheckOwner[T]` 是唯一 sanctioned 出口。lookup-failure 与 owner-mismatch 通过 nil-safe accessor 在 funnel 内自然 collapse（accessor 对 nil resource 返回空字符串，与已校验非空的 callerID 不等，funnel 返回 KindNotFound——与 owner-mismatch 同 envelope）。funnel 签名 4 参（resource, ownerID accessor, callerID, code）——wire message 是 const 字面量 `"not found"` 在 funnel body 内固化（resource type 由 errcode.Code 承载，msg 不再是调用方参数），保证 funnel 自身满足 MESSAGE-CONST-LITERAL-01 无需 carve-out。canonical 形态：
+
+```go
+// cells/accesscore/slices/sessionlogout/service.go
+sess, err := s.sessionStore.Get(txCtx, sessionID)
+if err != nil && errcode.IsInfraError(err) {
+    return errcode.Wrap(errcode.KindUnavailable, ...)
+}
+if err := auth.CheckOwner(sess, sessionSubjectID, callerUserID,
+    errcode.ErrSessionNotFound); err != nil {
+    return err
+}
+
+// 同包 file-scope helper (nil-safe accessor)
+func sessionSubjectID(v *session.ValidateView) string {
+    if v == nil { return "" }
+    return v.SubjectID
+}
+```
+
+空 `callerID` 处理：funnel 自身对空 callerID fail-closed 返回 KindNotFound（IDOR 安全保证），无需调用方保证。调用方若希望对"空 callerID = 服务端 auth 配置漏洞"路径产生更清晰的 400 KindInvalid 而非 404 KindNotFound（UX/运维区分），可在 service entry 入口加 empty-callerID guard，sessionlogout.Service.Logout 即此做法——但这是 UX/语义选择，不是 IDOR 安全前提。
+
+archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` 3 个 predicates 闭合该形态（B1/B2/B3）：callsite lock + funnel body lock + zero-tolerance ban；每个 predicate 通过 `types.Info` 包路径绑定 + AST 形态唯一性达成 Hard 范本目录中「typed function choice」+「typed marker funnel for unbounded ops」形态。完整 AI-robust 评级论据（包括 funnel 双向锁分析与盲区清单）见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc——本节不复制评级表述以避免双源漂移。
 
 ## ADV-05 治理规则：active event 必须有 subscriber
 
