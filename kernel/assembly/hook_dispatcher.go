@@ -109,9 +109,6 @@ type dispatcherConfig struct {
 	// Dropped reuses an already-registered drop counter when the owning
 	// assembly rebuilds the dispatcher for a new Start cycle.
 	Dropped metrics.CounterVec
-	// Clock is the time source for flush deadline timers. Required; use
-	// clock.Real() in production and clockmock.New() in tests.
-	Clock clock.Clock
 }
 
 // newHookDispatcher constructs + eagerly starts a dispatcher.
