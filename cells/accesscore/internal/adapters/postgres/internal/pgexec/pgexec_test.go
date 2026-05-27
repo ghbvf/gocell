@@ -90,9 +90,11 @@ type mockExec struct{}
 func (m mockExec) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
+
 func (m mockExec) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
-	return nil, nil
+	return nil, errors.ErrUnsupported
 }
+
 func (m mockExec) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
 
 // TestExecDirect_RejectsNonSealedExecutor verifies that pgexec.ExecDirect's
