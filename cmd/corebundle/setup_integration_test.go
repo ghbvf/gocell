@@ -99,16 +99,21 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
-	// Shared ledger store: auditcore and the bootstrap auth-fail observer
-	// both write into the same MemStore so the test can assert that 401/429
-	// paths actually persist hash-chain entries (M4 — pre-funnel test fixture
-	// passed nil observer and missed bootstrap.auth.fail entries entirely).
+	// Two physically isolated audit chains (issue #1121): auditcore writes
+	// relay events on namespace="auditcore"; the bootstrap observer writes
+	// 401/429 events on namespace="bootstrap". auditquery reads from both via
+	// a ledger.MultiStore so the test can still assert that bootstrap.auth.fail
+	// entries are visible end-to-end.
 	auditHMAC := []byte("test-hmac-key-32-bytes-long!!!!!")
 	auditProto := buildTestAuditProtocol(t, auditHMAC)
 	auditStore := buildTestAuditStore(t, auditProto)
+	bootstrapHMAC := []byte("test-bootstrap-hmac-key-32bytes!")
+	bootstrapRaw, bootstrapWrapped := buildTestBootstrapAuditChain(t, bootstrapHMAC)
+	multiStore, err := ledger.NewMultiStore(auditStore, bootstrapRaw)
+	require.NoError(t, err)
 
 	bootstrapAuthObserver, err := audit.NewBootstrapAuthFailObserver(
-		slog.Default(), auditStore, clock.Real(),
+		slog.Default(), bootstrapWrapped, clock.Real(),
 	)
 	require.NoError(t, err)
 
@@ -145,6 +150,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProto),
 		auditcore.WithLedgerStore(auditStore),
+		auditcore.WithQueryStore(multiStore),
 	)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo})
@@ -226,7 +232,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(raw), "ERR_AUTH_BOOTSTRAP_FAILED")
 
-		entries, err := auditStore.Query(context.Background(),
+		entries, err := multiStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
@@ -256,7 +262,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 			"setup/admin with wrong Basic Auth password must 401")
 
-		entries, err := auditStore.Query(context.Background(),
+		entries, err := multiStore.Query(context.Background(),
 			ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 			query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 		require.NoError(t, err)
@@ -408,8 +414,13 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	// returned Option slice.
 	auditProtocol := buildTestAuditProtocol(t, []byte("test-hmac-key-32-bytes-long!!!!!"))
 	auditStore := buildTestAuditStore(t, auditProtocol)
+	// Bootstrap chain (namespace="bootstrap"), physically isolated per #1121.
+	bootstrapRaw, bootstrapWrapped := buildTestBootstrapAuditChain(t,
+		[]byte("test-bootstrap-hmac-key-32bytes!"))
+	multiStore, err := ledger.NewMultiStore(auditStore, bootstrapRaw)
+	require.NoError(t, err)
 
-	auditObserver, err := audit.NewBootstrapAuthFailObserver(slog.Default(), auditStore, clock.Real())
+	auditObserver, err := audit.NewBootstrapAuthFailObserver(slog.Default(), bootstrapWrapped, clock.Real())
 	require.NoError(t, err, "build bootstrap audit observer")
 
 	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
@@ -447,6 +458,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProtocol),
 		auditcore.WithLedgerStore(auditStore),
+		auditcore.WithQueryStore(multiStore),
 	)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo})
@@ -519,7 +531,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	// runtime/auth/bootstrap.go (onAuthFail(r.Context(), reason) at line 107),
 	// before the HTTP response is closed. By the time resp.Body.Close() returns
 	// above, the ledger Append has already completed — no Eventually needed.
-	entries, qerr := auditStore.Query(context.Background(),
+	// Query the MultiStore to mirror the auditquery read path.
+	entries, qerr := multiStore.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)

@@ -1,6 +1,5 @@
-// INVARIANT:
-//   - CLI-UNIMPL-HIDE-01
-//   - CLI-TOPLEVEL-HELP-REGISTRY-01
+// INVARIANT: CLI-UNIMPL-HIDE-01
+//   - INVARIANT: CLI-TOPLEVEL-HELP-REGISTRY-01
 //
 // No `gocell` command — at any level — may be visible in help while being
 // unimplemented. The five help-bearing verb trees

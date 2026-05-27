@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
@@ -266,9 +267,15 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	}
 }
 
-// buildTestBootstrapLedgerStore builds an in-memory ledger.Store suitable for
-// non-integration unit tests (no //go:build integration tag). Keep separate
-// from cmd/corebundle/audit_test_helper_test.go which is integration-tagged.
+// buildTestBootstrapLedgerStore builds an in-memory *audit.BootstrapLedgerStore
+// suitable for non-integration unit tests (no //go:build integration tag).
+// Keep separate from cmd/corebundle/audit_test_helper_test.go which is
+// integration-tagged.
+//
+// Since issue #1121 the helper uses audit.BootstrapNamespace() so the test
+// store is on the bootstrap chain (distinct from the auditcore relay chain)
+// and the typed *audit.BootstrapLedgerStore handle matches the production
+// SharedDeps field type.
 //
 // Why not merged with runtime/audit/bootstrap_append_test.go::buildTestLedgerStore:
 // That helper uses clockmock seeded to a fixed testNow value and is designed
@@ -277,20 +284,20 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 // called directly); it does not assert timestamps, only that wiring succeeds
 // and the store is non-nil. Integration tests that run BuildApp end-to-end
 // get this field overwritten automatically by AuditCoreModule.Provide.
-func buildTestBootstrapLedgerStore(t *testing.T) ledger.Store {
+func buildTestBootstrapLedgerStore(t *testing.T) *audit.BootstrapLedgerStore {
 	t.Helper()
-	ns, err := ledger.ParseNamespaceID("auditcore")
-	require.NoError(t, err, "audit namespace parse")
 	proto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("test-hmac-key-32-bytes-long!!!!!")),
-		ledger.WithNamespace(ns),
+		ledger.WithChainHMAC([]byte("test-bootstrap-hmac-key-32bytes!")),
+		ledger.WithNamespace(audit.BootstrapNamespace()),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	require.NoError(t, err, "audit protocol")
-	store, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
+	mem, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
 	require.NoError(t, err, "audit mem store")
-	return store
+	wrapped, err := audit.NewBootstrapLedgerStore(mem)
+	require.NoError(t, err, "wrap bootstrap ledger store")
+	return wrapped
 }
 
 // newValidatedSharedDeps returns a SharedDeps that passes Validate() for the

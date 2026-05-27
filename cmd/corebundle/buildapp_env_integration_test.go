@@ -52,8 +52,9 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_METRICS_TOKEN", "test-metrics-token")
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "test-verbose-token")
 
-	// auditcore cell
+	// auditcore cell (two chains since issue #1121: relay + bootstrap)
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 
 	// configcore cell

@@ -21,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+const bootstrapAuditEntryOffset = 2 * time.Hour
+
 // newHandlerMux registers auditquery routes under the canonical API prefix,
 // mirroring production wiring so all auth.Mount guards are exercised.
 func newHandlerMux(svc *Service) http.Handler {
@@ -396,6 +398,14 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 		ID: "ae-2", EventID: "evt-2", EventType: "event.test.v1",
 		ActorID: "usr-2", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
 	}))
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID:        "ae-3",
+		EventID:   "evt-bootstrap-1",
+		EventType: "bootstrap.auth.fail",
+		ActorID:   "system:bootstrap",
+		Timestamp: base.Add(bootstrapAuditEntryOffset),
+		Payload:   []byte(`{"reason":"wrong_credentials"}`),
+	}))
 
 	tests := []struct {
 		name            string
@@ -405,6 +415,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 		injectEmptyAuth bool // inject auth.TestContext("", nil) — authenticated but empty Subject
 		wantStatus      int
 		wantCount       int // -1 = don't check
+		wantActorIDs    []string
 	}{
 		{
 			name:       "self actorId matches subject",
@@ -414,11 +425,28 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			wantCount:  1,
 		},
 		{
-			name:       "no actorId defaults to subject",
+			name:       "non-admin no actorId defaults to subject",
 			query:      "",
 			subject:    "usr-1",
 			wantStatus: http.StatusOK,
 			wantCount:  1,
+		},
+		{
+			name:         "non-admin eventType without actorId remains self-scoped",
+			query:        "?eventType=bootstrap.auth.fail",
+			subject:      "usr-1",
+			wantStatus:   http.StatusOK,
+			wantCount:    0,
+			wantActorIDs: []string{},
+		},
+		{
+			name:         "admin eventType without actorId queries globally",
+			query:        "?eventType=bootstrap.auth.fail",
+			subject:      "admin-user",
+			roles:        []string{"admin"},
+			wantStatus:   http.StatusOK,
+			wantCount:    1,
+			wantActorIDs: []string{"system:bootstrap"},
 		},
 		{
 			name:       "other actorId without admin returns 403",
@@ -470,6 +498,14 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 				data := resp["data"].([]any)
 				assert.Len(t, data, tc.wantCount)
+				if tc.wantActorIDs != nil {
+					gotActorIDs := make([]string, 0, len(data))
+					for _, raw := range data {
+						item := raw.(map[string]any)
+						gotActorIDs = append(gotActorIDs, item["actorId"].(string))
+					}
+					assert.Equal(t, tc.wantActorIDs, gotActorIDs)
+				}
 			}
 		})
 	}

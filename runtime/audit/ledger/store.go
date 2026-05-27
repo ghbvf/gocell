@@ -67,6 +67,8 @@ func QuerySort() []query.SortColumn {
 // ready). See kernel/healthz.RepoProber godoc for the full contract.
 //
 // Method semantics (ADR-AuditLedger §4.2):
+//   - Protocol: returns the immutable protocol decisions used by this store.
+//     Must not return nil.
 //   - Append: persist a new entry. Computes PrevHash from Tail, computes
 //     Hash via Protocol.ComputeHash, assigns SeqNo. Rejects invalid JSON
 //     payload (ErrValidationFailed). Rejects duplicate content fingerprint
@@ -84,6 +86,11 @@ func QuerySort() []query.SortColumn {
 //     relation. Distinct failure domain from pool-level postgres_ready probe.
 //     In-memory implementations return nil (always ready).
 type Store interface {
+	// Protocol returns the immutable protocol decisions backing this store.
+	// Callers use it for composition-time invariant checks such as namespace
+	// disjointness; implementations must not return nil.
+	Protocol() *Protocol
+
 	// Append persists a new entry into the namespace's hash chain. Computes
 	// PrevHash from Tail, assigns SeqNo, and computes Hash via Protocol.ComputeHash.
 	// Rejects invalid JSON payload (ErrValidationFailed) and duplicate content

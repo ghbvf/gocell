@@ -162,6 +162,9 @@ func NewLedgerStore(
 	}, nil
 }
 
+// Protocol returns the immutable protocol decisions backing this store.
+func (s *LedgerStore) Protocol() *ledger.Protocol { return s.protocol }
+
 // namespace returns the string form of the configured NamespaceID.
 func (s *LedgerStore) namespace() string { return string(s.protocol.Namespace()) }
 

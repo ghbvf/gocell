@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -49,14 +48,22 @@ const bootstrapAppendDetachedTimeout = 2 * time.Second
 // All three dependencies are strong wiring; nil and typed-nil inputs are
 // rejected at construction so misconfiguration fails fast at startup, not
 // on the first 401/429.
-func NewBootstrapAuthFailObserver(logger *slog.Logger, store ledger.Store, clk clock.Clock) (auth.BootstrapAuthFailObserver, error) {
+//
+// The store parameter is the sealed *BootstrapLedgerStore handle (issue
+// #1121 / ADR 202605270230); passing the auditcore-namespace store here is
+// a compile error rather than a runtime fork of the shared HMAC chain.
+func NewBootstrapAuthFailObserver(
+	logger *slog.Logger,
+	store *BootstrapLedgerStore,
+	clk clock.Clock,
+) (auth.BootstrapAuthFailObserver, error) {
 	if logger == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: NewBootstrapAuthFailObserver requires non-nil logger")
 	}
-	if validation.IsNilInterface(store) {
+	if store == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit: NewBootstrapAuthFailObserver requires non-nil ledger.Store")
+			"audit: NewBootstrapAuthFailObserver requires non-nil *BootstrapLedgerStore")
 	}
 	if validation.IsNilInterface(clk) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -79,6 +86,7 @@ func NewBootstrapAuthFailObserver(logger *slog.Logger, store ledger.Store, clk c
 		if err := AppendBootstrapAuthFail(appendCtx, store, clk, reason, ip); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
 				slog.String("reason", reason),
 				slog.String("client_ip", ip),
 				slog.Any("error", err))

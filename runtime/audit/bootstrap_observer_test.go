@@ -18,8 +18,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
-// failingStore is a ledger.Store that returns an injected Append error so the
-// observer's double-write fallback path can be asserted in isolation.
+// failingStore is a ledger.Store wrapper that returns an injected Append error
+// so the observer's double-write fallback path can be asserted in isolation.
+// Wrapping is done at the ledger.Store level (not *BootstrapLedgerStore) so
+// the typed wrapper's delegate calls the failing Append.
 type failingStore struct {
 	ledger.Store
 	appendErr error
@@ -35,7 +37,7 @@ func (f failingStore) Append(_ context.Context, _ *ledger.Entry) error {
 // entry to the injected ledger.Store.
 func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 	t.Parallel()
-	store, clk := buildTestLedgerStore(t)
+	store, raw, clk := buildTestLedgerStore(t)
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -62,7 +64,7 @@ func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 		"success path must not emit the fallback line")
 
 	// Audit channel: a hash-chained entry was written to the ledger.
-	entries, err := store.Query(context.Background(),
+	entries, err := raw.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
@@ -82,8 +84,10 @@ func TestNewBootstrapAuthFailObserver_DoubleWriteSlogAndAudit(t *testing.T) {
 // original auth failure and the lost audit-chain record.
 func TestNewBootstrapAuthFailObserver_AuditAppendFails_LogsFallback(t *testing.T) {
 	t.Parallel()
-	realStore, clk := buildTestLedgerStore(t)
-	store := failingStore{Store: realStore, appendErr: errors.New("ledger boom")}
+	_, raw, clk := buildTestLedgerStore(t)
+	failing := failingStore{Store: raw, appendErr: errors.New("ledger boom")}
+	store, err := audit.NewBootstrapLedgerStore(failing)
+	require.NoError(t, err, "wrap failing store")
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -120,7 +124,7 @@ func TestNewBootstrapAuthFailObserver_AuditAppendFails_LogsFallback(t *testing.T
 // NewBootstrapAuthFailObserver.
 func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing.T) {
 	t.Parallel()
-	store, clk := buildTestLedgerStore(t)
+	store, raw, clk := buildTestLedgerStore(t)
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -134,7 +138,7 @@ func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing
 	cancel()
 	obs(parent, "wrong_credentials")
 
-	entries, err := store.Query(context.Background(),
+	entries, err := raw.Query(context.Background(),
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, err)
@@ -152,7 +156,7 @@ func TestNewBootstrapAuthFailObserver_DetachedCtxSurvivesCallerCancel(t *testing
 // typed-nil inputs must be rejected at construction.
 func TestNewBootstrapAuthFailObserver_NilDeps_Errors(t *testing.T) {
 	t.Parallel()
-	store, clk := buildTestLedgerStore(t)
+	store, _, clk := buildTestLedgerStore(t)
 
 	t.Run("nil logger", func(t *testing.T) {
 		t.Parallel()
@@ -161,20 +165,11 @@ func TestNewBootstrapAuthFailObserver_NilDeps_Errors(t *testing.T) {
 	})
 	t.Run("nil store", func(t *testing.T) {
 		t.Parallel()
+		// *BootstrapLedgerStore is a concrete pointer, so a nil value is just
+		// nil — no typed-nil-in-interface subtlety like the previous
+		// ledger.Store signature.
 		_, err := audit.NewBootstrapAuthFailObserver(slog.Default(), nil, clk)
 		require.Error(t, err, "nil store must be rejected")
-	})
-	t.Run("typed-nil store (concrete pointer wrapped in interface)", func(t *testing.T) {
-		t.Parallel()
-		// True typed-nil: an interface value carrying type info (*ledger.MemStore)
-		// but a nil concrete pointer. A bare `var typedNil ledger.Store` is only
-		// a nil interface — distinct from the typed-nil shape, which is what
-		// validation.IsNilInterface must catch via reflect.
-		var nilMem *ledger.MemStore
-		var typedNil ledger.Store = nilMem
-		_, err := audit.NewBootstrapAuthFailObserver(slog.Default(), typedNil, clk)
-		require.Error(t, err,
-			"typed-nil store (concrete-pointer-in-interface) must be rejected via validation.IsNilInterface")
 	})
 	t.Run("nil clock", func(t *testing.T) {
 		t.Parallel()

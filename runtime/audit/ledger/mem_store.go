@@ -71,6 +71,9 @@ func NewMemStore(protocol *Protocol, clk clock.Clock) (*MemStore, error) {
 	}, nil
 }
 
+// Protocol returns the immutable protocol decisions backing this store.
+func (m *MemStore) Protocol() *Protocol { return m.protocol }
+
 // Append appends a new entry to the chain. It:
 //  1. Validates the entry payload is valid JSON (strict mode).
 //  2. Checks the content fingerprint for idempotency (ErrAuditLedgerAlreadyExists).

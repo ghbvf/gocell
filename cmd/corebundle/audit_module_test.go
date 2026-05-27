@@ -86,3 +86,27 @@ func TestAuditCoreModule_Provide_HMACKeyMissing_RealMode(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(err.Error(), "auditcore HMAC"),
 		"label must appear exactly once in the error chain; got %q", err.Error())
 }
+
+// TestAuditCoreModule_Provide_BootstrapHMACKeyMissing_RealMode mirrors the
+// auditcore relay test above for the bootstrap chain's HMAC key (issue #1121).
+// The two chains are wired symmetrically — both must fail-fast in real mode
+// when their respective env var is unset, with operator-facing error text
+// that names the env var.
+//
+// The relay key is set to a valid production-shape value so the failure
+// surfaces from the bootstrap path, not the relay path.
+func TestAuditCoreModule_Provide_BootstrapHMACKeyMissing_RealMode(t *testing.T) {
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	// Ensure the bootstrap HMAC env is absent.
+	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "")
+
+	shared := minimalSharedDepsForAuditTest(t, "real")
+
+	_, _, _, err := AuditCoreModule{}.Provide(context.Background(), shared)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
+		"error must name the bootstrap-chain env var for operator diagnosis")
+	assert.Equal(t, 1, strings.Count(err.Error(), "bootstrap audit HMAC"),
+		"outer label must appear exactly once; got %q", err.Error())
+}

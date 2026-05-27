@@ -12,9 +12,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
-// Service implements audit query business logic using ledger.Store.
+// Service implements audit query business logic against a ledger.QueryStore.
+//
+// The narrow QueryStore interface (just Query, no Append/Tail/Verify/...) lets
+// composition roots inject a read-side aggregator like ledger.MultiStore that
+// fans out reads across multiple chains (issue #1121 / ADR 202605270230 —
+// auditcore relay chain + bootstrap chain). Any concrete ledger.Store also
+// satisfies QueryStore by structural typing, so single-chain deployments need
+// no extra wiring.
 type Service struct {
-	store   ledger.Store       `gocell:"required"`
+	store   ledger.QueryStore  `gocell:"required"`
 	codec   *query.CursorCodec `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"auditquery: cursor codec is required"`
 	logger  *slog.Logger
 	runMode query.RunMode
@@ -25,7 +32,7 @@ type Service struct {
 // assembly declares DurabilityDemo.
 //
 // Both store and codec must be non-nil; codec is required for pagination.
-func NewService(store ledger.Store, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+func NewService(store ledger.QueryStore, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	s := &Service{store: store, codec: codec, logger: logger, runMode: runMode}
 	if err := s.validateRequired(); err != nil {
 		return nil, err

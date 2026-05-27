@@ -9,6 +9,7 @@ import (
 
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
@@ -49,4 +50,26 @@ func auditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
 		auditcore.WithLedgerProtocol(p),
 		auditcore.WithLedgerStore(store),
 	}
+}
+
+// buildTestBootstrapAuditChain constructs a (raw store, sealed wrapper) pair on
+// the bootstrap namespace for integration tests that need to drive
+// audit.NewBootstrapAuthFailObserver with a real *audit.BootstrapLedgerStore.
+// The raw store is returned alongside so test assertions can call Query on it
+// directly, and so a ledger.MultiStore can include it next to the auditcore
+// relay store (mirroring the production wiring in audit_module.go).
+func buildTestBootstrapAuditChain(t testing.TB, hmacKey []byte) (ledger.Store, *audit.BootstrapLedgerStore) {
+	t.Helper()
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC(hmacKey),
+		ledger.WithNamespace(audit.BootstrapNamespace()),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err, "bootstrap audit protocol construction")
+	raw, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err, "bootstrap audit mem store construction")
+	wrapped, err := audit.NewBootstrapLedgerStore(raw)
+	require.NoError(t, err, "wrap bootstrap audit ledger store")
+	return raw, wrapped
 }

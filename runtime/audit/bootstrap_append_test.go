@@ -26,21 +26,21 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!")
 // Entry.Timestamp assertion is exact (UTC, no zone drift).
 var testNow = time.Date(2026, 5, 19, 10, 30, 0, 0, time.UTC)
 
-func buildTestLedgerStore(t *testing.T) (ledger.Store, clock.Clock) {
+func buildTestLedgerStore(t *testing.T) (*audit.BootstrapLedgerStore, ledger.Store, clock.Clock) {
 	t.Helper()
-	ns, err := ledger.ParseNamespaceID("auditcore")
-	require.NoError(t, err, "namespace parse")
 	p, err := ledger.NewProtocol(
 		ledger.WithChainHMAC(append([]byte(nil), testHMACKey...)),
-		ledger.WithNamespace(ns),
+		ledger.WithNamespace(audit.BootstrapNamespace()),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	require.NoError(t, err, "protocol construction")
 	clk := clockmock.New(testNow)
-	store, err := ledger.NewMemStore(p, clk)
+	mem, err := ledger.NewMemStore(p, clk)
 	require.NoError(t, err, "memstore construction")
-	return store, clk
+	wrapped, err := audit.NewBootstrapLedgerStore(mem)
+	require.NoError(t, err, "wrap bootstrap ledger store")
+	return wrapped, mem, clk
 }
 
 // TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP covers T1.
@@ -63,12 +63,12 @@ func TestAppendBootstrapAuthFail_WritesEntryWithReasonAndClientIP(t *testing.T) 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			store, clk := buildTestLedgerStore(t)
+			store, raw, clk := buildTestLedgerStore(t)
 
 			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, tc.reason, tc.clientIP)
 			require.NoError(t, err, "AppendBootstrapAuthFail must succeed for valid reason %q", tc.reason)
 
-			entries, err := store.Query(context.Background(),
+			entries, err := raw.Query(context.Background(),
 				ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 				query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 			require.NoError(t, err, "ledger query")
@@ -102,7 +102,7 @@ func TestAppendBootstrapAuthFail_RejectsUnknownReason(t *testing.T) {
 	for _, reason := range cases {
 		t.Run(reason, func(t *testing.T) {
 			t.Parallel()
-			store, clk := buildTestLedgerStore(t)
+			store, _, clk := buildTestLedgerStore(t)
 			err := audit.AppendBootstrapAuthFail(context.Background(), store, clk, reason, "192.0.2.1")
 			require.Error(t, err, "unknown reason %q must be rejected", reason)
 			var coded *errcode.Error
@@ -128,7 +128,7 @@ func TestAppendBootstrapAuthFail_RejectsUnknownReason(t *testing.T) {
 // EventID, it will immediately fail here.
 func TestAppendBootstrapAuthFail_DuplicateFingerprintRejected(t *testing.T) {
 	t.Parallel()
-	store, clk := buildTestLedgerStore(t)
+	store, raw, clk := buildTestLedgerStore(t)
 	ctx := context.Background()
 
 	// First append — must succeed.
@@ -141,7 +141,7 @@ func TestAppendBootstrapAuthFail_DuplicateFingerprintRejected(t *testing.T) {
 	err = audit.AppendBootstrapAuthFail(ctx, store, clk, "rate_limited", "192.0.2.1")
 	require.NoError(t, err, "second Append must also succeed — EventID uniqueness prevents fingerprint collision")
 
-	entries, qerr := store.Query(ctx,
+	entries, qerr := raw.Query(ctx,
 		ledger.AuditFilters{EventType: "bootstrap.auth.fail"},
 		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
 	require.NoError(t, qerr)
@@ -154,29 +154,16 @@ func TestAppendBootstrapAuthFail_NilStoreOrClock_Errors(t *testing.T) {
 	t.Parallel()
 	t.Run("nil store", func(t *testing.T) {
 		t.Parallel()
-		_, clk := buildTestLedgerStore(t)
+		_, _, clk := buildTestLedgerStore(t)
 		err := audit.AppendBootstrapAuthFail(context.Background(), nil, clk, "rate_limited", "192.0.2.1")
 		require.Error(t, err)
 		var coded *errcode.Error
 		require.True(t, errors.As(err, &coded))
 		assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
 	})
-	t.Run("typed-nil store (concrete pointer wrapped in interface)", func(t *testing.T) {
-		t.Parallel()
-		_, clk := buildTestLedgerStore(t)
-		// True typed-nil: an interface value carrying type info (*ledger.MemStore)
-		// but a nil concrete pointer. A bare `var typedNil ledger.Store` is only
-		// a nil interface — distinct shape, not what validation.IsNilInterface
-		// is meant to catch via reflect.
-		var nilMem *ledger.MemStore
-		var typedNil ledger.Store = nilMem
-		err := audit.AppendBootstrapAuthFail(context.Background(), typedNil, clk, "rate_limited", "")
-		require.Error(t, err,
-			"typed-nil ledger.Store (concrete-pointer-in-interface) must be rejected via validation.IsNilInterface")
-	})
 	t.Run("nil clock", func(t *testing.T) {
 		t.Parallel()
-		store, _ := buildTestLedgerStore(t)
+		store, _, _ := buildTestLedgerStore(t)
 		err := audit.AppendBootstrapAuthFail(context.Background(), store, nil, "missing_header", "")
 		require.Error(t, err, "nil clock must be rejected; Timestamp provenance is load-bearing")
 	})

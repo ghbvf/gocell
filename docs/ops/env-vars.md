@@ -48,6 +48,7 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 | Variable | Purpose | Default (dev) | Required |
 |---|---|---|---|
 | `GOCELL_AUDITCORE_HMAC_KEY` | HMAC key for session HMAC chains | `dev-hmac-key-replace-in-prod!!!!` | **Real mode** |
+| `GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY` | HMAC key for the bootstrap audit hash chain | — | **Real mode** |
 | `GOCELL_AUDITCORE_CURSOR_KEY` | HMAC key for audit cursor codec | `corebundle-audit-cursor-key-32b!` | **Real mode** |
 | `GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY` | Previous audit cursor key (rotation) | — | No |
 

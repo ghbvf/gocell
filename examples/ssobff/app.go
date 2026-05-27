@@ -227,19 +227,21 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// Demo deployment runs in interactive mode: no initialadmin lifecycle is
 	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
 	// first admin). Bootstrap credentials are still mandatory — they protect
-	// the setup endpoint via Basic Auth (ADR §D2 operator credential via env). The demo uses the package-local ssobffBootstrap* constants;
-	// production deployments inject from K8s Secret / Vault.
-	// Build pgOutboxWriter + auditcore (and capture pgLedgerStore) BEFORE the
-	// bootstrap middleware: runtime/audit.NewBootstrapAuthFailObserver needs
-	// the same ledger.Store auditcore drains into HTTP queries, so bootstrap
-	// 401/429s land in the auditcore hash chain (not slog-only).
+	// the setup endpoint via Basic Auth (ADR §D2 operator credential via env).
+	// The demo uses the package-local ssobffBootstrap* constants; production
+	// deployments inject from K8s Secret / Vault.
+	//
+	// Build pgOutboxWriter + auditcore BEFORE the bootstrap middleware: the
+	// bootstrap auth-fail observer needs the typed *audit.BootstrapLedgerStore
+	// returned by buildSSOBFFAuditCore (issue #1121 — the bootstrap chain is
+	// physically isolated from the auditcore relay chain).
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
-	auc, ledgerStore, err := buildSSOBFFAuditCore(clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
+	auc, bootstrapAuditStore, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
 	}
-	authFailObserver, err := audit.NewBootstrapAuthFailObserver(cfg.logger, ledgerStore, clk)
+	authFailObserver, err := audit.NewBootstrapAuthFailObserver(cfg.logger, bootstrapAuditStore, clk)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: audit.NewBootstrapAuthFailObserver: %w", err)
@@ -314,53 +316,84 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
 // ledger.Protocol is owned by the composition root; cells never hold the raw
 // HMAC key. Mirrors cmd/corebundle/audit_module.go durable path but uses
-// in-source demo HMAC key (production deployments must inject from a secret manager).
+// in-source demo HMAC keys (production deployments must inject from a secret
+// manager).
 //
-// Returns the AuditCore cell alongside the pgLedgerStore it was wired with, so
-// the composition root can hand the same store to
-// runtime/audit.NewBootstrapAuthFailObserver — bootstrap auth failures land in
-// the same hash chain that auditcore drains into HTTP queries.
+// Since issue #1121 (ADR 202605270230) the bootstrap auth-fail chain is
+// physically isolated from the auditcore relay chain: two independent
+// (Protocol, Store) pairs are built, each with its own NamespaceID and HMAC
+// key. auditquery reads from both via ledger.MultiStore; the returned
+// *audit.BootstrapLedgerStore is handed to runtime/audit.NewBootstrapAuthFailObserver.
 func buildSSOBFFAuditCore(
+	ctx context.Context,
 	clk clock.Clock,
 	logger *slog.Logger,
 	eb outbox.Publisher,
 	outboxWriter *adapterpg.OutboxWriter,
 	pool *adapterpg.Pool,
 	txMgr *adapterpg.TxManager,
-) (*auditcore.AuditCore, ledger.Store, error) {
+) (*auditcore.AuditCore, *audit.BootstrapLedgerStore, error) {
 	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
 	}
-	ns, err := ledger.ParseNamespaceID("auditcore")
+	auditNS, err := ledger.ParseNamespaceID("auditcore")
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
 	}
-	// WARNING: demo key only. Production deployments must inject from a secret manager.
-	protocol, err := ledger.NewProtocol(
+	// WARNING: demo keys only. Production deployments must inject from a secret manager.
+	relayProtocol, err := ledger.NewProtocol(
 		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")), // #nosec G101 -- demo fixture, never used in production
-		ledger.WithNamespace(ns),
+		ledger.WithNamespace(auditNS),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
 	}
-	pgLedgerStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, protocol, clk)
+	// Independent HMAC key for the bootstrap chain (ref: hashicorp/vault per-
+	// device Salt) so compromise of one chain's key cannot forge entries in
+	// the other.
+	bootstrapProtocol, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("ssobff-bootstrap-hmac-key-32byte")), // #nosec G101 -- demo fixture, never used in production
+		ledger.WithNamespace(audit.BootstrapNamespace()),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore: %w", err)
+		return nil, nil, fmt.Errorf("ssobff: build bootstrap audit protocol: %w", err)
+	}
+	relayStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, relayProtocol, clk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (relay): %w", err)
+	}
+	bootstrapStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, bootstrapProtocol, clk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (bootstrap): %w", err)
+	}
+	bootstrapWrapped, err := audit.NewBootstrapLedgerStore(bootstrapStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssobff: wrap bootstrap ledger store: %w", err)
+	}
+	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, logger); err != nil {
+		return nil, nil, fmt.Errorf("ssobff: bootstrap audit tail verify: %w", err)
+	}
+	multiStore, err := ledger.NewMultiStore(relayStore, bootstrapStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ssobff: build audit multi-store: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
 		clk,
-		auditcore.WithLedgerProtocol(protocol),
-		auditcore.WithLedgerStore(pgLedgerStore),
+		auditcore.WithLedgerProtocol(relayProtocol),
+		auditcore.WithLedgerStore(relayStore),
+		auditcore.WithQueryStore(multiStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(outboxWriter)),
 		auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
-	return auc, pgLedgerStore, nil
+	return auc, bootstrapWrapped, nil
 }
 
 // registerSSOBFFCells registers all three platform cells into the assembly.

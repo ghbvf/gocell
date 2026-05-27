@@ -51,7 +51,8 @@ func WithLedgerProtocol(p *ledger.Protocol) Option {
 	}
 }
 
-// WithLedgerStore injects the ledger.Store into the Cell.
+// WithLedgerStore injects the ledger.Store into the Cell. Used by the
+// appender slices for writes and by strict tail verify at startup.
 //
 // Both bare-nil and typed-nil are rejected at Init() time (ledgerStoreNil
 // sentinel sticky). Pattern mirrors WithLedgerProtocol above.
@@ -62,6 +63,28 @@ func WithLedgerStore(s ledger.Store) Option {
 			return
 		}
 		c.ledgerStore = s
+	}
+}
+
+// WithQueryStore injects a narrow QueryStore for the auditquery slice. When
+// not supplied, the slice falls back to the ledger.Store wired via
+// WithLedgerStore (which satisfies QueryStore by structural typing).
+//
+// The composition root uses this option to inject a ledger.MultiStore that
+// fans out reads across multiple chains (issue #1121 / ADR 202605270230 —
+// the auditcore relay chain and the bootstrap chain). Aggregator types that
+// implement only QueryStore (e.g. *ledger.MultiStore) are deliberately not
+// accepted by WithLedgerStore — a compile error prevents routing writes
+// through a read-side fan-out.
+//
+// Builder-style noop on typed-nil — final validation happens in Init when
+// the slice services are constructed.
+func WithQueryStore(s ledger.QueryStore) Option {
+	return func(c *AuditCore) {
+		if validation.IsNilInterface(s) {
+			return
+		}
+		c.queryStore = s
 	}
 }
 
@@ -133,9 +156,10 @@ type AuditCore struct {
 
 	// ledger framework dependencies (injected by composition root).
 	ledgerProtocol    *ledger.Protocol
-	ledgerStore       ledger.Store
-	ledgerProtocolNil bool // sentinel: WithLedgerProtocol received nil
-	ledgerStoreNil    bool // sentinel: WithLedgerStore received typed-nil/bare-nil
+	ledgerStore       ledger.Store      // appender writes + startup tail verify
+	queryStore        ledger.QueryStore // auditquery reads; defaults to ledgerStore in Init when nil
+	ledgerProtocolNil bool              // sentinel: WithLedgerProtocol received nil
+	ledgerStoreNil    bool              // sentinel: WithLedgerStore received typed-nil/bare-nil
 
 	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Sealed marker
 	// types prevent any cell.go public Option from accepting raw
@@ -375,8 +399,17 @@ func (c *AuditCore) initSlices() error {
 
 // initQuerySlice constructs the audit-query handler slice. Must be called after
 // initCursorCodec so that c.cursorCodec is set.
+//
+// Read source: c.queryStore when set (composition root may inject a
+// ledger.MultiStore aggregating multiple chains — issue #1121 /
+// ADR 202605270230); falls back to c.ledgerStore for single-chain deployments
+// (Store satisfies QueryStore by structural typing).
 func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
-	querySvc, err := auditquery.NewService(c.ledgerStore, c.cursorCodec, c.logger,
+	queryStore := c.queryStore
+	if queryStore == nil {
+		queryStore = c.ledgerStore
+	}
+	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger,
 		query.RunModeForDemo(mode == outbox.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)

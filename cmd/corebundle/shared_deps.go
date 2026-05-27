@@ -14,7 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -71,8 +71,13 @@ type SharedDeps struct {
 	// injected into configcore (the only owner — Cache is service-private).
 	EventbusCacheCollector obmetrics.EventbusCacheCollector
 
-	// BootstrapLedgerStore is the audit hash-chain Store wired into the
-	// bootstrap auth-fail observer (audit.NewBootstrapAuthFailObserver).
+	// BootstrapLedgerStore is the sealed handle to the bootstrap auth-fail
+	// audit chain, wired into audit.NewBootstrapAuthFailObserver.
+	//
+	// Since issue #1121 (ADR 202605270230) the field type is the typed
+	// *audit.BootstrapLedgerStore wrapper rather than the raw ledger.Store
+	// interface — passing an auditcore-namespace store to the observer
+	// constructor is a compile error instead of a runtime chain fork.
 	//
 	// Happens-before contract (BOOTSTRAP-AUDIT-CHAIN-WIRING-01, plan 039 W1-2):
 	//   - AuditCoreModule.Provide MUST run before AccessCoreModule.Provide so
@@ -82,17 +87,17 @@ type SharedDeps struct {
 	//     MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01 archtest.
 	//   - The nil fail-fast is owned by AccessCoreModule.Provide via
 	//     audit.NewBootstrapAuthFailObserver, which rejects a nil store at
-	//     construction time (validation.IsNilInterface check) before any
-	//     bootstrap-auth 401/429 can fire. SharedDeps.Validate intentionally
-	//     does NOT check BootstrapLedgerStore here because
-	//     LoadSharedDepsFromEnv runs Validate BEFORE BuildApp populates this
-	//     field; see shared_deps_validate.go::validateCore for the rationale
-	//     comment kept beside the code path.
+	//     construction time before any bootstrap-auth 401/429 can fire.
+	//     SharedDeps.Validate intentionally does NOT check
+	//     BootstrapLedgerStore here because LoadSharedDepsFromEnv runs
+	//     Validate BEFORE BuildApp populates this field; see
+	//     shared_deps_validate.go::validateCore for the rationale comment
+	//     kept beside the code path.
 	//
 	// Callers that bypass BuildApp (direct AccessCoreModule.Provide invocation)
 	// must pre-populate this field; see bundle_test.go::buildTestBootstrapLedgerStore
 	// for the test pattern.
-	BootstrapLedgerStore ledger.Store
+	BootstrapLedgerStore *audit.BootstrapLedgerStore
 
 	// PG is the assembly's single postgres capability provider, provisioned once
 	// by provisionCapabilities (cap_wiring.go) before BuildApp. It exposes the

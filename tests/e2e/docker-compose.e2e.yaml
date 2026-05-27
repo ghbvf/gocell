@@ -87,6 +87,7 @@ services:
 
       # auditcore cell: HMAC + cursor keys.
       GOCELL_AUDITCORE_HMAC_KEY: audit-hmac-key-e2e-replace-32b!!!
+      GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY: bootstrap-hmac-key-e2e-replace-32b!
       GOCELL_AUDITCORE_CURSOR_KEY: audit-cursor-key-32b-e2e-padded!
 
       # accesscore cell: cursor key.
