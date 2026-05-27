@@ -17,7 +17,7 @@
 //
 // ScaffoldID is a struct newtype (NOT a string newtype) with one unexported
 // field. The only public constructor is Parse, which validates the input
-// against IdentifierPattern (`^[a-z][a-z0-9]+$`). The same pattern is the
+// against IdentifierPattern (`^[a-z][a-z0-9]{1,31}$`). The same pattern is the
 // single source for kernel/metadata.AssemblyIDPattern / CellIDPattern via a
 // reverse alias (metadata re-exports the const). YAML schemas under
 // kernel/metadata/schemas/ continue to carry literal regex strings, and
@@ -53,10 +53,18 @@ import (
 )
 
 // IdentifierPattern is the single-source regex for typed scaffold identifiers
-// — lowercase ASCII letters + digits, ≥2 chars, must start with a letter.
+// — lowercase ASCII letters + digits, 2-32 chars, must start with a letter.
 // Re-exported by kernel/metadata (AssemblyIDPattern / CellIDPattern) so YAML
 // schema validators consume the same pattern.
-const IdentifierPattern = `^[a-z][a-z0-9]+$`
+//
+// The 32-char upper bound is chosen so composed-name budgets stay safe:
+// kernel/healthz.EmitterFailOpenProbeName concatenates a 21-char prefix
+// ("outbox_failopen_rate_") with cellID and runs healthz.NewProbeName, which
+// enforces probeNameMaxLen=64 (K8s DNS-1123 label max 63 + 1 margin). With
+// the 32-char cellID cap, the composed probe name always stays within budget
+// (21+32=53 < 64); a longer cellID would cause NewDirectEmitter to fail at
+// construction time. Mirrors POSIX hostname / K8s container name conventions.
+const IdentifierPattern = `^[a-z][a-z0-9]{1,31}$`
 
 var identifierRe = regexp.MustCompile(IdentifierPattern)
 
@@ -97,7 +105,7 @@ func Parse(raw string) (ScaffoldID, error) {
 			errcode.WithDetails(
 				errcode.PublicString("id", raw),
 				errcode.PublicString("pattern", IdentifierPattern),
-				errcode.PublicString("hint", "lowercase letters and digits only, at least 2 chars, no dashes / underscores / dots"),
+				errcode.PublicString("hint", "lowercase letters and digits only, 2-32 chars, no dashes / underscores / dots"),
 			))
 	}
 	return ScaffoldID{value: raw}, nil

@@ -59,7 +59,17 @@ func (p ProbeName) String() string { return string(p) }
 // repo probes (`<cell>_repo_ready`) all satisfy this base pattern.
 var probeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
 
-const probeNameMaxLen = 48
+// probeNameMaxLen aligns with the Kubernetes DNS-1123 label cap (63) plus a
+// one-character margin. Composed-name budgets fit comfortably: the longest
+// runtime concat is EmitterFailOpenProbeName = "outbox_failopen_rate_" (21)
+// + cellID; pkg/scaffoldid.IdentifierPattern caps cellID at 32 chars, so the
+// worst-case composed value is 21+32=53 < 64. Choosing 64 (rather than 48)
+// keeps a comfortable margin while staying within every downstream metric
+// backend's label budget (Prometheus 1024, OTel 256).
+//
+// ref: kubernetes/apimachinery pkg/util/validation/validation.go::IsDNS1123Label
+//      (label max 63); pkg/scaffoldid.IdentifierPattern (cellID max 32).
+const probeNameMaxLen = 64
 
 // NewProbeName validates s and returns a typed [ProbeName]. It is the only
 // sanctioned runtime entry point — composed-name constructors call this with

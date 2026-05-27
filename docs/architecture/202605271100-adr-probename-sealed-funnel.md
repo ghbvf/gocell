@@ -267,3 +267,37 @@ Dependent contracts:
 backlog issue：`PROBENAME-NEWPROBENAME-CALLER-SEAL-01`（A4 Medium 上游 Hard 升级评估）
 — 若后续评估确认 NewProbeName 入参的 Go const-seal 可行路径，按 `ai-robust.md`
 §"Funnel 双向锁评级" 要求升级。
+
+## Amendment 2026-05-27 — Composed-name length budget (round-2 review F3)
+
+Round-2 review (gh issue #1187 review F3) 指出 `EmitterFailOpenProbeName(cellID)`
+存在长 cellID 触发 `NewDirectEmitter` 构造失败的理论回归：
+`probeNameMaxLen=48` 与 `pkg/scaffoldid.IdentifierPattern=^[a-z][a-z0-9]+$`
+（旧版无上限）的组合下，cellID > 27 chars 时 `outbox_failopen_rate_<cellID>` 超 48
+char 上限，emitter 构造直接 fail。生产 cell 名 ≤18 char 实际零触发，但治理面缺
+失"两个 single-source 必须互相约束"的硬契约。
+
+修复（同 PR）：
+
+1. `pkg/scaffoldid.IdentifierPattern` 加 32 char 上限：
+   `^[a-z][a-z0-9]{1,31}$`（2-32 chars）。理由：对齐 POSIX hostname / K8s
+   container name 上限族，且为 healthz composed-name 预留 budget。
+2. `kernel/healthz.probeNameMaxLen` 从 48 调至 64：对齐 K8s DNS-1123 label cap
+   (63) + 1-char margin。Prometheus 1024 / OTel 256 backend budget 都不受影响。
+3. 契约：`prefix(21="outbox_failopen_rate_") + cellID(≤32) = ≤53 < 64`，
+   `EmitterFailOpenProbeName` 对任意合法 cellID 都不再 fail。
+4. 同步扇出 3 个 JSON schema（assembly / cell / slice）+ `MatchCellID`
+   godoc + `scaffoldid.Parse` hint。
+
+测试加固：
+
+- `pkg/scaffoldid.TestParse_Accept` 加 `strings.Repeat("a", 32)` 边界 accept。
+- `pkg/scaffoldid.TestParse_Reject` 加 `strings.Repeat("a", 33)` 边界 reject。
+- `kernel/healthz.TestNewProbeName_AtBudget` 加 64-char accept + 65-char reject
+  双向边界。
+- `kernel/healthz.TestEmitterFailOpenProbeName_LongCellID` 验证 32-char
+  cellID 不再 fail（"两个 single-source 互相约束" 显式回归测试）。
+
+威胁矩阵 reassessment（amendment 必查项）：原 ADR §"Threat" 段未列长 cellID 回归，
+amendment 后无 ✅→⚠️ 项；新增 invariant "EmitterFailOpenProbeName 对任意 32-char
+合法 cellID 必成功" 由上面 long-cellID 测试守。

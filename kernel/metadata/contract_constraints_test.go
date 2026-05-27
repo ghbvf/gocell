@@ -6,10 +6,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// TestMatchCellID covers the CellIDPattern regex semantics (^[a-z][a-z0-9]+$):
-// lowercase ASCII letters + digits only, ≥2 chars, must start with a letter.
+// TestMatchCellID covers the CellIDPattern regex semantics (^[a-z][a-z0-9]{1,31}$):
+// lowercase ASCII letters + digits only, 2-32 chars, must start with a letter.
 // Identical to AssemblyIDPattern by design — the no-dash convention enforced
-// by FMT-16 / FMT-C1.
+// by FMT-16 / FMT-C1. 32-char upper bound feeds healthz composed-name budget
+// (see pkg/scaffoldid.IdentifierPattern godoc).
 func TestMatchCellID(t *testing.T) {
 	t.Parallel()
 

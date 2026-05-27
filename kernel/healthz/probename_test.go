@@ -64,8 +64,8 @@ func TestNewProbeName_Invalid(t *testing.T) {
 func TestNewProbeName_TooLong(t *testing.T) {
 	t.Parallel()
 
-	// Build a snake_case name that exceeds 48 chars.
-	long := "a" + strings.Repeat("_b", 25) // len > 48
+	// Build a snake_case name that exceeds 64 chars (probeNameMaxLen, K8s DNS-1123 + 1).
+	long := "a" + strings.Repeat("_b", 33) // len = 1 + 66 = 67 > 64
 	_, err := NewProbeName(long)
 	if err == nil {
 		t.Errorf("NewProbeName(%q) expected error for length %d, got nil", long, len(long))
@@ -73,6 +73,22 @@ func TestNewProbeName_TooLong(t *testing.T) {
 	// The error is an errcode.Error; the message contains "length budget".
 	if !strings.Contains(err.Error(), "length budget") {
 		t.Errorf("expected error to mention length budget, got: %v", err)
+	}
+}
+
+// TestNewProbeName_AtBudget verifies the 64-char boundary: exactly 64 must
+// accept, 65 must reject. Without an explicit boundary test, a future probe
+// budget change might silently shift the cap.
+func TestNewProbeName_AtBudget(t *testing.T) {
+	t.Parallel()
+
+	at := strings.Repeat("a", 64) // exactly 64 chars — accept
+	if _, err := NewProbeName(at); err != nil {
+		t.Errorf("NewProbeName(64-char) expected accept, got error: %v", err)
+	}
+	over := strings.Repeat("a", 65) // 65 chars — reject
+	if _, err := NewProbeName(over); err == nil {
+		t.Error("NewProbeName(65-char) expected reject, got nil")
 	}
 }
 
@@ -86,6 +102,24 @@ func TestEmitterFailOpenProbeName_Valid(t *testing.T) {
 	want := ProbeName("outbox_failopen_rate_accesscore")
 	if got != want {
 		t.Errorf("EmitterFailOpenProbeName(%q) = %q, want %q", "accesscore", got, want)
+	}
+}
+
+// TestEmitterFailOpenProbeName_LongCellID verifies the composed-name budget
+// stays safe at the scaffoldid 32-char cap: prefix(21) + cellID(32) = 53 < 64.
+// This is the contract between pkg/scaffoldid.IdentifierPattern's upper bound
+// and kernel/healthz.probeNameMaxLen — drift in either breaks the chain.
+func TestEmitterFailOpenProbeName_LongCellID(t *testing.T) {
+	t.Parallel()
+
+	cellID := strings.Repeat("a", 32) // matches scaffoldid IdentifierPattern max
+	got, err := EmitterFailOpenProbeName(cellID)
+	if err != nil {
+		t.Fatalf("EmitterFailOpenProbeName(32-char cellID) unexpected error: %v", err)
+	}
+	want := ProbeName("outbox_failopen_rate_" + cellID)
+	if got != want {
+		t.Errorf("EmitterFailOpenProbeName(32-char) = %q, want %q", got, want)
 	}
 }
 
