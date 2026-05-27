@@ -120,7 +120,12 @@ const (
 	metadatatestPkgPath          = "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	metadatatestNewCellIDFunc    = "NewCellID"
 	metadatatestCellIDSourceFile = "kernel/metadata/metadatatest/cellid.go"
-	fixtureCellIDADRFile         = "docs/architecture/202605271000-adr-fixture-cellid-typed-builder.md"
+	// fixtureCellIDADRFile is the relative path to the ADR backing A4
+	// (carveout map ↔ ADR registry consistency). Rename or move of the ADR
+	// file requires synchronized update of this constant in the SAME PR —
+	// A4 fails fast with "read ADR" if the file is not found, which is the
+	// intended diagnostic.
+	fixtureCellIDADRFile = "docs/architecture/202605271000-adr-fixture-cellid-typed-builder.md"
 )
 
 // cellIDFieldPosition identifies a struct field (or slice-field element
@@ -427,6 +432,12 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool {
 			if !isFn || f.Pkg() == nil {
 				return false
 			}
+			// Reject methods (receiver != nil): a method named NewCellID on some
+			// other type could share the same pkg+name and slip through if we only
+			// checked package path and function name.
+			if f.Signature().Recv() != nil {
+				return false
+			}
 			if f.Pkg().Path() != metadatatestPkgPath || f.Name() != metadatatestNewCellIDFunc {
 				return false
 			}
@@ -619,6 +630,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	carveOuts := map[string]struct{}{}     // no carveouts in fixture scope
 
 	var violations []string
+	visitedFiles := make(map[string]struct{})
 	fixturePkgPattern := []string{"./tools/archtest/internal/fixturecellidnegfixture"}
 	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, fixturePkgPattern, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -626,6 +638,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
+			visitedFiles[filepath.Base(rel)] = struct{}{}
 			if _, ok := allowSelfFile[rel]; ok {
 				continue
 			}
@@ -711,6 +724,22 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 			if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+bf+":") {
 				t.Errorf("%s/A3: archtest A1 produced unexpected violation on blind-spot fixture (known A1 limitation): %s", fixtureCellIDRuleID, v)
 			}
+		}
+	}
+
+	// Verify that good and blind-spot fixture files were actually loaded by
+	// RunTypedFixture. If a file is absent (e.g. build-tag mismatch or path
+	// error), the assertions above silently pass because there is nothing to
+	// check — a false positive on success.
+	wantVisited := []string{
+		"good_const_ref.go",
+		"good_call_literal.go",
+		"blind_spot_ident_slice.go",
+		"blind_spot_assign.go",
+	}
+	for _, want := range wantVisited {
+		if _, ok := visitedFiles[want]; !ok {
+			t.Errorf("%s/A3: expected fixture file %s was not loaded by RunTypedFixture (build-tag or path issue?)", fixtureCellIDRuleID, want)
 		}
 	}
 }

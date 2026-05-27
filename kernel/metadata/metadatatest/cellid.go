@@ -15,6 +15,24 @@
 //     FIXTURE-CELLID-TYPED-BUILDER-01/A1 — every cell-id-typed field
 //     position in a kernel/metadata.* composite literal must resolve
 //     to NewCellID(BasicLit) or a metadatatest package-level var.
+//
+// # Usage
+//
+// In test fixtures, replace bare string literals at cell-id field
+// positions with metadatatest constants or NewCellID(literal):
+//
+//	// Before — A1 archtest rejects:
+//	Cells: map[string]*metadata.CellMeta{"accesscore": {ID: "accesscore", ...}}
+//
+//	// After — using pre-validated constant (preferred for shared ids):
+//	Cells: map[string]*metadata.CellMeta{
+//	    metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, ...},
+//	}
+//
+//	// After — using NewCellID for one-off ids:
+//	Cells: map[string]*metadata.CellMeta{
+//	    metadatatest.NewCellID("freshid"): {ID: metadatatest.NewCellID("freshid"), ...},
+//	}
 package metadatatest
 
 import (
@@ -75,6 +93,28 @@ var (
 	// pattern-compliant equivalent below and the fixture rewritten to use
 	// the constant. The legacy non-compliant literal is recorded in a
 	// trailing comment for grep-traceability.
+	//
+	// Naming provenance for AI co-authors:
+	//
+	//   CellIDAA/BB/CC/XX/YY — compliant substitutes for single-char legacy
+	//   ids ('a' → 'aa', 'b' → 'bb', etc.). The doubling is a migration
+	//   artifact; new ids should use descriptive names.
+	//
+	//   CellIDCellA/B/C — kebab legacy 'cell-a'/'cell-b'/'cell-c' de-dashed
+	//   per FMT-16 no-dash rule. Do not mirror this pattern for new ids;
+	//   prefer a semantic name (e.g. 'authcell' instead of 'cella').
+	//
+	//   CellIDEdgeBFF — 'BFF' stands for Backend-For-Frontend (common
+	//   abbreviation). The value is 'edgebff', not 'edge-bff' (no dashes).
+	//
+	//   CellIDMyL0Cell — name contains consistency level 'L0'; migrated from
+	//   legacy 'myL0cell' (uppercase). The L0 in the name is retained for
+	//   grep-traceability only; new constants should not encode level in
+	//   their name.
+	//
+	// These constants are migration artifacts. New fixtures should use
+	// descriptive cell ids via NewCellID(literal) rather than mirroring
+	// these naming patterns.
 	CellIDFoobar     = NewCellID("foobar")
 	CellIDAA         = NewCellID("aa") // legacy "a"
 	CellIDBB         = NewCellID("bb") // legacy "b"

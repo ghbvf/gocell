@@ -132,9 +132,22 @@ func TestPredefinedConstants(t *testing.T) {
 		"CellIDL1Cell":         "l1cell",
 		"CellIDMyL0Cell":       "myl0cell",
 	}
+	if len(pinned) != len(want) {
+		t.Errorf("pinned and want maps have different sizes: len(pinned)=%d len(want)=%d", len(pinned), len(want))
+	}
 	for k, got := range pinned {
-		if got != want[k] {
-			t.Errorf("%s = %q, want %q", k, got, want[k])
+		w, ok := want[k]
+		if !ok {
+			t.Errorf("%s in pinned but not in want", k)
+			continue
+		}
+		if got != w {
+			t.Errorf("%s = %q, want %q", k, got, w)
+		}
+	}
+	for k := range want {
+		if _, ok := pinned[k]; !ok {
+			t.Errorf("%s in want but not in pinned", k)
 		}
 	}
 }
