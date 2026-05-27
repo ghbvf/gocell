@@ -1,0 +1,90 @@
+# ADR — Fixture Cell-ID Typed Builder Funnel
+
+Date: 2026-05-27
+Status: Accepted
+Tracks: gh issue #681 (PR-FIXTURE-CELLID-TYPED-BUILDER-01)
+Funnel ID: `FIXTURE-CELLID-TYPED-BUILDER-01`
+
+## Problem
+
+PR #484 unified the cell-id regex into a single source (`pkg/scaffoldid/scaffoldid.go`) and used `sed` to migrate legacy kebab-style cell-ids in `kernel/governance/` fixtures (`shared-validate` → `sharedvalidate`, etc.). However, the fixtures still embed cell-ids as **bare string literals** at every position — `map[string]*metadata.CellMeta` keys, `CellMeta.ID` fields, `L0DepMeta.Cell` references, `JourneyMeta.Cells` slice elements, and similar field positions across the `kernel/metadata.*` struct family.
+
+This is precisely the "hand-crafted fixture by string literal" Soft formation listed in `.claude/rules/gocell/ai-robust.md` §适用范围. An AI co-author writing a new test fixture can re-introduce an invalid cell-id (kebab, uppercase, single character, leading digit, underscore) and existing governance rules will not catch it uniformly:
+
+- **REF** rules guard cross-entity reference completeness (slice→cell), not cell-id literal format.
+- **FMT-C1** guards `CellMeta.ID` format, but **only triggers in fixtures that actually run FMT-C1**. Fixtures consumed by other tests (e.g. `l0Project()` for L0 dependency tracking) can contain malformed cell-ids without any rule firing. Empirical evidence: `kernel/governance/location_integration_test.go:224` carried `"a"` (single character, not matching `^[a-z][a-z0-9]+$`) as a cell-id for years until this PR.
+
+A **constructor-time fail-fast** typed builder closes this gap: every fixture that mentions a cell-id calls through `metadatatest.NewCellID(s)`, which `panic`s when `s` violates `metadata.MatchCellID`. The panic surfaces at fixture assembly time regardless of which validator the test eventually runs.
+
+## Decision
+
+Introduce a typed-builder funnel mirrored across three loci:
+
+1. **Builder package**: `kernel/metadata/metadatatest.NewCellID(s string) string` panics via `panicregister.Approved("metadatatest-cell-id-invalid", errcode.Assertion(...))` when `s` violates `metadata.MatchCellID`. A closed enumeration of pre-validated package-level vars (`CellIDAccessCore`, `CellIDAuditCore`, …) covers the cell-ids used across multiple fixtures; one-off ids in individual tests use `NewCellID(literal)` directly.
+2. **Fixture migration**: all bare cell-id literals in cell-id field positions across `kernel/` `*_test.go` files migrate to `metadatatest.NewCellID(literal)` or `metadatatest.<CellIDVar>`.
+3. **Static enforcement (archtest `FIXTURE-CELLID-TYPED-BUILDER-01`)**:
+   - **A1** (Hard downstream): typed-info funnel rejecting bare literals and Ident→BasicLit chains at any of the 15 cell-id field positions enumerated in §1 below.
+   - **A2** (Hard upstream): form-uniqueness lock on the `NewCellID` body — any structural drift breaks the test.
+   - **A3** (meta self-test): `archtest_fixture` sub-package containing deliberate bad/good usages; asserts A1 fires on bad and stays silent on good.
+   - **A4** (consistency lock): asserts the carveout map in archtest matches §2 below character-by-character.
+4. **Import scope guard** (`METADATATEST-IMPORT-SCOPE-01`, Medium): production code may not import `metadatatest`.
+
+## §1 — Cell-id field positions (15-field enumeration, schema-derived)
+
+Source: `kernel/metadata/types.go` + `kernel/metadata/derived.go`. Any **new** cell-id field added to `kernel/metadata.*` must be added here AND to `cellIDFieldPositions` / `cellIDMapKeyValueStructs` in the archtest in the **same PR**.
+
+| Struct                                          | Field           | Type                          | Position                          |
+|-------------------------------------------------|-----------------|-------------------------------|-----------------------------------|
+| `ProjectMeta`                                   | `Cells`         | `map[string]*CellMeta`        | map key                           |
+| `CellMeta`                                      | `ID`            | `string`                      | direct                            |
+| `SliceMeta`                                     | `BelongsToCell` | `string`                      | direct                            |
+| `L0DepMeta`                                     | `Cell`          | `string`                      | direct                            |
+| `ContractMeta`                                  | `OwnerCell`     | `string`                      | direct                            |
+| `EndpointsMeta`                                 | `Server`        | `string`                      | direct (HTTP server cell)         |
+| `EndpointsMeta`                                 | `Clients`       | `[]string`                    | slice element                     |
+| `EndpointsMeta`                                 | `Publisher`     | `string`                      | direct                            |
+| `EndpointsMeta`                                 | `Handler`       | `string`                      | direct (command handler cell)     |
+| `EndpointsMeta`                                 | `Invokers`      | `[]string`                    | slice element                     |
+| `EndpointsMeta`                                 | `Provider`      | `string`                      | direct (projection provider cell) |
+| `EndpointsMeta`                                 | `Readers`       | `[]string`                    | slice element                     |
+| `JourneyMeta`                                   | `Cells`         | `[]string`                    | slice element                     |
+| `AssemblyMeta`                                  | `Cells`         | `[]string`                    | slice element                     |
+| `LocatedSliceMeta` (in `kernel/metadata/derived.go`) | `CellID` | `string`                      | direct                            |
+
+### Out of scope (independent typed concepts, mirror backlog)
+
+Slice-id, contract-id, journey-id, assembly-id, and actor-id each share the cell-id pattern but are semantically distinct identifiers. The mirror upgrade for each is tracked under separate backlog issues (`pri-p3`, `flag-cond`, trigger: "when the corresponding domain fixture area is next touched").
+
+## §2 — Carveout Registry
+
+Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.md` "archtest carve-out 约束"). Each entry must appear character-identical here and in `fixtureCellIDCarveOuts` in `tools/archtest/fixture_cellid_typed_builder_test.go`; A4 fails if either side drifts.
+
+| Carved-out function | Reason |
+|---------------------|--------|
+| github.com/ghbvf/gocell/kernel/governance.TestValidator_FMTC1_CellIDPattern | FMT-C1 RED case: intentionally constructs invalid cell ids ("foo-bar", "FooBar", "1foo", "foo_bar", "a") as fixture content to verify FMT-C1 detection. metadatatest.NewCellID would panic at those literals; the test cannot use the builder. |
+
+## §3 — 升级路径
+
+- **New cell-id field added to `kernel/metadata`**: same PR must update §1 table AND `cellIDFieldPositions` / `cellIDMapKeyValueStructs` lists in the archtest. A1 would otherwise miss the new position (Soft regression).
+- **RED case removed or refactored**: same PR removes the corresponding §2 entry AND the `fixtureCellIDCarveOuts` map entry. A4 enforces consistency.
+- **Builder body refactor**: A2 is a body-form lock — any structural change to `NewCellID` (e.g. extracting a helper, swapping `errcode.Assertion` for another constructor, adding extra logging) requires a synchronized A2 update. The lock prevents silent erosion of the typed-marker funnel.
+- **Production import accidentally added**: `METADATATEST-IMPORT-SCOPE-01` archtest catches it. Upgrade to Hard would require Go's test-only-package proposal; tracked alongside the broader `kernel/cell/celltest` import-boundary pattern.
+
+## §4 — AI-robust 评级
+
+- **Downstream Hard** (A1): typed-info callsite identity — Ident→BasicLit chains, third-party const refs, and dynamic `NewCellID(var)` arguments all fail uniformly. There is no AST shape that resolves to "metadatatest.NewCellID(literal) or metadatatest.<Var>" while not actually being one of those two forms.
+- **Upstream Hard** (A2): the single sanctioned construction site (`NewCellID` body) is shape-locked. Any drift fails A2 immediately.
+- **Meta Hard** (A3, A4): A3 reverse self-test catches A1 regressions (over-broad or no-op). A4 keeps the carveout truth-source synchronized between archtest and ADR.
+- **Medium** (`METADATATEST-IMPORT-SCOPE-01`): path-based scope, not type-system. Go cannot express "test-only package" at the type level.
+
+The funnel forms the **string-typed concept funnel** template (per `.claude/rules/gocell/ai-robust.md` §Hard 范本目录): values are restricted to a sanctioned construction site (NewCellID) plus a closed enumeration of pre-validated constants, with callsite identity verified by go/types.
+
+## Refs
+
+- `kernel/metadata/metadatatest/cellid.go` — builder + const set
+- `tools/archtest/fixture_cellid_typed_builder_test.go` — A1/A2/A3/A4 + carveout map
+- `tools/archtest/internal/fixturecellidnegfixture/` — A3 fixture
+- `tools/archtest/cell_id_pattern_single_source_test.go` — sibling funnel (PR #484, Medium)
+- `pkg/panicregister/panicregister.go` — Approved funnel
+- `.claude/rules/gocell/ai-robust.md` §Hard 范本目录, §archtest carve-out 约束
+- `docs/architecture/202605121800-adr-archtest-carveout-narrow.md` — function-level carveout discipline (referenced template)

@@ -40,7 +40,7 @@ func NewCellID(s string) string {
 	return s
 }
 
-// Pre-defined cell-id constants for kernel/governance/*_test.go fixtures.
+// Pre-defined cell-id constants for kernel/* test fixtures + tooling fixtures.
 // Every value is validated by NewCellID at package init — if an entry below
 // is ever invalid, the test binary fails to load instead of failing midway
 // through a test run.
@@ -48,13 +48,50 @@ func NewCellID(s string) string {
 // Synthetic / ad-hoc cell-ids inside individual test functions still go
 // through NewCellID(literal) directly; the constants below cover the
 // closed enumeration of cell-ids used by multiple fixture sites.
+//
+// New constants are added on demand when a literal appears at ≥ 3
+// fixture sites. One-off literals stay inline via NewCellID(literal).
 var (
+	// Platform / production cell ids:
 	CellIDAccessCore     = NewCellID("accesscore")
 	CellIDAuditCore      = NewCellID("auditcore")
 	CellIDBillingCore    = NewCellID("billingcore")
 	CellIDConfigCore     = NewCellID("configcore")
 	CellIDSharedCrypto   = NewCellID("sharedcrypto")
 	CellIDSharedValidate = NewCellID("sharedvalidate")
-	CellIDFoobar         = NewCellID("foobar")
-	CellIDAA             = NewCellID("aa") // short synthetic id used by location_integration_test.go fixtures
+
+	// Generic synthetic cell ids used by codegen / governance fixtures.
+	// Where a fixture previously embedded a non-compliant id (kebab,
+	// single-char, leading-digit, uppercase), it is migrated to a
+	// pattern-compliant equivalent below and the fixture rewritten to use
+	// the constant. The legacy non-compliant literal is recorded in a
+	// trailing comment for grep-traceability.
+	CellIDFoobar     = NewCellID("foobar")
+	CellIDAA         = NewCellID("aa")         // legacy "a"
+	CellIDBB         = NewCellID("bb")         // legacy "b"
+	CellIDCC         = NewCellID("cc")         // legacy "c"
+	CellIDXX         = NewCellID("xx")         // legacy "x"
+	CellIDYY         = NewCellID("yy")         // legacy "y"
+	CellIDDemo       = NewCellID("demo")
+	CellIDTestCell   = NewCellID("testcell")   // legacy "test-cell"
+	CellIDOrderCell  = NewCellID("ordercell")
+	CellIDSampleCore = NewCellID("samplecore")
+	CellIDAlpha      = NewCellID("alpha")
+	CellIDBeta       = NewCellID("beta")
+	CellIDDeviceCell = NewCellID("devicecell")
+	CellIDGood       = NewCellID("good")
+	CellIDPlain      = NewCellID("plain")
+	CellIDSomeCore   = NewCellID("somecore")
+	CellIDMyCell     = NewCellID("mycell")
+	CellIDMyCore     = NewCellID("mycore")
+	CellIDCellA      = NewCellID("cella")      // legacy "cell-a"
+	CellIDCellB      = NewCellID("cellb")      // legacy "cell-b"
+	CellIDCellC      = NewCellID("cellc")      // legacy "cell-c"
+	CellIDEdgeBFF    = NewCellID("edgebff")    // legacy "edge-bff"
+	CellIDExtGateway = NewCellID("extgateway") // legacy "ext-gateway"
+	CellIDAppCore    = NewCellID("appcore")    // legacy "app-core"
+	CellIDSvcA       = NewCellID("svca")       // legacy "svc-a"
+	CellIDSvcB       = NewCellID("svcb")       // legacy "svc-b"
+	CellIDL1Cell     = NewCellID("l1cell")     // legacy "l1-cell"
+	CellIDMyL0Cell   = NewCellID("myl0cell")   // legacy "myL0cell" (uppercase)
 )
