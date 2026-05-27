@@ -365,9 +365,9 @@ cell := accesscore.New(
 
 - **R1（单一合法持有者）**：在 *_repo.go / *_store.go 文件中，无 struct 可声明 `*pgxpool.Pool` 字段（全局谓词，无包发现机制）。pool 由 `pgexec.PGExecutor` 接口字段持有；底层 unexported `pgExecutor` struct 在 `internal/pgexec` sub-pkg 内。
 - **R2（构造函数 wrap funnel）**：在 *_repo.go / *_store.go 文件中，所有 `*pgxpool.Pool` 函数参数必须在 `New*` 前缀的构造函数内，且函数体必须调用 `pgexec.New(pool)`（callee 解析到 `*types.Func`，`Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"`）。
-- **R3**：(a) retired（compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段）；(b) 在 *_repo.go / *_store.go 中，任何 `ExecDirect` 调用（receiver 类型 `pgexec.PGExecutor`）必须有同 scope 的 `pgrepoapproved.ApprovedExecDirect` typed marker。
+- **R3**（amended 2026-05-28，call-bound）：(a) retired（compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段）；(b) **global scope**——任何 callee 解析到 `pgexec.ExecDirect`（top-level function，`Pkg().Path()` 以 `/internal/pgexec` 结尾）的调用，其首参必须是 inline `pgrepoapproved.Approve("<kebab-literal>")` typed approval token（call-bound 授权；不再是同 scope sibling marker，不再受 file-extension scope 约束）。
 
-扫描范围为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个此类文件，防止包名变更导致覆盖静默归零。
+扫描范围：**R1/R2** 限 `*_repo.go` / `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围；pre-existing Soft，#1206 跟踪）；**R3 global**（call-bound + callee identity 使 file scope 不必要）。`PGExecutor` 接口自 2026-05-28 经 unexported `sealPGExecutor` marker method 封印（包外不可实现），`TestPGRepoAmbientTx_InterfaceSealed` 回归守卫。详见 ADR `docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md` §Amendment 2026-05-28。
 
 **Funnel 双向锁评级（ai-robust.md §Funnel 双向锁评级）**：
 
