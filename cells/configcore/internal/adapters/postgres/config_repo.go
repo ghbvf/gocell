@@ -61,7 +61,7 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 		kind = errcode.KindUnavailable
 	}
 	return errcode.Wrap(kind, code, "config repo operation failed", cause,
-		errcode.WithInternal(fmt.Sprintf("op=%s identifier=%s", op, identifier)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("op=%s identifier=%s", op, identifier))),
 		errcode.WithCategory(category),
 	)
 }
@@ -325,7 +325,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 			return cancelErr
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: create failed", err,
-			errcode.WithInternal(fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -395,13 +395,13 @@ func (r *ConfigRepository) scanConfigOrMapError(
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 			msgConfigNotFound, err,
-			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalFmtConfigMissKey, op, key))),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
 	return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 		configRepoQueryFailedMessage, err,
-		errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: %s scan error key=%s", op, key))),
 		errcode.WithCategory(errcode.CategoryInfra),
 	)
 }
@@ -507,13 +507,13 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, expectedVersi
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 				msgConfigNotFound, scanErr,
-				errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, opUpdate, key)),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalFmtConfigMissKey, opUpdate, key))),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s select-for-update error key=%s", opUpdate, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: %s select-for-update error key=%s", opUpdate, key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -584,7 +584,7 @@ func (r *ConfigRepository) doUpdate(
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: %s scan error key=%s", op, key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -616,7 +616,7 @@ func (r *ConfigRepository) resolveUpdateConflict(ctx context.Context, op, key st
 		// Confirmed key absent → 404.
 		return errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 			msgConfigNotFound, probeErr,
-			errcode.WithInternal(fmt.Sprintf(internalFmtConfigMissKey, op, key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalFmtConfigMissKey, op, key))),
 			errcode.WithCategory(errcode.CategoryDomain),
 		)
 	}
@@ -647,7 +647,7 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string, expectedVersi
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, scanErr,
-			errcode.WithInternal(fmt.Sprintf("config repo: Delete scan error key=%s", key)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: Delete scan error key=%s", key))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}
@@ -790,7 +790,7 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 			return cancelErr
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: publish version failed", err,
-			errcode.WithInternal(fmt.Sprintf("configID=%s version=%d", version.ConfigID, version.Version)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("configID=%s version=%d", version.ConfigID, version.Version))),
 			errcode.WithCategory(errcode.CategoryInfra))
 	}
 	return nil
@@ -858,13 +858,15 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
 				"config version not found", err,
-				errcode.WithInternal(fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version)),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version))),
 				errcode.WithCategory(errcode.CategoryDomain),
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			configRepoQueryFailedMessage, err,
-			errcode.WithInternal(fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+				"config repo: GetVersion scan error config_id=%s version=%d",
+				configID, version))),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
 	}

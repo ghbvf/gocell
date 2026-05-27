@@ -54,17 +54,17 @@ func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 	if inst.Status != StatusRunning {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep requires Running status",
-			errcode.WithInternal(fmt.Sprintf("status=%s", inst.Status)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("status=%s", inst.Status))))
 	}
 	if stepCount <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep requires positive stepCount",
-			errcode.WithInternal(fmt.Sprintf("stepCount=%d", stepCount)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stepCount=%d", stepCount))))
 	}
 	if inst.CurrentStep < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep on instance with negative CurrentStep",
-			errcode.WithInternal(fmt.Sprintf("currentStep=%d", inst.CurrentStep)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("currentStep=%d", inst.CurrentStep))))
 	}
 	// Compared as CurrentStep >= stepCount-1 (not CurrentStep+1 >= stepCount) to
 	// stay overflow-safe: a corrupt/replayed CurrentStep near math.MaxInt would
@@ -73,7 +73,7 @@ func AdvanceStep(inst *Instance, stepCount int, now time.Time) error {
 	if inst.CurrentStep >= stepCount-1 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: AdvanceStep would exceed step count",
-			errcode.WithInternal(fmt.Sprintf("currentStep=%d stepCount=%d", inst.CurrentStep, stepCount)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("currentStep=%d stepCount=%d", inst.CurrentStep, stepCount))))
 	}
 	if err := guardMonotonic(inst, now); err != nil {
 		return err
@@ -93,12 +93,12 @@ func guardMonotonic(inst *Instance, now time.Time) error {
 	if now.Before(inst.StartedAt) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: advance now precedes StartedAt (clock skew?)",
-			errcode.WithInternal(fmt.Sprintf("now=%s startedAt=%s", now, inst.StartedAt)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("now=%s startedAt=%s", now, inst.StartedAt))))
 	}
 	if inst.UpdatedAt != nil && now.Before(*inst.UpdatedAt) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga: advance now precedes previous UpdatedAt (clock skew?)",
-			errcode.WithInternal(fmt.Sprintf("now=%s updatedAt=%s", now, *inst.UpdatedAt)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("now=%s updatedAt=%s", now, *inst.UpdatedAt))))
 	}
 	return nil
 }

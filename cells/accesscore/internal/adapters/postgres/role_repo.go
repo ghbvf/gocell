@@ -207,7 +207,7 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, erro
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: get-by-id", err)
 	}
@@ -262,12 +262,12 @@ func (r *PGRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (b
 			case "role_assignments_user_id_fkey":
 				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
 					errcode.WithCategory(errcode.CategoryDomain),
-					errcode.WithInternal(fmt.Sprintf("user_id=%s", userID)))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user_id=%s", userID))))
 			default:
 				// role_assignments_role_id_fkey or unknown — treat as role not found.
 				return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
 					errcode.WithCategory(errcode.CategoryDomain),
-					errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("role_id=%s", roleID))))
 			}
 		}
 		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: assign-to-user", err)
@@ -296,7 +296,7 @@ func (r *PGRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) 
 		if isLastAdminProtected(err) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
-				errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtRoleIDUserID, roleID, userID))))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: remove-from-user", err)
 	}
@@ -352,7 +352,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 			// DB trigger fired — safety net for any direct DELETE bypass of CTE.
 			return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last admin",
-				errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtRoleIDUserID, roleID, userID))))
 		}
 		return false, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"role_repo: remove-if-not-last", err)
@@ -371,7 +371,7 @@ func (r *PGRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID
 		// as the DB trigger path — single business invariant.
 		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 			"cannot revoke admin: removing this assignment would leave the system with no effective admin; assign admin to an active user first",
-			errcode.WithInternal(fmt.Sprintf(fmtRoleIDUserID, roleID, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(fmtRoleIDUserID, roleID, userID))))
 	}
 }
 

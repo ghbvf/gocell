@@ -96,12 +96,12 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 	if store == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: AppendBootstrapAuthFail requires non-nil *BootstrapLedgerStore",
-			errcode.WithInternal("nil store"))
+			errcode.WithInternal(errcode.InternalAttr("_", "nil store")))
 	}
 	if validation.IsNilInterface(clk) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: AppendBootstrapAuthFail requires non-nil clock",
-			errcode.WithInternal("nil clock"))
+			errcode.WithInternal(errcode.InternalAttr("_", "nil clock")))
 	}
 	if _, ok := validBootstrapAuthFailReasons[reason]; !ok {
 		allowed := make([]string, 0, len(validBootstrapAuthFailReasons))
@@ -111,7 +111,7 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 		sort.Strings(allowed)
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: bootstrap auth-fail reason not in whitelist",
-			errcode.WithInternal(fmt.Sprintf("reason=%q allowed=%v", reason, allowed)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("reason=%q allowed=%v", reason, allowed))))
 	}
 	payload, err := json.Marshal(bootstrapAuthFailPayload{Reason: reason, ClientIP: clientIP})
 	if err != nil {

@@ -69,7 +69,7 @@ func ParseCellType(s string) (CellType, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid cell type",
-			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 	}
 }
 
@@ -88,7 +88,7 @@ func ParseContractKind(s string) (ContractKind, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract kind",
-			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 	}
 }
 
@@ -115,7 +115,7 @@ func ParseContractRole(s string) (ContractRole, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",
-			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 	}
 }
 
@@ -132,6 +132,6 @@ func ParseContractLifecycle(s string) (ContractLifecycle, error) {
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract lifecycle",
-			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalValueQuotedFmt, s))))
 	}
 }

@@ -50,7 +50,7 @@ func NewMultiStore(stores ...Store) (*MultiStore, error) {
 		if validation.IsNilInterface(s) {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"audit ledger: NewMultiStore received nil store",
-				errcode.WithInternal(fmt.Sprintf("stores[%d] nil", i)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stores[%d] nil", i))))
 		}
 	}
 	return &MultiStore{stores: append([]Store(nil), stores...)}, nil

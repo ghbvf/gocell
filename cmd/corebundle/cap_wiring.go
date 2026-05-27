@@ -65,7 +65,7 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 			// See runtime/capability.RabbitMQ.
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"corebundle: declared capability has no provisioning path",
-				errcode.WithInternal(fmt.Sprintf("capability=%q", string(c))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("capability=%q", string(c)))))
 		}
 	}
 	return nil

@@ -61,7 +61,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 				// phase4 must have run before phase5; this is a programmer error.
 				return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 					"listener AuthJWTFromAssembly verifier not resolved; phase ordering violation: phase4 must complete before applyListenerAuthChain",
-					errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
 			}
 			authOpts, aerr := b.buildAuthRouterOptions(v)
 			if aerr != nil {
@@ -83,7 +83,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 			// Sealed interface: this branch is theoretically unreachable.
 			return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"unknown AuthPlan type (sealed interface violation)",
-				errcode.WithInternal(fmt.Sprintf("listener=%q type=%T", ref.String(), plan)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q type=%T", ref.String(), plan))))
 		}
 	}
 	describe = describeAuthChain(chain)
@@ -149,12 +149,12 @@ func discoverAuthVerifierFromAssembly(asm kauth.AssemblyRef) (kauth.IntentTokenV
 		if validation.IsNilInterface(v) {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"bootstrap: authProvider cell TokenVerifier() returned nil",
-				errcode.WithInternal(fmt.Sprintf("cell=%q", id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", id))))
 		}
 		if found != nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"bootstrap: multiple authProvider cells discovered; keep only one or supply the verifier explicitly via kauth.NewAuthJWT(verifier)",
-				errcode.WithInternal(fmt.Sprintf("first_cell=%q second_cell=%q", foundID, id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("first_cell=%q second_cell=%q", foundID, id))))
 		}
 		found = v
 		foundID = id

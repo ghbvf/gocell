@@ -20,7 +20,7 @@ func assertErrorContains(t *testing.T, context string, err error, want string) {
 	}
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		full := ecErr.Message + " " + ecErr.InternalMessage
+		full := ecErr.Message + " " + ecErr.Error()
 		if !strings.Contains(full, want) {
 			t.Fatalf("%s: error message+internal %q does not contain %q", context, full, want)
 		}

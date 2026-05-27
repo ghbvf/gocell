@@ -132,12 +132,12 @@ func NewHMACKeyRing(current, previous []byte) (*HMACKeyRing, error) {
 	if len(current) < MinHMACKeyBytes {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"current HMAC secret is too short",
-			errcode.WithInternal(fmt.Sprintf("got=%d min=%d", len(current), MinHMACKeyBytes)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%d min=%d", len(current), MinHMACKeyBytes))))
 	}
 	if len(previous) > 0 && len(previous) < MinHMACKeyBytes {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"previous HMAC secret is too short",
-			errcode.WithInternal(fmt.Sprintf("got=%d min=%d", len(previous), MinHMACKeyBytes)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%d min=%d", len(previous), MinHMACKeyBytes))))
 	}
 	return &HMACKeyRing{
 		current:  current,

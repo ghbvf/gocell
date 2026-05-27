@@ -65,11 +65,11 @@ func classifyS3Error(err error, opCode errcode.Code, opMsg string) error {
 	if isTransientS3Error(err) {
 		return errcode.WrapInfra(opCode,
 			"s3: transient error", err,
-			errcode.WithInternal(opMsg))
+			errcode.WithInternal(errcode.InternalAttr("_", opMsg)))
 	}
 	return errcode.Wrap(errcode.KindInternal, opCode,
 		"s3: operation failed", err,
-		errcode.WithInternal(opMsg))
+		errcode.WithInternal(errcode.InternalAttr("_", opMsg)))
 }
 
 // isTransientS3Error reports whether err should be retried.

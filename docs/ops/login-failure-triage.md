@@ -27,16 +27,19 @@ operators cannot infer the cause from a captured response.
 ## Internal text templates
 
 `errcode.WithInternal` payloads — recorded by the framework's HTTP middleware
-(`pkg/httputil.log4xx`) as `slog.String("internal", ...)` on the public-facing
-4xx log record. The log line uses `slog.Warn` with msg `"error (4xx)"` (label
-comes from the generated handler's `writeErrcodeError` call site; "error" is
-the default label). The `internal` field is never serialized to the wire.
+(`pkg/httputil.log4xx`) as individual `slog.Attr` entries on the public-facing
+4xx log record, one per `InternalDetail` entry. The free-form single-string
+migration convention (PR #1035) uses key `"_"`, so the resulting slog field
+is `_` (jq path `._`) for the migrated callsites listed below. The log line
+uses `slog.Warn` with msg `"error (4xx)"` (label comes from the generated
+handler's `writeErrcodeError` call site; "error" is the default label).
+`InternalDetails` is never serialized to the wire.
 
 | # | Template | Source | When emitted |
 |---|----------|--------|--------------|
 | 1 | `user lookup failed: <repo-error>` | `sessionlogin.Login` pre-tx user lookup (service.go ≈ L284) | `userRepo.GetByUsername` returned non-nil error — typically "not found" (unknown username) but also surfaces DB errors (`"context deadline exceeded"`, `"connection refused"`). Both collapse to 401 for enumeration safety. `<repo-error>` is `err.Error()`; the attempted username is NOT embedded — correlate via access logs by `request_id`. |
 | 2 | `credentialauthority: in-tx assert failed (user_id=<uuid>): credentialauthority: baseline CanAuthenticate=false` | `sessionlogin.loginInTx` baseline assert (service.go ≈ L441) | After acquiring the FOR UPDATE row lock, `credentialauthority.Assert` rejected the user. Common causes: `status != active` (locked / suspended), pre-bcrypt PasswordVersion changed under a concurrent ChangePassword. The trailing `: <inner>` text comes from `credentialauthority.Assert`'s WithInternal — values include `baseline CanAuthenticate=false` (inactive) and `password version pin mismatch (pre=X locked=Y)` (race). Use the trailing fragment to disambiguate. |
-| 3 | *(no WithInternal — message-only)* | `sessionlogin.loginInTx` wrong-password branch (service.go ≈ L463) | User exists and the in-tx baseline assert passed, but the pre-tx bcrypt compare failed. Identifiable in slog by `code=ERR_AUTH_LOGIN_FAILED` with the `internal` field **absent** (jq: `.internal == null`). Lockout counter is incremented for Active users on this branch. |
+| 3 | *(no WithInternal — message-only)* | `sessionlogin.loginInTx` wrong-password branch (service.go ≈ L463) | User exists and the in-tx baseline assert passed, but the pre-tx bcrypt compare failed. Identifiable in slog by `code=ERR_AUTH_LOGIN_FAILED` with the `_` field **absent** (jq: `._ == null`). Lockout counter is incremented for Active users on this branch. |
 
 Template #4 (a separate "race-window" branch) was removed: the in-tx
 re-check now uses the same `credentialauthority: in-tx assert failed`
@@ -53,12 +56,14 @@ ordinary inactive cases.
 ```bash
 kubectl logs deployment/accesscore --since=5m \
   | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED") |
-           "\(.time) request_id=\(.request_id // "-") reason=\(.internal // "wrong_password")"'
+           "\(.time) request_id=\(.request_id // "-") reason=\(._ // "wrong_password")"'
 ```
 
 Top-level slog fields on the 4xx record: `time`, `level` (`WARN`), `msg`
-(`"error (4xx)"` by default), `code`, `status`, optionally `internal`,
-`request_id`, `trace_id`, `span_id` (see `pkg/httputil.log4xx` + `AppendCorrelationAttrs`).
+(`"error (4xx)"` by default), `code`, `status`, optionally `_` (the migrated
+free-form InternalDetail) or any other semantic key emitted via
+`InternalAttr(key, val)`, `request_id`, `trace_id`, `span_id` (see
+`pkg/httputil.log4xx` + `AppendCorrelationAttrs`).
 Note: the slog field is `request_id` (snake_case); the corresponding wire HTTP
 response body field is `requestId` (camelCase) — they identify the same request,
 so operators bridging from HTTP body to slog logs need this mapping.
@@ -67,17 +72,18 @@ record — join via `request_id`.
 
 ### "Distinguish missing-user vs wrong-password vs inactive"
 
-The `internal` field is the discriminator (absent for the wrong-password
-branch — Template #3 has no `WithInternal`):
+The `_` field (the migrated free-form `InternalAttr("_", ...)` value) is the
+discriminator (absent for the wrong-password branch — Template #3 has no
+`WithInternal`):
 
 ```bash
 kubectl logs deployment/accesscore --since=15m \
   | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED") |
-      if   .internal == null                                                        then "wrong_password"
-      elif .internal | startswith("user lookup failed")                             then "missing_user_or_repo_error"
-      elif .internal | contains("baseline CanAuthenticate=false")                   then "inactive_or_race"
-      elif .internal | contains("password version pin mismatch")                    then "password_version_race"
-      elif .internal | startswith("credentialauthority: in-tx assert failed")       then "in_tx_assert_other"
+      if   ._ == null                                                        then "wrong_password"
+      elif ._ | startswith("user lookup failed")                             then "missing_user_or_repo_error"
+      elif ._ | contains("baseline CanAuthenticate=false")                   then "inactive_or_race"
+      elif ._ | contains("password version pin mismatch")                    then "password_version_race"
+      elif ._ | startswith("credentialauthority: in-tx assert failed")       then "in_tx_assert_other"
       else "unknown"
       end' \
   | sort | uniq -c | sort -rn
@@ -99,7 +105,7 @@ Use this to spot DB-side issues (e.g. `"context deadline exceeded"`,
 
 ```bash
 kubectl logs deployment/accesscore --since=1h \
-  | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED" and (.internal // "" | startswith("user lookup failed"))) | .internal' \
+  | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED" and (._ // "" | startswith("user lookup failed"))) | ._' \
   | sort | uniq -c | sort -rn | head -20
 ```
 
@@ -112,12 +118,12 @@ ingress / access logs where the request body or username is preserved
 ```bash
 kubectl logs deployment/accesscore --since=1h \
   | jq -r 'select(.code=="ERR_AUTH_LOGIN_FAILED"
-                   and (.internal // "" | contains("baseline CanAuthenticate=false"))) |
-           .internal' \
+                   and (._ // "" | contains("baseline CanAuthenticate=false"))) |
+           ._' \
   | sort | uniq -c | sort -rn
 ```
 
-Note: the slog `internal` text does NOT carry a separate `bcrypt_ok` field —
+Note: the slog `_` text does NOT carry a separate `bcrypt_ok` field —
 sessionlogin's auto-lockout counter (incremented via `recordFailureBestEffort`
 on this path) is the operational signal that distinguishes "wrong password +
 inactive" from "right password + inactive". Pull `failed_login_count` from

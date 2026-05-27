@@ -58,11 +58,11 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 
 	if _, exists := r.store.byName[user.Username]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
-			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, user.Username)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, user.Username))))
 	}
 	if _, exists := r.store.byEmail[user.Email]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
-			errcode.WithInternal(fmt.Sprintf("email=%q", user.Email)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("email=%q", user.Email))))
 	}
 
 	c := cloneUser(user)
@@ -84,7 +84,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
 	}
 	return cloneUser(u), nil
 }
@@ -101,7 +101,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, username)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, username))))
 	}
 	return cloneUser(u), nil
 }
@@ -143,7 +143,7 @@ func (r *UserRepository) UpdateProfile(
 	if !exists {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 
 	newName := existing.Username
@@ -161,13 +161,13 @@ func (r *UserRepository) UpdateProfile(
 	if newName != existing.Username {
 		if collider, hit := r.store.byName[newName]; hit && collider.ID != userID {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
-				errcode.WithInternal(fmt.Sprintf(errMsgUsernameFmt, newName)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgUsernameFmt, newName))))
 		}
 	}
 	if newEmail != existing.Email {
 		if collider, hit := r.store.byEmail[newEmail]; hit && collider.ID != userID {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "email already exists",
-				errcode.WithInternal(fmt.Sprintf("email=%q", newEmail)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("email=%q", newEmail))))
 		}
 	}
 
@@ -223,7 +223,7 @@ func (r *UserRepository) UpdateLockState(
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024
@@ -296,7 +296,7 @@ func (r *UserRepository) UpdatePasswordResetFlag(
 	if !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 
 	updated, err := domain.ReconstituteUser(domain.ReconstituteUserParams{
@@ -359,7 +359,7 @@ func (r *UserRepository) guardEffectiveAdminRemovalLocked(userID string) error {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 			"cannot remove the last effective admin",
 			errcode.WithCategory(errcode.CategoryAuth),
-			errcode.WithInternal(fmt.Sprintf("user_id=%q", userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user_id=%q", userID))))
 	}
 	return nil
 }
@@ -425,7 +425,7 @@ func (r *UserRepository) UpdatePassword(
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 	if u.PasswordVersion != expectedPV {
 		return 0, cas.CheckVersionMatch(0, "user", userID)
@@ -473,7 +473,7 @@ func (r *UserRepository) BumpAuthzEpoch(ctx context.Context, userID string, tok 
 	if !ok {
 		return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, userID))))
 	}
 	newEpoch := u.AuthzEpoch() + 1
 	// Rebuild the stored user with the bumped epoch.
@@ -524,7 +524,7 @@ func (r *UserRepository) UpdateLockoutFields(ctx context.Context, user *domain.U
 	if _, exists := r.store.usersByID[user.ID]; !exists {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, user.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, user.ID))))
 	}
 
 	c := cloneUser(user)
@@ -546,7 +546,7 @@ func (r *UserRepository) Delete(ctx context.Context, id string) error {
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf(errMsgIDFmt, id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
 	}
 
 	// S4.0 effective-admin invariant safety net (parallels migration 024

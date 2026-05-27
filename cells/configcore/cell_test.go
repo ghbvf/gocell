@@ -106,7 +106,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 		require.Error(t, err)
 		var ecErrHalf *errcode.Error
 		require.True(t, errors.As(err, &ecErrHalf))
-		assert.Contains(t, ecErrHalf.Message+" "+ecErrHalf.InternalMessage, "outboxWriter and txRunner")
+		assert.Contains(t, ecErrHalf.Message+" "+ecErrHalf.Error(), "outboxWriter and txRunner")
 	}
 
 	t.Run("writer without tx manager", func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "durable mode")
+	assert.Contains(t, ecErr.Message+" "+ecErr.Error(), "durable mode")
 }
 
 func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
@@ -153,7 +153,7 @@ func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	require.Error(t, err)
 	var ecErrSink *errcode.Error
 	require.True(t, errors.As(err, &ecErrSink))
-	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.InternalMessage, "explicit event sink")
+	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.Error(), "explicit event sink")
 }
 
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
@@ -206,7 +206,7 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 	require.Error(t, err)
 	var ecErrMutex *errcode.Error
 	require.True(t, errors.As(err, &ecErrMutex))
-	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.InternalMessage, "mutually exclusive")
+	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.Error(), "mutually exclusive")
 }
 
 // TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter guards the
@@ -226,7 +226,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 	require.Error(t, err)
 	var ecErrDurable *errcode.Error
 	require.True(t, errors.As(err, &ecErrDurable))
-	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.InternalMessage, "durable")
+	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.Error(), "durable")
 }
 
 func TestConfigCore_RouteGroups(t *testing.T) {

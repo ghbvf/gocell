@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -1065,14 +1064,15 @@ func TestNewCoordinator_TypedNilJournal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestFailurePayload_NoInternalLeak constructs an errcode.Error that carries
-// WithInternal("secret=hunter2") and WithDetails(slog.String("password","p")),
-// calls failurePayload, and asserts the JSON result contains only the const
-// literal message — no secret or password substring.
+// WithInternal(InternalAttr("_", "secret=hunter2")) and
+// WithDetails(PublicString("password", "p")), calls failurePayload, and
+// asserts the JSON result contains only the const literal message — no
+// secret or password substring.
 func TestFailurePayload_NoInternalLeak(t *testing.T) {
 	err := errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"step blew up",
-		errcode.WithInternal("secret=hunter2"),
-		errcode.WithDetails(slog.String("password", "p")),
+		errcode.WithInternal(errcode.InternalAttr("_", "secret=hunter2")),
+		errcode.WithDetails(errcode.PublicString("password", "p")),
 	)
 
 	payload := failurePayload(err)

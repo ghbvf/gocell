@@ -116,8 +116,8 @@ Shutdown：逆序 + shutdown barrier + grace + metrics 化（shutdown_duration_s
 ```
 domain service 抛错
   └─ errcode.New(ErrXxx, "const literal msg",
-        WithDetails(slog.String("userId", id), slog.Int("attempts", n)),
-        WithInternal(fmt.Sprintf("sql=%q stack=%s", q, stack)))
+        WithDetails(errcode.PublicString("userId", id), errcode.PublicInt("attempts", n)),
+        WithInternal(errcode.InternalAttr("_", fmt.Sprintf("sql=%q stack=%s", q, stack))))
         │
         ▼
 codegen handler

@@ -38,7 +38,7 @@ func ParseKeyID(keyID string) (provider string, version int, err error) {
 
 	return "", 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 		"invalid keyID: must end with '-v{N}' or ':v{N}'",
-		errcode.WithInternal(fmt.Sprintf("key_id=%q", keyID)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key_id=%q", keyID))))
 }
 
 // tryParseVersionSuffix attempts to parse a version suffix from keyID using sep
@@ -58,18 +58,18 @@ func tryParseVersionSuffix(keyID, sep string) (provider string, version int, fou
 	if provider == "" {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"invalid keyID: empty provider before separator",
-			errcode.WithInternal(fmt.Sprintf("key_id=%q sep=%q", keyID, sep)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key_id=%q sep=%q", keyID, sep))))
 	}
 	v, parseErr := strconv.Atoi(versionStr)
 	if parseErr != nil {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"invalid keyID: non-numeric version",
-			errcode.WithInternal(fmt.Sprintf("key_id=%q version=%q", keyID, versionStr)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key_id=%q version=%q", keyID, versionStr))))
 	}
 	if v < 0 {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"invalid keyID: negative version",
-			errcode.WithInternal(fmt.Sprintf("key_id=%q version=%d", keyID, v)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key_id=%q version=%d", keyID, v))))
 	}
 	return provider, v, true, nil
 }
@@ -103,7 +103,7 @@ func MatchKeyID(handleID, edkKeyID string) error {
 	if subtle.ConstantTimeCompare([]byte(handleCanonical), []byte(edkCanonical)) != 1 {
 		return errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"keyID mismatch: handle does not match edk",
-			errcode.WithInternal(fmt.Sprintf("handle=%q edk=%q", handleID, edkKeyID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("handle=%q edk=%q", handleID, edkKeyID))))
 	}
 	return nil
 }

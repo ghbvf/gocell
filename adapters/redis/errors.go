@@ -40,12 +40,12 @@ func classifyRedisError(err error, opCode errcode.Code, opMsg string) error {
 		return errcode.WrapInfra(opCode,
 			"redis: transient error",
 			err,
-			errcode.WithInternal(opMsg))
+			errcode.WithInternal(errcode.InternalAttr("_", opMsg)))
 	}
 	return errcode.Wrap(errcode.KindInternal, opCode,
 		"redis: operation failed",
 		err,
-		errcode.WithInternal(opMsg))
+		errcode.WithInternal(errcode.InternalAttr("_", opMsg)))
 }
 
 // isTransientRedisError reports whether err represents a transient Redis failure

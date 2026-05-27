@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -233,7 +232,7 @@ func validateFailedLoginCount(userID string, count int) (int32, error) {
 	if count < 0 || int64(count) > int64(maxFailedLoginCount) {
 		return 0, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"user_repo: failed_login_count out of range",
-			errcode.WithInternal(fmt.Sprintf("id=%s count=%d", userID, count)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s count=%d", userID, count))))
 	}
 	// G115 bounds-check is performed above; the int32 conversion is safe.
 	return int32(count), nil
@@ -258,7 +257,7 @@ func (r *PGUserRepo) Create(ctx context.Context, user *domain.User) error {
 		if pgquery.IsUniqueViolation(err) {
 			return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username or email already exists",
-				errcode.WithInternal(fmt.Sprintf("username=%q email=%q", user.Username, user.Email)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("username=%q email=%q", user.Username, user.Email))))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: create", err)
 	}
@@ -273,7 +272,7 @@ func (r *PGUserRepo) GetByID(ctx context.Context, id string) (*domain.User, erro
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 		}
 		// scanUser may return errcode.ErrPGSchemaShape for invalid enum drift
 		// from the DB; propagate that code instead of collapsing to ErrInternal
@@ -296,7 +295,7 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("username=%q", username))))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -324,7 +323,7 @@ func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.U
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -351,7 +350,7 @@ func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("username=%q", username)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("username=%q", username))))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -390,12 +389,12 @@ func (r *PGUserRepo) UpdateProfile(
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
 		}
 		if pgquery.IsUniqueViolation(err) {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 				"username or email already exists",
-				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
 		}
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
@@ -421,14 +420,14 @@ func (r *PGUserRepo) UpdateLockState(
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
-				errcode.WithInternal(fmt.Sprintf("id=%s status=%q", userID, string(status))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s status=%q", userID, string(status)))))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update lock state", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
 	}
 	return nil
 }
@@ -447,7 +446,7 @@ func (r *PGUserRepo) UpdatePasswordResetFlag(
 	if tag.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
 	}
 	return nil
 }
@@ -465,14 +464,14 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthLastAdminProtected,
 				"cannot remove the last effective admin",
 				errcode.WithCategory(errcode.CategoryAuth),
-				errcode.WithInternal(fmt.Sprintf("user_id=%s", id)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user_id=%s", id))))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: delete", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 	}
 	return nil
 }
@@ -496,7 +495,7 @@ func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string, tok cred
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(fmt.Sprintf("id=%s", userID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
 		}
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: bump authz epoch", err)
 	}
@@ -543,20 +542,20 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 	if !domain.ValidUserStatus(domain.UserStatus(status)) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid status from DB",
-			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "status")),
-			errcode.WithInternal(fmt.Sprintf("scanned status=%q", status)))
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "status")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned status=%q", status))))
 	}
 	if !domain.ValidUserSource(domain.UserSource(source)) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: invalid creation_source from DB",
-			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "creation_source")),
-			errcode.WithInternal(fmt.Sprintf("scanned source=%q", source)))
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "creation_source")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned source=%q", source))))
 	}
 	if failedLoginCount < 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrPGSchemaShape,
 			"scanUser: failed_login_count must be >= 0",
-			errcode.WithDetails(slog.String("table", "users"), slog.String("column", "failed_login_count")),
-			errcode.WithInternal(fmt.Sprintf("scanned value=%d", failedLoginCount)))
+			errcode.WithDetails(errcode.PublicString("table", "users"), errcode.PublicString("column", "failed_login_count")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("scanned value=%d", failedLoginCount))))
 	}
 	u, reconErr := domain.ReconstituteUser(domain.ReconstituteUserParams{
 		ID:                    id,
@@ -608,7 +607,7 @@ func (r *PGUserRepo) UpdateLockoutFields(ctx context.Context, user *domain.User)
 	if tag.RowsAffected() == 0 {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", user.ID))))
 	}
 	return nil
 }

@@ -972,7 +972,7 @@ func TestHub_SendNotFound(t *testing.T) {
 	require.Error(t, err)
 	var ecErrNotFound *errcode.Error
 	require.True(t, errors.As(err, &ecErrNotFound))
-	assert.Contains(t, ecErrNotFound.Message+" "+ecErrNotFound.InternalMessage, "not found")
+	assert.Contains(t, ecErrNotFound.Message+" "+ecErrNotFound.Error(), "not found")
 }
 
 func TestHub_MessageHandler(t *testing.T) {

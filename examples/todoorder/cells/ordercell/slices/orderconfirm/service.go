@@ -104,7 +104,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 		return confirmv1.Confirm400ErrorResponse{
 			Body: *errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"order-confirm: status must be \"confirmed\"",
-				errcode.WithDetails(slog.String("status", req.Status))),
+				errcode.WithDetails(errcode.PublicString("status", req.Status))),
 		}, nil
 	}
 
@@ -116,7 +116,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 			return confirmv1.Confirm404ErrorResponse{
 				Body: *errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
 					"order-confirm: order not found",
-					errcode.WithDetails(slog.String("orderId", req.ID))),
+					errcode.WithDetails(errcode.PublicString("orderId", req.ID))),
 			}, nil
 		}
 		return nil, fmt.Errorf("order-confirm: get order: %w", err)
@@ -196,7 +196,7 @@ func (s *Service) confirm409(orderID, currentStatus string) confirmv1.Confirm409
 	return confirmv1.Confirm409ErrorResponse{
 		Body: *errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"order-confirm: order cannot be confirmed",
-			errcode.WithDetails(slog.String("orderId", orderID), slog.String("currentStatus", currentStatus))),
+			errcode.WithDetails(errcode.PublicString("orderId", orderID), errcode.PublicString("currentStatus", currentStatus))),
 	}
 }
 

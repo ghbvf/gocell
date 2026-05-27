@@ -256,18 +256,18 @@ func validateCreateAdminInput(in CreateAdminInput) error {
 	if utf8.RuneCountInString(in.Username) > MaxUsernameLen {
 		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"username too long",
-			errcode.WithDetails(slog.Int("max", MaxUsernameLen)))
+			errcode.WithDetails(errcode.PublicInt("max", MaxUsernameLen)))
 	}
 	if utf8.RuneCountInString(in.Email) > MaxEmailLen {
 		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"email too long",
-			errcode.WithDetails(slog.Int("max", MaxEmailLen)))
+			errcode.WithDetails(errcode.PublicInt("max", MaxEmailLen)))
 	}
 	passwordBytes := len(in.Password)
 	if passwordBytes < MinPasswordBytes || passwordBytes > MaxPasswordBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"password length out of range",
-			errcode.WithDetails(slog.Int("min", MinPasswordBytes), slog.Int("max", MaxPasswordBytes)))
+			errcode.WithDetails(errcode.PublicInt("min", MinPasswordBytes), errcode.PublicInt("max", MaxPasswordBytes)))
 	}
 	if !isPrintableASCII(in.Password) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
@@ -328,7 +328,7 @@ func setupRetiredError() error {
 		errcode.KindGone,
 		errcode.ErrSetupAlreadyInitialized,
 		"first-run admin already provisioned; this endpoint is retired",
-		errcode.WithDetails(slog.String("nextAction", "login")),
+		errcode.WithDetails(errcode.PublicString("nextAction", "login")),
 	)
 }
 

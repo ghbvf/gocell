@@ -45,7 +45,7 @@ func TestIdempotencyClaimer_RejectsInvalidKey(t *testing.T) {
 			require.Error(t, err)
 			var ecErrKey *errcode.Error
 			require.True(t, errors.As(err, &ecErrKey))
-			assert.Contains(t, ecErrKey.Message+" "+ecErrKey.InternalMessage, "must be non-empty and free of")
+			assert.Contains(t, ecErrKey.Message+" "+ecErrKey.Error(), "must be non-empty and free of")
 		})
 	}
 }

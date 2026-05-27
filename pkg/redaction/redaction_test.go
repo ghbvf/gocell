@@ -674,9 +674,11 @@ func (customLogValuer) LogValue() slog.Value {
 // secretLeakingLogValuer documents the fail-open boundary cost: if a
 // LogValuer's resolved string contains a sensitive key=value pattern,
 // RedactSlogAttr does NOT recurse into LogValue() and the secret leaks
-// to slog. This is by design — the first-line defense (errcode.WithDetails
-// + DETAILS-SLOG-ATTR-01 archtest) prevents direct-writing arbitrary
-// structs to errcode.Error.Details.
+// to slog. This is by design — the first-line defense is the sealed
+// PublicDetail / InternalDetail newtype in pkg/errcode/details.go,
+// which routes string values through AsSlogAttr() as slog.KindString
+// (covered by RedactString); LogValuer / custom Stringer carriers are
+// caller-controlled and must not embed sensitive content.
 type secretLeakingLogValuer struct{}
 
 func (secretLeakingLogValuer) LogValue() slog.Value {
@@ -690,8 +692,10 @@ func (secretLeakingLogValuer) LogValue() slog.Value {
 // This is intentional fail-open design: the regex pipeline only matches
 // `key=value` text shapes, so numeric/temporal/structured values cannot
 // carry the patterns. Runtime data entering errcode.Error must go through
-// errcode.WithDetails (type-checked to slog.Attr), which is the first line
-// of defense (DETAILS-SLOG-ATTR-01 archtest).
+// the sealed PublicDetail / InternalDetail newtypes (errcode.PublicAttr /
+// InternalAttr), which return slog.String (KindString) for string values
+// via AsSlogAttr — the first line of defense covering the common
+// "embedded key=value inside a string" leak shape.
 //
 // If a new direct-write path for slog.Any(callerSuppliedStruct) is added,
 // extend redactSlogValue with ValueResolve and add cases here.
@@ -738,8 +742,9 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 		{
 			// Documents fail-open boundary cost: LogValuer resolving to a
 			// sensitive string IS NOT redacted (passthrough). Acceptable
-			// only because errcode.WithDetails forbids non-slog.Attr inputs
-			// upstream (DETAILS-SLOG-ATTR-01).
+			// because sealed PublicDetail / InternalDetail upstream route
+			// string values through AsSlogAttr as KindString; LogValuer /
+			// custom Stringer carriers are out of scope for redaction.
 			name:           "logvaluer with secret leaks by design (fail-open boundary)",
 			attr:           slog.Any("config", secretLeakingLogValuer{}),
 			wantValueEqual: true,

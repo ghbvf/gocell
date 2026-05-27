@@ -411,7 +411,7 @@ func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) e
 	if e.DeviceID != deviceID {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"device-command: command does not belong to this device",
-			errcode.WithInternal(fmt.Sprintf("command %q does not belong to device %q", cmdID, deviceID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("command %q does not belong to device %q", cmdID, deviceID))))
 	}
 	return nil
 }

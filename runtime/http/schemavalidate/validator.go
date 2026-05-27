@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -65,7 +64,7 @@ func WriteValidationError(ctx context.Context, w http.ResponseWriter, err error)
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
 		ec = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "request validation failed",
-			errcode.WithInternal(err.Error()))
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
 	}
 	httputil.WriteError(ctx, w, ec)
 }
@@ -87,7 +86,7 @@ func (v *validator) Validate(_ context.Context, body []byte) error {
 		if errors.As(err, &verr) {
 			msg := buildSafeMessage(verr)
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "request body validation failed",
-				errcode.WithDetails(slog.String("detail", msg)))
+				errcode.WithDetails(errcode.PublicString("detail", msg)))
 		}
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid request body")
 	}

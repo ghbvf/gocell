@@ -273,7 +273,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	if userLookupErr != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 			errMsgInvalidCredentials,
-			errcode.WithInternal(fmt.Sprintf("user lookup failed: %v", userLookupErr)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("user lookup failed: %v", userLookupErr))))
 	}
 
 	// User exists. Open a tx that holds the row lock across:
@@ -421,7 +421,9 @@ func (s *Service) loginInTx(
 		return loginOutcome{
 			failureErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				errMsgInvalidCredentials,
-				errcode.WithInternal(fmt.Sprintf("credentialauthority: in-tx assert failed (user_id=%s): %v", user.ID, err))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+					"credentialauthority: in-tx assert failed (user_id=%s): %v",
+					user.ID, err)))),
 		}, nil
 	}
 
@@ -739,7 +741,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	if err := credentialauthority.Assert(user); err != nil {
 		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"account is not active",
-			errcode.WithInternal("sessionlogin:IssueForUser credential not authoritative"))
+			errcode.WithInternal(errcode.InternalAttr("_", "sessionlogin:IssueForUser credential not authoritative")))
 	}
 
 	sessionID := uuid.NewString()

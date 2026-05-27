@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
-	"math"
 	"net/http"
 	"testing"
 	"time"
@@ -39,16 +37,20 @@ func TestNewWrapAndOptions(t *testing.T) {
 		ErrServiceUnavailable,
 		"service unavailable",
 		cause,
-		WithInternal("postgres pool exhausted"),
-		WithDetails(slog.Bool("retry", true)),
+		WithInternal(InternalAttr("_", "postgres pool exhausted")),
+		WithDetails(PublicBool("retry", true)),
 		WithCategory(CategoryInfra),
 	)
 
 	assert.Equal(t, KindUnavailable, err.Kind)
 	assert.Equal(t, ErrServiceUnavailable, err.Code)
 	assert.Equal(t, "service unavailable", err.Message)
-	assert.Equal(t, "postgres pool exhausted", err.InternalMessage)
-	assert.Equal(t, []slog.Attr{slog.Bool("retry", true)}, err.Details)
+	require.Len(t, err.InternalDetails, 1)
+	assert.Equal(t, "_", err.InternalDetails[0].Key())
+	assert.Equal(t, "postgres pool exhausted", err.InternalDetails[0].Value())
+	require.Len(t, err.Details, 1)
+	assert.Equal(t, "retry", err.Details[0].Key())
+	assert.Equal(t, true, err.Details[0].Value())
 	assert.ErrorIs(t, err, cause)
 	assert.Equal(t, "[ERR_SERVICE_UNAVAILABLE] postgres pool exhausted: pool exhausted", err.Error())
 }
@@ -207,21 +209,23 @@ func TestAssertion(t *testing.T) {
 
 func TestWithDetailsAttrs(t *testing.T) {
 	t.Run("singleAttr", func(t *testing.T) {
-		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(slog.String("field", "name")))
-		assert.Equal(t, []slog.Attr{slog.String("field", "name")}, err.Details)
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(PublicString("field", "name")))
+		require.Len(t, err.Details, 1)
+		assert.Equal(t, "field", err.Details[0].Key())
+		assert.Equal(t, "name", err.Details[0].Value())
 	})
 
 	t.Run("multiOrdering", func(t *testing.T) {
-		attrs := []slog.Attr{
-			slog.String("a", "1"),
-			slog.Int("b", 2),
-			slog.Bool("c", true),
+		details := []PublicDetail{
+			PublicString("a", "1"),
+			PublicInt("b", 2),
+			PublicBool("c", true),
 		}
-		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(attrs...))
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(details...))
 		require.Len(t, err.Details, 3)
-		assert.Equal(t, "a", err.Details[0].Key)
-		assert.Equal(t, "b", err.Details[1].Key)
-		assert.Equal(t, "c", err.Details[2].Key)
+		assert.Equal(t, "a", err.Details[0].Key())
+		assert.Equal(t, "b", err.Details[1].Key())
+		assert.Equal(t, "c", err.Details[2].Key())
 	})
 
 	t.Run("empty", func(t *testing.T) {
@@ -231,26 +235,26 @@ func TestWithDetailsAttrs(t *testing.T) {
 
 	t.Run("appendCumulative", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(slog.String("a", "1")),
-			WithDetails(slog.String("b", "2")),
+			WithDetails(PublicString("a", "1")),
+			WithDetails(PublicString("b", "2")),
 		)
 		require.Len(t, err.Details, 2)
-		assert.Equal(t, "a", err.Details[0].Key)
-		assert.Equal(t, "b", err.Details[1].Key)
+		assert.Equal(t, "a", err.Details[0].Key())
+		assert.Equal(t, "b", err.Details[1].Key())
 	})
 
 	t.Run("findAttrHit", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(slog.String("reason", "expired")),
+			WithDetails(PublicString("reason", "expired")),
 		)
-		attr, ok := err.FindAttr("reason")
+		d, ok := err.FindAttr("reason")
 		require.True(t, ok)
-		assert.Equal(t, "expired", attr.Value.String())
+		assert.Equal(t, "expired", d.Value())
 	})
 
 	t.Run("findAttrMiss", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
-			WithDetails(slog.String("a", "1")),
+			WithDetails(PublicString("a", "1")),
 		)
 		_, ok := err.FindAttr("missing")
 		assert.False(t, ok)
@@ -275,6 +279,24 @@ func TestErrorMarshalJSON(t *testing.T) {
 		assert.Equal(t, []any{}, got["details"])
 	})
 
+	t.Run("publicErrorLiteralDropsZeroValueDetails", func(t *testing.T) {
+		raw, mErr := json.Marshal(PublicError{
+			Code:    ErrValidationFailed,
+			Message: "bad",
+			Details: []PublicDetail{
+				{},
+				PublicString("field", "name"),
+			},
+		})
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{
+			map[string]any{"key": "field", "value": "name"},
+		}, got["details"])
+		assert.NotContains(t, string(raw), "null")
+	})
+
 	t.Run("noDetailsClient", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found")
 		raw, mErr := json.Marshal(err)
@@ -288,7 +310,7 @@ func TestErrorMarshalJSON(t *testing.T) {
 
 	t.Run("singleAttrClient", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found",
-			WithDetails(slog.String("cellId", "abc")))
+			WithDetails(PublicString("cellId", "abc")))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -298,12 +320,25 @@ func TestErrorMarshalJSON(t *testing.T) {
 		}, got["details"])
 	})
 
+	t.Run("directDetailsMutationDropsZeroValueDetails", func(t *testing.T) {
+		err := New(KindNotFound, ErrCellNotFound, "cell not found")
+		err.Details = []PublicDetail{{}, PublicString("cellId", "abc")}
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{
+			map[string]any{"key": "cellId", "value": "abc"},
+		}, got["details"])
+		assert.NotContains(t, string(raw), "null")
+	})
+
 	t.Run("multiAttrClient", func(t *testing.T) {
 		err := New(KindInvalid, ErrValidationFailed, "bad",
 			WithDetails(
-				slog.String("field", "name"),
-				slog.Int("len", 0),
-				slog.Bool("required", true),
+				PublicString("field", "name"),
+				PublicInt("len", 0),
+				PublicBool("required", true),
 			))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
@@ -322,16 +357,16 @@ func TestErrorMarshalJSON(t *testing.T) {
 
 	t.Run("internalNotMarshaled", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found",
-			WithInternal("internal trace data"))
+			WithInternal(InternalAttr("_", "internal trace data")))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		assert.NotContains(t, string(raw), "internal trace data")
-		assert.NotContains(t, string(raw), "internalMessage")
+		assert.NotContains(t, string(raw), "internalDetails")
 	})
 
 	t.Run("serverErrStripsDetails", func(t *testing.T) {
 		err := New(KindInternal, ErrInternal, "boom",
-			WithDetails(slog.String("dsn", "secret"), slog.Int("retries", 3)))
+			WithDetails(PublicString("dsn", "secret"), PublicInt("retries", 3)))
 		raw, mErr := json.Marshal(err)
 		require.NoError(t, mErr)
 		var got map[string]any
@@ -344,119 +379,9 @@ func TestErrorMarshalJSON(t *testing.T) {
 		assert.NotContains(t, string(raw), "secret")
 		assert.NotContains(t, string(raw), "boom")
 	})
-
-	t.Run("clientErrSubstitutesUnsafeKindBypassingEntry", func(t *testing.T) {
-		// Construct an *Error directly so the wire-unsafe attr bypasses the
-		// WithDetails kind whitelist. MarshalJSON must substitute the
-		// unsafeKindMarker rather than emit a handler-dependent payload.
-		err := &Error{
-			Kind:    KindInvalid,
-			Code:    ErrValidationFailed,
-			Message: "bad",
-			Details: []slog.Attr{
-				slog.String("ok", "v"),
-				slog.Any("ch", make(chan int)), // KindAny — not wire-safe
-			},
-		}
-		raw, mErr := json.Marshal(err)
-		require.NoError(t, mErr)
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(raw, &got))
-		details, ok := got["details"].([]any)
-		require.True(t, ok)
-		require.Len(t, details, 2)
-		assert.Equal(t, "v", details[0].(map[string]any)["value"])
-		assert.Equal(t, unsafeKindMarker, details[1].(map[string]any)["value"],
-			"wire-unsafe kind must be replaced by sentinel string")
-	})
-
-	t.Run("clientErrSubstitutesNonFiniteFloatBypassingEntry", func(t *testing.T) {
-		err := &Error{
-			Kind:    KindInvalid,
-			Code:    ErrValidationFailed,
-			Message: "bad",
-			Details: []slog.Attr{
-				slog.Float64("ratio", math.Inf(1)),
-			},
-		}
-		raw, mErr := json.Marshal(err)
-		require.NoError(t, mErr)
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(raw, &got))
-		details, ok := got["details"].([]any)
-		require.True(t, ok)
-		require.Len(t, details, 1)
-		assert.Equal(t, unsafeValueMarker, details[0].(map[string]any)["value"],
-			"non-finite float must be replaced by sentinel string")
-	})
 }
 
-func TestWithDetailsKindWhitelist(t *testing.T) {
-	t.Run("scalarKindsAccepted", func(t *testing.T) {
-		require.NotPanics(t, func() {
-			_ = New(KindInvalid, ErrValidationFailed, "ok", WithDetails(
-				slog.String("s", "v"),
-				slog.Int("i", 1),
-				slog.Int64("i64", 1),
-				slog.Uint64("u64", 1),
-				slog.Float64("f", 1),
-				slog.Bool("b", true),
-				slog.Duration("d", 0),
-				slog.Time("t", time.Time{}),
-			))
-		})
-	})
-
-	t.Run("anyKindPanics", func(t *testing.T) {
-		var ec *Error
-		defer func() {
-			r := recover()
-			require.NotNil(t, r, "WithDetails(slog.Any(...)) must panic")
-			err, ok := r.(error)
-			require.True(t, ok, "panic value must be error from Assertion()")
-			require.True(t, errors.As(err, &ec), "panic must wrap *errcode.Error")
-			assert.Contains(t, ec.Message, "wire-unsafe kind")
-			assert.Contains(t, ec.Message, "Any")
-		}()
-		_ = New(KindInvalid, ErrValidationFailed, "ok",
-			WithDetails(slog.Any("x", struct{ A int }{42})))
-	})
-
-	t.Run("groupKindPanics", func(t *testing.T) {
-		require.Panics(t, func() {
-			_ = New(KindInvalid, ErrValidationFailed, "ok",
-				WithDetails(slog.Group("g", slog.String("inner", "v"))))
-		})
-	})
-
-	t.Run("nonFiniteFloatPanics", func(t *testing.T) {
-		cases := []struct {
-			name string
-			val  float64
-		}{
-			{name: "nan", val: math.NaN()},
-			{name: "positive_inf", val: math.Inf(1)},
-			{name: "negative_inf", val: math.Inf(-1)},
-		}
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				var ec *Error
-				defer func() {
-					r := recover()
-					require.NotNil(t, r, "WithDetails(slog.Float64(non-finite)) must panic")
-					err, ok := r.(error)
-					require.True(t, ok, "panic value must be error from Assertion()")
-					require.True(t, errors.As(err, &ec), "panic must wrap *errcode.Error")
-					assert.Contains(t, ec.Message, "non-finite float64")
-				}()
-				_ = New(KindInvalid, ErrValidationFailed, "ok",
-					WithDetails(slog.Float64("ratio", tc.val)))
-			})
-		}
-	})
-}
-
-func TestPublicString(t *testing.T) {
+func TestRenderPublic(t *testing.T) {
 	t.Run("directErrcode", func(t *testing.T) {
 		cause := errors.New("postgres://user:secret@example/db")
 		err := Wrap(
@@ -464,11 +389,11 @@ func TestPublicString(t *testing.T) {
 			ErrZeroTestMatch,
 			"pattern matched no tests — check your YAML ref",
 			cause,
-			WithInternal(`pattern="TestSecret" pkg=./cells token=hunter2`),
-			WithDetails(slog.String("ref", "journey.J-login.auto")),
+			WithInternal(InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
+			WithDetails(PublicString("ref", "journey.J-login.auto")),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
 		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
 		assert.Contains(t, got, `ref="journey.J-login.auto"`)
@@ -482,10 +407,10 @@ func TestPublicString(t *testing.T) {
 			KindNotFound,
 			ErrZeroTestMatch,
 			"pattern matched no tests — check your YAML ref",
-			WithInternal(`pattern="TestSecret" pkg=./cells token=hunter2`),
+			WithInternal(InternalAttr("_", `pattern="TestSecret" pkg=./cells token=hunter2`)),
 		)
 
-		got := PublicString(fmt.Errorf("verify journey --active: %w", inner))
+		got := RenderPublic(fmt.Errorf("verify journey --active: %w", inner))
 		assert.Contains(t, got, "verify journey --active")
 		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
 		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
@@ -498,10 +423,10 @@ func TestPublicString(t *testing.T) {
 			KindInternal,
 			ErrAuthRoleFetchFailed,
 			"role repository failed: postgres://user:secret@example/db",
-			WithInternal("token=hunter2"),
+			WithInternal(InternalAttr("_", "token=hunter2")),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Equal(t, "[ERR_INTERNAL] internal server error", got)
 		assert.NotContains(t, got, "ERR_AUTH_ROLE_FETCH_FAILED")
 		assert.NotContains(t, got, "postgres://")
@@ -513,7 +438,7 @@ func TestPublicString(t *testing.T) {
 			KindInternal,
 			ErrAuthRoleFetchFailed,
 			"role repository failed: postgres://user:secret@example/db",
-			WithInternal("token=hunter2"),
+			WithInternal(InternalAttr("_", "token=hunter2")),
 		)
 
 		got := OperatorString(err)
@@ -527,18 +452,18 @@ func TestPublicString(t *testing.T) {
 			KindInvalid,
 			ErrValidationFailed,
 			"invalid config",
-			WithInternal("token=first-secret"),
-			WithDetails(slog.String("field", "cell.id")),
+			WithInternal(InternalAttr("_", "token=first-secret")),
+			WithDetails(PublicString("field", "cell.id")),
 		)
 		second := Wrap(
 			KindInternal,
 			ErrAuthRoleFetchFailed,
 			"role lookup failed: dsn=secret",
 			errors.New("cause=second-secret"),
-			WithInternal("token=second-secret"),
+			WithInternal(InternalAttr("_", "token=second-secret")),
 		)
 
-		got := PublicString(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
+		got := RenderPublic(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
 		assert.Contains(t, got, "verify generated:")
 		assert.Contains(t, got, "[ERR_VALIDATION_FAILED] invalid config")
 		assert.Contains(t, got, `field="cell.id"`)
@@ -559,10 +484,10 @@ func TestPublicString(t *testing.T) {
 			KindInvalid,
 			ErrValidationFailed,
 			"invalid config",
-			WithDetails(slog.String("field", "cell.id,owner\nname"), slog.Int("limit", 2)),
+			WithDetails(PublicString("field", "cell.id,owner\nname"), PublicInt("limit", 2)),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, `field="cell.id,owner\nname"`)
 		assert.Contains(t, got, "limit=2")
 	})
@@ -573,10 +498,10 @@ func TestPublicString(t *testing.T) {
 			KindInvalid,
 			ErrValidationFailed,
 			"invalid config",
-			WithDetails(slog.Duration("timeout", time.Second), slog.Time("at", at)),
+			WithDetails(PublicDuration("timeout", time.Second), PublicTime("at", at)),
 		)
 
-		got := PublicString(err)
+		got := RenderPublic(err)
 		assert.Contains(t, got, "timeout=1000000000")
 		assert.Contains(t, got, `at="2026-05-06T01:02:03Z"`)
 	})
@@ -587,24 +512,22 @@ func TestOperatorProjection(t *testing.T) {
 		KindInvalid,
 		ErrValidationFailed,
 		"invalid config",
-		WithDetails(slog.String("field", "cell.id")),
+		WithDetails(PublicString("field", "cell.id")),
 	)
 	second := New(
 		KindInternal,
 		ErrAuthRoleFetchFailed,
 		"role lookup failed: dsn=secret",
-		WithInternal("token=secret"),
+		WithInternal(InternalAttr("_", "token=secret")),
 	)
 
 	got := OperatorProjection(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
 	require.Len(t, got, 2)
-	assert.Equal(t, PublicError{
-		Code:    ErrValidationFailed,
-		Message: "invalid config",
-		Details: []PublicDetail{
-			{Key: "field", Value: "cell.id"},
-		},
-	}, got[0])
+	require.Len(t, got[0].Details, 1)
+	assert.Equal(t, ErrValidationFailed, got[0].Code)
+	assert.Equal(t, "invalid config", got[0].Message)
+	assert.Equal(t, "field", got[0].Details[0].Key())
+	assert.Equal(t, "cell.id", got[0].Details[0].Value())
 	assert.Equal(t, PublicError{
 		Code:       ErrInternal,
 		Message:    "internal server error",
@@ -617,7 +540,7 @@ func TestOperatorProjection(t *testing.T) {
 func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
 	assert.Nil(t, PublicProjection(nil))
 	assert.Nil(t, OperatorProjection(nil))
-	assert.Empty(t, PublicString(nil))
+	assert.Empty(t, RenderPublic(nil))
 	assert.Empty(t, OperatorString(nil))
 
 	publicPlain := PublicProjection(errors.New("dsn=postgres://user:secret@example/db"))
@@ -640,23 +563,21 @@ func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
 		KindInvalid,
 		ErrValidationFailed,
 		"invalid config",
-		WithDetails(slog.String("field", "cell.id")),
+		WithDetails(PublicString("field", "cell.id")),
 	)
 	matchedProjection := PublicProjection(errcodeAsError{target: matched})
 	require.Len(t, matchedProjection, 1)
-	assert.Equal(t, PublicError{
-		Code:    ErrValidationFailed,
-		Message: "invalid config",
-		Details: []PublicDetail{
-			{Key: "field", Value: "cell.id"},
-		},
-	}, matchedProjection[0])
+	require.Len(t, matchedProjection[0].Details, 1)
+	assert.Equal(t, ErrValidationFailed, matchedProjection[0].Code)
+	assert.Equal(t, "invalid config", matchedProjection[0].Message)
+	assert.Equal(t, "field", matchedProjection[0].Details[0].Key())
+	assert.Equal(t, "cell.id", matchedProjection[0].Details[0].Value())
 
 	server := New(
 		KindInternal,
 		ErrAuthRoleFetchFailed,
 		"role lookup failed: dsn=secret",
-		WithInternal("token=secret"),
+		WithInternal(InternalAttr("_", "token=secret")),
 	)
 	assert.Equal(t, "[ERR_INTERNAL] internal server error", server.PublicString())
 	assert.Equal(

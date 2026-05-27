@@ -207,7 +207,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"cell id is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	// Record the real filesystem directory so strict rules (REF-04) can
 	// compare it against m.ID instead of self-comparing against the map key.
@@ -220,7 +220,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate cell ID",
-			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
 	}
 	pm.Cells[m.ID] = &m
 	return nil
@@ -242,7 +242,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice id is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 
 	// G-7: auto-derive belongsToCell from path.
@@ -253,8 +253,8 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	} else if m.BelongsToCell != cellID {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice belongsToCell does not match directory cell",
-			errcode.WithInternal(fmt.Sprintf("slice=%q belongs_to=%q dir_cell=%q path=%s",
-				m.ID, m.BelongsToCell, cellID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q belongs_to=%q dir_cell=%q path=%s",
+				m.ID, m.BelongsToCell, cellID, path))))
 	}
 
 	// Record filesystem truth separately from the yaml id. Strict rules
@@ -270,7 +270,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if _, exists := pm.Slices[key]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate slice ID",
-			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, key, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, key, path))))
 	}
 	// slice.yaml is the single source of truth for slice consistency level
 	// (codegen funnel projects it into slice_gen.go.sliceMeta). The prior
@@ -280,7 +280,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ConsistencyLevel == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice consistencyLevel is empty: declare consistencyLevel: L0|L1|L2|L3|L4",
-			errcode.WithInternal(fmt.Sprintf("slice=%q path=%s", m.ID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q path=%s", m.ID, path))))
 	}
 	pm.Slices[key] = &m
 	return nil
@@ -311,7 +311,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"contract id is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	// G-7: auto-derive ownerCell from provider endpoint if omitted (per contract.schema.json).
 	if m.OwnerCell == "" {
@@ -327,7 +327,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate contract ID",
-			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
 	}
 	pm.Contracts[m.ID] = &m
 	return nil
@@ -345,13 +345,13 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"journey id is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Journeys[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate journey ID",
-			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
 	}
 	pm.Journeys[m.ID] = &m
 	return nil
@@ -369,7 +369,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"assembly id is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	// Record filesystem truth so strict rules (FMT-16) can compare the directory
 	// segment against m.ID. matchAssemblyYAML guarantees len(parts)==3 and
@@ -382,7 +382,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate assembly ID",
-			errcode.WithInternal(fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
 	}
 	pm.Assemblies[m.ID] = &m
 	return nil
@@ -442,12 +442,12 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to read metadata file", err,
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	if len(data) > maxMetadataFileSize {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"metadata file exceeds size limit",
-			errcode.WithInternal(fmt.Sprintf("path=%s size=%d limit=%d", path, len(data), maxMetadataFileSize)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("path=%s size=%d limit=%d", path, len(data), maxMetadataFileSize))))
 	}
 
 	// Phase 1: capture location-preserving AST.
@@ -459,7 +459,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 		}
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to parse metadata file", err,
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 	// Reject multi-document YAML files. Metadata files must contain exactly
 	// one document; a second document after "---" would be silently ignored
@@ -468,7 +468,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	if !errors.Is(tmpErr, io.EOF) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"unexpected multiple YAML documents in metadata file",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 
 	// Phase 2: strict decode into target struct. This is where KnownFields(true)
@@ -484,7 +484,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 		}
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to decode metadata file", err,
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
 	}
 
 	return &root, nil

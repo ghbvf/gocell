@@ -160,7 +160,7 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 				"bootstrap: cell-owned RouteGroup must not target cell.HealthListener "+
 					"(reserved for framework /healthz, /readyz, /metrics); declare it on "+
 					"cell.PrimaryListener or cell.InternalListener instead",
-				errcode.WithInternal(fmt.Sprintf("cellID=%q prefix=%q", rg.CellID, rg.Prefix)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cellID=%q prefix=%q", rg.CellID, rg.Prefix))))
 		}
 		rtr, ok := routers[rg.Listener]
 		if !ok {
@@ -247,7 +247,8 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 			"set bootstrap.WithListener(cell.InternalListener, ..., "+
 			"[]kauth.ListenerAuth{<svcTokenAuth from kauth.NewAuthServiceToken(store, ring)>}) "+
 			"and optionally layer kauth.AuthMTLS{} with verified client TLS",
-		errcode.WithInternal(fmt.Sprintf("count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", "))))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+			"count=%d routes=[%s]", len(internalRoutes), strings.Join(internalRoutes, ", ")))))
 }
 
 func declaredInternalRoutes(rtr *router.Router) []string {

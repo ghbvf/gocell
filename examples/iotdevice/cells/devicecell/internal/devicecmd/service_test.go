@@ -415,7 +415,8 @@ func TestService_ScanActive_CursorDeviceMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	reasonAttr, ok := ecErr.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
+	got, _ := reasonAttr.Value().(string)
+	assert.Equal(t, "query context mismatch", got)
 }
 
 func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {

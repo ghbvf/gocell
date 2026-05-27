@@ -84,7 +84,7 @@ func (c *UpgradeConfig) Validate() error {
 		if !strings.Contains(pattern, "://") {
 			return errcode.New(errcode.KindInternal, errcode.ErrWebsocketOriginsInvalid,
 				"websocket: AllowedOrigins entry must include scheme (e.g. https://example.com); bare host rejected",
-				errcode.WithInternal(fmt.Sprintf("pattern=%s", strconv.Quote(pattern))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("pattern=%s", strconv.Quote(pattern)))))
 		}
 		normalized = append(normalized, pattern)
 	}

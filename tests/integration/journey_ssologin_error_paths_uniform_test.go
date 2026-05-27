@@ -103,15 +103,15 @@ func TestJSsologinErrorPathsUniform(t *testing.T) {
 			name: "missing-user",
 			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				wantMessage,
-				errcode.WithInternal("user lookup failed: sql: no rows in result set")),
+				errcode.WithInternal(errcode.InternalAttr("_", "user lookup failed: sql: no rows in result set"))),
 		},
 		{
 			name: "inactive-account",
 			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				wantMessage,
-				errcode.WithInternal(fmt.Sprintf(
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 					"credentialauthority: pre-bcrypt baseline fail (user_id=%s status=%v)",
-					"u-123", "locked"))),
+					"u-123", "locked")))),
 		},
 		{
 			name: "wrong-password",
@@ -125,9 +125,9 @@ func TestJSsologinErrorPathsUniform(t *testing.T) {
 			name: "in-tx-inactive-race",
 			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed,
 				wantMessage,
-				errcode.WithInternal(fmt.Sprintf(
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
 					"credentialauthority: in-tx assert failed (user=%s): %v",
-					"bob", "account is locked"))),
+					"bob", "account is locked")))),
 		},
 		{
 			// Mirrors service.go:484 — classifyForUpdateErr maps KindNotFound (user

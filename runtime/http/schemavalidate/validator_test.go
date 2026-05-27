@@ -64,8 +64,8 @@ func TestValidator_MinLength(t *testing.T) {
 	detailAttr, found := ec.FindAttr("detail")
 	if !found {
 		t.Errorf("expected 'detail' attribute in error details, got none")
-	} else if !containsFieldName(detailAttr.Value.String(), "name") {
-		t.Errorf("detail should contain field name 'name', got: %q", detailAttr.Value.String())
+	} else if v, _ := detailAttr.Value().(string); !containsFieldName(v, "name") {
+		t.Errorf("detail should contain field name 'name', got: %q", detailAttr.Value())
 	}
 }
 

@@ -190,7 +190,7 @@ func (b *BaseCell) Init(_ context.Context, _ Registrar) error {
 	if b.state != cellStateNew && b.state != cellStateStopped {
 		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			"cell Init requires state new or stopped",
-			errcode.WithInternal(fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state))))
 	}
 	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
 	if b.shutdownCancel != nil {
@@ -211,7 +211,7 @@ func (b *BaseCell) Start(ctx context.Context) error {
 	if b.state != cellStateInitialized {
 		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			"cell Start requires state initialized",
-			errcode.WithInternal(fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state))))
 	}
 	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.WithoutCancel(ctx))
 	b.state = cellStateStarted
@@ -348,12 +348,12 @@ func NewBaseSliceFromMeta(meta *metadata.SliceMeta) (*BaseSlice, error) {
 	if meta.BelongsToCell == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cell.NewBaseSliceFromMeta: meta.BelongsToCell is empty",
-			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q", meta.ID))))
 	}
 	if meta.ConsistencyLevel == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cell.NewBaseSliceFromMeta: meta.ConsistencyLevel is empty",
-			errcode.WithInternal(fmt.Sprintf("slice=%q", meta.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q", meta.ID))))
 	}
 	level, err := cellvocab.ParseLevel(meta.ConsistencyLevel)
 	if err != nil {

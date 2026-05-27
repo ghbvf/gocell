@@ -99,7 +99,10 @@ func TestParse_ErrorIncludesPatternDetail(t *testing.T) {
 	if !ok {
 		t.Fatal(`Parse error missing "pattern" detail`)
 	}
-	got := patternAttr.Value.String()
+	got, ok2 := patternAttr.Value().(string)
+	if !ok2 {
+		t.Fatal(`"pattern" detail value is not a string`)
+	}
 	if !strings.Contains(got, "[a-z]") {
 		t.Fatalf(`"pattern" detail = %q, want substring "[a-z]"`, got)
 	}

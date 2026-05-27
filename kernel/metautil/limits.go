@@ -2,7 +2,6 @@ package metautil
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -97,7 +96,7 @@ func Truncate(s string, n int) string {
 // what is structurally guarded code.
 
 func newKeyCountErr(prefix string, count int) error {
-	details := errcode.WithDetails(slog.Int("count", count), slog.Int("max", MaxMetadataKeys))
+	details := errcode.WithDetails(errcode.PublicInt("count", count), errcode.PublicInt("max", MaxMetadataKeys))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -111,8 +110,8 @@ func newKeyCountErr(prefix string, count int) error {
 }
 
 func newKeyLenErr(prefix, key string) error {
-	details := errcode.WithDetails(slog.Int("length", len(key)), slog.Int("max", MaxMetadataKeyLen))
-	internal := errcode.WithInternal(fmt.Sprintf(internalKeyQuotedFmt, Truncate(key, maxInternalQuotedBytes)))
+	details := errcode.WithDetails(errcode.PublicInt("length", len(key)), errcode.PublicInt("max", MaxMetadataKeyLen))
+	internal := errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalKeyQuotedFmt, Truncate(key, maxInternalQuotedBytes))))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -126,13 +125,13 @@ func newKeyLenErr(prefix, key string) error {
 }
 
 func newValueLenErr(prefix, key, value string) error {
-	details := errcode.WithDetails(slog.Int("length", len(value)), slog.Int("max", MaxMetadataValueLen))
+	details := errcode.WithDetails(errcode.PublicInt("length", len(value)), errcode.PublicInt("max", MaxMetadataValueLen))
 	// Use distinct labels so operators can tell apart "key too long" from
 	// "value too long" by looking at the Internal field alone.
-	internal := errcode.WithInternal(fmt.Sprintf("%s %s",
+	internal := errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("%s %s",
 		fmt.Sprintf(internalValueKeyFmt, Truncate(key, maxInternalQuotedBytes)),
 		fmt.Sprintf(internalValueValueFmt, Truncate(value, maxInternalQuotedBytes)),
-	))
+	)))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -146,7 +145,7 @@ func newValueLenErr(prefix, key, value string) error {
 }
 
 func newTotalSizeErr(prefix string, total int) error {
-	details := errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxMetadataTotalSize))
+	details := errcode.WithDetails(errcode.PublicInt("total", total), errcode.PublicInt("max", MaxMetadataTotalSize))
 	switch prefix {
 	case DomainOutbox:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

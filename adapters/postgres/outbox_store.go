@@ -418,7 +418,7 @@ func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status kout.State)
 	default:
 		return time.Time{}, false, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
 			"OldestEligibleAt: invalid status",
-			errcode.WithInternal(fmt.Sprintf("status=%s want StatePublished or StateDead", status)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("status=%s want StatePublished or StateDead", status))))
 	}
 
 	// The column name cannot be parameterised; the status value is bound via $1.

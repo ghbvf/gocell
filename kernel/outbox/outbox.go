@@ -73,7 +73,7 @@ func validateMetadata(m map[string]string) error {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
-				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, k)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalMetadataKeyQuotedFmt, k))))
 		}
 	}
 	return metautil.ValidateLimits(m, metautil.DomainOutbox)
@@ -197,7 +197,7 @@ func (e Entry) Validate() error {
 	if len(e.Payload) > MaxPayloadBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: payload size exceeds max",
-			errcode.WithDetails(slog.Int("size", len(e.Payload)), slog.Int("max", MaxPayloadBytes)))
+			errcode.WithDetails(errcode.PublicInt("size", len(e.Payload)), errcode.PublicInt("max", MaxPayloadBytes)))
 	}
 	// CWE-117 defense in depth at the in-memory boundary. Wire-side enforcement
 	// lives in wireMessage's SafeID fields (see envelope.go); this guards programmer-constructed
@@ -235,7 +235,7 @@ func validateEntryIDField(name, value string) error {
 	if err := idutil.SafeID(value).Validate(); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: entry field invalid", err,
-			errcode.WithDetails(slog.String("field", name)))
+			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	return nil
 }
@@ -314,7 +314,7 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 		if err := e.Validate(); err != nil {
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: batch entry validation failed", err,
-				errcode.WithDetails(slog.Int("entry_index", i)))
+				errcode.WithDetails(errcode.PublicInt("entry_index", i)))
 		}
 	}
 
@@ -330,9 +330,9 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 			// CWE-117: e.ID may be unsafe when Write fails on Entry.Validate
 			// itself. Surface entry_index unconditionally; surface entry_id
 			// only when SafeID-shaped to avoid log injection vector.
-			details := []slog.Attr{slog.Int("entry_index", i)}
+			details := []errcode.PublicDetail{errcode.PublicInt("entry_index", i)}
 			if idutil.SafeID(e.ID).Validate() == nil {
-				details = append(details, slog.String("entry_id", e.ID))
+				details = append(details, errcode.PublicString("entry_id", e.ID))
 			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"outbox: batch sequential write failed", err,
@@ -383,7 +383,7 @@ func (NoopWriter) WriteBatch(_ context.Context, entries []Entry) error {
 		if err := entry.Validate(); err != nil {
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: noop writer entry validation failed", err,
-				errcode.WithDetails(slog.Int("entry_index", i)))
+				errcode.WithDetails(errcode.PublicInt("entry_index", i)))
 		}
 	}
 	return nil

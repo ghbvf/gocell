@@ -507,21 +507,25 @@ func TestScaffoldCell_RejectsSymlinkBreakout(t *testing.T) {
 // MESSAGE-CONST-LITERAL-01 constraint: runtime field names are in Details,
 // not in the const-literal message.
 func TestScaffoldCell_ValidationErrors(t *testing.T) {
-	// hasDetail reports whether the errcode.Error's Details contain an attr
-	// with the given key and value.
+	// hasDetail reports whether the errcode.Error's Details contain an entry
+	// with the given key and string value.
 	hasDetail := func(ec *errcode.Error, key, value string) bool {
-		for _, attr := range ec.Details {
-			if attr.Key == key && attr.Value.String() == value {
+		for _, d := range ec.Details {
+			if d.Key() != key {
+				continue
+			}
+			s, ok := d.Value().(string)
+			if ok && s == value {
 				return true
 			}
 		}
 		return false
 	}
 
-	// hasDetailKey reports whether any detail attr matches the given key.
+	// hasDetailKey reports whether any detail entry matches the given key.
 	hasDetailKey := func(ec *errcode.Error, key string) bool {
-		for _, attr := range ec.Details {
-			if attr.Key == key {
+		for _, d := range ec.Details {
+			if d.Key() == key {
 				return true
 			}
 		}

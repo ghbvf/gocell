@@ -3,7 +3,6 @@ package cellgen
 import (
 	"bufio"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,12 +83,12 @@ func BuildCellSpec(
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			"cellgen build: cell not found",
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 	}
 	if cell.GoStructName.IsZero() {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: cell is missing goStructName in cell.yaml — required for cell_gen.go",
-			errcode.WithDetails(slog.String("cellID", cellID)))
+			errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 	}
 
 	spec := &CellGenSpec{
@@ -108,17 +107,17 @@ func BuildCellSpec(
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"cellgen build: listener ref must match pattern (e.g. cell.PrimaryListener, cell.InternalListener)",
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("listenerRef", l.Ref),
-					slog.String("pattern", listenerRefPattern.String()),
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("listenerRef", l.Ref),
+					errcode.PublicString("pattern", listenerRefPattern.String()),
 				))
 		}
 		if _, exists := listenerPrefix[l.Ref]; exists {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"cellgen build: cell declares listener twice",
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("listenerRef", l.Ref),
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("listenerRef", l.Ref),
 				))
 		}
 		listenerPrefix[l.Ref] = l.Prefix
@@ -159,7 +158,7 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSliceNotFound,
 			"cellgen build slice: slice not found",
-			errcode.WithDetails(slog.String("sliceKey", key)))
+			errcode.WithDetails(errcode.PublicString("sliceKey", key)))
 	}
 
 	spec := &SliceGenSpec{
@@ -240,10 +239,10 @@ func buildSubscriptionSpecFromCU(
 		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: subscribe Handler must be a non-empty exported Go identifier (e.g. HandleEvent, HandleOrderCreated)",
 			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sliceID),
-				slog.String("handler", cu.Handler),
-				slog.String("pattern", goExportedIdentPattern.String()),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("handler", cu.Handler),
+				errcode.PublicString("pattern", goExportedIdentPattern.String()),
 			))
 	}
 
@@ -255,19 +254,19 @@ func buildSubscriptionSpecFromCU(
 		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: subscribe field name must be a valid Go identifier (e.g. consumerSvc, eventHandler)",
 			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sliceID),
-				slog.String("field", fieldName),
-				slog.String("pattern", goLocalIdentPattern.String()),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("field", fieldName),
+				errcode.PublicString("pattern", goLocalIdentPattern.String()),
 			))
 	}
 
 	contract, ok := p.Contracts[cu.Contract]
 	if !ok {
-		details := []slog.Attr{
-			slog.String("cellID", cellID),
-			slog.String("sliceID", sliceID),
-			slog.String("contract", cu.Contract),
+		details := []errcode.PublicDetail{
+			errcode.PublicString("cellID", cellID),
+			errcode.PublicString("sliceID", sliceID),
+			errcode.PublicString("contract", cu.Contract),
 		}
 		if stubTopicPattern.MatchString(cu.Contract) {
 			return SubscriptionGenSpec{}, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
@@ -282,10 +281,10 @@ func buildSubscriptionSpecFromCU(
 		return SubscriptionGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: subscribes to non-event contract",
 			errcode.WithDetails(
-				slog.String("cellID", cellID),
-				slog.String("sliceID", sliceID),
-				slog.String("contract", cu.Contract),
-				slog.String("kind", contract.Kind),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("kind", contract.Kind),
 			))
 	}
 	return SubscriptionGenSpec{
@@ -308,9 +307,9 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				msgUndeclaredListener,
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("sliceID", r.Slice),
-					slog.String("listener", r.Listener),
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", r.Slice),
+					errcode.PublicString("listener", r.Listener),
 				))
 		}
 		// Method is optional — empty means RegisterRoutes (applied by buildRouteGroupsFromBundle).
@@ -319,10 +318,10 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"cellgen build: route Method must be an exported Go identifier (e.g. RegisterRoutes, HandleHTTP) or empty to use the default",
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("sliceID", r.Slice),
-					slog.String("method", r.Method),
-					slog.String("pattern", goExportedIdentPattern.String()),
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", r.Slice),
+					errcode.PublicString("method", r.Method),
+					errcode.PublicString("pattern", goExportedIdentPattern.String()),
 				))
 		}
 		// HandlerField is derived from AST field name but validated defensively.
@@ -330,10 +329,10 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"cellgen build: route HandlerField must be a valid Go identifier (e.g. createHandler, queryH)",
 				errcode.WithDetails(
-					slog.String("cellID", cellID),
-					slog.String("sliceID", r.Slice),
-					slog.String("handlerField", r.HandlerField),
-					slog.String("pattern", goLocalIdentPattern.String()),
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", r.Slice),
+					errcode.PublicString("handlerField", r.HandlerField),
+					errcode.PublicString("pattern", goLocalIdentPattern.String()),
 				))
 		}
 	}

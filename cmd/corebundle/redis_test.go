@@ -149,7 +149,9 @@ func TestLoadRedisConfigFromEnv_InvalidDBFailFast(t *testing.T) {
 			assert.Contains(t, ecErr.Message, envRedisDB)
 			attr, ok := ecErr.FindAttr("got")
 			assert.True(t, ok, "expected 'got' detail attr")
-			assert.Equal(t, tc.db, attr.Value.String())
+			got, ok := attr.Value().(string)
+			require.True(t, ok, "expected string detail value, got %T", attr.Value())
+			assert.Equal(t, tc.db, got)
 		})
 	}
 }

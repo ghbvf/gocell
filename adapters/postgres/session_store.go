@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -156,7 +155,7 @@ func (s *PGSessionStore) Create(ctx context.Context, sess *session.Session) erro
 	if _, err := uuid.Parse(sess.SubjectID); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"PG session store requires UUID-formatted SubjectID",
-			errcode.WithDetails(slog.String("subjectID", sess.SubjectID)))
+			errcode.WithDetails(errcode.PublicString("subjectID", sess.SubjectID)))
 	}
 	// S4d: credential provenance is mandatory. See mem_store Create.
 	if sess.AuthzEpochAtIssue == 0 {
@@ -186,13 +185,13 @@ func sessionCreateError(err error, sessionID, subjectID string) error {
 	if pgquery.IsUniqueViolation(err) {
 		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session: duplicate ID",
-			errcode.WithDetails(slog.String("sessionID", sessionID)))
+			errcode.WithDetails(errcode.PublicString("sessionID", sessionID)))
 	}
 	if pgquery.IsForeignKeyViolation(err) {
 		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound,
 			"session: subject user not found",
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithDetails(slog.String("subjectID", subjectID)))
+			errcode.WithDetails(errcode.PublicString("subjectID", subjectID)))
 	}
 	return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: create", err)
 }
@@ -213,7 +212,7 @@ func (s *PGSessionStore) Get(ctx context.Context, id string) (*session.ValidateV
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound,
 			"session: not found",
 			errcode.WithCategory(errcode.CategoryDomain),
-			errcode.WithDetails(slog.String("sessionID", id)))
+			errcode.WithDetails(errcode.PublicString("sessionID", id)))
 	}
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "session store: get", err)
@@ -310,7 +309,7 @@ func (s *PGSessionStore) RevokeForSubject(
 	if _, err := uuid.Parse(subjectID); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"PG session store requires UUID-formatted subjectID",
-			errcode.WithDetails(slog.String("subjectID", subjectID)))
+			errcode.WithDetails(errcode.PublicString("subjectID", subjectID)))
 	}
 	if !session.ValidateCredentialEvent(event) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

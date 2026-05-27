@@ -115,7 +115,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 			require.ErrorAs(t, err, &ecErr)
 			assert.Equal(t, tt.wantCode, ecErr.Code)
 			assert.Equal(t, msgUserNotFound, ecErr.Message)
-			assert.Contains(t, ecErr.InternalMessage, tt.wantInternal)
+			assert.Contains(t, ecErr.Error(), tt.wantInternal)
 		})
 	}
 }

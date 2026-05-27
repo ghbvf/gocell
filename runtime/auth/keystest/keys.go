@@ -44,7 +44,7 @@ func MustGenerateKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		e := errcode.Assertion("authtest: failed to generate test RSA key pair")
-		e.InternalMessage = err.Error()
+		e.InternalDetails = append(e.InternalDetails, errcode.InternalAttr("_", err.Error()))
 		panic(panicregister.Approved("authtest-rsa-keypair", e))
 	}
 	return priv, &priv.PublicKey
@@ -59,7 +59,7 @@ func MustNewKeySet(clk clock.Clock) (*auth.KeySet, *rsa.PrivateKey, *rsa.PublicK
 	ks, err := auth.NewKeySet(priv, pub, clk)
 	if err != nil {
 		e := errcode.Assertion("authtest: failed to create test key set")
-		e.InternalMessage = err.Error()
+		e.InternalDetails = append(e.InternalDetails, errcode.InternalAttr("_", err.Error()))
 		panic(panicregister.Approved("authtest-keyset", e))
 	}
 	return ks, priv, pub
@@ -74,7 +74,7 @@ func MustNewKeyProvider(clk clock.Clock) auth.KeyProvider {
 	ring, err := auth.NewHMACKeyRing([]byte("test-hmac-secret-at-least-32-bytes!!"), nil)
 	if err != nil {
 		e := errcode.Assertion("authtest: failed to create test HMAC key ring")
-		e.InternalMessage = err.Error()
+		e.InternalDetails = append(e.InternalDetails, errcode.InternalAttr("_", err.Error()))
 		panic(panicregister.Approved("authtest-hmac-keyring", e))
 	}
 	return auth.NewStaticKeyProvider(ks, ring)

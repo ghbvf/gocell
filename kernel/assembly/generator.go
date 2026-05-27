@@ -83,14 +83,14 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			msgAssemblyNotFound,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 
 	helperName, err := assemblyRunHelperName(assemblyID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"invalid assembly for generated run helper", err,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 
 	ctx := entrypointContext{
@@ -196,7 +196,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			msgAssemblyNotFound,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 
 	cellSet := make(map[string]bool, len(asm.Cells))
@@ -242,7 +242,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			msgAssemblyNotFound,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 
 	modules := make([]string, 0, len(asm.Cells))
@@ -252,12 +252,12 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		if cm == nil {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				"assembly references unknown cell",
-				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
 		}
 		if cm.GoStructName.IsZero() {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				"cell missing GoStructName for modules_gen factory derivation",
-				errcode.WithInternal(fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q cell=%q", assemblyID, cellID))))
 		}
 		modules = append(modules, cm.GoStructName.String()+"Module")
 		for _, c := range cm.Requires {
@@ -280,7 +280,7 @@ func (g *Generator) GenerateModulesGen(assemblyID string) ([]byte, error) {
 		if !ok {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				"cell declares an unknown capability in requires",
-				errcode.WithInternal(fmt.Sprintf("assembly=%q capability=%q", assemblyID, c)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q capability=%q", assemblyID, c))))
 		}
 		capConsts = append(capConsts, name)
 	}
@@ -417,7 +417,7 @@ func (g *Generator) appendGeneratedFiles(
 		if cerr != nil {
 			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold assembly: derived path containment failed", cerr,
-				errcode.WithInternal(fmt.Sprintf("path=%s", d.relPath)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("path=%s", d.relPath))))
 		}
 		plan = append(plan, pathsafe.PlannedFile{
 			AbsPath: absPath,
@@ -501,7 +501,7 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 	if err != nil {
 		return scaffoldAssemblyContext{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"assembly id has no identifier characters", err,
-			errcode.WithInternal(fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID.String())))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, spec.ID.String()))))
 	}
 
 	// deployTemplate is a typed-Scalar sentinel: zero value `Scalar("")`
@@ -561,7 +561,7 @@ func (g *Generator) renderAssemblyScaffoldFiles(
 		if containErr != nil {
 			return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"scaffold assembly: path containment check failed", containErr,
-				errcode.WithInternal(fmt.Sprintf("path=%s", f.Path)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("path=%s", f.Path))))
 		}
 		plan = append(plan, pathsafe.PlannedFile{
 			AbsPath: absPath,
@@ -598,7 +598,7 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 	if !metadata.IsValidMetadataText(spec.OwnerTeam) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerTeam contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=OwnerTeam value=%q", spec.OwnerTeam)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=OwnerTeam value=%q", spec.OwnerTeam))))
 	}
 	if spec.OwnerRole == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -607,12 +607,12 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 	if !metadata.IsValidMetadataText(spec.OwnerRole) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: OwnerRole contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=OwnerRole value=%q", spec.OwnerRole)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=OwnerRole value=%q", spec.OwnerRole))))
 	}
 	if spec.Deploy != "" && !metadata.IsKnownDeployTemplate(spec.Deploy) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly scaffold: --deploy must be one of [k8s compose binary]",
-			errcode.WithInternal(fmt.Sprintf("deploy=%q", spec.Deploy)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("deploy=%q", spec.Deploy))))
 	}
 	// spec.Cells is []scaffoldid.ScaffoldID — the AssemblyIDPattern
 	// (^[a-z][a-z0-9]+$) is identical to CellIDPattern, so a typed entry has
@@ -622,7 +622,7 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 		if g.cells.Get(cellID.String()) == nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"assembly scaffold: --cells references unknown cell",
-				errcode.WithInternal(fmt.Sprintf("cell=%q", cellID.String())))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", cellID.String()))))
 		}
 	}
 	return nil
@@ -638,13 +638,13 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 		if provErr != nil {
 			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"boundary: resolve provider failed", provErr,
-				errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", contractID))))
 		}
 		consumers, consErr := g.contracts.Consumers(contractID)
 		if consErr != nil {
 			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"boundary: resolve consumers failed", consErr,
-				errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", contractID))))
 		}
 		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
 	}
@@ -932,21 +932,21 @@ func (g *Generator) executeTemplate(name string, ctx any) ([]byte, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to read template", err,
-			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalTemplateQuotedFmt, name))))
 	}
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to parse template", err,
-			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalTemplateQuotedFmt, name))))
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"failed to execute template", err,
-			errcode.WithInternal(fmt.Sprintf(internalTemplateQuotedFmt, name)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalTemplateQuotedFmt, name))))
 	}
 
 	return buf.Bytes(), nil

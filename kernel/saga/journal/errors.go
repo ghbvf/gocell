@@ -21,7 +21,7 @@ import (
 func NewInstanceNotFoundError(instanceID idutil.SafeID) error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrSagaNotFound,
 		"saga journal: instance not found",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s", instanceID)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("instanceID=%s", instanceID))),
 	)
 }
 
@@ -30,7 +30,7 @@ func NewInstanceNotFoundError(instanceID idutil.SafeID) error {
 func NewDuplicateInstanceError(instanceID idutil.SafeID) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrSagaDuplicateInstance,
 		"saga journal: instance already enqueued",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s", instanceID)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("instanceID=%s", instanceID))),
 	)
 }
 
@@ -41,7 +41,7 @@ func NewDuplicateInstanceError(instanceID idutil.SafeID) error {
 func NewStaleLeaseError(instanceID, leaseID idutil.SafeID) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrSagaStaleLease,
 		"saga journal: stale lease on append",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s leaseID=%s", instanceID, leaseID)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("instanceID=%s leaseID=%s", instanceID, leaseID))),
 	)
 }
 
@@ -51,7 +51,7 @@ func NewStaleLeaseError(instanceID, leaseID idutil.SafeID) error {
 func NewInvalidTerminalStatusError(instanceID idutil.SafeID, from, to saga.Status) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: invalid terminal status",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s from=%s to=%s", instanceID, from, to)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("instanceID=%s from=%s to=%s", instanceID, from, to))),
 	)
 }
 
@@ -60,7 +60,7 @@ func NewInvalidTerminalStatusError(instanceID idutil.SafeID, from, to saga.Statu
 func NewNonPositiveBatchSizeError(batchSize int) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: ClaimPending batchSize must be positive",
-		errcode.WithInternal(fmt.Sprintf("batchSize=%d", batchSize)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("batchSize=%d", batchSize))),
 	)
 }
 
@@ -70,7 +70,7 @@ func NewNonPositiveBatchSizeError(batchSize int) error {
 func NewNonPositiveLeaseDurationError(d time.Duration) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: leaseDuration must be positive",
-		errcode.WithInternal(fmt.Sprintf("leaseDuration=%s", d)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("leaseDuration=%s", d))),
 	)
 }
 
@@ -82,7 +82,7 @@ func NewNonPositiveLeaseDurationError(d time.Duration) error {
 func NewEventPhaseError(instanceID idutil.SafeID, kind EventKind, status saga.Status) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"saga journal: event kind not allowed in current phase",
-		errcode.WithInternal(fmt.Sprintf("instanceID=%s kind=%s status=%s", instanceID, kind, status)),
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("instanceID=%s kind=%s status=%s", instanceID, kind, status))),
 	)
 }
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,17 +41,17 @@ func validateScaffoldID(value, field string) error {
 	if value == "" {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field is required",
-			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalFieldFmt, field))))
 	}
 	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains path traversal or separator",
-			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s value=%q", field, value))))
 	}
 	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, value)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s value=%q", field, value))))
 	}
 	return nil
 }
@@ -67,7 +66,7 @@ func validateScaffoldText(value, field string) error {
 	if strings.ContainsAny(value, "\n\r\x00\t") {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold field contains forbidden control characters",
-			errcode.WithInternal(fmt.Sprintf(internalFieldFmt, field)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalFieldFmt, field))))
 	}
 	return nil
 }
@@ -100,11 +99,11 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 		return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold contract: --owner does not match IdentifierPattern", err,
 			errcode.WithDetails(
-				slog.String("flag", "--owner"),
-				slog.String("pattern", scaffoldid.IdentifierPattern),
+				errcode.PublicString("flag", "--owner"),
+				errcode.PublicString("pattern", scaffoldid.IdentifierPattern),
 			),
-			errcode.WithInternal(fmt.Sprintf("flag=--owner value=%q pattern=%s",
-				owner, scaffoldid.IdentifierPattern)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--owner value=%q pattern=%s",
+				owner, scaffoldid.IdentifierPattern))))
 	}
 	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
 	if !validKinds[kind] {
@@ -158,11 +157,11 @@ func validateJourneyFlags(id, goal, team, cells string) ([]string, error) {
 			return nil, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 				"scaffold journey: --cells[] entry does not match IdentifierPattern", err,
 				errcode.WithDetails(
-					slog.String("flag", "--cells[]"),
-					slog.String("pattern", scaffoldid.IdentifierPattern),
+					errcode.PublicString("flag", "--cells[]"),
+					errcode.PublicString("pattern", scaffoldid.IdentifierPattern),
 				),
-				errcode.WithInternal(fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
-					c, scaffoldid.IdentifierPattern)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cells[] value=%q pattern=%s",
+					c, scaffoldid.IdentifierPattern))))
 		}
 	}
 	return cellList, nil
@@ -440,11 +439,11 @@ func scaffoldCell(root string, args []string) error {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--id does not match metadata AssemblyIDPattern", err,
 			errcode.WithDetails(
-				slog.String("flag", "--id"),
-				slog.String("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--id"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
-			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
-				*id, metadata.AssemblyIDPattern)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--id value=%q pattern=%s",
+				*id, metadata.AssemblyIDPattern))))
 	}
 	spec := buildScaffoldCellSpec(scaffoldCellInputs{
 		ID:             cellID,
@@ -545,26 +544,26 @@ func validateSliceScaffoldFlags(id, cellID, level string) error {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --id does not match AssemblyIDPattern", err,
 			errcode.WithDetails(
-				slog.String("flag", "--id"),
-				slog.String("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--id"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
-			errcode.WithInternal(fmt.Sprintf("flag=--id value=%q pattern=%s",
-				id, metadata.AssemblyIDPattern)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--id value=%q pattern=%s",
+				id, metadata.AssemblyIDPattern))))
 	}
 	if _, err := scaffoldid.Parse(cellID); err != nil {
 		return errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --cell does not match AssemblyIDPattern", err,
 			errcode.WithDetails(
-				slog.String("flag", "--cell"),
-				slog.String("pattern", metadata.AssemblyIDPattern),
+				errcode.PublicString("flag", "--cell"),
+				errcode.PublicString("pattern", metadata.AssemblyIDPattern),
 			),
-			errcode.WithInternal(fmt.Sprintf("flag=--cell value=%q pattern=%s",
-				cellID, metadata.AssemblyIDPattern)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q pattern=%s",
+				cellID, metadata.AssemblyIDPattern))))
 	}
 	if !validSliceLevels[level] {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"scaffold slice: --level must be one of L0|L1|L2|L3|L4",
-			errcode.WithInternal(fmt.Sprintf("level=%q", level)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("level=%q", level))))
 	}
 	return nil
 }

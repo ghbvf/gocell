@@ -163,7 +163,7 @@ func (c *IdempotencyClaimer) Claim(
 	if key == "" || strings.ContainsAny(key, "{}") {
 		return 0, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
 			"redis: idempotency key must be non-empty and free of curly-brace characters",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("key=%q", key))))
 	}
 	if leaseTTL <= 0 {
 		leaseTTL = idempotency.DefaultLeaseTTL

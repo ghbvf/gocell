@@ -265,7 +265,7 @@ func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
 	require.Len(t, errs, 1)
 	var ecErrJourneyPrefix *errcode.Error
 	require.True(t, errors.As(errs[0], &ecErrJourneyPrefix))
-	assert.Contains(t, ecErrJourneyPrefix.Message+" "+ecErrJourneyPrefix.InternalMessage, "journey prefix")
+	assert.Contains(t, ecErrJourneyPrefix.Message+" "+ecErrJourneyPrefix.Error(), "journey prefix")
 }
 
 func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
@@ -473,5 +473,5 @@ func assertDetailString(t *testing.T, ec *errcode.Error, key, want string) {
 	t.Helper()
 	attr, ok := ec.FindAttr(key)
 	require.True(t, ok, "missing detail attr %q", key)
-	assert.Equal(t, want, attr.Value.String())
+	assert.Equal(t, want, attr.Value())
 }

@@ -516,8 +516,10 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 				"message must be a const literal")
 			var gotField string
 			for _, attr := range ec.Details {
-				if attr.Key == "field" {
-					gotField = attr.Value.String()
+				if attr.Key() == "field" {
+					s, ok := attr.Value().(string)
+					require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+					gotField = s
 					break
 				}
 			}

@@ -33,10 +33,10 @@
 
 `errcode.New` / `errcode.Wrap` 的 message 参数必须是 const literal（程序员写死的描述性文本）；runtime 产生的数据（用户输入、ID、计数等）禁止拼进 message。runtime 数据走两条通道：
 
-- `WithDetails(slog.String("key", val))` — 公开字段，4xx 时随 `details` 数组下发给客户端，5xx 时框架 strip；
-- `WithInternal(fmt.Sprintf(...))` — 仅服务端日志可见，任何状态码下均不下发客户端。
+- `WithDetails(errcode.PublicString("key", val))`（及 `PublicInt` / `PublicBool` / `PublicDuration` / `PublicTime`）— 公开字段，4xx 时随 `details` 数组下发给客户端，5xx 时框架 strip；
+- `WithInternal(errcode.InternalAttr("key", val))` — 仅服务端日志可见，任何状态码下均不下发客户端。
 
-`WithInternal` 不受 const literal 约束。archtest `MESSAGE-CONST-LITERAL-01` 静态守卫，拦截任何在 `errcode.New/Wrap` 第三参数位置出现 `fmt.Sprintf` 或字符串拼接的调用点。
+`WithInternal` 不受 const literal 约束（整条通道仅服务端可见）。archtest `MESSAGE-CONST-LITERAL-01` 静态守卫 `errcode.New/Wrap` message 参数位置；`PublicString` 系列 / `InternalAttr` 的 value 参数无 const 约束（runtime 数据在 details/internal 通道是预期用法）。
 
 ### archtest carve-out 约束
 
@@ -87,16 +87,38 @@ map. AI co-authors writing a new panic call site can either:
 Any other shape — bare panic, missing wrap, non-literal reason, different
 callee — fails archtest immediately.
 
-## Details 类型安全：slog.Attr
+## Details 类型安全：PublicDetail / InternalDetail sealed newtype + sealed value marker
 
-`WithDetails` 参数类型由 `map[string]any` 改为 `...slog.Attr`，调用方使用标准构造函数：
+`WithDetails` / `WithInternal` 参数是 sealed newtype（`pkg/errcode/details.go`）：
+
+- **Public 通道**走 typed scalar 构造器 — `PublicString` / `PublicInt[T 整数]` / `PublicBool` / `PublicDuration` / `PublicTime`。`PublicDetail.value` 字段是 sealed `publicValue` marker interface（unexported `publicValue()` method），包外类型无法实现，所以非 wire-safe 值（chan / func / NaN/Inf float64 / map / struct / pointer）编译期不可表达。
+- **Internal 通道**走 `InternalAttr(key, value any)` — value 仍是 `any`，因为整条通道仅服务端可见，wire-safety 不约束。
 
 ```go
 errcode.New(ErrNotFound, "device not found",
     errcode.WithDetails(
-        slog.String("deviceId", id),
-        slog.Int("retryCount", n),
-    ))
+        errcode.PublicString("deviceId", id),
+        errcode.PublicInt("retryCount", n),
+    ),
+    errcode.WithInternal(errcode.InternalAttr("query", q)))
 ```
 
-wire schema `error.details` 为 `array<{key: string, value: any}>`，由 `Error.MarshalJSON()` 从 `[]slog.Attr` 派生，不再是任意 JSON object。`error-response-v1.schema.json` 中 `details` 字段类型同步改为 `array`。archtest `DETAILS-SLOG-ATTR-01` 拦截直接传入 `map[string]any` 的旧式调用。移除旧版 `attrsToMap` helper（单源治理，不保留过渡桥接）。
+`PublicDetail` / `InternalDetail` 字段全部 unexported，包外不可结构字面量构造、不可类型 alias 重新可构造（Go nominal typing 同字段集 re-shape 也不接受）。Wire schema `error.details` 是 `array<{key: string, value: <scalar>}>`（由 `PublicDetail.MarshalJSON` 派生，wire schema 约束 value ∈ {string, number, boolean}）；5xx wire 强制 strip 为 `[]`（由 `Error.MarshalJSON` 经 `PublicProjection` / `project()` 实现）。`error-response-v1.schema.json` 的 `details.value` schema 与 typed 构造器集对齐（不含 float64）。
+
+`InternalDetail` 永不进 wire，仅服务端 slog 与 `Error.Error()` 字符串可见；handler 想在 slog 输出每条 InternalDetail 用 `d.AsSlogAttr()` 转 `slog.Attr`。free-form 单字符串场景按约定走 `InternalAttr("_", "...")` —— `Error.Error()` 将单条 `_` 键渲染为 bare value（保留原 `[CODE] msg` 字符串格式）：
+
+```go
+// free-form 单字符串场景（mechanical migration of pre-#1035 WithInternal(string)）
+errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("query=%s page=%d", q, p)))
+
+// 结构化场景（推荐用于新写代码：单独的 key 让 slog 字段可被查询）
+errcode.WithInternal(
+    errcode.InternalAttr("op", "scan"),
+    errcode.InternalAttr("query", q),
+    errcode.InternalAttr("retries", n),
+)
+```
+
+archtest `DETAILS-SLOG-ATTR-01` 已退役（type system 已表达 invariant）；新加 `DETAILS-SEALED-FIELD-FROZEN-01`（reflect + AST lock）反向守卫 PublicDetail/InternalDetail 字段集 + 可见性 + publicValue 类型身份 + publicValue 实现集合 + PublicDetail constructor 集合，防止包内漂移（如 value 字段被改回 `any`、字段大写化、重命名、悄悄新增 `PublicFloat`）。`MustValidateDetailsKinds` 同样退役（typed value 已使非 scalar 在 type system 不可表达）。`PublicAttr(any)` 删除：调用方按 value 类型选 typed scalar 构造器（不再有 `any` 入口）；为强制 caller 自行 format 浮点数（NaN/Inf 风险），**故意不提供** `PublicFloat`。
+
+详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` §Amendment 2026-05-27。

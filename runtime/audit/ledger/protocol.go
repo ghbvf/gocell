@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -86,8 +85,8 @@ func (ns NamespaceID) Validate() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: namespace ID exceeds maximum length",
 			errcode.WithDetails(
-				slog.Int("maxLength", maxNamespaceIDLen),
-				slog.Int("actualLength", len(s)),
+				errcode.PublicInt("maxLength", maxNamespaceIDLen),
+				errcode.PublicInt("actualLength", len(s)),
 			))
 	}
 	first := rune(s[0])
@@ -188,8 +187,8 @@ func WithChainHMAC(key []byte) Option {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"audit ledger: HMAC key too short (RFC 2104 §3, NIST SP 800-107)",
 				errcode.WithDetails(
-					slog.Int("minimumBytes", minHMACKeyBytes),
-					slog.Int("actualBytes", len(key)),
+					errcode.PublicInt("minimumBytes", minHMACKeyBytes),
+					errcode.PublicInt("actualBytes", len(key)),
 				))
 		}
 		dst := make([]byte, len(key))

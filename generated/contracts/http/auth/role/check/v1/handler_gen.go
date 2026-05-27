@@ -4,7 +4,6 @@
 package check
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -76,13 +75,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "roleName"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "roleName"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "roleName"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "roleName"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		req.RoleName = v

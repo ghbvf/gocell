@@ -124,7 +124,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 				require.Error(t, err)
 				var ecErrHalf *errcode.Error
 				require.True(t, errors.As(err, &ecErrHalf))
-				assert.Contains(t, ecErrHalf.Message+" "+ecErrHalf.InternalMessage, "outboxWriter+txRunner")
+				assert.Contains(t, ecErrHalf.Message, "outboxWriter+txRunner")
 				return
 			}
 			require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) 
 	require.Error(t, err)
 	var ecErrDefault *errcode.Error
 	require.True(t, errors.As(err, &ecErrDefault))
-	assert.Contains(t, ecErrDefault.Message+" "+ecErrDefault.InternalMessage, "outboxWriter+txRunner")
+	assert.Contains(t, ecErrDefault.Message, "outboxWriter+txRunner")
 }
 
 // TestOrderCell_DemoMode_RejectsHalfConfiguredPath verifies that exactly one
@@ -168,7 +168,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			require.Error(t, err)
 			var ecErrReject *errcode.Error
 			require.True(t, errors.As(err, &ecErrReject))
-			assert.Contains(t, ecErrReject.Message+" "+ecErrReject.InternalMessage, "outboxWriter and txRunner")
+			assert.Contains(t, ecErrReject.Message, "outboxWriter and txRunner")
 		})
 	}
 }
@@ -182,7 +182,7 @@ func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 	require.Error(t, err)
 	var ecErrNoopWriter *errcode.Error
 	require.True(t, errors.As(err, &ecErrNoopWriter))
-	assert.Contains(t, ecErrNoopWriter.Message+" "+ecErrNoopWriter.InternalMessage, "durable mode")
+	assert.Contains(t, ecErrNoopWriter.Message, "durable mode")
 }
 
 // TestOrderCell_DurableMode_RejectsMissingCursorCodec locks the fail-fast

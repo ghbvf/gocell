@@ -6,8 +6,15 @@ package archtest
 //   - INVARIANT: MESSAGE-CONST-LITERAL-01
 //   - INVARIANT: ERROR-FIRST-API-01
 //   - INVARIANT: ERROR-FIRST-TYPED-NIL-01
-//   - INVARIANT: DETAILS-SLOG-ATTR-01
 //   - INVARIANT: EXPORTED-ERROR-NEW-01
+//   - INVARIANT: DETAILS-SEALED-FIELD-FROZEN-01
+//
+// DETAILS-SLOG-ATTR-01 retired by PR #1035: sealed PublicDetail newtype
+// (pkg/errcode/details.go) makes wire-unsafe construction inexpressible
+// in Go's type system. See ADR docs/architecture/202605051730-adr-errcode-message-pii-safety.md.
+// DETAILS-SEALED-FIELD-FROZEN-01 is the reflect-based field lock that
+// guards the same invariant against in-package drift (re-exporting either
+// the carrier struct fields or the publicValue marker interface).
 
 import (
 	"bufio"
@@ -18,14 +25,17 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -172,37 +182,6 @@ type carveOut struct{ rel, fn string }
 var errcodeKindLiteralCarveOuts = map[carveOut]struct{}{
 	{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {},
 	{rel: "pkg/httputil/response.go", fn: "WritePublic"}:   {},
-}
-
-// ─── details_slog_attr constants ─────────────────────────────────────────────
-
-const ruleDetailsSlogAttr01 = "DETAILS-SLOG-ATTR-01"
-
-// errcodeImportPathLit is the quoted import path emitted by the parser in
-// ast.ImportSpec.Path.Value (literal form, including the surrounding
-// double quotes). Distinct from errcodeImportPath above which stores the
-// unquoted form for strconv.Unquote-based comparison.
-const errcodeImportPathLit = `"github.com/ghbvf/gocell/pkg/errcode"`
-
-// detailsSlogAttrScanRoots are the top-level directories whose non-test .go
-// files are scanned. Adding a new top-level directory under module root
-// requires explicit registration here.
-var detailsSlogAttrScanRoots = []string{
-	"adapters",
-	"cells",
-	"cmd",
-	"examples",
-	"kernel",
-	"pkg",
-	"runtime",
-	"tools",
-}
-
-// detailsSlogAttrAllowlist lists path prefixes that are exempt from the
-// gate. Entries are matched against the module-relative path.
-var detailsSlogAttrAllowlist = []string{
-	"pkg/errcode/",
-	"tools/archtest/testdata/",
 }
 
 // ─── exported_error_new constants ────────────────────────────────────────────
@@ -887,10 +866,11 @@ func errcodeErrorAliasReexports(f *ast.File) []string {
 // MESSAGE-CONST-LITERAL-01 — every call to `errcode.New(...)` and
 // `errcode.Wrap(...)` in production code must pass a compile-time const
 // literal as the third (`message`) argument. Runtime data (user input, IDs,
-// counts, secrets) belongs in WithDetails (typed slog.Attr) or WithInternal
-// (server-side only). The PII-safe default is enforced statically here so
-// regression cannot reintroduce `fmt.Sprintf` / string-concatenation
-// messages that leak runtime context onto the wire.
+// counts, secrets) belongs in WithDetails (sealed PublicDetail via
+// errcode.PublicString) or WithInternal (sealed InternalDetail, server-side
+// only). The PII-safe default is enforced statically here so regression
+// cannot reintroduce `fmt.Sprintf` / string-concatenation messages that
+// leak runtime context onto the wire.
 //
 // ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
 func TestErrcodeMessageConstLiteral(t *testing.T) {
@@ -962,7 +942,8 @@ func scanErrcodeMessageASTDiags(
 			Line: line,
 			Message: fmt.Sprintf(
 				"%s(...) message must be a const literal (got %T) "+
-					"— move runtime data to WithDetails(slog.Attr) or WithInternal",
+					"— move runtime data to WithDetails(errcode.PublicString/PublicInt/PublicBool/PublicDuration/PublicTime(...)) or "+
+					"WithInternal(errcode.InternalAttr(...))",
 				callee.displayName, msgArg),
 		})
 	})
@@ -1627,204 +1608,6 @@ func findPanicCalls(body *ast.BlockStmt, onPanic func(token.Pos)) {
 	})
 }
 
-// INVARIANT: DETAILS-SLOG-ATTR-01
-//
-// TestDetailsSlogAttr enforces DETAILS-SLOG-ATTR-01 across production code.
-//
-// DETAILS-SLOG-ATTR-01 — every call to `errcode.WithDetails(...)` in
-// production code must pass typed slog.Attr arguments, not the legacy
-// `map[string]any{...}` literal form. The signature change is a hard cutover
-// (see ADR docs/architecture/202605051730-adr-errcode-message-pii-safety.md);
-// this archtest prevents regression by flagging map-literal arguments at
-// build time.
-//
-// ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md
-func TestDetailsSlogAttr(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-
-	var allDiags []Diagnostic
-	for _, dir := range detailsSlogAttrScanRoots {
-		diags := Run(t, DirsScope(root, []string{dir}), func(p *Pass) []Diagnostic {
-			var out []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if isInDetailsSlogAttrAllowlist(rel) {
-					continue
-				}
-				out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
-			}
-			return out
-		})
-		allDiags = append(allDiags, diags...)
-	}
-
-	// Re-sort across all dirs since each Run returns its own diagnostic slice.
-	sort.Slice(allDiags, func(i, j int) bool {
-		if allDiags[i].Rel != allDiags[j].Rel {
-			return allDiags[i].Rel < allDiags[j].Rel
-		}
-		return allDiags[i].Line < allDiags[j].Line
-	})
-
-	Report(t, ruleDetailsSlogAttr01, allDiags)
-}
-
-// isInDetailsSlogAttrAllowlist reports whether rel matches any allowlist prefix.
-func isInDetailsSlogAttrAllowlist(rel string) bool {
-	for _, prefix := range detailsSlogAttrAllowlist {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// TestDetailsSlogAttrFixtures verifies the AST scanner via static
-// regression cases.
-//
-// Each fixture dir owns a diag.golden capturing the rule's real output
-// (Rel:Line: Message). GREEN fixtures have an empty golden. Line numbers
-// live in the regenerated golden, never in this table — adding an import
-// to a fixture and re-running with -update produces a clean positional
-// delta. See ADR
-// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
-func TestDetailsSlogAttrFixtures(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	base := filepath.Join(root, "tools", "archtest", "testdata", "details_slog_attr")
-
-	// RED cases expect violations; GREEN cases expect empty golden.
-	dirs := []string{
-		"compliant", // GREEN
-		"violates",  // RED: map literal + slog.Any + slog.Group
-	}
-
-	for _, dir := range dirs {
-		dir := dir
-		t.Run(dir, func(t *testing.T) {
-			t.Parallel()
-			fixtureDir := filepath.Join(base, dir)
-			diags := Run(t, DirsScope(fixtureDir, []string{"."}), func(p *Pass) []Diagnostic {
-				var out []Diagnostic
-				for _, file := range p.Files {
-					rel := p.Rel(file)
-					out = append(out, scanWithDetailsFile(p.Fset, file, rel)...)
-				}
-				return out
-			})
-			goldenPath := filepath.Join(base, dir, "diag.golden")
-			AssertGolden(t, goldenPath, diags)
-		})
-	}
-}
-
-// errcodeLocalName returns the local identifier used in file to refer to
-// pkg/errcode (default "errcode" for an unnamed import; alias otherwise).
-// Returns "" when the file does not import errcode at all — in that case
-// any "WithDetails" selector cannot resolve to errcode.WithDetails.
-func errcodeLocalName(file *ast.File) string {
-	for _, imp := range file.Imports {
-		if imp.Path == nil || imp.Path.Value != errcodeImportPathLit {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		return "errcode"
-	}
-	return ""
-}
-
-// argHasMapLiteral reports whether expr is or contains a *ast.CompositeLit
-// whose Type is a *ast.MapType (excluding struct/slice composite literals).
-// We only flag the outermost arg shape; nested map literals inside a typed
-// slog.Group / slog.Any are caller-controlled and out of scope.
-func argHasMapLiteral(expr ast.Expr) bool {
-	cl, ok := expr.(*ast.CompositeLit)
-	if !ok {
-		return false
-	}
-	_, isMap := cl.Type.(*ast.MapType)
-	return isMap
-}
-
-// scanWithDetailsFile walks file and reports every
-// `<errcodeLocal>.WithDetails(map[...]{...})` call whose argument is a map
-// literal.
-func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
-	local := errcodeLocalName(file)
-	if local == "" {
-		return nil
-	}
-
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "WithDetails" {
-			return
-		}
-		x, ok := sel.X.(*ast.Ident)
-		if !ok || x.Name != local {
-			return
-		}
-		for _, arg := range call.Args {
-			if argHasMapLiteral(arg) {
-				line := fset.Position(call.Pos()).Line
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: line,
-					Message: "errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr " +
-						"values instead. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-				})
-				continue
-			}
-			if name, ok := unsafeSlogAttrConstructor(arg); ok {
-				line := fset.Position(call.Pos()).Line
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: line,
-					Message: fmt.Sprintf(
-						"errcode.WithDetails(slog.%s(...)) — wire-unsafe kind; "+
-							"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. "+
-							"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
-						name),
-				})
-			}
-		}
-	})
-	return out
-}
-
-// unsafeSlogAttrConstructor reports whether expr is a slog constructor whose
-// resulting Attr.Value carries a wire-unsafe kind (KindAny / KindGroup).
-// Detection is purely syntactic — selector match on "slog.Any" / "slog.Group"
-// — to keep this archtest free of go/types loads.
-//
-// Note: KindLogValuer Attrs are constructed via slog.Any(key, logValuerImpl),
-// not via a top-level slog.LogValue function (the stdlib has no such symbol;
-// LogValue is a method on slog.Value, not a constructor). The "Any" branch
-// already covers that path.
-func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
-	call, ok := expr.(*ast.CallExpr)
-	if !ok {
-		return "", false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.X == nil || sel.Sel == nil {
-		return "", false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || pkg.Name != "slog" {
-		return "", false
-	}
-	switch sel.Sel.Name {
-	case "Any", "Group":
-		return sel.Sel.Name, true
-	}
-	return "", false
-}
-
 // INVARIANT: EXPORTED-ERROR-NEW-01
 //
 // TestExportedErrorNew enforces EXPORTED-ERROR-NEW-01 by walking every
@@ -1971,4 +1754,314 @@ func isErrorsNewCall(expr ast.Expr, info *types.Info) bool {
 		return false
 	}
 	return pkg.Path() == "errors"
+}
+
+// ─── details_sealed_field_frozen ────────────────────────────────────────────
+//
+// INVARIANT: DETAILS-SEALED-FIELD-FROZEN-01
+//
+// errcode.PublicDetail / errcode.InternalDetail are sealed-construction
+// carriers (ADR docs/architecture/202605051730-adr-errcode-message-pii-safety.md
+// §Amendment 2026-05-27). The construction Hard claim requires two
+// invariants that this archtest locks via reflect:
+//
+//  1. Field layout: both structs MUST have exactly {key, value}, both
+//     unexported. An exported field re-opens the literal-construction
+//     bypass (`errcode.PublicDetail{Key:..., Value:...}` becomes valid
+//     from outside the package), collapsing the Hard rating.
+//  2. publicValue typed-marker: errcode.PublicDetail.value MUST be the
+//     sealed interface (named "publicValue", unexported method publicValue()).
+//     A widening to `any` (or a renamed-but-method-exporting variant)
+//     would let callers route wire-unsafe types (chan, func, NaN/Inf
+//     floats, maps, structs, pointers) into Error.Details, silently
+//     downgrading 4xx → 500 at json.Marshal time.
+//
+// InternalDetail.value is intentionally `any` (server-only channel; ADR
+// amendment §"Three-layer table revision"); the test asserts that
+// deliberate asymmetry so it cannot drift silently.
+//
+// AI-robust rating (per .claude/rules/gocell/ai-robust.md §Hard 范本目录
+// "sealed construction"):
+//   - Downstream Hard: typed Public* constructors are the only callsites
+//     that can produce a non-zero publicValue (the marker method is
+//     unexported, so no other package can implement it). Wire-unsafe
+//     value types are inexpressible at compile time.
+//   - Upstream Hard: PublicDetail.key / PublicDetail.value are unexported,
+//     so outside-package struct-literal construction is a Go compile
+//     error. errcode.Error.Details ([]PublicDetail) remains exported and
+//     can be mutated by outside code, but only via PublicDetail values
+//     produced from the typed constructors; the wire-side 5xx Details-
+//     strip invariant (Error.MarshalJSON → project() → []PublicDetail{})
+//     is the defense for runtime data leakage regardless of append source.
+//
+// Blind spots (reverse self-check below):
+//   - The lock keys on field NAMES "key"/"value"; a rename surfaces as
+//     a test error (visible), not a silent pass.
+//   - The publicValue type identity is checked by name and by the
+//     presence of an unexported method "publicValue" — an aliased type
+//     declared inside pkg/errcode with the same method set would pass,
+//     but it would still be sealed (the marker is package-local).
+//   - Outside-package aliasing of PublicDetail (`type Foo = errcode.PublicDetail`
+//     in another package) does not re-open construction: aliases preserve
+//     field visibility, so unexported fields stay unconstructable.
+//
+// Reference: SUBSCRIBERS-DERIVED-FIELD-FROZEN-01 (same reflect lock pattern),
+// OUTBOX-HANDLERESULT-FIELDS-FROZEN-01 (sibling envelope freeze).
+func TestDetailsSealedFieldFrozen01(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PublicDetail", func(t *testing.T) {
+		dt := reflect.TypeOf(errcode.PublicDetail{})
+		assertSealedKeyValueShape(t, "PublicDetail", dt)
+
+		// PublicDetail.value MUST be the publicValue sealed interface
+		// — name check pins the marker identity; an in-package rename
+		// surfaces visibly here.
+		valueField, ok := dt.FieldByName("value")
+		if !ok {
+			t.Fatal("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail has no value field (caught by shape assertion above)")
+		}
+		if valueField.Type.Kind() != reflect.Interface {
+			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value Kind = %s, want Interface "+
+				"(widening to a concrete type, or to a non-marker interface, breaks the typed-value funnel)",
+				valueField.Type.Kind())
+		}
+		if got := valueField.Type.Name(); got != "publicValue" {
+			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicDetail.value type name = %q, want %q "+
+				"(if you renamed the marker, update this archtest and the ADR amendment table)",
+				got, "publicValue")
+		}
+
+		// Confirm the typed constructors land on the same value field type
+		// (defense-in-depth: if PublicString were rewired to return a
+		// PublicDetail with a different value kind, this test fires).
+		probe := reflect.ValueOf(errcode.PublicString("k", "v"))
+		probeValue := probe.FieldByName("value")
+		if probeValue.Kind() != reflect.Interface {
+			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: PublicString(...) produced value Kind %s, want Interface",
+				probeValue.Kind())
+		}
+
+		root := findModuleRoot(t)
+		detailsPath := filepath.Join(root, "pkg", "errcode", "details.go")
+		file := mustParseGoFile(t, detailsPath)
+		assertExactStringSet(t, "DETAILS-SEALED-FIELD-FROZEN-01 publicValue implementers",
+			collectPublicValueImplementers(file),
+			[]string{"publicBool", "publicDuration", "publicInt", "publicString", "publicTime"})
+		assertExactStringSet(t, "DETAILS-SEALED-FIELD-FROZEN-01 PublicDetail constructors",
+			collectPublicDetailConstructors(file),
+			[]string{"PublicBool", "PublicDuration", "PublicInt", "PublicString", "PublicTime"})
+	})
+
+	t.Run("InternalDetail", func(t *testing.T) {
+		dt := reflect.TypeOf(errcode.InternalDetail{})
+		assertSealedKeyValueShape(t, "InternalDetail", dt)
+
+		// InternalDetail.value is intentionally untyped any (server-only
+		// channel; runtime data including fmt.Sprintf output is the
+		// documented use case). Lock the asymmetry so a future refactor
+		// that "harmonizes" both carriers must update the ADR first.
+		valueField, ok := dt.FieldByName("value")
+		if !ok {
+			t.Fatal("DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail has no value field (caught by shape assertion above)")
+		}
+		if valueField.Type.Kind() != reflect.Interface || valueField.Type.Name() != "" {
+			t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: InternalDetail.value type = %s, want untyped any "+
+				"(InternalDetail is server-only; tightening to a marker interface needs an ADR amendment)",
+				valueField.Type.String())
+		}
+	})
+}
+
+func mustParseGoFile(t *testing.T, path string) *ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	require.NoError(t, err, "DETAILS-SEALED-FIELD-FROZEN-01: parse %s", path)
+	return file
+}
+
+func collectPublicValueImplementers(file *ast.File) []string {
+	seen := map[string]struct{}{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Name.Name != "publicValue" || len(fn.Recv.List) == 0 {
+			continue
+		}
+		if name := detailReceiverTypeName(fn.Recv.List[0].Type); name != "" {
+			seen[name] = struct{}{}
+		}
+	}
+	return sortedSetKeys(seen)
+}
+
+func collectPublicDetailConstructors(file *ast.File) []string {
+	seen := map[string]struct{}{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
+			continue
+		}
+		for _, result := range fn.Type.Results.List {
+			if ident, ok := result.Type.(*ast.Ident); ok && ident.Name == "PublicDetail" {
+				seen[fn.Name.Name] = struct{}{}
+			}
+		}
+	}
+	return sortedSetKeys(seen)
+}
+
+func detailReceiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return detailReceiverTypeName(t.X)
+	default:
+		return ""
+	}
+}
+
+func sortedSetKeys(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for key := range set {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func assertExactStringSet(t *testing.T, name string, got, want []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want %v. Adding/removing a public detail scalar kind must update "+
+			"details.go, error-response-v1.schema.json, the ADR, and this archtest together.",
+			name, got, want)
+	}
+}
+
+// checkSealedKeyValueShape returns one violation message per shape axis
+// (field count, key presence/visibility/type, value presence/visibility).
+// Pure function so the reverse self-check below can call it directly on
+// synthetic structs without involving *testing.T. Empty result = clean.
+func checkSealedKeyValueShape(name string, dt reflect.Type) []string {
+	var violations []string
+	if dt.NumField() != 2 {
+		violations = append(violations, fmt.Sprintf(
+			"%s NumField = %d, want 2 (adding a field re-opens the sealed-construction invariant; update the ADR amendment first)",
+			name, dt.NumField()))
+		return violations
+	}
+	if keyField, ok := dt.FieldByName("key"); !ok {
+		violations = append(violations, fmt.Sprintf(
+			"%s has no 'key' field (renamed? exported? both break the sealed-construction invariant)", name))
+	} else {
+		if keyField.PkgPath == "" {
+			violations = append(violations, fmt.Sprintf(
+				"%s.key is exported (PkgPath empty); outside-package literal construction becomes possible — re-seal by lowercasing",
+				name))
+		}
+		if keyField.Type.Kind() != reflect.String {
+			violations = append(violations, fmt.Sprintf(
+				"%s.key Kind = %s, want String", name, keyField.Type.Kind()))
+		}
+	}
+	if valueField, ok := dt.FieldByName("value"); !ok {
+		violations = append(violations, fmt.Sprintf(
+			"%s has no 'value' field (renamed? exported? both break the sealed-construction invariant)", name))
+	} else if valueField.PkgPath == "" {
+		violations = append(violations, fmt.Sprintf(
+			"%s.value is exported (PkgPath empty); outside-package literal construction becomes possible — re-seal by lowercasing",
+			name))
+	}
+	return violations
+}
+
+// assertSealedKeyValueShape adapts checkSealedKeyValueShape to *testing.T
+// so the production assertion (TestDetailsSealedFieldFrozen01) can share
+// the same logic as the reverse self-check below.
+func assertSealedKeyValueShape(t *testing.T, name string, dt reflect.Type) {
+	t.Helper()
+	for _, v := range checkSealedKeyValueShape(name, dt) {
+		t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: %s", v)
+	}
+}
+
+// TestDetailsSealedFieldFrozen01_ScannerFires proves the field-shape
+// assertion has teeth (reverse self-check): a synthetic struct that
+// violates each axis must produce a non-empty result from
+// checkSealedKeyValueShape. Without this, a refactor that lowercases
+// the helper's guard conditions could silently disable the lock.
+//
+// Synthetic types are built via reflect.StructOf so the linter does not
+// see "unused" field declarations on probe-only structs.
+func TestDetailsSealedFieldFrozen01_ScannerFires(t *testing.T) {
+	t.Parallel()
+
+	stringType := reflect.TypeOf("")
+	anyType := reflect.TypeOf((*any)(nil)).Elem()
+
+	mkField := func(name string, typ reflect.Type, exported bool) reflect.StructField {
+		f := reflect.StructField{Name: name, Type: typ}
+		if !exported {
+			f.PkgPath = "github.com/ghbvf/gocell/tools/archtest"
+		}
+		return f
+	}
+
+	cases := []struct {
+		name   string
+		fields []reflect.StructField
+		want   bool // true = scanner must report violation
+	}{
+		{
+			name: "extraField", // wrong field count
+			fields: []reflect.StructField{
+				mkField("key", stringType, false),
+				mkField("value", anyType, false),
+				mkField("Extra", stringType, true),
+			},
+			want: true,
+		},
+		{
+			name: "exportedKey", // outside-package literal construction becomes possible
+			fields: []reflect.StructField{
+				mkField("Key", stringType, true),
+				mkField("value", anyType, false),
+			},
+			want: true,
+		},
+		{
+			name: "renamedKey",
+			fields: []reflect.StructField{
+				mkField("ident", stringType, false),
+				mkField("value", anyType, false),
+			},
+			want: true,
+		},
+		{
+			name: "goodShape", // canonical {key, value} unexported — must pass
+			fields: []reflect.StructField{
+				mkField("key", stringType, false),
+				mkField("value", anyType, false),
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := checkSealedKeyValueShape(tc.name, reflect.StructOf(tc.fields))
+			if tc.want && len(got) == 0 {
+				t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: scanner did not fire on %s", tc.name)
+			}
+			if !tc.want && len(got) != 0 {
+				t.Errorf("DETAILS-SEALED-FIELD-FROZEN-01: scanner false-positive on %s: %v", tc.name, got)
+			}
+		})
+	}
+
+	// Keep the time import live for parity with details.go imports.
+	_ = time.Second
 }

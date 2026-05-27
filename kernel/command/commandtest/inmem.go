@@ -145,7 +145,7 @@ func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) e
 	if _, exists := q.entries[entry.ID]; exists {
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			msgCommandAlreadyExists,
-			errcode.WithInternal(fmt.Sprintf("id=%q", entry.ID)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", entry.ID))))
 	}
 
 	if idempotencyKey != "" {
@@ -207,7 +207,7 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal(commandIDInternalPrefix+commandID))
+			errcode.WithInternal(errcode.InternalAttr("_", commandIDInternalPrefix+commandID)))
 	}
 	if e.Status == command.StatusDelivered {
 		return nil // idempotent
@@ -241,7 +241,7 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal(commandIDInternalPrefix+commandID))
+			errcode.WithInternal(errcode.InternalAttr("_", commandIDInternalPrefix+commandID)))
 	}
 
 	target := reason.TargetStatus()
@@ -270,7 +270,7 @@ func (q *InMemQueue) ExtendLease(_ context.Context, commandID string, extension 
 
 	if _, ok := q.entries[commandID]; !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal(commandIDInternalPrefix+commandID))
+			errcode.WithInternal(errcode.InternalAttr("_", commandIDInternalPrefix+commandID)))
 	}
 
 	expiry, hasLease := q.leases[commandID]
@@ -290,7 +290,7 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 	e, ok := q.entries[commandID]
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal(commandIDInternalPrefix+commandID))
+			errcode.WithInternal(errcode.InternalAttr("_", commandIDInternalPrefix+commandID)))
 	}
 	if err := command.AdvanceCommand(e, command.StatusCanceled, now); err != nil {
 		return fmt.Errorf("commandtest: cancel: %w", err)
@@ -368,7 +368,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 	e, ok := q.entries[id]
 	if !ok {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, msgCommandNotFound,
-			errcode.WithInternal(commandIDInternalPrefix+id))
+			errcode.WithInternal(errcode.InternalAttr("_", commandIDInternalPrefix+id)))
 	}
 	cp := stripInternalMetaKeys(*e)
 	return &cp, nil

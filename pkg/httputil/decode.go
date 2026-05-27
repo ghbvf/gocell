@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -92,7 +91,7 @@ func validateSingleJSONValue(body []byte) error {
 	// dec.More() is insufficient — it returns false for stray '}' and ']',
 	// letting invalid input like `{"name":"ok"}}` pass silently.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return validationFailedWithDetails(slog.String("reason", "trailing content after JSON value"))
+		return validationFailedWithDetails(errcode.PublicString("reason", "trailing content after JSON value"))
 	}
 	return nil
 }
@@ -100,26 +99,26 @@ func validateSingleJSONValue(body []byte) error {
 func classifyDecodeError(err error) error {
 	switch {
 	case errors.Is(err, io.EOF):
-		return validationFailedWithDetails(slog.String("reason", "empty body"))
+		return validationFailedWithDetails(errcode.PublicString("reason", "empty body"))
 	case errors.Is(err, io.ErrUnexpectedEOF):
-		return validationFailedWithDetails(slog.String("reason", "malformed JSON"))
+		return validationFailedWithDetails(errcode.PublicString("reason", "malformed JSON"))
 	case isMaxBytesError(err):
 		return bodyTooLargeError()
 	default:
 		var syntaxErr *json.SyntaxError
 		if errors.As(err, &syntaxErr) {
-			return validationFailedWithDetails(slog.String("reason", "malformed JSON"), slog.Int64("offset", syntaxErr.Offset))
+			return validationFailedWithDetails(errcode.PublicString("reason", "malformed JSON"), errcode.PublicInt("offset", syntaxErr.Offset))
 		}
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return validationFailedWithDetails(slog.String("reason", "type mismatch"), slog.String("field", typeErr.Field))
+			return validationFailedWithDetails(errcode.PublicString("reason", "type mismatch"), errcode.PublicString("field", typeErr.Field))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "internal server error", err,
 			errcode.WithCategory(errcode.CategoryInfra))
 	}
 }
 
-func validationFailedWithDetails(attrs ...slog.Attr) error {
+func validationFailedWithDetails(attrs ...errcode.PublicDetail) error {
 	return errcode.New(
 		errcode.KindInvalid,
 		errcode.ErrValidationFailed,
@@ -290,5 +289,5 @@ func joinJSONPath(parent, field string) string {
 }
 
 func unknownFieldError(field string) error {
-	return validationFailedWithDetails(slog.String("reason", "unknown field"), slog.String("field", field))
+	return validationFailedWithDetails(errcode.PublicString("reason", "unknown field"), errcode.PublicString("field", field))
 }

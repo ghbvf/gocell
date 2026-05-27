@@ -35,7 +35,7 @@ func Protocol() *session.Protocol {
 	)
 	if err != nil {
 		e := errcode.Assertion("sessiontest: protocol construction failed")
-		e.InternalMessage = err.Error()
+		e.InternalDetails = append(e.InternalDetails, errcode.InternalAttr("_", err.Error()))
 		panic(panicregister.Approved("sessiontest-protocol-init", e))
 	}
 	return p

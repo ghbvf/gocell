@@ -2,7 +2,6 @@ package saga
 
 import (
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -28,10 +27,11 @@ func TestErrDefinitionNotRegistered(t *testing.T) {
 	// Verify definitionId detail is present.
 	found := false
 	for _, attr := range ec.Details {
-		if attr.Key == "definitionId" && attr.Value.Kind() == slog.KindString {
+		if attr.Key() == "definitionId" {
+			v, _ := attr.Value().(string)
 			found = true
-			if attr.Value.String() != string(id) {
-				t.Errorf("definitionId detail = %q, want %q", attr.Value.String(), string(id))
+			if v != string(id) {
+				t.Errorf("definitionId detail = %q, want %q", v, string(id))
 			}
 		}
 	}
@@ -62,13 +62,14 @@ func TestErrFoldEventMismatch(t *testing.T) {
 	// the KindInternal three-layer rule (error-handling.md).
 	var gotInstanceID bool
 	for _, attr := range ec.Details {
-		if attr.Key == "instanceId" && attr.Value.Kind() == slog.KindString {
+		if attr.Key() == "instanceId" {
+			v, _ := attr.Value().(string)
 			gotInstanceID = true
-			if attr.Value.String() != string(id) {
-				t.Errorf("instanceId detail = %q, want %q", attr.Value.String(), string(id))
+			if v != string(id) {
+				t.Errorf("instanceId detail = %q, want %q", v, string(id))
 			}
 		}
-		if attr.Key == "reason" {
+		if attr.Key() == "reason" {
 			t.Errorf("reason must not be in Details (must be in WithInternal); got attr %v", attr)
 		}
 	}

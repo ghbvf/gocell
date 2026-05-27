@@ -61,7 +61,7 @@ func VerifyBootstrapTailOnStartup(ctx context.Context, store *BootstrapLedgerSto
 	if !valid {
 		return errcode.New(errcode.KindInternal, errcode.ErrAuditChainBroken,
 			"audit: bootstrap chain integrity broken on startup",
-			errcode.WithDetails(slog.Int64("first_invalid_seq", firstInvalid)))
+			errcode.WithDetails(errcode.PublicInt("first_invalid_seq", firstInvalid)))
 	}
 	logger.Info("audit: bootstrap chain tail verify passed",
 		slog.Int64("seq_no", tail.SeqNo))

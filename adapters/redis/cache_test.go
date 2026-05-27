@@ -209,7 +209,7 @@ func TestGetJSON_UnmarshalError(t *testing.T) {
 	var ecErrUnmarshal *errcode.Error
 	require.True(t, errors.As(err, &ecErrUnmarshal))
 	assert.Equal(t, ErrAdapterRedisGet, ecErrUnmarshal.Code)
-	assert.Contains(t, ecErrUnmarshal.Message+" "+ecErrUnmarshal.InternalMessage, "unmarshal")
+	assert.Contains(t, ecErrUnmarshal.Message+" "+ecErrUnmarshal.Error(), "unmarshal")
 }
 
 func TestGetJSON_GetError(t *testing.T) {

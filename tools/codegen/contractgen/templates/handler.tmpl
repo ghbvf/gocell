@@ -13,7 +13,7 @@ envelope shape stays consistent across the entire HTTP surface
 	if req.{{.GoName}} == "" {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: required field missing",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"))))
+			errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"))))
 		return
 	}
 {{- end}}
@@ -21,7 +21,7 @@ envelope shape stays consistent across the entire HTTP surface
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 {{- end}}
@@ -29,7 +29,7 @@ envelope shape stays consistent across the entire HTTP surface
 	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
-			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+			errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 {{- end}}
@@ -40,21 +40,21 @@ envelope shape stays consistent across the entire HTTP surface
 		if raw{{.GoName}} == "" {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: required field missing",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"))))
 			return
 		}
 		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "must be an integer"))))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -62,7 +62,7 @@ envelope shape stays consistent across the entire HTTP surface
 		if v > {{derefInt64 .Maximum}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -74,14 +74,14 @@ envelope shape stays consistent across the entire HTTP surface
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "must be an integer"))))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -89,7 +89,7 @@ envelope shape stays consistent across the entire HTTP surface
 		if v > {{derefInt64 .Maximum}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -102,7 +102,7 @@ envelope shape stays consistent across the entire HTTP surface
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a number"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "must be a number"))))
 			return
 		}
 		req.{{.GoName}} = v
@@ -113,7 +113,7 @@ envelope shape stays consistent across the entire HTTP surface
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a boolean"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "must be a boolean"))))
 			return
 		}
 		req.{{.GoName}} = v
@@ -125,7 +125,6 @@ envelope shape stays consistent across the entire HTTP surface
 package {{.PackageName}}
 
 import (
-	"log/slog"
 	"net/http"
 {{- if .RequestSchemaJSON}}
 	"bytes"
@@ -333,7 +332,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < {{derefInt .MinLength}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -341,7 +340,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) > {{derefInt .MaxLength}} {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "{{.Name}}"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 {{- end}}

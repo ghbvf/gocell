@@ -245,7 +245,7 @@ func TestKeyset_InvalidColumnName(t *testing.T) {
 	assert.Error(t, err)
 	var ecErrCol *errcode.Error
 	require.True(t, errors.As(err, &ecErrCol))
-	assert.Contains(t, ecErrCol.Message+" "+ecErrCol.InternalMessage, "invalid column name")
+	assert.Contains(t, ecErrCol.Message, "invalid column name")
 }
 
 func TestKeyset_InvalidDirection(t *testing.T) {
@@ -259,7 +259,7 @@ func TestKeyset_InvalidDirection(t *testing.T) {
 	assert.Error(t, err)
 	var ecErrDir *errcode.Error
 	require.True(t, errors.As(err, &ecErrDir))
-	assert.Contains(t, ecErrDir.Message+" "+ecErrDir.InternalMessage, "invalid sort direction")
+	assert.Contains(t, ecErrDir.Message, "invalid sort direction")
 }
 
 func requireCursorInvalid(t *testing.T, err error, reason string) {
@@ -271,5 +271,7 @@ func requireCursorInvalid(t *testing.T, err error, reason string) {
 	assert.Equal(t, errcode.ErrCursorInvalid, got.Code)
 	reasonAttr, ok := got.FindAttr("reason")
 	require.True(t, ok)
-	assert.Equal(t, reason, reasonAttr.Value.String())
+	s, ok := reasonAttr.Value().(string)
+	require.True(t, ok, "reason must be a string value")
+	assert.Equal(t, reason, s)
 }

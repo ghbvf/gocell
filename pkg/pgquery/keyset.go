@@ -2,7 +2,6 @@ package pgquery
 
 import (
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 
@@ -37,12 +36,12 @@ func AppendKeyset(b *Builder, params query.ListParams) error {
 		if !validColumnName.MatchString(col.Name) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"keyset: invalid column name",
-				errcode.WithInternal(fmt.Sprintf("name=%q", col.Name)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("name=%q", col.Name))))
 		}
 		if col.Direction != query.SortASC && col.Direction != query.SortDESC {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"keyset: invalid sort direction",
-				errcode.WithInternal(fmt.Sprintf("direction=%q want ASC or DESC", col.Direction)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("direction=%q want ASC or DESC", col.Direction))))
 		}
 	}
 
@@ -156,7 +155,7 @@ func appendOrderBy(b *Builder, cols []query.SortColumn) {
 func cursorInvalid(reason string) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 		"invalid cursor; restart from first page (client should discard stored cursor)",
-		errcode.WithInternal(reason),
-		errcode.WithDetails(slog.String("reason", reason)),
+		errcode.WithInternal(errcode.InternalAttr("_", reason)),
+		errcode.WithDetails(errcode.PublicString("reason", reason)),
 	)
 }

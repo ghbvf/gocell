@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,8 +161,8 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 			errcode.KindInvalid,
 			errcode.ErrValidationFailed,
 			"invalid generated metadata",
-			errcode.WithInternal("token=hunter2 raw=/private/generated.yaml"),
-			errcode.WithDetails(slog.String("field", "cell.id")),
+			errcode.WithInternal(errcode.InternalAttr("_", "token=hunter2 raw=/private/generated.yaml")),
+			errcode.WithDetails(errcode.PublicString("field", "cell.id")),
 		)
 	})
 
@@ -195,7 +194,7 @@ func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 			errcode.KindInternal,
 			errcode.ErrAuthRoleFetchFailed,
 			"role repository failed: postgres://user:secret@example/db",
-			errcode.WithInternal("token=hunter2"),
+			errcode.WithInternal(errcode.InternalAttr("_", "token=hunter2")),
 		)
 	})
 

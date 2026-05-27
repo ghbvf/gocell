@@ -162,11 +162,11 @@ func classifyPGError(err error, permanentCode errcode.Code, opContext string) er
 	if isRetryablePGError(err) {
 		return errcode.WrapInfra(permanentCode,
 			"postgres: transient error", err,
-			errcode.WithInternal(opContext))
+			errcode.WithInternal(errcode.InternalAttr("_", opContext)))
 	}
 	return errcode.Wrap(errcode.KindInternal, permanentCode,
 		"postgres: operation failed", err,
-		errcode.WithInternal(opContext))
+		errcode.WithInternal(errcode.InternalAttr("_", opContext)))
 }
 
 // classifyPGConnectError is the dedicated funnel for **connect-class** call
@@ -196,7 +196,7 @@ func classifyPGConnectError(err error, opContext string) error {
 	if isConnectTimeout(err) {
 		return errcode.WrapInfra(ErrAdapterPGConnectTimeout,
 			"postgres: connect timeout", err,
-			errcode.WithInternal(opContext))
+			errcode.WithInternal(errcode.InternalAttr("_", opContext)))
 	}
 	return classifyPGError(err, ErrAdapterPGConnect, opContext)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,9 +46,9 @@ func TestWrap_CanceledReturnsClientCanceled(t *testing.T) {
 	assert.Equal(t, errcode.ErrClientCanceled, got.Code)
 	assert.Equal(t, "request canceled", got.Message)
 	assert.Equal(t, errcode.CategoryInfra, got.Category)
-	assert.Contains(t, got.InternalMessage, "Insert")
-	assert.Contains(t, got.InternalMessage, "key=foo")
-	assert.Contains(t, got.InternalMessage, "ctx canceled")
+	assert.Contains(t, got.Error(), "Insert")
+	assert.Contains(t, got.Error(), "key=foo")
+	assert.Contains(t, got.Error(), "ctx canceled")
 	assert.ErrorIs(t, got, context.Canceled,
 		"Cause must be preserved so errors.Is(err, context.Canceled) works upstream")
 }
@@ -115,20 +114,44 @@ func TestReasonFromDetails(t *testing.T) {
 	}{
 		{name: "nil error → empty", err: nil, want: ""},
 		{name: "no details → empty", err: mkErr(), want: ""},
-		{name: "non-string value → empty", err: mkErr(errcode.WithDetails(slog.Int(DetailsKeyReason, 42))), want: ""},
-		{name: "empty-string value → empty", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ""))), want: ""},
-		{name: "ReasonCanceled accepted", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ReasonCanceled))), want: ReasonCanceled},
+		{
+			name: "non-string value → empty",
+			err:  mkErr(errcode.WithDetails(errcode.PublicInt(DetailsKeyReason, 42))),
+			want: "",
+		},
+		{
+			name: "empty-string value → empty",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ""))),
+			want: "",
+		},
+		{
+			name: "ReasonCanceled accepted",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonCanceled))),
+			want: ReasonCanceled,
+		},
 		{
 			name: "ReasonDeadlineExceeded accepted",
-			err:  mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ReasonDeadlineExceeded))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, ReasonDeadlineExceeded))),
 			want: ReasonDeadlineExceeded,
 		},
-		{name: "arbitrary string rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "future-enum-value"))), want: ""},
-		{name: "user-derived string rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "key=admin"))), want: ""},
-		{name: "case mismatch rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "Canceled"))), want: ""},
+		{
+			name: "arbitrary string rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "future-enum-value"))),
+			want: "",
+		},
+		{
+			name: "user-derived string rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "key=admin"))),
+			want: "",
+		},
+		{
+			name: "case mismatch rejected",
+			err:  mkErr(errcode.WithDetails(errcode.PublicString(DetailsKeyReason, "Canceled"))),
+			want: "",
+		},
 		{
 			name: "extra unrelated keys ignored",
-			err:  mkErr(errcode.WithDetails(slog.String("other", "x"), slog.String(DetailsKeyReason, ReasonCanceled))),
+			err:  mkErr(errcode.WithDetails(errcode.PublicString("other", "x"), errcode.PublicString(DetailsKeyReason, ReasonCanceled))),
 			want: ReasonCanceled,
 		},
 	}
@@ -157,10 +180,11 @@ func TestWrap_ReasonInDetails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Wrap(tt.err, "Op", "id=x")
 			require.NotNil(t, got)
-			attr, ok := got.FindAttr(DetailsKeyReason)
+			d, ok := got.FindAttr(DetailsKeyReason)
 			require.True(t, ok, "Details[\"reason\"] must be set so tracing middleware can read reason")
-			require.Equal(t, slog.KindString, attr.Value.Kind(), "reason must be a string attr")
-			assert.Equal(t, tt.wantReason, attr.Value.String())
+			s, ok := d.Value().(string)
+			require.True(t, ok, "reason must be a string value")
+			assert.Equal(t, tt.wantReason, s)
 		})
 	}
 }

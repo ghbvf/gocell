@@ -180,7 +180,7 @@ func TestNewHMACKeyRing_ShortCurrentFails(t *testing.T) {
 	require.Error(t, err)
 	var ecErrCurrent *errcode.Error
 	require.True(t, errors.As(err, &ecErrCurrent))
-	assert.Contains(t, ecErrCurrent.Message+" "+ecErrCurrent.InternalMessage, "too short")
+	assert.Contains(t, ecErrCurrent.Message+" "+ecErrCurrent.Error(), "too short")
 }
 
 func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
@@ -188,7 +188,7 @@ func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
 	require.Error(t, err)
 	var ecErrPrev *errcode.Error
 	require.True(t, errors.As(err, &ecErrPrev))
-	assert.Contains(t, ecErrPrev.Message+" "+ecErrPrev.InternalMessage, "previous HMAC secret")
+	assert.Contains(t, ecErrPrev.Message+" "+ecErrPrev.Error(), "previous HMAC secret")
 }
 
 func TestGenerateServiceToken_NilRing(t *testing.T) {

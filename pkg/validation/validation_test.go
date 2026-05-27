@@ -44,8 +44,10 @@ func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, want
 	}
 	var foundField string
 	for _, attr := range ec.Details {
-		if attr.Key == "field" {
-			foundField = attr.Value.String()
+		if attr.Key() == "field" {
+			if s, ok := attr.Value().(string); ok {
+				foundField = s
+			}
 			break
 		}
 	}

@@ -92,7 +92,7 @@ func ResetForRetry(entry *Entry) error {
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: cannot reset for retry from current status (allowed: sent, failed)",
-			errcode.WithInternal(fmt.Sprintf("status=%s", entry.Status)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("status=%s", entry.Status))))
 	}
 
 	entry.Status = StatusPending

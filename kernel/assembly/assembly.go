@@ -218,7 +218,7 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 	if a.state != stateStopped {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly: cannot register in current state",
-			errcode.WithInternal(fmt.Sprintf("assembly=%q state=%d", a.id, a.state)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q state=%d", a.id, a.state))))
 	}
 
 	if c == nil {
@@ -232,7 +232,7 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 	if _, exists := a.cellMap[id]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"duplicate cell ID",
-			errcode.WithInternal(fmt.Sprintf("id=%q", id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", id))))
 	}
 	a.cells = append(a.cells, c)
 	a.cellMap[id] = c
@@ -344,7 +344,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				"assembly: BeforeStop failed", err,
-				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalCellQuotedFmt, c.ID())))))
 		}
 	}
 	if err := c.Stop(ctx); err != nil {
@@ -352,7 +352,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 			slog.String("cell", c.ID()), slog.Any("error", err))
 		errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			"assembly: stop cell failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalCellQuotedFmt, c.ID())))))
 	}
 	if as, ok := c.(cell.AfterStopper); ok {
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStop, as.AfterStop); err != nil {
@@ -360,7 +360,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				"assembly: AfterStop failed", err,
-				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalCellQuotedFmt, c.ID())))))
 		}
 	}
 	// Remove the stopped cell's snapshot so Snapshots() never returns stale
@@ -405,7 +405,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		a.mu.Unlock()
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly: cannot start in current state",
-			errcode.WithInternal(fmt.Sprintf("assembly=%q state=%d", a.id, observedState)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q state=%d", a.id, observedState))))
 	}
 	a.ensureDispatcherLocked()
 	a.state = stateStarting
@@ -421,7 +421,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		a.mu.Unlock()
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"assembly: validate mode failed", err,
-			errcode.WithInternal(fmt.Sprintf("assembly=%q", a.id)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("assembly=%q", a.id))))
 	}
 
 	// Phase 1: Init all cells via per-cell RegistryRecorder.
@@ -453,7 +453,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			a.mu.Unlock()
 			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"assembly: init cell failed", err,
-				errcode.WithInternal(fmt.Sprintf(internalCellQuotedFmt, c.ID())))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalCellQuotedFmt, c.ID()))))
 		}
 		localSnaps[c.ID()] = recorder.Snapshot()
 	}
@@ -533,7 +533,7 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error, rollbackErrs [
 	a.mu.Unlock()
 	wrapped := errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 		"assembly: cell lifecycle phase failed", err,
-		errcode.WithInternal(fmt.Sprintf("phase=%s cell=%q", phase, cellID)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("phase=%s cell=%q", phase, cellID))))
 	return errors.Join(append([]error{wrapped}, rollbackErrs...)...)
 }
 

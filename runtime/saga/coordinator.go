@@ -239,7 +239,7 @@ func NewCoordinator(
 	if c.locker != nil && c.cfg.LeaseDuration < distlock.MinTTL {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: leader-elect LeaseDuration must be ≥ distlock.MinTTL; the lease doubles as the distlock TTL",
-			errcode.WithInternal(fmt.Sprintf("LeaseDuration=%s minTTL=%s", c.cfg.LeaseDuration, distlock.MinTTL)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("LeaseDuration=%s minTTL=%s", c.cfg.LeaseDuration, distlock.MinTTL))))
 	}
 	return c, nil
 }
@@ -779,8 +779,8 @@ func safeRun(ctx context.Context, fn ksaga.StepFunc, inst *ksaga.Instance, prev 
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"saga: step panicked",
-				errcode.WithDetails(slog.String("instanceId", string(inst.ID))),
-				errcode.WithInternal(fmt.Sprintf("panic: %v", r)))
+				errcode.WithDetails(errcode.PublicString("instanceId", string(inst.ID))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))))
 		}
 	}()
 	return fn(ctx, inst, prev)

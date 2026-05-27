@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -56,8 +55,8 @@ func NewBootstrapLedgerStore(inner ledger.Store) (*BootstrapLedgerStore, error) 
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: NewBootstrapLedgerStore requires bootstrap namespace",
 			errcode.WithDetails(
-				slog.String("expectedNamespace", string(BootstrapNamespace())),
-				slog.String("actualNamespace", string(actual)),
+				errcode.PublicString("expectedNamespace", string(BootstrapNamespace())),
+				errcode.PublicString("actualNamespace", string(actual)),
 			))
 	}
 	return &BootstrapLedgerStore{inner: inner}, nil

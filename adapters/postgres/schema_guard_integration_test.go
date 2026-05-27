@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -306,11 +305,15 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 // VerifyExpectedShape tests
 // ---------------------------------------------------------------------------
 
-// attrsContainKV is a helper that checks if any slog.Attr in attrs has the
-// given key and string value.
-func attrsContainKV(attrs []slog.Attr, key, value string) bool {
-	for _, a := range attrs {
-		if a.Key == key && a.Value.String() == value {
+// detailsContainKV is a helper that checks if any errcode.PublicDetail in
+// details has the given key and string value.
+func detailsContainKV(details []errcode.PublicDetail, key, value string) bool {
+	for _, d := range details {
+		if d.Key() != key {
+			continue
+		}
+		s, ok := d.Value().(string)
+		if ok && s == value {
 			return true
 		}
 	}
@@ -357,9 +360,9 @@ func TestVerifyExpectedShape_MissingRequiredColumn(t *testing.T) {
 		"error code must be ErrAdapterPGSchemaShape")
 	assert.Contains(t, ec.Message, "required column missing",
 		"message must describe the fault")
-	assert.True(t, attrsContainKV(ec.Details, "table", "users"),
+	assert.True(t, detailsContainKV(ec.Details, "table", "users"),
 		"details must contain table=users; got %v", ec.Details)
-	assert.True(t, attrsContainKV(ec.Details, "column", "authz_epoch"),
+	assert.True(t, detailsContainKV(ec.Details, "column", "authz_epoch"),
 		"details must contain column=authz_epoch; got %v", ec.Details)
 }
 
@@ -388,9 +391,9 @@ func TestVerifyExpectedShape_ForbiddenColumnPresent(t *testing.T) {
 		"error code must be ErrAdapterPGSchemaShape")
 	assert.Contains(t, ec.Message, "forbidden legacy column present",
 		"message must describe the fault")
-	assert.True(t, attrsContainKV(ec.Details, "table", "sessions"),
+	assert.True(t, detailsContainKV(ec.Details, "table", "sessions"),
 		"details must contain table=sessions; got %v", ec.Details)
-	assert.True(t, attrsContainKV(ec.Details, "column", "access_token"),
+	assert.True(t, detailsContainKV(ec.Details, "column", "access_token"),
 		"details must contain column=access_token; got %v", ec.Details)
 }
 
@@ -449,8 +452,20 @@ func TestVerifyNoInvalidIndexes_DetectInvalid(t *testing.T) {
 	// details should carry count >= 1
 	var foundCount bool
 	for _, a := range ec.Details {
-		if a.Key == "count" && a.Value.Int64() >= 1 {
-			foundCount = true
+		if a.Key() != "count" {
+			continue
+		}
+		switch v := a.Value().(type) {
+		case int:
+			if int64(v) >= 1 {
+				foundCount = true
+			}
+		case int64:
+			if v >= 1 {
+				foundCount = true
+			}
+		}
+		if foundCount {
 			break
 		}
 	}
@@ -542,12 +557,15 @@ func TestInvalidIndexCheck_NoInvalidIndexes(t *testing.T) {
 // VerifyExpectedShape: multi-dimension wrong-shape tests
 // ---------------------------------------------------------------------------
 
-// extractDimensionDetail extracts the "dimension" slog.Attr value from an
+// extractDimensionDetail extracts the "dimension" PublicDetail value from an
 // errcode.Error's Details slice. Returns "" if not found.
 func extractDimensionDetail(ec *errcode.Error) string {
-	for _, a := range ec.Details {
-		if a.Key == "dimension" {
-			return a.Value.String()
+	for _, d := range ec.Details {
+		if d.Key() != "dimension" {
+			continue
+		}
+		if s, ok := d.Value().(string); ok {
+			return s
 		}
 	}
 	return ""
@@ -619,7 +637,7 @@ func TestVerifyExpectedShape_DetectsWrongFKOnDeleteAction(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code)
 	assert.Equal(t, "foreign_key", extractDimensionDetail(ec))
-	assert.Contains(t, ec.InternalMessage, "on_delete")
+	assert.Contains(t, ec.Error(), "on_delete")
 }
 
 // TestVerifyExpectedShape_DetectsMissingUniqueIndex verifies that dropping a

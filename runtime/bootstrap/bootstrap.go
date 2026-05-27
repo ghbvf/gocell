@@ -231,7 +231,7 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	if len(cfg.authChain) == 0 {
 		return errcode.New(errcode.KindInternal, errcode.ErrListenerAuthChainMissing,
 			"bootstrap: listener requires non-empty authChain (use []auth.ListenerAuth{auth.AuthNone{}} for no-auth listeners)",
-			errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q", ref.String()))))
 	}
 	if cfg.net == nil && cfg.addr == "" {
 		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener;"+

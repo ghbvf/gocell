@@ -165,7 +165,7 @@ func (s *Service) CreateOrder(
         return orderv1.OrderCommandCreateOrder4xxErrorResponse(*errcode.New(
             errcode.ErrValidationFailed,
             "customer_id is required",
-            errcode.WithDetails(slog.String("field", "customer_id")),
+            errcode.WithDetails(errcode.PublicString("field", "customer_id")),
         )), nil
     }
 

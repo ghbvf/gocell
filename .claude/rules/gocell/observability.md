@@ -21,10 +21,10 @@
 | 层 | 存放内容 | 4xx 响应 | 5xx 响应 | 服务端日志 |
 |----|---------|---------|---------|-----------|
 | **Message**（const literal） | 程序员写死的描述性文本，无 runtime 数据 | 下发 | 下发 | 记录 |
-| **Details**（`[]slog.Attr`） | runtime 业务字段（ID、计数、枚举值等） | 下发 | strip | 记录 |
-| **Internal**（`WithInternal`） | runtime 调试上下文（堆栈摘要、SQL 片段等） | 不下发 | 不下发 | 记录 |
+| **Details**（`[]errcode.PublicDetail`，sealed） | runtime 业务字段（ID、计数、枚举值等） | 下发 | strip | 记录 |
+| **Internal**（`[]errcode.InternalDetail`，sealed） | runtime 调试上下文（堆栈摘要、SQL 片段等） | 不下发 | 不下发 | 记录 |
 
-框架 HTTP middleware 在序列化响应前检查状态码：5xx 时将 `details` 置空（不下发），`internal` 字段永不出现在 wire 层。开发者通过查 `slog` 结构化日志获取 Internal 内容，不走 trace span（防止 PII 泄漏到 trace backend）。详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`。
+构造路径唯一：Public 通道走 typed scalar 构造器 `errcode.PublicString` / `PublicInt[T]` / `PublicBool` / `PublicDuration` / `PublicTime`（`pkg/errcode/details.go`，`PublicDetail.value` 字段是 sealed `publicValue` marker interface — 包外类型既不能结构字面量构造也无法实现该 marker，wire-unsafe 类型 chan/func/NaN/Inf/map/struct/pointer 编译期不可表达）；Internal 通道走 `errcode.InternalAttr(k, v any)` —— value 仍是 `any`，因为整条通道仅服务端可见，wire-safety 不约束。框架 HTTP middleware 在序列化响应前检查状态码：5xx 时将 `details` 置空（不下发），`internal` 字段永不出现在 wire 层。开发者通过查 `slog` 结构化日志获取 Internal 内容（handler 用 `InternalDetail.AsSlogAttr()` 转 `slog.Attr` 输出），不走 trace span（防止 PII 泄漏到 trace backend）。详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md` + §Amendment 2026-05-27。
 
 ## Span Error Redaction（fail-closed by default）
 
@@ -145,8 +145,8 @@ emitter health probe（`outbox_failopen_rate_<cell>`）的注册同理收口：c
 | 通道 | 载体 | wire 体 | server-side slog | 脱敏机制 |
 |------|------|--------|-----------------|---------|
 | a. Message | `errcode.Message` const literal | ✓ | ✓ | 不需要 |
-| b. Details | `errcode.Details` `[]slog.Attr` | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
-| c. Internal | `errcode.WithInternal` | ✗ | ✓ | server-only |
+| b. Details | `errcode.Details` `[]PublicDetail` (sealed) | 4xx ✓ / 5xx strip | ✓ | runtime 字段为低敏感 |
+| c. Internal | `errcode.InternalDetails` `[]InternalDetail` (sealed) | ✗ | ✓ | server-only |
 | **d. Ops-Diagnostics** | handler-side `slog.Log(ctx, level, ...)` typed payload（透传 request ctx 关联字段） | ✗ | ✓ | **typed funnel + archtest** |
 
 readyz 各字段归属：

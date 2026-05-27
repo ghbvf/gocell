@@ -279,12 +279,12 @@ func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 	if err != nil {
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth: read JWT failed", err,
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, a.jwtPath))))
 	}
 	if len(jwtBytes) == 0 {
 		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth: JWT file is empty",
-			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, a.jwtPath))))
 	}
 
 	path := "auth/" + a.mountPath + "/login"
@@ -385,7 +385,7 @@ func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMet
 	default:
 		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: unknown VAULT_AUTH_METHOD (known values: token, approle, kubernetes)",
-			errcode.WithInternal(fmt.Sprintf("method=%q", method)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("method=%q", method))))
 	}
 }
 
@@ -441,13 +441,13 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 			if err != nil {
 				return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					"vault-auth: read secret_id from file failed", err,
-					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, cleanPath))))
 			}
 			s := strings.TrimSpace(string(data))
 			if s == "" {
 				return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					"vault-auth: secret_id file is empty",
-					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, cleanPath))))
 			}
 			return s, nil
 		}, nil
@@ -455,7 +455,7 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 	default:
 		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: unknown VAULT_SECRET_ID_TYPE (known values: direct, wrapped, file)",
-			errcode.WithInternal(fmt.Sprintf("type=%q", secretIDType)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("type=%q", secretIDType))))
 	}
 }
 

@@ -32,7 +32,7 @@ func NewGoIdentifier(s string) (GoIdentifier, error) {
 	if !goStructNameRe.MatchString(s) {
 		return GoIdentifier{}, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"goStructName must match GoStructNamePattern (uppercase ASCII letter start, ASCII letters + digits)",
-			errcode.WithInternal(fmt.Sprintf("value=%q pattern=%s", s, GoStructNamePattern)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("value=%q pattern=%s", s, GoStructNamePattern))))
 	}
 	return GoIdentifier{value: s}, nil
 }

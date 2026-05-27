@@ -107,7 +107,7 @@ func validateURLForm(raw string) error {
 		if u.Host != "" {
 			return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 				"adapter endpoint: unix:// scheme requires an empty host (local socket only)",
-				errcode.WithInternal(fmt.Sprintf("host=%q", u.Host)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("host=%q", u.Host))))
 		}
 		return nil
 	}
@@ -125,13 +125,13 @@ func validateURLForm(raw string) error {
 		}
 		return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 			"adapter endpoint: non-TLS scheme used for remote host",
-			errcode.WithInternal(fmt.Sprintf("url=%s scheme=%q host=%q", u.Redacted(), scheme, host)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("url=%s scheme=%q host=%q", u.Redacted(), scheme, host))))
 	}
 
 	// Unknown scheme — fail closed.
 	return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 		"adapter endpoint: unrecognized scheme",
-		errcode.WithInternal(fmt.Sprintf("url=%s scheme=%q", u.Redacted(), scheme)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("url=%s scheme=%q", u.Redacted(), scheme))))
 }
 
 // validateBareHostPort handles strings without "://" (bare host:port or host).
@@ -142,5 +142,5 @@ func validateBareHostPort(raw string) error {
 	}
 	return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 		"adapter endpoint: bare host:port is not a loopback IP literal and has no TLS scheme",
-		errcode.WithInternal(fmt.Sprintf("addr=%q", raw)))
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("addr=%q", raw))))
 }

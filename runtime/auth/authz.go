@@ -165,7 +165,7 @@ func RequireCallerCell(allowlist ...string) Policy {
 		if p.CallerCellID == "" || !set[strings.ToLower(p.CallerCellID)] {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 				"caller_cell not in allowlist",
-				errcode.WithInternal(fmt.Sprintf("caller_cell=%q allowlist=%v", p.CallerCellID, sortedAllowlist)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("caller_cell=%q allowlist=%v", p.CallerCellID, sortedAllowlist))))
 		}
 		return nil
 	}

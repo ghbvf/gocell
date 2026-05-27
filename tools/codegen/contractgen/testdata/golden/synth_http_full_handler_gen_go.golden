@@ -4,7 +4,6 @@
 package details
 
 import (
-	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -70,13 +69,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if len(v) < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "id"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "id"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		if len(v) > 64 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "id"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "id"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		req.ID = v
@@ -87,19 +86,19 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "page"), slog.String("reason", "must be an integer"))))
+				errcode.WithDetails(errcode.PublicString("field", "page"), errcode.PublicString("reason", "must be an integer"))))
 			return
 		}
 		if v < 1 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "page"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "page"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		if v > 1000 {
 			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"validation: invalid request parameter",
-				errcode.WithDetails(slog.String("field", "page"), slog.String("reason", "invalid"))))
+				errcode.WithDetails(errcode.PublicString("field", "page"), errcode.PublicString("reason", "invalid"))))
 			return
 		}
 		req.Page = v

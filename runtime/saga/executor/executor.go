@@ -378,7 +378,7 @@ func safeRun(
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"runtime/saga/executor: step Run panicked",
-				errcode.WithInternal(fmt.Sprintf("panic: %v", r)),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))),
 			)
 		}
 	}()
@@ -397,7 +397,7 @@ func safeRunCompensate(
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"runtime/saga/executor: step Compensate panicked",
-				errcode.WithInternal(fmt.Sprintf("panic: %v", r)),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))),
 			)
 		}
 	}()

@@ -157,7 +157,7 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if !expected.IsValid() {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal(fmt.Sprintf("unknown expected intent %q", string(expected))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("unknown expected intent %q", string(expected)))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	claims, header, err := v.parseAndVerify(ctx, tokenStr)
@@ -167,27 +167,27 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if !claims.TokenUse.IsValid() {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal("token_use claim missing or unknown"),
+			errcode.WithInternal(errcode.InternalAttr("_", "token_use claim missing or unknown")),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	headerIntent, ok := intentForJWTTyp(stringFromHeader(header, "typ"))
 	if !ok {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal("typ header missing or unknown"),
+			errcode.WithInternal(errcode.InternalAttr("_", "typ header missing or unknown")),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if headerIntent != claims.TokenUse {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal("typ header and token_use claim disagree"),
+			errcode.WithInternal(errcode.InternalAttr("_", "typ header and token_use claim disagree")),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if claims.TokenUse != expected {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal(fmt.Sprintf("token_use=%q does not match expected %q",
-				string(claims.TokenUse), string(expected))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("token_use=%q does not match expected %q",
+				string(claims.TokenUse), string(expected)))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Audience validation (RFC 8725 §3.3): when expectedAudiences is configured,
@@ -197,7 +197,9 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	if len(v.expectedAudiences) > 0 && !audContainsAny(claims.Audience, v.expectedAudiences) {
 		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token audience validation failed",
-			errcode.WithInternal(fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
+				"aud %v does not satisfy any configured expected audience",
+				claims.Audience))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Issuer validation: when expectedIssuer is configured, the token's iss claim
@@ -226,7 +228,7 @@ func (v *JWTVerifier) checkIssuer(claims Claims) error {
 	if claims.Issuer != v.expectedIssuer {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token issuer validation failed",
-			errcode.WithInternal(fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer)),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	return nil
@@ -408,7 +410,7 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if !intent.IsValid() {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			msgTokenIntentFailed,
-			errcode.WithInternal(fmt.Sprintf("unknown token intent %q", string(intent))),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("unknown token intent %q", string(intent)))),
 			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if i.keys.SigningKey() == nil {

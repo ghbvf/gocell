@@ -1530,8 +1530,10 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	assert.Equal(t, "validation: required field missing", ec.Message)
 	var gotField string
 	for _, attr := range ec.Details {
-		if attr.Key == "field" {
-			gotField = attr.Value.String()
+		if attr.Key() == "field" {
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotField = s
 			break
 		}
 	}
@@ -1563,8 +1565,10 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	assert.Equal(t, "validation: required field missing", ec.Message)
 	var gotFieldEmail string
 	for _, attr := range ec.Details {
-		if attr.Key == "field" {
-			gotFieldEmail = attr.Value.String()
+		if attr.Key() == "field" {
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldEmail = s
 			break
 		}
 	}
@@ -1600,8 +1604,10 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 	assert.Equal(t, "validation: required field missing", ec.Message)
 	var gotFieldPwd string
 	for _, attr := range ec.Details {
-		if attr.Key == "field" {
-			gotFieldPwd = attr.Value.String()
+		if attr.Key() == "field" {
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldPwd = s
 			break
 		}
 	}
@@ -1630,8 +1636,10 @@ func TestService_Create_RequireNotEmptyShortCircuitsOnFirstField(t *testing.T) {
 		"validator must short-circuit on the first declared field; setup.CreateAdmin uses the same order")
 	var gotFieldSC string
 	for _, attr := range ec.Details {
-		if attr.Key == "field" {
-			gotFieldSC = attr.Value.String()
+		if attr.Key() == "field" {
+			s, ok := attr.Value().(string)
+			require.True(t, ok, "expected string for 'field' detail, got %T", attr.Value())
+			gotFieldSC = s
 			break
 		}
 	}

@@ -304,8 +304,8 @@ func TestGenerator_Scaffold_ConflictDetection(t *testing.T) {
 	if !ok {
 		t.Fatalf("conflict error must carry 'path' detail; got %+v", ec.Details)
 	}
-	if !strings.Contains(pathAttr.Value.String(), "conflict") {
-		t.Errorf("path detail must reference the conflicting assembly id; got %q", pathAttr.Value.String())
+	if v, _ := pathAttr.Value().(string); !strings.Contains(v, "conflict") {
+		t.Errorf("path detail must reference the conflicting assembly id; got %q", v)
 	}
 }
 

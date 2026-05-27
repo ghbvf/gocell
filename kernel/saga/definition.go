@@ -2,7 +2,6 @@ package saga
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -68,27 +67,27 @@ func (p RetryPolicy) Validate() error {
 	if p.MaxAttempts < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxAttempts must be >= 0",
-			errcode.WithDetails(slog.Int("maxAttempts", p.MaxAttempts)),
+			errcode.WithDetails(errcode.PublicInt("maxAttempts", p.MaxAttempts)),
 		)
 	}
 	if p.BaseInterval < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: BaseInterval must be >= 0",
-			errcode.WithDetails(slog.Duration("baseInterval", p.BaseInterval)),
+			errcode.WithDetails(errcode.PublicDuration("baseInterval", p.BaseInterval)),
 		)
 	}
 	if p.MaxInterval < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxInterval must be >= 0",
-			errcode.WithDetails(slog.Duration("maxInterval", p.MaxInterval)),
+			errcode.WithDetails(errcode.PublicDuration("maxInterval", p.MaxInterval)),
 		)
 	}
 	if p.BaseInterval > 0 && p.MaxInterval > 0 && p.MaxInterval < p.BaseInterval {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga retry policy: MaxInterval must be >= BaseInterval",
 			errcode.WithDetails(
-				slog.Duration("baseInterval", p.BaseInterval),
-				slog.Duration("maxInterval", p.MaxInterval),
+				errcode.PublicDuration("baseInterval", p.BaseInterval),
+				errcode.PublicDuration("maxInterval", p.MaxInterval),
 			),
 		)
 	}
@@ -152,26 +151,26 @@ func (d *Definition) Validate() error {
 	if err := d.ID.Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid ID",
-			errcode.WithDetails(slog.String("id", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("id", string(d.ID))),
 		)
 	}
 	if len(d.Steps) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: must have at least one step",
-			errcode.WithDetails(slog.String("definitionId", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 		)
 	}
 	if d.Timeout < 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: Timeout must be >= 0",
-			errcode.WithDetails(slog.String("definitionId", string(d.ID))),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 		)
 	}
 	if err := d.RetryPolicy.Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid RetryPolicy",
-			errcode.WithDetails(slog.String("definitionId", string(d.ID))),
-			errcode.WithInternal(err.Error()),
+			errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())),
 		)
 	}
 	seen := make(map[idutil.SafeID]int, len(d.Steps))
@@ -183,10 +182,10 @@ func (d *Definition) Validate() error {
 			return errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"saga definition: duplicate step Name",
 				errcode.WithDetails(
-					slog.String("definitionId", string(d.ID)),
-					slog.String("stepName", string(step.Name)),
-					slog.Int("firstIndex", prev),
-					slog.Int("duplicateIndex", i),
+					errcode.PublicString("definitionId", string(d.ID)),
+					errcode.PublicString("stepName", string(step.Name)),
+					errcode.PublicInt("firstIndex", prev),
+					errcode.PublicInt("duplicateIndex", i),
 				),
 			)
 		}
@@ -200,19 +199,19 @@ func (d *Definition) Validate() error {
 // per-Definition seen map. Split out to keep Validate's cognitive complexity
 // within budget.
 func (d *Definition) validateStep(i int, step Step) error {
-	stepDetails := func() []slog.Attr {
-		return []slog.Attr{
-			slog.String("definitionId", string(d.ID)),
-			slog.Int("stepIndex", i),
-			slog.String("stepName", string(step.Name)),
+	stepDetails := func() []errcode.PublicDetail {
+		return []errcode.PublicDetail{
+			errcode.PublicString("definitionId", string(d.ID)),
+			errcode.PublicInt("stepIndex", i),
+			errcode.PublicString("stepName", string(step.Name)),
 		}
 	}
 	if step.Name == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: step missing Name",
 			errcode.WithDetails(
-				slog.String("definitionId", string(d.ID)),
-				slog.Int("stepIndex", i),
+				errcode.PublicString("definitionId", string(d.ID)),
+				errcode.PublicInt("stepIndex", i),
 			),
 		)
 	}
@@ -220,7 +219,7 @@ func (d *Definition) validateStep(i int, step Step) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid step Name",
 			errcode.WithDetails(stepDetails()...),
-			errcode.WithInternal(err.Error()),
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())),
 		)
 	}
 	if step.Run == nil {
@@ -239,7 +238,7 @@ func (d *Definition) validateStep(i int, step Step) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga definition: invalid step RetryPolicy",
 			errcode.WithDetails(stepDetails()...),
-			errcode.WithInternal(err.Error()),
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())),
 		)
 	}
 	return nil
@@ -281,7 +280,7 @@ func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 		if d == nil {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"saga registry: nil definition",
-				errcode.WithDetails(slog.Int("definitionIndex", i)),
+				errcode.WithDetails(errcode.PublicInt("definitionIndex", i)),
 			)
 		}
 		if err := d.Validate(); err != nil {
@@ -290,7 +289,7 @@ func NewInMemoryRegistry(defs ...*Definition) (*InMemoryRegistry, error) {
 		if _, exists := r.defs[d.ID]; exists {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 				"saga registry: duplicate definition ID",
-				errcode.WithDetails(slog.String("definitionId", string(d.ID))),
+				errcode.WithDetails(errcode.PublicString("definitionId", string(d.ID))),
 			)
 		}
 		r.defs[d.ID] = d

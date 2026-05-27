@@ -166,7 +166,7 @@ Hard 等级在**注册集合内** form uniqueness：
 - **诚实声明**：编译期不可阻止（Go 允许任何包定义任何 callable），enforcement 完全依赖 archtest + depguard 联合。这是 Go 语言中 "对 registered Func 集合的零引用" 在 OSS 业界实测调查中可达的**最高评级**
 - **funnel 双向锁评级**（§Funnel 双向锁评级）：
   - **上游 Hard（注册集合内）**：cellgen 包内任何 Ident 不得落入 `cellgenErrConstructorBlacklist`（stdlib）+ `cellgen-error-libs` depguard 在 import 边界关闭第三方 lib。**评级依据章程 §"typed function call as Hard funnel for unbounded operations"**：「form uniqueness + archtest fail-on-deviation 是 Go 语言中此类规则形态可达最高级，不要求编译期阻止」（与 PANIC-REGISTERED-01 同源认定）。
-  - **下游 Hard**：`pkg/errcode` funnel 集合本身由 `ERRCODE-KIND-LITERAL-01` + `MESSAGE-CONST-LITERAL-01` + `DETAILS-SLOG-ATTR-01` 锁定（三档 archtest 形态锁，与 ADR `202605051730-adr-errcode-message-pii-safety.md` 一致）
+  - **下游 Hard**：`pkg/errcode` funnel 集合本身由 `ERRCODE-KIND-LITERAL-01` + `MESSAGE-CONST-LITERAL-01` + `DETAILS-SEALED-FIELD-FROZEN-01` 锁定（三档 archtest 形态锁，与 ADR `202605051730-adr-errcode-message-pii-safety.md` 一致）
   - **defense-in-depth**：`.golangci.yml` `cellgen-error-libs` depguard 规则（递归 glob `**/tools/codegen/cellgen/**`，覆盖现在+未来子包）在 import 边界 ban 五个常见第三方 error lib——第三方构造路径不需要进入 archtest 黑名单
   - **闭环范围**：上游 (注册 stdlib 黑名单 + 注册第三方 import ban) + 下游 funnel 内容锁 — **在注册集合内**集合外不能进 + 集合内必须经过 funnel 双向 Hard
 
@@ -183,7 +183,7 @@ Hard 等级在**注册集合内** form uniqueness：
 **Scope 估算**（why not in P5.1）：
 - cellgen 30 个 error-returning 函数签名改 `*errcode.Error`：~30 一行编辑
 - cellgen body 中 2 处 raw stdlib err forward 加 errcode.Wrap：~6 行
-- **`pkg/errcode.Error` 字段私有化**（核心阻塞项）：7 个 exported 字段 (`Kind / Code / Message / InternalMessage / Details / Cause / Category`) 改 unexported + 提供 accessor 方法 + 迁移所有读取这些字段的 caller（runtime/http middleware、observability、redaction layer 等）— ~25-40h 跨包重构
+- **`pkg/errcode.Error` 字段私有化**（核心阻塞项）：7 个 exported 字段 (`Kind / Code / Message / InternalDetails / Details / Cause / Category`) 改 unexported + 提供 accessor 方法 + 迁移所有读取这些字段的 caller（runtime/http middleware、observability、redaction layer 等）— ~25-40h 跨包重构
 - archtest 简化为 FuncDecl-level 单规则：~50 行
 
 **Trigger condition** (backlog `CELLGEN-ERRCODE-FUNNEL-HARDEN-PATH-C-FULL`)：

@@ -5,7 +5,6 @@ package pathsafe
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,7 +127,7 @@ func openRootDirNoFollow(realRoot string) (int, error) {
 	if err != nil {
 		return -1, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"pathsafe: open root for fd-walk", err,
-			errcode.WithDetails(slog.String("root", realRoot)))
+			errcode.WithDetails(errcode.PublicString("root", realRoot)))
 	}
 	return fd, nil
 }
@@ -232,7 +231,7 @@ func secureMkdirAllAndWrite(
 	if err != nil {
 		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"pathsafe: cannot relativize parent path", err,
-			errcode.WithInternal(fmt.Sprintf("realRoot=%s parent=%s", realRoot, parentPath)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("realRoot=%s parent=%s", realRoot, parentPath))))
 	}
 
 	rootFd, err := openRootDirNoFollow(realRoot)
@@ -255,7 +254,7 @@ func secureMkdirAllAndWrite(
 		if err := unlinkatLeafIgnoreENOENT(parentFd, basename); err != nil {
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"pathsafe: unlinkat leaf for force-overwrite", err,
-				errcode.WithInternal(fmt.Sprintf("basename=%s", basename)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("basename=%s", basename))))
 		}
 	}
 	return writeFileNoFollowAt(parentFd, basename, content, fileMode)

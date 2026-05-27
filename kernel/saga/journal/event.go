@@ -155,17 +155,17 @@ func (e Event) ValidateForAppend() error {
 	if !e.Kind.Valid() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga journal: event has invalid Kind",
-			errcode.WithInternal(fmt.Sprintf("kind=%d", e.Kind)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("kind=%d", e.Kind))))
 	}
 	if e.Kind.IsTerminal() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga journal: terminal event must be written via MarkTerminal, not Append",
-			errcode.WithInternal(fmt.Sprintf("kind=%s", e.Kind)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("kind=%s", e.Kind))))
 	}
 	if len(e.Payload) > MaxPayloadBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga journal: event payload exceeds MaxPayloadBytes",
-			errcode.WithInternal(fmt.Sprintf("payloadBytes=%d max=%d", len(e.Payload), MaxPayloadBytes)))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("payloadBytes=%d max=%d", len(e.Payload), MaxPayloadBytes))))
 	}
 	if err := e.validateStepName(); err != nil {
 		return err
@@ -178,7 +178,7 @@ func (e Event) validateStepName() error {
 		if e.StepName == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"saga journal: step event missing StepName",
-				errcode.WithInternal(fmt.Sprintf("kind=%s", e.Kind)))
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("kind=%s", e.Kind))))
 		}
 		if err := e.StepName.Validate(); err != nil {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

@@ -2,7 +2,6 @@
 package domain
 
 import (
-	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -287,14 +286,14 @@ func ReconstituteUser(p ReconstituteUserParams) (*User, error) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid status",
 			errcode.WithDetails(
-				slog.String("status", string(p.Status)),
+				errcode.PublicString("status", string(p.Status)),
 			))
 	}
 	if !ValidUserSource(p.Source) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
 			"ReconstituteUser: invalid source",
 			errcode.WithDetails(
-				slog.String("source", string(p.Source)),
+				errcode.PublicString("source", string(p.Source)),
 			))
 	}
 	if p.AuthzEpoch <= 0 {

@@ -448,7 +448,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 		assert.Contains(t, ecErrEmptyID.Message, "must not be empty")
 		attr, found := ecErrEmptyID.FindAttr("index")
 		require.True(t, found, "expected index detail")
-		assert.Equal(t, int64(1), attr.Value.Int64())
+		assert.Equal(t, int64(1), attr.Value())
 		assert.Empty(t, tx.execCalls)
 	})
 
@@ -464,7 +464,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 		assert.Contains(t, ecErrZeroID.Message, "all-zeros")
 		attr, found := ecErrZeroID.FindAttr("index")
 		require.True(t, found, "expected index detail")
-		assert.Equal(t, int64(1), attr.Value.Int64())
+		assert.Equal(t, int64(1), attr.Value())
 		assert.Empty(t, tx.execCalls)
 	})
 }
@@ -540,7 +540,7 @@ func TestOutboxWriter_Write_MetadataExceedsLimit(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, ec.Message+" "+ec.InternalMessage, "exceeds")
+	assert.Contains(t, ec.Message+" "+ec.Error(), "exceeds")
 	assert.Empty(t, tx.execCalls, "no INSERT should be issued for oversized metadata")
 }
 

@@ -64,7 +64,7 @@ func buildKeyProvider(
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown GOCELL_CONFIGCORE_KEY_PROVIDER; known values: \"local-aes\", \"vault-transit\"",
-			errcode.WithDetails(slog.String("provider", providerName)))
+			errcode.WithDetails(errcode.PublicString("provider", providerName)))
 	}
 }
 
