@@ -3,6 +3,8 @@ package executor
 import (
 	"log/slog"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // Option is a functional option for Executor construction.
@@ -37,6 +39,23 @@ func WithHeartbeatInterval(d time.Duration) Option {
 func WithLeaseDuration(d time.Duration) Option {
 	return func(e *Executor) {
 		e.leaseDuration = d
+	}
+}
+
+// WithTracer is a cumulative builder option. Category: builder-noop.
+// Sets the Tracer used for per-step Execute / Compensate spans
+// (`saga.executor.step.run` / `saga.executor.step.compensate`). A nil tracer
+// is silently ignored; the constructor default (wrapper.NoopTracer{}) is
+// kept. Safe to call multiple times; last non-nil value wins.
+//
+// Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md):
+// Tracer is an optional adapter wiring, not a fail-fast requirement —
+// NoopTracer is a correct zero-allocation default for tests and dev mode.
+func WithTracer(t wrapper.Tracer) Option {
+	return func(e *Executor) {
+		if t != nil {
+			e.tracer = t
+		}
 	}
 }
 

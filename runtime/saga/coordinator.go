@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
@@ -129,6 +130,7 @@ type Coordinator struct {
 	logger     *slog.Logger // default slog.Default()
 	cfg        Config
 	clock      clock.Clock
+	tracer     wrapper.Tracer // default wrapper.NoopTracer{}
 
 	// optional leader election (PR-05). nil locker → single-process unsafe
 	// mode. leaderElectNil records a nil locker passed to WithLeaderElect so
@@ -204,6 +206,7 @@ func NewCoordinator(
 		dispatcher: NoopDispatcher{},
 		logger:     slog.Default(),
 		cfg:        DefaultConfig(),
+		tracer:     wrapper.NoopTracer{},
 		readyCh:    make(chan struct{}),
 	}
 	for _, o := range opts {
@@ -506,7 +509,25 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 // driveOne — core step execution
 // ---------------------------------------------------------------------------
 
-func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) error {
+func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) (driveErr error) {
+	// Top-level per-instance span. Child spans (saga.executor.step.run /
+	// saga.executor.step.compensate) are owned by the Executor. Tracer
+	// defaults to NoopTracer so this is zero-allocation in tests.
+	ctx, span := c.tracer.Start(ctx, "saga.coordinator.driveOne",
+		wrapper.Attr{Key: "saga.instance_id", Value: string(ci.Instance.ID)},
+		wrapper.Attr{Key: "saga.definition_id", Value: string(ci.Instance.DefinitionID)},
+		wrapper.Attr{Key: "saga.lease_id", Value: string(ci.LeaseID)},
+	)
+	defer func() {
+		if driveErr != nil {
+			// Redact before recording — span sinks must not leak secrets
+			// (per .claude/rules/gocell/observability.md §Span Error Redaction).
+			span.RecordError(redaction.RedactError(driveErr))
+			span.SetStatus(wrapper.StatusError, "driveOne returned err")
+		}
+		span.End()
+	}()
+
 	// 1. Lookup definition; missing → MarkTerminal Failed.
 	def, ok := c.registry.Lookup(ci.Instance.DefinitionID)
 	if !ok {

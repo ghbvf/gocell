@@ -32,8 +32,10 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -123,6 +125,7 @@ type Executor struct {
 	jitter            jitterSource
 	logger            *slog.Logger
 	observer          Observer
+	tracer            wrapper.Tracer
 }
 
 // IsLeaseLost reports whether err signals that the instance lease was lost
@@ -165,6 +168,7 @@ func NewExecutor(hb Heartbeater, clk clock.Clock, opts ...Option) (*Executor, er
 		jitter:            newDefaultJitter(clk),
 		logger:            slog.Default(),
 		observer:          NopObserver{},
+		tracer:            wrapper.NoopTracer{},
 	}
 
 	for _, o := range opts {
@@ -227,7 +231,32 @@ func (e *Executor) Execute(
 ) Result {
 	defID := string(inst.DefinitionID)
 	stepName := string(step.Name)
+	// Per-step trace span. Attrs at start carry the static identity; the final
+	// attempt count + outcome are set after executeInner returns so a single
+	// span reflects the complete retry history. Tracer defaults to NoopTracer.
+	ctx, span := e.tracer.Start(ctx, "saga.executor.step.run",
+		wrapper.Attr{Key: "saga.instance_id", Value: string(inst.ID)},
+		wrapper.Attr{Key: "saga.definition_id", Value: defID},
+		wrapper.Attr{Key: "saga.step_name", Value: stepName},
+	)
+	defer span.End()
+
 	result := e.executeInner(ctx, inst, leaseID, step, defPolicy, prevState)
+
+	span.SetAttributes(
+		wrapper.Attr{Key: "saga.attempts", Value: int64(result.Attempts)},
+		wrapper.Attr{Key: "saga.outcome", Value: result.Outcome.String()},
+	)
+	if result.Outcome != OutcomeSucceeded {
+		if result.Err != nil {
+			// Redact before recording — span sinks are operator-visible and
+			// must not leak secrets that could appear in step.Run errors
+			// (per .claude/rules/gocell/observability.md §Span Error Redaction).
+			span.RecordError(redaction.RedactError(result.Err))
+		}
+		span.SetStatus(wrapper.StatusError, result.Outcome.String())
+	}
+
 	e.observer.ObserveOutcome(ctx, defID, stepName, result.Outcome, result.Attempts)
 	return result
 }
@@ -476,6 +505,15 @@ func (e *Executor) Compensate(
 	if step.Compensate == nil {
 		return nil
 	}
+	// Per-step compensate trace span. Tracer defaults to NoopTracer when no
+	// adapter is wired, so this is zero-allocation in tests.
+	ctx, span := e.tracer.Start(ctx, "saga.executor.step.compensate",
+		wrapper.Attr{Key: "saga.instance_id", Value: string(inst.ID)},
+		wrapper.Attr{Key: "saga.definition_id", Value: string(inst.DefinitionID)},
+		wrapper.Attr{Key: "saga.step_name", Value: string(step.Name)},
+	)
+	defer span.End()
+
 	e.logger.InfoContext(ctx, "saga executor: compensating step",
 		slog.String("instance_id", string(inst.ID)),
 		slog.String("step_name", string(step.Name)),
@@ -486,6 +524,9 @@ func (e *Executor) Compensate(
 			slog.String("step_name", string(step.Name)),
 			slog.Any("error", err),
 		)
+		// Redact before recording — see ObserveOutcome rationale above.
+		span.RecordError(redaction.RedactError(err))
+		span.SetStatus(wrapper.StatusError, "compensate failed")
 		return err
 	}
 	return nil

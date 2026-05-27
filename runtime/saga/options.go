@@ -3,6 +3,7 @@ package saga
 import (
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
@@ -38,6 +39,22 @@ func WithLogger(l *slog.Logger) Option {
 func WithConfig(cfg Config) Option {
 	return func(c *Coordinator) {
 		c.cfg = cfg
+	}
+}
+
+// WithTracer sets the Tracer used for the per-instance `saga.coordinator.driveOne`
+// span. A nil tracer is silently ignored; the Coordinator falls back to
+// wrapper.NoopTracer{} (set in NewCoordinator). Must be called before Start.
+//
+// Category: builder-noop (cf. runtime-api.md) — tracing is an optional
+// adapter wiring. The per-step `saga.executor.step.run` /
+// `saga.executor.step.compensate` spans are owned by the Executor; see
+// executor.WithTracer.
+func WithTracer(t wrapper.Tracer) Option {
+	return func(c *Coordinator) {
+		if t != nil {
+			c.tracer = t
+		}
 	}
 }
 
