@@ -86,6 +86,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
@@ -389,6 +390,34 @@ func scanA1DeclarationSanction(
 				if !isProbeNameTypedConst(obj) {
 					continue
 				}
+
+				// Value-shape applies to every ProbeName const regardless of
+				// package: the value must pass the same NewProbeName validator
+				// that runtime callers run. Without this, an author could
+				// declare a typed const with a wire-illegal value (hyphens,
+				// uppercase, double-underscore, >64 chars) and the only
+				// failure point would be far from the declaration site when
+				// a composed-name constructor re-validates the prefix or the
+				// metric backend rejects the label. Same regex + length budget
+				// as kernel/healthz.NewProbeName. Checked first so a single
+				// `continue` for the package-sanction violation does not skip
+				// it; value-shape and package-sanction are independent axes
+				// and both must surface when both fail.
+				if val, ok := EvaluateConstString(info, vs.Values[0]); ok {
+					if _, err := healthz.NewProbeName(val); err != nil {
+						pos := fset.Position(name.Pos())
+						out = append(out, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"PROBENAME-SEALED-FUNNEL-01/A1: ProbeName const %q in %q "+
+									"has value %q that fails healthz.NewProbeName validator: %v",
+								name.Name, pkgPath, val, err,
+							),
+						})
+					}
+				}
+
 				// Const is of type ProbeName — enforce package sanction.
 				if !probeNameSanctionedPkgs[pkgPath] {
 					pos := fset.Position(name.Pos())
@@ -933,6 +962,7 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 	cases := []subDir{
 		{name: "bare_literal_arg_red", want: "A2"},
 		{name: "decl_bypass_red", want: "A1"},
+		{name: "invalid_value_red", want: "A1"},
 		{name: "non_funnel_register_red", want: "A3"},
 		{name: "newprobename_dynamic_red", want: "A4"},
 		{name: "string_cast_bypass_red", want: "B3"},
