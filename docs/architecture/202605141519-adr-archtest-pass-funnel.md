@@ -173,6 +173,30 @@ Additionally, **`FixtureBuildTag` is unexported → `fixtureBuildTag`** (type-sy
 
 **Conclusion**: #944 strictly tightens defense #4 — one vector graduates archtest→type-system Hard (Form D via unexport), two previously-open vectors close (FlatNonDefaultTags union, runTypedWithRoot), one Blind spot closes (same-file var-binding), and the coverage self-test's by-name skip is path-bound (Medium) so item 1's `repoSkipTagAllowlist` recognition cannot itself reopen a fail-open hole for production files. The two residual ⚠️ rows (cross-func escape; loader-set maintenance) are unchanged accepted Blind spots at the same grade as the sibling rules (`diagsLoadPackages` / taggroup BS-4/BS-5), tracked for inter-procedural Hard upgrade via gh issue #973. No previously-clean row regresses. `passFunnelPermanentExempt` size unchanged.
 
+### #722 amendment — RunTypedProduction upstream Hard seal (2026-05-27)
+
+The original Stage 1.7 commit shipped `RunTypedProduction` with **upstream Medium**: a rule author could still write `RunTyped(t, opts, []string{"./..."}, rule) + per-file pass.IsGenerated(f) skip` to opt into production-only scope without the driver-level filter. `pass.go::RunTypedProduction` godoc documented this gap explicitly as "Upstream Medium (honest caveat)" and tagged it for upgrade tracking. #722 closes the gap by **sealed construction**: delete the two per-file generated/ predicate façades so the bypass form becomes a Go compile error.
+
+1. **`(*archtest.Pass).IsGenerated` method removed** (`tools/archtest/pass.go`). Any business test calling `pass.IsGenerated(file)` becomes a compile error — there is no method by that name on `*archtest.Pass`.
+2. **`archtest.IsGeneratedRelPath` package-level re-export removed** (`tools/archtest/resolve.go`). The parallel "bare path string check via package façade" path becomes a compile error symmetrically.
+3. The one production caller (`http_contract_visibility_type_segregation_01_test.go:192`) is migrated: the `pass.IsGenerated(file)` call was dead code given the existing package-level filter at line 164 (`strings.Contains(pkgPath, "/generated/")`) which already excludes generated packages at Pass entry. Removed.
+4. The Wave 3 anchor `TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3` (`outbox_invariants_test.go`) — a meta-probe documenting that `RunTyped("./...")` loads generated/ files — switches from `IsGeneratedRelPath(rel)` to inline `strings.HasPrefix(rel, "generated/")`. This is semantically identical (`typeseval.IsGeneratedRelPath` body is literally this prefix check); the anchor probes loader output, not a production rule's filtering discipline.
+5. The two unit tests of the deleted symbols (`TestPass_IsGenerated`, `TestIsGeneratedRelPathReExported`) and one redundant safety-net call in `TestRunTypedProduction_excludesGeneratedPackages` (line 1230's `strings.HasPrefix` already asserts the same property) are deleted.
+
+**Threat matrix re-evaluation (per ai-robust.md §ADR amendment 落地必查):**
+
+| Vector | Before #722 | After #722 | Status change |
+|--------|-------------|------------|---------------|
+| `RunTyped("./...") + pass.IsGenerated(f)` per-file skip (façade-method form) | **Latently legal** (documented "upstream Medium honest caveat"; archtest-undetected) | **Compile error** — method does not exist on `*archtest.Pass` | ✅ Upgraded archtest-Medium → type-system Hard |
+| `RunTyped("./...") + archtest.IsGeneratedRelPath(rel)` per-file skip (façade-function form) | Latently legal (parallel path; same Medium) | **Compile error** — function does not exist in `archtest` package | ✅ Upgraded archtest-Medium → type-system Hard |
+| `RunTyped("./...") + typeseval.IsGeneratedRelPath(rel)` direct call to the typeseval oracle | Banned by `PASS-FUNNEL-RESOLVE-01` (Medium archtest, type-aware) | Banned by `PASS-FUNNEL-RESOLVE-01` (unchanged; symbol kept in banned set) | ⚠️ Unchanged (Medium archtest — same grade as sibling typeseval helpers, AST type-aware ceiling for symbol-reference bans in Go) |
+| `RunTyped("./...") + strings.HasPrefix(rel, "generated/")` hand-rolled per-file skip | Unguarded | Unguarded — but a deliberate visible deviation from the framework filter, surfaces in code review (no archtest façade to "casually" reach for) | ⚠️ Residual escape (accepted) — Go is Turing-complete, banning literal prefix checks is not expressible at any grade; raises friction by removing the convenience path |
+| `Pass.IsGenerated` / `archtest.IsGeneratedRelPath` future re-introduction (alias / re-shape) | N/A | Symbol absence + this amendment row documents the seal intent; closely paired with `RunTypedProduction` godoc's `Ref: sealed construction` line | ⚠️ Review-bound (Medium — same grade as the sibling `fixtureTagLoaderSet` enumeration maintenance row above) |
+
+**Conclusion**: #722 strictly tightens defense #4 (well-known-typeseval-helper façade discipline) by removing the two per-file generated/ façades that the documented upstream bypass relied upon. Two latently-legal vectors graduate archtest-Medium → type-system Hard (façade-method and façade-function forms); the existing oracle ban (PASS-FUNNEL-RESOLVE-01) is unchanged. The residual escape (hand-rolled `strings.HasPrefix`) is unavoidable in Go without banning the entire `strings.HasPrefix` API and is downgraded to "visible code-review deviation" since there is no longer a low-friction framework path. The new review-bound row (future re-introduction of the deleted façades) sits at the same Medium grade as sibling enumeration-maintenance rows. No previously-clean row regresses. `passFunnelPermanentExempt` size unchanged. `pass.go::RunTypedProduction` godoc updated to claim **upstream Hard (type-system seal)**.
+
+ref: ai-robust.md §Hard 范本 "sealed construction"; closes #722.
+
 ## Industry precedent
 
 | Project | Pass shape | INV-1 defense |

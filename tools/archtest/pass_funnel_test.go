@@ -11,11 +11,14 @@ package archtest
 // The first four rules forbid archtest tools/archtest/<file>_test.go from
 // reaching the legacy entry points directly. Authors must use archtest.Run
 // (AST-only) / archtest.RunTyped (typed) / archtest.RunTypedFixture (fixture
-// packages) / archtest.RunTypedProduction (production-only) via the
-// Pass-Driver paradigm, and must call the façade helper functions in
-// archtest.ResolvePackageRef / ResolveMethodCall / EvaluateConstString /
-// FlatNonDefaultTags / KnownNonDefaultTags / Pass.IsFileInScope /
-// Pass.IsGenerated instead of importing internal/typeseval directly.
+// packages) / archtest.RunTypedProduction (production-only — driver-level
+// generated/ filter) via the Pass-Driver paradigm, and must call the façade
+// helper functions archtest.ResolvePackageRef / ResolveMethodCall /
+// EvaluateConstString / FlatNonDefaultTags / KnownNonDefaultTags /
+// Pass.IsFileInScope instead of importing internal/typeseval directly. The
+// per-file generated/ predicate has no façade by design — production-scope
+// rules MUST take generated/ filtering at the driver level via
+// archtest.RunTypedProduction (#722 sealed construction).
 //
 // PASS-FUNNEL-FIXTURE-TAG-01 closes the façade-bypass leg of the
 // archtest_fixture funnel: RunTypedFixture's outward Hard (FixtureOpts has
