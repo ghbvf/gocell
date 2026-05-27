@@ -14,6 +14,14 @@
 -- DROP COLUMN tenant_id, DROP COLUMN session_id, DROP COLUMN correlation_id,
 -- DROP COLUMN occurred_at;
 --
+-- Hash chain format (W1.2, PR #1218):
+--   HMAC message = json.Marshal(auditHashInput{prev_hash, event_id, event_type,
+--   actor_id, subject_id, tenant_id, session_id, correlation_id,
+--   occurred_at_unix_nano, timestamp_unix_nano, payload}).
+--   Canonical JSON encoding (struct source-declaration order) eliminates the
+--   field-boundary collision risk of the previous pipe-separated format.
+--   Payload is encoded as a base64 string by encoding/json []byte handling.
+--
 -- Sentinel values:
 --   Empty string '' for string columns (subject_id, tenant_id, session_id,
 --   correlation_id) indicates Principal was not injected by the producer

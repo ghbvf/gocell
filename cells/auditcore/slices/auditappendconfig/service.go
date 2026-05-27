@@ -15,6 +15,7 @@ import "github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 // type-alias rationale).
 type Service = appender.Service
 
-// Spec selects the actor-extraction strategy for config-change events:
-// prefer payload.actorId, fall back to payload.userId.
-var Spec = appender.MustNewSpec("auditappendconfig", appender.ActorAcceptUserFallback)
+// Spec is the per-slice configuration that names this slice for log/error
+// prefixes. Actor identity now comes exclusively from entry.Principal.ActorID
+// (injected by producers via InjectPrincipalFromContext).
+var Spec = appender.MustNewSpec("auditappendconfig")

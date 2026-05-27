@@ -72,20 +72,28 @@ func testProtocol() *ledger.Protocol {
 //   - limit (integer minimum: 1, maximum: 500)
 //   - cursor (string maxLength: 4096)
 //   - actorId (string maxLength: 256)
+//   - correlationId (string maxLength: 256)
 //   - eventType (string maxLength: 256)
 //   - from (string format: date-time, maxLength: 64)
+//   - sessionId (string maxLength: 256)
+//   - subjectId (string maxLength: 256)
+//   - tenantId (string maxLength: 256)
 //   - to (string format: date-time, maxLength: 64)
 func TestHttpAuditListV1_QueryParamConstraints(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
 	c.ValidateQueryParam(t, "limit", "1")
-	c.MustRejectQueryParam(t, "limit", "0")                           // violates minimum: 1
-	c.MustRejectQueryParam(t, "limit", "501")                         // violates maximum: 500
-	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097)))   // violates maxLength: 4096
-	c.MustRejectQueryParam(t, "actorId", string(make([]byte, 257)))   // violates maxLength: 256
-	c.MustRejectQueryParam(t, "eventType", string(make([]byte, 257))) // violates maxLength: 256
-	c.MustRejectQueryParam(t, "from", "not-a-date-time")              // violates format: date-time
-	c.MustRejectQueryParam(t, "to", "2026-01-01T00:00:00Z-garbage")   // violates format: date-time
+	c.MustRejectQueryParam(t, "limit", "0")                               // violates minimum: 1
+	c.MustRejectQueryParam(t, "limit", "501")                             // violates maximum: 500
+	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097)))       // violates maxLength: 4096
+	c.MustRejectQueryParam(t, "actorId", string(make([]byte, 257)))       // violates maxLength: 256
+	c.MustRejectQueryParam(t, "correlationId", string(make([]byte, 257))) // violates maxLength: 256
+	c.MustRejectQueryParam(t, "eventType", string(make([]byte, 257)))     // violates maxLength: 256
+	c.MustRejectQueryParam(t, "from", "not-a-date-time")                  // violates format: date-time
+	c.MustRejectQueryParam(t, "sessionId", string(make([]byte, 257)))     // violates maxLength: 256
+	c.MustRejectQueryParam(t, "subjectId", string(make([]byte, 257)))     // violates maxLength: 256
+	c.MustRejectQueryParam(t, "tenantId", string(make([]byte, 257)))      // violates maxLength: 256
+	c.MustRejectQueryParam(t, "to", "2026-01-01T00:00:00Z-garbage")       // violates format: date-time
 }
 
 func TestHttpAuditListV1Serve(t *testing.T) {
@@ -128,12 +136,16 @@ func TestHttpAuditListV1_QueryParamsMetadata(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"actorId":   "string",
-		"cursor":    "string",
-		"eventType": "string",
-		"from":      "string",
-		"limit":     "integer",
-		"to":        "string",
+		"actorId":       "string",
+		"correlationId": "string",
+		"cursor":        "string",
+		"eventType":     "string",
+		"from":          "string",
+		"limit":         "integer",
+		"sessionId":     "string",
+		"subjectId":     "string",
+		"tenantId":      "string",
+		"to":            "string",
 	}
 	if len(c.HTTP.QueryParams) != len(want) {
 		t.Fatalf("queryParams count = %d, want %d (%v)", len(c.HTTP.QueryParams), len(want), want)

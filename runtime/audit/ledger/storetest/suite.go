@@ -431,10 +431,15 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 }
 
 // runQueryByFilters: Query returns only entries matching the filter.
+// Covers EventType (original), ActorID, SubjectID, TenantID, SessionID,
+// CorrelationID independently and in composite AND combination (F9).
 func runQueryByFilters(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
+	// Seed 6 entries: first 3 have event_type=type.X, last 3 have type.Y.
+	// All 6 carry the same actor but distinct principal/correlation for
+	// per-filter isolation tests.
 	for i := 1; i <= 6; i++ {
 		et := "type.X"
 		if i > 3 {
@@ -460,6 +465,106 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	if len(results) != 3 {
 		t.Errorf("Query(type.X): got %d, want 3", len(results))
 	}
+
+	// SubjectID, TenantID, SessionID, CorrelationID filter tests.
+	// Use a separate factory instance so these entries are isolated from the
+	// event-type seed above and results are unambiguous.
+	runQueryByPrincipalFilters(t, factory)
+}
+
+// runQueryByPrincipalFilters seeds entries with principal/correlation fields
+// and verifies that each of SubjectID, TenantID, SessionID, and CorrelationID
+// filters return exactly the matching subset — and that composing two filters
+// returns their intersection (AND semantics).
+func runQueryByPrincipalFilters(t *testing.T, factory Factory) {
+	t.Helper()
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	// Entry A: has subj-A, tenant-T, sess-S, corr-C1
+	entryA := &ledger.Entry{
+		EventID:       "pf-a",
+		EventType:     "principal.filter.test",
+		ActorID:       "actor-pf",
+		SubjectID:     "subj-A",
+		TenantID:      "tenant-T",
+		SessionID:     "sess-S",
+		CorrelationID: "corr-C1",
+		Timestamp:     fc.Now(),
+		Payload:       []byte(`{}`),
+	}
+	// Entry B: has subj-B, same tenant-T, no session, corr-C2
+	entryB := &ledger.Entry{
+		EventID:       "pf-b",
+		EventType:     "principal.filter.test",
+		ActorID:       "actor-pf",
+		SubjectID:     "subj-B",
+		TenantID:      "tenant-T",
+		SessionID:     "",
+		CorrelationID: "corr-C2",
+		Timestamp:     fc.Now(),
+		Payload:       []byte(`{}`),
+	}
+	// Entry C: has subj-C, tenant-U, sess-S (same session as A), corr-C2 (same as B)
+	entryC := &ledger.Entry{
+		EventID:       "pf-c",
+		EventType:     "principal.filter.test",
+		ActorID:       "actor-pf",
+		SubjectID:     "subj-C",
+		TenantID:      "tenant-U",
+		SessionID:     "sess-S",
+		CorrelationID: "corr-C2",
+		Timestamp:     fc.Now(),
+		Payload:       []byte(`{}`),
+	}
+	for _, e := range []*ledger.Entry{entryA, entryB, entryC} {
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("Append %s: %v", e.EventID, err)
+		}
+	}
+
+	list := func(f ledger.AuditFilters) []*ledger.Entry {
+		t.Helper()
+		res, err := store.Query(context.Background(), f, query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+		if err != nil {
+			t.Fatalf("Query(%+v): %v", f, err)
+		}
+		return res
+	}
+
+	// SubjectID: only entry A matches subj-A
+	if r := list(ledger.AuditFilters{SubjectID: "subj-A"}); len(r) != 1 || r[0].EventID != "pf-a" {
+		t.Errorf("SubjectID=subj-A: got %v, want [pf-a]", eventIDs(r))
+	}
+
+	// TenantID: entries A and B share tenant-T
+	if r := list(ledger.AuditFilters{TenantID: "tenant-T"}); len(r) != 2 {
+		t.Errorf("TenantID=tenant-T: got %d entries %v, want 2", len(r), eventIDs(r))
+	}
+
+	// SessionID: entries A and C share sess-S
+	if r := list(ledger.AuditFilters{SessionID: "sess-S"}); len(r) != 2 {
+		t.Errorf("SessionID=sess-S: got %d entries %v, want 2", len(r), eventIDs(r))
+	}
+
+	// CorrelationID: entries B and C share corr-C2
+	if r := list(ledger.AuditFilters{CorrelationID: "corr-C2"}); len(r) != 2 {
+		t.Errorf("CorrelationID=corr-C2: got %d entries %v, want 2", len(r), eventIDs(r))
+	}
+
+	// Composite AND: TenantID=tenant-T AND SessionID=sess-S → only entry A
+	if r := list(ledger.AuditFilters{TenantID: "tenant-T", SessionID: "sess-S"}); len(r) != 1 || r[0].EventID != "pf-a" {
+		t.Errorf("TenantID=tenant-T AND SessionID=sess-S: got %v, want [pf-a]", eventIDs(r))
+	}
+}
+
+// eventIDs returns a slice of EventID strings for test failure messages.
+func eventIDs(entries []*ledger.Entry) []string {
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.EventID
+	}
+	return ids
 }
 
 // runAppendMultiKeyPayloadRoundTrip verifies that Append → GetBySeq → Verify
@@ -766,7 +871,7 @@ func runPrincipalFieldsRoundTrip(t *testing.T, factory Factory) {
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
-	occurredAt := fc.Now().Add(-5 * time.Second) // distinct from Timestamp (persistence clock)
+	occurredAt := fc.Now().Add(-testtime.D5s) // distinct from Timestamp (persistence clock)
 	e := &ledger.Entry{
 		EventID:    "principal-rt-evt",
 		EventType:  "principal.roundtrip.test",

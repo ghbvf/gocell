@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -93,7 +94,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := seedContractSession(sessionRepo)
-	svc, err := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
+	svc, err := NewService(clock.Real(), sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &recordingWriter{}))),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, err)

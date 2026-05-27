@@ -409,6 +409,8 @@ func (h *pubSubHarness) publishAndWait(payload []byte) {
 // enforce schemaVersion:"v1" (e.g. InMemoryEventBus after P1-14) can receive
 // test messages. The subscriber will receive the unwrapped business payload.
 //
+// occurredAt is required since OccurredAt mandatory enforcement (PR #1218).
+//
 // Constructed manually to avoid importing runtime/outbox from the kernel layer.
 func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 	t.Helper()
@@ -423,6 +425,7 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		Topic         string          `json:"topic"`
 		Payload       json.RawMessage `json:"payload"`
 		CreatedAt     string          `json:"createdAt"`
+		OccurredAt    string          `json:"occurredAt"`
 	}
 	msg := wireMsg{
 		SchemaVersion: "v1",
@@ -431,6 +434,7 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		Topic:         topic,
 		Payload:       json.RawMessage(payload),
 		CreatedAt:     "2024-01-01T00:00:00Z",
+		OccurredAt:    "2024-01-01T00:00:00Z",
 	}
 	out, err := json.Marshal(msg)
 	if err != nil {

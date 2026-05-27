@@ -56,14 +56,16 @@ func newIntegProtocol(t *testing.T) *ledger.Protocol {
 	return p
 }
 
-// newValidEntry returns an outbox.Entry with a JSON payload that satisfies
-// ActorAcceptUserFallback (carries "actorId"). Caller may adjust ID for replay tests.
+// newValidEntry returns an outbox.Entry with OccurredAt and Principal.ActorID set.
+// Caller may adjust ID for replay tests.
 func newValidEntry(id string) outbox.Entry {
 	return outbox.Entry{
-		ID:        id,
-		EventType: "event.user.created.v1",
-		Payload:   []byte(`{"actorId":"integ-actor-1","userId":"integ-user-1"}`),
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ID:         id,
+		EventType:  "event.user.created.v1",
+		Payload:    []byte(`{"actorId":"integ-actor-1","userId":"integ-user-1"}`),
+		OccurredAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Principal:  outbox.PrincipalMetadata{ActorID: "integ-actor-1"},
 	}
 }
 
@@ -87,7 +89,7 @@ func TestL2Atomicity_appender_RollsBack(t *testing.T) {
 	ctx := context.Background()
 	proto := newIntegProtocol(t)
 	fc := clockmock.New(storetest.EpochAnchor())
-	spec := appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback)
+	spec := appender.MustNewSpec("auditappenduser")
 
 	// --- Failure path: Emit fails → RunInTx rolls back → no audit_entries row ---
 	failPool := sharedPG.NewPerTestPool(t)
@@ -140,7 +142,7 @@ func TestL2Atomicity_appender_ReplayIdempotent(t *testing.T) {
 	ctx := context.Background()
 	proto := newIntegProtocol(t)
 	fc := clockmock.New(storetest.EpochAnchor())
-	spec := appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback)
+	spec := appender.MustNewSpec("auditappenduser")
 
 	pool := sharedPG.NewPerTestPool(t)
 	txm := adapterpg.NewTxManager(pool)

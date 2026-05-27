@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 34 migrations: 001-033 contiguous, plus 040 (intentional gap
+	// Currently 35 migrations: 001-033 contiguous, plus 040-042 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -61,9 +61,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout);
 	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
 	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10);
-	// 041 extends audit_entries with subject_id/tenant_id/session_id/correlation_id/occurred_at (W0 wire envelope Principal 族).
-	assert.Equal(t, int64(41), v,
-		"expected version should be exactly 41 (current migration max — 041 audit Principal/OccurredAt)")
+	// 041 extends audit_entries with subject_id/tenant_id/session_id/correlation_id/occurred_at (W0 wire envelope Principal 族);
+	// 042 adds outbox_entries.principal (JSONB) + occurred_at (TIMESTAMPTZ) (W1.1 wire envelope durable persistence F1).
+	assert.Equal(t, int64(42), v,
+		"expected version should be exactly 42 (current migration max — 042 outbox_entries principal/occurred_at)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

@@ -80,12 +80,13 @@ updated AS (
 	WHERE e.id = picked.id
 	RETURNING e.id, e.aggregate_id, e.aggregate_type, e.event_type,
 		e.topic, e.payload, e.metadata, e.created_at, e.attempts, e.observability,
-		e.lease_id,
+		e.lease_id, e.principal, e.occurred_at,
 		picked.next_retry_at AS picked_next_retry_at,
 		picked.created_at AS picked_created_at
 )
 SELECT id, aggregate_id, aggregate_type, event_type,
-	topic, payload, metadata, created_at, attempts, observability, lease_id
+	topic, payload, metadata, created_at, attempts, observability, lease_id,
+	principal, occurred_at
 FROM updated
 ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id`
 
@@ -319,10 +320,11 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 // ClaimedEntry. Column order:
 //
 //	id, aggregate_id, aggregate_type, event_type, topic, payload,
-//	metadata, created_at, attempts, observability, lease_id
+//	metadata, created_at, attempts, observability, lease_id,
+//	principal, occurred_at
 //
-// Both metadata and observability are JSONB; NULL is valid for both and is
-// treated as an empty map / zero struct respectively. A JSON parse failure
+// metadata, observability, and principal are JSONB; NULL is valid for all and
+// is treated as an empty map / zero struct respectively. A JSON parse failure
 // is logged as Warn (data integrity) and the entry is still returned.
 // lease_id is returned by claim as a non-NULL UUID and surfaced as a string
 // fencing token to the runtime layer.
@@ -332,11 +334,14 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		metadataJSON      []byte
 		observabilityJSON []byte
 		leaseID           uuid.UUID
+		principalJSON     []byte
+		occurredAt        time.Time
 	)
 	if err := rows.Scan(
 		&ce.ID, &ce.AggregateID, &ce.AggregateType, &ce.EventType,
 		&ce.Topic, &ce.Payload, &metadataJSON, &ce.CreatedAt, &ce.Attempts,
 		&observabilityJSON, &leaseID,
+		&principalJSON, &occurredAt,
 	); err != nil {
 		return outbox.ClaimedEntry{}, err
 	}
@@ -387,6 +392,32 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 			ce.Observability = obs
 		}
 	}
+	if len(principalJSON) > 0 {
+		// Decode-validate-assign atomic — same staging-variable pattern as
+		// observability above so a row with a partially-decoded principal does
+		// not leak unsafe IDs into ce.Principal.
+		var p kout.PrincipalMetadata
+		if err := json.Unmarshal(principalJSON, &p); err != nil {
+			slog.Warn("outbox store: failed to unmarshal principal — dropping",
+				slog.String("entry_id", ce.ID),
+				slog.String("event_type", ce.EventType),
+				slog.Any("error", err))
+			// ce.Principal stays zero-value
+		} else if validateErr := p.Validate(); validateErr != nil {
+			// Persisted row violates field-size invariants — drop entirely.
+			slog.Warn("outbox store: principal fails validation — dropping",
+				slog.String("entry_id", ce.ID),
+				slog.String("event_type", ce.EventType),
+				slog.Any("error", validateErr))
+			// ce.Principal stays zero-value
+		} else {
+			ce.Principal = p
+		}
+	}
+	// Hydrate OccurredAt; the sentinel '1970-01-01 00:00:00+00' maps to a
+	// non-zero time.Time but the consumer can detect un-adopted rows by checking
+	// OccurredAt.Equal(time.Unix(0, 0).UTC()).
+	ce.OccurredAt = occurredAt
 	return ce, nil
 }
 

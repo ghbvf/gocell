@@ -253,9 +253,10 @@ func (s *Service) publishLocked(txCtx context.Context, userID string) error {
 		return fmt.Errorf("accountlockout: marshal locked event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: dto.TopicUserLocked,
-		Payload:   payload,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  dto.TopicUserLocked,
+		Payload:    payload,
+		OccurredAt: s.clk.Now().UTC(),
 	}
 	if err := s.emitter.Emit(txCtx, entry); err != nil {
 		return fmt.Errorf("accountlockout: emit locked event: %w", err)
@@ -273,9 +274,10 @@ func (s *Service) publishUnlocked(txCtx context.Context, userID string) error {
 		return fmt.Errorf("accountlockout: marshal unlocked event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: dto.TopicUserUnlocked,
-		Payload:   payload,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  dto.TopicUserUnlocked,
+		Payload:    payload,
+		OccurredAt: s.clk.Now().UTC(),
 	}
 	if err := s.emitter.Emit(txCtx, entry); err != nil {
 		return fmt.Errorf("accountlockout: emit unlocked event: %w", err)

@@ -192,14 +192,22 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = e.clock.Now().UTC()
 	}
-	// Inject observability BEFORE Validate so the validator covers the values
-	// actually written to wire (CWE-117): unsafe ctx-injected IDs must fail
-	// here, not at the consumer's UnmarshalEnvelope (which would waste a
-	// broker round-trip + DLQ slot). Mirrors adapters/postgres/outbox_writer.go
-	// where InjectObservabilityFromContext runs BEFORE Validate for the same
-	// reason. See PR #582 round-3 review F2 / K8s apiserver/audit Backend
-	// pattern (validate at trust boundary).
+	if entry.OccurredAt.IsZero() {
+		// OccurredAt is mandatory per Entry.Validate. Fill from emitter clock
+		// when caller didn't set it explicitly — matches the CreatedAt fill
+		// pattern. Producers with a distinct business-event time (e.g. backfill,
+		// scheduled event) MUST set OccurredAt before calling Emit.
+		entry.OccurredAt = e.clock.Now().UTC()
+	}
+	// Inject observability and principal BEFORE Validate so the validator
+	// covers the values actually written to wire (CWE-117): unsafe ctx-injected
+	// IDs must fail here, not at the consumer's UnmarshalEnvelope (which would
+	// waste a broker round-trip + DLQ slot). Mirrors adapters/postgres/outbox_writer.go
+	// where both inject calls run BEFORE Validate for the same reason.
+	// See PR #582 round-3 review F2 / K8s apiserver/audit Backend pattern
+	// (validate at trust boundary).
 	entry.InjectObservabilityFromContext(ctx)
+	entry.InjectPrincipalFromContext(ctx)
 	if err := entry.Validate(); err != nil {
 		return err
 	}

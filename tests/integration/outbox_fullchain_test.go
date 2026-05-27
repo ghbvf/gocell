@@ -856,7 +856,7 @@ func TestIntegration_OutboxFullChain_Principal(t *testing.T) {
 	// ---------------------------------------------------------------
 	entryID := uuid.New().String()
 	topic := "test.outbox.fullchain.principal"
-	occurredAt := time.Now().UTC().Add(-30 * time.Second) // distinct from write-time clock
+	occurredAt := time.Now().UTC().Add(-testtime.D30s) // distinct from write-time clock
 	entry := outbox.Entry{
 		ID:            entryID,
 		AggregateID:   "order-principal-42",

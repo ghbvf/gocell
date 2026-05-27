@@ -45,8 +45,9 @@ type ListAdapter struct {
 	S *Service
 }
 
-// List implements auditlist.Service. The request fields (actorId, from, to, limit,
-// cursor, eventType) are already decoded and basic-validated by handler_gen.
+// List implements auditlist.Service. The request fields (actorId, subjectId, tenantId,
+// sessionId, correlationId, from, to, limit, cursor, eventType) are already decoded
+// and basic-validated by handler_gen.
 // B2-C-09: Payload is redacted of sensitive fields before returning to client.
 func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
@@ -71,8 +72,12 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 
 	filters := ledger.AuditFilters{
-		EventType: req.EventType,
-		ActorID:   actorID,
+		EventType:     req.EventType,
+		ActorID:       actorID,
+		SubjectID:     req.SubjectID,
+		TenantID:      req.TenantID,
+		SessionID:     req.SessionID,
+		CorrelationID: req.CorrelationID,
 	}
 
 	if req.From != "" {
@@ -133,13 +138,23 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // toListResponseDataItem converts a ledger.Entry to auditlist.ResponseDataItem.
 // B2-C-09: Payload is scrubbed of sensitive fields via pkg/redaction.RedactPayload
 // before being returned to API consumers.
+// F11: SubjectID/TenantID/SessionID/CorrelationID/OccurredAt (Principal envelope fields)
+// are exposed as optional top-level fields; OccurredAt is omitted when zero.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
-	return &auditlist.ResponseDataItem{
-		ID:        e.ID,
-		EventID:   e.EventID,
-		EventType: e.EventType,
-		ActorID:   e.ActorID,
-		Timestamp: e.Timestamp.Format(time.RFC3339),
-		Payload:   json.RawMessage(redaction.RedactPayload(e.Payload)),
+	item := &auditlist.ResponseDataItem{
+		ID:            e.ID,
+		EventID:       e.EventID,
+		EventType:     e.EventType,
+		ActorID:       e.ActorID,
+		SubjectID:     e.SubjectID,
+		TenantID:      e.TenantID,
+		SessionID:     e.SessionID,
+		CorrelationID: e.CorrelationID,
+		Timestamp:     e.Timestamp.Format(time.RFC3339),
+		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
+	if !e.OccurredAt.IsZero() {
+		item.OccurredAt = e.OccurredAt.UTC().Format(time.RFC3339)
+	}
+	return item
 }

@@ -393,10 +393,11 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 //     or other load-bearing fields)
 //  5. No exported alias of wireMessage exists under any name
 //     (`type Envelope = wireMessage` — caught by Type() identity equality)
-//  6. No exported struct with SchemaVersion + ≥7/10 canonical wireMessage
-//     fields exists under any name (`type Envelope struct{...}` — re-shape
-//     re-export under a fresh name; also flags `type Envelope wireMessage`
-//     defined-type sharing the underlying struct identity)
+//  6. No exported struct with a SchemaVersion field exists under any name
+//     (`type Envelope struct{SchemaVersion string}` — SchemaVersion is the
+//     wire-envelope discriminator; in-memory Entry never carries it, so
+//     presence alone signals a re-shape attempt; also flags `type Envelope
+//     wireMessage` defined-type sharing the underlying struct identity)
 func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -543,11 +544,18 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 					continue
 				}
 
-				// Check 6: re-shape re-export. Look for SchemaVersion +
-				// substantial overlap with canonical wireMessage fields.
-				// SchemaVersion is the discriminator that distinguishes wire
-				// envelopes from in-memory Entry (Entry intentionally lacks
-				// SchemaVersion since it's the post-decode representation).
+				// Check 6: re-shape re-export. SchemaVersion is the sole
+				// discriminator: in-memory Entry intentionally omits it (it is
+				// the post-decode representation, never a wire target), so any
+				// exported struct in kernel/outbox that DOES carry SchemaVersion
+				// is by definition an attempted wire-envelope re-shape.
+				//
+				// Removing the 9/12 canonical-field threshold makes the check
+				// deny-by-default: even a minimal `struct { SchemaVersion string }`
+				// fires immediately, making it AI-Hard (no slip-past-threshold
+				// path). If a future exported struct legitimately carries
+				// SchemaVersion for a non-wire reason, it must be added to
+				// safeIDBlindSpotAllowlist with explicit rationale.
 				//
 				// We also flag when underlying struct IDENTITY equals
 				// wireMessage's underlying — covers `type Envelope wireMessage`
@@ -564,34 +572,96 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 					continue
 				}
 
-				hasSchemaVersion := false
-				canonicalMatchCount := 0
 				for i := 0; i < candStrct.NumFields(); i++ {
-					fn := candStrct.Field(i).Name()
-					if fn == "SchemaVersion" {
-						hasSchemaVersion = true
+					if candStrct.Field(i).Name() == "SchemaVersion" {
+						diags = append(diags, Diagnostic{
+							Message: fmt.Sprintf(
+								"SAFEID-UPSTREAM-FUNNEL-HARD-01/ReShapeReExport: "+
+									"%s.%s is an exported struct carrying a SchemaVersion field "+
+									"— SchemaVersion is the wire-envelope discriminator; "+
+									"in-memory Entry never carries it, so any exported struct "+
+									"with SchemaVersion is a parallel wire envelope under a different name; "+
+									"either remove SchemaVersion or add to safeIDBlindSpotAllowlist with rationale",
+								p.Pkg.Path(), name),
+						})
+						break
 					}
-					if _, ok := canonicalSet[fn]; ok {
-						canonicalMatchCount++
-					}
-				}
-				const reShapeMatchThreshold = 9 // out of 12 canonical fields
-				if hasSchemaVersion && canonicalMatchCount >= reShapeMatchThreshold {
-					diags = append(diags, Diagnostic{
-						Message: fmt.Sprintf(
-							"SAFEID-UPSTREAM-FUNNEL-HARD-01/ReShapeReExport: "+
-								"%s.%s is an exported struct with SchemaVersion + %d/%d canonical wireMessage fields "+
-								"— parallel wire envelope re-introduced under a different name; "+
-								"either rename to extend wireMessage or add to safeIDExemptFields / safeIDBlindSpotAllowlist with rationale",
-							p.Pkg.Path(), name,
-							canonicalMatchCount, len(wireMessageCanonicalFields)),
-					})
 				}
 			}
 			return nil
 		})
 
 	Report(t, "SAFEID-UPSTREAM-FUNNEL-HARD-01", diags)
+}
+
+// TestSAFEIDUpstreamFunnelHard01_SchemaVersionSignal_SelfCheck verifies
+// two invariants of the SchemaVersion-only re-shape detector (Check 6 above):
+//
+//  1. "Entry is allowlisted": kernel/outbox.Entry must be in safeIDBlindSpotAllowlist
+//     so the SchemaVersion-only detector skips it regardless of its field set.
+//  2. "Entry has no SchemaVersion": Entry must not carry the wire-envelope
+//     discriminator, proving it is structurally distinct from wireMessage and
+//     would not fire even if removed from the allowlist.
+//
+// These two checks together prove the detector's signal correctness:
+//   - a struct with ONLY SchemaVersion fires (not gated by canonical-count threshold)
+//   - the in-memory Entry struct does NOT have SchemaVersion (no false positive)
+func TestSAFEIDUpstreamFunnelHard01_SchemaVersionSignal_SelfCheck(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var diags []Diagnostic
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./kernel/outbox/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
+				return nil
+			}
+			scope := p.Pkg.Scope()
+
+			// Check A: Entry must be in safeIDBlindSpotAllowlist.
+			if _, ok := safeIDBlindSpotAllowlist["Entry"]; !ok {
+				diags = append(diags, Diagnostic{
+					Message: "SAFEID-UPSTREAM-FUNNEL-HARD-01/SchemaVersionSignal: " +
+						"kernel/outbox.Entry is not in safeIDBlindSpotAllowlist — " +
+						"the SchemaVersion-only detector relies on the allowlist to skip it; " +
+						"add Entry to safeIDBlindSpotAllowlist with rationale",
+				})
+			}
+
+			// Check B: Entry must NOT have a SchemaVersion field.
+			entryObj := scope.Lookup("Entry")
+			if entryObj == nil {
+				diags = append(diags, Diagnostic{
+					Message: "SAFEID-UPSTREAM-FUNNEL-HARD-01/SchemaVersionSignal: kernel/outbox.Entry not found",
+				})
+				return diags
+			}
+			named, ok := entryObj.Type().(*types.Named)
+			if !ok {
+				return diags
+			}
+			strct, ok := named.Underlying().(*types.Struct)
+			if !ok {
+				return diags
+			}
+			for i := 0; i < strct.NumFields(); i++ {
+				if strct.Field(i).Name() == "SchemaVersion" {
+					diags = append(diags, Diagnostic{
+						Message: "SAFEID-UPSTREAM-FUNNEL-HARD-01/SchemaVersionSignal: " +
+							"kernel/outbox.Entry has a SchemaVersion field — " +
+							"Entry is the post-decode in-memory representation and must not carry " +
+							"the wire-envelope discriminator; move SchemaVersion to wireMessage only",
+					})
+					break
+				}
+			}
+			return nil
+		})
+
+	Report(t, "SAFEID-UPSTREAM-FUNNEL-HARD-01/BlindSpot/SchemaVersionSignal", diags)
 }
 
 // TestSAFEIDUpstreamFunnelHard01_BlindSpot_NoReExport is the reverse

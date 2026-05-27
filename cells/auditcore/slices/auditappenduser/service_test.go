@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappenduser"
 )
 
@@ -15,5 +14,4 @@ import (
 // appender package was extracted to single-source.
 func TestSpec(t *testing.T) {
 	assert.Equal(t, "auditappenduser", auditappenduser.Spec.Name())
-	assert.Equal(t, appender.ActorAcceptUserFallback, auditappenduser.Spec.Mode())
 }

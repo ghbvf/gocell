@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -56,6 +57,7 @@ type Service struct {
 	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	txRunner    persistence.CellTxManager         `gocell:"required" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter     outbox.CellEmitter
+	clk         clock.Clock
 	logger      *slog.Logger
 }
 
@@ -87,11 +89,13 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // NewService creates a new rbac-assign service.
 // The invalidator is required; it handles credential revocation for Revoke operations.
 func NewService(
+	clk clock.Clock,
 	roleRepo ports.RoleRepository,
 	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "rbacassign.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -99,6 +103,7 @@ func NewService(
 		roleRepo:    roleRepo,
 		invalidator: invalidator,
 		emitter:     outbox.DemoCellEmitter(),
+		clk:         clk,
 		logger:      logger,
 	}
 	for _, o := range opts {
@@ -117,9 +122,10 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dt
 		return fmt.Errorf("rbac-assign: marshal role-changed event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: eventType,
-		Payload:   payload,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  eventType,
+		Payload:    payload,
+		OccurredAt: s.clk.Now().UTC(),
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("rbac-assign: emit role-changed event: %w", err)

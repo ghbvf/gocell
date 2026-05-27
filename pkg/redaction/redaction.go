@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -104,9 +105,27 @@ var sensitiveKeyExactPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern
 // Value: "hunter2"} — the value field carries no `password=` anchor token
 // so RedactString returns it unchanged).
 //
+// Dotted keys (e.g. "gocell.principal.session_id") are split on "." and each
+// segment is tested independently so that namespace-prefixed OTel span attribute
+// keys for sensitive fields are caught — the same guarantee as bare keys.
+// A bare key like "bare_session_id" is not split and must be an exact match
+// against sensitiveKeyPattern to trigger.
+//
 // ref: adapters/otel/span.go safeStringAttr; pkg/redaction.RedactSlogAttr.
 func IsSensitiveKey(key string) bool {
-	return sensitiveKeyExactPattern.MatchString(key)
+	if sensitiveKeyExactPattern.MatchString(key) {
+		return true
+	}
+	// Dotted namespace support: "gocell.principal.session_id" → segments
+	// ["gocell", "principal", "session_id"]; match if any segment is sensitive.
+	if strings.ContainsRune(key, '.') {
+		for _, seg := range strings.Split(key, ".") {
+			if sensitiveKeyExactPattern.MatchString(seg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a

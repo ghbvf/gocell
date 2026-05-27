@@ -498,6 +498,15 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"my_password_field", false},
 		{"password_hint", false},
 		{"x-token-prefix", false},
+		// dotted namespace keys — any segment matching the pattern is sensitive
+		{"gocell.principal.session_id", true},
+		{"app.user.session_id", true},
+		{"gocell.principal.actor_id", false}, // actor_id is not sensitive per design
+		{"gocell.principal.token", true},
+		{"trace.request.id", false},  // none of trace/request/id match pattern
+		{"foo.session-id.bar", true}, // session-id segment matches
+		// bare non-matching dotted key should not trigger
+		{"cell.id", false},
 	}
 	for _, tc := range cases {
 		tc := tc

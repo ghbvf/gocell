@@ -65,11 +65,12 @@ type wireMessage struct {
 	Principal PrincipalMetadata `json:"principal,omitempty"`
 	// OccurredAt is the producer-domain event time (when the business event
 	// actually happened in the producer's reference frame). Distinct from
-	// CreatedAt (outbox row INSERT time set by writer/store). Zero-value
-	// (omitempty) entries that do not need a domain event time omit the field.
+	// CreatedAt (outbox row INSERT time set by writer/store). Required on
+	// wire: Entry.Validate rejects zero-value. Producers MUST set this field
+	// before Writer.Write.
 	//
 	// ref: CloudEvents v1.0 §3 Required Attributes "time" — occurrence time.
-	OccurredAt time.Time `json:"occurredAt,omitempty"`
+	OccurredAt time.Time `json:"occurredAt"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 

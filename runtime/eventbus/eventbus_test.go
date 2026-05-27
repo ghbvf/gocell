@@ -41,10 +41,11 @@ const busEventually10x = 10 * testtime.EventuallyShort
 func makeTestEnvelope(t testing.TB, topic string, payload []byte, id string) []byte {
 	t.Helper()
 	entry := outbox.Entry{
-		ID:        id,
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
+		ID:         id,
+		EventType:  topic,
+		Topic:      topic,
+		Payload:    payload,
+		OccurredAt: time.Now().UTC(),
 	}
 	b, err := outbox.MarshalEnvelope(entry)
 	if err != nil {
@@ -100,7 +101,8 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 		"topic": "test.envelope.topic",
 		"payload": {"action":"created","key":"k1","value":"v1"},
 		"metadata": {"source":"test"},
-		"createdAt": "2026-04-18T00:00:00Z"
+		"createdAt": "2026-04-18T00:00:00Z",
+		"occurredAt": "2026-04-18T00:00:00Z"
 	}`)
 	require.NoError(t, bus.Publish(context.Background(), "test.envelope.topic", envelope))
 
@@ -1624,6 +1626,7 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 		EventType:   "drop.broadcast.v1",
 		Topic:       "drop.broadcast.v1",
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
+		OccurredAt:  time.Now().UTC(),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -1693,6 +1696,7 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 		EventType:   "drop.roundrobin.v1",
 		Topic:       "drop.roundrobin.v1",
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
+		OccurredAt:  time.Now().UTC(),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -1761,6 +1765,7 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 		EventType:   topic,
 		Topic:       topic,
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
+		OccurredAt:  time.Now().UTC(),
 	}
 	env, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)

@@ -57,7 +57,7 @@ func mustNewService(
 	t.Helper()
 	inv := newTestInvalidator(t, userRepo, sessionStore)
 	opts = append([]Option{WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{}))}, opts...)
-	svc, err := NewService(roleRepo, inv, logger, opts...)
+	svc, err := NewService(clock.Real(), roleRepo, inv, logger, opts...)
 	require.NoError(t, err)
 	return svc
 }
@@ -107,7 +107,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	inv := newTestInvalidator(t, store.UserRepository(), sessionStore)
 	// No WithTxManager — must fail.
-	_, err := NewService(store.RoleRepository(), inv, slog.Default())
+	_, err := NewService(clock.Real(), store.RoleRepository(), inv, slog.Default())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -117,7 +117,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 
 func TestNewService_InvalidatorRequired(t *testing.T) {
 	store := mem.NewStore(clock.Real())
-	_, err := NewService(store.RoleRepository(), nil, slog.Default(),
+	_, err := NewService(clock.Real(), store.RoleRepository(), nil, slog.Default(),
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -421,7 +421,7 @@ func TestRevoke_FunnelFail_ReturnsError(t *testing.T) {
 	failSession := failingSessionStore{Store: realSession}
 	inv, err := credentialinvalidate.New(store.UserRepository(), failSession, testutil.RealRefreshStore(t))
 	require.NoError(t, err)
-	svc, err := NewService(store.RoleRepository(), inv, slog.Default(),
+	svc, err := NewService(clock.Real(), store.RoleRepository(), inv, slog.Default(),
 		WithTxManager(persistence.WrapForCell(rbacFakeTxRunner{})))
 	require.NoError(t, err)
 

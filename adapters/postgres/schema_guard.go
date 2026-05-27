@@ -21,6 +21,7 @@ import (
 // schema_guard documentation stays in sync with the embedded SQL.
 //
 //   - outbox_entries     (001)  transactional outbox for event relay
+//                                 + principal JSONB + occurred_at TIMESTAMPTZ (042 wire envelope F1)
 //   - config_entries     (004)  cell configuration key-value store
 //   - config_versions    (004)  immutable configuration version history
 //   - refresh_tokens     (007)  append-only refresh token lineage
@@ -372,6 +373,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
 	{Table: "audit_entries", Column: "prev_hash", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "hash", Type: "text", NotNull: true},
+	// audit_entries principal + correlation columns (041_extend_audit_principal_correlation.sql)
+	// NULL-able: rows inserted before migration 041 retain NULL; new rows
+	// populated from the outbox wire envelope Principal + CorrelationID fields.
+	{Table: "audit_entries", Column: "subject_id", Type: "text", NotNull: false},
+	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: false},
+	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: false},
+	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: false},
+	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: false},
 	// devices (029_devices.sql) — examples/iotdevice devicecell PG repo (B2.B).
 	{Table: "devices", Column: "id", Type: "text", NotNull: true},
 	{Table: "devices", Column: "name", Type: "text", NotNull: true},
@@ -410,6 +419,10 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// outbox_entries wire envelope F1 (042_outbox_principal_occurred_at.sql) —
+	// durable persistence of PrincipalMetadata and producer-clock OccurredAt.
+	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},
+	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.

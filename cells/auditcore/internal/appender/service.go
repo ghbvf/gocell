@@ -61,9 +61,13 @@ type Service struct {
 }
 
 // NewService constructs an audit-append service for the slice identified by
-// spec. The slice's actor-extraction strategy and log/error prefix are
-// derived from spec; all other behavior (hash chain append + transactional
-// outbox emit) is shared.
+// spec. The log/error prefix is derived from spec; all other behavior (hash
+// chain append + transactional outbox emit) is shared.
+//
+// Actor identity is sourced exclusively from entry.Principal.ActorID (the
+// typed envelope field injected by the producer via InjectPrincipalFromContext).
+// Payload-derived actor extraction has been removed — producers must call
+// entry.InjectPrincipalFromContext(ctx) before emitting.
 //
 // OUTBOX-SERVICE-01: TxRunner must be supplied via WithTxManager —
 // constructor returns ErrValidationFailed otherwise. The error message
@@ -115,14 +119,17 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
-	actorID, ok := extractActor(entry.Payload, s.spec.mode)
-	if !ok {
+	// Actor identity is sourced exclusively from entry.Principal.ActorID
+	// (the typed envelope field injected by the producer via
+	// InjectPrincipalFromContext). Payload-derived extraction removed (F5).
+	actorID := string(entry.Principal.ActorID)
+	if actorID == "" {
 		s.logger.Warn(logPrefix+": actor missing — rejecting event",
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"auditappender: event payload missing required actor identity",
+				"auditappender: event missing Principal.ActorID — producer must call entry.InjectPrincipalFromContext(ctx)",
 				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
@@ -135,7 +142,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		TenantID:      string(entry.Principal.TenantID),
 		SessionID:     string(entry.Principal.SessionID),
 		CorrelationID: string(entry.Observability.CorrelationID),
-		OccurredAt:    occurredAtForLedger(entry),
+		OccurredAt:    entry.OccurredAt,
 		Timestamp:     tsForLedger(entry, s.clk, s.logger, s.spec.name),
 		Payload:       entry.Payload,
 	}
@@ -149,7 +156,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		if err := s.store.Append(txCtx, e); err != nil {
 			return err
 		}
-		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditAppended, appendedEvent)
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicAuditAppended, appendedEvent)
 	}); err != nil {
 		// Idempotent replay: the ledger already holds this entry (same
 		// content/EventID fingerprint), e.g. outbox redelivery or a parallel
@@ -188,28 +195,6 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
-}
-
-// occurredAtForLedger returns the producer-clock event time for the OccurredAt
-// ledger field. It prefers outbox.Entry.OccurredAt (the business-event occurrence
-// time set by the producer); falls back to CreatedAt (the outbox persistence time)
-// when OccurredAt is zero. Returns the zero time.Time when both are zero —
-// the DB column carries NOT NULL DEFAULT '1970-01-01' so a zero-value Go time.Time
-// serializes to a near-epoch timestamp rather than NULL.
-//
-// Fallback to entry.CreatedAt when OccurredAt is zero is intentional for the
-// W0 adoption transition window. Audit occurred_at column will silently store
-// store-clock time for events whose producers haven't yet adopted
-// InjectPrincipalFromContext. Time-Causality distinction value materializes
-// only after producer adoption (tracked separately).
-func occurredAtForLedger(entry outbox.Entry) time.Time {
-	if !entry.OccurredAt.IsZero() {
-		return entry.OccurredAt
-	}
-	if !entry.CreatedAt.IsZero() {
-		return entry.CreatedAt
-	}
-	return time.Time{}
 }
 
 // tsForLedger picks the audit entry timestamp source. Prefers outbox.Entry.CreatedAt

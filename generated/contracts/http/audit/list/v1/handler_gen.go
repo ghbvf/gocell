@@ -85,6 +85,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.CorrelationID = r.URL.Query().Get("correlationId")
+	if req.CorrelationID != "" && len(req.CorrelationID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "correlationId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.CorrelationID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "correlationId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
 	req.EventType = r.URL.Query().Get("eventType")
 	if req.EventType != "" && len(req.EventType) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -110,6 +124,48 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"validation: invalid request parameter",
 			errcode.WithDetails(errcode.PublicString("field", "from"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
+	req.SessionID = r.URL.Query().Get("sessionId")
+	if req.SessionID != "" && len(req.SessionID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "sessionId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.SessionID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "sessionId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
+	req.SubjectID = r.URL.Query().Get("subjectId")
+	if req.SubjectID != "" && len(req.SubjectID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "subjectId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.SubjectID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "subjectId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
+	req.TenantID = r.URL.Query().Get("tenantId")
+	if req.TenantID != "" && len(req.TenantID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "tenantId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.TenantID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "tenantId"), errcode.PublicString("reason", "invalid"))))
 		return
 	}
 

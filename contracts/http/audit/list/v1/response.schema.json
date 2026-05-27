@@ -20,6 +20,22 @@
           "actorId": {
             "type": "string"
           },
+          "subjectId": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "correlationId": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "timestamp": {
             "type": "string",
             "format": "date-time"

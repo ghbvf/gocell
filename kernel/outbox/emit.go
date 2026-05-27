@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // Emit marshals payload to JSON, wraps it in an Entry with a fresh ID and the
-// given topic, and delegates to emitter.Emit.
+// given topic, stamps OccurredAt from clk, and delegates to emitter.Emit. clk
+// MUST be the producer's injected clock (every producer holds clock.Clock per
+// CLOCK-POSITIONAL-INJECTION-01) so OccurredAt reflects the producer-domain
+// event time rather than an ambient wall clock — this is what makes the
+// PROD-CLOCK-INJECTION-01 archtest happy and keeps OccurredAt semantically
+// "producer-clock" not "writer-clock".
 //
 // Replaces the hand-written "json.Marshal → Entry{} → Emit" pattern at producer
 // call sites: one line instead of four, and the signature mechanically rules
@@ -26,7 +33,8 @@ import (
 // minimal (no CQRS command/event taxonomy, no header shim); callers that need
 // Metadata / AggregateID / FailurePolicy construct the Entry by hand and call
 // emitter.Emit directly.
-func Emit[T any](ctx context.Context, emitter Emitter, topic string, payload T) error {
+func Emit[T any](ctx context.Context, clk clock.Clock, emitter Emitter, topic string, payload T) error {
+	clock.MustHaveClock(clk, "outbox.Emit")
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("outbox.Emit(%s): marshal payload: %w", topic, err)
@@ -36,9 +44,10 @@ func Emit[T any](ctx context.Context, emitter Emitter, topic string, payload T) 
 		return fmt.Errorf("outbox.Emit(%s): new entry id: %w", topic, err)
 	}
 	entry := Entry{
-		ID:        id,
-		EventType: topic,
-		Payload:   data,
+		ID:         id,
+		EventType:  topic,
+		Payload:    data,
+		OccurredAt: clk.Now().UTC(),
 	}
 	if err := emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("outbox.Emit(%s): %w", topic, err)

@@ -252,6 +252,157 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
 }
 
+// seedPrincipalEntry seeds a single entry with all principal fields set.
+// Used by cursor scope tests to ensure enough matching results to produce a cursor.
+func seedPrincipalEntry(store *ledger.MemStore, eventID, subjectID, tenantID, sessionID, correlationID string, ts time.Time) {
+	e := &ledger.Entry{
+		EventID:       eventID,
+		EventType:     "event.principal.v1",
+		ActorID:       "act-principal",
+		SubjectID:     subjectID,
+		TenantID:      tenantID,
+		SessionID:     sessionID,
+		CorrelationID: correlationID,
+		Timestamp:     ts,
+		Payload:       []byte("{}"),
+	}
+	_ = store.Append(context.Background(), e)
+}
+
+// TestService_Query_CursorScope_SubjectID verifies that a cursor bound to
+// subjectId=A is invalidated when the next page uses subjectId=B (F13).
+// Strategy: seed 5 entries with SubjectID="subj-A"; obtain page1 (limit=3, hasMore=true);
+// then attempt page2 with subjectId=subj-B using page1 cursor → scope mismatch.
+func TestService_Query_CursorScope_SubjectID(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		seedPrincipalEntry(store,
+			fmt.Sprintf("evt-scope-subj-%02d", i),
+			"subj-A", "", "", "",
+			base.Add(time.Duration(i)*time.Hour),
+		)
+	}
+
+	fA := ledger.AuditFilters{SubjectID: "subj-A"}
+	page1, err := svc.Query(context.Background(), fA, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	// Same cursor, different SubjectID → scope mismatch
+	fB := ledger.AuditFilters{SubjectID: "subj-B"}
+	_, err = svc.Query(context.Background(), fB, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// TestService_Query_CursorScope_TenantID verifies that a cursor bound to
+// tenantId=A is invalidated when the next page uses tenantId=B (F13).
+func TestService_Query_CursorScope_TenantID(t *testing.T) {
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		seedPrincipalEntry(store,
+			fmt.Sprintf("evt-scope-tenant-%02d", i),
+			"", "tenant-A", "", "",
+			base.Add(time.Duration(i)*time.Hour),
+		)
+	}
+
+	fA := ledger.AuditFilters{TenantID: "tenant-A"}
+	page1, err := svc.Query(context.Background(), fA, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	fB := ledger.AuditFilters{TenantID: "tenant-B"}
+	_, err = svc.Query(context.Background(), fB, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// TestService_Query_CursorScope_SessionID verifies that a cursor bound to
+// sessionId=X is invalidated when the next page uses sessionId=Y (F13).
+func TestService_Query_CursorScope_SessionID(t *testing.T) {
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		seedPrincipalEntry(store,
+			fmt.Sprintf("evt-scope-sess-%02d", i),
+			"", "", "sess-X", "",
+			base.Add(time.Duration(i)*time.Hour),
+		)
+	}
+
+	fX := ledger.AuditFilters{SessionID: "sess-X"}
+	page1, err := svc.Query(context.Background(), fX, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	fY := ledger.AuditFilters{SessionID: "sess-Y"}
+	_, err = svc.Query(context.Background(), fY, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// TestService_Query_CursorScope_CorrelationID verifies that a cursor bound to
+// correlationId=X is invalidated when the next page uses correlationId=Y (F13).
+func TestService_Query_CursorScope_CorrelationID(t *testing.T) {
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		seedPrincipalEntry(store,
+			fmt.Sprintf("evt-scope-corr-%02d", i),
+			"", "", "", "corr-100",
+			base.Add(time.Duration(i)*time.Hour),
+		)
+	}
+
+	f100 := ledger.AuditFilters{CorrelationID: "corr-100"}
+	page1, err := svc.Query(context.Background(), f100, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	f200 := ledger.AuditFilters{CorrelationID: "corr-200"}
+	_, err = svc.Query(context.Background(), f200, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// TestService_Query_CursorScope_EmptyPrincipalFilters verifies that empty
+// principal filters are excluded from scope, so a cursor obtained without
+// principal filters can be reused with the same empty filters.
+func TestService_Query_CursorScope_EmptyPrincipalFilters(t *testing.T) {
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		seedEntry(store, fmt.Sprintf("ae-%02d", i), "event.v1", "usr-1", base.Add(time.Duration(i)*time.Hour))
+	}
+
+	// Empty principal filters → no scope keys for subjectId/tenantId/sessionId/correlationId
+	f := ledger.AuditFilters{}
+	page1, err := svc.Query(context.Background(), f, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	// page2 with same empty filters must succeed
+	page2, err := svc.Query(context.Background(), f, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.NoError(t, err)
+	assert.NotEmpty(t, page2.Items)
+}
+
 func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {
 	p, _ := ledger.NewProtocol(
 		ledger.WithChainHMAC([]byte("test-hmac-key-32bytes-long!!!!!!!")),

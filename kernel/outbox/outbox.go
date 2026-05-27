@@ -52,7 +52,8 @@ const (
 // The list is exhaustive — these are the only keys the kernel bridge maps
 // in either direction. Adding a new bridge field requires extending this
 // list (extending this list is caught by PRINCIPAL-SEALED-FIELD-FROZEN-01
-// archtest reverse-check + RESERVED-METADATA-KEY-MEMBERSHIP invariant test).
+// archtest reverse-check in tools/archtest/principal_sealed_field_frozen_test.go,
+// and by TestEntry_Validate_RejectsReservedMetadataKeys in outbox_test.go).
 //
 // READ-ONLY. Mutating this slice at runtime does NOT affect validateMetadata's
 // check — the unexported reservedMetadataKeySet is built at package init and
@@ -165,17 +166,10 @@ type Entry struct {
 	// from CreatedAt (outbox row INSERT time, set by the writer/store):
 	// OccurredAt is producer-clock semantic, CreatedAt is store-clock.
 	//
-	// Empty (zero-value time.Time) is valid — matches ObservabilityMetadata
-	// optional model. Producers MAY set explicitly when domain semantics
-	// require a distinct event time; default leaves it zero and CreatedAt
-	// remains the only time reference.
-	//
-	// PROVENANCE NOTE: Until producer adoption, audit ledger's occurred_at
-	// column reflects store-clock time via the appender's occurredAtForLedger
-	// fallback (cells/auditcore/internal/appender/service.go). Audit consumers
-	// should not rely on occurred_at vs created_at semantic distinction until
-	// adoption completes. See ADR §Adoption Transition:
-	// docs/architecture/202605281200-1042-outbox-wire-envelope-principal-occurred-at.md.
+	// Required (Entry.Validate rejects zero-value); producers MUST set
+	// explicitly via clk.Now() or equivalent producer clock before
+	// Writer.Write. Use entry.OccurredAt = clk.Now().UTC() at entry
+	// construction time; do NOT use time.Now() directly (inject clock.Clock).
 	//
 	// ref: CloudEvents v1.0 §3 Required Attributes — "time" carries event
 	// occurrence time; gocell separates this from the outbox row time.
@@ -285,6 +279,10 @@ func (e Entry) Validate() error {
 	}
 	if err := e.Principal.Validate(); err != nil {
 		return err
+	}
+	if e.OccurredAt.IsZero() {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox: entry missing OccurredAt — set entry.OccurredAt = clk.Now().UTC() before Writer.Write")
 	}
 	return nil
 }

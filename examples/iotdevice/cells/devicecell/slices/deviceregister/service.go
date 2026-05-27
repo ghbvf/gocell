@@ -115,9 +115,10 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		return device, nil
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: TopicDeviceRegistered,
-		Payload:   payload,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  TopicDeviceRegistered,
+		Payload:    payload,
+		OccurredAt: s.clock.Now().UTC(),
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		s.logger.Error(

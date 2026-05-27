@@ -149,6 +149,7 @@ func (p *fakePublisher) Captured() []publishCall {
 // ---------------------------------------------------------------------------
 
 func makeEntry(id, eventType string) outbox.ClaimedEntry {
+	now := time.Now().UTC()
 	return outbox.ClaimedEntry{
 		Entry: kout.Entry{
 			ID:            id,
@@ -156,7 +157,8 @@ func makeEntry(id, eventType string) outbox.ClaimedEntry {
 			AggregateType: "test",
 			EventType:     eventType,
 			Payload:       []byte(`{"id":"` + id + `"}`),
-			CreatedAt:     time.Now(),
+			OccurredAt:    now,
+			CreatedAt:     now,
 		},
 		Attempts: 0,
 	}
@@ -578,6 +580,7 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 
 func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	store := outboxtest.NewFakeStore()
+	now := time.Now().UTC()
 	entry := outbox.ClaimedEntry{
 		Entry: kout.Entry{
 			ID:            "env-test",
@@ -586,7 +589,8 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 			EventType:     "order.created",
 			Topic:         "orders.v1",
 			Payload:       []byte(`{"amount":42}`),
-			CreatedAt:     time.Now(),
+			OccurredAt:    now,
+			CreatedAt:     now,
 		},
 		Attempts: 0,
 	}

@@ -897,9 +897,10 @@ func (s *Service) publish(ctx context.Context, topic string, payload any) error 
 		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: topic,
-		Payload:   data,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  topic,
+		Payload:    data,
+		OccurredAt: s.clock.Now().UTC(),
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("identity-manage: emit event: %w", err)

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -89,15 +90,35 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 }
 
 // TestMemStore_Append_HashEquivalence verifies the HMAC-SHA256 computation
-// matches the algorithm in cells/auditcore/internal/domain/hashchain.go
-// byte-for-byte. The reference implementation uses:
+// uses the canonical JSON encoding of the auditHashInput struct (W1.2, F3+F6).
 //
-//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
+// The reference computation mirrors Protocol.ComputeHash:
+//
+//	msg = json.Marshal(auditHashInput{prev_hash, event_id, ..., payload})
 //	hash = hex(HMAC-SHA256(key, msg))
 //
-// Payload is hex-encoded to prevent separator-collision attacks.
+// JSON encoding eliminates field-boundary collision risk (no manual pipe
+// separator). Payload is encoded as a base64 string by encoding/json's []byte
+// handling.
 func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	t.Parallel()
+
+	// referenceHashInput mirrors the private auditHashInput struct in protocol.go.
+	// It must stay in sync with protocol.go's auditHashInput field names and JSON
+	// tags for the byte-for-byte equivalence assertion to hold.
+	type referenceHashInput struct {
+		PrevHash           string `json:"prev_hash"`
+		EventID            string `json:"event_id"`
+		EventType          string `json:"event_type"`
+		ActorID            string `json:"actor_id"`
+		SubjectID          string `json:"subject_id"`
+		TenantID           string `json:"tenant_id"`
+		SessionID          string `json:"session_id"`
+		CorrelationID      string `json:"correlation_id"`
+		OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+		TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+		Payload            []byte `json:"payload"`
+	}
 
 	key := testHMACKey()
 	fixedNow := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -123,23 +144,24 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	// Compute expected hash using the reference algorithm (new B3 format with hex payload).
+	// Compute expected hash using the canonical-JSON reference algorithm.
 	prevHash := ""
-	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
-		prevHash,
-		entry.EventID,
-		entry.EventType,
-		entry.ActorID,
-		"", // SubjectID
-		"", // TenantID
-		"", // SessionID
-		"", // CorrelationID
-		zeroOccurredAt.UnixNano(),
-		fixedNow.UnixNano(),
-		hex.EncodeToString(payload), // hex-encoded payload
-	)
+	refInput := referenceHashInput{
+		PrevHash:           prevHash,
+		EventID:            entry.EventID,
+		EventType:          entry.EventType,
+		ActorID:            entry.ActorID,
+		SubjectID:          "", // empty
+		TenantID:           "", // empty
+		SessionID:          "", // empty
+		CorrelationID:      "", // empty
+		OccurredAtUnixNano: zeroOccurredAt.UnixNano(),
+		TimestampUnixNano:  fixedNow.UnixNano(),
+		Payload:            payload,
+	}
+	msgBytes, _ := json.Marshal(refInput)
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(msg))
+	mac.Write(msgBytes)
 	expectedHash := hex.EncodeToString(mac.Sum(nil))
 
 	tail, err := store.Tail(context.Background())
@@ -656,11 +678,32 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 	}
 }
 
-// TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the
-// reference algorithm from cells/auditcore/internal/domain/hashchain.go.
-// New B3 format includes SubjectID/TenantID/SessionID/CorrelationID/OccurredAt.
+// TestProtocol_ComputeHash_ByteForByte verifies that ComputeHash produces
+// the canonical-JSON HMAC-SHA256 encoding described in W1.2 (F3+F6).
+//
+// The reference computation uses a local mirror of the private auditHashInput
+// struct (identical field names and JSON tags). json.Marshal in source-
+// declaration order produces deterministic bytes; the test asserts byte-for-byte
+// equivalence so any future change to the struct layout is caught immediately.
 func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
+
+	// referenceHashInput mirrors the private auditHashInput struct in protocol.go.
+	// Must stay in sync with protocol.go's auditHashInput JSON tags.
+	type referenceHashInput struct {
+		PrevHash           string `json:"prev_hash"`
+		EventID            string `json:"event_id"`
+		EventType          string `json:"event_type"`
+		ActorID            string `json:"actor_id"`
+		SubjectID          string `json:"subject_id"`
+		TenantID           string `json:"tenant_id"`
+		SessionID          string `json:"session_id"`
+		CorrelationID      string `json:"correlation_id"`
+		OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+		TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+		Payload            []byte `json:"payload"`
+	}
+
 	key := testHMACKey()
 	// WithChainHMAC zeros the caller's key slice after making an internal copy
 	// (F7: HMAC key zeroing). Save a copy before calling NewProtocol so the
@@ -695,23 +738,24 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		PrevHash:      "deadbeef",
 	}
 
-	// Reference computation (mirrors hashchain.go computeHash, B3 format with hex payload):
-	//   prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
-	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
-		e.PrevHash,
-		e.EventID,
-		e.EventType,
-		e.ActorID,
-		e.SubjectID,
-		e.TenantID,
-		e.SessionID,
-		e.CorrelationID,
-		occurredAt.UnixNano(),
-		fixedNow.UnixNano(),
-		hex.EncodeToString(e.Payload), // hex-encoded payload (PR #1218)
-	)
+	// Reference computation: canonical JSON of the auditHashInput struct
+	// (source-declaration order = deterministic byte sequence).
+	refInput := referenceHashInput{
+		PrevHash:           e.PrevHash,
+		EventID:            e.EventID,
+		EventType:          e.EventType,
+		ActorID:            e.ActorID,
+		SubjectID:          e.SubjectID,
+		TenantID:           e.TenantID,
+		SessionID:          e.SessionID,
+		CorrelationID:      e.CorrelationID,
+		OccurredAtUnixNano: occurredAt.UnixNano(),
+		TimestampUnixNano:  fixedNow.UnixNano(),
+		Payload:            e.Payload,
+	}
+	msgBytes, _ := json.Marshal(refInput)
 	mac := hmac.New(sha256.New, keyCopy)
-	mac.Write([]byte(msg))
+	mac.Write(msgBytes)
 	expected := hex.EncodeToString(mac.Sum(nil))
 
 	got := p.ComputeHash(e.PrevHash, e)

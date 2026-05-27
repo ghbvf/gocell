@@ -51,6 +51,23 @@ func (s *Service) Query(
 	if filters.ActorID != "" {
 		attrs = append(attrs, "actorId", filters.ActorID)
 	}
+	// Principal identity filters (F13): subjectId/tenantId/sessionId/correlationId are
+	// cursor-scope identifiers. Changing any of these mid-pagination would silently
+	// switch the result set to a different identity boundary, so they must be bound
+	// in the cursor scope fingerprint. An empty value means "no filter" and is
+	// excluded from scope to keep cursors compact (consistent with actorId/eventType).
+	if filters.SubjectID != "" {
+		attrs = append(attrs, "subjectId", filters.SubjectID)
+	}
+	if filters.TenantID != "" {
+		attrs = append(attrs, "tenantId", filters.TenantID)
+	}
+	if filters.SessionID != "" {
+		attrs = append(attrs, "sessionId", filters.SessionID)
+	}
+	if filters.CorrelationID != "" {
+		attrs = append(attrs, "correlationId", filters.CorrelationID)
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values

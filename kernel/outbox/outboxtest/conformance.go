@@ -1003,26 +1003,22 @@ func testPrincipalRoundTrip(t *testing.T, _ Features, constructor PubSubConstruc
 	RunPrincipalRoundTripConformance(t, pub, sub, TestTopic(t))
 }
 
-// testOccurredAtRoundTrip verifies that a zero OccurredAt round-trips as zero
-// and that a non-zero OccurredAt round-trips correctly (zero case is implicitly
-// covered by all existing publish/subscribe tests — this test is the explicit
-// non-zero assertion).
+// testOccurredAtRoundTrip verifies that a non-zero OccurredAt round-trips
+// correctly across the wire boundary. Zero OccurredAt is now rejected by
+// Entry.Validate() (mandatory since PR #1218); producers must set this field.
 func testOccurredAtRoundTrip(t *testing.T, _ Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
 	topic := TestTopic(t)
 
-	// Sub-test 1: non-zero OccurredAt round-trips correctly (covered by
-	// testPrincipalRoundTrip as a side-effect — assert here for explicitness).
-	// Sub-test 2: zero OccurredAt round-trips as zero.
-	wantOccurredAt := time.Time{} // zero
+	wantOccurredAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 
 	entry := outbox.Entry{
-		ID:        "oat-zero-conf",
-		EventType: topic,
-		Topic:     topic,
-		Payload:   []byte(`{"conformance":"occurred_at_zero"}`),
-		// OccurredAt intentionally zero
-		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		ID:         "oat-nonzero-conf",
+		EventType:  topic,
+		Topic:      topic,
+		Payload:    []byte(`{"conformance":"occurred_at_nonzero"}`),
+		OccurredAt: wantOccurredAt,
+		CreatedAt:  time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
 	}
 	wireBytes, err := outbox.MarshalEnvelope(entry)
 	if err != nil {
@@ -1054,7 +1050,7 @@ func testOccurredAtRoundTrip(t *testing.T, _ Features, constructor PubSubConstru
 	select {
 	case got := <-ch:
 		if !got.OccurredAt.Equal(wantOccurredAt) {
-			t.Errorf("OccurredAt: got %v, want zero", got.OccurredAt)
+			t.Errorf("OccurredAt: got %v, want %v", got.OccurredAt, wantOccurredAt)
 		}
 	case <-time.After(defaultTimeout):
 		t.Fatal("testOccurredAtRoundTrip: timed out")

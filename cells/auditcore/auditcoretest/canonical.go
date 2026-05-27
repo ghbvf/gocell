@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // sessionCreatedPayload mirrors the payload shape declared in
@@ -46,10 +47,15 @@ func NewSessionCreatedEntry(sessionID, userID string) outbox.Entry {
 		// Unreachable in practice; kept to satisfy compiler.
 		panic("auditcoretest: NewSessionCreatedEntry: json.Marshal failed: " + err.Error())
 	}
+	now := time.Now().UTC()
 	return outbox.Entry{
-		ID:        "evt-" + sessionID,
-		EventType: "event.session.created.v1",
-		Payload:   payload,
-		CreatedAt: time.Now().UTC(),
+		ID:         "evt-" + sessionID,
+		EventType:  "event.session.created.v1",
+		Payload:    payload,
+		CreatedAt:  now,
+		OccurredAt: now,
+		Principal: outbox.PrincipalMetadata{
+			ActorID: idutil.SafeID(userID),
+		},
 	}
 }

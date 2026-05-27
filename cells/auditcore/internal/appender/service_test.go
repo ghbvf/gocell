@@ -20,9 +20,14 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// fixedOccurredAt is a stable time used across test entries to satisfy the
+// mandatory OccurredAt requirement (Entry.Validate rejects zero-value).
+var fixedOccurredAt = time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 
 type failingStore struct {
 	ledger.Store
@@ -60,9 +65,9 @@ func mustJSON(t testing.TB, v any) []byte {
 	return b
 }
 
-func newSpec(t *testing.T, name string, mode appender.ActorMode) appender.Spec {
+func newSpec(t *testing.T, name string) appender.Spec {
 	t.Helper()
-	return appender.MustNewSpec(name, mode)
+	return appender.MustNewSpec(name)
 }
 
 func newService(t *testing.T, spec appender.Spec, store ledger.Store, p *ledger.Protocol, opts ...appender.Option) *appender.Service {
@@ -79,7 +84,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 
 	_, err = appender.NewService(spec, store, p, slog.Default(), clock.Real())
 	require.Error(t, err)
@@ -91,62 +96,31 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	assert.Equal(t, "auditappender: TxRunner required; use WithTxManager", ec.Message)
 }
 
-// TestActorExtraction is the strategy decision table for the two ActorMode
-// branches. ActorAcceptUserFallback (user/config/session): actorId > userId.
-// ActorRequireExplicit (role): actorId only.
-func TestActorExtraction(t *testing.T) {
+// TestActorFromPrincipal verifies that actor identity is sourced exclusively
+// from entry.Principal.ActorID (F5: single source of truth). The old
+// payload-derived extraction path has been removed.
+func TestActorFromPrincipal(t *testing.T) {
 	cases := []struct {
 		name        string
-		spec        appender.Spec
-		payload     map[string]any
+		principal   outbox.PrincipalMetadata
 		wantAck     bool
 		wantActorID string
 	}{
 		{
-			name:        "fallback_actorId_only",
-			spec:        appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback),
-			payload:     map[string]any{"actorId": "admin-1"},
+			name:        "principal_actorId_present_ack",
+			principal:   outbox.PrincipalMetadata{ActorID: "admin-1"},
 			wantAck:     true,
 			wantActorID: "admin-1",
 		},
 		{
-			name:        "fallback_userId_only",
-			spec:        appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback),
-			payload:     map[string]any{"userId": "usr-1"},
-			wantAck:     true,
-			wantActorID: "usr-1",
+			name:      "principal_actorId_empty_reject",
+			principal: outbox.PrincipalMetadata{SubjectID: "usr-1"},
+			wantAck:   false,
 		},
 		{
-			name:        "fallback_both_prefers_actorId",
-			spec:        appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback),
-			payload:     map[string]any{"actorId": "admin-1", "userId": "usr-1"},
-			wantAck:     true,
-			wantActorID: "admin-1",
-		},
-		{
-			name:    "fallback_neither_rejects",
-			spec:    appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback),
-			payload: map[string]any{"username": "alice"},
-			wantAck: false,
-		},
-		{
-			name:        "explicit_actorId_only_accepts",
-			spec:        appender.MustNewSpec("auditappendrole", appender.ActorRequireExplicit),
-			payload:     map[string]any{"actorId": "admin-1", "userId": "usr-1"},
-			wantAck:     true,
-			wantActorID: "admin-1",
-		},
-		{
-			name:    "explicit_userId_only_rejects",
-			spec:    appender.MustNewSpec("auditappendrole", appender.ActorRequireExplicit),
-			payload: map[string]any{"userId": "usr-1"},
-			wantAck: false,
-		},
-		{
-			name:    "explicit_neither_rejects",
-			spec:    appender.MustNewSpec("auditappendrole", appender.ActorRequireExplicit),
-			payload: map[string]any{"foo": "bar"},
-			wantAck: false,
+			name:      "principal_zero_reject",
+			principal: outbox.PrincipalMetadata{},
+			wantAck:   false,
 		},
 	}
 	for _, tc := range cases {
@@ -154,12 +128,15 @@ func TestActorExtraction(t *testing.T) {
 			p := newTestProtocol(t)
 			store, err := ledger.NewMemStore(p, clock.Real())
 			require.NoError(t, err)
-			svc := newService(t, tc.spec, store, p)
+			spec := newSpec(t, "auditappenduser")
+			svc := newService(t, spec, store, p)
 
 			entry := outbox.Entry{
-				ID:        "evt-" + tc.name,
-				EventType: "event.test.v1",
-				Payload:   mustJSON(t, tc.payload),
+				ID:         "evt-" + tc.name,
+				EventType:  "event.test.v1",
+				Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+				OccurredAt: fixedOccurredAt,
+				Principal:  tc.principal,
 			}
 			result := svc.HandleEvent(context.Background(), entry)
 			if tc.wantAck {
@@ -180,13 +157,14 @@ func TestService_HandleEvent_InvalidJSON_Reject(t *testing.T) {
 	p := newTestProtocol(t)
 	store, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 	svc := newService(t, spec, store, p)
 
 	entry := outbox.Entry{
-		ID:        "evt-bad-json",
-		EventType: "event.user.created.v1",
-		Payload:   []byte("{invalid json}"),
+		ID:         "evt-bad-json",
+		EventType:  "event.user.created.v1",
+		Payload:    []byte("{invalid json}"),
+		OccurredAt: fixedOccurredAt,
 	}
 	result := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -199,13 +177,15 @@ func TestService_HandleEvent_AppendFails_Requeue(t *testing.T) {
 	p := newTestProtocol(t)
 	realStore, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 	svc := newService(t, spec, &failingStore{Store: realStore, err: sentinel}, p)
 
 	entry := outbox.Entry{
-		ID:        "evt-fail",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+		ID:         "evt-fail",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "admin-1"},
 	}
 	result := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
@@ -242,9 +222,6 @@ func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
 		{
 			// context.Canceled is infra (IsInfraError true) and NOT transient
 			// → predicate !IsTransient && !IsInfraError == false → Requeue.
-			// Locks the fail-closed direction: a future change to the
-			// predicate that drops the IsInfraError clause would wrongly
-			// Reject canceled-context store failures.
 			name:     "context.Canceled (infra, not transient) → Requeue",
 			storeErr: context.Canceled,
 			wantDisp: outbox.DispositionRequeue,
@@ -255,13 +232,15 @@ func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
 			p := newTestProtocol(t)
 			realStore, err := ledger.NewMemStore(p, clock.Real())
 			require.NoError(t, err)
-			spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+			spec := newSpec(t, "auditappenduser")
 			svc := newService(t, spec, &failingStore{Store: realStore, err: tc.storeErr}, p)
 
 			entry := outbox.Entry{
-				ID:        "evt-cls",
-				EventType: "event.user.created.v1",
-				Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+				ID:         "evt-cls",
+				EventType:  "event.user.created.v1",
+				Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+				OccurredAt: fixedOccurredAt,
+				Principal:  outbox.PrincipalMetadata{ActorID: "admin-1"},
 			}
 			result := svc.HandleEvent(context.Background(), entry)
 			assert.Equal(t, tc.wantDisp, result.Disposition)
@@ -280,13 +259,15 @@ func TestService_HandleEvent_DuplicateReplay_Ack(t *testing.T) {
 	p := newTestProtocol(t)
 	realStore, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 	svc := newService(t, spec, realStore, p)
 
 	entry := outbox.Entry{
-		ID:        "evt-dup",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
+		ID:         "evt-dup",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "admin-1"},
 	}
 
 	first := svc.HandleEvent(context.Background(), entry)
@@ -309,13 +290,15 @@ func TestService_HandleEvent_Happy(t *testing.T) {
 	store, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
 	rec := &recordingEmitter{}
-	spec := newSpec(t, "auditappendsession", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappendsession")
 	svc := newService(t, spec, store, p, appender.WithEmitter(outbox.WrapEmitterForCell(rec)))
 
 	entry := outbox.Entry{
-		ID:        "evt-happy",
-		EventType: "event.session.created.v1",
-		Payload:   mustJSON(t, map[string]any{"actorId": "user-1", "userId": "user-1"}),
+		ID:         "evt-happy",
+		EventType:  "event.session.created.v1",
+		Payload:    mustJSON(t, map[string]any{"sessionId": "sess-1"}),
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "user-1"},
 	}
 	result := svc.HandleEvent(context.Background(), entry)
 	require.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -370,16 +353,12 @@ func newServiceWithLogBuf(
 // TestHandleEvent_UsesEntryCreatedAt asserts that the ledger.Entry.Timestamp is
 // set to outbox.Entry.CreatedAt (the event's original creation time), NOT to
 // clk.Now() at handle time.
-//
-// F-02 RED: current implementation uses s.clk.Now(); after the fix it must use
-// entry.CreatedAt so that audit timestamps faithfully represent when the business
-// event occurred, not when it was picked up by the relay.
 func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 	p := newTestProtocol(t)
 	inner, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
 	cap := &captureStore{Store: inner}
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 
 	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
@@ -388,10 +367,12 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 
 	t1 := epoch // original event creation time, before clock advance
 	entry := outbox.Entry{
-		ID:        "evt-created-at",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
-		CreatedAt: t1,
+		ID:         "evt-created-at",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+		CreatedAt:  t1,
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "actor-1"},
 	}
 
 	svc, _ := newServiceWithLogBuf(t, spec, cap, p, fc)
@@ -412,23 +393,22 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 // TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn asserts that when
 // outbox.Entry.CreatedAt is zero, the service falls back to clk.Now() AND
 // emits a Warn-level log record.
-//
-// F-02 RED: current implementation uses clk.Now() unconditionally (no fallback
-// branch, no Warn log). After the fix: zero CreatedAt → Warn + clk.Now().
 func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 	p := newTestProtocol(t)
 	inner, err := ledger.NewMemStore(p, clock.Real())
 	require.NoError(t, err)
 	cap := &captureStore{Store: inner}
-	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	spec := newSpec(t, "auditappenduser")
 
 	epoch := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
 
 	entry := outbox.Entry{
-		ID:        "evt-zero-created-at",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		ID:         "evt-zero-created-at",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "actor-1"},
 		// CreatedAt intentionally zero
 	}
 
@@ -444,7 +424,7 @@ func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 		t.Errorf("fallback Timestamp: got %v, want clk.Now()=%v", gotTS, epoch)
 	}
 
-	// F-02: must emit a Warn-level log when falling back
+	// must emit a Warn-level log when falling back
 	logOutput := buf.String()
 	if !strings.Contains(logOutput, "WARN") && !strings.Contains(logOutput, "warn") {
 		t.Errorf("expected Warn-level log for zero CreatedAt fallback; got log output: %s", logOutput)
@@ -453,29 +433,23 @@ func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 
 // TestHandleEvent_PrincipalFieldMapping verifies that all four Principal fields
 // and OccurredAt from outbox.Entry are mapped to the corresponding ledger.Entry
-// fields. This is F3.2 regression guard: the mapping was added in PR #1218 and
-// must survive future refactors of the HandleEvent service function.
-//
-// Sub-cases:
-//  1. All four Principal fields + OccurredAt populated → each written to ledger.Entry.
-//  2. OccurredAt zero, CreatedAt non-zero → OccurredAt falls back to CreatedAt
-//     (occurredAtForLedger fallback path).
+// fields. F3.2 regression guard.
 func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
 	t.Run("all four principal fields and occurred_at written to ledger entry", func(t *testing.T) {
 		p := newTestProtocol(t)
 		inner, err := ledger.NewMemStore(p, clock.Real())
 		require.NoError(t, err)
 		cap := &captureStore{Store: inner}
-		spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+		spec := newSpec(t, "auditappenduser")
 
 		epoch := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
-		occurredAt := epoch.Add(-2 * time.Minute) // producer clock, before persistence
-		createdAt := epoch.Add(-1 * time.Minute)  // outbox persistence time
+		occurredAt := epoch.Add(-testtime.D2min) // producer clock, before persistence
+		createdAt := epoch.Add(-testtime.D1min)  // outbox persistence time
 
 		entry := outbox.Entry{
 			ID:         "evt-principal-map",
 			EventType:  "event.user.created.v1",
-			Payload:    mustJSON(t, map[string]any{"actorId": "actor-pm"}),
+			Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
 			CreatedAt:  createdAt,
 			OccurredAt: occurredAt,
 			Principal: outbox.PrincipalMetadata{
@@ -492,38 +466,43 @@ func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
 		require.Len(t, cap.appended, 1, "must append exactly one entry")
 
 		le := cap.appended[0]
+		assert.Equal(t, "actor-pm", le.ActorID, "ActorID must be mapped from entry.Principal.ActorID")
 		assert.Equal(t, "subj-pm", le.SubjectID, "SubjectID must be mapped from entry.Principal.SubjectID")
 		assert.Equal(t, "tenant-pm", le.TenantID, "TenantID must be mapped from entry.Principal.TenantID")
 		assert.Equal(t, "sess-pm", le.SessionID, "SessionID must be mapped from entry.Principal.SessionID")
 		assert.True(t, le.OccurredAt.Equal(occurredAt),
-			"OccurredAt must prefer entry.OccurredAt when non-zero (got %v, want %v)", le.OccurredAt, occurredAt)
+			"OccurredAt must be entry.OccurredAt (got %v, want %v)", le.OccurredAt, occurredAt)
 	})
+}
 
-	t.Run("occurred_at zero falls back to created_at", func(t *testing.T) {
-		p := newTestProtocol(t)
-		inner, err := ledger.NewMemStore(p, clock.Real())
-		require.NoError(t, err)
-		cap := &captureStore{Store: inner}
-		spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+// TestHandleEvent_CorrelationID_CarriedThrough verifies F10: when
+// entry.Observability.CorrelationID is non-empty, the resulting
+// ledger.Entry.CorrelationID carries it through unchanged.
+func TestHandleEvent_CorrelationID_CarriedThrough(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser")
 
-		createdAt := time.Date(2026, 3, 15, 11, 0, 0, 0, time.UTC)
+	corrID := "corr-abc-123"
+	entry := outbox.Entry{
+		ID:         "evt-corr-id",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"foo": "bar"}),
+		OccurredAt: fixedOccurredAt,
+		Principal:  outbox.PrincipalMetadata{ActorID: "actor-x"},
+		Observability: outbox.ObservabilityMetadata{
+			CorrelationID: idutil.SafeID(corrID),
+		},
+	}
 
-		entry := outbox.Entry{
-			ID:        "evt-occurred-at-fallback",
-			EventType: "event.user.created.v1",
-			Payload:   mustJSON(t, map[string]any{"actorId": "actor-fb"}),
-			CreatedAt: createdAt,
-			// OccurredAt intentionally zero
-		}
+	svc := newService(t, spec, cap, p)
+	result := svc.HandleEvent(context.Background(), entry)
+	require.Equal(t, outbox.DispositionAck, result.Disposition)
+	require.Len(t, cap.appended, 1)
 
-		svc := newService(t, spec, cap, p)
-		result := svc.HandleEvent(context.Background(), entry)
-		require.Equal(t, outbox.DispositionAck, result.Disposition)
-		require.Len(t, cap.appended, 1)
-
-		le := cap.appended[0]
-		assert.True(t, le.OccurredAt.Equal(createdAt),
-			"OccurredAt must fall back to entry.CreatedAt when OccurredAt is zero (got %v, want %v)",
-			le.OccurredAt, createdAt)
-	})
+	le := cap.appended[0]
+	assert.Equal(t, corrID, le.CorrelationID,
+		"CorrelationID must be carried from entry.Observability.CorrelationID to ledger.Entry.CorrelationID")
 }

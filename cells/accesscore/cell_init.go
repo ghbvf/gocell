@@ -296,7 +296,7 @@ func (c *AccessCore) initSlices() error {
 	// session-logout — cascades revocation to refresh.Store so logout
 	// invalidates the full refresh chain, not just the access session.
 	logoutOpts := []sessionlogout.Option{sessionlogout.WithEmitter(c.emitter), sessionlogout.WithTxManager(c.txRunner)}
-	logoutSvc, err := sessionlogout.NewService(c.sessionStore, c.refreshStore, c.logger, logoutOpts...)
+	logoutSvc, err := sessionlogout.NewService(c.clk, c.sessionStore, c.refreshStore, c.logger, logoutOpts...)
 	if err != nil {
 		return err
 	}
@@ -350,7 +350,7 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	setupSvc, err := setup.NewService(
-		setupProv, c.logger,
+		c.clk, setupProv, c.logger,
 		setup.WithEmitter(c.emitter),
 		setup.WithTxManager(c.txRunner),
 		setup.WithSetupLock(c.setupLock),
@@ -381,7 +381,7 @@ func (c *AccessCore) initSlices() error {
 //     test/demo fidelity only, not L2 atomicity.
 func (c *AccessCore) initRbacAssign() error {
 	rbacAssignSvc, err := rbacassign.NewService(
-		c.roleRepo, c.invalidator, c.logger,
+		c.clk, c.roleRepo, c.invalidator, c.logger,
 		rbacassign.WithEmitter(c.emitter),
 		rbacassign.WithTxManager(c.txRunner),
 	)

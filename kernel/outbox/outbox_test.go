@@ -725,12 +725,12 @@ func TestEntry_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid with Topic",
-			entry:   Entry{ID: "evt-1", Topic: "t", Payload: []byte("{}")},
+			entry:   Entry{ID: "evt-1", Topic: "t", Payload: []byte("{}"), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)},
 			wantErr: false,
 		},
 		{
 			name:    "valid with EventType fallback",
-			entry:   Entry{ID: "evt-2", EventType: "e", Payload: []byte("{}")},
+			entry:   Entry{ID: "evt-2", EventType: "e", Payload: []byte("{}"), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)},
 			wantErr: false,
 		},
 		{
@@ -827,7 +827,7 @@ func (r *sequentialRecorder) Write(_ context.Context, entry Entry) error {
 var _ Writer = (*sequentialRecorder)(nil)
 
 func validEntry(id string) Entry {
-	return Entry{ID: id, Topic: "test.topic", Payload: []byte("{}")}
+	return Entry{ID: id, Topic: "test.topic", Payload: []byte("{}"), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)}
 }
 
 func TestWriteBatchFallback_EmptySlice(t *testing.T) {
@@ -985,7 +985,7 @@ func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataWithinLimits(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)}
 	// Producer-owned domain keys only — observability IDs (trace_id, request_id,
 	// ...) live in Entry.Observability, not here.
 	e.Metadata = map[string]string{"order_id": "abc123", "tenant": "t-456"}
@@ -1012,12 +1012,12 @@ func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
 }
 
 func TestEntry_Validate_NilMetadata_OK(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)}
 	assert.NoError(t, e.Validate())
 }
 
 func TestEntry_Validate_EmptyMetadata_OK(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)}
 	e.Metadata = map[string]string{}
 	assert.NoError(t, e.Validate())
 }
@@ -1033,7 +1033,7 @@ func TestValidateMetadata_Constants(t *testing.T) {
 func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
 	// len() returns byte count, not rune count. A 3-byte CJK character
 	// "中" (U+4E2D) counts as 3 bytes toward the key/value limits.
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)}
 	cjkKey := strings.Repeat("中", metautil.MaxMetadataKeyLen/3) // each char is 3 bytes
 	assert.Less(t, len(cjkKey), metautil.MaxMetadataKeyLen+1, "should fit within byte limit")
 	e.Metadata = map[string]string{cjkKey: "value"}
@@ -1056,9 +1056,10 @@ func TestEntry_Validate_PayloadByteLimit_Exceeds(t *testing.T) {
 
 func TestEntry_Validate_PayloadAtExactBoundary(t *testing.T) {
 	e := Entry{
-		ID:        "test",
-		EventType: "test.event",
-		Payload:   make([]byte, MaxPayloadBytes),
+		ID:         "test",
+		EventType:  "test.event",
+		Payload:    make([]byte, MaxPayloadBytes),
+		OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
 	}
 	assert.NoError(t, e.Validate(), "payload at exactly MaxPayloadBytes must be valid")
 }
@@ -1071,8 +1072,10 @@ func TestPayloadConstantsAlign(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
+	fixedOccurredAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+
 	// Exactly metautil.MaxMetadataKeys keys should pass.
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: fixedOccurredAt}
 	e.Metadata = make(map[string]string)
 	for i := range metautil.MaxMetadataKeys {
 		e.Metadata[fmt.Sprintf("k%02d", i)] = "v"
@@ -1080,13 +1083,13 @@ func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	assert.NoError(t, e.Validate(), "exactly metautil.MaxMetadataKeys should be valid")
 
 	// Exactly metautil.MaxMetadataKeyLen key should pass.
-	e2 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e2 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: fixedOccurredAt}
 	exactKey := strings.Repeat("k", metautil.MaxMetadataKeyLen)
 	e2.Metadata = map[string]string{exactKey: "v"}
 	assert.NoError(t, e2.Validate(), "key at exactly metautil.MaxMetadataKeyLen should be valid")
 
 	// Exactly metautil.MaxMetadataValueLen value should pass.
-	e3 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e3 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`), OccurredAt: fixedOccurredAt}
 	exactVal := strings.Repeat("v", metautil.MaxMetadataValueLen)
 	e3.Metadata = map[string]string{"k": exactVal}
 	assert.NoError(t, e3.Validate(), "value at exactly metautil.MaxMetadataValueLen should be valid")

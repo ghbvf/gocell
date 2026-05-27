@@ -13,8 +13,7 @@ import "github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 // type-alias rationale).
 type Service = appender.Service
 
-// Spec selects the actor-extraction strategy for role events: actorId is
-// the admin/operator who performed the assignment; userId in role events
-// identifies the target, not the actor, so userId fallback is forbidden
-// (B2-C-05 fail-closed).
-var Spec = appender.MustNewSpec("auditappendrole", appender.ActorRequireExplicit)
+// Spec is the per-slice configuration that names this slice for log/error
+// prefixes. Actor identity now comes exclusively from entry.Principal.ActorID
+// (injected by producers via InjectPrincipalFromContext).
+var Spec = appender.MustNewSpec("auditappendrole")

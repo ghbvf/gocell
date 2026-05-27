@@ -16,7 +16,8 @@ import "github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 // cannot fork HandleEvent or any other appender.Service behavior.
 type Service = appender.Service
 
-// Spec selects the actor-extraction strategy for user lifecycle events:
-// prefer payload.actorId (admin-write), fall back to payload.userId
-// (self-service). cell.go reads it during initSlices.
-var Spec = appender.MustNewSpec("auditappenduser", appender.ActorAcceptUserFallback)
+// Spec is the per-slice configuration that names this slice for log/error
+// prefixes. Actor identity now comes exclusively from entry.Principal.ActorID
+// (injected by producers via InjectPrincipalFromContext). cell.go reads Spec
+// during initSlices.
+var Spec = appender.MustNewSpec("auditappenduser")

@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -107,6 +108,7 @@ type Service struct {
 	logger      *slog.Logger                `gocell:"required" gocellErr:"setup: logger is required"`
 	txRunner    persistence.CellTxManager   `gocell:"required" gocellErr:"setup: TxRunner required; use WithTxManager"`
 	emitter     outbox.CellEmitter
+	clk         clock.Clock
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
 	// path. CreateAdmin acquires it inside RunInTx before calling
 	// provisioner.Ensure. PG mode uses pg_advisory_xact_lock (cross-pod);
@@ -124,12 +126,14 @@ type Service struct {
 
 // NewService constructs a Service. provisioner is required; passing nil returns
 // an error so mis-wired assemblies fail at startup.
-func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "setup.NewService")
 	s := &Service{
 		provisioner: provisioner,
 		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 		hasher:      credential.NewProductionHasher(),
+		clk:         clk,
 	}
 	for _, o := range opts {
 		o(s)
@@ -345,9 +349,10 @@ func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) err
 		return fmt.Errorf("setup: marshal user.created payload: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: dto.TopicUserCreated,
-		Payload:   payload,
+		ID:         outbox.MustNewEntryID(),
+		EventType:  dto.TopicUserCreated,
+		Payload:    payload,
+		OccurredAt: s.clk.Now().UTC(),
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("setup: emit user.created: %w", err)

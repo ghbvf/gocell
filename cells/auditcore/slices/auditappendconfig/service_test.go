@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/appender"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditappendconfig"
 )
 
@@ -13,5 +12,4 @@ import (
 // actor / framework behavior is covered in cells/auditcore/internal/appender.
 func TestSpec(t *testing.T) {
 	assert.Equal(t, "auditappendconfig", auditappendconfig.Spec.Name())
-	assert.Equal(t, appender.ActorAcceptUserFallback, auditappendconfig.Spec.Mode())
 }

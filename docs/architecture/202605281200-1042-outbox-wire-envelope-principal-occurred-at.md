@@ -49,22 +49,26 @@ issue body 提"codegen funnel + golden"，复核后否决：
   - `OccurredAt` = producer 域业务事件时间（producer-clock）
   - `CreatedAt` = outbox row INSERT 时间（store-clock，由 PG writer / DirectEmitter 自动填）
 
-OccurredAt **optional**（zero-value 允许，匹配 ObservabilityMetadata 模型）。
+OccurredAt **mandatory**（zero-value 被 `Entry.Validate()` 拒绝，由 PR #1218 W2 收紧；producers 必须 `entry.OccurredAt = clk.Now().UTC()` 或通过 `outbox.Emit` helper 自动填充）。
 
 Lamport / causation_id defer 到 W3 Command Bus —— causation 链需 command/event 双向关系上下文，单字段补齐无意义。
 
 ### 4. audit ledger HMAC msg 格式 rewrite — 无向后兼容
 
-`runtime/audit/ledger.Protocol.ComputeHash` HMAC msg 格式：
+`runtime/audit/ledger.Protocol.ComputeHash` HMAC msg 格式（W1.2, PR #1218 F3+F6 canonical-JSON upgrade）：
 
 ```
-OLD: prevHash|eventID|eventType|actorID|UnixNano|payload
-NEW: prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+OLD (pipe-separated, B3): prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
+NEW (canonical JSON): json.Marshal(auditHashInput{prev_hash, event_id, event_type, actor_id, subject_id, tenant_id, session_id, correlation_id, occurred_at_unix_nano, timestamp_unix_nano, payload})
 ```
 
-PR #1042 工作时 gocell 无外部部署 → 用户明确放弃向后兼容（无 v1/v2 协议分叉，无 nullable shim）。所有 hash 期望 fixture 同 PR regen。
+`auditHashInput` 是 `runtime/audit/ledger` 包内 private typed struct，11 字段，字段顺序与 JSON tag 固定。`json.Marshal` 按 struct source-declaration order 输出确定性字节序列。Payload 为 `[]byte`，由 `encoding/json` 编码为 base64 JSON string（无需手工 hex-encode）。
 
-`cells/auditcore/internal/appender/service.go` 同步对齐新 11-字段 HMAC 格式（不再有 cells/auditcore/internal/domain/hashchain.go 因为已收编到 appender 路径）。
+旧 pipe-separator 格式（含 B3 的 hex-payload 局部修复）的 field-boundary collision 风险由此彻底消除（F3+F6）：JSON quote/escape 处理使任何字段值都无法移动字段边界。
+
+无版本字节（version byte）、无 legacy 路径：gocell 无外部部署 → 用户明确放弃向后兼容。所有 hash 期望 fixture 同 PR regen（W1.2 同 PR 完成）。
+
+`cells/auditcore/internal/appender/service.go` 通过 `s.protocol.ComputeHash` 委托，不含自身 hash 计算，无需单独修改（不再有 cells/auditcore/internal/domain/hashchain.go — 已收编到 appender 路径）。
 
 ### 5. ReservedMetadataKeys 扩展 5 key
 
@@ -147,22 +151,6 @@ Dependent contracts (governance scan): none — 三族字段集是 framework 横
 **Future** (defer):
 - Lamport / causation_id — W3 Command Bus 引入
 - ReceivedAt（broker / consumer 接收时间）— 消费侧 telemetry，不进 producer envelope
-- OccurredAt 强制必填 — 等业务全面 adoption 后通过单独 PR 收紧 Entry.Validate（届时所有 emit 路径已有 producer clock）；暂定 W3 Command Bus milestone 阶段考虑（producer adoption 完成后）。No specific gh issue tracks this today; will be opened when the W3 Command Bus PR series starts.
-
-## Adoption Transition
-
-Until producers adopt `InjectPrincipalFromContext` + OccurredAt setting,
-`audit_entries.occurred_at` will store `entry.CreatedAt` (store-clock fallback
-via `occurredAtForLedger` in `cells/auditcore/internal/appender/service.go`)
-for legacy emit paths. Audit query consumers (e.g., `/correlate` endpoint)
-should not differentiate `occurred_at` vs `created_at` semantically until
-adoption completes.
-
-Adoption tracking is incremental — no single PR migrates all 241 producer
-sites; sub-feature PRs adopt opportunistically. The Time-Causality field's
-full product value materializes only after adoption. The sentinel value
-`'1970-01-01 00:00:00+00'` in `audit_entries.occurred_at` distinguishes
-rows persisted before adoption from rows with real producer-clock values.
 
 ## References
 

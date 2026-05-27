@@ -29,20 +29,16 @@ func assertSpecPanicsWithErrcodeMessage(t *testing.T, wantMessage string, fn fun
 // extending the whitelist in spec.go — preventing accidental fan-out and
 // making the inventory grep-able from a single source.
 func TestMustNewSpec_Whitelist(t *testing.T) {
-	cases := []struct {
-		name string
-		mode appender.ActorMode
-	}{
-		{"auditappenduser", appender.ActorAcceptUserFallback},
-		{"auditappendconfig", appender.ActorAcceptUserFallback},
-		{"auditappendsession", appender.ActorAcceptUserFallback},
-		{"auditappendrole", appender.ActorRequireExplicit},
+	cases := []string{
+		"auditappenduser",
+		"auditappendconfig",
+		"auditappendsession",
+		"auditappendrole",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			spec := appender.MustNewSpec(tc.name, tc.mode)
-			assert.Equal(t, tc.name, spec.Name())
-			assert.Equal(t, tc.mode, spec.Mode())
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			spec := appender.MustNewSpec(name)
+			assert.Equal(t, name, spec.Name())
 		})
 	}
 }
@@ -52,18 +48,6 @@ func TestMustNewSpec_RejectsUnknownName(t *testing.T) {
 		"; whitelist: auditappenduser, auditappendconfig," +
 		" auditappendsession, auditappendrole"
 	assertSpecPanicsWithErrcodeMessage(t, want, func() {
-		appender.MustNewSpec("auditappendmystery", appender.ActorAcceptUserFallback)
+		appender.MustNewSpec("auditappendmystery")
 	})
-}
-
-// TestActorMode_ZeroValueRejected guards the sealed ActorMode contract.
-// A zero-value ActorMode (default-constructed by external code) must not pass
-// MustNewSpec — only the package-level ActorAcceptUserFallback /
-// ActorRequireExplicit instances are valid.
-func TestActorMode_ZeroValueRejected(t *testing.T) {
-	assertSpecPanicsWithErrcodeMessage(t,
-		"appender.MustNewSpec: invalid ActorMode (zero value); use appender.ActorAcceptUserFallback or appender.ActorRequireExplicit",
-		func() {
-			appender.MustNewSpec("auditappenduser", appender.ActorMode{})
-		})
 }

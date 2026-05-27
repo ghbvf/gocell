@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -374,6 +375,258 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
+}
+
+// TestAuditEntryResponse_PrincipalFields verifies that the 5 new Principal/OccurredAt
+// fields (F11) are exposed in the API response when populated in the ledger entry.
+func TestAuditEntryResponse_PrincipalFields(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	occurredAt := time.Date(2026, 3, 1, 11, 59, 59, 0, time.UTC)
+
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID:            "ae-p1",
+		EventID:       "evt-p1",
+		EventType:     "user.login.v1",
+		ActorID:       "usr-10",
+		SubjectID:     "subj-abc",
+		TenantID:      "tenant-xyz",
+		SessionID:     "sess-001",
+		CorrelationID: "corr-999",
+		OccurredAt:    occurredAt,
+		Timestamp:     base,
+		Payload:       []byte(`{}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-10", nil)
+	req = req.WithContext(auth.TestContext("usr-10", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	item := resp.Data[0]
+
+	assert.Equal(t, "subj-abc", item["subjectId"])
+	assert.Equal(t, "tenant-xyz", item["tenantId"])
+	assert.Equal(t, "sess-001", item["sessionId"])
+	assert.Equal(t, "corr-999", item["correlationId"])
+	assert.Equal(t, occurredAt.UTC().Format(time.RFC3339), item["occurredAt"])
+}
+
+// TestAuditEntryResponse_PrincipalFields_OccurredAtZero verifies that occurredAt
+// is omitted from the response when the ledger entry has a zero OccurredAt.
+func TestAuditEntryResponse_PrincipalFields_OccurredAtZero(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID:        "ae-zero",
+		EventID:   "evt-zero",
+		EventType: "user.login.v1",
+		ActorID:   "usr-11",
+		Timestamp: base,
+		Payload:   []byte(`{}`),
+		// OccurredAt is zero value
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-11", nil)
+	req = req.WithContext(auth.TestContext("usr-11", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.NotContains(t, body, `"occurredAt"`, "zero OccurredAt must be omitted from response")
+}
+
+// TestHandleQuery_FilterBySubjectID verifies that the subjectId query parameter
+// narrows the result set to entries matching the given SubjectID.
+// Note: MemStore.Append overwrites the caller-provided ID with EventID, so we
+// identify results by eventId (which equals the store-assigned ID).
+func TestHandleQuery_FilterBySubjectID(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-subj-A", EventType: "event.v1",
+		ActorID: "act-1", SubjectID: "subj-A", Timestamp: base, Payload: []byte(`{}`),
+	}))
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-subj-B", EventType: "event.v1",
+		ActorID: "act-2", SubjectID: "subj-B", Timestamp: base.Add(time.Hour), Payload: []byte(`{}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=subj-A", nil)
+	req = req.WithContext(auth.TestContext("admin-u", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	// MemStore assigns ID = EventID on Append; verify by eventId field
+	assert.Equal(t, "evt-subj-A", resp.Data[0]["eventId"])
+	assert.Equal(t, "subj-A", resp.Data[0]["subjectId"])
+}
+
+// TestHandleQuery_FilterByTenantID verifies that the tenantId query parameter
+// narrows the result set to entries matching the given TenantID.
+func TestHandleQuery_FilterByTenantID(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-tenant-A", EventType: "event.v1",
+		ActorID: "act-t1", TenantID: "tenant-A", Timestamp: base, Payload: []byte(`{}`),
+	}))
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-tenant-B", EventType: "event.v1",
+		ActorID: "act-t2", TenantID: "tenant-B", Timestamp: base.Add(time.Hour), Payload: []byte(`{}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?tenantId=tenant-B", nil)
+	req = req.WithContext(auth.TestContext("admin-u", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "evt-tenant-B", resp.Data[0]["eventId"])
+	assert.Equal(t, "tenant-B", resp.Data[0]["tenantId"])
+}
+
+// TestHandleQuery_FilterBySessionID verifies that the sessionId query parameter
+// narrows the result set to entries matching the given SessionID.
+func TestHandleQuery_FilterBySessionID(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-sess-X", EventType: "event.v1",
+		ActorID: "act-sess1", SessionID: "sess-X", Timestamp: base, Payload: []byte(`{}`),
+	}))
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-sess-Y", EventType: "event.v1",
+		ActorID: "act-sess2", SessionID: "sess-Y", Timestamp: base.Add(time.Hour), Payload: []byte(`{}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?sessionId=sess-X", nil)
+	req = req.WithContext(auth.TestContext("admin-u", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "evt-sess-X", resp.Data[0]["eventId"])
+	assert.Equal(t, "sess-X", resp.Data[0]["sessionId"])
+}
+
+// TestHandleQuery_FilterByCorrelationID verifies that the correlationId query
+// parameter narrows the result set to entries matching the given CorrelationID.
+func TestHandleQuery_FilterByCorrelationID(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 4, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-corr-100", EventType: "event.v1",
+		ActorID: "act-corr1", CorrelationID: "corr-100", Timestamp: base, Payload: []byte(`{}`),
+	}))
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		EventID: "evt-corr-200", EventType: "event.v1",
+		ActorID: "act-corr2", CorrelationID: "corr-200", Timestamp: base.Add(time.Hour), Payload: []byte(`{}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?correlationId=corr-200", nil)
+	req = req.WithContext(auth.TestContext("admin-u", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "evt-corr-200", resp.Data[0]["eventId"])
+	assert.Equal(t, "corr-200", resp.Data[0]["correlationId"])
+}
+
+// TestHandleQuery_CompositeFilter_SubjectAndTenant verifies that combining
+// subjectId + tenantId applies AND-conjunction semantics.
+func TestHandleQuery_CompositeFilter_SubjectAndTenant(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	// Three entries to exercise AND-conjunction of subjectId + tenantId filters.
+	eC1 := &ledger.Entry{ // subj-A + t-X → matches both filters
+		EventID: "evt-c1", EventType: "e.v1", ActorID: "a1",
+		SubjectID: "subj-A", TenantID: "t-X", Timestamp: base, Payload: []byte(`{}`),
+	}
+	eC2 := &ledger.Entry{ // subj-A + t-Y → matches subjectId only
+		EventID: "evt-c2", EventType: "e.v1", ActorID: "a2",
+		SubjectID: "subj-A", TenantID: "t-Y", Timestamp: base.Add(time.Hour), Payload: []byte(`{}`),
+	}
+	eC3 := &ledger.Entry{ // subj-B + t-X → matches tenantId only
+		EventID: "evt-c3", EventType: "e.v1", ActorID: "a3",
+		SubjectID: "subj-B", TenantID: "t-X", Timestamp: base.Add(testtime.D2h), Payload: []byte(`{}`),
+	}
+	entries := []*ledger.Entry{eC1, eC2, eC3}
+	for _, e := range entries {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	// AND: subjectId=subj-A AND tenantId=t-X → only evt-c1
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=subj-A&tenantId=t-X", nil)
+	req = req.WithContext(auth.TestContext("admin-u", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "evt-c1", resp.Data[0]["eventId"])
 }
 
 // Trust boundary tests (#27q).

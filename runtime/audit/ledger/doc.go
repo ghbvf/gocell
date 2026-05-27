@@ -24,11 +24,22 @@
 //
 // Each entry's Hash is computed as:
 //
-//	HMAC-SHA256(key, prevHash|eventID|eventType|actorID|UnixNano|payload)
+//	HMAC-SHA256(key, json.Marshal(auditHashInput{...}))
 //
-// encoded as lowercase hex. The algorithm is byte-for-byte identical to
-// cells/auditcore/internal/domain/hashchain.go to preserve chain continuity
-// when the PG-backed store (S8+) replaces the legacy in-cell chain.
+// where auditHashInput is a typed struct with 11 fields (prev_hash, event_id,
+// event_type, actor_id, subject_id, tenant_id, session_id, correlation_id,
+// occurred_at_unix_nano, timestamp_unix_nano, payload) and json.Marshal
+// serializes fields in source-declaration order (deterministic). The result
+// is hex-encoded as lowercase hex.
+//
+// Using canonical JSON encoding eliminates the field-boundary collision risk
+// that existed in the previous pipe-separated fmt.Sprintf format: JSON's
+// quote/escape handling makes any field value safe regardless of its bytes
+// (F3+F6, PR #1218 W1.2). Payload is a []byte field, encoded by the JSON
+// encoder as a base64 string.
+//
+// ref: google/trillian storage/leafdata.go — typed canonical input struct for
+// log-leaf HMAC; RFC 8785 JCS (struct-order determinism sufficient here).
 //
 // # Restart Recovery
 //

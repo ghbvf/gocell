@@ -590,6 +590,46 @@ func TestNewDirectEmitter_WithLoggerNilFallsBackToDefault(t *testing.T) {
 	require.NoError(t, e.Emit(context.Background(), validEntry("logger-nil-test")))
 }
 
+// TestDirectEmitter_InjectsPrincipalFromContext verifies that DirectEmitter.Emit
+// populates entry.Principal from the context before publishing, symmetric to the
+// observability injection (TestDirectEmitter_InjectsObservabilityFromContext).
+// OAuth/OIDC principal identity must cross the async boundary intact so consumer
+// slices can attribute audit events to the correct actor/subject/tenant/session.
+func TestDirectEmitter_InjectsPrincipalFromContext(t *testing.T) {
+	const wantActorID = "actor-abc"
+	const wantSubjectID = "subj-xyz"
+	const wantTenantID = "tenant-t1"
+	const wantSessionID = "sess-s99"
+
+	ctx := context.Background()
+	ctx = ctxkeys.WithActorID(ctx, wantActorID)
+	ctx = ctxkeys.WithSubjectID(ctx, wantSubjectID)
+	ctx = ctxkeys.WithTenantID(ctx, wantTenantID)
+	ctx = ctxkeys.WithSessionID(ctx, wantSessionID)
+
+	publisher := &recordingEmitterPublisher{}
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
+	require.NoError(t, err)
+
+	entry := validEntry("principal-inject-test")
+	entry.Topic = "test.principal.v1"
+	entry.EventType = "test.principal.v1"
+
+	require.NoError(t, emitter.Emit(ctx, entry))
+	require.Len(t, publisher.calls, 1, "publish must be attempted")
+
+	got, err := UnmarshalEnvelope(entry.Topic, publisher.calls[0].payload)
+	require.NoError(t, err)
+	assert.Equal(t, wantActorID, string(got.Principal.ActorID),
+		"DirectEmitter must inject actor_id from ctx into entry.Principal")
+	assert.Equal(t, wantSubjectID, string(got.Principal.SubjectID),
+		"DirectEmitter must inject subject_id from ctx into entry.Principal")
+	assert.Equal(t, wantTenantID, string(got.Principal.TenantID),
+		"DirectEmitter must inject tenant_id from ctx into entry.Principal")
+	assert.Equal(t, wantSessionID, string(got.Principal.SessionID),
+		"DirectEmitter must inject session_id from ctx into entry.Principal")
+}
+
 type noopPub struct{}
 
 func (noopPub) Publish(_ context.Context, _ string, _ []byte) error { return nil }

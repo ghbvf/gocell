@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestOutboxWriter_Write_NoTx(t *testing.T) {
@@ -50,6 +51,7 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 		EventType:     "order.shipped",
 		Payload:       []byte(`{"shipped":true}`),
 		CreatedAt:     time.Now(),
+		OccurredAt:    time.Now().UTC(),
 		Metadata:      map[string]string{"source": "test"},
 	}
 
@@ -89,6 +91,7 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 		Topic:         "custom.topic.v1",
 		Payload:       []byte(`{"enrolled":true}`),
 		CreatedAt:     time.Now(),
+		OccurredAt:    time.Now().UTC(),
 	}
 
 	err := w.Write(ctx, entry)
@@ -109,11 +112,12 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	ctx = ctxkeys.WithTraceID(ctx, "trace-123")
 
 	entry := outbox.Entry{
-		ID:        "ctx-meta-0001",
-		EventType: "order.created",
-		Payload:   []byte(`{"id":"1"}`),
-		CreatedAt: time.Now(),
-		Metadata:  map[string]string{"source": "handler"},
+		ID:         "ctx-meta-0001",
+		EventType:  "order.created",
+		Payload:    []byte(`{"id":"1"}`),
+		CreatedAt:  time.Now(),
+		OccurredAt: time.Now().UTC(),
+		Metadata:   map[string]string{"source": "handler"},
 	}
 
 	err := w.Write(ctx, entry)
@@ -140,15 +144,56 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	assert.Equal(t, "trace-123", string(obs.TraceID))
 }
 
+func TestOutboxWriter_Write_InjectsPrincipalFromContext(t *testing.T) {
+	w := NewOutboxWriter(clock.Real())
+	tx := &mockOutboxTx{}
+
+	ctx := CtxWithTx(context.Background(), tx)
+	ctx = ctxkeys.WithActorID(ctx, "actor-001")
+	ctx = ctxkeys.WithSubjectID(ctx, "subj-001")
+	ctx = ctxkeys.WithTenantID(ctx, "tenant-001")
+	ctx = ctxkeys.WithSessionID(ctx, "sess-001")
+
+	occurredAt := time.Now().UTC().Add(-testtime.D5s)
+	entry := outbox.Entry{
+		ID:         "ctx-principal-0001",
+		EventType:  "order.created",
+		Payload:    []byte(`{"id":"1"}`),
+		CreatedAt:  time.Now(),
+		OccurredAt: occurredAt,
+	}
+
+	err := w.Write(ctx, entry)
+	require.NoError(t, err)
+	require.Len(t, tx.execCalls, 1)
+
+	call := tx.execCalls[0]
+	// $11 (args[10]) = principal JSON
+	principalJSON, ok := call.args[10].([]byte)
+	require.True(t, ok, "principal arg must be []byte")
+	var p outbox.PrincipalMetadata
+	require.NoError(t, json.Unmarshal(principalJSON, &p))
+	assert.Equal(t, "actor-001", string(p.ActorID))
+	assert.Equal(t, "subj-001", string(p.SubjectID))
+	assert.Equal(t, "tenant-001", string(p.TenantID))
+	assert.Equal(t, "sess-001", string(p.SessionID))
+
+	// $12 (args[11]) = occurred_at
+	gotOccurredAt, ok := call.args[11].(time.Time)
+	require.True(t, ok, "occurred_at arg must be time.Time")
+	assert.Equal(t, occurredAt, gotOccurredAt)
+}
+
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:        "d4e5f6a7-b8c9-0123-defa-234567890123",
-		EventType: "test.event",
-		Payload:   []byte("{}"),
+		ID:         "d4e5f6a7-b8c9-0123-defa-234567890123",
+		EventType:  "test.event",
+		Payload:    []byte("{}"),
+		OccurredAt: time.Now().UTC(),
 		// CreatedAt is zero
 	}
 
@@ -167,10 +212,11 @@ func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:        "e5f6a7b8-c9d0-1234-efab-345678901234",
-		EventType: "test",
-		Payload:   []byte("{}"),
-		CreatedAt: time.Now(),
+		ID:         "e5f6a7b8-c9d0-1234-efab-345678901234",
+		EventType:  "test",
+		Payload:    []byte("{}"),
+		CreatedAt:  time.Now(),
+		OccurredAt: time.Now().UTC(),
 	}
 
 	err := w.Write(ctx, entry)
@@ -259,10 +305,11 @@ func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tx.execCalls = nil // reset between sub-tests
 			entry := outbox.Entry{
-				ID:        tt.id,
-				EventType: "test.event",
-				Payload:   []byte("{}"),
-				CreatedAt: time.Now(),
+				ID:         tt.id,
+				EventType:  "test.event",
+				Payload:    []byte("{}"),
+				CreatedAt:  time.Now(),
+				OccurredAt: time.Now().UTC(),
 			}
 
 			err := w.Write(ctx, entry)
@@ -350,9 +397,10 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
+	now := time.Now().UTC()
 	entries := []outbox.Entry{
-		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t1", Payload: []byte(`{"a":1}`), CreatedAt: time.Now()},
-		{ID: "b2c3d4e5-f6a7-8901-bcde-f12345678901", Topic: "t2", Payload: []byte(`{"b":2}`), CreatedAt: time.Now()},
+		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t1", Payload: []byte(`{"a":1}`), CreatedAt: now, OccurredAt: now},
+		{ID: "b2c3d4e5-f6a7-8901-bcde-f12345678901", Topic: "t2", Payload: []byte(`{"b":2}`), CreatedAt: now, OccurredAt: now},
 	}
 
 	err := w.WriteBatch(ctx, entries)
@@ -361,14 +409,15 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 
 	call := tx.execCalls[0]
 	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
-	// 2 entries × 10 cols = 20 args (added observability column)
-	assert.Len(t, call.args, 20)
+	// 2 entries × 12 cols = 24 args (id, agg_id, agg_type, event_type, topic, payload,
+	// metadata, created_at, status, observability, principal, occurred_at).
+	assert.Len(t, call.args, 24)
 	assert.Equal(t, "a1b2c3d4-e5f6-7890-abcd-ef1234567890", call.args[0])
-	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[10])
+	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[12])
 
-	// $9 per entry (args[8] and args[18]) must be StatePending — regression guard.
+	// $9 per entry (args[8] and args[20]) must be StatePending — regression guard.
 	assert.Equal(t, outbox.StatePending.String(), call.args[8])  // first entry status = $9
-	assert.Equal(t, outbox.StatePending.String(), call.args[18]) // second entry status = $19
+	assert.Equal(t, outbox.StatePending.String(), call.args[20]) // second entry status = $21
 }
 
 func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
@@ -382,17 +431,19 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 
 	entries := []outbox.Entry{
 		{
-			ID:        "batch-ctx-0001",
-			Topic:     "orders.v1",
-			Payload:   []byte(`{"idx":1}`),
-			CreatedAt: time.Now(),
-			Metadata:  map[string]string{"source": "business"},
+			ID:         "batch-ctx-0001",
+			Topic:      "orders.v1",
+			Payload:    []byte(`{"idx":1}`),
+			CreatedAt:  time.Now(),
+			OccurredAt: time.Now().UTC(),
+			Metadata:   map[string]string{"source": "business"},
 		},
 		{
-			ID:        "batch-ctx-0002",
-			Topic:     "orders.v1",
-			Payload:   []byte(`{"idx":2}`),
-			CreatedAt: time.Now(),
+			ID:         "batch-ctx-0002",
+			Topic:      "orders.v1",
+			Payload:    []byte(`{"idx":2}`),
+			CreatedAt:  time.Now(),
+			OccurredAt: time.Now().UTC(),
 			// No explicit metadata: observability still comes from ctx.
 		},
 	}
@@ -401,8 +452,8 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tx.execCalls, 1)
 
-	// 2 entries × 10 cols = 20 args
-	require.Len(t, tx.execCalls[0].args, 20)
+	// 2 entries × 12 cols = 24 args
+	require.Len(t, tx.execCalls[0].args, 24)
 
 	// First entry: business metadata preserved, observability from ctx.
 	firstMetaJSON, ok := tx.execCalls[0].args[6].([]byte)
@@ -421,8 +472,8 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 	assert.Equal(t, "corr-batch", string(firstObs.CorrelationID))
 	assert.Equal(t, "trace-batch", string(firstObs.TraceID))
 
-	// Second entry: observability also from ctx.
-	secondObsJSON, ok := tx.execCalls[0].args[19].([]byte)
+	// Second entry: observability also from ctx (col index 9 of second entry = 9+12=21).
+	secondObsJSON, ok := tx.execCalls[0].args[21].([]byte)
 	require.True(t, ok)
 	var secondObs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(secondObsJSON, &secondObs))
@@ -438,7 +489,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 
 	t.Run("empty ID", func(t *testing.T) {
 		entries := []outbox.Entry{
-			{ID: "valid-id", Topic: "t", Payload: []byte("{}")},
+			{ID: "valid-id", Topic: "t", Payload: []byte("{}"), OccurredAt: time.Now().UTC()},
 			{ID: "", Topic: "t", Payload: []byte("{}")},
 		}
 		err := w.WriteBatch(ctx, entries)
@@ -454,7 +505,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 
 	t.Run("all-zeros UUID", func(t *testing.T) {
 		entries := []outbox.Entry{
-			{ID: "valid-id", Topic: "t", Payload: []byte("{}")},
+			{ID: "valid-id", Topic: "t", Payload: []byte("{}"), OccurredAt: time.Now().UTC()},
 			{ID: "00000000-0000-0000-0000-000000000000", Topic: "t", Payload: []byte("{}")},
 		}
 		err := w.WriteBatch(ctx, entries)
@@ -475,7 +526,7 @@ func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
 	ctx := CtxWithTx(context.Background(), tx)
 
 	entries := []outbox.Entry{
-		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"), CreatedAt: time.Now()},
+		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"), CreatedAt: time.Now(), OccurredAt: time.Now().UTC()},
 	}
 
 	err := w.WriteBatch(ctx, entries)
@@ -496,18 +547,19 @@ func TestOutboxWriter_WriteBatch_ChunksLargeBatch(t *testing.T) {
 	entries := make([]outbox.Entry, n)
 	for i := range n {
 		entries[i] = outbox.Entry{
-			ID:        fmt.Sprintf("evt-%012d", i),
-			Topic:     "t",
-			Payload:   []byte("{}"),
-			CreatedAt: time.Now(),
+			ID:         fmt.Sprintf("evt-%012d", i),
+			Topic:      "t",
+			Payload:    []byte("{}"),
+			CreatedAt:  time.Now(),
+			OccurredAt: time.Now().UTC(),
 		}
 	}
 
 	err := w.WriteBatch(ctx, entries)
 	require.NoError(t, err)
 	require.Len(t, tx.execCalls, 2, "should split into 2 chunks")
-	assert.Len(t, tx.execCalls[0].args, writeBatchChunkSize*10)
-	assert.Len(t, tx.execCalls[1].args, 1*10)
+	assert.Len(t, tx.execCalls[0].args, writeBatchChunkSize*12)
+	assert.Len(t, tx.execCalls[1].args, 1*12)
 }
 
 // TestOutboxWriter_Write_MetadataExceedsLimit verifies B2-A-07: writes carrying

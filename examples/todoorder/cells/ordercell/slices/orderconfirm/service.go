@@ -213,6 +213,7 @@ func (s *Service) buildStatusChangedEntry(id, oldStatus, newStatus string, chang
 		Topic:         TopicOrderStatusChanged,
 		Payload:       payload,
 		CreatedAt:     changedAt,
+		OccurredAt:    changedAt,
 	}
 	if err := entry.Validate(); err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-confirm: invalid outbox entry: %w", err)

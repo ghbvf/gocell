@@ -68,12 +68,20 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 			"outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
 	}
 
-	// Inject observability BEFORE Validate so any failure path (Validate or
-	// downstream marshal) carries the originating request's trace/request/
-	// correlation identity in slog/span attributes — without this ordering,
-	// validate-rejected writes appear in error metrics with empty trace IDs
-	// and break post-mortem correlation.
+	// Inject observability + principal BEFORE Validate so any failure path
+	// (Validate or downstream marshal) carries the originating request's
+	// trace/request/correlation identity and principal identity in slog/span
+	// attributes — without this ordering, validate-rejected writes appear in
+	// error metrics with empty trace IDs and break post-mortem correlation.
 	entry.InjectObservabilityFromContext(ctx)
+	entry.InjectPrincipalFromContext(ctx)
+	if entry.OccurredAt.IsZero() {
+		// OccurredAt mandatory per Entry.Validate. Fill from writer clock when
+		// caller didn't set explicitly (mirrors CreatedAt fill in PG outbox
+		// row). Callers with a distinct producer-domain event time MUST set
+		// OccurredAt before Write.
+		entry.OccurredAt = w.clock.Now().UTC()
+	}
 
 	if err := entry.Validate(); err != nil {
 		return err
@@ -94,14 +102,19 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal observability", err)
 	}
 
+	principalJSON, err := marshalPrincipal(entry.Principal)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal principal", err)
+	}
+
 	createdAt := entry.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = w.clock.Now()
 	}
 
 	const query = `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability, principal, occurred_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
 
 	_, err = tx.Exec(
 		ctx, query,
@@ -115,6 +128,8 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		createdAt,
 		outbox.StatePending.String(),
 		observabilityJSON,
+		principalJSON,
+		entry.OccurredAt,
 	)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
@@ -126,10 +141,10 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 }
 
 // writeBatchChunkSize is the maximum number of entries per INSERT statement.
-// PostgreSQL supports at most 65535 bind parameters; each entry uses 10 columns
-// (added observability column), so the theoretical max is 65535/10 = 6553.
-// We use 6500 as a safe margin.
-const writeBatchChunkSize = 6500
+// PostgreSQL supports at most 65535 bind parameters; each entry uses 12 columns
+// (added observability + principal + occurred_at columns), so the theoretical
+// max is 65535/12 = 5461. We use 5400 as a safe margin.
+const writeBatchChunkSize = 5400
 
 // WriteBatch inserts multiple outbox entries within the caller's transaction.
 // All entries are validated upfront (ID format + Entry.Validate); if any entry
@@ -150,11 +165,12 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
 	}
 
-	// Inject observability + validate upfront. Iteration uses indices so the
-	// in-place mutation from InjectObservabilityFromContext propagates to
-	// writeBatchChunk's later loop. Inject must precede Validate so any
-	// failure path (Validate or downstream marshal) carries the request's
-	// trace/request/correlation identity in slog/span attributes (B2-A-04).
+	// Inject observability + principal + validate upfront. Iteration uses
+	// indices so the in-place mutations from InjectObservabilityFromContext
+	// and InjectPrincipalFromContext propagate to writeBatchChunk's later
+	// loop. Inject must precede Validate so any failure path (Validate or
+	// downstream marshal) carries the request's trace/request/correlation
+	// identity and principal identity in slog/span attributes (B2-A-04).
 	for i := range entries {
 		if strings.TrimSpace(entries[i].ID) == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -167,6 +183,10 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 				errcode.WithDetails(errcode.PublicInt("index", i)))
 		}
 		entries[i].InjectObservabilityFromContext(ctx)
+		entries[i].InjectPrincipalFromContext(ctx)
+		if entries[i].OccurredAt.IsZero() {
+			entries[i].OccurredAt = w.clock.Now().UTC()
+		}
 		if err := entries[i].Validate(); err != nil {
 			return fmt.Errorf("outbox entry[%d]: %w", i, err)
 		}
@@ -184,8 +204,8 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 
 // writeBatchChunkCols is the number of columns inserted per outbox entry
 // (id, aggregate_id, aggregate_type, event_type, topic, payload, metadata,
-// created_at, status, observability).
-const writeBatchChunkCols = 10
+// created_at, status, observability, principal, occurred_at).
+const writeBatchChunkCols = 12
 
 // writeBatchChunk inserts a single chunk of entries via multi-row INSERT.
 // globalOffset is the index of the first entry in the original slice (for error messages).
@@ -195,7 +215,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 	// Approximate size: 170 bytes for header + (entries * ~60 bytes per value tuple).
 	sb.Grow(170 + len(entries)*(writeBatchChunkCols*6+3))
 	sb.WriteString(`INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability, principal, occurred_at)
 		VALUES `)
 
 	var numBuf [32]byte
@@ -221,12 +241,12 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 }
 
 // encodeBatchEntry validates and serializes a single outbox.Entry for batch
-// INSERT. Returns the 10-arg row in fixed column order. globalIndex is the
+// INSERT. Returns the 12-arg row in fixed column order. globalIndex is the
 // caller's original-slice index, used only to produce ergonomic error
 // messages when many entries are in flight.
 //
-// Observability injection happened upfront in WriteBatch so failure paths
-// here carry the request's trace identity (B2-A-04).
+// Observability and principal injection happened upfront in WriteBatch so
+// failure paths here carry the request's trace and principal identity (B2-A-04).
 func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any, error) {
 	metadata, err := json.Marshal(e.Metadata)
 	if err != nil {
@@ -250,6 +270,13 @@ func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any,
 			errcode.WithDetails(errcode.PublicInt("index", globalIndex)))
 	}
 
+	principalJSON, err := marshalPrincipal(e.Principal)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
+			"outbox entry: failed to marshal principal", err,
+			errcode.WithDetails(errcode.PublicInt("index", globalIndex)))
+	}
+
 	createdAt := e.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = w.clock.Now()
@@ -257,7 +284,8 @@ func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any,
 
 	return []any{
 		e.ID, e.AggregateID, e.AggregateType,
-		e.EventType, e.Topic, e.Payload, metadata, createdAt, outbox.StatePending.String(), observabilityJSON,
+		e.EventType, e.Topic, e.Payload, metadata, createdAt, outbox.StatePending.String(),
+		observabilityJSON, principalJSON, e.OccurredAt,
 	}, nil
 }
 
@@ -284,4 +312,15 @@ func marshalObservability(o outbox.ObservabilityMetadata) ([]byte, error) {
 		return nil, nil
 	}
 	return json.Marshal(o)
+}
+
+// marshalPrincipal serializes PrincipalMetadata to JSON.
+// Returns nil (SQL NULL) when the struct is zero — mirrors marshalObservability's
+// NULL-for-zero strategy; the outbox_entries.principal column accepts NULL because
+// not all producers adopt InjectPrincipalFromContext (W0 transition).
+func marshalPrincipal(p outbox.PrincipalMetadata) ([]byte, error) {
+	if p.IsZero() {
+		return nil, nil
+	}
+	return json.Marshal(p)
 }

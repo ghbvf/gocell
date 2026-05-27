@@ -38,7 +38,7 @@ func makeRelayEntry(id, eventType string, attempts int) outboxrt.ClaimedEntry {
 // makeMockRowData converts a ClaimedEntry into a mockRowData row for mockRows.
 // Column order matches claimPendingQuery RETURNING clause:
 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata,
-// created_at, attempts, observability, lease_id.
+// created_at, attempts, observability, lease_id, principal, occurred_at.
 func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 	metaJSON, _ := json.Marshal(e.Metadata)
 	if e.Metadata == nil {
@@ -48,6 +48,10 @@ func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 	if !e.Observability.IsZero() {
 		obsJSON, _ = json.Marshal(e.Observability)
 	}
+	var principalJSON []byte
+	if !e.Principal.IsZero() {
+		principalJSON, _ = json.Marshal(e.Principal)
+	}
 	leaseID, err := uuid.Parse(e.LeaseID)
 	if err != nil {
 		// Test fixtures that don't pre-set LeaseID get a fresh one — the unit
@@ -55,10 +59,16 @@ func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 		// not lease ownership.
 		leaseID = uuid.New()
 	}
+	occurredAt := e.OccurredAt
+	if occurredAt.IsZero() {
+		// Sentinel: epoch 0 maps to the migration DEFAULT '1970-01-01 00:00:00+00'.
+		occurredAt = time.Time{}
+	}
 	return mockRowData{
 		values: []any{
 			e.ID, e.AggregateID, e.AggregateType, e.EventType,
 			e.Topic, e.Payload, metaJSON, e.CreatedAt, e.Attempts, obsJSON, leaseID,
+			principalJSON, occurredAt,
 		},
 	}
 }

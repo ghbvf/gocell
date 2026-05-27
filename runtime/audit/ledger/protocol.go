@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -136,42 +136,81 @@ func (p *Protocol) RestartRecovery() RestartRecoveryMode { return p.restartRecov
 // Idempotency returns the configured idempotency mode.
 func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 
+// auditHashInput is the canonical typed input to the HMAC-SHA256 hash chain
+// computation. json.Marshal serializes struct fields in source-declaration
+// order (Go spec §reflect.Value.MapKeys does not apply to structs), producing
+// deterministic bytes across all Go versions and platforms.
+//
+// Using a typed struct with JSON encoding eliminates the field-boundary
+// collision risk that existed with the previous fmt.Sprintf pipe-separator
+// format: JSON's quote/escape handling makes it impossible for any field value
+// to shift the boundary between fields, regardless of the bytes the field
+// contains (F3+F6, PR #1218 W1.2).
+//
+// Payload is []byte; encoding/json serializes []byte as a base64-encoded JSON
+// string (RFC 4648 §4), so the Payload field is self-encoding — no manual
+// hex-encoding or escaping is required.
+//
+// ref: google/trillian storage/leafdata.go — typed canonical input struct
+// pattern for log-leaf HMAC.
+// ref: RFC 8785 (JCS) — canonical JSON for deterministic signing (JCS uses
+// full normalisation; here struct-order determinism is sufficient because
+// auditHashInput is a private, append-only type with no external serialiser).
+type auditHashInput struct {
+	PrevHash           string `json:"prev_hash"`
+	EventID            string `json:"event_id"`
+	EventType          string `json:"event_type"`
+	ActorID            string `json:"actor_id"`
+	SubjectID          string `json:"subject_id"`
+	TenantID           string `json:"tenant_id"`
+	SessionID          string `json:"session_id"`
+	CorrelationID      string `json:"correlation_id"`
+	OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+	TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+	Payload            []byte `json:"payload"`
+}
+
 // ComputeHash produces the HMAC-SHA256 hex digest for an entry using the
-// configured HMAC key. The message format is byte-for-byte compatible with
-// cells/auditcore/internal/domain/hashchain.go computeHash:
+// configured HMAC key.
 //
-//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
+// The HMAC message is the canonical JSON encoding of an auditHashInput struct
+// (json.Marshal in source-declaration order). JSON encoding eliminates the
+// field-boundary collision risk that existed in the previous pipe-separated
+// fmt.Sprintf format (F3+F6): any bytes in any field are quoted/escaped by the
+// JSON encoder, so an attacker cannot craft a Payload value that shifts the
+// boundary between fields.
 //
-// The Payload field is hex-encoded (lowercase hex, [0-9a-f]) before
-// substitution into the format string. Hex chars cannot contain the `|`
-// separator, making separator-collision attacks on the Payload field
-// impossible: an attacker controlling arbitrary JSON bytes cannot craft a
-// `|`-containing payload that shifts the boundary between any two fields.
+// Payload is encoded as a base64 JSON string by encoding/json's []byte
+// handling; no manual hex-encoding is needed.
 //
-// No backwards compatibility: the format was rewritten in B3 (issue #1042)
-// to include the five principal/correlation fields; the hex-encoding of
-// Payload was added in PR #1218 to close the separator-collision attack
-// surface.
+// No backwards compatibility: the canonical-JSON format supersedes the
+// pipe-separated format introduced in B3 (issue #1042) and the hex-payload
+// partial fix in PR #1218. gocell has no external deployments — existing hash
+// fixtures are regenerated in the same PR.
 //
-// ref: cells/auditcore/internal/domain/hashchain.go computeHash (must remain
-// byte-for-byte equivalent to preserve chain continuity when PG store lands).
+// ref: google/trillian storage/leafdata.go; RFC 8785 JCS (struct-order
+// determinism is sufficient for a private, append-only type).
 func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
+	input := auditHashInput{
+		PrevHash:           prevHash,
+		EventID:            e.EventID,
+		EventType:          e.EventType,
+		ActorID:            e.ActorID,
+		SubjectID:          e.SubjectID,
+		TenantID:           e.TenantID,
+		SessionID:          e.SessionID,
+		CorrelationID:      e.CorrelationID,
+		OccurredAtUnixNano: e.OccurredAt.UnixNano(),
+		TimestampUnixNano:  e.Timestamp.UnixNano(),
+		Payload:            e.Payload,
+	}
+	// json.Marshal on a simple struct with only string/int64/[]byte fields
+	// cannot return an error. The only error paths are for channels, functions,
+	// and cyclic references — none of which are present here.
+	msgBytes, _ := json.Marshal(input)
 	mac := hmac.New(sha256.New, p.hmacKey)
-	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
-		prevHash,
-		e.EventID,
-		e.EventType,
-		e.ActorID,
-		e.SubjectID,
-		e.TenantID,
-		e.SessionID,
-		e.CorrelationID,
-		e.OccurredAt.UnixNano(),
-		e.Timestamp.UnixNano(),
-		hex.EncodeToString(e.Payload), // hex-encoded: [0-9a-f] cannot contain '|'
-	)
 	// crypto/hmac hash.Write always returns (len(b), nil) per io.Writer contract.
-	mac.Write([]byte(msg))
+	mac.Write(msgBytes)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 

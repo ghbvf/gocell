@@ -16,12 +16,16 @@ import (
 
 // Request — http.audit.list.v1.request
 type Request struct {
-	ActorID   string `json:"actorId,omitempty"`
-	Cursor    string `json:"cursor,omitempty"`
-	EventType string `json:"eventType,omitempty"`
+	ActorID       string `json:"actorId,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
+	Cursor        string `json:"cursor,omitempty"`
+	EventType     string `json:"eventType,omitempty"`
 	// format: date-time
-	From  string `json:"from,omitempty"`
-	Limit int64  `json:"limit,omitempty"`
+	From      string `json:"from,omitempty"`
+	Limit     int64  `json:"limit,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	SubjectID string `json:"subjectId,omitempty"`
+	TenantID  string `json:"tenantId,omitempty"`
 	// format: date-time
 	To string `json:"to,omitempty"`
 }
@@ -35,10 +39,16 @@ type Response struct {
 
 // ResponseDataItem is a generated DTO for contract http.audit.list.v1.
 type ResponseDataItem struct {
-	ID        string `json:"id"`
-	EventID   string `json:"eventId"`
-	EventType string `json:"eventType"`
-	ActorID   string `json:"actorId"`
+	ID            string `json:"id"`
+	EventID       string `json:"eventId"`
+	EventType     string `json:"eventType"`
+	ActorID       string `json:"actorId"`
+	SubjectID     string `json:"subjectId,omitempty"`
+	TenantID      string `json:"tenantId,omitempty"`
+	SessionID     string `json:"sessionId,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
+	// format: date-time
+	OccurredAt string `json:"occurredAt,omitempty"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
 	Payload   any    `json:"payload,omitempty"`

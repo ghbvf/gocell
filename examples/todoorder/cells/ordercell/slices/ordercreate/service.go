@@ -166,6 +166,7 @@ func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, err
 		Topic:         TopicOrderCreated,
 		Payload:       payload,
 		CreatedAt:     order.CreatedAt,
+		OccurredAt:    order.CreatedAt,
 	}
 	if err := entry.Validate(); err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-create: invalid outbox entry: %w", err)

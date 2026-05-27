@@ -334,16 +334,24 @@ func (s *LedgerStore) Tail(ctx context.Context) (ledger.TailSnapshot, error) {
 }
 
 // ledgerRepoReadySQL is a representative zero-cost query for the audit_entries
-// table. It returns no rows but exercises schema existence and table-level
-// permissions, surfacing migration drift that a pool-level ping cannot detect.
-// Matches the SELECT 1 FROM <t> WHERE false pattern used by PGSessionStore.
-const ledgerRepoReadySQL = `SELECT 1 FROM audit_entries WHERE false`
+// table. It returns no rows but exercises schema existence, column presence, and
+// table-level permissions, surfacing migration drift that a pool-level ping cannot
+// detect. The five principal/correlation columns added by migration 041 are
+// explicitly selected so that a missing migration 041 causes this probe to fail
+// with a "column does not exist" error, tripping the readiness check before
+// the first audit write attempt.
+const ledgerRepoReadySQL = `SELECT subject_id, tenant_id, session_id, correlation_id, occurred_at ` +
+	`FROM audit_entries LIMIT 1`
 
-// RepoReady implements healthz.RepoProber. It issues a cheap
-// non-transactional representative query against the audit_entries table so
-// that schema/migration drift and table-level permission loss are surfaced as a
-// differentiated failure domain distinct from the pool-level postgres_ready
-// probe registered by *Pool.
+// RepoReady implements healthz.RepoProber. It issues a cheap non-transactional
+// representative query against the audit_entries table so that schema/migration
+// drift and table-level permission loss are surfaced as a differentiated failure
+// domain distinct from the pool-level postgres_ready probe registered by *Pool.
+//
+// The query selects the five principal/correlation columns introduced by migration
+// 041; if migration 041 has not been applied the query returns a "column does not
+// exist" error and the probe trips, preventing the service from accepting audit
+// writes against an out-of-date schema.
 //
 // The ambient-tx fallback in pgExecutor is a no-op for this probe: health
 // handler contexts never carry a pgx.Tx, so pgExecutor routes directly to the

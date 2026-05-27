@@ -427,7 +427,7 @@ func TestPGOutboxStore_ClaimPending_SQLContainsSkipLocked(t *testing.T) {
 
 func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	e := makeRelayEntry("e-meta", "order.created", 0)
-	// Simulate NULL metadata (JSON null bytes) and NULL observability.
+	// Simulate NULL metadata (JSON null bytes) and NULL observability/principal.
 	row := mockRowData{
 		values: []any{
 			e.ID, e.AggregateID, e.AggregateType, e.EventType,
@@ -436,6 +436,8 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 			e.CreatedAt, e.Attempts,
 			[]byte(nil), // NULL observability
 			uuid.New(),  // lease_id
+			[]byte(nil), // NULL principal
+			time.Time{}, // zero occurred_at (sentinel)
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -447,6 +449,7 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	// null bytes → len > 0 but json.Unmarshal("null") sets metadata to nil
 	assert.Nil(t, entries[0].Metadata)
 	assert.True(t, entries[0].Observability.IsZero())
+	assert.True(t, entries[0].Principal.IsZero())
 }
 
 func TestPGOutboxStore_ClaimPending_BeginError(t *testing.T) {
@@ -494,6 +497,8 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 			e.CreatedAt, e.Attempts,
 			[]byte(nil), // NULL observability
 			uuid.New(),  // lease_id
+			[]byte(nil), // NULL principal
+			time.Time{}, // zero occurred_at
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -504,6 +509,33 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 	require.NoError(t, err, "invalid metadata JSON must not fail ClaimPending")
 	require.Len(t, entries, 1)
 	assert.Nil(t, entries[0].Metadata)
+}
+
+func TestPGOutboxStore_ClaimPending_PrincipalAndOccurredAt_RoundTrip(t *testing.T) {
+	e := makeRelayEntry("e-principal", "order.created", 0)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+	// Populate principal and occurred_at on the inner Entry.
+	e.Principal = kout.PrincipalMetadata{
+		ActorID:   "actor-rtrip",
+		SubjectID: "subj-rtrip",
+		TenantID:  "tenant-rtrip",
+		SessionID: "sess-rtrip",
+	}
+	e.OccurredAt = occurredAt
+
+	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{makeMockRowData(e)}}}
+	store := NewOutboxStore(db, clock.Real())
+
+	entries, err := store.ClaimPending(context.Background(), 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	got := entries[0]
+	assert.Equal(t, "actor-rtrip", string(got.Principal.ActorID))
+	assert.Equal(t, "subj-rtrip", string(got.Principal.SubjectID))
+	assert.Equal(t, "tenant-rtrip", string(got.Principal.TenantID))
+	assert.Equal(t, "sess-rtrip", string(got.Principal.SessionID))
+	assert.Equal(t, occurredAt, got.OccurredAt)
 }
 
 func TestPGOutboxStore_ClaimPending_RowsIterError(t *testing.T) {

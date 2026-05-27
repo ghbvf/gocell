@@ -46,6 +46,7 @@ func TestUnmarshalEnvelope_V1Success(t *testing.T) {
 		Metadata:      map[string]string{"source": "test"},
 		Observability: ObservabilityMetadata{TraceID: "abc123"},
 		CreatedAt:     now,
+		OccurredAt:    time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC),
 	}
 
 	raw, err := MarshalEnvelope(entry)
@@ -133,11 +134,12 @@ func TestMarshalEnvelope_ProducesV1FromMinimalEntry(t *testing.T) {
 	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
 
 	raw, err := MarshalEnvelope(Entry{
-		ID:        id,
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
+		ID:         id,
+		EventType:  topic,
+		Topic:      topic,
+		Payload:    payload,
+		CreatedAt:  time.Now(),
+		OccurredAt: time.Now().UTC(),
 	})
 	require.NoError(t, err)
 
@@ -166,6 +168,7 @@ func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
 		Metadata:      map[string]string{"foo": "bar"},
 		Observability: obs,
 		CreatedAt:     time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
+		OccurredAt:    time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
 	}
 
 	raw, err := MarshalEnvelope(entry)
@@ -350,12 +353,13 @@ func TestMarshalEnvelope_PreservesPrincipal(t *testing.T) {
 		SessionID: "sess-abc",
 	}
 	entry := Entry{
-		ID:        "p-rt-1",
-		EventType: "test.event.v1",
-		Topic:     "test.event.v1",
-		Payload:   []byte(`{"x":1}`),
-		Principal: principal,
-		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		ID:         "p-rt-1",
+		EventType:  "test.event.v1",
+		Topic:      "test.event.v1",
+		Payload:    []byte(`{"x":1}`),
+		Principal:  principal,
+		CreatedAt:  time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
 	}
 
 	raw, err := MarshalEnvelope(entry)
@@ -374,11 +378,12 @@ func TestMarshalEnvelope_PreservesPrincipal(t *testing.T) {
 
 func TestMarshalEnvelope_EmptyPrincipalRoundTrip(t *testing.T) {
 	entry := Entry{
-		ID:        "p-empty-1",
-		EventType: "test.event.v1",
-		Topic:     "test.event.v1",
-		Payload:   []byte(`{"x":1}`),
-		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		ID:         "p-empty-1",
+		EventType:  "test.event.v1",
+		Topic:      "test.event.v1",
+		Payload:    []byte(`{"x":1}`),
+		CreatedAt:  time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		OccurredAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
 	}
 
 	raw, err := MarshalEnvelope(entry)
@@ -416,23 +421,18 @@ func TestMarshalEnvelope_OccurredAtRoundTrip(t *testing.T) {
 	assert.Contains(t, raw2, "occurredAt", "wire JSON must contain occurredAt field when set")
 }
 
-func TestMarshalEnvelope_ZeroOccurredAtRoundTrip(t *testing.T) {
-	entry := Entry{
-		ID:        "oat-zero-1",
-		EventType: "test.event.v1",
-		Topic:     "test.event.v1",
-		Payload:   []byte(`{"x":1}`),
-		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
-		// OccurredAt intentionally zero
-	}
-
-	raw, err := MarshalEnvelope(entry)
-	require.NoError(t, err)
-
-	got, err := UnmarshalEnvelope(entry.Topic, raw)
-	require.NoError(t, err)
-
-	assert.True(t, got.OccurredAt.IsZero(), "zero OccurredAt must round-trip as zero")
+func TestMarshalEnvelope_ZeroOccurredAtRejected(t *testing.T) {
+	// OccurredAt is mandatory (Entry.Validate rejects zero-value).
+	// Verify that a wire message decoded with zero occurredAt is rejected.
+	raw := []byte(`{` +
+		`"schemaVersion":"v1",` +
+		`"id":"oat-zero-1","eventType":"test.event.v1",` +
+		`"payload":{"x":1},"createdAt":"2026-05-28T12:00:00Z"` +
+		`}`)
+	// occurredAt is absent from the JSON → decodes as zero time.Time → Validate rejects.
+	_, err := UnmarshalEnvelope("test.event.v1", raw)
+	require.Error(t, err, "wire message with zero occurredAt must be rejected")
+	assert.Contains(t, err.Error(), "OccurredAt", "error message must reference OccurredAt field")
 }
 
 func TestUnmarshalEnvelope_RejectsUnsafePrincipalSafeID(t *testing.T) {
