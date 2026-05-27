@@ -18,17 +18,21 @@ import (
 func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel string) *metadata.ProjectMeta {
 	cells := make(map[string]*metadata.CellMeta, len(cellIDs))
 	for i, id := range cellIDs {
+		// F8 (R3): re-validate every cell-id through the typed builder so a
+		// bare-literal call site fails fast in the helper, closing the
+		// AssignStmt blind spot (A1 only scans CompositeLit positions).
+		validated := metadatatest.NewCellID(id)
 		cm := &metadata.CellMeta{
 			Type:             "core",
 			ConsistencyLevel: cellLevels[i],
 			Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "cell_" + id},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + id + ".startup"}},
-			Dir:              id,
-			File:             "cells/" + id + "/cell.yaml",
+			Schema:           metadata.SchemaMeta{Primary: "cell_" + validated},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + validated + ".startup"}},
+			Dir:              validated,
+			File:             "cells/" + validated + "/cell.yaml",
 		}
-		cm.ID = id
-		cells[id] = cm
+		cm.ID = validated
+		cells[validated] = cm
 	}
 	return &metadata.ProjectMeta{
 		Cells:     cells,

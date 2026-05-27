@@ -266,21 +266,7 @@ github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstr
 # SharedResolver the combined cost is ~30–60s. Same type-graph-load /
 # 16-shard resolver-cache-loss class as the entries above.
 github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder
-# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A2 body-shape lock —
-# single RunTyped Tests:false over ./kernel/metadata/metadatatest/... (single
-# package); narrower scope than A1 but still pays packages.Load for that subtree.
-# Cost dominated by packages.Load warmup on cold-cache shards.
-github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_NewCellIDBodyShape
-# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A3 negative fixture —
-# RunTypedFixture over fixturecellidnegfixture/ with full type info; same
-# cold-cache class as A1 sibling above.
-github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_NegativeFixture
-# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A4 carveout ADR
-# consistency — file I/O + ADR parse; fast on its own but shares shard
-# budget with A1/A2/A3 siblings; allowlisted to prevent false SLOW.
-github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_CarveOutADRConsistency
-# type-graph-load: METADATATEST-IMPORT-SCOPE-01 import scope guard —
-# two RunTypedProduction passes (FlatNonDefaultTags + default) over
-# ./... with Tests:true; whole-module SharedResolver profile identical
-# to TestFixtureCellIDTypedBuilder sibling above.
-github.com/ghbvf/gocell/tools/archtest	TestMetadatatestImportScope
+# Note: FIXTURE-CELLID-TYPED-BUILDER-01 A2/A3/A4/A5 and METADATATEST-IMPORT-
+# SCOPE-01 have per-test Elapsed under 1s after R3 scope-narrowing (A2 single
+# package, A5 single package, A4 file I/O only, A3 single fixture pkg, import
+# scope AST-only Run); they do not need slowgate allowlist entries.

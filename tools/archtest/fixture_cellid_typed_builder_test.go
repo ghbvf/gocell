@@ -23,7 +23,7 @@
 // cannot express "test-only package" at the type level). Upgrade
 // tracked alongside the broader go test-only-package proposal.
 //
-// Enforcement is split into four sub-tests (A1–A4) plus the import
+// Enforcement is split into five sub-tests (A1–A5) plus the import
 // scope guard:
 //
 //   - A1 TestFixtureCellIDTypedBuilder — typed-info funnel: scans all
@@ -51,16 +51,24 @@
 //
 //   - Assignment statement form (c.ID = id): A1 scans CompositeLit
 //     nodes only; `var c = &metadata.CellMeta{}; c.ID = "rawassign"`
-//     is outside A1 scope. This form appears in makeProject helpers
-//     in kernel/metadata/derived_test.go and assembly_derive_test.go.
+//     is outside A1 scope. The helpers in kernel/metadata/derived_test.go,
+//     assembly_derive_test.go, and kernel/governance/rules_topo_test.go
+//     close this gap at the call-site level by wrapping every assignment
+//     in metadatatest.NewCellID(id) — the builder panics on invalid
+//     literal, achieving fail-fast equivalent to A1's static reject.
 //     Reverse self-test: blind_spot_assign.go asserts A1 does not
-//     report a violation for this shape.
+//     report a violation for the shape (the helper wrap is the funnel,
+//     not the archtest).
 //
 //   - A2 TestFixtureCellIDTypedBuilder_NewCellIDBodyShape — locks
 //     the metadatatest.NewCellID FuncDecl body form: exactly
 //     {if !metadata.MatchCellID(s) { panic(panicregister.Approved(literal,
 //     errcode.Assertion(...))) }; return s}. Hard upstream: any other
-//     body form fails archtest.
+//     body form fails archtest. The MatchCellID / Approved / Assertion
+//     callees are resolved via TypesInfo to their packages
+//     (kernel/metadata, pkg/panicregister, pkg/errcode respectively);
+//     identifier-name match alone is rejected (was a Soft loophole
+//     until R3).
 //
 //   - A3 TestFixtureCellIDTypedBuilder_NegativeFixture — loads the
 //     fixturecellidnegfixture/ archtest_fixture sub-package containing
@@ -76,10 +84,23 @@
 //     builder.md, asserting both sides are character-identical. Mirrors
 //     ERRCODE-CARVEOUT-ADR-CONSISTENCY-01.
 //
+//   - A5 TestFixtureCellIDTypedBuilder_VarInitializerShape — locks the
+//     initializer shape of every CellID-prefixed package-level var in
+//     kernel/metadata/metadatatest: each must be exactly
+//     metadatatest.NewCellID(BasicLit STRING), with NewCellID resolved
+//     via TypesInfo to its package. Closes the upstream half of the
+//     CellID* var funnel: A1's SelectorExpr branch accepts any
+//     metadatatest var whose name starts with "CellID", and A5
+//     guarantees those vars came from the sanctioned constructor.
+//     Together A5 (upstream) + A1's SelectorExpr branch (downstream)
+//     reject any `var CellIDBypass = "raw-evil"` at archtest time
+//     before it can sanction a downstream callsite.
+//
 //   - TestMetadatatestImportScope — enforces METADATATEST-IMPORT-SCOPE-01:
 //     no production (.go non-_test.go) file may import metadatatest.
-//     Runs two RunTypedProduction passes (with FlatNonDefaultTags and
-//     without) to cover //go:build !X reverse directives.
+//     Uses Run (AST-only, ModuleScope) rather than RunTypedProduction —
+//     import scope is a syntactic question and does not require typed
+//     graph load (R3 narrowing: ~12s → 0.1s).
 //
 // Carveouts (function-level only, per ai-robust.md):
 //
@@ -580,8 +601,8 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s/A2: first statement must be *ast.IfStmt, got %T", fixtureCellIDRuleID, fn.Body.List[0])
 	}
-	if !isMatchCellIDNegateCond(ifStmt.Cond) {
-		t.Fatalf("%s/A2: if condition must be !metadata.MatchCellID(s)", fixtureCellIDRuleID)
+	if !isMatchCellIDNegateCond(pInfo, ifStmt.Cond) {
+		t.Fatalf("%s/A2: if condition must be !metadata.MatchCellID(s) resolved via TypesInfo to %s.MatchCellID", fixtureCellIDRuleID, metadataPkgPath)
 	}
 	if ifStmt.Else != nil {
 		t.Fatalf("%s/A2: if statement must have no else branch", fixtureCellIDRuleID)
@@ -658,7 +679,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	}
 }
 
-func isMatchCellIDNegateCond(cond ast.Expr) bool {
+func isMatchCellIDNegateCond(pInfo *types.Info, cond ast.Expr) bool {
 	unary, ok := cond.(*ast.UnaryExpr)
 	if !ok || unary.Op != token.NOT {
 		return false
@@ -668,7 +689,19 @@ func isMatchCellIDNegateCond(cond ast.Expr) bool {
 		return false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "MatchCellID" {
+	if !ok {
+		return false
+	}
+	// F1: verify MatchCellID resolves to metadata.MatchCellID via TypesInfo —
+	// matching .Sel.Name == "MatchCellID" alone is Soft (any package with
+	// same-name function slips through). Package-path lock is Hard.
+	if pInfo != nil {
+		obj := pInfo.Uses[sel.Sel]
+		fn, isFn := obj.(*types.Func)
+		if !isFn || fn.Pkg() == nil || fn.Pkg().Path() != metadataPkgPath || fn.Name() != "MatchCellID" {
+			return false
+		}
+	} else if sel.Sel.Name != "MatchCellID" {
 		return false
 	}
 	if len(call.Args) != 1 {
@@ -679,6 +712,103 @@ func isMatchCellIDNegateCond(cond ast.Expr) bool {
 		return false
 	}
 	return true
+}
+
+// TestFixtureCellIDTypedBuilder_VarInitializerShape (A5) locks the body-form
+// of every CellID-prefixed package-level var in kernel/metadata/metadatatest.
+// Each such var must have its initializer be exactly
+// metadatatest.NewCellID(BasicLit STRING) — same TypesInfo-resolved identity
+// as the F1 lock on A2's body shape. This closes the upstream half of the
+// CellID* var funnel: A1's SelectorExpr branch accepts any metadatatest var
+// whose name starts with "CellID", and A5 guarantees that every such var was
+// constructed via the sanctioned NewCellID(literal) path. Together A5
+// (upstream) + A1 SelectorExpr branch (downstream) form a Hard funnel —
+// adding "var CellIDBypass = "raw-evil"" would fail A5 immediately.
+//
+// Symmetric to A2 (NewCellID body-shape lock). A2 protects the constructor;
+// A5 protects every site that uses the constructor at package init.
+func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
+	t.Parallel()
+
+	type result struct {
+		pInfo *types.Info
+		specs []*ast.ValueSpec
+	}
+	var collected result
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
+			return nil
+		}
+		collected.pInfo = p.TypesInfo
+		for _, file := range p.Files {
+			if filepath.Base(p.Abs(file)) != "cellid.go" {
+				continue
+			}
+			EachInChildren[ast.GenDecl](file, func(gd *ast.GenDecl) {
+				if gd.Tok != token.VAR {
+					return
+				}
+				for _, spec := range gd.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					collected.specs = append(collected.specs, vs)
+				}
+			})
+		}
+		return nil
+	})
+	if len(collected.specs) == 0 {
+		t.Fatalf("%s/A5: no var GenDecl found in kernel/metadata/metadatatest/cellid.go", fixtureCellIDRuleID)
+	}
+	if collected.pInfo == nil {
+		t.Fatalf("%s/A5: TypesInfo not captured", fixtureCellIDRuleID)
+	}
+
+	for _, vs := range collected.specs {
+		for i, name := range vs.Names {
+			if !strings.HasPrefix(name.Name, "CellID") {
+				continue
+			}
+			if i >= len(vs.Values) {
+				t.Errorf("%s/A5: %s has no initializer (must be NewCellID(literal))", fixtureCellIDRuleID, name.Name)
+				continue
+			}
+			call, ok := vs.Values[i].(*ast.CallExpr)
+			if !ok {
+				t.Errorf("%s/A5: %s initializer must be NewCellID(BasicLit STRING) CallExpr, got %T", fixtureCellIDRuleID, name.Name, vs.Values[i])
+				continue
+			}
+			// Resolve the callee via TypesInfo — Sel.Name match alone is Soft.
+			var callee *types.Func
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				obj := collected.pInfo.Uses[fn]
+				if f, isFn := obj.(*types.Func); isFn {
+					callee = f
+				}
+			case *ast.SelectorExpr:
+				obj := collected.pInfo.Uses[fn.Sel]
+				if f, isFn := obj.(*types.Func); isFn {
+					callee = f
+				}
+			}
+			if callee == nil || callee.Pkg() == nil ||
+				callee.Pkg().Path() != metadatatestPkgPath || callee.Name() != metadatatestNewCellIDFunc {
+				t.Errorf("%s/A5: %s initializer must call %s.%s, got %v", fixtureCellIDRuleID, name.Name, metadatatestPkgPath, metadatatestNewCellIDFunc, callee)
+				continue
+			}
+			if len(call.Args) != 1 {
+				t.Errorf("%s/A5: %s NewCellID call must take exactly 1 argument, got %d", fixtureCellIDRuleID, name.Name, len(call.Args))
+				continue
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				t.Errorf("%s/A5: %s NewCellID argument must be a string BasicLit, got %T", fixtureCellIDRuleID, name.Name, call.Args[0])
+			}
+		}
+	}
 }
 
 // TestFixtureCellIDTypedBuilder_NegativeFixture (A3) loads the
@@ -905,10 +1035,18 @@ func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {
 // drag init-time panics into runtime and contradict its test-only
 // purpose.
 //
-// Two RunTypedProduction passes are performed — one with
-// FlatNonDefaultTags and one without — to cover //go:build !X reverse
-// build directives (files that are excluded by default tags but included
-// with non-default tags, or vice-versa).
+// Implementation uses [Run] (AST-only, no go/packages.Load type-graph
+// build) over [ModuleScope] — import scope is a syntactic question (does
+// `import "..." appear in a non-_test.go file under the default build
+// context?), so the typed-load cost of RunTypedProduction is structurally
+// unnecessary. The single-pass AST walk replaces the previous double
+// RunTypedProduction (FlatNonDefaultTags + default tags); files gated by
+// reverse `//go:build !X` directives are still loaded under the default
+// build context the AST walker uses (those files are visible when X is
+// not set, which is the CI default). archtest_fixture-tagged fixture
+// files are excluded by the default skip set; we additionally exclude
+// kernel/metadata/metadatatest itself (the package source files) to
+// avoid self-flagging.
 //
 // AI-robust: Medium (archtest path-based scope; Go's type system cannot
 // express "test-only package"). Upgrade tracked alongside the broader
@@ -916,38 +1054,30 @@ func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {
 func TestMetadatatestImportScope(t *testing.T) {
 	t.Parallel()
 
+	root := findModuleRoot(t)
+	scope := ModuleScope(root)
 	var violations []string
-	collectImportViolations := func(opts TypedOpts) {
-		_ = RunTypedProduction(t, opts, func(p *Pass) []Diagnostic {
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				// Filter out files outside module root (build cache synthetic
-				// test runners, etc.) and *_test.go (test imports are allowed).
-				if strings.HasPrefix(rel, "..") || strings.Contains(rel, "/.cache/") {
-					continue
-				}
-				if strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				if !importsMetadatatest(file) {
-					continue
-				}
-				// archtest_fixture build tag files would have been filtered out by
-				// the loader unless explicitly enabled — RunTypedProduction does
-				// not enable archtest_fixture, so any non-test file seen here is
-				// production scope.
-				pos := p.Fset.Position(file.Pos())
-				violations = append(violations,
-					fmt.Sprintf("%s:%d: production file imports %s — restricted to *_test.go",
-						rel, pos.Line, metadatatestPkgPath))
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
 			}
-			return nil
-		})
-	}
-	// First pass: with FlatNonDefaultTags to cover //go:build !X forms.
-	collectImportViolations(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()})
-	// Second pass: without extra tags (default build context).
-	collectImportViolations(TypedOpts{Tests: true})
+			// The metadatatest package itself imports nothing of itself,
+			// but defensive — its own files would not be production callers.
+			if strings.HasPrefix(rel, "kernel/metadata/metadatatest/") {
+				continue
+			}
+			if !importsMetadatatest(file) {
+				continue
+			}
+			pos := p.Fset.Position(file.Pos())
+			violations = append(violations,
+				fmt.Sprintf("%s:%d: production file imports %s — restricted to *_test.go",
+					rel, pos.Line, metadatatestPkgPath))
+		}
+		return nil
+	})
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
 	if len(violations) > 0 {

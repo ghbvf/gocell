@@ -20,10 +20,13 @@ func buildAssemblyProject(cellLevels map[string]string, asmCells []string, asm *
 		Journeys:   make(map[string]*metadata.JourneyMeta),
 		Assemblies: make(map[string]*metadata.AssemblyMeta),
 	}
+	// F8 (R3): re-validate every cell-id through the typed builder so a
+	// bare-literal call site fails fast in the helper, closing the
+	// AssignStmt blind spot (A1 only scans CompositeLit positions).
 	for id, lvl := range cellLevels {
 		c := &metadata.CellMeta{ConsistencyLevel: lvl}
-		c.ID = id
-		pm.Cells[id] = c
+		c.ID = metadatatest.NewCellID(id)
+		pm.Cells[c.ID] = c
 	}
 	asm.Cells = asmCells
 	pm.Assemblies[asm.ID] = asm

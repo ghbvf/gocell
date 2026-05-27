@@ -24,9 +24,10 @@ Introduce a typed-builder funnel mirrored across three loci:
 2. **Fixture migration**: all bare cell-id literals in cell-id field positions across `kernel/` `*_test.go` files migrate to `metadatatest.NewCellID(literal)` or `metadatatest.<CellIDVar>`.
 3. **Static enforcement (archtest `FIXTURE-CELLID-TYPED-BUILDER-01`)**:
    - **A1** (Hard downstream): typed-info funnel rejecting bare literals, Ident→BasicLit chains, dynamic NewCellID arguments, and non-CellID-prefixed metadatatest var refs at any of the 15 cell-id field positions enumerated in §1 below.
-   - **A2** (Hard upstream): form-uniqueness lock on the `NewCellID` body — any structural drift breaks the test.
+   - **A2** (Hard upstream): form-uniqueness lock on the `NewCellID` body — including TypesInfo-resolved callee identity for `metadata.MatchCellID`, `panicregister.Approved`, and `errcode.Assertion`. Any structural drift or package substitution breaks the test.
    - **A3** (meta self-test): `archtest_fixture` sub-package containing deliberate bad/good usages; asserts A1 fires on bad and stays silent on good.
    - **A4** (consistency lock): asserts the carveout map in archtest matches §2 below character-by-character.
+   - **A5** (Hard upstream — var initializer): every CellID-prefixed package-level var in `kernel/metadata/metadatatest` must have initializer = `NewCellID(BasicLit STRING)` with `NewCellID` TypesInfo-resolved to the metadatatest package. Closes the upstream half of the CellID* var funnel: without A5, `var CellIDBypass = "raw-evil"` would slip through A1's prefix check.
 4. **Import scope guard** (`METADATATEST-IMPORT-SCOPE-01`, Medium): production code may not import `metadatatest`.
 
 ## §1 — Cell-id field positions (15-field enumeration, schema-derived)
@@ -75,6 +76,7 @@ Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.
 - **New cell-id field added to `kernel/metadata`**: same PR must update §1 table AND `cellIDFieldPositions` / `cellIDMapKeyValueStructs` lists in the archtest. A1 would otherwise miss the new position (Soft regression).
 - **RED case removed or refactored**: same PR removes the corresponding §2 entry AND the `fixtureCellIDCarveOuts` map entry. A4 enforces consistency.
 - **Builder body refactor**: A2 is a body-form lock — any structural change to `NewCellID` (e.g. extracting a helper, swapping `errcode.Assertion` for another constructor, adding extra logging) requires a synchronized A2 update. The lock prevents silent erosion of the typed-marker funnel.
+- **New CellID* var added to metadatatest**: A5 requires the initializer be `NewCellID(BasicLit STRING)`. The initializer expression and the var name (prefix `CellID`) are both part of the funnel contract. Any var with `CellID` prefix without this initializer shape fails A5; any new metadatatest var that should be downstream-acceptable as a sanctioned cell-id ref must take the `CellID*` name.
 - **Production import accidentally added**: `METADATATEST-IMPORT-SCOPE-01` archtest catches it. Upgrade to Hard would require Go's test-only-package proposal; tracked alongside the broader `kernel/cell/celltest` import-boundary pattern.
 - **Scope expansion** (mirror backlog issues #1201–#1204): when a mirror backlog issue migration is complete, the same PR must (1) add the new path prefix to `scopePrefixes` in `scanCellIDFixtureViolations` and to the `RunTyped` pattern list, (2) remove the corresponding allowlist entry from `tools/slowgate/allowlist.txt` if one was added for the expanded scope, and (3) close the corresponding mirror issue.
 
@@ -88,7 +90,7 @@ Mirror issue timeline: issues #1201-#1204 do not carry committed timelines; they
   - **Ident-typed slice values**: when a slice field (e.g. `JourneyMeta.Cells`) is assigned via an `*ast.Ident` pointing to a pre-built `[]string` var rather than an inline `[]string{...}` composite literal, A1 silently skips the check (the outer `kv.Value` is not a `*ast.CompositeLit`). Downstream Hard (with documented blind spot: Ident-typed slice values for slice-field positions; see archtest godoc Known blind spots). Reverse self-test: `blind_spot_ident_slice.go` in A3 fixture asserts A1 does not report a violation for this shape.
   - **Assignment statement form** (`c.ID = id`): A1 scans `CompositeLit` nodes only; `var c = &metadata.CellMeta{}; c.ID = "rawassign"` is outside A1 scope. This form appears in `makeProject` helpers in `kernel/metadata/derived_test.go` and `assembly_derive_test.go`. Reverse self-test: `blind_spot_assign.go` in A3 fixture.
 
-- **Upstream Hard** (A2): the single sanctioned construction site (`NewCellID` body) is shape-locked AND the `panicregister.Approved` / `errcode.Assertion` callees are identity-locked via `TypesInfo.Uses` package-path verification. Any structural drift or package substitution fails A2 immediately. A2 now loads only `./kernel/metadata/metadatatest/...` (single package) instead of the full module type-graph, reducing cold-cache load time.
+- **Upstream Hard** (A2 + A5): A2 shape-locks the single sanctioned construction site (`NewCellID` body); the `metadata.MatchCellID` / `panicregister.Approved` / `errcode.Assertion` callees are identity-locked via `TypesInfo.Uses` package-path verification. A5 shape-locks every CellID-prefixed metadatatest var initializer to `NewCellID(BasicLit STRING)` with the same TypesInfo identity check on `NewCellID`. Together A2 + A5 close the upstream half: any structural drift, package substitution, or non-sanctioned var initializer fails archtest immediately. Both load only `./kernel/metadata/metadatatest/...` (single package) instead of the full module type-graph.
 - **Meta Hard** (A3, A4): A3 reverse self-test catches A1 regressions (over-broad or no-op), including new bad fixtures for dynamic `NewCellID(var)` and non-CellID-prefixed local var refs. A4 keeps the carveout truth-source synchronized between archtest and ADR.
 - **Medium** (`METADATATEST-IMPORT-SCOPE-01`): path-based scope, not type-system. Go cannot express "test-only package" at the type level.
 
@@ -99,7 +101,7 @@ The funnel forms the **string-typed concept funnel** template (per `.claude/rule
 ## Refs
 
 - `kernel/metadata/metadatatest/cellid.go` — builder + const set
-- `tools/archtest/fixture_cellid_typed_builder_test.go` — A1/A2/A3/A4 + carveout map
+- `tools/archtest/fixture_cellid_typed_builder_test.go` — A1/A2/A3/A4/A5 + carveout map + import scope
 - `tools/archtest/internal/fixturecellidnegfixture/` — A3 fixture
 - `tools/archtest/cell_id_pattern_single_source_test.go` — sibling funnel (PR #484, Medium)
 - `pkg/panicregister/panicregister.go` — Approved funnel

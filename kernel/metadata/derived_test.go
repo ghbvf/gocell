@@ -4,18 +4,23 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // makeProject builds a minimal ProjectMeta with CellMeta entries for each of
-// the given cell IDs. Each ID must satisfy metadata.MatchCellID (no dashes,
-// lowercase alphanumeric). Callers use metadatatest.NewCellID(literal) or
-// metadatatest.CellIDXxx constants at call sites to satisfy the A1 funnel.
+// the given cell IDs. Each ID is re-validated through metadatatest.NewCellID
+// inside the helper so a bare-literal call site fails fast even though the
+// helper signature is `...string`. This closes the AssignStmt blind spot
+// flagged by FIXTURE-CELLID-TYPED-BUILDER-01 R3 review (F8): A1 only scans
+// CompositeLit positions, so `c.ID = id` would silently propagate an
+// unsanctioned literal — the explicit NewCellID wrap turns the helper into
+// a fail-fast funnel.
 func makeProject(cellIDs ...string) *metadata.ProjectMeta {
 	cells := make(map[string]*metadata.CellMeta, len(cellIDs))
 	for _, id := range cellIDs {
 		c := &metadata.CellMeta{}
-		c.ID = id
-		cells[id] = c
+		c.ID = metadatatest.NewCellID(id)
+		cells[c.ID] = c
 	}
 	return &metadata.ProjectMeta{
 		Cells:      cells,
