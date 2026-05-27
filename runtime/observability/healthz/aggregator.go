@@ -75,7 +75,7 @@ func NewAggregator(clk clock.Clock, opts ...Option) healthz.Aggregator {
 // errors.Is) when p is nil or its Name() is empty, and [healthz.ErrDuplicateProbe]
 // when a probe with the same Name() is already registered. Name shape
 // (snake_case + _ready suffix for dependency probes) is enforced statically by
-// archtest READYZ-PROBE-NAMING-01, not at runtime — see Probe.Name godoc for
+// archtest PROBENAME-SEALED-FUNNEL-01, not at runtime — see Probe.Name godoc for
 // the single-source-of-truth rationale. The probe's Check function is wrapped
 // with a ctx-safe racing wrapper at registration time so that a canceled
 // context always terminates the outer call even when the underlying function

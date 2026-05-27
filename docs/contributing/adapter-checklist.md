@@ -120,15 +120,15 @@ new-probe checklist: declare typed const → add package to
 // PROBENAME-SEALED-FUNNEL-01.
 const ProbeReady healthz.ProbeName = "my_adapter_ready"
 
-func (p *MyAdapter) Checkers() map[string]func(context.Context) error {
-    return map[string]func(context.Context) error{
-        string(ProbeReady): func(ctx context.Context) error {
+func (p *MyAdapter) Probes() []healthz.Probe {
+    return []healthz.Probe{
+        healthz.NewProbe(ProbeReady, func(ctx context.Context) error {
             ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
             defer cancel()
             // Probe the actual business path (not sys/health or a ping endpoint).
             // A business-path probe covers auth, routing, and resource availability.
             return p.probeBusinessPath(ctx)
-        },
+        }),
     }
 }
 
@@ -140,11 +140,13 @@ var _ lifecycle.ManagedResource = (*MyAdapter)(nil)
 ```
 
 For the common single-probe case, prefer the helper (it applies the inner
-deadline and the conversion at the funnel boundary):
+deadline and wraps the closure as a typed healthz.Probe):
 
 ```go
-func (p *MyAdapter) Checkers() map[string]func(context.Context) error {
-    return adapterutil.HealthToCheckers(ProbeReady, p.Health, adapterutil.DefaultProbeTimeout)
+func (p *MyAdapter) Probes() []healthz.Probe {
+    return []healthz.Probe{
+        adapterutil.HealthToProbe(ProbeReady, p.Health, adapterutil.DefaultProbeTimeout),
+    }
 }
 ```
 
@@ -153,7 +155,7 @@ primary capability (e.g., `transit/keys/{name}` read for Vault Transit, not
 `sys/health`). `sys/health` and equivalent "is the process alive" endpoints
 do NOT cover mount/key/permission availability.
 
-Sample: `adapters/vault/transit_provider.go::Checkers()`.
+Sample: `adapters/vault/transit_provider.go::Probes()`.
 
 ---
 
@@ -199,6 +201,6 @@ The Vault transit adapter satisfies all 8 checklist items:
 | 3 | testcontainers | `readiness_test.go` TC-INT-6~9; `integration_test.go` TC-INT-1~5 |
 | 4 | slog + no payload dump | No `fmt.Println`; no body dumps in error messages |
 | 5 | Reference frameworks | `ref: external-secrets pkg/provider/vault`, `ref: hashicorp/vault api/`, `ref: testcontainers-go modules/vault` |
-| 6 | ManagedResource | `transit_provider.go::Checkers()` probes `transit/keys/{name}` (not `sys/health`); compile-time `var _ lifecycle.ManagedResource` assertion |
+| 6 | ManagedResource | `transit_provider.go::Probes()` probes `transit/keys/{name}` (not `sys/health`); compile-time `var _ lifecycle.ManagedResource` assertion |
 | 7 | lint 0 issues | `golangci-lint run ./adapters/vault/... ./pkg/aeadutil/... ./runtime/crypto/...` — 0 issues |
 | 8 | PR references | PR description lists adopt/deviation for tink-go, kmsv2, external-secrets, testcontainers-go |
