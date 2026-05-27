@@ -326,8 +326,24 @@ Round-2 review (gh issue #1187 review F1) 指出 PR 落地后仍存在一条 bar
    system 层消除。
 2. `adapters/adapterutil.HealthToCheckers(name, fn, timeout) map[string]func` →
    `HealthToProbe(name, fn, timeout) healthz.Probe`。
-3. `runtime/outbox` 新增 typed const `ProbePoll / ProbeReclaim / ProbeCleanup`
-   （values 不变：`outbox_relay_poll` 等，运维 dashboard / alert 零迁移）。
+3. `runtime/outbox` 新增 typed const `ProbePoll / ProbeReclaim / ProbeCleanup`。
+   **Wire-level breaking rename**：旧实现走 `bootstrap.WithHealthChecker(
+   "outbox-relay-poll", ...)`，wire key 含 hyphen；amendment 的 typed const
+   值必须通过 `probeNamePattern = ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`（hyphen
+   禁），故强制 rename：
+
+   | 旧 wire key（PR #1187 前） | 新 wire key（PR #1187 起） |
+   |---------------------------|---------------------------|
+   | `outbox-relay-poll`       | `outbox_relay_poll`       |
+   | `outbox-relay-reclaim`    | `outbox_relay_reclaim`    |
+   | `outbox-relay-cleanup`    | `outbox_relay_cleanup`    |
+
+   **Migration impact**：仓内零 dashboard / alert / ops 文档硬编码引用旧
+   key（`grep -r 'outbox-relay-' --include='*.yaml' --include='*.json'
+   --include='*.md' docs/` 验证空），但下游消费方（外部运维监控配置 / 报警
+   规则 / 启动校验脚本）若硬编码 hyphen 形态需同步更新。Release notes 必须
+   显式列出 3 条 readyz JSON `dependencies[].name` 字段值变更。本 amendment
+   原 wording "values 不变 / 零迁移"由 round-3 review F2 撤回；以本表为准。
 4. `runtime/bootstrap/managed_resource.go::expandManagedResources` 删
    `healthz.NewProbeName` 转换分支，直接迭代 `r.Probes()` 并 register。
 5. archtest `PROBENAME-SEALED-FUNNEL-01`：
@@ -349,13 +365,21 @@ Round-2 review (gh issue #1187 review F1) 指出 PR 落地后仍存在一条 bar
   本身上移到 ManagedResource interface）。
 - 新增 invariant "每个 ManagedResource 派生 probe 必须在 goldenProbeNames inventory"
   由 archtest A1 sub-rule + golden lock 双向锁；runtime/outbox 3 个 typed const 全部入表。
+- ⚠️ "/readyz wire shape 无破坏性变更" 收紧：verbose schema 字段集（含
+  `HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01` 锁的 `dependencies[].{name,status,durationMs}`
+  field set）**仍 hold**——本 amendment 不删字段不加字段；但 3 条 outbox
+  relay probe 的 `name` 字段值经历 hyphen→underscore string rename（见上 §3
+  表）。该 rename 是 typed funnel regex 收紧（拒 hyphen）的必要后果，无法保
+  留 hyphen 别名。
 
-AI-robust 评级（升级）：
+AI-robust 评级（升级 + round-3 review 修订）：
 
 | 轴 | 形态（amendment 后） | 评级 |
 |----|---------------------|------|
-| ManagedResource 上游 type system | `Probes() []healthz.Probe` 让 `map[string]func` 编译错 | **Hard 上游** |
-| 下游 const 声明 + golden inventory | `runtime/outbox` typed const + sanctionedPkgs + golden | **Hard 下游** |
+| ManagedResource 接口 | `Probes() []healthz.Probe` 让 `map[string]func` 编译错 | **Hard 上游** (type system) |
+| A1 const 声明（sanctioned pkg + value-shape + adapter-suffix + golden） | archtest 锁；Go 包级可见性无 const-seal 表达，永久 Go 天花板 | **Medium 上游** (Go ceiling, won't-do) |
+| A2 callsite typed args | `RegisterReadiness` / `NewProbe` / `HealthToProbe` / `bootstrap.WithHealthChecker` 首参皆 `ProbeName`，裸 string compile error；archtest 锁 4 个 callee form-uniqueness + 拒 `ProbeName(callExpr)` 动态 cast | **Hard 下游** (type system + archtest) |
+| A6 Probe interface 实现集 | sealed marker `isHealthzProbe()` unexported；包外实现 compile error；唯二实现 `kernel/healthz.funcProbe`（NewProbe 返回）+ `kernel/healthz.ctxSafeProbe`（WrapCtxSafe 返回） | **Hard 上游** (type system) |
 
 PR 调用接口形态变更：`bootstrap.WithManagedResource(r)` caller 一个 option 不变；只是
 resource 实现侧把 `Checkers() map` 改为 `Probes() []healthz.Probe`。生产 cellID 都不含
