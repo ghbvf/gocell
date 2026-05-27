@@ -60,9 +60,9 @@ func TestConfigCore_InitDemoMode_EmitsNonDurableDegradationWarn(t *testing.T) {
 	logger := slog.New(cap)
 
 	c := NewConfigCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithInMemoryDefaults(),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		WithLogger(logger),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)

@@ -1,0 +1,9 @@
+module fixturetest/clock_positional_injection/param_passes
+
+go 1.25.10
+
+// Pin to the worktree's kernel/clock so the fixture can resolve
+// kernel/clock.MustHaveClock and exercise the type-aware positional-injection gate.
+replace github.com/ghbvf/gocell => ../../../../..
+
+require github.com/ghbvf/gocell v0.0.0

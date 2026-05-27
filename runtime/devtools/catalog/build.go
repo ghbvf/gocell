@@ -2,7 +2,6 @@
 package catalog
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
@@ -11,11 +10,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// ExportOptions configures BuildDocument. Clock is required; all other fields
-// are optional. nil Clock returns an error.
+// ExportOptions configures BuildDocument. All fields are optional.
+// The required clock is passed as a positional parameter to BuildDocument.
 type ExportOptions struct {
-	// Clock is the time source used to stamp Document.GeneratedAt. Required.
-	Clock clock.Clock
 	// Root is the project root path echoed back in Document.Root. Optional.
 	Root string
 	// Filter projects entities and dependencies. Zero value = full snapshot.
@@ -86,15 +83,13 @@ func buildWireSummaryIndex(summaries []metadata.CellWireSummary) map[string]*met
 }
 
 // BuildDocument projects pm into a Document according to opts. Pure function:
-// no I/O, no global state access. Time is sourced from opts.Clock.
+// no I/O, no global state access. Time is sourced from clk.
 //
-// Returns an error only when opts is structurally invalid (e.g. opts.Clock is
-// nil). All filter combinations produce a valid (possibly empty) Document; an
-// empty result is not an error.
-func BuildDocument(pm *metadata.ProjectMeta, opts ExportOptions) (Document, error) {
-	if opts.Clock == nil {
-		return Document{}, fmt.Errorf("catalog.BuildDocument: opts.Clock must not be nil")
-	}
+// clk is required and positional; pass clockmock.New(...) in tests. All filter
+// combinations produce a valid (possibly empty) Document; an empty result is
+// not an error.
+func BuildDocument(clk clock.Clock, pm *metadata.ProjectMeta, opts ExportOptions) (Document, error) {
+	clock.MustHaveClock(clk, "catalog.BuildDocument")
 	if pm == nil {
 		pm = &metadata.ProjectMeta{}
 	}
@@ -119,7 +114,7 @@ func BuildDocument(pm *metadata.ProjectMeta, opts ExportOptions) (Document, erro
 	doc := Document{
 		SchemaVersion: SchemaVersionV1,
 		APIVersion:    APIVersionV1,
-		GeneratedAt:   opts.Clock.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:   clk.Now().UTC().Format(time.RFC3339),
 		Root:          opts.Root,
 		Query:         buildFilterEcho(opts.Filter),
 		Entities:      entities,

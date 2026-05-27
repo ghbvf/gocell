@@ -8,7 +8,7 @@
 //
 // Example wiring at composition root (managed mode — recommended):
 //
-//	hub := websocket.NewHub(websocket.DefaultHubConfig(clock.Real()), msgHandler)
+//	hub := websocket.NewHub(clock.Real(), websocket.DefaultHubConfig(), msgHandler)
 //	bootstrap.New(..., bootstrap.WithManagedResource(hub))
 //	// bootstrap auto-starts the hub via Hub.Worker() (kernel/worker.Worker)
 //	// and tears it down via Hub.Close() during phase10 LIFO shutdown.
@@ -17,7 +17,7 @@
 //
 // Manual mode (legacy / unit tests outside bootstrap):
 //
-//	hub := websocket.NewHub(websocket.DefaultHubConfig(clock.Real()), msgHandler)
+//	hub := websocket.NewHub(clock.Real(), websocket.DefaultHubConfig(), msgHandler)
 //	go func() { _ = hub.Start(ctx) }()
 //	defer hub.Stop(ctx)
 package websocket

@@ -21,8 +21,6 @@
 -- ref: adapters/postgres/migrations/014_add_outbox_lease_id.sql
 -- ref: temporalio/temporal common/persistence/sql/sqlplugin/postgresql
 
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE saga_instances (
     -- id: kernel idutil.SafeID (typed string). UUID-shaped in production
     -- callers, but the kernel API is string-typed and the conformance suite

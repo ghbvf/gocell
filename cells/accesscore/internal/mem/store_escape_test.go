@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // TestLeaseInvalidatedAfterTxReturn is the escape regression for the
@@ -71,7 +72,7 @@ func TestLeaseInvalidatedAfterTxReturn(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, e := repo.BumpAuthzEpoch(escaped, seed.ID)
+			_, e := repo.BumpAuthzEpoch(escaped, seed.ID, credentialfence.Mint())
 			errs <- e
 		}()
 	}

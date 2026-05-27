@@ -113,11 +113,10 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 		atCh.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     "f6-ack-order-queue",
 		DLXExchange:   "f6-ack-order.dlx",
 		PrefetchCount: numDeliveries,
-		Clock:         clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,10 +186,9 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 // newSubNoShutdown is a helper that creates a Subscriber without ShutdownTimeout
 // (removed in T8). Uses context for timeout instead.
 func newSubNoShutdown(conn *Connection, queueName, dlx string) *Subscriber {
-	return NewSubscriber(conn, SubscriberConfig{
+	return NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   queueName,
 		DLXExchange: dlx,
-		Clock:       clock.Real(),
 	})
 }
 

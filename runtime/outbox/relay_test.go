@@ -163,7 +163,6 @@ func fastCfg() outbox.RelayConfig {
 		RetentionPeriod:     testtime.D1h,
 		DeadRetentionPeriod: testtime.D24h,
 		CleanupWaitFloor:    testtime.FastPoll,
-		Clock:               clock.Real(),
 	}
 }
 
@@ -213,7 +212,7 @@ func waitPub(t *testing.T, pub *fakePublisher, want int) {
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
 // runtime/bootstrap/relay_adapter.go.
 func TestRelay_ProvidesLifecyclePrimitives(t *testing.T) {
-	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
 
 	// Checkers must return a non-nil map (empty is valid when budgets disabled,
 	// but budgetCfg enables all three).
@@ -232,7 +231,7 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	store.Seed(makeEntry("e1", "order.created"), makeEntry("e2", "order.updated"), makeEntry("e3", "order.deleted"))
 
 	pub := newFakePublisher()
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -265,7 +264,7 @@ func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
 	store.Seed(entry)
 
 	pub := newFakePublisher().WithFailN(1) // first publish fails
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -306,7 +305,7 @@ func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 
 	pub := newFakePublisher()
 	pub.WithError(errors.New("permanent broker failure"))
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -327,7 +326,7 @@ func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 func TestRelay_Shutdown_CleanStop(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 	pub := newFakePublisher()
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -360,7 +359,7 @@ func TestRelay_Shutdown_CleanStop(t *testing.T) {
 
 func TestRelay_StopBeforeStart_IsNoop(t *testing.T) {
 	store := outboxtest.NewFakeStore()
-	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), fastCfg())
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D100ms)
 	defer cancel()
@@ -374,7 +373,7 @@ func TestRelay_StopBeforeStart_IsNoop(t *testing.T) {
 // (bootstrap WorkerGroup.Stop + LIFO ManagedResource.Close) does not error.
 func TestRelay_Stop_Idempotent(t *testing.T) {
 	store := outboxtest.NewFakeStore()
-	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), fastCfg())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -409,7 +408,7 @@ func TestRelay_Stop_Idempotent(t *testing.T) {
 
 func TestRelay_DoubleStart_Error(t *testing.T) {
 	store := outboxtest.NewFakeStore()
-	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), fastCfg())
 
 	go func() { _ = relay.Start(t.Context()) }()
 	// Wait for relay to reach running state.
@@ -433,7 +432,7 @@ func TestRelay_DoubleStart_Error(t *testing.T) {
 
 func TestRelay_CanRestartAfterStop(t *testing.T) {
 	store := outboxtest.NewFakeStore()
-	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), fastCfg())
 
 	for i := range 2 {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -480,7 +479,7 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 
 	// Publisher that blocks indefinitely (simulates crash during publish).
 	blockPub := &blockingPublisher{}
-	relay := outbox.NewRelay(store, blockPub, cfg)
+	relay := outbox.NewRelay(clock.Real(), store, blockPub, cfg)
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -556,7 +555,7 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	cfg := fastCfg()
 	cfg.RetentionPeriod = relayMinRetention
 	cfg.DeadRetentionPeriod = relayMinRetention
-	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), cfg)
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -585,7 +584,7 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	store.Seed(entry)
 
 	pub := newFakePublisher()
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -616,7 +615,7 @@ func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {
 	mc := &testCollector{}
 	cfg := fastCfg()
 	cfg.Metrics = mc
-	relay := outbox.NewRelay(store, pub, cfg)
+	relay := outbox.NewRelay(clock.Real(), store, pub, cfg)
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -652,7 +651,7 @@ func TestRelay_NilMetrics_DoesNotPanic(t *testing.T) {
 	pub := newFakePublisher()
 	cfg := fastCfg()
 	cfg.Metrics = nil // explicit nil — must default to Noop
-	relay := outbox.NewRelay(store, pub, cfg)
+	relay := outbox.NewRelay(clock.Real(), store, pub, cfg)
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -672,7 +671,7 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 
 	pub := newFakePublisher()
 	pub.WithError(errors.New(`dial failed: {"password":"secret123","host":"db.internal"}`))
-	relay := outbox.NewRelay(store, pub, fastCfg())
+	relay := outbox.NewRelay(clock.Real(), store, pub, fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -823,7 +822,7 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 	cfg.MaxAttempts = 5
 	cfg.Metrics = mc
 
-	relay := outbox.NewRelay(store, pub, cfg)
+	relay := outbox.NewRelay(clock.Real(), store, pub, cfg)
 	startCtx, startCancel := context.WithTimeout(t.Context(), testtime.D2s)
 	defer startCancel()
 	require.NoError(t, relay.Start(startCtx))
@@ -877,7 +876,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 	store := newFailingStore()
 	store.setClaimErr(errors.New("db down"))
 
-	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), budgetCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -897,7 +896,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	store := newFailingStore()
 	store.setClaimErr(errors.New("db down"))
 
-	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), budgetCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -925,7 +924,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 	store := newFailingStore()
 	store.setReclaimErr(errors.New("reclaim db down"))
 
-	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), budgetCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -952,7 +951,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 	store := newFailingStore()
 	store.setCleanupPubErr(errors.New("cleanup db down"))
 
-	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), budgetCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -975,7 +974,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 }
 
 func TestRelay_HealthCheckers_RegistersThree(t *testing.T) {
-	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
+	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
 	checkers := relay.Checkers()
 
 	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered")
@@ -990,7 +989,7 @@ func TestRelay_FailureBudgetThresholdZero_DisablesChecker(t *testing.T) {
 	cfg.ReclaimFailureBudget = 3 // enabled
 	cfg.CleanupFailureBudget = 3 // enabled
 
-	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), cfg)
+	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), cfg)
 	checkers := relay.Checkers()
 
 	assert.NotContains(t, checkers, "outbox-relay-poll",
@@ -1006,7 +1005,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 
 	cfg := budgetCfg()
 	cfg.PollFailureBudget = 3
-	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), cfg)
 
 	// --- First run: trip the poll budget ---
 	stop := startRelay(t, relay)
@@ -1053,7 +1052,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 }
 
 func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
-	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), fastCfg())
+	relay := outbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), newFakePublisher(), fastCfg())
 
 	stop := startRelay(t, relay)
 	defer stop()
@@ -1133,7 +1132,7 @@ func TestRelay_pendingDepthObserved_OnReclaimTick(t *testing.T) {
 
 	spy := newSpyDepthObserver()
 	cfg := fastCfg()
-	relay := outbox.NewRelay(store, newFakePublisher(), cfg).
+	relay := outbox.NewRelay(clock.Real(), store, newFakePublisher(), cfg).
 		WithPendingDepthObserver(spy)
 
 	stop := startRelay(t, relay)
@@ -1170,7 +1169,7 @@ func TestRelay_pendingDepthSkipped_OnError(t *testing.T) {
 
 	spy := newSpyDepthObserver()
 	cfg := fastCfg()
-	relay := outbox.NewRelay(errStore, newFakePublisher(), cfg).
+	relay := outbox.NewRelay(clock.Real(), errStore, newFakePublisher(), cfg).
 		WithPendingDepthObserver(spy)
 
 	stop := startRelay(t, relay)
@@ -1205,7 +1204,7 @@ func TestRelay_NoObserver_NoCall(t *testing.T) {
 	cs := &countingCountStore{FakeStore: outboxtest.NewFakeStore()}
 
 	cfg := fastCfg()
-	relay := outbox.NewRelay(cs, newFakePublisher(), cfg)
+	relay := outbox.NewRelay(clock.Real(), cs, newFakePublisher(), cfg)
 	// No WithPendingDepthObserver — relay must not call CountPending.
 
 	stop := startRelay(t, relay)

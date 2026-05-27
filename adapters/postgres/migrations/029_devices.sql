@@ -13,8 +13,6 @@
 -- ref: adapters/postgres/migrations/017_users.sql (B2.A schema range pattern)
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS devices (
     id         TEXT        PRIMARY KEY,
     name       TEXT        NOT NULL,

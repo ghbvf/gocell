@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // MemStore is an in-memory Store implementation for dev and tests. It is
@@ -142,7 +143,8 @@ func (m *MemStore) Revoke(_ context.Context, id string) error {
 // (D3 fail-closed by default — every event triggers identical revoke
 // scoping); future protocols may scope per-event when sealed alternatives
 // are added. Missing subjects yield no error (always succeeds).
-func (m *MemStore) RevokeForSubject(_ context.Context, subjectID string, event CredentialEvent) error {
+func (m *MemStore) RevokeForSubject(_ context.Context, subjectID string, event CredentialEvent, tok credentialfence.FenceToken) error {
+	credentialfence.MustHave(tok, "session.Store.RevokeForSubject")
 	if subjectID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject requires non-empty subjectID")

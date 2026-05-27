@@ -109,13 +109,10 @@ type dispatcherConfig struct {
 	// Dropped reuses an already-registered drop counter when the owning
 	// assembly rebuilds the dispatcher for a new Start cycle.
 	Dropped metrics.CounterVec
-	// Clock is the time source for flush deadline timers. Required; use
-	// clock.Real() in production and clockmock.New() in tests.
-	Clock clock.Clock
 }
 
 // newHookDispatcher constructs + eagerly starts a dispatcher.
-func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
+func newHookDispatcher(clk clock.Clock, cfg dispatcherConfig) *hookDispatcher {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = DefaultHookObserverQueueSize
 	}
@@ -125,7 +122,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 	if cfg.Provider == nil {
 		cfg.Provider = metrics.NopProvider{}
 	}
-	clock.MustHaveClock(cfg.Clock, "assembly.newHookDispatcher")
+	clock.MustHaveClock(clk, "assembly.newHookDispatcher")
 
 	dropped := cfg.Dropped
 	if dropped == nil {
@@ -151,7 +148,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 		observer:    cfg.Observer,
 		sinkTimeout: cfg.SinkTimeout,
 		dropped:     dropped,
-		clock:       cfg.Clock,
+		clock:       clk,
 		sinkIdle:    closedChannel(),
 		done:        make(chan struct{}),
 	}

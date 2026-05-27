@@ -83,7 +83,6 @@ func newTestServiceWithComparer(t *testing.T, cmp *countingComparer) (*Service, 
 	svc := mustNewService(
 		userRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
-		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour),
 		withPasswordComparer(cmp.compare),
@@ -275,7 +274,6 @@ func TestLogin_InactiveInTx_NoPublic403(t *testing.T) {
 	svc := mustNewService(
 		racingRepo, sessionStore, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(),
-		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour),
 	)

@@ -4,11 +4,16 @@
 // writing the resulting journal event(s) and outbox commands inside one
 // short database transaction.
 //
-// # Single-process unsafe mode
+// # Leader election (single-process unsafe by default)
 //
-// PR-03 ships a single-process Coordinator with NO leader-elect; it is NOT
-// suitable for production. PR-05 will add distlock-based leader-elect.
-// The Coordinator emits slog.Warn(mode="unsafe_no_leader") at Start.
+// Without WithLeaderElect the Coordinator runs single-process with NO
+// distributed leader election; it is NOT safe for multi-process deployment and
+// emits slog.Warn(mode="unsafe_no_leader") at Start. Pass
+// WithLeaderElect(distlock.Locker) (PR-05) to gate every drive behind a
+// per-instance distributed lock keyed "saga:{definitionID}:{instanceID}":
+// contending coordinators skip instances they cannot lock, a crashed leader's
+// lock and journal lease both expire via TTL, and Start emits
+// slog.Info(mode="leader_elect"). See leader_elect.go.
 //
 // # Layering
 //
@@ -30,13 +35,13 @@
 // # PR-03 deferred scope
 //
 //   - Retry policy (per-step backoff): deferred to PR-06.
-//   - Leader-elect (distlock): deferred to PR-05.
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.
-//   - Metrics emission (tick / heartbeat / drive counters) deferred to a
-//     future PR. PR-03's slog Warn logs provide minimal observability until
-//     then.
+//   - Metrics emission (tick / heartbeat / drive counters, plus the PR-05
+//     leader-elect skip / lock-acquire-failure counters) deferred to a future
+//     PR (tracked in #1109). Until then slog provides minimal observability:
+//     leader-elect skips and ctx-cancel are Debug, backend I/O errors Warn.
 //
 // # Coordinator lifecycle
 //

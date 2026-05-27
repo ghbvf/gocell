@@ -45,8 +45,6 @@ type Deps struct {
 	Issuer TokenIssuer
 	// RoleRepo resolves the user's current role names. Required.
 	RoleRepo ports.RoleRepository
-	// Clk supplies the current time. Required; MustHaveClock panics if nil.
-	Clk clock.Clock
 }
 
 // Request is the per-call input for a MintAccess.
@@ -85,7 +83,8 @@ type Result struct {
 // that persist the value (e.g. session row fingerprint when FingerprintJTIRef
 // is in use). The authz_epoch claim has been removed from the JWT in S4d —
 // epoch provenance is now stored exclusively in the session/refresh rows.
-func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
+func MintAccess(ctx context.Context, clk clock.Clock, deps Deps, req Request) (Result, error) {
+	clock.MustHaveClock(clk, "sessionmint.MintAccess")
 	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
 	if err != nil {
 		return Result{}, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthRoleFetchFailed,
@@ -93,8 +92,6 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 			errcode.WithCategory(errcode.CategoryInfra))
 	}
 
-	clk := deps.Clk
-	clock.MustHaveClock(clk, "sessionmint.MintAccess")
 	expiresAt := clk.Now().Add(auth.DefaultAccessTokenTTL)
 
 	jti := uuid.NewString()

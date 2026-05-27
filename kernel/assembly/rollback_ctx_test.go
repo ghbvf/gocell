@@ -175,11 +175,10 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			a := newTestAssembly(t, Config{
+			a := newTestAssembly(t, clock.Real(), Config{
 				ID:             "rollback-ctx-" + tc.name,
 				DurabilityMode: outbox.DurabilityDemo,
 				HookTimeout:    tc.hookTimeout,
-				Clock:          clock.Real(),
 			})
 
 			good := newCtxRecordingCell("A", false)
@@ -220,10 +219,9 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 	t.Parallel()
 
-	a := newTestAssembly(t, Config{
+	a := newTestAssembly(t, clock.Real(), Config{
 		ID:             "rollback-afterstart-fail",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 
 	prior := newCtxRecordingCell("A", false)
@@ -268,10 +266,9 @@ func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 func TestRollbackCells_I0BeforeStartFails(t *testing.T) {
 	t.Parallel()
 
-	a := newTestAssembly(t, Config{
+	a := newTestAssembly(t, clock.Real(), Config{
 		ID:             "rollback-i0-beforestart",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 
 	failing := newBeforeStartFailingCell("A")

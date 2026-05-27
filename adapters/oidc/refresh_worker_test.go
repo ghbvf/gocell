@@ -42,10 +42,9 @@ func newTestAdapter(t *testing.T, srvURL string, clk *clockmock.FakeClock, col *
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
-	a, err := New(ctx, Config{
+	a, err := New(ctx, clk, Config{
 		IssuerURL:        srvURL,
 		ClientID:         "test-client",
-		Clock:            clk,
 		RefreshCollector: col,
 	})
 	require.NoError(t, err)
@@ -301,10 +300,9 @@ func TestRefreshWorker_RefreshInterval_DefaultAndExplicit(t *testing.T) {
 	t.Run("default interval", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
-		a, err := New(ctx, Config{
+		a, err := New(ctx, clk, Config{
 			IssuerURL: srv.URL,
 			ClientID:  "test-client",
-			Clock:     clk,
 		})
 		require.NoError(t, err)
 		assert.Equal(t, defaultOIDCRefreshInterval, a.refreshInterval())
@@ -314,10 +312,9 @@ func TestRefreshWorker_RefreshInterval_DefaultAndExplicit(t *testing.T) {
 		explicit := testExplicitRefreshInterval
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
-		a, err := New(ctx, Config{
+		a, err := New(ctx, clk, Config{
 			IssuerURL:       srv.URL,
 			ClientID:        "test-client",
-			Clock:           clk,
 			RefreshInterval: explicit,
 		})
 		require.NoError(t, err)

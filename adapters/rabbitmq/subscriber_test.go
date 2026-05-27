@@ -51,10 +51,9 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handlerCalled := false
@@ -111,10 +110,9 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handlerCalled := false
@@ -175,10 +173,9 @@ func TestProcessDelivery_UnsafeCharsInEntryID_RejectsToDLX(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handlerCalled := false
@@ -241,10 +238,9 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
@@ -304,10 +300,9 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → success
@@ -408,11 +403,10 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- NewSubscriber(conn, SubscriberConfig{
+		subDone <- NewSubscriber(clock.Real(), conn, SubscriberConfig{
 			QueueName:     "test-queue",
 			DLXExchange:   "test.dlx",
 			PrefetchCount: numDeliveries,
-			Clock:         clock.Real(),
 		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic", CellID: "test-cell"}, entryToSubHandler(handler))
 	}()
 
@@ -472,11 +466,10 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     "test-queue",
 		DLXExchange:   "test.dlx",
 		PrefetchCount: numDeliveries,
-		Clock:         clock.Real(),
 	})
 
 	subDone := make(chan error, 1)
@@ -535,10 +528,9 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 		return outbox.Ack()
 	}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -631,10 +623,9 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	// Use a ctx that will be canceled shortly — much less than the 30 s ceiling.
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "f3-cancel-queue",
 		DLXExchange: "f3-cancel.dlx",
-		Clock:       clock.Real(),
 	})
 
 	subDone := make(chan error, 1)
@@ -718,10 +709,9 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "f3-nodeadline-queue",
 		DLXExchange: "f3-nodeadline.dlx",
-		Clock:       clock.Real(),
 	})
 
 	subDone := make(chan error, 1)
@@ -761,10 +751,9 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Exactly maxEntryIDLength bytes.
@@ -826,10 +815,9 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	commitErr := errors.New("lease expired")
@@ -895,10 +883,9 @@ func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{
@@ -969,10 +956,9 @@ func TestDispatchAck_AckFail(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{} // commitErr nil → Commit succeeds
@@ -1030,10 +1016,9 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handlerCalled := false
@@ -1094,10 +1079,9 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Handler returns DispositionReject. nackErr makes Nack(requeue=false) fail.
@@ -1152,10 +1136,9 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// HandleResult{} zero value: Disposition=0 hits the default: case.
@@ -1209,10 +1192,9 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{releaseErr: errors.New("release store unavailable")}
@@ -1297,10 +1279,9 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 
 	spy := &spySettlementObserver{}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -1358,10 +1339,9 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 
 	spy := &spySettlementObserver{}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -1421,10 +1401,9 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 
 	spy := &spySettlementObserver{}
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {

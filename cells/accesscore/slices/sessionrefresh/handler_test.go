@@ -52,9 +52,17 @@ func setup(t testing.TB) (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc, err := NewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
-		withTestInvalidator(userRepo, sessionStore, refreshStore))
+	svc, err := NewService(
+		clock.Real(),
+		sessionStore,
+		mem.NewStore(clock.Real()).RoleRepository(),
+		userRepo,
+		refreshStore,
+		testIssuer,
+		slog.Default(),
+		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		withTestInvalidator(userRepo, sessionStore, refreshStore),
+	)
 	require.NoError(t, err)
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
@@ -208,7 +216,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
 	svc := mustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, store, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, newTestRefreshStore()))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
@@ -290,7 +298,7 @@ func TestHandleRefresh_UserNotActive_Returns401(t *testing.T) {
 	require.NoError(t, issueErr)
 
 	svc := mustNewService(sessionStore, mem.NewStore(clock.Real()).RoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
+		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, refreshStore))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {

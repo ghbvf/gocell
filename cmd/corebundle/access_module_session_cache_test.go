@@ -13,6 +13,7 @@ import (
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 	"github.com/ghbvf/gocell/runtime/capability"
 )
@@ -26,7 +27,7 @@ func (stubSessionStore) Get(context.Context, string) (*session.ValidateView, err
 	return nil, errors.New("stub: never called")
 }
 func (stubSessionStore) Revoke(context.Context, string) error { return nil }
-func (stubSessionStore) RevokeForSubject(context.Context, string, session.CredentialEvent) error {
+func (stubSessionStore) RevokeForSubject(_ context.Context, _ string, _ session.CredentialEvent, _ credentialfence.FenceToken) error {
 	return nil
 }
 func (stubSessionStore) RepoReady(context.Context) error { return nil }

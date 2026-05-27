@@ -106,7 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	opts := buildExportOptions(h, filter)
 
 	// Build document (includes wireSummary injection via opts.WireSummaries).
-	doc, err := catalog.BuildDocument(h.project, opts)
+	doc, err := catalog.BuildDocument(h.clock, h.project, opts)
 	if err != nil {
 		slog.Error("devtools: BuildDocument failed",
 			slog.Any("error", err),
@@ -146,7 +146,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // load. Use sparingly; not appropriate for high-frequency polling.
 func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions {
 	opts := catalog.ExportOptions{
-		Clock:         h.clock,
 		Root:          ".",
 		Filter:        filter,
 		WireSummaries: h.wireSummaries,

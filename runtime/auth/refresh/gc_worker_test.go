@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 type staticClock struct {
@@ -71,7 +72,7 @@ func (s *gcStoreSpy) RevokeSessionDetached(context.Context, string) error {
 	return errors.New("not implemented")
 }
 
-func (s *gcStoreSpy) RevokeUser(context.Context, string) error {
+func (s *gcStoreSpy) RevokeUser(context.Context, string, credentialfence.FenceToken) error {
 	return errors.New("not implemented")
 }
 
@@ -121,9 +122,9 @@ func discardLogger() *slog.Logger {
 func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 	now := time.Date(2026, 4, 25, 8, 0, 0, 0, time.UTC)
 	store := newGCStoreSpy(0, nil)
+	clk := staticClock{now: now}
 	valid := GCWorkerConfig{
 		Store:     store,
-		Clock:     staticClock{now: now},
 		Interval:  time.Second,
 		Retention: time.Minute,
 	}
@@ -132,13 +133,13 @@ func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 		name string
 		cfg  GCWorkerConfig
 	}{
-		{name: "missing store", cfg: GCWorkerConfig{Clock: valid.Clock, Interval: valid.Interval, Retention: valid.Retention}},
-		{name: "non-positive interval", cfg: GCWorkerConfig{Store: store, Clock: valid.Clock, Interval: 0, Retention: valid.Retention}},
-		{name: "non-positive retention", cfg: GCWorkerConfig{Store: store, Clock: valid.Clock, Interval: valid.Interval, Retention: 0}},
+		{name: "missing store", cfg: GCWorkerConfig{Interval: valid.Interval, Retention: valid.Retention}},
+		{name: "non-positive interval", cfg: GCWorkerConfig{Store: store, Interval: 0, Retention: valid.Retention}},
+		{name: "non-positive retention", cfg: GCWorkerConfig{Store: store, Interval: valid.Interval, Retention: 0}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			worker, err := NewGCWorker(tc.cfg)
+			worker, err := NewGCWorker(clk, tc.cfg)
 			require.Error(t, err)
 			assert.Nil(t, worker)
 		})
@@ -146,11 +147,11 @@ func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 	// nil clock panics at construction (fail-fast via MustHaveClock).
 	t.Run("missing clock panics", func(t *testing.T) {
 		assert.Panics(t, func() {
-			_, _ = NewGCWorker(GCWorkerConfig{Store: store, Interval: valid.Interval, Retention: valid.Retention})
+			_, _ = NewGCWorker(nil, GCWorkerConfig{Store: store, Interval: valid.Interval, Retention: valid.Retention})
 		}, "nil clock must panic at construction via MustHaveClock")
 	})
 
-	worker, err := NewGCWorker(valid)
+	worker, err := NewGCWorker(clk, valid)
 	require.NoError(t, err)
 	require.NotNil(t, worker)
 	assert.Same(t, store, worker.store)
@@ -163,9 +164,8 @@ func TestGCWorker_StartStopRunsImmediateGC(t *testing.T) {
 	retention := testtime.D30min
 	store := newGCStoreSpy(3, nil)
 	collector := &gcCollectorSpy{}
-	worker, err := NewGCWorker(GCWorkerConfig{
+	worker, err := NewGCWorker(staticClock{now: now}, GCWorkerConfig{
 		Store:     store,
-		Clock:     staticClock{now: now},
 		Interval:  time.Hour,
 		Retention: retention,
 		Logger:    discardLogger(),
@@ -196,9 +196,8 @@ func TestGCWorker_RunOnceRecordsFailure(t *testing.T) {
 	now := time.Date(2026, 4, 25, 9, 0, 0, 0, time.UTC)
 	store := newGCStoreSpy(0, errors.New("storage unavailable"))
 	collector := &gcCollectorSpy{}
-	worker, err := NewGCWorker(GCWorkerConfig{
+	worker, err := NewGCWorker(staticClock{now: now}, GCWorkerConfig{
 		Store:     store,
-		Clock:     staticClock{now: now},
 		Interval:  time.Hour,
 		Retention: time.Minute,
 		Logger:    discardLogger(),

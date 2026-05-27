@@ -54,10 +54,10 @@ func TestNewConnection_ConnectTimeout_Blackhole(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := NewConnection(Config{
+	_, err := NewConnection(clock.Real(), Config{
 		URL:            testAMQPBlackholeURL,
 		ConnectTimeout: testtime.D200ms,
-	}, WithConnectionClock(clock.Real()))
+	})
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "NewConnection must fail; blackhole IP cannot be reached")

@@ -70,9 +70,9 @@ func BuildWriteService(t *testing.T, opts ...BuildWriteOption) (*configwrite.Ser
 
 	rec := outboxtest.NewRecorder()
 	svc, err := configwrite.NewService(
+		cfg.clk,
 		repo,
 		cfg.logger,
-		cfg.clk,
 		configwrite.WithTxManager(outbox.DemoCellTxManager()),
 		configwrite.WithEmitter(rec.CellEmitter()),
 	)
@@ -132,8 +132,8 @@ func BuildSubscribeService(t *testing.T, opts ...BuildSubscribeOption) *configsu
 	}
 
 	svc, err := configsubscribe.NewService(
+		cfg.clk,
 		cfg.logger,
-		configsubscribe.WithClock(cfg.clk),
 	)
 	if err != nil {
 		t.Fatalf("BuildSubscribeService: %v", err)

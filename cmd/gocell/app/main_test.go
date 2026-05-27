@@ -32,16 +32,34 @@ var (
 	stderrCaptureMu sync.Mutex
 )
 
+// TestPrintUsage pins the top-level usage surface. After
+// CLI-TOPLEVEL-HELP-REGISTRY-01 it is derived from the `commands` registry
+// via renderTopHelp: it lists exactly the seven top-level commands (name +
+// description) and the -h footer, and deliberately NO LONGER hand-lists each
+// verb's sub-types — that detail moved to `gocell <command> -h`. The
+// notWant assertions pin that the formerly drift-prone nested prose
+// (generate listed 3 of 7 sub-types, verify 1 of 8) is gone.
 func TestPrintUsage(t *testing.T) {
 	out := captureStdout(t, PrintUsage)
 	for _, want := range []string{
-		"generate    Generate assembly code and derived files",
+		"Usage: gocell <command> [args]",
+		"Commands:",
+		"validate", "scaffold", "generate", "check", "verify", "graph", "export",
+		"Generate assembly code and derived files",
+		"Run 'gocell <command> -h' for full flag help on a sub-command.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("PrintUsage() missing %q in:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{
 		"assembly --id=<assemblyID>",
 		"metrics-schema --id=<assemblyID>",
 		"generated [--module=<module>]",
 	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("PrintUsage() missing %q in:\n%s", want, out)
+		if strings.Contains(out, notWant) {
+			t.Fatalf("PrintUsage() must not hand-list verb sub-types (%q); "+
+				"sub-type detail belongs to `gocell <command> -h`:\n%s", notWant, out)
 		}
 	}
 }
@@ -106,19 +124,40 @@ func TestReadModuleNotFound(t *testing.T) {
 // TestDispatch_SuccessPath_ExitZero) exercise the wiring end-to-end.
 
 func TestCommands(t *testing.T) {
-	// Verify all expected commands are registered.
-	expected := []string{"validate", "scaffold", "generate", "check", "verify"}
-	for _, name := range expected {
-		if _, ok := commands[name]; !ok {
-			t.Errorf("command %q not registered in commands map", name)
+	// Pin the full top-level command set, not a subset: length catches a
+	// stray addition, the findSub loop catches a removal or rename (a renamed
+	// command leaves its old name unfound). This keeps the anti-drift
+	// guarantee airtight rather than blind to graph/export.
+	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export"}
+	if len(commands) != len(want) {
+		t.Fatalf("commands registry has %d entries, want %d (%v)", len(commands), len(want), subNames(commands))
+	}
+	for _, name := range want {
+		if _, ok := findSub(commands, name); !ok {
+			t.Errorf("command %q not registered in commands registry; have %v", name, subNames(commands))
 		}
 	}
 }
 
+// withInjectedCommand appends a temporary command to the package-level
+// commands registry and restores the original slice on cleanup. Used by the
+// errcode-redaction Dispatch tests to drive an arbitrary handler error
+// through the real dispatch path. Not parallel-safe (mutates a package var),
+// consistent with these tests' non-Parallel design.
+//
+// Restore is clean: the commands literal has cap == len, so append always
+// allocates a fresh backing array rather than writing into a shared slot;
+// reassigning commands = orig fully reverts both header and reachable data.
+func withInjectedCommand(t *testing.T, name string, run func(context.Context, []string) error) {
+	t.Helper()
+	orig := commands
+	commands = append(commands, subcommand[func(ctx context.Context, args []string) error]{name: name, run: run})
+	t.Cleanup(func() { commands = orig })
+}
+
 func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 	const cmdName = "test-errcode-public"
-	orig, hadOrig := commands[cmdName]
-	commands[cmdName] = func(context.Context, []string) error {
+	withInjectedCommand(t, cmdName, func(context.Context, []string) error {
 		return errcode.New(
 			errcode.KindInvalid,
 			errcode.ErrValidationFailed,
@@ -126,13 +165,6 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 			errcode.WithInternal("token=hunter2 raw=/private/generated.yaml"),
 			errcode.WithDetails(slog.String("field", "cell.id")),
 		)
-	}
-	t.Cleanup(func() {
-		if hadOrig {
-			commands[cmdName] = orig
-			return
-		}
-		delete(commands, cmdName)
 	})
 
 	out := captureStderr(t, func() {
@@ -154,21 +186,17 @@ func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
 
 func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
 	const cmdName = "test-errcode-operator"
-	orig, hadOrig := commands[cmdName]
-	commands[cmdName] = func(context.Context, []string) error {
+	withInjectedCommand(t, cmdName, func(context.Context, []string) error {
+		// The DSN in the message is intentional worst-case data: a KindInternal
+		// error whose message was carelessly built with a secret. project()'s
+		// operator surface replaces a 5xx message with "internal server error",
+		// so the leak assertion below proves postgres:// never reaches stderr.
 		return errcode.New(
 			errcode.KindInternal,
 			errcode.ErrAuthRoleFetchFailed,
 			"role repository failed: postgres://user:secret@example/db",
 			errcode.WithInternal("token=hunter2"),
 		)
-	}
-	t.Cleanup(func() {
-		if hadOrig {
-			commands[cmdName] = orig
-			return
-		}
-		delete(commands, cmdName)
 	})
 
 	out := captureStderr(t, func() {
@@ -202,6 +230,9 @@ func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 		{"verify", runVerify, []string{"Usage: gocell verify", "generated", "stale, staged-only"}},
 		{"scaffold", runScaffold, []string{"Usage: gocell scaffold", "cell", "--dry-run"}},
 		{"check", runCheck, []string{"Usage: gocell check", "contract-health", "unconditional-skip"}},
+		// export now uses the same registry-derived help contract as the
+		// other help-bearing verb trees.
+		{"export", runExport, []string{"Usage: gocell export", "catalog", "metadata"}},
 	}
 
 	for _, tc := range cases {
@@ -234,7 +265,7 @@ func assertHelpOutput(t *testing.T, name string, run func(context.Context, []str
 // from operator-visible output.
 func TestPrintHelpRendersEntryWithoutDescription(t *testing.T) {
 	out := captureStdout(t, func() {
-		printHelp("demo", []helpEntry{
+		printHelp("Usage: gocell demo <type> [flags]", "Types:", []helpEntry{
 			{name: "with-desc", desc: []string{"has a description"}},
 			{name: "no-desc"},
 		})

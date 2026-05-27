@@ -104,7 +104,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	opts = append(opts, cellOpts...)
 
 	handedToBootstrap = true
-	return bootstrap.New(opts...).Run(ctx) //archtest:allow:clock-injection:via-slice opts from defaultRuntimeOptions includes WithClock
+	return bootstrap.New(shared.Clock, opts...).Run(ctx)
 }
 
 func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error) {

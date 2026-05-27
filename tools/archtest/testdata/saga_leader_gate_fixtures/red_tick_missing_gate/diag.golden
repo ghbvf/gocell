@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_leader_gate_fixtures/red_tick_missing_gate/violator.go:12: SAGA-DRIVE-BEHIND-LEADER-GATE-01-A2: tickOnce body does not call acquireLead — the sole driveOne caller must pass the leader-elect gate

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/state/cas"
 )
 
@@ -484,7 +485,8 @@ func (r *PGUserRepo) Delete(ctx context.Context, id string) error {
 // fail-fast enforced: calling without an ambient transaction returns an error
 // (errcode.ErrInternal); without a transaction the row update is auto-committed
 // before the caller's surrounding atomic sequence completes.
-func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string) (int64, error) {
+func (r *PGUserRepo) BumpAuthzEpoch(ctx context.Context, userID string, tok credentialfence.FenceToken) (int64, error) {
+	credentialfence.MustHave(tok, "ports.UserRepository.BumpAuthzEpoch")
 	if err := assertAmbientTx(ctx); err != nil {
 		return 0, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
@@ -298,7 +299,10 @@ func (s *PGSessionStore) Close(_ context.Context) error { return nil }
 // Pre-revoked sessions preserve their original RevokedAt timestamp (append-only
 // revoke semantics — ADR-Session D3). The event argument is informational under
 // the current protocol; the UPDATE covers all active sessions regardless of event.
-func (s *PGSessionStore) RevokeForSubject(ctx context.Context, subjectID string, event session.CredentialEvent) error {
+func (s *PGSessionStore) RevokeForSubject(
+	ctx context.Context, subjectID string, event session.CredentialEvent, tok credentialfence.FenceToken,
+) error {
+	credentialfence.MustHave(tok, "session.Store.RevokeForSubject")
 	if subjectID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"session: RevokeForSubject requires non-empty subjectID")

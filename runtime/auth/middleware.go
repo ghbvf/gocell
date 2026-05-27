@@ -33,12 +33,13 @@ import (
 //
 // ref: go-kratos/kratos — public bypass via selector at composition layer
 // ref: go-zero — JWT opt-in per route group, no hidden runtime defaults
-func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.Handler) http.Handler {
+func AuthMiddleware(clk clock.Clock, verifier IntentTokenVerifier, opts ...AuthOption) func(http.Handler) http.Handler {
 	cfg := defaultAuthConfig()
+	cfg.clock = clk
 	for _, o := range opts {
 		o(&cfg)
 	}
-	clock.MustHaveClock(cfg.clock, "auth.AuthMiddleware")
+	clock.MustHaveClock(clk, "auth.AuthMiddleware")
 
 	isPublic := cfg.publicMatcher
 	if isPublic == nil {

@@ -87,7 +87,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	const (
 		topic     = "test.release-before-redelivery.events"
 		queueName = "test.release-before-redelivery.queue"
@@ -118,11 +118,10 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 1,
 		DLXExchange:   "test.release-before-redelivery.dlx",
-		Clock:         clock.Real(),
 	})
 
 	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.D15s)

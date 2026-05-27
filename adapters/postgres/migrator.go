@@ -58,6 +58,13 @@ type MigrationStatus struct {
 
 const allowDestructiveDownGUC = "gocell.allow_destructive_down"
 
+// migrationLockTimeout bounds how long any migration statement waits to acquire
+// a lock before failing. It is injected at session scope by
+// lockTimeoutSessionLocker (see newGooseProvider) so every migration — Up or
+// Down, transactional or `-- +goose no transaction` — runs with this bound by
+// construction; migration .sql files do not (and must not) set it themselves.
+const migrationLockTimeout = "5s"
+
 // DestructiveDownPermit is an explicit break-glass token required for any schema
 // rollback. The unexported marker makes the permit sealed: callers outside this
 // package cannot fabricate one and must go through AllowDestructiveDown.
@@ -151,6 +158,11 @@ func newGooseProvider(db *sql.DB, migrations fs.FS, tableName string, locker loc
 			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
 		}
 	}
+
+	// Always wrap with lock_timeout injection so every applied migration (Up or
+	// Down) runs with a bounded lock-wait by construction — see
+	// lockTimeoutSessionLocker. For Down this nests over destructiveDownSessionLocker.
+	locker = &lockTimeoutSessionLocker{inner: locker}
 
 	provider, err := goose.NewProvider(
 		goose.DialectPostgres,
@@ -272,6 +284,67 @@ func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *
 	// Reset with session-scope (false) to match the SessionLock set_config call.
 	_, resetErr := conn.ExecContext(resetCtx,
 		`SELECT set_config($1, '', false)`, allowDestructiveDownGUC)
+	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
+	return errors.Join(resetErr, unlockErr)
+}
+
+// lockTimeoutSessionLocker wraps an inner SessionLocker and sets lock_timeout
+// at session scope for the duration of the migration session, then resets it on
+// unlock. newGooseProvider wraps every provider with this locker, so lock_timeout
+// is applied to every migration — Up or Down, transactional or
+// `-- +goose no transaction` — by construction.
+//
+// AI-robust rating: Medium (not Hard). The funnel rests on three facts:
+//   - newGooseProvider always wraps the resolved locker with this type (one
+//     code line below) — code-fact, not separately archtested;
+//   - newGooseProvider is the sole construction site for a provider that APPLIES
+//     migrations (Migrator.Up / Migrator.Down) — GOOSE-SESSION-LOCKER-01 pins
+//     every *mutating* goose.NewProvider callsite under adapters/postgres/ to
+//     carry WithSessionLocker and carves out schema_guard.VerifyExpectedVersion's
+//     read-only (GetDBVersion, no DDL) provider;
+//   - TestMigrator_LockTimeoutSessionLocker_SetsAndResets verifies the locker's
+//     set/reset behavior.
+//
+// True Hard (type-seal the provider so it cannot be constructed without
+// lock_timeout) is INFEASIBLE: goose.NewProvider is a third-party constructor
+// that cannot be sealed, so a future sibling caller inside package postgres
+// could in principle build a mutating provider without this wrapper — caught by
+// GOOSE-SESSION-LOCKER-01 (Medium, caller-scope) + review, not by the type
+// system. This is a permanent Medium ceiling, tracked for Hard-ification in
+// gh issue #1131 (alongside the SPAN #851 / HEALTHZ #893 holder-seal precedents).
+// The only operational bypass is running goose CLI / psql directly — the same
+// threat model as destructiveDownSessionLocker's GUC guard.
+//
+// Session scope (set_config third arg = false) — NOT SET LOCAL — is required so
+// the timeout survives across the implicit-transaction boundaries of
+// `-- +goose no transaction` migrations, mirroring destructiveDownSessionLocker.
+// SessionUnlock resets via RESET so the connection is clean when returned to the
+// shared pgxpool (the migrator's *sql.DB wraps the same pool the app uses).
+type lockTimeoutSessionLocker struct {
+	inner lock.SessionLocker
+}
+
+func (l *lockTimeoutSessionLocker) SessionLock(ctx context.Context, conn *sql.Conn) (retErr error) {
+	if err := l.inner.SessionLock(ctx, conn); err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, l.inner.SessionUnlock(context.WithoutCancel(ctx), conn))
+		}
+	}()
+	if _, err := conn.ExecContext(ctx,
+		`SELECT set_config('lock_timeout', $1, false)`, migrationLockTimeout); err != nil {
+		return fmt.Errorf("postgres: set migration lock_timeout: %w", err)
+	}
+	return nil
+}
+
+func (l *lockTimeoutSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
+	resetCtx := context.WithoutCancel(ctx)
+	// RESET (not set_config to '') restores lock_timeout to the server/startup
+	// default; lock_timeout is a typed GUC for which '' is not a valid value.
+	_, resetErr := conn.ExecContext(resetCtx, `RESET lock_timeout`)
 	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
 	return errors.Join(resetErr, unlockErr)
 }

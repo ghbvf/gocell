@@ -382,10 +382,11 @@ package gocell
 import (
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/kernel/clock"
 )
 
 func NewAssembly(id string) *assembly.CoreAssembly {
-    return assembly.New(assembly.Config{ID: id, DurabilityMode: cell.DurabilityDemo})
+    return assembly.New(clock.Real(), assembly.Config{ID: id, DurabilityMode: cell.DurabilityDemo})
 }
 ```
 

@@ -149,19 +149,6 @@ func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
 	}
 }
 
-// WithClock injects the clock. Required — NewService calls clock.MustHaveClock
-// after options and panics if no non-nil clock was provided.
-// Use clock.Real() at composition roots; clockmock.New(...) in tests.
-// A nil clock is silently ignored (the subsequent MustHaveClock will catch it).
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		if clk == nil {
-			return
-		}
-		s.clk = clk
-	}
-}
-
 // WithTombstoneTTL sets the tombstone TTL used by the background GC sweep.
 // 0, negative, or any value below the Claimer idempotency window
 // (defaultTombstoneTTL = idempotency.DefaultTTL) is raised to that window;
@@ -185,22 +172,22 @@ func WithEventbusCacheCollector(c obmetrics.EventbusCacheCollector) Option {
 }
 
 // NewService creates a config-subscribe Service.
-// WithClock must be passed — clock.MustHaveClock panics on missing injection.
-func NewService(logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "configsubscribe.NewService")
 	s := &Service{
 		cache: &Cache{
 			entries:        make(map[string]cacheEntry),
+			clk:            clk,
 			tombstoneTTL:   0, // will be normalized below
 			cacheCollector: obmetrics.NoopEventbusCacheCollector{},
 		},
+		clk:                  clk,
 		logger:               logger,
 		configEventCollector: obmetrics.NoopConfigEventCollector{},
 	}
 	for _, o := range opts {
 		o(s)
 	}
-
-	clock.MustHaveClock(s.clk, "configsubscribe.NewService")
 
 	if err := s.validateRequired(); err != nil {
 		return nil, err

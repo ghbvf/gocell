@@ -45,12 +45,12 @@ func newTestConnectionWithCapAndMock(t *testing.T, poolSize, maxChannels int) (*
 		return mockConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                testAMQPURL,
 		ChannelPoolSize:    poolSize,
 		ConfirmTimeout:     testtime.D2s,
 		MaxChannelsPerConn: maxChannels,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -206,7 +206,7 @@ func TestPublisher_RepeatedPublish_DoesNotLeakInUseChannels(t *testing.T) {
 	}
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	for i := range numPublishes {
 		err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
@@ -282,13 +282,13 @@ func TestReconnect_DrainPool_ReleasesInUseChannels(t *testing.T) {
 		return newMockConnection(), nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                testAMQPURL,
 		ChannelPoolSize:    poolSize,
 		MaxChannelsPerConn: maxChannels,
 		ReconnectBaseDelay: testtime.D1ms, // fast reconnect for test
 		ConfirmTimeout:     testtime.D2s,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -392,10 +392,9 @@ func TestSubscribeOnce_SetupFailure_ReleasesInUseChannel(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "setup-fail-queue",
 		DLXExchange: "setup-fail.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// inUseChannels is 0 before subscribe.
@@ -430,10 +429,9 @@ func TestSubscriptionRun_WaitAndClose_ReleasesInUseChannel(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "waitandclose-queue",
 		DLXExchange: "waitandclose.dlx",
-		Clock:       clock.Real(),
 	})
 
 	subCtx, subCancel := context.WithCancel(context.Background())

@@ -65,10 +65,16 @@ paths:
 - 空实现/no-op/fallback 写明业务原因（注释）
 - 构造函数出口必须经 `s.validateRequired()`（由 `gocell generate required-deps`
   从 Service struct 字段 `gocell:"required"` tag 生成）。可选依赖（logger /
-  emitter）在构造函数内 fallback。clock 字段保留 `clock.MustHaveClock` 内核
-  panic 豁免（programmer error 语义）。由 `REQUIRED-DEP-NIL-GUARD-01` 三件套
-  archtest 静态守卫。OUTBOX-SERVICE-01 SERVICE-02..05 sub-rule 持续守 outbox
-  侧约束（publish/import/DirectEmitter/WithOutboxWriter）。
+  emitter）在构造函数内 fallback。clock 是**强制位置参** `clk clock.Clock`
+  （漏传 = 编译错误，由 `CLOCK-POSITIONAL-INJECTION-01` form-lock 守正向形态；
+  新增构造函数推荐首参或紧跟 `ctx`，pre-existing 位置不重排——见 ADR
+  `docs/architecture/202605270000-adr-clock-positional-injection-funnel.md` §1
+  "no reordering churn"），构造函数体内 `clock.MustHaveClock(clk, ...)` 保留为
+  typed-nil panic 豁免（programmer error 语义，#883 Option A）——禁 `WithClock`
+  option、禁输入 Config 的 `Clock` 字段（详见 ADR `202605270000`）。由
+  `REQUIRED-DEP-NIL-GUARD-01` 三件套 archtest 静态守卫。OUTBOX-SERVICE-01
+  SERVICE-02..05 sub-rule 持续守 outbox 侧约束
+  （publish/import/DirectEmitter/WithOutboxWriter）。
 - 加密/签名/鉴权优先复用现有安全封装
 
 ## 命名规范
@@ -76,6 +82,7 @@ paths:
 - DB 字段 `snake_case`，JSON 字段 `camelCase`，Query/Path 参数 `camelCase`
 - 错误用 `errcode.New(code, message)`，包装上下文用 `fmt.Errorf("context: %w", err)`
 - mock 定义在测试文件中（`*_test.go` 同包）
+- cell 单测不 import 平台 `adapters/`，用 canonical in-mem fake；由 archtest `CELL-TEST-NO-ADAPTER-IMPORT-01` 守（fake 清单、豁免语义与理由见其 package godoc 单一真值源），build-tag 门控的集成测试豁免
 
 ## 测试覆盖率
 

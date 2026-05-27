@@ -91,7 +91,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -120,8 +120,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		bootstrapAuthObserver,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -129,9 +128,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	)...)
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -140,23 +138,21 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProto),
 		auditcore.WithLedgerStore(auditStore),
-	) //archtest:allow:clock-injection:via-slice WithClock prepended to positional opts
+	)
 
-	asm := assembly.New(assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "setup-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
@@ -398,7 +394,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -426,8 +422,7 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		auditObserver,
 	)
 
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -435,9 +430,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	)...)
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -446,23 +440,21 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		auditcore.WithLedgerProtocol(auditProtocol),
 		auditcore.WithLedgerStore(auditStore),
-	) //archtest:allow:clock-injection:via-slice WithClock at the front; positional spread avoided
+	)
 
-	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "ratelimit-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),

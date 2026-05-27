@@ -34,7 +34,7 @@ func adminSvcCtx() context.Context {
 func newTestService() *Service {
 	repo := mem.NewConfigRepository(clock.Real())
 	logger := slog.Default()
-	svc, err := NewService(repo, logger, clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, logger, WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	if err != nil {
 		panic("newTestService: " + err.Error())
 	}
@@ -45,7 +45,7 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 	t.Helper()
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
-	_, err := NewService(repo, slog.Default(), clock.Real() /* no WithTxManager */)
+	_, err := NewService(clock.Real(), repo, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -206,7 +206,7 @@ func TestService_Delete(t *testing.T) {
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 func TestService_Update_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
+	svcGood, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 func TestService_Delete_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
+	svcGood, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -248,7 +248,7 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failWriter))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
@@ -300,12 +300,12 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	// Seed via direct repo insert (bypasses service tx counter).
-	seedSvc, seedErr := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	seedSvc, seedErr := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, seedErr)
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
@@ -322,12 +322,12 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
 	// Seed via direct repo insert (bypasses service tx counter).
-	seedSvc, seedErr := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	seedSvc, seedErr := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, seedErr)
 	_, _ = seedSvc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
@@ -346,9 +346,10 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	fp := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "configcore",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(emitter)), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
@@ -372,7 +373,7 @@ func TestConcurrentUpdate_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "cas-race-key", Value: "initial"})
 	require.NoError(t, err)
@@ -422,7 +423,7 @@ func TestConcurrentDelete_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "cas-delete-race-key", Value: "initial"})
 	require.NoError(t, err)

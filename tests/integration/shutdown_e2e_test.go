@@ -103,13 +103,13 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 // t.Cleanup to close it.
 func newShutdownTestConn(t *testing.T, amqpURL string) *rabbitmq.Connection {
 	t.Helper()
-	conn, err := rabbitmq.NewConnection(rabbitmq.Config{
+	conn, err := rabbitmq.NewConnection(clock.Real(), rabbitmq.Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.SelectShutdown,
 		ReconnectBaseDelay:  testtime.D500ms,
-	}, rabbitmq.WithConnectionClock(clock.Real()))
+	})
 	require.NoError(t, err, "create rabbitmq connection for shutdown e2e")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
@@ -215,12 +215,11 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	pubConn := newShutdownTestConn(t, amqpURL)
 	subConn := newShutdownTestConn(t, amqpURL)
 
-	pub := rabbitmq.NewPublisher(pubConn, rabbitmq.WithPublisherClock(clock.Real()))
-	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
+	pub := rabbitmq.NewPublisher(clock.Real(), pubConn)
+	sub := rabbitmq.NewSubscriber(clock.Real(), subConn, rabbitmq.SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 10,
 		DLXExchange:   dlxExchange,
-		Clock:         clock.Real(),
 	})
 
 	// Handler counts processed messages. Simulate work with a delay.
@@ -346,23 +345,22 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	})
 
 	pubConn := newShutdownTestConn(t, amqpURL)
-	subConn, err := rabbitmq.NewConnection(rabbitmq.Config{
+	subConn, err := rabbitmq.NewConnection(clock.Real(), rabbitmq.Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: shutdownD3s,
 		ReconnectBaseDelay:  testtime.D200ms,
-	}, rabbitmq.WithConnectionClock(clock.Real()))
+	})
 	require.NoError(t, err, "create subscriber connection")
 	// Do NOT defer subConn.Close here — the broker will be killed; the
 	// connection teardown is handled implicitly via process exit / GC.
 
-	pub := rabbitmq.NewPublisher(pubConn, rabbitmq.WithPublisherClock(clock.Real()))
-	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
+	pub := rabbitmq.NewPublisher(clock.Real(), pubConn)
+	sub := rabbitmq.NewSubscriber(clock.Real(), subConn, rabbitmq.SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 5,
 		DLXExchange:   dlxExchange,
-		Clock:         clock.Real(),
 	})
 
 	// Simple handler — just counts deliveries.

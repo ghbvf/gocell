@@ -44,11 +44,10 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 		// subtest's teardown cannot bleed into the next.
 		conn := newIntegrationConnection(t, brokerURL)
 
-		pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
-		sub := NewSubscriber(conn, SubscriberConfig{
+		pub := NewPublisher(clock.Real(), conn)
+		sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 			DLXExchange:   "test.dlx",
 			PrefetchCount: 1,
-			Clock:         clock.Real(),
 		})
 		t.Cleanup(func() { _ = sub.Close(context.Background()) })
 		// outboxtest.PublishN wraps payloads in a v1 wire envelope, matching

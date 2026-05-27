@@ -48,7 +48,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 		config.ConfirmTimeout = testtime.SelectAsyncSettle
 	}
 
-	conn, err := NewConnection(config, WithConnectionClock(clock.Real()))
+	conn, err := NewConnection(clock.Real(), config)
 	require.NoError(t, err, "create dedicated rabbitmq connection")
 
 	cleanup := func() {
@@ -74,13 +74,13 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	t.Helper()
 	url := sharedBrokerURL(t)
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 url,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.EventuallyLong,
 		ReconnectBaseDelay:  testtime.D500ms,
-	}, WithConnectionClock(clock.Real()))
+	})
 	require.NoError(t, err, "create connection against shared rabbitmq broker")
 	return conn, func() { _ = conn.Close(context.Background()) }
 }
@@ -104,13 +104,13 @@ func startRabbitMQBroker(t *testing.T) (amqpURL string, cleanup func()) {
 // Use this when a per-subtest Connection is needed against a shared container.
 func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
 	t.Helper()
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.EventuallyLong,
 		ReconnectBaseDelay:  testtime.D500ms,
-	}, WithConnectionClock(clock.Real()))
+	})
 	require.NoError(t, err, "create per-subtest rabbitmq connection")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
@@ -167,16 +167,15 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	topic := "test.integration.events"
 	queueName := "test.integration.queue"
 
 	// Subscribe and receive.
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
 	})
 
 	ctx := context.Background()
@@ -238,7 +237,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	topic := "test.integration.publish-only"
 
 	entry := outbox.Entry{
@@ -271,7 +270,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	const (
 		topic       = "test.retry.e2e"
@@ -308,11 +307,10 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.NoError(t, cbErr)
 
 	// --- Start main subscriber with ConsumerBase-wrapped handler ---
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     mainQueue,
 		PrefetchCount: 1,
 		DLXExchange:   dlxExchange,
-		Clock:         clock.Real(),
 	})
 
 	var callCount atomic.Int32

@@ -59,12 +59,11 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:                "addafterwait-queue",
 		DLXExchange:              "addafterwait.dlx",
 		StopIntakePerCallTimeout: testtime.D2s,
 		StopIntakeDrainTimeout:   testtime.D5s,
-		Clock:                    clock.Real(),
 	})
 
 	// Push the first delivery so consumeLoop dispatches it and we have a
@@ -183,12 +182,11 @@ func runPostCancelArrivalScenario(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:                "addafterwait-stress",
 		DLXExchange:              "addafterwait.stress.dlx",
 		StopIntakePerCallTimeout: testtime.D2s,
 		StopIntakeDrainTimeout:   testtime.D5s,
-		Clock:                    clock.Real(),
 	})
 
 	body1 := makeDeliveryBody(t, outbox.Entry{

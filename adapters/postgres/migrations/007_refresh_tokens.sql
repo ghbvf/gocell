@@ -1,12 +1,9 @@
 -- Migration 007: refresh_tokens table for the F2 opaque refresh token store.
 -- Backs runtime/auth/refresh.Store (see docs/plans/202604191515-auth-federated-whistle.md §F2 C6).
--- Transactional migration (no CONCURRENTLY): SET LOCAL lock_timeout per migrations/README.md rule 4.
 -- Soft-delete via revoked_at TIMESTAMPTZ enables audit retention + delayed GC sweep.
 -- ref: dexidp/dex storage/storage.go RefreshToken layout.
 
 -- +goose Up
-SET LOCAL lock_timeout = '5s';
-
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id             BIGSERIAL   PRIMARY KEY,
     token          TEXT        NOT NULL,

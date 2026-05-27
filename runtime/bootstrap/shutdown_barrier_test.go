@@ -77,9 +77,9 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	healthAddr := healthLn.Addr().String()
 	const preDelay = barrierPreDelay
 
-	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-pre-delay", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -155,7 +155,7 @@ func TestShutdown_LIFOTeardownOrder(t *testing.T) {
 	s.addTeardown(record("second"))
 	s.addTeardown(record("third"))
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	_ = b.phase10LIFOTeardown(context.Background(), s)
 
 	mu.Lock()
@@ -186,7 +186,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 		},
 	}
 
-	asm := assembly.New(assembly.Config{ID: "test-ctx-sep", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-ctx-sep", DurabilityMode: outbox.DurabilityDemo})
 
 	// preShutdownDelay creates a reliable assertion window: after extCancel(),
 	// phase10ReadinessFlip blocks for the delay duration before LIFO teardown
@@ -195,7 +195,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	const assertionDelay = barrierAssertionDelay
 	healthLn := newLocalListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -256,9 +256,9 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	workerErr := errors.New("worker exploded")
 	errorWorker := &errorAfterStartWorker{err: workerErr, startDelay: barrierWorkerStartDelay}
 
-	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-worker-err", DurabilityMode: outbox.DurabilityDemo})
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -284,10 +284,10 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	const preDelay = barrierPreDelayShorter
 
 	healthLn := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-budget", DurabilityMode: outbox.DurabilityDemo})
+	eb := eventbus.New(clock.Real())
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),

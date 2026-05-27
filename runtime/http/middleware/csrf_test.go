@@ -369,9 +369,9 @@ func TestCSRF_DefaultConfig(t *testing.T) {
 
 func TestCSRF_CookieSessionIntegration(t *testing.T) {
 	// Test the CSRF → CookieSession middleware chain.
+	clk := clock.Real()
 	secret := generateKey(t)
 	sessCfg := DefaultCookieSessionConfig(secret)
-	sessCfg.Clock = clock.Real()
 
 	csrfCfg := CSRFConfig{
 		TrustedOrigins:     []string{"https://app.example.com"},
@@ -380,11 +380,11 @@ func TestCSRF_CookieSessionIntegration(t *testing.T) {
 
 	// Build chain: CSRF → CookieSession → capture handler.
 	capture := &authCapture{}
-	chain := CSRF(csrfCfg)(mustCookieSession(sessCfg)(capture.handler()))
+	chain := CSRF(csrfCfg)(mustCookieSession(clk, sessCfg)(capture.handler()))
 
 	// Encode a JWT into a session cookie.
 	jwt := "test-jwt-token"
-	cookieVal := encodeCookieValue(t, sessCfg, jwt)
+	cookieVal := encodeCookieValue(t, clk, sessCfg, jwt)
 
 	t.Run("trusted origin + valid cookie → injects auth", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/data", nil)

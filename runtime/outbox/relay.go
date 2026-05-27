@@ -164,7 +164,8 @@ func (r *Relay) clk() clock.Clock {
 // Zero or negative cfg values are replaced with defaults via cfg.WithDefaults().
 // A nil Metrics is replaced with NoopRelayCollector; the collector is then
 // wrapped in safeRelayCollector so panics cannot crash relay goroutines.
-func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
+func NewRelay(clk clock.Clock, store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
+	clock.MustHaveClock(clk, "outbox.NewRelay")
 	cfg = cfg.WithDefaults()
 	if cfg.Metrics == nil {
 		cfg.Metrics = kout.NoopRelayCollector{}
@@ -181,14 +182,13 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 			slog.Duration("poll_interval", cfg.PollInterval))
 	}
 
-	clock.MustHaveClock(cfg.Clock, "outbox.NewRelay")
 	r := &Relay{
 		store:   store,
 		pub:     pub,
 		cfg:     cfg,
 		metrics: metrics,
 		readyCh: make(chan struct{}),
-		clock:   cfg.Clock,
+		clock:   clk,
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {

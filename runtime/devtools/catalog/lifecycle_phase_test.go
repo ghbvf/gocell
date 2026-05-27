@@ -28,9 +28,11 @@ func TestCellSpec_PhaseRoundTrip(t *testing.T) {
 			},
 		},
 	}
-	doc, err := catalog.BuildDocument(pm, catalog.ExportOptions{
-		Clock: clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC)),
-	})
+	doc, err := catalog.BuildDocument(
+		clockmock.New(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC)),
+		pm,
+		catalog.ExportOptions{},
+	)
 	require.NoError(t, err)
 
 	var gotCell, gotSlice bool

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // sqlStateCheckViolation is SQLSTATE 23514 (check constraint violation).
@@ -260,7 +261,7 @@ func TestPGUserRepo_Integration(t *testing.T) {
 
 	t.Run("BumpAuthzEpoch_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
 		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			_, e := repo.BumpAuthzEpoch(txCtx, uuid.NewString())
+			_, e := repo.BumpAuthzEpoch(txCtx, uuid.NewString(), credentialfence.Mint())
 			return e
 		})
 		require.Error(t, err)
@@ -368,7 +369,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 	// funnel entry point guarantees this in production).
 	var bumped int64
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		v, err := repo.BumpAuthzEpoch(txCtx, u.ID)
+		v, err := repo.BumpAuthzEpoch(txCtx, u.ID, credentialfence.Mint())
 		if err != nil {
 			return err
 		}
@@ -393,7 +394,7 @@ func TestPGUserRepo_BumpAuthzEpoch_ReadbackVisible(t *testing.T) {
 
 	// Second bump confirms monotonicity through the read path.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		v, err := repo.BumpAuthzEpoch(txCtx, u.ID)
+		v, err := repo.BumpAuthzEpoch(txCtx, u.ID, credentialfence.Mint())
 		if err != nil {
 			return err
 		}

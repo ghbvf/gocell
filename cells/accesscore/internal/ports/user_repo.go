@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 )
 
 // UserRepository persists and retrieves User aggregates.
@@ -138,7 +139,13 @@ type UserRepository interface {
 	// the new value. It must be called inside an ambient transaction (the
 	// credential-invalidation funnel entry point guarantees this). Returns
 	// ErrAuthUserNotFound (KindNotFound) when no row matches userID.
-	BumpAuthzEpoch(ctx context.Context, userID string) (newEpoch int64, err error)
+	//
+	// tok is a capability proof that this call routes through
+	// credentialinvalidate.Invalidator via credentialfence.Mint; only
+	// credentialinvalidate may mint a non-nil token in production. Passing a
+	// nil token panics through the panicregister funnel (B-class programmer
+	// error) at the implementation boundary.
+	BumpAuthzEpoch(ctx context.Context, userID string, tok credentialfence.FenceToken) (newEpoch int64, err error)
 
 	// GetByIDForUpdate fetches a user by primary key inside an ambient
 	// transaction and acquires a row-level write lock (PG: SELECT ... FOR

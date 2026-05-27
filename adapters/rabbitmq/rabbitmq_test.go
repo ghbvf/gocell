@@ -512,11 +512,11 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 		return mockConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:             testAMQPURL,
 		ChannelPoolSize: 5,
 		ConfirmTimeout:  testtime.D2s,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -564,9 +564,9 @@ func TestNewConnection_DialFails(t *testing.T) {
 		return nil, errors.New("connection refused")
 	}
 
-	_, err := NewConnection(Config{
+	_, err := NewConnection(clock.Real(), Config{
 		URL: testAMQPBadURL,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
@@ -580,9 +580,9 @@ func TestNewConnection_PermanentDialError(t *testing.T) {
 		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}
 	}
 
-	_, err := NewConnection(Config{
+	_, err := NewConnection(clock.Real(), Config{
 		URL: testAMQPBadURL,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -597,9 +597,9 @@ func TestNewConnection_RecoverableDialError(t *testing.T) {
 		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 	}
 
-	_, err := NewConnection(Config{
+	_, err := NewConnection(clock.Real(), Config{
 		URL: testAMQPURL,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -1000,12 +1000,12 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		return newMockConnection(), nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -1058,12 +1058,12 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		}
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -1289,7 +1289,7 @@ func TestPublisher_Publish_Success(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"hello":"world"}`))
 	assert.NoError(t, err)
@@ -1313,7 +1313,7 @@ func TestPublisher_Publish_Nacked(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
@@ -1327,10 +1327,10 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 		return mockConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:            "amqp://test@localhost/",
 		ConfirmTimeout: testtime.MediumPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -1338,7 +1338,7 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 		}
 	}()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
@@ -1347,7 +1347,7 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 
 func TestPublisher_Publish_ContextCancelled(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
@@ -1366,7 +1366,7 @@ func TestPublisher_Publish_PublishError(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
@@ -1382,7 +1382,7 @@ func TestPublisher_Publish_ConfirmModeError(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
@@ -1405,7 +1405,7 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		clock:        clock.Real(),
 		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
 
 	require.Error(t, err)
@@ -1434,7 +1434,7 @@ func TestSubscriber_Setup_DeclaresTopology(t *testing.T) {
 	ch := newMockChannel()
 	mockConn.nextCh = ch
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", "cg-1"))
 	require.NoError(t, err)
@@ -1451,7 +1451,7 @@ func TestSubscriber_Setup_DeclaresTopology(t *testing.T) {
 
 func TestSubscriber_Setup_EmptyDLX_ReturnsError(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: ""})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
@@ -1463,7 +1463,7 @@ func TestSubscriber_Setup_AcquireChannelFailure(t *testing.T) {
 	// Close the connection to make AcquireChannel fail.
 	_ = conn.Close(context.Background())
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
@@ -1475,7 +1475,7 @@ func TestSubscriber_Setup_ExchangeDeclareFailure(t *testing.T) {
 	ch.exchangeDeclareErr = errors.New("exchange declare failed")
 	mockConn.nextCh = ch
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
@@ -1488,7 +1488,7 @@ func TestSubscriber_Setup_QueueDeclareFailure(t *testing.T) {
 	ch.queueDeclareErr = errors.New("queue declare failed")
 	mockConn.nextCh = ch
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
@@ -1501,7 +1501,7 @@ func TestSubscriber_Setup_QueueBindFailure(t *testing.T) {
 	ch.queueBindErr = errors.New("queue bind failed")
 	mockConn.nextCh = ch
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
@@ -1513,7 +1513,7 @@ func TestSubscriber_Setup_EmptyGroup_DefaultsToTopic(t *testing.T) {
 	ch := newMockChannel()
 	mockConn.nextCh = ch
 
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	err := sub.Setup(context.Background(), setupTopic("my.topic", ""))
 	require.NoError(t, err)
@@ -1538,11 +1538,10 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     "test-queue",
 		PrefetchCount: 5,
 		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
 	})
 
 	entry := outbox.Entry{
@@ -1604,10 +1603,9 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -1700,10 +1698,9 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
@@ -1747,10 +1744,9 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		// QueueName deliberately left empty.
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1769,7 +1765,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 func TestSubscriber_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close(context.Background()))
 	assert.NoError(t, sub.Close(context.Background())) // Second close is no-op.
@@ -1777,7 +1773,7 @@ func TestSubscriber_Close_Idempotent(t *testing.T) {
 
 func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx", Clock: clock.Real()})
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close(context.Background()))
 
@@ -1803,10 +1799,9 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	mockConn.nextCh = nil
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1891,10 +1886,9 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	mockConn.chanErr = errors.New("no connection")
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(c, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), c, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2016,10 +2010,10 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 		return mockConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:             "amqp://test@localhost/",
 		ChannelPoolSize: 5,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() { _ = conn.Close(context.Background()) }()
 
@@ -2028,10 +2022,9 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	mockConn.chanErr = errors.New("connection dead")
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
@@ -2073,10 +2066,9 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(c, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), c, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Run Subscribe in a goroutine so the main goroutine can orchestrate the
@@ -2129,11 +2121,10 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		// QueueName deliberately left empty; ConsumerGroup is set.
 		ConsumerGroup: "auditcore",
 		DLXExchange:   "test.dlx",
-		Clock:         clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2164,7 +2155,7 @@ func subscribeWithCanceledCtx(t *testing.T, cfg SubscriberConfig, sub outbox.Sub
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	s := NewSubscriber(conn, cfg)
+	s := NewSubscriber(clock.Real(), conn, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -2183,7 +2174,6 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 			QueueName:     "my-explicit-queue",
 			ConsumerGroup: "auditcore", // Should be ignored when QueueName is set.
 			DLXExchange:   "test.dlx",
-			Clock:         clock.Real(),
 		},
 		outbox.Subscription{Topic: "session.created", CellID: "test-cell"},
 	)
@@ -2199,7 +2189,6 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 		SubscriberConfig{
 			// Both QueueName and ConsumerGroup empty — backward compat.
 			DLXExchange: "test.dlx",
-			Clock:       clock.Real(),
 		},
 		outbox.Subscription{Topic: "my.topic", CellID: "test-cell"},
 	)
@@ -2218,10 +2207,9 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "my-dlx",
-		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2250,11 +2238,10 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:     "test-queue",
 		DLXExchange:   "my-dlx",
 		DLXRoutingKey: "dead-letter-key",
-		Clock:         clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2277,10 +2264,9 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName: "test-queue",
 		// DLXExchange deliberately left empty.
-		Clock: clock.Real(),
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic", CellID: "test-cell"},
@@ -2331,10 +2317,9 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "test-queue",
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
@@ -2420,7 +2405,7 @@ func TestPublisher_Publish_ExchangeDeclareFails(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
 	assert.Error(t, err)
@@ -2444,7 +2429,7 @@ func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
 	assert.Error(t, err)
@@ -2900,9 +2885,8 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -2937,9 +2921,8 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -2975,9 +2958,8 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
@@ -3009,9 +2991,8 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Entry has Observability populated, but since the bare Subscriber is
@@ -3073,9 +3054,8 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Entry has Observability populated; processDelivery must not restore it
@@ -3118,9 +3098,8 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -3157,9 +3136,8 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -3191,9 +3169,8 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	// No DLXExchange configured — Subscribe should fail before any delivery processing.
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		// DLXExchange deliberately left empty.
-		Clock: clock.Real(),
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic", CellID: "test-cell"},
@@ -3240,9 +3217,8 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
@@ -3275,9 +3251,8 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
@@ -3314,9 +3289,8 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
@@ -3481,9 +3455,8 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
@@ -3519,9 +3492,8 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -3647,9 +3619,8 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.dlx",
-		Clock:       clock.Real(),
 	})
 
 	receipt := &mockReceipt{}
@@ -3820,9 +3791,9 @@ func TestIsTerminalConnectionError(t *testing.T) {
 
 func TestConnection_ErrorChain_DoesNotLeakCredentials(t *testing.T) {
 	url := testAMQPAdminURL
-	_, err := NewConnection(Config{URL: url}, WithDialFunc(func(u string) (AMQPConnection, error) {
+	_, err := NewConnection(clock.Real(), Config{URL: url}, WithDialFunc(func(u string) (AMQPConnection, error) {
 		return nil, fmt.Errorf("dial tcp: lookup %s: no such host", u)
-	}), WithConnectionClock(clock.Real()))
+	}))
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "secret123", "error chain must not leak password")
 	assert.NotContains(t, err.Error(), "admin:secret123", "error chain must not leak credentials")
@@ -3879,12 +3850,12 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		return mock2, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -4326,12 +4297,12 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		return mock2, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -4453,7 +4424,7 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 		conn:        mc,
 	}
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"test":true}`))
 	require.NoError(t, err)
 
@@ -4488,7 +4459,7 @@ func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 		conn:        mc,
 	}
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"test":true}`))
 	assert.NoError(t, err, "close error must not mask successful publish result")
 }

@@ -44,7 +44,7 @@ func adminSvcCtx() context.Context {
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	logger := slog.Default()
-	svc, err := NewService(repo, logger, clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, logger, WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	if err != nil {
 		panic("newTestService: " + err.Error())
 	}
@@ -62,7 +62,7 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 	t.Helper()
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func mustSeedEntry(repo *mem.ConfigRepository, key, value string) {
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
-	_, err := NewService(repo, slog.Default(), clock.Real() /* no WithTxManager */)
+	_, err := NewService(clock.Real(), repo, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -195,7 +195,7 @@ func TestService_Rollback(t *testing.T) {
 func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 func TestService_Publish_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -225,14 +225,14 @@ func TestService_Publish_OutboxWriteError(t *testing.T) {
 func TestService_Rollback_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	mustSeedEntry(repo, "app.name", "v1")
 	// Publish first (use a working writer), then swap to failing writer for rollback.
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
+	svcGood, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, goodWriter))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -262,7 +262,7 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(tx)))
 	require.NoError(t, err)
 
@@ -277,7 +277,7 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 // Sensitive flag so downstream consumers (handler, postgres replay) can redact uniformly.
 func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
@@ -319,7 +319,7 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 
 func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	mustSeedEntry(repo, "app.name", "gocell")
 
@@ -347,7 +347,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := mem.NewConfigRepository(clock.Real())
-			svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+			svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 			require.NoError(t, err)
 			now := time.Now()
 			require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
@@ -386,7 +386,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -408,7 +408,7 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, logger, clock.Real(),
+	svc, err := NewService(clock.Real(), repo, logger,
 		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
@@ -427,13 +427,13 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed, slog.Default()))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	mustSeedEntry(repo, "app.x", "v1")
-	svcOK, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svcOK, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
@@ -454,13 +454,13 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 
 	repo := mem.NewConfigRepository(clock.Real())
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc, err := NewService(repo, logger, clock.Real(),
+	svc, err := NewService(clock.Real(), repo, logger,
 		WithEmitter(outbox.WrapEmitterForCell(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen, logger))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 
 	mustSeedEntry(repo, "app.x", "v1")
-	svcOK, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
+	svcOK, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)
 	_, err = svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
@@ -539,7 +539,7 @@ func TestConcurrentRollback_ExactlyOneSucceeds(t *testing.T) {
 	t.Parallel()
 
 	repo := mem.NewConfigRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(concurrentSafeTxRunner{})))
 	require.NoError(t, err)
 	mustSeedEntry(repo, "cas-rollback-key", "v1")
 	_, err = svc.Publish(adminSvcCtx(), "cas-rollback-key")

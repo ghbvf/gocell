@@ -79,10 +79,10 @@ func countWarnEntries(logs []byte, msg string) int {
 	return count
 }
 
-// mustNew is a test helper that calls New and panics on error.
+// mustNew is a test helper that calls New with the given clock and panics on error.
 // It is used exclusively in tests that expect construction to succeed.
-func mustNew(opts ...Option) *Router {
-	r, err := New(opts...)
+func mustNew(clk clock.Clock, opts ...Option) *Router {
+	r, err := New(clk, opts...)
 	if err != nil {
 		panic("mustNew: " + err.Error())
 	}
@@ -90,7 +90,7 @@ func mustNew(opts ...Option) *Router {
 }
 
 func TestRouterImplementsRouteMux(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	var mux cell.RouteMux = r
 	assert.NotNil(t, mux)
 }
@@ -103,8 +103,8 @@ func TestRouterClientErrorLogSamplingOption(t *testing.T) {
 	defer slog.SetDefault(original)
 
 	r, err := NewForListener(
+		clock.Real(),
 		cell.PrimaryListener,
-		WithRouterClock(clock.Real()),
 		WithClientErrorLogSampling(2),
 	)
 	require.NoError(t, err)
@@ -133,14 +133,14 @@ func TestRouterClientErrorLogSamplingOption(t *testing.T) {
 func TestHealthEndpoints(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router.
 	// They are registered directly on the router, not via WithHealthHandler.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
-	r, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
+	hh := health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
+	r, err := NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 	r.Handle("/healthz", hh.LivezHandler())
 	r.Handle("/readyz", hh.ReadyzHandler())
@@ -170,7 +170,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	// for middleware instrumentation; the /metrics scrape endpoint is a separate handler
 	// registered on the HealthListener router by bootstrap.
 	mc := metrics.NewInMemoryCollector()
-	healthRtr, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
+	healthRtr, err := NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/metrics", mc.Handler())
 
@@ -182,7 +182,7 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestHandleAndServe(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
@@ -195,7 +195,7 @@ func TestHandleAndServe(t *testing.T) {
 }
 
 func TestRouteGroup(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Route("/api/v1", func(mux cell.RouteMux) {
 		mux.Handle("/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -212,7 +212,7 @@ func TestRouteGroup(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_PrefixRejectsAnd405(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
 
 	err := r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -248,7 +248,7 @@ func TestMountRouteGroup_CellAttribution_PrefixRejectsAnd405(t *testing.T) {
 }
 
 func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateAcrossCellsFails(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -278,7 +278,7 @@ func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateAcrossCellsFails(t *
 }
 
 func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateSameCellAllowed(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -316,7 +316,7 @@ func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateSameCellAllowed(t *t
 
 func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -344,7 +344,7 @@ func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *te
 func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -384,7 +384,7 @@ func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testi
 func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1"}}
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithAuthMiddleware(verifier))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -416,7 +416,7 @@ func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_CircuitBreakerReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithCircuitBreaker(breaker))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithCircuitBreaker(breaker))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -443,7 +443,7 @@ func TestMountRouteGroup_CellAttribution_CircuitBreakerReject(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithBodyLimit(4))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithBodyLimit(4))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -470,7 +470,7 @@ func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 
 	err := r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -508,7 +508,7 @@ func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {
 func TestMountRouteGroup_CellAttribution_LongestPrefixWins(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc), WithRateLimiter(limiter))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -547,7 +547,7 @@ func TestMountRouteGroup_CellAttribution_LongestPrefixWins(t *testing.T) {
 
 func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
@@ -574,7 +574,7 @@ func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
 }
 
 func TestGroup(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Group(func(mux cell.RouteMux) {
 		mux.Handle("/grouped", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -588,7 +588,7 @@ func TestGroup(t *testing.T) {
 }
 
 func TestMount(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	subMux := http.NewServeMux()
 	subMux.Handle("GET /hello", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -617,7 +617,7 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 		}
 	})
 
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Mount("/ws", upgrader)
 
 	srv := httptest.NewServer(r)
@@ -647,7 +647,7 @@ func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("access log panic test")
 	}))
@@ -665,7 +665,7 @@ func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 
 func TestPanicRequestRecordedInMetrics(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("metrics panic test")
 	}))
@@ -690,7 +690,7 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 	r.Handle("/ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
@@ -733,7 +733,7 @@ func TestNewForListener_AccessLogIncludesListener(t *testing.T) {
 			slog.SetDefault(logger)
 			defer slog.SetDefault(original)
 
-			r, err := NewForListener(tt.ref, WithRouterClock(clock.Real()))
+			r, err := NewForListener(clock.Real(), tt.ref)
 			require.NoError(t, err)
 			r.Handle("/listener-log", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
@@ -752,7 +752,7 @@ func TestNewForListener_AccessLogIncludesListener(t *testing.T) {
 }
 
 func TestDefaultMiddlewareApplied(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Handle("/mid-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -771,7 +771,7 @@ func TestDefaultMiddlewareApplied(t *testing.T) {
 // --- Trusted proxy fail-fast validation ---
 
 func TestNew_InvalidTrustedProxies_ReturnsError(t *testing.T) {
-	r, err := New(WithTrustedProxies([]string{"not-an-ip"}))
+	r, err := New(clock.Real(), WithTrustedProxies([]string{"not-an-ip"}))
 	require.Error(t, err)
 	assert.Nil(t, r)
 	assert.Contains(t, err.Error(), "not-an-ip")
@@ -779,13 +779,13 @@ func TestNew_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 }
 
 func TestNew_ValidTrustedProxies(t *testing.T) {
-	r, err := New(WithRouterClock(clock.Real()), WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
+	r, err := New(clock.Real(), WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
 	require.NoError(t, err)
 	assert.NotNil(t, r)
 }
 
 func TestNew_NilTrustedProxies(t *testing.T) {
-	r, err := New(WithRouterClock(clock.Real()), WithTrustedProxies(nil))
+	r, err := New(clock.Real(), WithTrustedProxies(nil))
 	require.NoError(t, err)
 	assert.NotNil(t, r)
 }
@@ -794,7 +794,7 @@ func TestNew_NilTrustedProxies(t *testing.T) {
 
 func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("test-router-tracer")
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithTracer(tracer))
 
 	var gotTraceID string
 	r.Handle("/traced", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -815,7 +815,7 @@ func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 
 func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 	tracer := &routerSpyTracer{}
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithTracer(tracer))
 
 	mustMountRoute(r, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/internal/v1/rbac/check"),
@@ -841,7 +841,7 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 
 func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("test-router-tracer")
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithTracer(tracer))
 
 	var gotTraceID string
 	r.Handle("/traced-upstream", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -863,7 +863,8 @@ func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 
 func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("test-public")
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/public"
@@ -902,7 +903,7 @@ func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
 }
 
 func TestNoTracer_NoTraceID(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real())) // no WithTracer
+	r := mustNew(clock.Real()) // no WithTracer
 
 	var hasTraceID bool
 	r.Handle("/no-trace", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -926,7 +927,7 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 	defer slog.SetDefault(original)
 
 	tracer := tracingtest.NewSimpleTracer("log-test")
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithTracer(tracer))
 	r.Handle("/log-trace", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -948,7 +949,7 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := mustNew(WithRouterClock(clock.Real()), WithTrustedProxies([]string{"127.0.0.1"}))
+	r := mustNew(clock.Real(), WithTrustedProxies([]string{"127.0.0.1"}))
 	r.Handle("/real-ip-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -970,7 +971,7 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 
 func TestWithTracer_PanicRequestTraced(t *testing.T) {
 	tracer := tracingtest.NewSimpleTracer("panic-trace-test")
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithTracer(tracer))
 	r.Handle("/boom-traced", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("tracing panic test")
 	}))
@@ -986,7 +987,7 @@ func TestWithTracer_PanicRequestTraced(t *testing.T) {
 func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	tracer := tracingtest.NewSimpleTracer("metrics-panic-test")
-	r := mustNew(WithRouterClock(clock.Real()), WithTracer(tracer), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithTracer(tracer), WithMetricsCollector(mc))
 	r.Handle("/boom-full", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("full chain panic test")
 	}))
@@ -1017,7 +1018,7 @@ func (l *routerTestLimiter) Allow(key string) bool {
 
 func TestWithRateLimiter_InDefaultChain(t *testing.T) {
 	limiter := &routerTestLimiter{allow: true}
-	r := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithRateLimiter(limiter))
 	r.Handle("/rl-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1032,7 +1033,7 @@ func TestWithRateLimiter_InDefaultChain(t *testing.T) {
 
 func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 	limiter := &routerTestLimiter{allow: false}
-	r := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(limiter))
+	r := mustNew(clock.Real(), WithRateLimiter(limiter))
 	r.Handle("/rl-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when rate limited")
 	}))
@@ -1052,7 +1053,7 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 func TestWithTracer_RateLimitedContractRouteTagged(t *testing.T) {
 	limiter := &routerTestLimiter{allow: false}
 	tracer := &routerSpyTracer{}
-	r := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(limiter), WithTracer(tracer))
+	r := mustNew(clock.Real(), WithRateLimiter(limiter), WithTracer(tracer))
 	mustMountRoute(r, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/api/v1/rl-contract/{id}"),
 		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -1091,7 +1092,7 @@ func (b *routerTestBreaker) Allow() (bool, func(error)) {
 
 func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
 	breaker := &routerTestBreaker{}
-	r := mustNew(WithRouterClock(clock.Real()), WithCircuitBreaker(breaker))
+	r := mustNew(clock.Real(), WithCircuitBreaker(breaker))
 	r.Handle("/cb-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1106,7 +1107,7 @@ func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
 
 func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("circuit breaker is open")}
-	r := mustNew(WithRouterClock(clock.Real()), WithCircuitBreaker(breaker))
+	r := mustNew(clock.Real(), WithCircuitBreaker(breaker))
 	r.Handle("/cb-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when circuit is open")
 	}))
@@ -1126,7 +1127,7 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
 	// A bare nil interface value must cause NewE to return an error so that
 	// Bootstrap.Run fails fast instead of silently skipping CB protection.
-	_, err := New(WithCircuitBreaker(nil))
+	_, err := New(clock.Real(), WithCircuitBreaker(nil))
 	require.Error(t, err, "nil interface Allower must return error from NewE")
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
@@ -1136,7 +1137,7 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 	// value is non-nil but the underlying pointer is nil, so calling Allow()
 	// on it would panic at runtime.
 	var cb *routerTestBreaker // typed nil
-	_, err := New(WithCircuitBreaker(cb))
+	_, err := New(clock.Real(), WithCircuitBreaker(cb))
 	require.Error(t, err, "typed-nil Allower must return error from NewE")
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
@@ -1146,7 +1147,7 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 // silently skipping rate-limiter installation. Mirrors WithCircuitBreaker
 // fail-fast pattern.
 func TestWithRateLimiter_NilInterface_Error(t *testing.T) {
-	_, err := New(WithRateLimiter(nil))
+	_, err := New(clock.Real(), WithRateLimiter(nil))
 	require.Error(t, err, "nil interface RateLimiter must return error from New")
 	assert.Contains(t, err.Error(), "rate limiter")
 }
@@ -1156,7 +1157,7 @@ func TestWithRateLimiter_NilInterface_Error(t *testing.T) {
 // the underlying pointer is nil, so calling Allow() would panic at runtime.
 func TestWithRateLimiter_TypedNilPointer_Error(t *testing.T) {
 	var rl *routerTestLimiter // typed nil
-	_, err := New(WithRateLimiter(rl))
+	_, err := New(clock.Real(), WithRateLimiter(rl))
 	require.Error(t, err, "typed-nil RateLimiter must return error from New")
 	assert.Contains(t, err.Error(), "rate limiter")
 }
@@ -1167,21 +1168,21 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no rate limiter configured. Physical isolation guarantees bypass — the primary
 	// router (with the rejecting rate limiter) never even sees /healthz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
 	// Primary router rejects ALL traffic via rate limiter.
-	primaryRtr := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(&routerTestLimiter{allow: false}))
+	primaryRtr := mustNew(clock.Real(), WithRateLimiter(&routerTestLimiter{allow: false}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should be rate-limited")
 	}))
 
 	// Health router has no rate limiter — /healthz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
+	healthRtr, err := NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/healthz", hh.LivezHandler())
 
@@ -1203,21 +1204,21 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no circuit breaker configured. Physical isolation guarantees bypass — the
 	// primary router (with the open circuit breaker) never sees /readyz requests.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
 	// Primary router rejects ALL traffic via open circuit breaker.
-	primaryRtr := mustNew(WithRouterClock(clock.Real()), WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
+	primaryRtr := mustNew(clock.Real(), WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should be circuit-broken")
 	}))
 
 	// Health router has no circuit breaker — /readyz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
+	healthRtr, err := NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/readyz", hh.ReadyzHandler())
 
@@ -1239,7 +1240,8 @@ func TestMetrics_Records429And503(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithMetricsCollector(mc),
 		WithRateLimiter(limiter),
 		WithCircuitBreaker(breaker),
@@ -1295,7 +1297,7 @@ func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called without auth token")
 	}))
@@ -1316,7 +1318,7 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	var gotSubject string
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1340,7 +1342,7 @@ func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	loginHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1364,24 +1366,24 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
 	// no auth middleware. Physical isolation guarantees bypass — the primary router
 	// (with auth middleware that would reject all requests) never sees /healthz.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
 	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	hh := health.New(asm, obshealthz.NewAggregator(obshealthz.WithClock(clock.Real())), clock.Real())
+	hh := health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("all tokens rejected"),
 	}
 	// Primary router has auth that rejects everything.
-	primaryRtr := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	primaryRtr := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 	primaryRtr.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	// Health router has no auth — /healthz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, WithRouterClock(clock.Real()))
+	healthRtr, err := NewForListener(clock.Real(), cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/healthz", hh.LivezHandler())
 
@@ -1406,7 +1408,7 @@ func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithRateLimiter(limiter), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithRateLimiter(limiter), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -1423,7 +1425,7 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("token expired"),
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called with invalid token")
 	}))
@@ -1442,14 +1444,15 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 }
 
 func TestWithAuthMiddleware_NilVerifier_ReturnsNewError(t *testing.T) {
-	r, err := New(WithAuthMiddleware(nil))
+	r, err := New(clock.Real(), WithAuthMiddleware(nil))
 	require.Error(t, err)
 	assert.Nil(t, r)
 	assert.Contains(t, err.Error(), "auth middleware verifier must not be nil")
 }
 
 func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/public"
 		})),
@@ -1490,7 +1493,7 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 func TestDeclareAuth_AuthBypass(t *testing.T) {
 	// F3: public routes declared via mustMountRoute(Public:true) bypass JWT check.
 	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	var reached bool
 	mustMountRoute(r, auth.Route{
@@ -1514,7 +1517,7 @@ func TestDeclareAuth_AuthBypass(t *testing.T) {
 func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 	// POST /api/v1/auth/login is public; GET must still require auth.
 	verifier := &routerTestVerifier{err: fmt.Errorf("should not be called")}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	mustMountRoute(r, auth.Route{
 		Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"),
@@ -1545,7 +1548,8 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
 	tracer := tracingtest.NewSimpleTracer("test-combined")
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/internal/*"}),
 	)
@@ -1587,7 +1591,7 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 	// F3: public routes reject client-supplied X-Request-Id.
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
-	r := mustNew(WithRouterClock(clock.Real()), WithPolicyCoverageWhitelist([]string{"/internal/*"}))
+	r := mustNew(clock.Real(), WithPolicyCoverageWhitelist([]string{"/internal/*"}))
 
 	var publicID, internalID string
 	mustMountRoute(r, auth.Route{
@@ -1622,7 +1626,7 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 	// F3: only declared public routes bypass auth; others still require a token.
 	verifier := &routerTestVerifier{claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	mustMountRoute(r, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"),
@@ -1651,7 +1655,8 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	// auth.Mount / FinalizeAuth is consulted for auth + RequestID; the explicit
 	// WithTracingOptions fn controls trace root creation.
 	tracer := tracingtest.NewSimpleTracer("test-combined-fine")
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
@@ -1671,7 +1676,8 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	var publicTraceID, fineTraceID string
 	// Re-register with trace capture (FinalizeAuth already called; use r.Handle for non-declared routes).
 	// Instead, rebuild using a fresh router that captures trace IDs inline.
-	r2 := mustNew(WithRouterClock(clock.Real()),
+	r2 := mustNew(
+		clock.Real(),
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
@@ -1721,7 +1727,8 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
 			middleware.WithHSTSPreload(),
@@ -1743,7 +1750,7 @@ func TestWithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 }
 
 func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 	r.Handle("/default-hsts", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1768,7 +1775,8 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	// auth.Mount) so the route runs without any auth gate and the tracing
 	// context is captured unconditionally.
 	tracer := tracingtest.NewSimpleTracer("test-empty")
-	r := mustNew(WithRouterClock(clock.Real()),
+	r := mustNew(
+		clock.Real(),
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/test/*"}),
 	)
@@ -1792,7 +1800,7 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 
 func TestDeclareAuth_PathNormalization(t *testing.T) {
 	// auth.Mount normalises paths via path.Clean: "/api/v1//login" → "/api/v1/login".
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 
 	var gotID string
 	mustMountRoute(r, auth.Route{
@@ -1820,7 +1828,7 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: kauth.Claims{Subject: "user-1"},
 	}
-	r := mustNew(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
+	r := mustNew(clock.Real(), WithAuthMiddleware(verifier))
 
 	mustMountRoute(r, auth.Route{
 		Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"),
@@ -1858,7 +1866,7 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 // skipping the auth compilation step (FinalizeAuth) and serving requests
 // without the compiled public/PasswordResetExempt matchers in place.
 func TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 
 	// Declare auth metadata without calling FinalizeAuth — this is the
 	// mis-wired state the guard is designed to detect.
@@ -1880,7 +1888,7 @@ func TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed(t *testing.T) {
 // after patternRecordingMux double-dispatch.
 func TestRouter_DispatchPopulatesPathValue(t *testing.T) {
 	r := mustNew(
-		WithRouterClock(clock.Real()),
+		clock.Real(),
 		WithPolicyCoverageWhitelist([]string{"/api/v1/users/*"}),
 	)
 
@@ -1904,7 +1912,7 @@ func TestRouter_DispatchPopulatesPathValue(t *testing.T) {
 // ServeMux dedup (markMuxHandler). Without this ordering, the second cell's
 // duplicate registration is silently swallowed instead of failing fast.
 func TestRouter_RawHandle_DuplicateAcrossCells_FailsFast(t *testing.T) {
-	r := mustNew(WithRouterClock(clock.Real()))
+	r := mustNew(clock.Real())
 
 	// cell-a registers GET /api/v1/shared/foo
 	err := r.MountRouteGroup(cell.RouteGroup{
@@ -1954,7 +1962,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 		claims: kauth.Claims{Subject: "user-1"},
 	}
 	r := mustNew(
-		WithRouterClock(clock.Real()),
+		clock.Real(),
 		WithMetricsCollector(mc),
 		WithTracer(spy),
 		WithAuthMiddleware(verifier),
@@ -2012,7 +2020,7 @@ func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
 // prefix as the route label instead of falling back to "unmatched".
 func TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := mustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+	r := mustNew(clock.Real(), WithMetricsCollector(mc))
 
 	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,

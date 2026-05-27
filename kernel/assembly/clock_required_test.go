@@ -48,10 +48,9 @@ const (
 func TestAssemblyNew_RejectsNilClock(t *testing.T) {
 	t.Parallel()
 	assertPanicsWithAssertionMessage(t, wantNilClockPanic, func() {
-		_ = assembly.New(assembly.Config{
+		_ = assembly.New(nil, assembly.Config{
 			ID:             "nil-clock",
 			DurabilityMode: outbox.DurabilityDemo,
-			// Clock intentionally omitted — must panic.
 		})
 	})
 }
@@ -67,10 +66,9 @@ func TestAssemblyNew_RejectsTypedNilClock(t *testing.T) {
 	var p *nilClockCarrier // typed-nil pointer
 	var clk clock.Clock = p
 	assertPanicsWithAssertionMessage(t, wantTypedNilClockPanic, func() {
-		_ = assembly.New(assembly.Config{
+		_ = assembly.New(clk, assembly.Config{
 			ID:             "typed-nil-clock",
 			DurabilityMode: outbox.DurabilityDemo,
-			Clock:          clk,
 		})
 	})
 }
@@ -81,10 +79,9 @@ func TestAssemblyNew_RejectsTypedNilClock(t *testing.T) {
 func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 	t.Parallel()
 
-	a := assembly.New(assembly.Config{
+	a := assembly.New(clock.Real(), assembly.Config{
 		ID:             "snapshots-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	t.Cleanup(a.Shutdown)
 
@@ -107,10 +104,9 @@ func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	t.Parallel()
 
-	a := assembly.New(assembly.Config{
+	a := assembly.New(clock.Real(), assembly.Config{
 		ID:             "snapshots-copy-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	t.Cleanup(a.Shutdown)
 

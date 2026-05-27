@@ -2,10 +2,26 @@
 // revocation events: it bumps the user's authz_epoch, revokes all active
 // sessions, and revokes all refresh chains in one ambient transaction.
 //
-// AI-robust archtest (Hard, see tools/archtest/credential_invalidate_funnel_test.go):
-//   - CREDENTIAL-INVALIDATE-FUNNEL-01:  session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
-//   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:  UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, *_test.go}
-//   - REFRESH-REVOKE-USER-FUNNEL-01:    refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
+// AI-robust archtest (all Hard post #1033, see
+// tools/archtest/credential_invalidate_funnel_invariants_test.go +
+// tools/archtest/fence_token_mint_funnel_test.go):
+//   - CREDENTIAL-INVALIDATE-FUNNEL-01:    session.Store.RevokeForSubject callers ⊆ {this pkg, store impl, storetest, *_test.go}
+//   - USER-AUTHZ-EPOCH-BUMP-FUNNEL-01:    UserRepository.BumpAuthzEpoch callers ⊆ {this pkg, repo impl, conformance, *_test.go}
+//   - REFRESH-REVOKE-USER-FUNNEL-01:      refresh.Store.RevokeUser callers ⊆ {this pkg, store impl, *_test.go}
+//   - CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: Invalidator.Apply callers ⊆
+//     {this pkg, authzmutate, identitymanage, sessionrefresh, rbacassign, *_test.go}
+//   - FENCE-TOKEN-MINT-FUNNEL-01:         credentialfence.Mint callers ⊆ {this pkg, storetest/conformance, *_test.go}
+//
+// The three mutation methods take a credentialfence.FenceToken capability
+// proof (#1033). Apply mints a FenceToken via credentialfence.Mint and
+// passes the same value to each of the three calls. Combined with the
+// type-system seal on FenceToken (external packages cannot implement the
+// interface or construct the unexported impl) plus the runtime nil-guard
+// (credentialfence.MustHave at the top of every mutation impl), the
+// upstream half of the funnel is now Hard: external packages cannot
+// produce a FenceToken value, so the mutation methods cannot be invoked
+// from outside the funnel even at compile time. See ADR §A16 for the
+// closure proof and threat-matrix re-evaluation.
 //
 // Apply must be called inside an ambient transaction (txCtx derived from
 // persistence.CellTxManager.RunInTx). All three operations commit atomically;
@@ -15,10 +31,12 @@ package credentialinvalidate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -61,16 +79,25 @@ func New(users ports.UserRepository, sessions session.Store, refreshStore refres
 // Order is defined only for short-circuit predictability; correctness does not
 // depend on the order.
 func (i *Invalidator) Apply(txCtx context.Context, subjectID string, event session.CredentialEvent) error {
+	slog.DebugContext(txCtx, "credentialinvalidate: apply",
+		slog.String("subject_id", subjectID),
+		slog.String("event", event.String()))
+	// Mint the FenceToken once and pass the same value through all three
+	// mutations. The token is identity-less (any non-nil FenceToken is
+	// equally valid), so sharing it across the three calls is
+	// semantically equivalent to minting per call — and saves two
+	// allocations on the hot path.
+	tok := credentialfence.Mint()
 	// New epoch value is intentionally discarded: sessionvalidate re-reads
 	// authz_epoch from the DB on every request, so the caller does not need
 	// the bumped value here. The DB row is the single source of truth.
-	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID); err != nil {
+	if _, err := i.users.BumpAuthzEpoch(txCtx, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: bump authz_epoch: %w", err)
 	}
-	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event); err != nil {
+	if err := i.sessions.RevokeForSubject(txCtx, subjectID, event, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: revoke sessions: %w", err)
 	}
-	if err := i.refresh.RevokeUser(txCtx, subjectID); err != nil {
+	if err := i.refresh.RevokeUser(txCtx, subjectID, tok); err != nil {
 		return fmt.Errorf("credentialinvalidate: revoke refresh chain: %w", err)
 	}
 	return nil

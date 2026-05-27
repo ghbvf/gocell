@@ -36,9 +36,11 @@ func TestAssemblySpec_OwnerAndMaxConsistencyLevelRoundTrip(t *testing.T) {
 			},
 		},
 	}
-	doc, err := catalog.BuildDocument(pm, catalog.ExportOptions{
-		Clock: clockmock.New(time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)),
-	})
+	doc, err := catalog.BuildDocument(
+		clockmock.New(time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)),
+		pm,
+		catalog.ExportOptions{},
+	)
 	require.NoError(t, err)
 
 	var asmSpec catalog.AssemblySpec

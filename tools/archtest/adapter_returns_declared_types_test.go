@@ -232,7 +232,7 @@ func loadContractStatusSets(rootDir string) (map[string]map[int]bool, error) {
 
 // importPathToContractID converts a full Go import path for a generated
 // contract package back to its contract ID.
-// It is the inverse of pathx.ContractIDToPackagePath + module prefix.
+// It is the inverse of contractpath.ContractIDToPackagePath + module prefix.
 //
 // "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1" → "http.auth.login.v1"
 // "github.com/ghbvf/gocell/generated/contracts/http/internalapi/foo/v1" → "http.internal.foo.v1"

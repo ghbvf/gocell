@@ -126,10 +126,10 @@ func fullPM() *metadata.ProjectMeta {
 	return pm
 }
 
-// baseOpts returns a baseline ExportOptions.
+// baseOpts returns a baseline ExportOptions without a clock field.
+// Pass fixedClock() as the first argument to catalog.BuildDocument.
 func baseOpts() catalog.ExportOptions {
 	return catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Root:   "/projects/gocell",
 		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
@@ -144,7 +144,7 @@ func baseOpts() catalog.ExportOptions {
 func TestBuildDocument_CellRequiresProjected(t *testing.T) {
 	pm := minimalPM()
 	pm.Cells["accesscore"].Requires = []string{"postgres", "redis"}
-	doc, err := catalog.BuildDocument(pm, baseOpts())
+	doc, err := catalog.BuildDocument(fixedClock(), pm, baseOpts())
 	require.NoError(t, err)
 
 	var found bool
@@ -166,7 +166,7 @@ func TestBuildDocument_CellRequiresProjected(t *testing.T) {
 func TestBuildDocument_FullSnapshot(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	assert.Equal(t, "v1", doc.SchemaVersion)
@@ -231,7 +231,7 @@ func TestBuildDocument_FilterKinds(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Kinds = []string{"Cell", "Contract"}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	for _, e := range doc.Entities {
@@ -248,7 +248,7 @@ func TestBuildDocument_FilterLayers(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Layers = []string{"cells"}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	for _, e := range doc.Entities {
@@ -265,7 +265,7 @@ func TestBuildDocument_FilterCellsFocus(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Cells = []string{"accesscore"}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -297,7 +297,7 @@ func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
 
 	opts := baseOpts()
 	opts.Filter.Cells = []string{"accesscore"}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -403,12 +403,11 @@ func TestBuildDocument_IncludeOptions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := catalog.ExportOptions{
-				Clock:    fixedClock(),
 				Filter:   catalog.Filter{Include: tc.inc},
 				CellDeps: cellDeps,
 				Packages: pkgs,
 			}
-			doc, err := catalog.BuildDocument(pm, opts)
+			doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 			require.NoError(t, err)
 			assertIncludeFlags(t, doc, tc.wantRelations, tc.wantStatus, tc.wantCellDeps, tc.wantPkgDeps)
 		})
@@ -473,10 +472,9 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 		},
 	}
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.Len(t, doc.StatusBoard, 4)
 
@@ -519,13 +517,12 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 func TestBuildDocument_PackageDeps_Loading(t *testing.T) {
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
 		Filter: catalog.Filter{
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{}, // loading: Graph==nil, Error==""
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -538,13 +535,12 @@ func TestBuildDocument_PackageDeps_Loading(t *testing.T) {
 func TestBuildDocument_PackageDeps_Error(t *testing.T) {
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
 		Filter: catalog.Filter{
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{Error: "foo"},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -558,13 +554,12 @@ func TestBuildDocument_PackageDeps_Ready(t *testing.T) {
 	pm := minimalPM()
 	g := &kerneldepgraph.Graph{}
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
 		Filter: catalog.Filter{
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -576,7 +571,6 @@ func TestBuildDocument_PackageDeps_Ready(t *testing.T) {
 func TestBuildDocument_QueryEcho(t *testing.T) {
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
 		Filter: catalog.Filter{
 			Kinds:  []string{"Cell"},
 			Layers: []string{"cells"},
@@ -587,7 +581,7 @@ func TestBuildDocument_QueryEcho(t *testing.T) {
 			},
 		},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"Cell"}, doc.Query.Kinds)
@@ -607,11 +601,12 @@ func TestBuildDocument_QueryEcho(t *testing.T) {
 func TestBuildDocument_RejectsNilClock(t *testing.T) {
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock:  nil, // nil clock must be rejected
 		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
-	_, err := catalog.BuildDocument(pm, opts)
-	assert.Error(t, err, "nil opts.Clock must return an error")
+	// clk is now a positional param; nil must panic via clock.MustHaveClock.
+	assert.Panics(t, func() {
+		_, _ = catalog.BuildDocument(nil, pm, opts)
+	}, "nil clock must panic")
 }
 
 // ---- TestRelationsDeterministic ----
@@ -620,11 +615,11 @@ func TestRelationsDeterministic(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 
-	first, err := catalog.BuildDocument(pm, opts)
+	first, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	for i := 0; i < 100; i++ {
-		doc, err := catalog.BuildDocument(pm, opts)
+		doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 		require.NoError(t, err)
 		require.Equal(t, len(first.Entities), len(doc.Entities))
 		for j := range first.Entities {
@@ -656,10 +651,9 @@ func TestBuildDocument_FilterCellsFocus_L0Dep(t *testing.T) {
 		Actors:     []metadata.ActorMeta{},
 	}
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Cells: []string{"cella"}, Include: catalog.IncludeOptions{}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -695,10 +689,9 @@ func TestBuildDocument_FilterCellsFocus_ContractClient(t *testing.T) {
 		Actors:     []metadata.ActorMeta{},
 	}
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Cells: []string{"cella"}, Include: catalog.IncludeOptions{}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -718,15 +711,14 @@ func TestBuildDocument_DepsFilter_CellFocus(t *testing.T) {
 		Edges: []catalog.CellEdge{{From: "accesscore", To: "auditcore"}},
 	}
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
-		Root:  "/projects/gocell",
+		Root: "/projects/gocell",
 		Filter: catalog.Filter{
 			Cells:   []string{"accesscore"},
 			Include: catalog.IncludeOptions{CellDeps: true},
 		},
 		CellDeps: cellDeps,
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Cells)
@@ -757,15 +749,14 @@ func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
 	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{cellsNode, kernelNode})
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
-		Root:  "/projects/gocell",
+		Root: "/projects/gocell",
 		Filter: catalog.Filter{
 			Layers:  []string{"cells"},
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -800,15 +791,14 @@ func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{accessNode, auditNode, kernelNode})
 	pm := fullPM()
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
-		Root:  "/projects/gocell",
+		Root: "/projects/gocell",
 		Filter: catalog.Filter{
 			Cells:   []string{"accesscore"},
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -859,10 +849,9 @@ func TestBuildDocument_Redaction_AllStates(t *testing.T) {
 				},
 			}
 			opts := catalog.ExportOptions{
-				Clock:  fixedClock(),
 				Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 			}
-			doc, err := catalog.BuildDocument(pm, opts)
+			doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 			require.NoError(t, err)
 			require.Len(t, doc.StatusBoard, 1)
 
@@ -886,14 +875,13 @@ func TestBuildDocument_Filter_MultiDim(t *testing.T) {
 	// kinds×cells: only Cell entities for accesscore
 	t.Run("kinds=Cell,cells=accesscore", func(t *testing.T) {
 		opts := catalog.ExportOptions{
-			Clock: fixedClock(),
 			Filter: catalog.Filter{
 				Kinds:   []string{"Cell"},
 				Cells:   []string{"accesscore"},
 				Include: catalog.IncludeOptions{},
 			},
 		}
-		doc, err := catalog.BuildDocument(pm, opts)
+		doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 		require.NoError(t, err)
 		for _, e := range doc.Entities {
 			assert.Equal(t, "Cell", e.Kind, "only Cell entities should appear")
@@ -904,14 +892,13 @@ func TestBuildDocument_Filter_MultiDim(t *testing.T) {
 	// kinds×layers: kinds=Cell,Slice and layers=cells must give same result as layers=cells alone
 	t.Run("kinds=Cell+Slice,layers=cells", func(t *testing.T) {
 		opts := catalog.ExportOptions{
-			Clock: fixedClock(),
 			Filter: catalog.Filter{
 				Kinds:   []string{"Cell", "Slice"},
 				Layers:  []string{"cells"},
 				Include: catalog.IncludeOptions{},
 			},
 		}
-		doc, err := catalog.BuildDocument(pm, opts)
+		doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 		require.NoError(t, err)
 		for _, e := range doc.Entities {
 			assert.Contains(t, []string{"Cell", "Slice"}, e.Kind)
@@ -921,7 +908,6 @@ func TestBuildDocument_Filter_MultiDim(t *testing.T) {
 	// Three-dimensional: kinds + layers + cells
 	t.Run("kinds=Slice,layers=cells,cells=accesscore", func(t *testing.T) {
 		opts := catalog.ExportOptions{
-			Clock: fixedClock(),
 			Filter: catalog.Filter{
 				Kinds:   []string{"Slice"},
 				Layers:  []string{"cells"},
@@ -929,7 +915,7 @@ func TestBuildDocument_Filter_MultiDim(t *testing.T) {
 				Include: catalog.IncludeOptions{},
 			},
 		}
-		doc, err := catalog.BuildDocument(pm, opts)
+		doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 		require.NoError(t, err)
 		for _, e := range doc.Entities {
 			assert.Equal(t, "Slice", e.Kind, "only Slice entities expected")
@@ -947,10 +933,9 @@ func TestBuildDocument_GeneratedAt_HonorsInjectedClock(t *testing.T) {
 	clk := clockmock.New(injected)
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock:  clk,
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(clk, pm, opts)
 	require.NoError(t, err)
 	assert.Equal(t, injected.UTC().Format(time.RFC3339), doc.GeneratedAt,
 		"GeneratedAt must equal injected clock time")
@@ -1041,7 +1026,6 @@ func TestInjectWireSummaries_EmptySummaries(t *testing.T) {
 func TestBuildDocument_WireSummariesInjected(t *testing.T) {
 	pm := minimalPM() // 1 cell: accesscore
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{}},
 		WireSummaries: []metadata.CellWireSummary{
 			{
@@ -1053,7 +1037,7 @@ func TestBuildDocument_WireSummariesInjected(t *testing.T) {
 		},
 	}
 
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	var cellEntity *catalog.Entity
@@ -1104,13 +1088,12 @@ func TestBuildDocument_PackageDeps_NoStatusField(t *testing.T) {
 	pm := minimalPM()
 	g := &kerneldepgraph.Graph{}
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
 		Filter: catalog.Filter{
 			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
 		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	// Marshal to JSON and verify no "status" key appears in packages block.

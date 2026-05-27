@@ -15,6 +15,13 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# CLOCK-POSITIONAL-INJECTION-01 (TestClockPositionalInjection + …Fixtures) is
+# intentionally NOT in this PR-time set: it is a whole-prod-tree packages.Load
+# scan whose memory footprint, added to the ~5 existing whole-tree scans here,
+# exceeds the 2-CPU/7GB CI runner budget (SIGTERM/OOM at ~84s). It stays gated
+# nightly via archtest-nightly.yml (full 16-shard suite) + local `make verify`
+# (verify-archtest.sh full sweep). #1053 review F6 (add to PR-time) reverted for
+# CI stability — the heavy whole-module form-lock belongs with the nightly suite.
 go test ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestFenceTokenMintFunnel_AllowlistEnforced)$' \
   -count=1 -timeout 5m

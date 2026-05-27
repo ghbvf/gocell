@@ -99,7 +99,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -121,8 +121,7 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 	// (pool, txMgr, clk) triple. Session/refresh stores remain in-memory for
 	// this harness (S3+S5 scope; PG session/refresh wiring is exercised
 	// separately in the S4a PG sub-tests below).
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -131,9 +130,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		accesscore.WithBootstrapAuth(bootstrapMW),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
-	)...) //archtest:allow:clock-injection:via-slice buildAccessCoreMemOptions + WithClock prepended; spread prevents direct positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	)...)
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -142,22 +140,20 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "setup-pg-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "setup-pg-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
 	healthLn := newCorebundleLocalListener(t)
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
@@ -407,7 +403,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var pgOutboxWriter outbox.Writer
 	if pgOutboxOverride != nil {
 		pgOutboxWriter = pgOutboxOverride
@@ -429,8 +425,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(),
 		accesscore.WithPGBundle(pgBundle),
 		accesscore.WithSessionStore(pgSessionStore),
 		accesscore.WithRefreshStore(pgRefreshStore),
@@ -441,8 +436,7 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -450,22 +444,20 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "session-pg-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "session-pg-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
 	sessionHealthLn := newCorebundleLocalListener(t)
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},

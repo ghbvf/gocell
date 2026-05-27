@@ -40,6 +40,13 @@ import (
 //                                 + commands.device_id FK → devices(id) ON DELETE RESTRICT
 //                                 + commands_status_chk, commands_attempt_chk
 //                                 + idx_commands_idempotency_key UNIQUE partial (031)
+//   - saga_instances     (040)  saga coordinator instance projection + lease fencing
+//                                 + saga_instances_status_range, saga_instances_version_nonneg,
+//                                   saga_instances_lease_paired CHECK
+//                                 + idx_saga_instances_claimable partial index
+//   - saga_events        (040)  append-only saga event log
+//                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
+//                                 + saga_events_kind_range, saga_events_version_positive CHECK
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -293,6 +300,10 @@ type expectedCheck struct {
 // Extracted to satisfy go:S1192 (used in 16 expectedColumns entries).
 const pgTypeTSTZ = "timestamp with time zone"
 
+// queryErrFmt is the WithInternal detail format for failed schema-dimension
+// SQL probes. Extracted to satisfy go:S1192 (used in 4 dimension probes).
+const queryErrFmt = "query: %v"
+
 // ---------------------------------------------------------------------------
 // Expected shape registries (hardcoded per ADR-credential §5.1.3)
 // ---------------------------------------------------------------------------
@@ -382,6 +393,23 @@ var expectedColumns = []expectedColumn{
 	{Table: "commands", Column: "timeouts_schedule_to_send_ns", Type: "bigint", NotNull: false},
 	{Table: "commands", Column: "timeouts_send_to_complete_ns", Type: "bigint", NotNull: false},
 	{Table: "commands", Column: "timeouts_overall_ns", Type: "bigint", NotNull: false},
+	// saga_instances (040_create_saga_tables.sql) — saga coordinator instance projection.
+	{Table: "saga_instances", Column: "id", Type: "text", NotNull: true},
+	{Table: "saga_instances", Column: "definition_id", Type: "text", NotNull: true},
+	{Table: "saga_instances", Column: "status", Type: "smallint", NotNull: true},
+	{Table: "saga_instances", Column: "current_version", Type: "bigint", NotNull: true},
+	{Table: "saga_instances", Column: "lease_id", Type: "text", NotNull: false},
+	{Table: "saga_instances", Column: "lease_expires_at", Type: pgTypeTSTZ, NotNull: false},
+	{Table: "saga_instances", Column: "started_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "saga_instances", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "saga_instances", Column: "payload_state", Type: "bytea", NotNull: false},
+	// saga_events (040_create_saga_tables.sql) — append-only saga event log.
+	{Table: "saga_events", Column: "instance_id", Type: "text", NotNull: true},
+	{Table: "saga_events", Column: "version", Type: "bigint", NotNull: true},
+	{Table: "saga_events", Column: "kind", Type: "smallint", NotNull: true},
+	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
+	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
+	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -404,6 +432,10 @@ var expectedPKs = []expectedPK{
 	// devices / commands (029, 030) — B2.B.
 	{Table: "devices", Columns: []string{"id"}},
 	{Table: "commands", Columns: []string{"id"}},
+	// saga_instances: PK on id (040_create_saga_tables.sql).
+	{Table: "saga_instances", Columns: []string{"id"}},
+	// saga_events: composite PK (instance_id, version) (040_create_saga_tables.sql).
+	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -419,16 +451,19 @@ var expectedIndexes = []expectedIndex{
 	// roles: no additional non-PK indexes in migration 019
 	// role_assignments
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
-	// audit_entries (020_audit_ledger.sql)
+	// audit_entries (020_audit_ledger.sql + 021 event_id unique)
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
+	{Table: "audit_entries", Name: "uq_audit_namespace_event_id", Unique: true},
 	// devices / commands (029, 030, 031) — B2.B.
 	{Table: "devices", Name: "idx_devices_status", Unique: false},
 	{Table: "commands", Name: "idx_commands_pending_fifo", Unique: false},
 	{Table: "commands", Name: "idx_commands_active_lease", Unique: false},
 	{Table: "commands", Name: "idx_commands_device_active", Unique: false},
 	{Table: "commands", Name: "idx_commands_idempotency_key", Unique: true},
+	// saga_instances (040_create_saga_tables.sql) — partial index over claimable rows.
+	{Table: "saga_instances", Name: "idx_saga_instances_claimable", Unique: false},
 }
 
 // expectedFKs is the foreign key constraint registry. ON DELETE action uses
@@ -469,6 +504,14 @@ var expectedFKs = []expectedFK{
 		RefTable:   "devices",
 		RefColumns: []string{"id"},
 		OnDelete:   "r", // RESTRICT — migrations/030_commands.sql (B2.B)
+	},
+	// saga_events → saga_instances ON DELETE CASCADE (040_create_saga_tables.sql).
+	{
+		Table:      "saga_events",
+		Constraint: "saga_events_instance_id_fkey",
+		RefTable:   "saga_instances",
+		RefColumns: []string{"id"},
+		OnDelete:   "c", // CASCADE — migration 040
 	},
 }
 
@@ -523,6 +566,16 @@ var expectedChecks = []expectedCheck{
 	{Table: "devices", Name: "devices_status_chk"},
 	{Table: "commands", Name: "commands_status_chk"},
 	{Table: "commands", Name: "commands_attempt_chk"},
+	// audit_entries hash-format guard (020_audit_ledger.sql) — seq_no-coupled
+	// 64-char lowercase hex format for prev_hash/hash with the genesis exception.
+	{Table: "audit_entries", Name: "ck_audit_hash_format"},
+	// saga_instances (040_create_saga_tables.sql).
+	{Table: "saga_instances", Name: "saga_instances_status_range"},
+	{Table: "saga_instances", Name: "saga_instances_version_nonneg"},
+	{Table: "saga_instances", Name: "saga_instances_lease_paired"},
+	// saga_events (040_create_saga_tables.sql).
+	{Table: "saga_events", Name: "saga_events_kind_range"},
+	{Table: "saga_events", Name: "saga_events_version_positive"},
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +609,7 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					slog.String("table", ec.Table),
 					slog.String("column", ec.Column),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		if gotType != ec.Type {
@@ -707,7 +760,7 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 					slog.String("table", idx.Table),
 					slog.String("index", idx.Name),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		if gotUnique != idx.Unique {
@@ -778,7 +831,7 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 				slog.String("table", fk.Table),
 				slog.String("constraint", fk.Constraint),
 			),
-			errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+			errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 		)
 	}
 	if gotRefTable != fk.RefTable {
@@ -879,7 +932,7 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 					slog.String("table", tr.Table),
 					slog.String("trigger", tr.Name),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		isEnabled := gotEnabled == "O"

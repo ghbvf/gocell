@@ -1,3 +1,0 @@
-module fixturetest/prod_clock_injection/control_plane_marker_wrong_func_violates
-
-go 1.22

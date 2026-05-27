@@ -56,7 +56,7 @@ type Service struct {
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
 // TxRunner must be provided via WithTxManager; nil txRunner is rejected to
 // prevent silent loss of L2 atomicity guarantees.
-func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "configwrite.NewService")
 	s := &Service{
 		repo:    repo,
@@ -82,7 +82,8 @@ type CreateInput struct {
 
 // Create creates a new config entry and publishes a change event.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -130,7 +131,8 @@ type UpdateInput struct {
 // a single transaction for L2 atomicity.
 // Returns ErrVersionConflict (409) if expectedVersion does not match the stored version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -160,7 +162,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 // Delete removes a config entry by key and publishes a change event.
 // Returns ErrVersionConflict (409) if expectedVersion does not match the stored version.
 func (s *Service) Delete(ctx context.Context, key string, expectedVersion int) error {
-	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return err

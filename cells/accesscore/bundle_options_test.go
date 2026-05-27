@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accessmem "github.com/ghbvf/gocell/cells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/cells/accesscore/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // TestWithMemBundle_WiresFourPrimitives verifies that WithMemBundle copies the
@@ -19,7 +19,7 @@ import (
 // is inexpressible — the four accessor outputs all come from the same Store.
 func TestWithMemBundle_WiresFourPrimitives(t *testing.T) {
 	b := accessmem.NewBundle(clock.Real())
-	c := NewAccessCore(WithClock(clock.Real()), WithMemBundle(b))
+	c := NewAccessCore(clock.Real(), WithMemBundle(b))
 
 	assert.NotNil(t, c.userRepo, "WithMemBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithMemBundle must wire roleRepo")
@@ -40,12 +40,12 @@ func TestWithMemBundle_WiresFourPrimitives(t *testing.T) {
 // needed because inner constructors only store the references.
 func TestWithPGBundle_WiresFourPrimitives(t *testing.T) {
 	fakePool := new(pgxpool.Pool)
-	fakeTxm := new(adapterpg.TxManager)
+	fakeTxm := outbox.DemoTxRunner{}
 
 	b, err := accesspg.NewBundle(fakePool, fakeTxm, clock.Real())
 	require.NoError(t, err)
 
-	c := NewAccessCore(WithClock(clock.Real()), WithPGBundle(b))
+	c := NewAccessCore(clock.Real(), WithPGBundle(b))
 
 	assert.NotNil(t, c.userRepo, "WithPGBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithPGBundle must wire roleRepo")

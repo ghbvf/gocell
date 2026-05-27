@@ -61,6 +61,7 @@ func TestResolveEmitter(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		clk         clock.Clock
 		cfg         outbox.EmitterConfig
 		wantDurable bool
 		wantErr     bool
@@ -68,6 +69,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// A: durable + full real deps → WriterEmitter, durable=true
 			name: "A_durable_full",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDurable,
@@ -81,6 +83,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// B: durable + missing writer → error (ErrCellMissingOutbox)
 			name: "B_durable_missing_writer",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDurable,
@@ -94,6 +97,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// C: durable + noop writer → CheckNotNoop rejects
 			name: "C_durable_noop_writer",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDurable,
@@ -107,6 +111,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// D: demo + real pub, no writer → DirectEmitter(FailOpen), durable=false
 			name: "D_demo_pub_no_writer",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
 				Mode:              outbox.DurabilityDemo,
@@ -115,13 +120,13 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          nil,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
-				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
 		{
 			// E: demo + real pub + noop writer → DirectEmitter, durable=false
 			name: "E_demo_pub_noop_writer",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
 				Mode:              outbox.DurabilityDemo,
@@ -130,13 +135,13 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          noopTx,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
-				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
 		{
 			// F: demo + real writer + real tx (no pub) → WriterEmitter, durable=true
 			name: "F_demo_writer_with_tx",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDemo,
@@ -150,6 +155,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// G: demo + real writer but no tx → pairing invariant error
 			name: "G_demo_writer_without_tx",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDemo,
@@ -163,6 +169,7 @@ func TestResolveEmitter(t *testing.T) {
 		{
 			// H: demo + all nil → no sink error
 			name: "H_demo_all_nil",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:          "testcell",
 				Mode:            outbox.DurabilityDemo,
@@ -177,6 +184,7 @@ func TestResolveEmitter(t *testing.T) {
 			// I: demo + noop pub + noop writer + noop tx
 			// noopPub is Nooper, noopWriter is Nooper → publisher branch selected → DirectEmitter, durable=false
 			name: "I_demo_all_noop",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
 				Mode:              outbox.DurabilityDemo,
@@ -185,13 +193,13 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          noopTx,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
-				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
 		{
 			// J: configcore fail-closed → DirectEmitter(FailClosed), durable=false
 			name: "J_demo_fail_closed",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:            "configcell",
 				Mode:              outbox.DurabilityDemo,
@@ -200,7 +208,6 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          nil,
 				DirectPublishMode: outbox.DirectPublishFailClosed,
 				MetricsProvider:   metrics.NopProvider{},
-				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
@@ -211,6 +218,7 @@ func TestResolveEmitter(t *testing.T) {
 			// Documenting this preference here prevents regressions of the dual-sink
 			// contract.
 			name: "K_demo_pub_and_real_writer",
+			clk:  clock.Real(),
 			cfg: outbox.EmitterConfig{
 				CellID:            "testcell",
 				Mode:              outbox.DurabilityDemo,
@@ -227,7 +235,7 @@ func TestResolveEmitter(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assertResolveEmitter(t, tc.cfg, tc.wantErr, tc.wantDurable)
+			assertResolveEmitter(t, tc.clk, tc.cfg, tc.wantErr, tc.wantDurable)
 		})
 	}
 }
@@ -235,9 +243,9 @@ func TestResolveEmitter(t *testing.T) {
 // assertResolveEmitter calls outbox.ResolveEmitter and asserts the expected
 // outcome. Extracted from TestResolveEmitter to reduce that function's
 // cognitive complexity.
-func assertResolveEmitter(t *testing.T, cfg outbox.EmitterConfig, wantErr bool, wantDurable bool) {
+func assertResolveEmitter(t *testing.T, clk clock.Clock, cfg outbox.EmitterConfig, wantErr bool, wantDurable bool) {
 	t.Helper()
-	outcome, err := outbox.ResolveEmitter(cfg)
+	outcome, err := outbox.ResolveEmitter(clk, cfg)
 	if wantErr {
 		if err == nil {
 			t.Fatalf("expected error, got nil (outcome=%+v)", outcome)
@@ -283,7 +291,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("mutual_exclusion", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID:    "testcell",
 				Mode:      outbox.DurabilityDemo,
@@ -305,7 +313,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("preresolved_durable_mode_requires_durable", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDurable,
@@ -326,7 +334,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("preresolved_durable_ok", func(t *testing.T) {
 		t.Parallel()
-		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDurable,
@@ -344,7 +352,7 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("preresolved_demo_non_durable_warn_at_L2", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDemo,
@@ -370,7 +378,7 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("preresolved_demo_no_warn_below_L2", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDemo,
@@ -390,7 +398,7 @@ func TestResolveCellEmitter(t *testing.T) {
 	t.Run("delegates_to_resolve_emitter_on_demo", func(t *testing.T) {
 		t.Parallel()
 		logger, buf := captureLogger()
-		outcome, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID:            "testcell",
 				Mode:              outbox.DurabilityDemo,
@@ -398,7 +406,6 @@ func TestResolveCellEmitter(t *testing.T) {
 				DirectPublishMode: outbox.DirectPublishFailClosed,
 				Logger:            logger,
 				MetricsProvider:   metrics.NopProvider{},
-				Clock:             clock.Real(),
 			},
 			ConsistencyLevel: cellvocab.L2,
 		})
@@ -418,7 +425,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 	t.Run("error_from_resolve_emitter_propagates", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 			EmitterConfig: outbox.EmitterConfig{
 				CellID: "testcell",
 				Mode:   outbox.DurabilityDemo,
@@ -438,7 +445,7 @@ func TestResolveCellEmitter(t *testing.T) {
 func TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError(t *testing.T) {
 	t.Parallel()
 	realPub := mrFakePublisher{}
-	_, err := outbox.ResolveEmitter(outbox.EmitterConfig{
+	_, err := outbox.ResolveEmitter(clock.Real(), outbox.EmitterConfig{
 		CellID:            "testcell",
 		Mode:              outbox.DurabilityDemo,
 		Publisher:         realPub,

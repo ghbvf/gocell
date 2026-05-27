@@ -1,0 +1,3 @@
+module fixturetest/prod_clock_injection/control_plane_wrong_method_name_violates
+
+go 1.22

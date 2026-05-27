@@ -26,7 +26,7 @@ import (
 // parameter and returns nil (including with a canceled ctx, since the
 // in-memory teardown is unconditional O(1)).
 func TestInMemoryEventBus_Close_AcceptsCtx(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
@@ -41,7 +41,7 @@ func TestInMemoryEventBus_Close_AcceptsCtx(t *testing.T) {
 // even when called with a canceled ctx, Close still terminates subscriber
 // goroutines (no goroutine leak).
 func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(4))
+	bus := New(clock.Real(), WithBufferSize(4))
 	topic := "test.close.cancelled"
 
 	subDone := make(chan struct{})
@@ -81,7 +81,7 @@ func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 // that *InMemoryEventBus satisfies both outbox.Publisher and outbox.Subscriber,
 // both of which now require Close(ctx context.Context) error.
 func TestInMemoryEventBus_Close_ImplementsBothPublisherAndSubscriber(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var _ outbox.Publisher = bus
@@ -91,7 +91,7 @@ func TestInMemoryEventBus_Close_ImplementsBothPublisherAndSubscriber(t *testing.
 // TestInMemoryEventBus_Close_Idempotent verifies that a second Close call
 // returns nil immediately (closed flag guard).
 func TestInMemoryEventBus_Close_Idempotent(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	ctx := context.Background()
 
 	assert.NoError(t, bus.Close(ctx), "first Close must return nil")
@@ -101,7 +101,7 @@ func TestInMemoryEventBus_Close_Idempotent(t *testing.T) {
 // TestInMemoryEventBus_Close_PreventsNewPublishes verifies that after Close,
 // Publish returns an error.
 func TestInMemoryEventBus_Close_PreventsNewPublishes(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	require.NoError(t, bus.Close(context.Background()))
 
 	err := bus.Publish(context.Background(), "test.topic", []byte(`{}`))

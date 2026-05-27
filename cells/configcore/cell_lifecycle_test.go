@@ -36,7 +36,7 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 	ctx := context.Background()
 
 	c := NewConfigCore(
-		WithClock(fc),
+		fc,
 		WithTombstoneTTL(testTombstoneTTL),
 		WithEventbusCacheCollector(obmetrics.NoopEventbusCacheCollector{}),
 		WithInMemoryDefaults(),
@@ -65,7 +65,7 @@ func TestConfigCore_AfterStart_StartsTombstoneGC(t *testing.T) {
 // *ConfigCore implements both optional lifecycle interfaces discovered by the
 // assembly via type assertion.
 func TestConfigCore_LifecycleHooks_InterfaceSatisfied(t *testing.T) {
-	c := NewConfigCore(WithClock(clockmock.New(time.Unix(0, 0))), WithInMemoryDefaults())
+	c := NewConfigCore(clockmock.New(time.Unix(0, 0)), WithInMemoryDefaults())
 
 	_, ok := any(c).(cell.AfterStarter)
 	assert.True(t, ok, "*ConfigCore must implement cell.AfterStarter")
@@ -81,7 +81,7 @@ func TestConfigCore_BeforeStop_SafeWhenGCNeverStarted(t *testing.T) {
 	ctx := context.Background()
 
 	c := NewConfigCore(
-		WithClock(fc),
+		fc,
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.DemoCellEmitter()),
 	)

@@ -98,15 +98,6 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
-// WithClock sets the clock used for session creation timestamps.
-// clk must not be nil; pass clock.Real() for production use.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		clock.MustHaveClock(clk, "sessionlogin.WithClock")
-		s.clock = clk
-	}
-}
-
 // withPasswordComparer overrides the bcrypt comparator used by Login. This
 // option is package-private (lowercase) and intended only for unit tests that
 // need to spy on or stub the password comparison step.
@@ -171,6 +162,7 @@ func WithAccountLockout(svc *accountlockout.Service) Option {
 // refresh token returned to the client; the access JWT is minted by
 // sessionmint.MintAccess.
 func NewService(
+	clk clock.Clock,
 	userRepo ports.UserRepository,
 	sessionStore session.Store,
 	roleRepo ports.RoleRepository,
@@ -179,6 +171,7 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "sessionlogin.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -187,6 +180,7 @@ func NewService(
 		sessionStore:    sessionStore,
 		roleRepo:        roleRepo,
 		refreshStore:    refreshStore,
+		clock:           clk,
 		emitter:         outbox.DemoCellEmitter(),
 		issuer:          issuer,
 		logger:          logger,
@@ -198,7 +192,6 @@ func NewService(
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
-	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
 	if s.sessionTTL <= 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"sessionlogin: SessionTTL required; use WithSessionTTL (typically accesscore.DefaultRefreshMaxAge)")
@@ -485,10 +478,9 @@ func (s *Service) mintAndPersistSession(
 	user *domain.User,
 	sessionID string,
 ) (loginOutcome, error) {
-	minted, err := sessionmint.MintAccess(txCtx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(txCtx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
-		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                user.ID,
 		SessionID:             sessionID,
@@ -751,10 +743,9 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	sessionID := uuid.NewString()
-	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
-		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                userID,
 		SessionID:             sessionID,
