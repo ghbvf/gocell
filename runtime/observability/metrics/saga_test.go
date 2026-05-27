@@ -12,6 +12,10 @@ import (
 // Compile-time check: SagaStepCollector must implement executor.Observer.
 var _ executor.Observer = (*obmetrics.SagaStepCollector)(nil)
 
+// Compile-time check: sagaSpyProvider must implement kernelmetrics.Provider so
+// that any future Provider interface expansion is caught at compile time.
+var _ kernelmetrics.Provider = (*sagaSpyProvider)(nil)
+
 // TestNewSagaStepCollector_RejectsNilProvider asserts fail-fast on nil.
 func TestNewSagaStepCollector_RejectsNilProvider(t *testing.T) {
 	_, err := obmetrics.NewSagaStepCollector(nil, "accesscore")
@@ -194,10 +198,19 @@ func TestSagaStepCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
 	}
 }
 
-// TestSagaStepCollector_NilReceiver_DoesNotPanic verifies all three methods
-// are nil-safe (observability must never panic on startup).
-func TestSagaStepCollector_NilReceiver_DoesNotPanic(t *testing.T) {
-	var c *obmetrics.SagaStepCollector
+// TestSagaStepCollector_NopObserver_DoesNotPanic verifies that the NopObserver
+// path (used when WithObserver(nil) is passed to the Executor) does not panic.
+// A nil *SagaStepCollector must never reach ObserveOutcome/ObserveRetry/
+// ObserveHeartbeatFailure — callers must use executor.NopObserver instead
+// (see NewSagaStepCollector caller contract).
+func TestSagaStepCollector_NopObserver_DoesNotPanic(t *testing.T) {
+	// NopObserver is the zero-cost "no metrics" path; it must never panic.
+	p := newSagaSpyProvider()
+	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaStepCollector: %v", err)
+	}
+	// Verify that a properly constructed (non-nil) collector does not panic on all methods.
 	c.ObserveOutcome(context.Background(), "d", "s", executor.OutcomeSucceeded, 1)
 	c.ObserveRetry(context.Background(), "d", "s")
 	c.ObserveHeartbeatFailure(context.Background(), executor.HeartbeatFailureInfraError)

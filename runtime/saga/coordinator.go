@@ -213,13 +213,9 @@ func NewCoordinator(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: WithLeaderElect locker must not be nil; pass a non-nil distlock.Locker or omit the option")
 	}
-	if c.executorNil {
+	if c.executorNil || c.executor == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"runtime/saga: WithExecutor executor must not be nil")
-	}
-	if c.executor == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"runtime/saga: WithExecutor required; pass a non-nil *executor.Executor")
+			"runtime/saga: executor required; pass a non-nil *executor.Executor via WithExecutor")
 	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
@@ -598,7 +594,8 @@ func (c *Coordinator) routeOutcome(
 	case executor.OutcomeLeaseLost:
 		c.logger.InfoContext(ctx, "saga: lease lost during step run; another leader took over",
 			slog.String("instance_id", string(ci.Instance.ID)),
-			slog.String("definition_id", string(def.ID)))
+			slog.String("definition_id", string(def.ID)),
+			slog.String("lease_id", string(ci.LeaseID)))
 		return nil
 	default:
 		return fmt.Errorf("saga: unknown executor outcome: %v", res.Outcome)
@@ -672,6 +669,9 @@ func (c *Coordinator) runCompensation(
 	var compensateErrors []error
 	walkErr := c.executor.RunWithHeartbeat(ctx, &ci.Instance, ci.LeaseID, func(hbCtx context.Context) error {
 		for i := len(committed) - 1; i >= 0; i-- {
+			if hbCtx.Err() != nil {
+				break // lease lost or parent canceled; stop accepting new compensate work
+			}
 			cs := committed[i]
 			step, found := stepByName[cs.name]
 			if !found {
@@ -755,6 +755,7 @@ func (c *Coordinator) compensateOneStep(
 	if compensateErr != nil {
 		c.logger.WarnContext(ctx, "saga: compensation: step compensate failed, continuing",
 			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.String("step_name", string(step.Name)),
 			slog.Any("error", compensateErr))
 		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
@@ -767,21 +768,26 @@ func (c *Coordinator) compensateOneStep(
 		}); txErr != nil {
 			c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepFailed",
 				slog.String("instance_id", string(ci.Instance.ID)),
+				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("step_name", string(step.Name)),
 				slog.Any("error", txErr))
 		}
 		return compensateErr
 	}
+	b, _ := json.Marshal(struct {
+		Step string `json:"step"`
+	}{Step: string(step.Name)})
 	if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
 			Kind:     journal.KindStepCompensated,
 			StepName: step.Name,
-			Payload:  []byte(`{"step":"` + string(step.Name) + `"}`),
+			Payload:  b,
 		})
 		return aErr
 	}); txErr != nil {
 		c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepCompensated",
 			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.String("step_name", string(step.Name)),
 			slog.Any("error", txErr))
 	}

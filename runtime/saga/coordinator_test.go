@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1521,13 +1522,15 @@ func TestDriveOne_OutcomeFailed_TriggersReverseCompensation(t *testing.T) {
 		t.Errorf("last event = %s, want saga_compensated or saga_failed", lastEv.Kind)
 	}
 
-	// Verify compensation ran (at least step1 since it was committed before the failure).
+	// Verify compensation ran in reverse order: step1 completed, step2 failed → only
+	// step1 was committed and must be compensated. Expected order: ["step1"].
 	mu.Lock()
 	gotComp := make([]string, len(compensated))
 	copy(gotComp, compensated)
 	mu.Unlock()
-	if len(gotComp) == 0 {
-		t.Error("no compensation steps ran")
+	wantOrder := []string{"step1"}
+	if !reflect.DeepEqual(gotComp, wantOrder) {
+		t.Errorf("compensation order = %v, want %v", gotComp, wantOrder)
 	}
 }
 
@@ -1751,19 +1754,33 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 	driveErrCh := make(chan error, 1)
 	go func() { driveErrCh <- c.driveOne(context.Background(), claimed[0]) }()
 
-	// Advance fake clock so heartbeat tickers fire, then detect stale.
-	for i := 0; i < 10; i++ {
-		clk.Advance(testtime.D10ms)
-		time.Sleep(testtime.D5ms) //archtest:allow:test-sleep lease-lost-test: drive heartbeat ticker for stale detection
-	}
+	// Wait for the stale flag to be set (i.e. the step goroutine has started and
+	// called j.SetStale()), then advance the fake clock to trigger the heartbeat
+	// tick that will detect the stale lease.
+	testwait.External(t, "step-stale-armed",
+		func() bool { return j.stale.Load() },
+		testtime.D2s, testtime.D1ms)
+	clk.Advance(testtime.D10ms)
+
+	// Wait for driveOne goroutine to return after lease-lost detection.
+	testwait.External(t, "driveOne-returned",
+		func() bool {
+			select {
+			case <-driveErrCh:
+				return true
+			default:
+				return false
+			}
+		},
+		testtime.D2s, testtime.D1ms)
 
 	select {
 	case err := <-driveErrCh:
 		if err != nil {
 			t.Errorf("driveOne should return nil on LeaseLost, got: %v", err)
 		}
-	case <-time.After(testtime.D3s):
-		t.Fatal("driveOne did not return after lease-lost detection")
+	default:
+		// value was already peeked by testwait.External — no error to drain
 	}
 
 	// No terminal event.
@@ -1895,13 +1912,15 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed(t *testing.
 	}
 
 	// Compensation ran for committed steps in reverse order.
-	// step3 failed → step3 compensated first, then step2 (fails), then step1.
+	// step1+step2 completed; step3 failed → compensation reverse-walks step2 first
+	// (records "step2-fail", returns error), then step1 (records "step1").
 	mu.Lock()
 	got := make([]string, len(compensated))
 	copy(got, compensated)
 	mu.Unlock()
-	if len(got) == 0 {
-		t.Error("no compensation steps ran")
+	wantOrder := []string{"step2-fail", "step1"}
+	if !reflect.DeepEqual(got, wantOrder) {
+		t.Errorf("compensation order = %v, want %v", got, wantOrder)
 	}
 }
 

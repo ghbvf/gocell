@@ -46,12 +46,12 @@
 // # Coordinator lifecycle
 //
 // NewCoordinator validates required deps (journal/txRunner/outboxEmit/registry
-// non-nil; clock panics if nil via clock.MustHaveClock). Start launches two
-// goroutines:
+// non-nil; clock panics if nil via clock.MustHaveClock). Start launches a
+// single tickLoop goroutine:
 //   - tickLoop: calls ClaimPending each PollInterval, drives each claimed
 //     instance through one step (Run outside tx, Append + Emit + AfterCommit
-//     Kick inside tx).
-//   - heartbeatLoop: extends leases on actively-driven instances.
+//     Kick inside tx). Per-step lease maintenance (heartbeat) is owned by
+//     the Executor's per-step heartbeat goroutine (see runtime/saga/executor).
 //
 // Stop is idempotent. Ready() returns a channel closed once Start transitions
 // to running. RepoReady delegates to journal.RepoReady so the wrapping cell

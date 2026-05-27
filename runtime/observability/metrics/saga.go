@@ -27,8 +27,9 @@ import (
 //     not a per-step business metric.
 //
 // Cardinality discipline: definition_id × step_name is the worst case; both
-// are static enumeration sets (registered at compile time). The metric
-// provider's default cap=2000 cells acts as a runtime tripwire.
+// are static enumeration sets (registered at compile time). Expected upper
+// bound: ≤ 200 active series per cell (≈ 20 definitions × 10 steps); metrics
+// provider cap=2000 is the runtime tripwire.
 //
 // ref: temporalio/sdk-go internal_task_handlers.go — server-emitted
 // activity outcome / heartbeat-failure metric envelope.
@@ -53,6 +54,9 @@ var _ executor.Observer = (*SagaStepCollector)(nil)
 //   - p == nil → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - cellID == "" → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - any CounterVec registration error is wrapped with the metric name
+//
+// Caller contract: never pass a nil *SagaStepCollector — use NopObserver via
+// WithObserver(nil) for explicit disable.
 func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
@@ -112,9 +116,6 @@ func (c *SagaStepCollector) ObserveOutcome(
 	outcome executor.Outcome,
 	_ /* attempts */ int,
 ) {
-	if c == nil {
-		return
-	}
 	c.outcome.With(kernelmetrics.Labels{
 		"cell":          c.cellID,
 		"definition_id": definitionID,
@@ -125,9 +126,6 @@ func (c *SagaStepCollector) ObserveOutcome(
 // ObserveRetry implements executor.Observer.
 // Records one increment on saga_step_retry_total{cell,definition_id,step_name}.
 func (c *SagaStepCollector) ObserveRetry(ctx context.Context, definitionID, stepName string) {
-	if c == nil {
-		return
-	}
 	c.retry.With(kernelmetrics.Labels{
 		"cell":          c.cellID,
 		"definition_id": definitionID,
@@ -138,9 +136,6 @@ func (c *SagaStepCollector) ObserveRetry(ctx context.Context, definitionID, step
 // ObserveHeartbeatFailure implements executor.Observer.
 // Records one increment on saga_heartbeat_failed_total{cell,reason}.
 func (c *SagaStepCollector) ObserveHeartbeatFailure(ctx context.Context, reason executor.HeartbeatFailureReason) {
-	if c == nil {
-		return
-	}
 	c.hbFail.With(kernelmetrics.Labels{
 		"cell":   c.cellID,
 		"reason": string(reason),

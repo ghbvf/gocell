@@ -44,7 +44,9 @@ func WithConfig(cfg Config) Option {
 // WithExecutor injects the per-step Executor. Required dependency — every
 // Coordinator MUST be constructed with a non-nil Executor; the wiring layer
 // owns Executor's heartbeat / retry / observer configuration. Both bare-nil
-// and typed-nil are rejected at NewCoordinator fail-fast.
+// and typed-nil are rejected at NewCoordinator with KindInvalid /
+// ErrValidationFailed: "runtime/saga: executor required; pass a non-nil
+// *executor.Executor via WithExecutor".
 //
 // Category: strong-dependency wiring option (cf. runtime-api.md). The Executor
 // is not optional — it owns the per-step execution loop the Coordinator
