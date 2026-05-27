@@ -189,7 +189,7 @@ marker（marker 存在但同 scope 无 ExecDirect → audit-trail 退化）。
 | 新 PG 适配包发明新 funnel（如 configcore Session） | 本 archtest 不覆盖；约定 + code-review + new-pattern-requires-ADR 兜底（不是回归 — 升级前也不覆盖） |
 | 新 ExecDirect callsite 漏加 marker | R3(b) 同 body marker presence 检查失败 ✓ |
 | Marker reason 写成 `fmt.Sprintf` / 变量 / 函数返回值隐藏审计串 | `bodyHasApprovedExecDirectMarker` 要求 arg[0] 为 `*ast.BasicLit + token.STRING`；non-literal 表达式 AST 节点不是 BasicLit → 拒绝 ✓（与"const ident / 常量折叠"威胁同源，见下文专行）|
-| 移到不相关 func body 放 marker 制造"看似 approved"的错觉 | BS-8 反向自检：marker 必须与同 body 的 `pgexec.PGExecutor.ExecDirect` 调用共存 — 孤立 marker 失败 ✓ |
+| 移到不相关 func body 放 marker 制造"看似 approved"的错觉 / 多余 marker 制造审计噪声 | BS-8 反向自检（round-3 升级 M==E 严格）：approval scope 内 marker count M 必须等于 `pgexec.ExecDirect` callsite count E；M > E 即 spurious marker(s)，BS-8 fail（M < E 由 R3 自身捕获）✓ |
 | 拷贝 `pgrepoapproved` 包到其他位置绕过 funnel | callee 解析锁 `Pkg().Path()` 到精确字符串 `"github.com/ghbvf/gocell/pkg/pgrepoapproved"`，重定向 import 不改 package path ✓ |
 | import 别名绕过 marker callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
 | build-tag 隔离的条件性 ExecDirect 调用 | RunTyped 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
@@ -217,9 +217,14 @@ pgExecutor funnel。
 
 **Decision**：把每个 PG adapter package 内的 `pgExecutor` struct + `newPGExecutor`
 factory 整体迁移到 `<adapter-pkg>/internal/pgexec/` sub-package。Sub-package
-导出 `PGExecutor` interface（Exec/Query/QueryRow/ExecDirect，saga 多 AcquireTx）
-+ exported `New(*pgxpool.Pool) PGExecutor` 工厂。parent-pkg repos/stores 持有
-`pgexec.PGExecutor`（interface 字段），构造点调 `pgexec.New(pool)`。
+导出 `PGExecutor` interface（**Exec/Query/QueryRow 三方法**，saga 多 AcquireTx；
+ExecDirect 不在 interface 上）+ exported `New(*pgxpool.Pool) PGExecutor` 工厂。
+ExecDirect 是 sub-pkg 顶层函数 `pgexec.ExecDirect(e PGExecutor, ctx, sql, args...)`，
+不是 interface method——F2-Hard 关闭 subset-interface bypass。parent-pkg repos/
+stores 持有 `pgexec.PGExecutor`（interface 字段），构造点调 `pgexec.New(pool)`，
+ADR-approved bypass 站点显式调 `pgexec.ExecDirect(s.db, ...)` + 同 scope per-
+callsite marker `pgrepoapproved.ApprovedExecDirect("<reason>")`（round-3 C4：
+M==E 1:1 配对）。
 
 **Implementation summary**：
 - 新增 4 个 sub-package（adapters/postgres/internal/pgexec/、adapters/postgres/saga/internal/pgexec/、cells/accesscore/internal/adapters/postgres/internal/pgexec/、examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec/）；

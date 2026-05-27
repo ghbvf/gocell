@@ -97,16 +97,28 @@ func (r goodRepo) badR3ApprovedPlaceholder(ctx context.Context) { //nolint:unuse
 	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
-// goodApprovedSingleExecDirect is GREEN: marker + 1 ExecDirect in same scope.
+// goodApprovedSingleExecDirect is GREEN: M=1 marker + E=1 ExecDirect, M==E.
 func (r goodRepo) goodApprovedSingleExecDirect(ctx context.Context) { //nolint:unused // GREEN fixture
 	pgrepoapproved.ApprovedExecDirect("fixture-green-single")
 	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
 }
 
-// goodApprovedMultiExecDirect is GREEN: one marker covers multiple
-// pgexec.ExecDirect calls in the same approval scope.
-func (r goodRepo) goodApprovedMultiExecDirect(ctx context.Context) { //nolint:unused // GREEN fixture
-	pgrepoapproved.ApprovedExecDirect("fixture-green-multi")
+// badR3SharedMarker is RED under per-callsite R3-Hard: M=1 marker + E=2
+// ExecDirect calls is forbidden (sharing markers is not allowed). Both calls
+// must be flagged (no callsite has its own dedicated marker). Used to live as
+// goodApprovedMultiExecDirect under PR #917 scope-level semantics; round-3
+// C4 changed semantic to 1:1 per-callsite Hard.
+func (r goodRepo) badR3SharedMarker(ctx context.Context) { //nolint:unused // RED fixture
+	pgrepoapproved.ApprovedExecDirect("fixture-red-shared-marker")
 	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 2")
+}
+
+// goodApprovedTwoMarkersTwoExecDirect is GREEN: M=2 + E=2, M==E satisfies
+// per-callsite 1:1 pairing. Each ExecDirect has its own dedicated marker.
+func (r goodRepo) goodApprovedTwoMarkersTwoExecDirect(ctx context.Context) { //nolint:unused // GREEN fixture
+	pgrepoapproved.ApprovedExecDirect("fixture-green-two-first")
+	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 1")
+	pgrepoapproved.ApprovedExecDirect("fixture-green-two-second")
 	_, _ = pgexec.ExecDirect(r.db, ctx, "SELECT 2")
 }

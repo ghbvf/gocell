@@ -12,7 +12,7 @@
 // /internal/pgexec) and R2 (cross-package wrap funnel: New*-constructors with
 // a *pgxpool.Pool parameter must call pgexec.New(pool)).
 //
-// Usage: call pgexec.New(pool) once inside your NewPG*-prefixed constructor
+// Usage: call pgexec.New(pool) once inside your New*-prefixed constructor
 // and store the returned PGExecutor as an unexported field on your repo /
 // store struct. All SQL goes through that field; the raw pool stays sealed
 // in this sub-package.

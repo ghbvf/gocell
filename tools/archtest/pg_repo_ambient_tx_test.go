@@ -377,10 +377,19 @@ func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *typ
 	return diags
 }
 
-// scanR3ExecDirectInScope flags CallExpr `pgexec.ExecDirect(...)` in body
-// where the callee resolves via *types.Info.Uses to a *types.Func with
-// Pkg().Path() ending /internal/pgexec AND Name() == "ExecDirect", unless the
-// SAME approval scope contains a sibling ApprovedExecDirect marker call.
+// scanR3ExecDirectInScope flags pgexec.ExecDirect callsites in body when the
+// scope does not have at least one marker per callsite (1:1 per-callsite
+// pairing, Hard form). Marker count M and ExecDirect call count E in same
+// approval scope (FuncDecl/FuncLit body); when E > M, all E calls are flagged
+// (none of them has a dedicated marker — sharing is forbidden).
+//
+// Per-callsite (M >= E required) is strictly Hard:
+//   - Scope-level "1 marker covers N calls" (PR #917 form) was a Soft
+//     generalization — one declaration approves arbitrarily many sites,
+//     erasing the per-callsite audit trail.
+//   - Per-callsite means every ExecDirect bypass has its own documented
+//     reason; adding a new callsite requires a new marker, never inheriting
+//     someone else's approval.
 //
 // ExecDirect is a top-level function (not a method) — this closes the
 // subset-interface bypass vector (F2-Hard). A local interface re-shape with
@@ -388,67 +397,61 @@ func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *typ
 // ExecDirect method on any interface; the only call form is the package-
 // qualified function call, identified by callee identity.
 func scanR3ExecDirectInScope(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info) []Diagnostic {
-	if bodyHasApprovedExecDirectMarker(body, info) {
+	execCalls := collectPgexecExecDirectCalls(body, info)
+	if len(execCalls) == 0 {
 		return nil
 	}
+	markerCount := countApprovedExecDirectMarkers(body, info)
+	if markerCount >= len(execCalls) {
+		return nil
+	}
+	// E > M: flag ALL ExecDirect calls. None has a dedicated marker — sharing
+	// is forbidden under per-callsite Hard form. The caller must add
+	// (E - M) more markers (one per remaining call) to satisfy the rule.
 	var diags []Diagnostic
-	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		if !isPgexecExecDirectCall(call, info) {
-			return
-		}
+	for _, call := range execCalls {
 		line := fset.Position(call.Pos()).Line
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
 			Line: line,
-			Message: "R3: pgexec.ExecDirect call requires sibling " +
-				"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker in the same " +
-				"approval scope (FuncDecl/FuncLit body, not nested closure) to document the " +
-				"ADR-approved bypass of ambient tx; " +
-				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before " +
-				"the pgexec.ExecDirect call; see pkg/pgrepoapproved; example: " +
-				"pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in " +
-				"same func body — only one production callsite at " +
-				"adapters/postgres/refresh_store.go::revokeSessionDetachedAt; ADR " +
-				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+			Message: fmt.Sprintf(
+				"R3: pgexec.ExecDirect callsite requires its own sibling "+
+					"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker "+
+					"(per-callsite 1:1 pairing, not scope-shared). This scope has "+
+					"%d marker(s) but %d pgexec.ExecDirect call(s); add %d more "+
+					"marker(s) in the same FuncDecl/FuncLit body (one reason per "+
+					"callsite). Production reference: "+
+					"adapters/postgres/refresh_store.go::revokeSessionDetachedAt "+
+					"(1 marker + 1 ExecDirect). ADR "+
+					"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+				markerCount, len(execCalls), len(execCalls)-markerCount,
+			),
 		})
-	})
+	}
 	return diags
 }
 
-// isPgexecExecDirectCall reports whether call's callee resolves via
-// *types.Info.Uses to a *types.Func with Pkg().Path() ending /internal/pgexec
-// AND Name() == "ExecDirect". This is the F2-Hard callsite-identity check
-// that replaces the former receiver-type-only check.
-func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
-	fn := resolveCalleeFunc(call.Fun, info)
-	if fn == nil || fn.Name() != execDirectName {
-		return false
-	}
-	if fn.Pkg() == nil {
-		return false
-	}
-	return strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix)
+// collectPgexecExecDirectCalls returns all CallExpr in body whose callee
+// resolves to pgexec.ExecDirect. Scope-bounded via stopAtFuncLit: nested
+// FuncLit bodies are independent approval scopes.
+func collectPgexecExecDirectCalls(body *ast.BlockStmt, info *types.Info) []*ast.CallExpr {
+	var calls []*ast.CallExpr
+	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
+		if isPgexecExecDirectCall(call, info) {
+			calls = append(calls, call)
+		}
+	})
+	return calls
 }
 
-// bodyHasApprovedExecDirectMarker reports whether body contains a CallExpr
-// whose callee resolves to pkg/pgrepoapproved.ApprovedExecDirect AND whose
-// first argument is a kebab-case const string literal. Scope bound via
-// stopAtFuncLit: a marker in a nested closure does NOT approve outer-scope
-// ExecDirect calls; conversely, an outer-scope marker does NOT approve
-// ExecDirect calls inside nested closures.
-//
-// Form-uniqueness chain (each rule a separate REJECT branch):
-//  1. callee resolves via *types.Info.Uses to *types.Func with name
-//     "ApprovedExecDirect" AND Pkg().Path() == pkg/pgrepoapproved
-//  2. arg[0] is a *ast.BasicLit with Kind == token.STRING
-//  3. strconv.Unquote(arg[0]) matches pgrepoApprovedReasonFormat
-//  4. unquoted value is NOT a placeholder identifier per pgrepoApprovedReasonPlaceholder
-func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool {
-	found := false
+// countApprovedExecDirectMarkers returns the number of well-formed
+// pgrepoapproved.ApprovedExecDirect marker callsites in body (same form-
+// uniqueness chain as bodyHasApprovedExecDirectMarker). Scope-bounded via
+// stopAtFuncLit. Multiple markers in same scope each count separately —
+// required for per-callsite pairing under R3-Hard.
+func countApprovedExecDirectMarkers(body *ast.BlockStmt, info *types.Info) int {
+	n := 0
 	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
 		fn := resolveCalleeFunc(call.Fun, info)
 		if fn == nil || fn.Name() != approvedMarkerFuncName {
 			return
@@ -470,10 +473,31 @@ func bodyHasApprovedExecDirectMarker(body *ast.BlockStmt, info *types.Info) bool
 		if pgrepoApprovedReasonPlaceholder.MatchString(val) {
 			return
 		}
-		found = true
+		n++
 	})
-	return found
+	return n
 }
+
+// isPgexecExecDirectCall reports whether call's callee resolves via
+// *types.Info.Uses to a *types.Func with Pkg().Path() ending /internal/pgexec
+// AND Name() == "ExecDirect". This is the F2-Hard callsite-identity check
+// that replaces the former receiver-type-only check.
+func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
+	fn := resolveCalleeFunc(call.Fun, info)
+	if fn == nil || fn.Name() != execDirectName {
+		return false
+	}
+	if fn.Pkg() == nil {
+		return false
+	}
+	return strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix)
+}
+
+// (bodyHasApprovedExecDirectMarker removed in round-3 — replaced by
+// countApprovedExecDirectMarkers, which returns the precise count for
+// per-callsite 1:1 pairing. Form-uniqueness chain (callee identity +
+// BasicLit + kebab regex + non-placeholder) is preserved in the counting
+// helper.)
 
 // isPGExecutorInterfaceType is retained for archtest helpers that need to
 // identify the sealed pgexec.PGExecutor interface type (e.g. future BS
@@ -626,6 +650,10 @@ var expectedFixtureViolations = []fixtureViolation{
 	{"R3:", 85}, // badR3ApprovedConcat (marker reason is BinaryExpr)
 	{"R3:", 91}, // badR3ApprovedEmpty (marker reason "" fails kebab regex)
 	{"R3:", 97}, // badR3ApprovedPlaceholder (marker reason "todo")
+	// Round-3 C4 per-callsite Hard: badR3SharedMarker has M=1 + E=2 — both
+	// ExecDirect calls flagged (no callsite has its own dedicated marker).
+	{"R3:", 113}, // badR3SharedMarker first ExecDirect
+	{"R3:", 114}, // badR3SharedMarker second ExecDirect
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches every RED
@@ -827,8 +855,11 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	assert.Empty(t, bs6Violations,
 		"BS-6 self-check: pgexec.ExecDirect must not be used as a function value in production")
 
-	// BS-8: pgrepoapproved.ApprovedExecDirect markers must only appear in
-	// approval scopes that also contain a sibling pgexec ExecDirect call.
+	// BS-8: pgrepoapproved.ApprovedExecDirect marker count M must equal
+	// pgexec.ExecDirect callsite count E in the same approval scope (M == E).
+	// Under per-callsite R3-Hard (1:1 pairing), M > E means at least one
+	// spurious marker that approves nothing (audit-trail noise); R3 already
+	// catches M < E (missing markers), so BS-8 covers the M > E half.
 	var bs8Violations []string
 	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -846,18 +877,18 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 				if body == nil {
 					return
 				}
-				if !bodyHasApprovedExecDirectMarker(body, p.TypesInfo) {
+				m := countApprovedExecDirectMarkers(body, p.TypesInfo)
+				e := len(collectPgexecExecDirectCalls(body, p.TypesInfo))
+				if m <= e {
 					return
 				}
-				if !bodyCallsPGExecutorExecDirect(body, p.TypesInfo) {
-					bs8Violations = append(bs8Violations, fmt.Sprintf(
-						"%s:%d: %s has pgrepoapproved.ApprovedExecDirect marker but "+
-							"no pgexec.PGExecutor.ExecDirect call in same approval scope — "+
-							"marker is a spurious audit-trail entry; remove it or add the "+
-							"corresponding ExecDirect call",
-						rel, p.Fset.Position(pos).Line, label,
-					))
-				}
+				bs8Violations = append(bs8Violations, fmt.Sprintf(
+					"%s:%d: %s has %d pgrepoapproved.ApprovedExecDirect marker(s) "+
+						"but only %d pgexec.ExecDirect call(s) in same approval scope — "+
+						"%d spurious marker(s) approve nothing; remove the excess "+
+						"marker(s) or add the corresponding ExecDirect call(s)",
+					rel, p.Fset.Position(pos).Line, label, m, e, m-e,
+				))
 			}
 			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				visitScope(fn.Body, "func "+fn.Name.Name, fn.Pos())
@@ -869,28 +900,14 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		return nil
 	})
 	assert.Empty(t, bs8Violations,
-		"BS-8 self-check: pgrepoapproved.ApprovedExecDirect marker must only co-locate "+
-			"with an actual pgexec.PGExecutor.ExecDirect call in the SAME approval scope")
+		"BS-8 self-check: pgrepoapproved.ApprovedExecDirect marker count M must "+
+			"equal pgexec.ExecDirect callsite count E in same approval scope; "+
+			"M > E means spurious marker(s) approve nothing")
 }
 
-// bodyCallsPGExecutorExecDirect reports whether body contains a CallExpr
-// `pgexec.ExecDirect(...)` whose callee resolves to a *types.Func with
-// Pkg().Path() ending /internal/pgexec AND Name() == "ExecDirect".
-//
-// Used by BS-8 spurious-marker reverse check: a marker is spurious if its
-// approval scope does NOT also contain a pgexec.ExecDirect call.
-func bodyCallsPGExecutorExecDirect(body *ast.BlockStmt, info *types.Info) bool {
-	found := false
-	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		if isPgexecExecDirectCall(call, info) {
-			found = true
-		}
-	})
-	return found
-}
+// (bodyCallsPGExecutorExecDirect removed in round-3 — BS-8 now uses
+// collectPgexecExecDirectCalls for precise count and supports the M > E
+// spurious-marker semantic. Single-bool reduction is no longer needed.)
 
 // findPgexecNewValueUses returns BS-3 violations.
 func findPgexecNewValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
