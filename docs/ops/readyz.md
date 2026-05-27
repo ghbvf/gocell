@@ -22,13 +22,13 @@ field values renamed from hyphen-form to underscore-form as part of the
 Downstream consumers — Prometheus rules, Grafana dashboards, alerting rules,
 startup-validation scripts, runbook commands — that hard-coded the hyphen
 form must be updated. Within this repository, no active operational
-configuration (Prometheus rules, Grafana dashboards, alerting YAML, ops
+configuration (Prometheus rules / Grafana dashboards / alerting YAML / ops
 scripts) references the old hyphen form (verified by
-`grep -r 'outbox-relay-' --include='*.yaml' --include='*.json' --include='*.md' docs/`).
-Historical ADRs may still mention the old hyphen form for archival
-traceability; those are not load-bearing and have been cross-referenced.
-Recommended deployment order: update monitoring configuration **first**, then
-roll out the new binary.
+`grep -rn 'outbox-relay-' --include='*.yaml' --include='*.json'` returning
+zero hits across the tree). Historical ADRs / docs / archived plans may
+still mention the old hyphen form for archival traceability; those are not
+load-bearing and have been cross-referenced. Recommended deployment order:
+update monitoring configuration **first**, then roll out the new binary.
 
 See ADR `docs/architecture/202605271100-adr-probename-sealed-funnel.md` F1
 amendment §3 for full background.
