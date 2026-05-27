@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // Option configures a Coordinator.
@@ -37,5 +38,23 @@ func WithLogger(l *slog.Logger) Option {
 func WithConfig(cfg Config) Option {
 	return func(c *Coordinator) {
 		c.cfg = cfg
+	}
+}
+
+// WithExecutor injects the per-step Executor. Required dependency — every
+// Coordinator MUST be constructed with a non-nil Executor; the wiring layer
+// owns Executor's heartbeat / retry / observer configuration. Both bare-nil
+// and typed-nil are rejected at NewCoordinator fail-fast.
+//
+// Category: strong-dependency wiring option (cf. runtime-api.md). The Executor
+// is not optional — it owns the per-step execution loop the Coordinator
+// delegates to in driveOne.
+func WithExecutor(exec *executor.Executor) Option {
+	return func(c *Coordinator) {
+		if exec == nil {
+			c.executorNil = true
+			return
+		}
+		c.executor = exec
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/distlock"
+	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // Compile-time interface checks.
@@ -44,7 +45,7 @@ type coordState int32
 const (
 	coordStopped  coordState = iota // zero value = stopped
 	coordStarting                   // Start() entered, goroutines launching
-	coordRunning                    // tick + heartbeat loops active
+	coordRunning                    // tick loop active
 	coordStopping                   // Stop() called, waiting for goroutines
 )
 
@@ -53,16 +54,9 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	defaultCoordPollInterval      = 200 * time.Millisecond
-	defaultCoordClaimBatchSize    = 16
-	defaultCoordLeaseDuration     = 30 * time.Second
-	defaultCoordHeartbeatInterval = 10 * time.Second // = LeaseDuration / 3
-
-	// minLeaseToHeartbeatRatio is the minimum factor by which LeaseDuration must
-	// exceed HeartbeatInterval (LeaseDuration > HeartbeatInterval * ratio), so
-	// at least one heartbeat fires before lease expiry. Extracted from the
-	// inline literal per PROD-DURATION-CONST-01.
-	minLeaseToHeartbeatRatio = 2
+	defaultCoordPollInterval   = 200 * time.Millisecond
+	defaultCoordClaimBatchSize = 16
+	defaultCoordLeaseDuration  = 30 * time.Second
 )
 
 // Config holds tunable parameters for the Coordinator engine. Zero values are
@@ -73,27 +67,21 @@ type Config struct {
 	// ClaimBatchSize is the maximum number of instances claimed per tick.
 	// Default 16.
 	ClaimBatchSize int
-	// LeaseDuration is how long a claimed lease is held before the heartbeat
-	// must extend it. Default 30s.
+	// LeaseDuration is how long a claimed lease is held. Default 30s.
+	// Also used as the per-instance distlock TTL in leader-elect mode.
 	LeaseDuration time.Duration
-	// HeartbeatInterval is how often heartbeatLoop extends active leases.
-	// Default 10s (= LeaseDuration/3). Must satisfy HeartbeatInterval*2 <
-	// LeaseDuration so at least one heartbeat can fire before expiry.
-	HeartbeatInterval time.Duration
 }
 
 // DefaultConfig returns a Config with documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		PollInterval:      defaultCoordPollInterval,
-		ClaimBatchSize:    defaultCoordClaimBatchSize,
-		LeaseDuration:     defaultCoordLeaseDuration,
-		HeartbeatInterval: defaultCoordHeartbeatInterval,
+		PollInterval:   defaultCoordPollInterval,
+		ClaimBatchSize: defaultCoordClaimBatchSize,
+		LeaseDuration:  defaultCoordLeaseDuration,
 	}
 }
 
-// Validate returns nil iff all duration fields are positive and
-// HeartbeatInterval*2 < LeaseDuration.
+// Validate returns nil iff all fields are positive.
 func (c Config) Validate() error {
 	if c.PollInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -106,14 +94,6 @@ func (c Config) Validate() error {
 	if c.LeaseDuration <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.LeaseDuration must be positive")
-	}
-	if c.HeartbeatInterval <= 0 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"saga coordinator: Config.HeartbeatInterval must be positive")
-	}
-	if c.HeartbeatInterval*minLeaseToHeartbeatRatio >= c.LeaseDuration {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"saga coordinator: Config.HeartbeatInterval*2 must be < LeaseDuration")
 	}
 	return nil
 }
@@ -157,6 +137,12 @@ type Coordinator struct {
 	locker         distlock.Locker
 	leaderElectNil bool
 
+	// executor is the required per-step execution engine. Injected via
+	// WithExecutor. executorNil records a typed-nil passed to WithExecutor
+	// so NewCoordinator can fail-fast (strong-dependency wiring option).
+	executor    *executor.Executor
+	executorNil bool
+
 	// lifecycle (mirrors runtime/outbox.Relay)
 	state   atomic.Int32
 	mu      sync.Mutex
@@ -165,19 +151,18 @@ type Coordinator struct {
 	readyCh chan struct{}
 	wg      sync.WaitGroup
 
-	// activeLeases maps instanceID (idutil.SafeID) → inflightDrive for instances
-	// currently being driven by driveOne. heartbeatLoop walks this map to extend
-	// leases; Stop walks it to release in-flight distlocks on shutdown.
-	activeLeases sync.Map
+	// inflightLocks maps instanceID (idutil.SafeID) → inflightDrive for
+	// instances currently being driven by driveOne. Stop walks it to release
+	// in-flight distlocks on shutdown and to drain until empty before canceling
+	// goroutines.
+	inflightLocks sync.Map
 }
 
-// inflightDrive is the activeLeases value: everything Stop/heartbeat need about
-// an instance currently being driven. release frees the per-instance distlock
+// inflightDrive is the inflightLocks value: everything Stop needs about an
+// instance currently being driven. release frees the per-instance distlock
 // (a no-op in single-process mode); it is idempotent (distlock Release is
 // sync.Once-guarded) so calling it from both tickOnce and Stop is safe.
 type inflightDrive struct {
-	leaseID idutil.SafeID
-	defID   idutil.SafeID
 	release func()
 }
 
@@ -228,6 +213,14 @@ func NewCoordinator(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: WithLeaderElect locker must not be nil; pass a non-nil distlock.Locker or omit the option")
 	}
+	if c.executorNil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"runtime/saga: WithExecutor executor must not be nil")
+	}
+	if c.executor == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"runtime/saga: WithExecutor required; pass a non-nil *executor.Executor")
+	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -248,8 +241,7 @@ func NewCoordinator(
 // Lifecycle — mirrors runtime/outbox/relay.go Start/Stop/Ready
 // ---------------------------------------------------------------------------
 
-// Start launches tickLoop + heartbeatLoop and blocks until ctx is canceled or
-// Stop is called.
+// Start launches tickLoop and blocks until ctx is canceled or Stop is called.
 func (c *Coordinator) Start(ctx context.Context) error {
 	if !c.state.CompareAndSwap(int32(coordStopped), int32(coordStarting)) {
 		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
@@ -262,7 +254,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.mu.Lock()
 	c.cancel = cancel
 	c.done = done
-	c.wg.Add(2) // tickLoop + heartbeatLoop
+	c.wg.Add(1) // tickLoop only
 	c.mu.Unlock()
 
 	c.state.Store(int32(coordRunning))
@@ -290,7 +282,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}()
 
 	go func() { defer c.wg.Done(); c.tickLoop(ctx) }()
-	go func() { defer c.wg.Done(); c.heartbeatLoop(ctx) }()
 
 	<-ctx.Done()
 	return nil
@@ -300,23 +291,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 // the loops and waits for them to exit. Idempotent.
 //
 // Drain budget = the passed-in ctx (same budget as the rest of Stop). While
-// draining, tickOnce short-circuits to stop accepting new claims and
-// heartbeatLoop keeps extending leases so inflight steps don't lose their
-// lease mid-flight. If a non-cooperative Step.Run ignores ctx.Done() and
+// draining, tickOnce short-circuits to stop accepting new claims and the
+// per-step Executor heartbeats keep leases valid so inflight steps don't lose
+// their lease mid-flight. If a non-cooperative Step.Run ignores ctx.Done() and
 // exceeds the drain budget:
 //
 //   - cancel() fires anyway and Stop returns (best-effort).
 //   - The orphaned step goroutine continues until it returns naturally; the
-//     heartbeat goroutine has by then exited, so the journal lease expires.
+//     Executor heartbeat goroutine has by then exited, so the journal lease expires.
 //   - In leader-elect mode the per-instance distlock would otherwise keep
-//     auto-renewing (it is decoupled from caller-ctx; see leader_elect.go), so
-//     Stop explicitly releases every in-flight distlock (releaseInflightLocks).
-//     Together with the expiring journal lease this lets another coordinator
-//     re-claim the instance promptly — bounded takeover, matching the
-//     etcd/redsync deadman-switch model — instead of stalling until this
-//     process dies. Releasing while the orphaned step still runs is safe: its
-//     commit is fenced by journal lease_id CAS (the PR-05 efficiency-lock model,
-//     leader_elect.go).
+//     auto-renewing, so Stop explicitly releases every in-flight distlock
+//     (releaseInflightLocks). Together with the expiring journal lease this lets
+//     another coordinator re-claim the instance promptly — bounded takeover,
+//     matching the etcd/redsync deadman-switch model. Releasing while the orphaned
+//     step still runs is safe: its commit is fenced by journal lease_id CAS
+//     (the PR-05 efficiency-lock model, leader_elect.go).
 //   - This is the inherent limit of cooperative cancellation in Go: the step
 //     goroutine itself cannot be killed. Step authors are responsible for
 //     selecting on ctx.Done() inside blocking primitives — see ksaga.StepFunc
@@ -343,10 +332,11 @@ func (c *Coordinator) Stop(ctx context.Context) error {
 
 	c.state.Store(int32(coordStopping))
 
-	// Drain active leases before canceling goroutines. heartbeatLoop is still
-	// running during this phase so leases stay valid. Non-cooperative steps
-	// (those that ignore ctx) will continue until they naturally finish;
-	// once driveOne returns, tickOnce deletes the lease from activeLeases.
+	// Drain active leases before canceling goroutines. Per-step Executor
+	// heartbeats are still running during this phase so leases stay valid.
+	// Non-cooperative steps (those that ignore ctx) will continue until they
+	// naturally finish; once driveOne returns, tickOnce deletes the lease from
+	// inflightLocks.
 	drainTicker := c.clock.NewTicker(c.cfg.PollInterval)
 drain:
 	for {
@@ -355,7 +345,7 @@ drain:
 			break drain // budget exhausted; fall through to cancel
 		case <-drainTicker.C():
 			count := 0
-			c.activeLeases.Range(func(_, _ any) bool { count++; return true })
+			c.inflightLocks.Range(func(_, _ any) bool { count++; return true })
 			if count == 0 {
 				break drain
 			}
@@ -392,14 +382,14 @@ drain:
 }
 
 // releaseInflightLocks frees the per-instance distlock for every drive still in
-// activeLeases. Called from Stop after cancel so a non-cooperative step that
+// inflightLocks. Called from Stop after cancel so a non-cooperative step that
 // outlives the drain budget cannot hold its lock until process death. release
 // is idempotent (a no-op in single-process mode; distlock Release is
 // sync.Once-guarded), so the owning tickOnce calling release again when it
 // finally returns is harmless. Entries are left for the owning goroutine to
 // delete from the map.
 func (c *Coordinator) releaseInflightLocks() {
-	c.activeLeases.Range(func(_, val any) bool {
+	c.inflightLocks.Range(func(_, val any) bool {
 		if d, ok := val.(inflightDrive); ok {
 			d.release()
 		}
@@ -496,9 +486,7 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// Use ci.LeaseID (per-instance fencing token) exclusively; the batch-level
 		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
 		// per-instance tokens; using the batch token would break CAS fencing.
-		c.activeLeases.Store(ci.Instance.ID, inflightDrive{
-			leaseID: ci.LeaseID,
-			defID:   ci.Instance.DefinitionID,
+		c.inflightLocks.Store(ci.Instance.ID, inflightDrive{
 			release: release,
 		})
 		if err := c.driveOne(ctx, ci); err != nil {
@@ -512,7 +500,7 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 				slog.String("lease_id", string(ci.LeaseID)),
 				slog.Any("error", err))
 		}
-		c.activeLeases.Delete(ci.Instance.ID)
+		c.inflightLocks.Delete(ci.Instance.ID)
 		release()
 	}
 	return nil
@@ -551,12 +539,9 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusSucceeded)
 	}
 
-	// 4. Run step OUTSIDE tx. safeRun recovers panics.
-	// Derive a per-step context with deadline from def.Timeout and/or step.Timeout.
-	// Deadlines use absolute wall-clock time derived from the injected clock so
-	// tests using a FakeClock can control time precisely. Each WithDeadline
-	// cancel func is defer-released so they fire deterministically once driveOne
-	// returns (LIFO order — innermost step cancel first, then total).
+	// 4. Delegate to executor.Execute — retry / per-step timeout / heartbeat /
+	// lease-loss all owned by the Executor. Coordinator applies saga-level
+	// total deadline on the context before handing off.
 	nextStep := def.Steps[cursor]
 	runCtx := ctx
 	if def.Timeout > 0 {
@@ -565,37 +550,64 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 		runCtx, cancel = context.WithDeadline(ctx, totalDeadline)
 		defer cancel()
 	}
-	if nextStep.Timeout > 0 {
-		stepDeadline := c.clock.Now().Add(nextStep.Timeout)
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithDeadline(runCtx, stepDeadline)
-		defer cancel()
-	}
-	newState, runErr := safeRun(runCtx, nextStep.Run, &ci.Instance, prevState)
-	// If the derived deadline ctx fired (def.Timeout or step.Timeout exceeded)
-	// while the parent ctx is still valid, treat the outcome as a saga timeout.
-	// Two paths reach here:
-	//   (a) step returned nil despite its ctx being canceled (non-cooperative
-	//       step that ignored ctx.Done()) → runErr == nil
-	//   (b) step observed ctx.Err() and returned an error derived from it →
-	//       runErr != nil but the cause is the derived deadline, not a domain
-	//       failure
-	// Either way, mark Expired (not Failed). Use the parent ctx for markTerminal
-	// so the journal write is not pre-canceled by the deadline that just fired.
-	if runCtx.Err() != nil && ctx.Err() == nil {
-		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusExpired)
-	}
+	res := c.executor.Execute(runCtx, &ci.Instance, ci.LeaseID, nextStep, def.RetryPolicy, prevState)
 
-	// 5. Open short tx: Append + (maybe) Emit + RegisterAfterCommit.
-	args := commitStepArgs{
-		instanceID: ci.Instance.ID,
-		leaseID:    ci.LeaseID,
-		defID:      def.ID,
-		step:       nextStep,
-		newState:   newState,
-		runErr:     runErr,
-		isLastStep: cursor == def.Len()-1,
+	// 5. Route Outcome.
+	return c.routeOutcome(ctx, ci, def, events, cursor, nextStep, res)
+}
+
+// routeOutcome maps an executor.Result outcome to the appropriate coordinator
+// action. Extracted from driveOne to stay within the cognitive-complexity limit.
+func (c *Coordinator) routeOutcome(
+	ctx context.Context,
+	ci journal.ClaimedInstance,
+	def *ksaga.Definition,
+	events []journal.Event,
+	cursor int,
+	nextStep ksaga.Step,
+	res executor.Result,
+) error {
+	switch res.Outcome {
+	case executor.OutcomeSucceeded:
+		return c.commitStepInTx(ctx, commitStepArgs{
+			instanceID: ci.Instance.ID,
+			leaseID:    ci.LeaseID,
+			defID:      def.ID,
+			step:       nextStep,
+			newState:   res.NewState,
+			isLastStep: cursor == def.Len()-1,
+		})
+	case executor.OutcomeFailed:
+		if shouldCompensate(events, def) {
+			return c.runCompensation(ctx, ci, def, events, res.Err)
+		}
+		return c.commitStepInTx(ctx, commitStepArgs{
+			instanceID: ci.Instance.ID,
+			leaseID:    ci.LeaseID,
+			defID:      def.ID,
+			step:       nextStep,
+			runErr:     res.Err,
+			isLastStep: false, // commitStepFailed handles Terminal directly
+		})
+	case executor.OutcomeExpired:
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusExpired)
+	case executor.OutcomeCanceled:
+		// Parent ctx explicitly canceled — do not write terminal state;
+		// let another coordinator re-claim on the next tick.
+		return nil
+	case executor.OutcomeLeaseLost:
+		c.logger.InfoContext(ctx, "saga: lease lost during step run; another leader took over",
+			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("definition_id", string(def.ID)))
+		return nil
+	default:
+		return fmt.Errorf("saga: unknown executor outcome: %v", res.Outcome)
 	}
+}
+
+// commitStepInTx wraps commitStep inside a RunInTx call and fires the
+// AfterCommit dispatcher Kick hook.
+func (c *Coordinator) commitStepInTx(ctx context.Context, args commitStepArgs) error {
 	return c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := c.commitStep(txCtx, args); err != nil {
 			return err
@@ -605,6 +617,175 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 		})
 		return nil
 	})
+}
+
+// shouldCompensate returns true when the saga should enter the Compensating
+// phase: at least one step in def has a non-nil Compensate function AND at
+// least one KindStepCompleted event exists in the history (meaning committed
+// work must be undone).
+func shouldCompensate(events []journal.Event, def *ksaga.Definition) bool {
+	// Check if any step has a compensate handler (short-circuit).
+	hasCompensate := false
+	for i := range def.Steps {
+		if def.Steps[i].Compensate != nil {
+			hasCompensate = true
+			break
+		}
+	}
+	if !hasCompensate {
+		return false
+	}
+	// Check if any step has been committed.
+	for i := range events {
+		if events[i].Kind == journal.KindStepCompleted {
+			return true
+		}
+	}
+	return false
+}
+
+// runCompensation drives reverse compensation for a failed saga. It appends
+// KindCompensationStarted, then reverse-walks committed steps calling
+// Compensate on each. The entire walk runs under a single RunWithHeartbeat
+// call to keep the lease alive throughout. Per-step compensate errors are
+// accumulated (best-effort continue); final status is Compensated if all
+// steps compensated cleanly, Failed otherwise.
+//
+// ref: itimofeev/go-saga coordinator.go abort() — best-effort reverse
+// compensation with error aggregation.
+func (c *Coordinator) runCompensation(
+	ctx context.Context,
+	ci journal.ClaimedInstance,
+	def *ksaga.Definition,
+	events []journal.Event,
+	runErr error,
+) error {
+	// Step a: append KindCompensationStarted in tx to push status → Compensating.
+	if err := c.appendCompensationStarted(ctx, ci, runErr); err != nil {
+		return err
+	}
+
+	// Step b: collect committed steps + build step index.
+	committed, stepByName := collectCommittedSteps(events, def)
+
+	// Step c: reverse-walk under heartbeat.
+	var compensateErrors []error
+	walkErr := c.executor.RunWithHeartbeat(ctx, &ci.Instance, ci.LeaseID, func(hbCtx context.Context) error {
+		for i := len(committed) - 1; i >= 0; i-- {
+			cs := committed[i]
+			step, found := stepByName[cs.name]
+			if !found {
+				c.logger.WarnContext(hbCtx, "saga: compensation: unknown committed step name, skipping",
+					slog.String("instance_id", string(ci.Instance.ID)),
+					slog.String("step_name", string(cs.name)))
+				continue
+			}
+			if compensateErr := c.compensateOneStep(hbCtx, ci, step, cs.payload); compensateErr != nil {
+				compensateErrors = append(compensateErrors, compensateErr)
+			}
+		}
+		return nil
+	})
+
+	// Step d: if lease was lost, return nil — another coordinator will take over.
+	if executor.IsLeaseLost(walkErr) {
+		return nil
+	}
+	if walkErr != nil {
+		return fmt.Errorf("runCompensation: RunWithHeartbeat: %w", walkErr)
+	}
+
+	// Step e: determine final status.
+	if len(compensateErrors) > 0 {
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
+	}
+	return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusCompensated)
+}
+
+// appendCompensationStarted appends KindCompensationStarted in a transaction.
+func (c *Coordinator) appendCompensationStarted(ctx context.Context, ci journal.ClaimedInstance, runErr error) error {
+	if err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		_, appErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
+			Kind:    journal.KindCompensationStarted,
+			Payload: failurePayload(runErr),
+		})
+		return appErr
+	}); err != nil {
+		return fmt.Errorf("runCompensation: append KindCompensationStarted: %w", err)
+	}
+	return nil
+}
+
+// committedStepEntry holds a step name and its committed payload.
+type committedStepEntry struct {
+	name    idutil.SafeID
+	payload []byte
+}
+
+// collectCommittedSteps collects all KindStepCompleted events in forward order
+// and builds a name→Step index. Extracted from runCompensation to reduce complexity.
+func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]committedStepEntry, map[idutil.SafeID]ksaga.Step) {
+	var committed []committedStepEntry
+	for i := range events {
+		if events[i].Kind == journal.KindStepCompleted {
+			committed = append(committed, committedStepEntry{
+				name:    events[i].StepName,
+				payload: events[i].Payload,
+			})
+		}
+	}
+	stepByName := make(map[idutil.SafeID]ksaga.Step, len(def.Steps))
+	for _, s := range def.Steps {
+		stepByName[s.Name] = s
+	}
+	return committed, stepByName
+}
+
+// compensateOneStep runs step.Compensate and records the outcome in the journal.
+// Returns the compensation error if the compensate function fails (nil on success
+// or when step.Compensate is nil). Journal append errors are logged but not
+// returned — best-effort journaling keeps the reverse walk from aborting.
+func (c *Coordinator) compensateOneStep(
+	ctx context.Context,
+	ci journal.ClaimedInstance,
+	step ksaga.Step,
+	committedPayload []byte,
+) error {
+	compensateErr := c.executor.Compensate(ctx, &ci.Instance, step, committedPayload)
+	if compensateErr != nil {
+		c.logger.WarnContext(ctx, "saga: compensation: step compensate failed, continuing",
+			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("step_name", string(step.Name)),
+			slog.Any("error", compensateErr))
+		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
+				Kind:     journal.KindStepFailed,
+				StepName: step.Name,
+				Payload:  failurePayload(compensateErr),
+			})
+			return aErr
+		}); txErr != nil {
+			c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepFailed",
+				slog.String("instance_id", string(ci.Instance.ID)),
+				slog.String("step_name", string(step.Name)),
+				slog.Any("error", txErr))
+		}
+		return compensateErr
+	}
+	if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
+			Kind:     journal.KindStepCompensated,
+			StepName: step.Name,
+			Payload:  []byte(`{"step":"` + string(step.Name) + `"}`),
+		})
+		return aErr
+	}); txErr != nil {
+		c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepCompensated",
+			slog.String("instance_id", string(ci.Instance.ID)),
+			slog.String("step_name", string(step.Name)),
+			slog.Any("error", txErr))
+	}
+	return nil
 }
 
 // commitStepArgs bundles the per-step commit inputs into a single value so
@@ -665,53 +846,6 @@ func (c *Coordinator) commitStepCompleted(txCtx context.Context, a commitStepArg
 }
 
 // ---------------------------------------------------------------------------
-// heartbeatLoop
-// ---------------------------------------------------------------------------
-
-func (c *Coordinator) heartbeatLoop(ctx context.Context) {
-	ticker := c.clock.NewTicker(c.cfg.HeartbeatInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C():
-			c.heartbeatOnce(ctx)
-		}
-	}
-}
-
-// heartbeatOnce extends all active leases tracked in activeLeases.
-// Stale leases (ok=false) are removed from the map.
-func (c *Coordinator) heartbeatOnce(ctx context.Context) {
-	c.activeLeases.Range(func(key, val any) bool {
-		instanceID, ok1 := key.(idutil.SafeID)
-		d, ok2 := val.(inflightDrive)
-		if !ok1 || !ok2 {
-			return true
-		}
-		ok, err := c.journal.Heartbeat(ctx, instanceID, d.leaseID, c.cfg.LeaseDuration)
-		if err != nil {
-			// Heartbeat returns (false, nil) on stale lease or missing
-			// instance by contract — any err here is real infra (PG
-			// outage, ctx cancel) or KindInvalid (programmer error). Both
-			// stay at Warn; classifier still routes if a future Journal
-			// impl widens the error shape.
-			c.logger.Log(ctx, journalErrLevel(err), "saga: heartbeat failed",
-				slog.String("instance_id", string(instanceID)),
-				slog.String("definition_id", string(d.defID)),
-				slog.Any("error", err))
-			return true
-		}
-		if !ok {
-			// Stale lease — stop tracking; another leader claimed it.
-			c.activeLeases.Delete(instanceID)
-		}
-		return true
-	})
-}
-
-// ---------------------------------------------------------------------------
 // markTerminal helper
 // ---------------------------------------------------------------------------
 
@@ -759,31 +893,6 @@ func foldEvents(events []journal.Event, def *ksaga.Definition) (cursor int, prev
 	}
 	_ = def // def not used in fold itself; passed for future per-step validation
 	return cursor, prevState, nil
-}
-
-// ---------------------------------------------------------------------------
-// safeRun — panic-guarded step executor
-// ---------------------------------------------------------------------------
-
-// safeRun calls fn and converts panics to errors. safeRun MUST be the only
-// callsite of StepFunc inside this package (locked by SAGA-STEP-RUN-OUTSIDE-TX-01
-// archtest shipped in PR-08).
-//
-// ctx carries the derived step/saga deadline; a step that ignores ctx.Done()
-// will block this goroutine until it returns naturally. The Coordinator
-// detects post-call ctx expiry (driveOne) and marks the instance Expired,
-// but cannot terminate the underlying goroutine — see ksaga.StepFunc godoc
-// for the cooperative-cancellation contract.
-func safeRun(ctx context.Context, fn ksaga.StepFunc, inst *ksaga.Instance, prev []byte) (newState []byte, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
-				"saga: step panicked",
-				errcode.WithDetails(errcode.PublicString("instanceId", string(inst.ID))),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))))
-		}
-	}()
-	return fn(ctx, inst, prev)
 }
 
 // ---------------------------------------------------------------------------
