@@ -2,6 +2,7 @@
 belongsToCell: {{.CellID}}
 # L0=local L1=localTx L2=outboxFact (publish 角色必须≥L2) L3=eventual L4=device
 consistencyLevel: {{if eq .SliceRole "publish"}}L2{{else}}L1{{end}}
+lifecycle: experimental
 contractUsages:
   - contract: {{.ContractID}}
     role: {{.SliceRole}}

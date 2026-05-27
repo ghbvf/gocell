@@ -19,6 +19,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "auditappenduser",
 	BelongsToCell:    "auditcore",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.audit.appended.v1", Role: "publish"},
 		{Contract: "event.user.created.v1", Role: "subscribe", Handler: "HandleEvent"},

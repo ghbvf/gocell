@@ -1,16 +1,16 @@
 // Package cellvocab is the single source of truth for the GoCell metadata
 // vocabulary — the typed enums (CellType, ContractKind, ContractRole,
-// Lifecycle, Level), their parsers/predicates, and the canonical consistency
-// level ordering.
+// CellLifecycle, ContractLifecycle, Level), their parsers/predicates, and the
+// canonical consistency level ordering.
 //
 // cellvocab is a leaf with zero kernel→kernel dependencies. It is consumed by:
 //
 //   - kernel/cell — uses the vocabulary in BaseCell construction, registry,
 //     consistency-mode resolution, and lifecycle hooks.
 //   - kernel/governance — references vocabulary types in lint/validation rules
-//     (cellvocab.ContractKind/Role/Lifecycle/CellType + their parsers); after
-//     the G-04 refactor governance no longer imports kernel/cell.
-//   - kernel/metadata — uses cellvocab.Levels/Rank/At for assembly derivation
+//     (cellvocab.ContractKind/Role/ContractLifecycle/CellType + their parsers);
+//     after the G-04 refactor governance no longer imports kernel/cell.
+//   - kernel/metadata — uses AllLevels()/Rank/At for assembly derivation
 //     before any kernel/cell type is bound; after G-04 metadata no longer
 //     reaches into kernel/cell/levelrank (the levelrank sub-package was
 //     absorbed into cellvocab).

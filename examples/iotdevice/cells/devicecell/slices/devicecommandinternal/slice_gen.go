@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "devicecommandinternal",
 	BelongsToCell:    "devicecell",
 	ConsistencyLevel: "L4",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.internal.devicecommands.list.v1", Role: "serve"},
 	},

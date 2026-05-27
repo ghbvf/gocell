@@ -77,7 +77,7 @@ func TestFakeStore_SeedSnapshot(t *testing.T) {
 
 	// Default status is pending.
 	for _, row := range snap {
-		if row.Status != "pending" {
+		if row.Status != kout.StatePending {
 			t.Errorf("row %s: expected status=pending, got %s", row.Entry.ID, row.Status)
 		}
 	}
@@ -127,7 +127,7 @@ func TestFakeStore_WithClock(t *testing.T) {
 	}
 
 	snap = s.Snapshot()
-	if snap[0].Status != "pending" {
+	if snap[0].Status != kout.StatePending {
 		t.Errorf("expected status=pending after reclaim, got %s", snap[0].Status)
 	}
 	if snap[0].NextRetryAt == nil {
@@ -219,7 +219,7 @@ func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
 
 	start := time.Now()
 	err = s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
-		return len(snap) == 1 && snap[0].Status == "published"
+		return len(snap) == 1 && snap[0].Status == kout.StatePublished
 	})
 	elapsed := time.Since(start)
 
@@ -310,9 +310,9 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 	var reclaimed, stillClaiming []string
 	for _, row := range s.Snapshot() {
 		switch row.Status {
-		case "pending":
+		case kout.StatePending:
 			reclaimed = append(reclaimed, row.Entry.ID)
-		case "claiming":
+		case kout.StateClaiming:
 			stillClaiming = append(stillClaiming, row.Entry.ID)
 		}
 	}

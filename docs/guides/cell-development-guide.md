@@ -32,6 +32,7 @@ cells/
 id: mycell
 type: core
 consistencyLevel: L1
+lifecycle: experimental  # 可选，默认 experimental；值域：experimental|candidate|asset|maintenance|retired
 owner:
   team: my-team
   role: mycell-owner
@@ -63,6 +64,7 @@ var cellMeta = &metadata.CellMeta{
     ID:               "mycell",
     Type:             "core",
     ConsistencyLevel: "L1",
+    Lifecycle:        "experimental",
     Owner:            metadata.OwnerMeta{Team: "my-team", Role: "mycell-owner"},
     Schema:           metadata.SchemaMeta{Primary: "my_table"},
     Verify:           metadata.CellVerifyMeta{Smoke: []string{"mycell/smoke"}},

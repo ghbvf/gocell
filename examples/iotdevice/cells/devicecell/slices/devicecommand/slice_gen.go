@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "devicecommand",
 	BelongsToCell:    "devicecell",
 	ConsistencyLevel: "L4",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.device.command.enqueue.v1", Role: "serve"},
 		{Contract: "http.device.command.dequeue.v1", Role: "serve"},

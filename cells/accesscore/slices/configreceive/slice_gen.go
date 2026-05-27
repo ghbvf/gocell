@@ -19,6 +19,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "configreceive",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L3",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.config.entry-upserted.v1", Role: "subscribe", Handler: "HandleEntryUpserted"},
 		{Contract: "event.config.entry-deleted.v1", Role: "subscribe", Handler: "HandleEntryDeleted"},

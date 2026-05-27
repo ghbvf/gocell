@@ -4,6 +4,7 @@ belongsToCell: ordercell
 # rewrites local projection maps). No DB transaction, no event publish,
 # no cross-cell call. SLICE-CONSISTENCY-01: L0 ≤ cell(L3) ✓
 consistencyLevel: L0
+lifecycle: experimental
 
 contractUsages:
   - contract: http.order.internal.projection-rebuild.v1

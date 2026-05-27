@@ -1,6 +1,7 @@
 id: demo
 type: core
 consistencyLevel: L1
+lifecycle: experimental
 owner:
   team: demo
   role: cell-owner

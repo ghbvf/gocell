@@ -130,6 +130,7 @@ CELL-RAW-DEPS-01 archtest 从字符串比对（ai-robust.md §L5，实测 Soft�
 ### 负向 / 风险
 - ⚠️ 测试桩需声明四子接口而非单 `Cell`——探索阶段确认无现存子接口 mock，本 PR 无此类破坏
 - ⚠️ 后续如需 `CellIdentity` 加字段（如 `Tier`），需新 ADR 决定加 `CellIdentity` 还是新 `CellTier` 子接口
+  - **Amendment（ADR 202605262100）**：已决议在 `CellIdentity` 新增 `Lifecycle() cellvocab.CellLifecycle` 方法（与 `Type()`/`ConsistencyLevel()` 同类声明式属性），不新建子接口；见 ADR `202605262100-adr-cell-slice-lifecycle-phase.md` §Decision-E。
 - ⚠️ Slice 接口 D4 决议「默认不拆」与 review 可能的「对称切分」诉求存在张力——以单事实源驱动而非形态对称为准，触发条件清晰可追
 
 ### AI-HARD 三档分级一览

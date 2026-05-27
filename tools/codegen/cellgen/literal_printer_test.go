@@ -247,6 +247,37 @@ func TestRenderCellMetaLiteral_TableDriven(t *testing.T) {
 	Schema: metadata.SchemaMeta{Primary: "s"},
 }`),
 		},
+		{
+			// Regression guard: Lifecycle is a plain yaml-tagged string field on
+			// CellMeta; renderMetaFields must project it when non-empty so that
+			// cell_gen.go carries the governance maturity phase declared in cell.yaml.
+			// Previously the hand-enumerated printer silently dropped it.
+			name: "Lifecycle projected when non-empty",
+			input: &metadata.CellMeta{
+				ID:               "lifecell",
+				Type:             "core",
+				ConsistencyLevel: "L1",
+				DurabilityMode:   "durable",
+				Lifecycle:        "asset",
+				Owner:            metadata.OwnerMeta{Team: "eng", Role: "owner"},
+				Schema:           metadata.SchemaMeta{Primary: "life_schema"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.lifecell.startup"}},
+				GoStructName:     metadata.MustNewGoIdentifier("LifeCell"),
+			},
+			want: strings.TrimSpace(`&metadata.CellMeta{
+	ID:               "lifecell",
+	Type:             "core",
+	ConsistencyLevel: "L1",
+	DurabilityMode:   "durable",
+	Lifecycle:        "asset",
+	Owner:            metadata.OwnerMeta{Team: "eng", Role: "owner"},
+	Schema:           metadata.SchemaMeta{Primary: "life_schema"},
+	Verify: metadata.CellVerifyMeta{Smoke: []string{
+		"smoke.lifecell.startup",
+	}},
+	GoStructName: metadata.MustNewGoIdentifier("LifeCell"),
+}`),
+		},
 	}
 
 	for _, tc := range tests {
@@ -388,5 +419,46 @@ func TestRenderSliceMetaLiteral_ProjectsSubscribeColumns(t *testing.T) {
 	// The publish CU must NOT carry any subscribe column.
 	if strings.Contains(got, `Role: "publish", Handler`) {
 		t.Errorf("publish CU must not project Handler/Group/Field; got:\n%s", got)
+	}
+}
+
+// TestRenderSliceMetaLiteral_LifecycleProjected verifies that a non-empty
+// Lifecycle field on SliceMeta is projected into the rendered literal.
+// SliceMeta.Lifecycle is a governance-only metadata field (not surfaced on
+// the Slice interface at runtime); renderSliceMetaLiteral must not drop it
+// so slice_gen.go carries the governance maturity phase from slice.yaml.
+func TestRenderSliceMetaLiteral_LifecycleProjected(t *testing.T) {
+	t.Parallel()
+	s := &metadata.SliceMeta{
+		ID:               "myslice",
+		BelongsToCell:    "mycell",
+		ConsistencyLevel: "L1",
+		Lifecycle:        "candidate", // slice ≤ cell: cell=asset allows candidate
+	}
+	got := renderSliceMetaLiteral(s)
+	if !strings.Contains(got, `Lifecycle: "candidate"`) {
+		t.Errorf("renderSliceMetaLiteral must project Lifecycle when set; got:\n%s", got)
+	}
+}
+
+// TestRenderCellMetaLiteral_LifecycleProjected verifies that a non-empty
+// Lifecycle field on CellMeta is projected into the rendered literal.
+// This is a focused regression guard separate from the table-driven suite.
+func TestRenderCellMetaLiteral_LifecycleProjected(t *testing.T) {
+	t.Parallel()
+	c := &metadata.CellMeta{
+		ID:               "assetcell",
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		DurabilityMode:   "durable",
+		Lifecycle:        "asset",
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Schema:           metadata.SchemaMeta{Primary: "asset_schema"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.assetcell.startup"}},
+		GoStructName:     metadata.MustNewGoIdentifier("AssetCell"),
+	}
+	got := renderCellMetaLiteral(c)
+	if !strings.Contains(got, `Lifecycle: "asset"`) {
+		t.Errorf("renderCellMetaLiteral must project Lifecycle when set; got:\n%s", got)
 	}
 }

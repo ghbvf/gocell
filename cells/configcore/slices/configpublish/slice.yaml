@@ -1,6 +1,7 @@
 id: configpublish
 belongsToCell: configcore
 consistencyLevel: L2
+lifecycle: asset
 contractUsages:
   - contract: http.config.publish.v1
     role: serve

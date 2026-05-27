@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "configpublish",
 	BelongsToCell:    "configcore",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.config.publish.v1", Role: "serve"},
 		{Contract: "http.config.rollback.v1", Role: "serve"},

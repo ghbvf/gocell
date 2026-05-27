@@ -60,7 +60,7 @@ func NewOutboxStore(db relayDB, clk clock.Clock) *PGOutboxStore {
 // ORDER BY matches idx_outbox_pending (next_retry_at NULLS FIRST, created_at)
 // with id as a stable tie-breaker for rows with identical timestamps.
 //
-// $1 statusClaiming, $2 statusPending, $3 batchSize, $4 leaseID (UUID).
+// $1 kout.StateClaiming.String(), $2 kout.StatePending.String(), $3 batchSize, $4 leaseID (UUID).
 //
 // ref: graphile/worker sql/000001.sql get_job — locked_by SET on claim
 // ref: jackc/pgxjob pgxjob.go — worker_id UUID via CTE
@@ -124,8 +124,8 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 // ref: graphile/worker resetLockedAt.ts — outer UPDATE re-asserts locked_by
 // ref: river_job.sql / pgxjob — CTE + SKIP LOCKED batched reclaim
 //
-// $1 claimTTL interval text, $2 maxAttempts, $3 statusDead, $4 statusPending,
-// $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros, $8 batchSize.
+// $1 claimTTL interval text, $2 maxAttempts, $3 kout.StateDead.String(), $4 kout.StatePending.String(),
+// $5 baseDelayMicros, $6 kout.StateClaiming.String(), $7 maxDelayMicros, $8 batchSize.
 const reclaimStaleQuery = `WITH picked AS (
 		SELECT id, lease_id, attempts FROM outbox_entries
 		WHERE status = $6 AND claimed_at < now() - $1::interval
@@ -186,7 +186,7 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 	}()
 
 	leaseID := uuid.NewString()
-	rows, err := tx.Query(ctx, claimPendingQuery, statusClaiming, statusPending, batchSize, leaseID)
+	rows, err := tx.Query(ctx, claimPendingQuery, kout.StateClaiming.String(), kout.StatePending.String(), batchSize, leaseID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ClaimPending query failed", err)
 	}
@@ -217,7 +217,7 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 // row already in a terminal state) — silent at-least-once OK; callers must
 // not treat it as error.
 func (s *PGOutboxStore) MarkPublished(ctx context.Context, id, leaseID string) (bool, error) {
-	ct, err := s.db.Exec(ctx, markPublishedQuery, statusPublished, id, statusClaiming, leaseID)
+	ct, err := s.db.Exec(ctx, markPublishedQuery, kout.StatePublished.String(), id, kout.StateClaiming.String(), leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkPublished failed", err)
 	}
@@ -243,7 +243,7 @@ func (s *PGOutboxStore) MarkRetry(
 	errMsg := sanitizeError(lastError, 1000)
 
 	ct, err := s.db.Exec(ctx, markRetryQuery,
-		statusPending, attempts, delayInterval, errMsg, id, statusClaiming, leaseID)
+		kout.StatePending.String(), attempts, delayInterval, errMsg, id, kout.StateClaiming.String(), leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkRetry failed", err)
 	}
@@ -256,7 +256,7 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id, leaseID string, attemp
 	errMsg := sanitizeError(lastError, 1000)
 
 	ct, err := s.db.Exec(ctx, markDeadQuery,
-		statusDead, attempts, errMsg, id, statusClaiming, leaseID)
+		kout.StateDead.String(), attempts, errMsg, id, kout.StateClaiming.String(), leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkDead failed", err)
 	}
@@ -282,8 +282,8 @@ func (s *PGOutboxStore) ReclaimStale(
 
 	ct, err := s.db.Exec(ctx, reclaimStaleQuery,
 		claimTTLInterval, maxAttempts,
-		statusDead, statusPending,
-		baseDelay.Microseconds(), statusClaiming,
+		kout.StateDead.String(), kout.StatePending.String(),
+		baseDelay.Microseconds(), kout.StateClaiming.String(),
 		maxDelay.Microseconds(), batchSize)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ReclaimStale failed", err)
@@ -294,7 +294,7 @@ func (s *PGOutboxStore) ReclaimStale(
 // CleanupPublished deletes a batch of published rows older than cutoff.
 // Caller is responsible for looping until deleted < batchSize.
 func (s *PGOutboxStore) CleanupPublished(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
-	ct, err := s.db.Exec(ctx, cleanupPublishedQuery, statusPublished, cutoff, batchSize)
+	ct, err := s.db.Exec(ctx, cleanupPublishedQuery, kout.StatePublished.String(), cutoff, batchSize)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CleanupPublished failed", err)
 	}
@@ -304,7 +304,7 @@ func (s *PGOutboxStore) CleanupPublished(ctx context.Context, cutoff time.Time, 
 // CleanupDead deletes a batch of dead rows older than cutoff.
 // Caller is responsible for looping until deleted < batchSize.
 func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
-	ct, err := s.db.Exec(ctx, cleanupDeadQuery, statusDead, cutoff, batchSize)
+	ct, err := s.db.Exec(ctx, cleanupDeadQuery, kout.StateDead.String(), cutoff, batchSize)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CleanupDead failed", err)
 	}
@@ -395,34 +395,36 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 // and skip the metric update rather than panicking.
 func (s *PGOutboxStore) CountPending(ctx context.Context) (int64, error) {
 	var n int64
-	if err := s.db.QueryRow(ctx, countPendingQuery, statusPending).Scan(&n); err != nil {
+	if err := s.db.QueryRow(ctx, countPendingQuery, kout.StatePending.String()).Scan(&n); err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CountPending failed", err)
 	}
 	return n, nil
 }
 
-// OldestEligibleAt returns the oldest published_at (status="published") or
-// dead_at (status="dead") in the table. Used by the relay's data-driven
-// cleanup loop to schedule the next wake-up at oldest+retention instead of a
-// fixed timer.
-func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status string) (time.Time, bool, error) {
+// OldestEligibleAt returns the oldest published_at (status=kout.StatePublished)
+// or dead_at (status=kout.StateDead) in the table. Used by the relay's
+// data-driven cleanup loop to schedule the next wake-up at oldest+retention
+// instead of a fixed timer.
+//
+// status MUST be kout.StatePublished or kout.StateDead. Other values return an
+// error immediately.
+func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status kout.State) (time.Time, bool, error) {
 	var col string
 	switch status {
-	case statusPublished:
+	case kout.StatePublished:
 		col = "published_at"
-	case statusDead:
+	case kout.StateDead:
 		col = "dead_at"
 	default:
 		return time.Time{}, false, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
 			"OldestEligibleAt: invalid status",
-			errcode.WithInternal(fmt.Sprintf("status=%q want published or dead", status)))
+			errcode.WithInternal(fmt.Sprintf("status=%s want StatePublished or StateDead", status)))
 	}
 
-	// Inline status as a literal (validated by the switch above) so we don't
-	// need a placeholder for it; the column name cannot be parameterised.
+	// The column name cannot be parameterised; the status value is bound via $1.
 	query := fmt.Sprintf("SELECT MIN(%s) FROM outbox_entries WHERE status = $1", col)
 	var oldest *time.Time
-	if err := s.db.QueryRow(ctx, query, status).Scan(&oldest); err != nil {
+	if err := s.db.QueryRow(ctx, query, status.String()).Scan(&oldest); err != nil {
 		return time.Time{}, false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: OldestEligibleAt failed", err)
 	}
 	if oldest == nil {

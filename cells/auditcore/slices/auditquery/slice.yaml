@@ -1,6 +1,7 @@
 id: auditquery
 belongsToCell: auditcore
 consistencyLevel: L0
+lifecycle: asset
 contractUsages:
   - contract: http.audit.list.v1
     role: serve

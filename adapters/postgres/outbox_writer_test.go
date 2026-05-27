@@ -71,6 +71,9 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 	var meta map[string]string
 	require.NoError(t, json.Unmarshal(metaJSON, &meta))
 	assert.Equal(t, "test", meta["source"])
+
+	// $9 (args[8]) must be StatePending — regression guard for "no bare 'pending' literal".
+	assert.Equal(t, outbox.StatePending.String(), call.args[8]) // status = $9
 }
 
 func TestOutboxWriter_Write_WithTopic(t *testing.T) {
@@ -126,8 +129,9 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	_, hasReqID := meta["request_id"]
 	assert.False(t, hasReqID, "request_id must not be in business metadata column — it belongs in observability column")
 
-	// Observability column (arg index 8): carries trace context from ctx.
-	obsJSON, obsOK := tx.execCalls[0].args[8].([]byte)
+	// Observability column (arg index 9): carries trace context from ctx.
+	// ($1=id $2=agg_id $3=agg_type $4=event_type $5=topic $6=payload $7=metadata $8=created_at $9=status $10=observability)
+	obsJSON, obsOK := tx.execCalls[0].args[9].([]byte)
 	require.True(t, obsOK)
 	var obs outbox.ObservabilityMetadata
 	require.NoError(t, json.Unmarshal(obsJSON, &obs))
@@ -361,6 +365,10 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 	assert.Len(t, call.args, 20)
 	assert.Equal(t, "a1b2c3d4-e5f6-7890-abcd-ef1234567890", call.args[0])
 	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[10])
+
+	// $9 per entry (args[8] and args[18]) must be StatePending — regression guard.
+	assert.Equal(t, outbox.StatePending.String(), call.args[8])  // first entry status = $9
+	assert.Equal(t, outbox.StatePending.String(), call.args[18]) // second entry status = $19
 }
 
 func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {

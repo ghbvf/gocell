@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "configread",
 	BelongsToCell:    "configcore",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.config.get.v1", Role: "serve"},
 		{Contract: "http.config.list.v1", Role: "serve"},

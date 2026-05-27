@@ -1,6 +1,7 @@
 id: sessionvalidate
 belongsToCell: accesscore
 consistencyLevel: L0
+lifecycle: asset
 contractUsages: []
 verify:
   unit:

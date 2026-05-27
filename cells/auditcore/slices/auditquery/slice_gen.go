@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "auditquery",
 	BelongsToCell:    "auditcore",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.audit.list.v1", Role: "serve"},
 	},

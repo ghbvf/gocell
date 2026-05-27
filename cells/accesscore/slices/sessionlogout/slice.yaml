@@ -1,6 +1,7 @@
 id: sessionlogout
 belongsToCell: accesscore
 consistencyLevel: L2
+lifecycle: asset
 contractUsages:
   - contract: http.auth.session.delete.v1
     role: serve

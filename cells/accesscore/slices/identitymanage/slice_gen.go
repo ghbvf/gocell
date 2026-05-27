@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "identitymanage",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L2",
+	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.user.created.v1", Role: "publish"},
 		{Contract: "event.user.locked.v1", Role: "publish"},

@@ -6,7 +6,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Levels lists the canonical consistency level strings in ascending rank
+// levels lists the canonical consistency level strings in ascending rank
 // order. Index = rank.
 //
 // Single source of truth shared by:
@@ -18,13 +18,20 @@ import (
 //
 // The taxonomy (L0..L4) is fixed by the GoCell constitution (sync/async ×
 // local/cross-cell/device); adding a new level is not anticipated.
-var Levels = [...]string{"L0", "L1", "L2", "L3", "L4"}
+//
+// The private var ensures callers cannot mutate the authoritative ordered set;
+// use AllLevels() to obtain a read-only copy.
+var levels = [...]string{"L0", "L1", "L2", "L3", "L4"}
+
+// AllLevels returns the canonical ordered set of consistency levels as a value
+// copy (callers cannot mutate the authoritative source).
+func AllLevels() [5]string { return levels }
 
 // Rank returns the rank index of s in Levels, or -1 if s is not a known
 // level. The string form is canonical because metadata derivation runs
 // before cellvocab.Level values are bound.
 func Rank(s string) int {
-	for i, lvl := range Levels {
+	for i, lvl := range levels {
 		if s == lvl {
 			return i
 		}
@@ -34,10 +41,10 @@ func Rank(s string) int {
 
 // At returns the canonical string for rank r, or "" if r is out of range.
 func At(r int) string {
-	if r < 0 || r >= len(Levels) {
+	if r < 0 || r >= len(levels) {
 		return ""
 	}
-	return Levels[r]
+	return levels[r]
 }
 
 // Level represents the consistency level (L0-L4) of a Cell or Contract.

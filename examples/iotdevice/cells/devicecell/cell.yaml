@@ -1,6 +1,7 @@
 id: devicecell
 type: edge
 consistencyLevel: L4
+lifecycle: experimental
 durabilityMode: durable
 owner:
   team: examples

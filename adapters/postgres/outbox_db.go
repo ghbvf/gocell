@@ -10,17 +10,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Outbox entry status constants
-// ---------------------------------------------------------------------------
-
-const (
-	statusPending   = "pending"   // awaiting publish (including retries)
-	statusClaiming  = "claiming"  // locked by a relay instance, publishing in progress
-	statusPublished = "published" // successfully delivered to broker
-	statusDead      = "dead"      // exceeded MaxAttempts, requires manual intervention
-)
-
-// ---------------------------------------------------------------------------
 // relayDB — shared DB interface
 // ---------------------------------------------------------------------------
 

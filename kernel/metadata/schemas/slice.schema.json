@@ -16,6 +16,12 @@
       "type": "string",
       "description": "The parent cell id. This is a derived-anchor and may be omitted when it can be inferred from the directory path."
     },
+    "lifecycle": {
+      "type": "string",
+      "description": "Governance maturity phase of the slice. Optional; empty defaults to experimental at runtime (kernel/cellvocab.CellLifecycle). MUST be ≤ the parent cell's lifecycle (governance rule CELL-LIFECYCLE-01).",
+      "enum": ["experimental", "candidate", "asset", "maintenance", "retired"],
+      "default": "experimental"
+    },
     "contractUsages": {
       "type": "array",
       "description": "Contracts this slice depends on, with the role it plays for each.",

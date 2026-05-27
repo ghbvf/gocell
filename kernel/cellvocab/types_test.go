@@ -91,10 +91,10 @@ func TestContractRoleValues(t *testing.T) {
 	assert.Equal(t, cellvocab.ContractRole("read"), cellvocab.RoleRead)
 }
 
-func TestLifecycleValues(t *testing.T) {
-	assert.Equal(t, cellvocab.Lifecycle("draft"), cellvocab.LifecycleDraft)
-	assert.Equal(t, cellvocab.Lifecycle("active"), cellvocab.LifecycleActive)
-	assert.Equal(t, cellvocab.Lifecycle("deprecated"), cellvocab.LifecycleDeprecated)
+func TestContractLifecycleValues(t *testing.T) {
+	assert.Equal(t, cellvocab.ContractLifecycle("draft"), cellvocab.ContractLifecycleDraft)
+	assert.Equal(t, cellvocab.ContractLifecycle("active"), cellvocab.ContractLifecycleActive)
+	assert.Equal(t, cellvocab.ContractLifecycle("deprecated"), cellvocab.ContractLifecycleDeprecated)
 }
 
 // ---------------------------------------------------------------------------
@@ -233,21 +233,21 @@ func TestParseContractRoleInvalid(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ParseLifecycle
+// ParseContractLifecycle
 // ---------------------------------------------------------------------------
 
-func TestParseLifecycleRoundTrip(t *testing.T) {
+func TestParseContractLifecycleRoundTrip(t *testing.T) {
 	tests := []struct {
 		input string
-		want  cellvocab.Lifecycle
+		want  cellvocab.ContractLifecycle
 	}{
-		{"draft", cellvocab.LifecycleDraft},
-		{"active", cellvocab.LifecycleActive},
-		{"deprecated", cellvocab.LifecycleDeprecated},
+		{"draft", cellvocab.ContractLifecycleDraft},
+		{"active", cellvocab.ContractLifecycleActive},
+		{"deprecated", cellvocab.ContractLifecycleDeprecated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, err := cellvocab.ParseLifecycle(tt.input)
+			got, err := cellvocab.ParseContractLifecycle(tt.input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.input, string(got))
@@ -255,7 +255,7 @@ func TestParseLifecycleRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParseLifecycleInvalid(t *testing.T) {
+func TestParseContractLifecycleInvalid(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -266,7 +266,7 @@ func TestParseLifecycleInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := cellvocab.ParseLifecycle(tt.input)
+			_, err := cellvocab.ParseContractLifecycle(tt.input)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))

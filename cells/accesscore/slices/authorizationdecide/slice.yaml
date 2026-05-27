@@ -1,6 +1,7 @@
 id: authorizationdecide
 belongsToCell: accesscore
 consistencyLevel: L0
+lifecycle: asset
 contractUsages: []
 verify:
   unit:

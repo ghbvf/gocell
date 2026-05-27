@@ -1,6 +1,7 @@
 id: rbaccheck
 belongsToCell: accesscore
 consistencyLevel: L0
+lifecycle: asset
 contractUsages:
   - contract: http.auth.role.list.v1
     role: serve

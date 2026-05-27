@@ -111,8 +111,8 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("CleanupPublished_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupPublished(t, factory) })
 	t.Run("CleanupPublished_BatchLimit", func(t *testing.T) { conformCleanupPublishedBatch(t, factory) })
 	t.Run("CleanupDead_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupDead(t, factory) })
-	t.Run("OldestEligibleAt_PublishedEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "published") })
-	t.Run("OldestEligibleAt_DeadEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "dead") })
+	t.Run("OldestEligibleAt_PublishedEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, kout.StatePublished) })
+	t.Run("OldestEligibleAt_DeadEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, kout.StateDead) })
 	t.Run("OldestEligibleAt_Published_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtPublished(t, factory) })
 	t.Run("OldestEligibleAt_Dead_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtDead(t, factory) })
 	t.Run("OldestEligibleAt_InvalidStatus_ReturnsError", func(t *testing.T) { conformOldestEligibleAtInvalid(t, factory) })
@@ -580,8 +580,8 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 		if len(snap) != 1 {
 			t.Fatalf("FakeStore snapshot: expected 1 row, got %d", len(snap))
 		}
-		if snap[0].Status != "dead" {
-			t.Errorf("FakeStore: expected status=dead, got %s", snap[0].Status)
+		if snap[0].Status != kout.StateDead {
+			t.Errorf("FakeStore: expected status=%s, got %s", kout.StateDead, snap[0].Status)
 		}
 		if snap[0].Attempts != 5 {
 			t.Errorf("FakeStore: expected attempts=5, got %d", snap[0].Attempts)
@@ -686,22 +686,36 @@ func conformCleanupDead(t *testing.T, factory StoreFactory) {
 // rows in the requested status) returns ok=false and a nil error — the
 // "idle table" branch the relay's nextCleanupWait relies on to back off to
 // the safety ceiling instead of tight-looping.
-func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status string) {
+func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status kout.State) {
 	t.Helper()
 	ctx := t.Context()
 	store := factory(t, nil)
 
 	at, ok, err := store.OldestEligibleAt(ctx, status)
 	if err != nil {
-		t.Fatalf("OldestEligibleAt(%q) on empty: %v", status, err)
+		t.Fatalf("OldestEligibleAt(%s) on empty: %v", status, err)
 	}
 	if ok {
-		t.Errorf("OldestEligibleAt(%q) on empty: ok=true, at=%v; want ok=false", status, at)
+		t.Errorf("OldestEligibleAt(%s) on empty: ok=true, at=%v; want ok=false", status, at)
 	}
 }
 
 // conformOldestEligibleAtPublished verifies that with multiple published rows,
-// the smallest published_at is returned and lies in the recent past.
+// the smallest published_at (MIN) is returned, not a later row.
+//
+// The test publishes entries one at a time in ClaimPending order (which is
+// created_at ASC), recording a time upper-bound after the FIRST MarkPublished
+// returns. Because ClaimPending orders by created_at ASC, claimed[0] is the
+// oldest entry; its published_at ≤ t_first_upper. The remaining entries are
+// published after t_first_upper, so their published_at > t_first_upper.
+// If the implementation returns MIN (oldest), at ≤ t_first_upper.
+// If the implementation returns MAX or any later row, at > t_first_upper,
+// causing the assertion to fail. This distinguishes correct MIN from any
+// non-MIN implementation without requiring an injected clock or sleep.
+//
+// conformRFC: ClaimPending ORDER BY next_retry_at NULLS FIRST, created_at ASC
+// guarantees the oldest entry is returned first — both FakeStore and
+// PGOutboxStore observe this ordering.
 func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
@@ -715,8 +729,8 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 
 	// All eligible rows are claimed in a single batch (PG ClaimPending uses
 	// MATERIALIZED with ORDER BY); per-iteration ClaimPending would return
-	// empty after the first call. Claim once, then publish each entry with
-	// the lease the batch carried.
+	// empty after the first call. Claim once, then publish each entry in
+	// order so we can establish a time boundary between the oldest and the rest.
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil {
 		t.Fatalf(msgClaimPending, err)
@@ -724,25 +738,45 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	if len(claimed) != len(seed) {
 		t.Fatalf("ClaimPending: expected %d, got %d", len(seed), len(claimed))
 	}
-	for _, ce := range claimed {
+
+	// Publish the FIRST (oldest) entry separately and record the upper bound
+	// of its published_at. ClaimPending returns entries sorted by
+	// (next_retry_at NULLS FIRST, created_at ASC), so claimed[0] is e1 (oldest).
+	firstEntry := claimed[0]
+	if _, err := store.MarkPublished(ctx, firstEntry.ID, firstEntry.LeaseID); err != nil {
+		t.Fatalf("MarkPublished(first): %v", err)
+	}
+	// t_first_upper is recorded AFTER the first MarkPublished returns. The
+	// remaining entries are published after this point, so their published_at
+	// values are guaranteed to be ≥ t_first_upper.
+	tFirstUpper := time.Now()
+
+	// Publish the remaining entries.
+	for _, ce := range claimed[1:] {
 		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
 			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
 		}
 	}
 
-	beforeFirst := now.Add(-time.Minute)
-	at, ok, err := store.OldestEligibleAt(ctx, "published")
+	at, ok, err := store.OldestEligibleAt(ctx, kout.StatePublished)
 	if err != nil {
 		t.Fatalf("OldestEligibleAt: %v", err)
 	}
 	if !ok {
 		t.Fatal("OldestEligibleAt: expected ok=true, got false")
 	}
-	if at.Before(beforeFirst) {
-		t.Errorf("OldestEligibleAt: returned %v before any published_at could exist (%v)", at, beforeFirst)
+	// MIN assertion: the result must not be after tFirstUpper. Any implementation
+	// that returns MAX or a later row's published_at (which is > tFirstUpper by
+	// construction) will fail here.
+	if at.After(tFirstUpper) {
+		t.Errorf("OldestEligibleAt: returned %v, which is after the first published_at upper bound %v; "+
+			"expected the MINIMUM published_at (oldest row) — implementation may be returning MAX instead of MIN",
+			at, tFirstUpper)
 	}
-	if at.After(time.Now()) {
-		t.Errorf("OldestEligibleAt: returned %v in the future", at)
+	// Sanity lower bound: result must not predate the test run. Entries are
+	// seconds-old, so a one-minute window is ample margin.
+	if at.Before(now.Add(-time.Minute)) {
+		t.Errorf("OldestEligibleAt: returned %v which is unreasonably old (before test start - 1min)", at)
 	}
 }
 
@@ -763,7 +797,7 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 		t.Fatalf("MarkDead: %v", err)
 	}
 
-	at, ok, err := store.OldestEligibleAt(ctx, "dead")
+	at, ok, err := store.OldestEligibleAt(ctx, kout.StateDead)
 	if err != nil {
 		t.Fatalf("OldestEligibleAt: %v", err)
 	}
@@ -848,18 +882,20 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 	}
 }
 
-// conformOldestEligibleAtInvalid verifies that statuses other than "published"
-// or "dead" return an error (the contract narrows the surface to exactly the
+// conformOldestEligibleAtInvalid verifies that States other than StatePublished
+// or StateDead return an error (the contract narrows the surface to exactly the
 // two cleanup-eligible statuses).
 func conformOldestEligibleAtInvalid(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	store := factory(t, nil)
 
-	for _, bad := range []string{"pending", "claiming", "", "unknown"} {
+	// StatePending and StateClaiming are valid State values but must be rejected.
+	// State(0) and State(99) are invalid State values and must also be rejected.
+	for _, bad := range []kout.State{kout.StatePending, kout.StateClaiming, kout.State(0), kout.State(99)} {
 		_, _, err := store.OldestEligibleAt(ctx, bad)
 		if err == nil {
-			t.Errorf("OldestEligibleAt(%q): expected error, got nil", bad)
+			t.Errorf("OldestEligibleAt(%s): expected error, got nil", bad)
 		}
 	}
 }

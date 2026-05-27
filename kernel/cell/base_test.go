@@ -357,20 +357,20 @@ func TestBaseContractAccessors(t *testing.T) {
 	assert.Equal(t, cellvocab.ContractHTTP, c.Kind())
 	assert.Equal(t, "accesscore", c.OwnerCell())
 	assert.Equal(t, cellvocab.L2, c.ConsistencyLevel())
-	assert.Equal(t, cellvocab.LifecycleActive, c.Lifecycle(), "default lifecycle should be active")
+	assert.Equal(t, cellvocab.ContractLifecycleActive, c.Lifecycle(), "default lifecycle should be active")
 }
 
 func TestBaseContractSetLifecycle(t *testing.T) {
 	c := NewBaseContract("api-v1", cellvocab.ContractHTTP, "accesscore", cellvocab.L1)
-	assert.Equal(t, cellvocab.LifecycleActive, c.Lifecycle(), "default should be active")
+	assert.Equal(t, cellvocab.ContractLifecycleActive, c.Lifecycle(), "default should be active")
 
 	tests := []struct {
 		name string
-		lc   cellvocab.Lifecycle
+		lc   cellvocab.ContractLifecycle
 	}{
-		{"draft", cellvocab.LifecycleDraft},
-		{"deprecated", cellvocab.LifecycleDeprecated},
-		{"back to active", cellvocab.LifecycleActive},
+		{"draft", cellvocab.ContractLifecycleDraft},
+		{"deprecated", cellvocab.ContractLifecycleDeprecated},
+		{"back to active", cellvocab.ContractLifecycleActive},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

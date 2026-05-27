@@ -102,7 +102,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 
 	const query = `INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `', $9)`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	_, err = tx.Exec(
 		ctx, query,
@@ -114,6 +114,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		entry.Payload,
 		metadata,
 		createdAt,
+		outbox.StatePending.String(),
 		observabilityJSON,
 	)
 	if err != nil {
@@ -254,7 +255,7 @@ func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any,
 
 	return []any{
 		e.ID, e.AggregateID, e.AggregateType,
-		e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending, observabilityJSON,
+		e.EventType, e.Topic, e.Payload, metadata, createdAt, outbox.StatePending.String(), observabilityJSON,
 	}, nil
 }
 

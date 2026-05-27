@@ -1,8 +1,12 @@
 // Package fsm provides generic helpers for map-based finite-state-machine
 // transition tables used by kernel state machines. A transition table maps
-// each state to the states reachable from it; terminal states are simply
-// absent from the table (no outgoing edges), so a lookup miss yields a nil
-// slice and denies all transitions.
+// each state to the states reachable from it. A terminal state has no outgoing
+// edges: it may be either absent from the table (lookup miss → nil slice) or
+// present with an explicit empty slice — both deny all transitions identically
+// (slices.Contains over nil and []S{} is false). kernel/outbox uses the
+// explicit-empty-key form so OUTBOX-STATE-TRANSITION-COMPLETENESS-01 can require
+// every State const to be a key; kernel/saga uses the absent form. Either is
+// valid.
 //
 // kernel/saga uses these helpers. kernel/command predates this package and
 // still inlines the same lookup/defensive-copy bodies; migrating it is a
@@ -20,7 +24,8 @@ package fsm
 import "slices"
 
 // CanTransition reports whether table permits a transition from → to. A state
-// absent from table (e.g. a terminal state) permits no outgoing transitions.
+// with no outgoing edges (absent from table, or present with an empty slice —
+// e.g. a terminal state) permits no transitions.
 func CanTransition[S comparable](table map[S][]S, from, to S) bool {
 	return slices.Contains(table[from], to)
 }

@@ -27,10 +27,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/lifecycle"
 )
 
 // runCorebundle is the handwritten runtime half behind the generated
@@ -67,6 +71,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	if err != nil {
 		return err
 	}
+	logAssemblyMaturity(cells)
 
 	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
@@ -108,6 +113,51 @@ func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error
 		return nil, err
 	}
 	return mods, nil
+}
+
+// logAssemblyMaturity emits a startup Info log of the running assembly's
+// maturity-lifecycle distribution as a structured group (e.g.
+// lifecycle.experimental=1 lifecycle.asset=2), with per-phase cell ID lists.
+// This is the consumer of runtime/lifecycle.LifecycleAggregator: it makes the
+// maturity composition of a deployment visible at boot, so operators notice if
+// (say) a production bundle is unexpectedly running experimental cells. The
+// aggregator exposes raw per-cell lifecycles; the distribution and cell IDs are
+// computed here, by the consumer.
+//
+// The lifecycle group is built by ranging over cellvocab.AllCellLifecycles()
+// so any future phase addition is automatically included without editing this
+// function.
+func logAssemblyMaturity(cells []cell.Cell) {
+	if len(cells) == 0 {
+		return
+	}
+	ids := make([]cell.CellIdentity, len(cells))
+	for i, c := range cells {
+		ids[i] = c
+	}
+
+	// Collect cell IDs per lifecycle phase.
+	byPhase := make(map[cellvocab.CellLifecycle][]string)
+	for _, e := range lifecycle.NewLifecycleAggregator(ids).Snapshot() {
+		byPhase[e.Lifecycle] = append(byPhase[e.Lifecycle], e.CellID)
+	}
+
+	// Build lifecycle group attrs ordered by AllCellLifecycles (ascending rank).
+	// Each phase contributes a count attr and a cell-IDs attr so operators can
+	// identify which cells are at each maturity level.
+	lcAttrs := make([]any, 0, len(cellvocab.AllCellLifecycles())*2)
+	for _, phase := range cellvocab.AllCellLifecycles() {
+		cellIDs := byPhase[phase]
+		lcAttrs = append(lcAttrs, slog.Int(string(phase), len(cellIDs)))
+		if len(cellIDs) > 0 {
+			lcAttrs = append(lcAttrs, slog.String(string(phase)+"_cells", strings.Join(cellIDs, ",")))
+		}
+	}
+
+	slog.Info("corebundle: assembly maturity composition",
+		slog.Int("total_cells", len(cells)),
+		slog.Group("lifecycle", lcAttrs...),
+	)
 }
 
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from

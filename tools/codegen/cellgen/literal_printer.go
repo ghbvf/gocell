@@ -39,14 +39,18 @@ func renderCellMetaLiteral(cell *metadata.CellMeta) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("&metadata.CellMeta{\n")
-	renderCellMetaFields(&sb, reflect.ValueOf(*cell), reflect.TypeOf(*cell), "\t")
+	renderMetaFields(&sb, reflect.ValueOf(*cell), reflect.TypeOf(*cell), "\t")
 	sb.WriteString("}")
 	return sb.String()
 }
 
-// renderCellMetaFields iterates exported fields of a CellMeta value at the
-// given indent level and writes non-zero non-dash-yaml fields to sb.
-func renderCellMetaFields(sb *strings.Builder, v reflect.Value, t reflect.Type, indent string) {
+// renderMetaFields iterates exported fields of a metadata struct value
+// (CellMeta or SliceMeta) at the given indent level and writes non-zero
+// non-dash-yaml fields to sb. Reflect-driven so a new exported yaml-tagged
+// field on either struct auto-projects into the generated literal — closing the
+// "struct gains a field but the hand-written printer silently drops it" drift
+// class for BOTH cell_gen.go and slice_gen.go.
+func renderMetaFields(sb *strings.Builder, v reflect.Value, t reflect.Type, indent string) {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		fv := v.Field(i)
@@ -147,13 +151,16 @@ func renderFieldValue(fv reflect.Value, field reflect.StructField, indent string
 
 // renderInlineStruct renders a named struct value as metadata.TypeName{key: val, ...}
 // for structs where all field values fit on one line (OwnerMeta, SchemaMeta).
-// For CellVerifyMeta (contains a slice), it renders multi-line.
+// For CellVerifyMeta / SliceVerifyMeta (contain slices), it renders multi-line.
 func renderInlineStruct(v reflect.Value, t reflect.Type, indent string) string {
 	// Use reflect.Type identity (not string name) to avoid silent breakage on rename.
-	if t == reflect.TypeOf(metadata.CellVerifyMeta{}) {
+	switch t {
+	case reflect.TypeOf(metadata.CellVerifyMeta{}):
 		return renderCellVerifyMeta(v, indent)
+	case reflect.TypeOf(metadata.SliceVerifyMeta{}):
+		return renderSliceVerifyMeta(v.Interface().(metadata.SliceVerifyMeta), indent)
 	}
-	// Single-line struct: OwnerMeta, SchemaMeta, L0DepMeta
+	// Single-line struct: OwnerMeta, SchemaMeta
 	return renderSingleLineStruct(v, t)
 }
 
@@ -166,6 +173,16 @@ func renderInlineStruct(v reflect.Value, t reflect.Type, indent string) string {
 // non-string types surface immediately at development time rather than
 // silently generating broken Go literals.
 func renderSingleLineStruct(v reflect.Value, t reflect.Type) string {
+	return fmt.Sprintf("metadata.%s%s", t.Name(), structFieldsBraced(v, t))
+}
+
+// structFieldsBraced renders an all-string struct's non-zero fields as
+// `{Field: "val", ...}` (no type prefix), for use both standalone (with a
+// type prefix prepended) and as elements inside a typed slice literal
+// `[]metadata.T{{...}, ...}`. Non-string fields panic via panicregister.Approved
+// (fail-loud) so a future struct field with a non-string type surfaces at
+// development time rather than emitting broken Go.
+func structFieldsBraced(v reflect.Value, t reflect.Type) string {
 	var parts []string
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
@@ -180,14 +197,14 @@ func renderSingleLineStruct(v reflect.Value, t reflect.Type) string {
 			panic(panicregister.Approved(
 				"cellgen-unsupported-singleline-field-type",
 				errcode.Assertion(
-					"cellgen literal printer: renderSingleLineStruct: unsupported field kind %s for field %s in %s;"+
-						" add a case in renderFieldValue and extend renderSingleLineStruct",
+					"cellgen literal printer: structFieldsBraced: unsupported field kind %s for field %s in %s;"+
+						" add a case in renderFieldValue and extend the struct renderer",
 					fv.Kind(), field.Name, t.Name()),
 			))
 		}
 		parts = append(parts, fmt.Sprintf("%s: %q", field.Name, fv.String()))
 	}
-	return fmt.Sprintf("metadata.%s{%s}", t.Name(), strings.Join(parts, ", "))
+	return fmt.Sprintf("{%s}", strings.Join(parts, ", "))
 }
 
 // renderCellVerifyMeta renders a CellVerifyMeta as a multi-line block.
@@ -270,17 +287,14 @@ func renderCellVerifyMeta(v reflect.Value, indent string) string {
 func renderSlice(fv reflect.Value, field reflect.StructField, indent string) string {
 	elemType := fv.Type().Elem()
 
-	switch elemType.Kind() { //nolint:exhaustive // only string and L0DepMeta in CellMeta
+	switch elemType.Kind() { //nolint:exhaustive // only string and all-string structs (L0DepMeta / ContractUsage)
 	case reflect.String:
 		return renderStringSlice(fv, indent)
 	case reflect.Struct:
-		if elemType == reflect.TypeOf(metadata.L0DepMeta{}) {
-			return renderL0DepMetaSlice(fv, indent)
-		}
-		panic(panicregister.Approved(
-			"cellgen-unsupported-field-type",
-			errcode.Assertion("cellgen literal printer: unsupported slice element struct %s for field %s", elemType.Name(), field.Name),
-		))
+		// Generic all-string struct slice: []metadata.L0DepMeta / []metadata.ContractUsage.
+		// Elements render as type-elided braces {Field: "v", ...} (the slice type
+		// declares the element type), zero-value fields omitted.
+		return renderStructSlice(fv, elemType, indent)
 	default:
 		panic(panicregister.Approved(
 			"cellgen-unsupported-field-type",
@@ -307,20 +321,22 @@ func renderStringSlice(fv reflect.Value, indent string) string {
 	return sb.String()
 }
 
-// renderL0DepMetaSlice renders a []metadata.L0DepMeta field as:
+// renderStructSlice renders an all-string struct slice as:
 //
-//	[]metadata.L0DepMeta{
-//		{Cell: "x", Reason: "y"},
+//	[]metadata.<ElemType>{
+//		{Field: "x", ...},
 //	}
-func renderL0DepMetaSlice(fv reflect.Value, indent string) string {
+//
+// Generic over the element type (L0DepMeta / ContractUsage); per-element fields
+// use the type-elided braced form from structFieldsBraced.
+func renderStructSlice(fv reflect.Value, elemType reflect.Type, indent string) string {
 	inner := indent + "\t"
 	var sb strings.Builder
-	sb.WriteString("[]metadata.L0DepMeta{\n")
+	fmt.Fprintf(&sb, "[]metadata.%s{\n", elemType.Name())
 	for i := 0; i < fv.Len(); i++ {
-		elem := fv.Index(i)
-		cell := elem.FieldByName("Cell").String()
-		reason := elem.FieldByName("Reason").String()
-		fmt.Fprintf(&sb, "%s{Cell: %q, Reason: %q},\n", inner, cell, reason)
+		sb.WriteString(inner)
+		sb.WriteString(structFieldsBraced(fv.Index(i), elemType))
+		sb.WriteString(",\n")
 	}
 	sb.WriteString(indent)
 	sb.WriteString("}")
@@ -329,11 +345,15 @@ func renderL0DepMetaSlice(fv reflect.Value, indent string) string {
 
 // renderSliceMetaLiteral renders a *metadata.SliceMeta as a Go source literal
 // `&metadata.SliceMeta{...}`. slice.yaml is the single source of truth for
-// slice identity / consistency level — codegen projects every contract-bearing
-// field so that the typed sliceMeta in slice_gen.go is the funnel SoR.
+// slice identity / consistency level / lifecycle — codegen projects every
+// contract-bearing field so that the typed sliceMeta in slice_gen.go is the
+// funnel SoR.
 //
-// Mirrors renderCellMetaLiteral's structure. Zero-value / empty-slice fields
-// are omitted to keep regenerated output minimal.
+// Reflect-driven via the shared renderMetaFields (same path as
+// renderCellMetaLiteral), so a new exported yaml-tagged SliceMeta field
+// (e.g. Lifecycle) auto-projects without editing this function — the
+// hand-enumerated form that previously dropped new fields is gone. Zero-value /
+// empty-slice fields are omitted to keep regenerated output minimal.
 //
 // CELLGEN-LITERAL-FUNNEL-02 also applies: unexported. The sole caller is
 // BuildSliceSpec, which writes the result into SliceGenSpec.RenderedMetaLiteral.
@@ -343,50 +363,9 @@ func renderSliceMetaLiteral(s *metadata.SliceMeta) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("&metadata.SliceMeta{\n")
-	fmt.Fprintf(&sb, "\tID:               %q,\n", s.ID)
-	fmt.Fprintf(&sb, "\tBelongsToCell:    %q,\n", s.BelongsToCell)
-	fmt.Fprintf(&sb, "\tConsistencyLevel: %q,\n", s.ConsistencyLevel)
-	if len(s.ContractUsages) > 0 {
-		sb.WriteString("\tContractUsages: []metadata.ContractUsage{\n")
-		for _, u := range s.ContractUsages {
-			sb.WriteString("\t\t{")
-			fmt.Fprintf(&sb, "Contract: %q, Role: %q", u.Contract, u.Role)
-			// Handler / Group / Field are the subscribe-only columns. Projecting
-			// them (when set) keeps the typed sliceMeta a COMPLETE projection of
-			// slice.yaml's contractUsages — not just {Contract, Role}. Zero-value
-			// columns are omitted to keep regenerated output minimal.
-			if u.Handler != "" {
-				fmt.Fprintf(&sb, ", Handler: %q", u.Handler)
-			}
-			if u.Group != "" {
-				fmt.Fprintf(&sb, ", Group: %q", u.Group)
-			}
-			if u.Field != "" {
-				fmt.Fprintf(&sb, ", Field: %q", u.Field)
-			}
-			sb.WriteString("},\n")
-		}
-		sb.WriteString("\t},\n")
-	}
-	if !isSliceVerifyMetaZero(s.Verify) {
-		sb.WriteString("\tVerify: ")
-		sb.WriteString(renderSliceVerifyMeta(s.Verify, "\t"))
-		sb.WriteString(",\n")
-	}
-	if len(s.AllowedFiles) > 0 {
-		sb.WriteString("\tAllowedFiles: []string{\n")
-		for _, p := range s.AllowedFiles {
-			fmt.Fprintf(&sb, "\t\t%q,\n", p)
-		}
-		sb.WriteString("\t},\n")
-	}
+	renderMetaFields(&sb, reflect.ValueOf(*s), reflect.TypeOf(*s), "\t")
 	sb.WriteString("}")
 	return sb.String()
-}
-
-// isSliceVerifyMetaZero reports whether every field of v is zero (nil or empty).
-func isSliceVerifyMetaZero(v metadata.SliceVerifyMeta) bool {
-	return len(v.Unit) == 0 && len(v.Contract) == 0 && len(v.Waivers) == 0
 }
 
 // renderSliceVerifyMeta renders a metadata.SliceVerifyMeta inline at the given

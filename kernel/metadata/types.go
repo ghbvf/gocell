@@ -15,14 +15,23 @@ import (
 // governance rules (REF-04) can compare filesystem truth against cell.id
 // without being fooled by a path/id split.
 type CellMeta struct {
-	ID               string         `yaml:"id"`
-	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
-	ConsistencyLevel string         `yaml:"consistencyLevel"` // "L0"-"L4"
-	DurabilityMode   string         `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
-	Owner            OwnerMeta      `yaml:"owner"`
-	Schema           SchemaMeta     `yaml:"schema"`
-	Verify           CellVerifyMeta `yaml:"verify"`
-	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
+	ID               string `yaml:"id"`
+	Type             string `yaml:"type"`             // "core"|"edge"|"support"
+	ConsistencyLevel string `yaml:"consistencyLevel"` // "L0"-"L4"
+	DurabilityMode   string `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
+	// Lifecycle is the governance maturity phase
+	// (experimental|candidate|asset|maintenance|retired). Optional; empty
+	// defaults to experimental at BaseCell construction. Distinct from the
+	// runtime cellState and from a Contract's draft/active/deprecated lifecycle
+	// — see kernel/cellvocab.CellLifecycle. The parser stays lenient (membership
+	// is enforced by cell.schema.json enum + governance CELL-LIFECYCLE-01 +
+	// NewBaseCell's ParseCellLifecycle), matching the durabilityMode/requires
+	// posture.
+	Lifecycle      string         `yaml:"lifecycle,omitempty"`
+	Owner          OwnerMeta      `yaml:"owner"`
+	Schema         SchemaMeta     `yaml:"schema"`
+	Verify         CellVerifyMeta `yaml:"verify"`
+	L0Dependencies []L0DepMeta    `yaml:"l0Dependencies"`
 	// GoStructName is a schema extension consumed by tools/codegen — kernel
 	// itself does not interpret its value. Cells that opt into K#04 codegen
 	// MUST set this; non-codegen cells leave it empty. There is no reliable
@@ -127,13 +136,18 @@ type SliceMeta struct {
 	// MUST be ≤ cell.ConsistencyLevel. slice.yaml is the SoR for slice
 	// level (codegen funnel projects to slice_gen.go.sliceMeta);
 	// inheritance from cell.consistencyLevel is no longer supported.
-	ConsistencyLevel string          `yaml:"consistencyLevel"`
-	ContractUsages   []ContractUsage `yaml:"contractUsages"`
-	Verify           SliceVerifyMeta `yaml:"verify"`
-	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
-	Dir              string          `yaml:"-"` // slice directory segment, set by parser
-	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
-	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
+	ConsistencyLevel string `yaml:"consistencyLevel"`
+	// Lifecycle is the slice's governance maturity phase
+	// (experimental|candidate|asset|maintenance|retired). Optional; MUST be ≤ the
+	// parent cell's lifecycle (governance CELL-LIFECYCLE-01). See
+	// kernel/cellvocab.CellLifecycle.
+	Lifecycle      string          `yaml:"lifecycle,omitempty"`
+	ContractUsages []ContractUsage `yaml:"contractUsages"`
+	Verify         SliceVerifyMeta `yaml:"verify"`
+	AllowedFiles   []string        `yaml:"allowedFiles,omitempty"`
+	Dir            string          `yaml:"-"` // slice directory segment, set by parser
+	CellDir        string          `yaml:"-"` // parent cell directory segment, set by parser
+	File           string          `yaml:"-"` // parsed slice.yaml path relative to project root
 }
 
 // Clone returns a deep copy of s, independently owning every slice and

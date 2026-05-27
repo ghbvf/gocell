@@ -70,6 +70,12 @@
       "description": "Outbox durability mode for L2+ cells. Declared so CheckNotNoop can enforce at runtime.",
       "enum": ["demo", "durable"]
     },
+    "lifecycle": {
+      "type": "string",
+      "description": "Governance maturity phase of the cell. Optional; empty defaults to experimental at runtime (kernel/cellvocab.CellLifecycle). Distinct from a Contract's draft/active/deprecated lifecycle. Validated by governance rule CELL-LIFECYCLE-01 (membership + slice≤cell).",
+      "enum": ["experimental", "candidate", "asset", "maintenance", "retired"],
+      "default": "experimental"
+    },
     "l0Dependencies": {
       "type": "array",
       "description": "Explicit L0 Cell import dependencies. Only declared when importing L0 (pure-computation) cells within the same assembly.",

@@ -15,6 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "sessionvalidate",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L0",
+	Lifecycle:        "asset",
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
 			"unit.sessionvalidate.service",
