@@ -21,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+const bootstrapAuditEntryOffset = 2 * time.Hour
+
 // newHandlerMux registers auditquery routes under the canonical API prefix,
 // mirroring production wiring so all auth.Mount guards are exercised.
 func newHandlerMux(svc *Service) http.Handler {
@@ -401,7 +403,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 		EventID:   "evt-bootstrap-1",
 		EventType: "bootstrap.auth.fail",
 		ActorID:   "system:bootstrap",
-		Timestamp: base.Add(2 * time.Hour),
+		Timestamp: base.Add(bootstrapAuditEntryOffset),
 		Payload:   []byte(`{"reason":"wrong_credentials"}`),
 	}))
 
