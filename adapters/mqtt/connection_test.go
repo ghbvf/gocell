@@ -30,7 +30,9 @@ func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "listen random port")
 	addr = ln.Addr().String()
-	ln.Close() //nolint:errcheck // best-effort; port may be reused
+	if err = ln.Close(); err != nil {
+		t.Logf("close probe listener: %v", err)
+	}
 
 	tcp := listeners.NewTCP(listeners.Config{
 		ID:      "test-tcp",
@@ -50,9 +52,9 @@ func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
 	}
 }
 
-// newEmbeddedBrokerWithDenyHook starts a broker that initially denies all auth
-// and returns the addr, the deny hook (so the test can swap it), and a stop func.
-func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, hook *denyAuthHook, stop func()) {
+// newEmbeddedBrokerWithDenyHook starts a broker that denies all auth and
+// returns the addr and a stop function.
+func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
 	h := &denyAuthHook{deny: true}
@@ -62,7 +64,9 @@ func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, hook *denyAuthHoo
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "listen random port")
 	addr = ln.Addr().String()
-	ln.Close() //nolint:errcheck // best-effort
+	if err = ln.Close(); err != nil {
+		t.Logf("close probe listener: %v", err)
+	}
 
 	tcp := listeners.NewTCP(listeners.Config{
 		ID:      "deny-tcp",
@@ -75,7 +79,7 @@ func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, hook *denyAuthHoo
 		_ = srv.Serve()
 	}()
 	time.Sleep(10 * time.Millisecond)
-	return addr, h, func() { _ = srv.Close() }
+	return addr, func() { _ = srv.Close() }
 }
 
 // denyAuthHook is a mochi hook that denies all connections when deny=true.
@@ -88,6 +92,7 @@ func (h *denyAuthHook) ID() string { return "deny-hook" }
 func (h *denyAuthHook) Provides(b byte) bool {
 	return b == mqttserver.OnConnectAuthenticate || b == mqttserver.OnACLCheck
 }
+
 func (h *denyAuthHook) OnConnectAuthenticate(_ *mqttserver.Client, _ packets.Packet) bool {
 	return !h.deny
 }
@@ -123,7 +128,7 @@ func TestConnection_HappyPath_HealthOk(t *testing.T) {
 	conn, err := mqtt.Open(ctx, clk, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, conn)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
 	assert.NoError(t, conn.Health(ctx))
 	assert.NotNil(t, conn.Client())
@@ -212,7 +217,7 @@ func TestConnection_PermanentError_SurfacedViaHealth(t *testing.T) {
 // TestConnection_DenyBroker_PermanentErrViaHealth tests that a deny-all broker
 // (0x87 NotAuthorized from mochi) sets permanentErr and Health is non-transient.
 func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
-	addr, _, stop := newEmbeddedBrokerWithDenyHook(t)
+	addr, stop := newEmbeddedBrokerWithDenyHook(t)
 	defer stop()
 
 	clk := clock.Real()
@@ -231,7 +236,7 @@ func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 		// The connection returned an error on first attempt — permanent/bootstrap.
 		return
 	}
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 	// If Open returned a *Connection (manager started but perm err set), Health
 	// should surface a non-transient error.
 	hErr := conn.Health(context.Background())
@@ -241,7 +246,7 @@ func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 // TestConnection_WaitConnected_PermanentErrSurfaced verifies WaitConnected
 // returns when permanentErr is set after an auth-deny CONNACK.
 func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
-	addr, _, stop := newEmbeddedBrokerWithDenyHook(t)
+	addr, stop := newEmbeddedBrokerWithDenyHook(t)
 	defer stop()
 
 	clk := clock.Real()
@@ -258,7 +263,7 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 		// bootstrap-fatal returned directly from Open — acceptable
 		return
 	}
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer waitCancel()
@@ -281,7 +286,7 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	collector := &fakeCollector{}
 	conn, err := mqtt.Open(ctx, clk, cfg, mqtt.WithConnectionCollector(collector))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
 	// Initial connection does not count as a reconnect.
 	assert.Equal(t, 0, collector.count, "first connection must not increment reconnect counter")
