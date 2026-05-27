@@ -39,8 +39,9 @@
 // field type lacks Heartbeat entirely — requires changing 22 conformance
 // case + multi-impl signatures, out of scope for #1181.
 //
-// Follow-up issue: split Journal interface — gh issue opened in the
-// same PR as #1181 (see PR body Follow-up section).
+// Follow-up issue: gh issue #1209 (split Journal interface into
+// JournalCore + Heartbeater so the Coordinator field type lacks Heartbeat
+// entirely, upgrading this archtest's upstream from Medium to Hard).
 //
 // # Blind-spot self-test
 //

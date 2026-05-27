@@ -129,6 +129,14 @@ type Executor struct {
 // during a RunWithHeartbeat invocation (another coordinator took over).
 // Callers driving compensation walks use this to distinguish "another leader
 // took over — stop quietly" from real fn errors.
+//
+// Implementation note: uses errors.Is on an unexported sentinel
+// (errLeaseLost). Only errors returned from RunWithHeartbeat can satisfy
+// IsLeaseLost. Execute does NOT route lease-loss through error — it returns
+// Result{Outcome: OutcomeLeaseLost}; IsLeaseLost is therefore not
+// applicable to Result.Err. Issue #1181 design decision: lease-loss
+// proactively cancels the running step via context cancelCause(errLeaseLost)
+// — step authors must select on ctx.Done() to honor the cancellation.
 func IsLeaseLost(err error) bool {
 	return errors.Is(err, errLeaseLost)
 }
@@ -258,6 +266,15 @@ func (e *Executor) executeInner(
 	}
 	go func() {
 		defer hbWG.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
+					slog.String("instance_id", string(inst.ID)),
+					slog.Any("panic", r),
+				)
+				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
+			}
+		}()
 		runHeartbeat(hbCtx, e.clk, e.heartbeater,
 			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger, onStale, onHBFailure)
 	}()
@@ -298,6 +315,16 @@ func (e *Executor) executeInner(
 // because its retry loop needs more nuanced control over the goroutine — both
 // paths share runHeartbeat as the heartbeat-goroutine body.
 //
+// Return-value precedence (correctness invariant):
+//   - If fn returns a real domain error (not nil / context.Canceled /
+//     context.DeadlineExceeded), it is returned as-is. Lease-loss never
+//     overrides a real fn error — domain failures must surface.
+//   - If fn returns nil OR a ctx-derived error (context.Canceled /
+//     context.DeadlineExceeded) AND a heartbeat concurrently observed a
+//     stale lease, the lease-lost sentinel overrides the return.
+//     Callers detect this via IsLeaseLost.
+//   - Otherwise fn's return is propagated unchanged.
+//
 // ref: temporalio/sdk-go internal_task_handlers.go (per-activity heartbeat
 // goroutine spanning the whole activity invocation).
 func (e *Executor) RunWithHeartbeat(
@@ -318,6 +345,15 @@ func (e *Executor) RunWithHeartbeat(
 	}
 	go func() {
 		defer hbWG.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
+					slog.String("instance_id", string(inst.ID)),
+					slog.Any("panic", r),
+				)
+				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails
+			}
+		}()
 		runHeartbeat(hbCtx, e.clk, e.heartbeater,
 			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger, onStale, onHBFailure)
 	}()

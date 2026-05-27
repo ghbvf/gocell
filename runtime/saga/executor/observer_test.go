@@ -413,7 +413,7 @@ func TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost(t *testing.T) {
 // ignored and the default NopObserver is kept (builder-noop semantics).
 func TestNewExecutor_NilObserver_DefaultsToNop(t *testing.T) {
 	t.Parallel()
-	fc := clockmock.New(time.Now())
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithObserver(nil))
 	if err != nil {

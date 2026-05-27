@@ -35,8 +35,9 @@ type Heartbeater interface {
 // On a stale lease it invokes onStale (which the caller wires to cancel the
 // running step's / fn's context with errLeaseLost) before returning, so the
 // orphaned work stops executing rather than racing to commit under a lost
-// lease. The lease-lost log is Warn (degraded operation per
-// observability.md), not Info.
+// lease. The lease-lost log is Info (expected handoff in multi-coordinator
+// deployments, per issue #1181 §6), not Warn. Infrastructure errors remain
+// Warn (degraded operation per observability.md).
 //
 // Infrastructure errors from Heartbeat are logged as Warn and the goroutine
 // continues to the next tick (fail-open for transient infra issues, matching
@@ -83,7 +84,7 @@ func runHeartbeat(
 				continue
 			}
 			if !ok {
-				logger.WarnContext(ctx, "saga executor: lease lost (stale); canceling step",
+				logger.InfoContext(ctx, "saga executor: lease lost (stale); canceling step",
 					slog.String("instance_id", string(instanceID)),
 					slog.String("lease_id", string(leaseID)),
 				)
