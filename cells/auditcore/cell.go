@@ -310,7 +310,7 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 // per-entry via outbox.Entry.FailurePolicy, and archtest
 // OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
 func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
-	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(c.clk, outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "auditcore",
 			Mode:              mode,
@@ -320,7 +320,6 @@ func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),

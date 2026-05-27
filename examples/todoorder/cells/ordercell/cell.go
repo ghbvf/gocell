@@ -266,7 +266,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 // After this call, pendingOutboxWriter is cleared and c.emitter is the
 // composed sealed CellEmitter.
 func (c *OrderCell) resolveOutboxDeps(mode outbox.DurabilityMode) error {
-	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:       "ordercell",
 			Mode:         mode,

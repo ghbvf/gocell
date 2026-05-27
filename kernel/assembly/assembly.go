@@ -171,7 +171,7 @@ func New(clk clock.Clock, cfg Config) *CoreAssembly {
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Shutdown to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher := newHookDispatcher(clk, newDispatcherConfig(clk, cfg, nil))
+	dispatcher := newHookDispatcher(clk, newDispatcherConfig(cfg, nil))
 	return &CoreAssembly{
 		id:                cfg.ID,
 		clk:               clk,
@@ -183,14 +183,13 @@ func New(clk clock.Clock, cfg Config) *CoreAssembly {
 	}
 }
 
-func newDispatcherConfig(clk clock.Clock, cfg Config, dropped metrics.CounterVec) dispatcherConfig {
+func newDispatcherConfig(cfg Config, dropped metrics.CounterVec) dispatcherConfig {
 	return dispatcherConfig{
 		Observer:    cfg.HookObserver,
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
 		Dropped:     dropped,
-		Clock:       clk,
 	}
 }
 
@@ -198,7 +197,7 @@ func (a *CoreAssembly) ensureDispatcherLocked() {
 	if a.dispatcher != nil {
 		return
 	}
-	a.dispatcher = newHookDispatcher(a.clk, newDispatcherConfig(a.clk, a.cfg, a.dispatcherDropped))
+	a.dispatcher = newHookDispatcher(a.clk, newDispatcherConfig(a.cfg, a.dispatcherDropped))
 	if a.dispatcherDropped == nil {
 		a.dispatcherDropped = a.dispatcher.dropped
 	}
