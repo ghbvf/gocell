@@ -521,6 +521,105 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SubscriberWithMiddleware built-in principal restore (B2)
+// Mirrors the Observability restore tests above.
+// ---------------------------------------------------------------------------
+
+// TestSubscriberWithMiddleware_BuiltInRestore_RestoresPrincipal asserts that
+// SubscriberWithMiddleware.SubscribeEntry restores entry.Principal into the
+// handler ctx, symmetric with the Observability restore already in place.
+func TestSubscriberWithMiddleware_BuiltInRestore_RestoresPrincipal(t *testing.T) {
+	cap := &captureSubscriber{}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t))
+	require.NoError(t, err)
+
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
+		testFullSub("test", "cg-principal"),
+		func(ctx context.Context, _ Entry) HandleResult {
+			actorID, ok := ctxkeys.ActorFrom(ctx)
+			require.True(t, ok, "actor_id must be set in handler ctx")
+			assert.Equal(t, "actor-restore", actorID)
+
+			subjectID, ok := ctxkeys.SubjectFrom(ctx)
+			require.True(t, ok, "subject_id must be set in handler ctx")
+			assert.Equal(t, "subj-restore", subjectID)
+
+			tenantID, ok := ctxkeys.TenantFrom(ctx)
+			require.True(t, ok, "tenant_id must be set in handler ctx")
+			assert.Equal(t, "tenant-restore", tenantID)
+
+			sessionID, ok := ctxkeys.SessionFrom(ctx)
+			require.True(t, ok, "session_id must be set in handler ctx")
+			assert.Equal(t, "sess-restore", sessionID)
+
+			return Ack()
+		}))
+
+	require.NotNil(t, cap.handler)
+	res, _ := cap.handler(context.Background(), Entry{
+		ID: "evt-principal-restore",
+		Principal: PrincipalMetadata{
+			ActorID:   "actor-restore",
+			SubjectID: "subj-restore",
+			TenantID:  "tenant-restore",
+			SessionID: "sess-restore",
+		},
+	})
+	assert.Equal(t, DispositionAck, res.Disposition)
+}
+
+// TestSubscriberWithMiddleware_BuiltInRestore_ZeroPrincipalIsNoOp asserts that
+// a zero-value Principal (no identity on the entry) does not write any ctx keys.
+func TestSubscriberWithMiddleware_BuiltInRestore_ZeroPrincipalIsNoOp(t *testing.T) {
+	cap := &captureSubscriber{}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t))
+	require.NoError(t, err)
+
+	called := false
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
+		testFullSub("test", "cg-principal-noop"),
+		func(ctx context.Context, _ Entry) HandleResult {
+			called = true
+			_, ok := ctxkeys.ActorFrom(ctx)
+			assert.False(t, ok, "no actor_id should be set from zero PrincipalMetadata")
+			return Ack()
+		}))
+
+	require.NotNil(t, cap.handler)
+	res, _ := cap.handler(context.Background(), Entry{ID: "e1", Principal: PrincipalMetadata{}})
+	assert.True(t, called)
+	assert.Equal(t, DispositionAck, res.Disposition)
+}
+
+// TestSubscriberWithMiddleware_PrincipalRestoreIsOutermost asserts that the
+// built-in principal restore runs BEFORE any user middleware, mirroring
+// TestSubscriberWithMiddleware_RestoreIsOutermost for Observability.
+func TestSubscriberWithMiddleware_PrincipalRestoreIsOutermost(t *testing.T) {
+	cap := &captureSubscriber{}
+	var seenActorInMiddleware string
+	userMW := func(_ Subscription, next EntryHandler) EntryHandler {
+		return func(ctx context.Context, entry Entry) HandleResult {
+			seenActorInMiddleware, _ = ctxkeys.ActorFrom(ctx)
+			return next(ctx, entry)
+		}
+	}
+	wrapped, err := NewSubscriberWithMiddleware(cap, testConsumerBase(t), userMW)
+	require.NoError(t, err)
+
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(), testFullSub("test", "cg-principal-outermost"),
+		func(_ context.Context, _ Entry) HandleResult {
+			return Ack()
+		}))
+	require.NotNil(t, cap.handler)
+	_, _ = cap.handler(context.Background(), Entry{
+		ID:        "e1",
+		Principal: PrincipalMetadata{ActorID: "actor-outermost"},
+	})
+	assert.Equal(t, "actor-outermost", seenActorInMiddleware,
+		"user middleware must observe ctx after built-in principal restore (outermost)")
+}
+
+// ---------------------------------------------------------------------------
 // Round-trip: Inject → RestoreToContext round-trip via EntryID
 // ---------------------------------------------------------------------------
 

@@ -338,6 +338,139 @@ func TestEntryValidate_RejectsUnsafeIDFields(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Principal + OccurredAt wire round-trip (B2)
+// ---------------------------------------------------------------------------
+
+func TestMarshalEnvelope_PreservesPrincipal(t *testing.T) {
+	principal := PrincipalMetadata{
+		ActorID:   "actor-123",
+		SubjectID: "subj-456",
+		TenantID:  "tenant-789",
+		SessionID: "sess-abc",
+	}
+	entry := Entry{
+		ID:        "p-rt-1",
+		EventType: "test.event.v1",
+		Topic:     "test.event.v1",
+		Payload:   []byte(`{"x":1}`),
+		Principal: principal,
+		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+	}
+
+	raw, err := MarshalEnvelope(entry)
+	require.NoError(t, err)
+
+	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	require.NoError(t, err)
+
+	assert.Equal(t, principal.ActorID, got.Principal.ActorID)
+	assert.Equal(t, principal.SubjectID, got.Principal.SubjectID)
+	assert.Equal(t, principal.TenantID, got.Principal.TenantID)
+	assert.Equal(t, principal.SessionID, got.Principal.SessionID)
+	// struct-equal 兜底
+	assert.Equal(t, principal, got.Principal)
+}
+
+func TestMarshalEnvelope_EmptyPrincipalRoundTrip(t *testing.T) {
+	entry := Entry{
+		ID:        "p-empty-1",
+		EventType: "test.event.v1",
+		Topic:     "test.event.v1",
+		Payload:   []byte(`{"x":1}`),
+		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+	}
+
+	raw, err := MarshalEnvelope(entry)
+	require.NoError(t, err)
+
+	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	require.NoError(t, err)
+
+	assert.True(t, got.Principal.IsZero(), "empty Principal must round-trip as zero")
+}
+
+func TestMarshalEnvelope_OccurredAtRoundTrip(t *testing.T) {
+	// time.Time JSON round-trip preserves UTC nanoseconds — use a
+	// microsecond-precision value so both JSON marshal paths stay equal.
+	occurredAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	entry := Entry{
+		ID:         "oat-rt-1",
+		EventType:  "test.event.v1",
+		Topic:      "test.event.v1",
+		Payload:    []byte(`{"x":1}`),
+		OccurredAt: occurredAt,
+		CreatedAt:  time.Date(2026, 5, 28, 12, 30, 0, 0, time.UTC),
+	}
+
+	raw, err := MarshalEnvelope(entry)
+	require.NoError(t, err)
+
+	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	require.NoError(t, err)
+
+	assert.True(t, got.OccurredAt.Equal(occurredAt), "OccurredAt must round-trip equal (got %v, want %v)", got.OccurredAt, occurredAt)
+	// Also verify the wire JSON contains the occurredAt field
+	var raw2 map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &raw2))
+	assert.Contains(t, raw2, "occurredAt", "wire JSON must contain occurredAt field when set")
+}
+
+func TestMarshalEnvelope_ZeroOccurredAtRoundTrip(t *testing.T) {
+	entry := Entry{
+		ID:        "oat-zero-1",
+		EventType: "test.event.v1",
+		Topic:     "test.event.v1",
+		Payload:   []byte(`{"x":1}`),
+		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+		// OccurredAt intentionally zero
+	}
+
+	raw, err := MarshalEnvelope(entry)
+	require.NoError(t, err)
+
+	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	require.NoError(t, err)
+
+	assert.True(t, got.OccurredAt.IsZero(), "zero OccurredAt must round-trip as zero")
+}
+
+func TestUnmarshalEnvelope_RejectsUnsafePrincipalSafeID(t *testing.T) {
+	// CWE-117 trust boundary: PrincipalMetadata fields use idutil.SafeID whose
+	// UnmarshalJSON fail-closes on unsafe characters. Confirm the wire boundary
+	// rejects a principal with an unsafe ActorID.
+	raw := []byte(`{` +
+		`"schemaVersion":"v1",` +
+		`"id":"ok","eventType":"foo.v1",` +
+		`"payload":{"d":1},"createdAt":"2026-05-28T00:00:00Z",` +
+		`"principal":{"actorId":"actor\nevil"}` +
+		`}`)
+
+	_, err := UnmarshalEnvelope("foo.v1", raw)
+	require.Error(t, err, "unsafe principal SafeID must fail-closed at wire boundary")
+	var ce *errcode.Error
+	require.True(t, errors.As(err, &ce))
+	assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
+}
+
+func TestMarshalEnvelope_RejectsUnsafePrincipalSafeID(t *testing.T) {
+	// Producer-side fail-fast: MarshalEnvelope must reject an entry with an
+	// unsafe Principal field (defense in depth, mirrors Observability check).
+	entry := Entry{
+		ID:        "valid-id",
+		EventType: "order.v1",
+		Topic:     "order.v1",
+		Payload:   []byte(`{"x":1}`),
+		Principal: PrincipalMetadata{ActorID: "actor\nevil"},
+		CreatedAt: time.Now(),
+	}
+	_, err := MarshalEnvelope(entry)
+	require.Error(t, err, "unsafe Principal field must be rejected at marshal time")
+	var ce *errcode.Error
+	require.True(t, errors.As(err, &ce))
+	assert.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
+}
+
 func TestEntryValidate_RejectsEmptyRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

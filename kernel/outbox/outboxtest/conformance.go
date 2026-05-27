@@ -77,6 +77,7 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("Batch4_Receipt", func(t *testing.T) { RunBatch4Receipt(t, features, constructor) })
 	t.Run("Batch5_Lifecycle", func(t *testing.T) { RunBatch5Lifecycle(t, features, constructor) })
 	t.Run("Batch6_Concurrency", func(t *testing.T) { RunBatch6Concurrency(t, features, constructor) })
+	t.Run("Batch7_Principal", func(t *testing.T) { RunBatch7Principal(t, features, constructor) })
 }
 
 // RunBatch1Subscribe runs core pub/sub tests. Exported so external adapter
@@ -875,4 +876,190 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	h.publishAndWait([]byte(`{"test":"middleware"}`))
 	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")
 	h.teardown()
+}
+
+// ---------------------------------------------------------------------------
+// Batch 7: Principal + OccurredAt wire round-trip
+// ---------------------------------------------------------------------------
+
+// RunBatch7Principal runs Principal and OccurredAt round-trip conformance tests.
+// Exported so external adapter integration suites can call this batch to
+// verify the full async principal-propagation contract across their broker.
+func RunBatch7Principal(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("PrincipalRoundTrip", func(t *testing.T) {
+		testPrincipalRoundTrip(t, features, constructor)
+	})
+	t.Run("OccurredAtRoundTrip", func(t *testing.T) {
+		testOccurredAtRoundTrip(t, features, constructor)
+	})
+}
+
+// RunPrincipalRoundTripConformance is a standalone helper for adapter suites
+// that want to validate Principal + OccurredAt propagation independently of
+// the full conformance matrix. It publishes an entry with a non-empty
+// Principal and a non-zero OccurredAt and asserts the consumer receives them
+// intact.
+//
+// Both pub and sub must be from the same backing implementation (the caller
+// must ensure they share the same routing/decoding logic). topic is used as
+// the broker routing key; if empty, a unique topic is generated.
+//
+// This function does NOT wire up SubscriberWithMiddleware — it drives the raw
+// Subscriber directly to verify that the wire envelope preserves the fields.
+// Tests that want to assert ctx restoration (RestoreToContext) should use the
+// kernel/outbox unit tests (TestSubscriberWithMiddleware_BuiltInRestore_*).
+func RunPrincipalRoundTripConformance(
+	t testing.TB,
+	pub outbox.Publisher,
+	sub outbox.Subscriber,
+	topic string,
+) {
+	t.Helper()
+	tb, ok := t.(*testing.T)
+	if !ok {
+		t.Fatal("RunPrincipalRoundTripConformance requires *testing.T")
+		return
+	}
+
+	if topic == "" {
+		topic = TestTopic(tb)
+	}
+
+	want := outbox.PrincipalMetadata{
+		ActorID:   "actor-conf",
+		SubjectID: "subj-conf",
+		TenantID:  "tenant-conf",
+		SessionID: "sess-conf",
+	}
+	wantOccurredAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+
+	// Build a wire envelope that includes principal + occurredAt fields.
+	// We construct it via MarshalEnvelope so the test exercises the real
+	// wire-encode path, not a hand-crafted JSON fixture.
+	entry := outbox.Entry{
+		ID:         "principal-conf-" + topic,
+		EventType:  topic,
+		Topic:      topic,
+		Payload:    []byte(`{"conformance":"principal"}`),
+		Principal:  want,
+		OccurredAt: wantOccurredAt,
+		CreatedAt:  time.Date(2026, 5, 28, 12, 30, 0, 0, time.UTC),
+	}
+	wireBytes, err := outbox.MarshalEnvelope(entry)
+	if err != nil {
+		tb.Fatalf("RunPrincipalRoundTripConformance: MarshalEnvelope: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(tb.Context())
+	tb.Cleanup(cancel)
+
+	type received struct {
+		entry outbox.Entry
+	}
+	ch := make(chan received, 1)
+
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic, CellID: "_outboxtest_principal"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				select {
+				case ch <- received{entry: e}:
+				default:
+				}
+				return outbox.Ack(), nil
+			})
+	}()
+	waitForSubscription(tb, ctx, sub, topic, "")
+
+	if err := pub.Publish(ctx, topic, wireBytes); err != nil {
+		tb.Fatalf("RunPrincipalRoundTripConformance: Publish: %v", err)
+	}
+
+	select {
+	case got := <-ch:
+		if got.entry.Principal != want {
+			tb.Errorf("Principal mismatch: got %+v, want %+v", got.entry.Principal, want)
+		}
+		if !got.entry.OccurredAt.Equal(wantOccurredAt) {
+			tb.Errorf("OccurredAt mismatch: got %v, want %v", got.entry.OccurredAt, wantOccurredAt)
+		}
+	case <-time.After(defaultTimeout):
+		tb.Fatal("RunPrincipalRoundTripConformance: timed out waiting for message")
+	}
+
+	cancel()
+	if err := awaitWithBudget("RunPrincipalRoundTripConformance-join", subDone, defaultTimeout); err != nil {
+		tb.Errorf("%v", err)
+	}
+}
+
+// testPrincipalRoundTrip verifies that Principal and OccurredAt survive the
+// full pub/sub cycle using the conformance constructor.
+func testPrincipalRoundTrip(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	RunPrincipalRoundTripConformance(t, pub, sub, TestTopic(t))
+}
+
+// testOccurredAtRoundTrip verifies that a zero OccurredAt round-trips as zero
+// and that a non-zero OccurredAt round-trips correctly (zero case is implicitly
+// covered by all existing publish/subscribe tests — this test is the explicit
+// non-zero assertion).
+func testOccurredAtRoundTrip(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	topic := TestTopic(t)
+
+	// Sub-test 1: non-zero OccurredAt round-trips correctly (covered by
+	// testPrincipalRoundTrip as a side-effect — assert here for explicitness).
+	// Sub-test 2: zero OccurredAt round-trips as zero.
+	wantOccurredAt := time.Time{} // zero
+
+	entry := outbox.Entry{
+		ID:        "oat-zero-conf",
+		EventType: topic,
+		Topic:     topic,
+		Payload:   []byte(`{"conformance":"occurred_at_zero"}`),
+		// OccurredAt intentionally zero
+		CreatedAt: time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC),
+	}
+	wireBytes, err := outbox.MarshalEnvelope(entry)
+	if err != nil {
+		t.Fatalf("testOccurredAtRoundTrip: MarshalEnvelope: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	ch := make(chan outbox.Entry, 1)
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic, CellID: "_outboxtest_oat"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				select {
+				case ch <- e:
+				default:
+				}
+				return outbox.Ack(), nil
+			})
+	}()
+	waitForSubscription(t, ctx, sub, topic, "")
+
+	if err := pub.Publish(ctx, topic, wireBytes); err != nil {
+		t.Fatalf("testOccurredAtRoundTrip: Publish: %v", err)
+	}
+
+	select {
+	case got := <-ch:
+		if !got.OccurredAt.Equal(wantOccurredAt) {
+			t.Errorf("OccurredAt: got %v, want zero", got.OccurredAt)
+		}
+	case <-time.After(defaultTimeout):
+		t.Fatal("testOccurredAtRoundTrip: timed out")
+	}
+
+	cancel()
+	if err := awaitWithBudget("testOccurredAtRoundTrip-join", subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
 }

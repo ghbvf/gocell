@@ -54,6 +54,17 @@ var ReservedMetadataKeys = []string{
 	"span_id",
 	"request_id",
 	"correlation_id",
+	// Principal namespace (Entry.Principal — OAuth/OIDC identity carried
+	// across the async boundary). Producers writing these via Metadata is
+	// a programming error; the typed Entry.Principal field is canonical.
+	"actor_id",
+	"subject_id",
+	"tenant_id",
+	"session_id",
+	// Time-Causality namespace (Entry.OccurredAt — producer-clock event
+	// time). Producers writing this via Metadata as string is a programming
+	// error; the typed Entry.OccurredAt field is canonical.
+	"occurred_at",
 }
 
 // reservedMetadataKeySet is the membership-test view of ReservedMetadataKeys.
@@ -122,6 +133,35 @@ type Entry struct {
 	// ref: OpenTelemetry SpanContext — typed carrier of trace identity, distinct
 	// from application attributes (Baggage).
 	Observability ObservabilityMetadata
+
+	// Principal carries cross-async OAuth/OIDC identity (actor/subject/
+	// tenant/session) managed exclusively by the gocell observability
+	// bridge. Producers MUST NOT populate this field directly —
+	// (e *Entry).InjectPrincipalFromContext fills it from the originating
+	// request context at write time. SubscriberWithMiddleware restores
+	// it into the handler context symmetric with Observability.
+	//
+	// Empty struct (IsZero) is valid — not every event carries a
+	// principal; matches ObservabilityMetadata optional model.
+	//
+	// ref: OpenID Connect Core 1.0 §5.1 ("sub"), RFC 8693 §4.1 ("act")
+	// — typed carrier of principal identity, distinct from observability
+	// (trace) and business (metadata) namespaces.
+	Principal PrincipalMetadata
+
+	// OccurredAt is the producer-domain event time — when the business
+	// event actually happened in the producer's reference frame. Distinct
+	// from CreatedAt (outbox row INSERT time, set by the writer/store):
+	// OccurredAt is producer-clock semantic, CreatedAt is store-clock.
+	//
+	// Empty (zero-value time.Time) is valid — matches ObservabilityMetadata
+	// optional model. Producers MAY set explicitly when domain semantics
+	// require a distinct event time; default leaves it zero and CreatedAt
+	// remains the only time reference.
+	//
+	// ref: CloudEvents v1.0 §3 Required Attributes — "time" carries event
+	// occurrence time; gocell separates this from the outbox row time.
+	OccurredAt time.Time
 
 	// FailurePolicy controls how an Emitter handles publisher-side failures
 	// for this specific entry. Zero value (FailurePolicyDefault) falls
@@ -223,6 +263,9 @@ func (e Entry) Validate() error {
 		return err
 	}
 	if err := e.Observability.Validate(); err != nil {
+		return err
+	}
+	if err := e.Principal.Validate(); err != nil {
 		return err
 	}
 	return nil
@@ -831,10 +874,18 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	// idempotency Settlement.
 	subHandler := s.consumerBase.Wrap(sub, wrapped)
 
-	// Step 3: observability restore — built-in OUTERMOST wrapper so all layers
-	// (business middleware, ConsumerBase, inner Subscribe) see a populated ctx.
+	// Step 3: observability + principal restore — built-in OUTERMOST wrapper so
+	// all layers (business middleware, ConsumerBase, inner Subscribe) see a ctx
+	// populated with trace/request/correlation identity AND actor/subject/tenant/
+	// session identity from the originating request context. Principal restore is
+	// a sibling invariant of Observability restore: both are injected by the
+	// producer bridge (InjectObservabilityFromContext / InjectPrincipalFromContext)
+	// and restored symmetrically here. OccurredAt is NOT restored to ctx —
+	// consumers read entry.OccurredAt directly (it is not a ctx-propagated field).
 	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
-		return subHandler(entry.Observability.RestoreToContext(reqCtx), entry)
+		reqCtx = entry.Observability.RestoreToContext(reqCtx)
+		reqCtx = entry.Principal.RestoreToContext(reqCtx)
+		return subHandler(reqCtx, entry)
 	}
 	return s.inner.Subscribe(ctx, sub, withRestore)
 }

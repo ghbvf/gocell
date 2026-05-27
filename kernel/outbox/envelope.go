@@ -57,7 +57,20 @@ type wireMessage struct {
 	Payload       json.RawMessage       `json:"payload"`
 	Metadata      map[string]string     `json:"metadata,omitempty"`
 	Observability ObservabilityMetadata `json:"observability,omitempty"`
-	CreatedAt     time.Time             `json:"createdAt"`
+	// Principal carries OAuth/OIDC identity (actor/subject/tenant/session)
+	// across the async boundary. Populated by the producer-side bridge
+	// (InjectPrincipalFromContext) and restored to consumer ctx by
+	// SubscriberWithMiddleware (RestoreToContext). omitempty: zero-value
+	// entries emitted by producers without a request context omit the field.
+	Principal PrincipalMetadata `json:"principal,omitempty"`
+	// OccurredAt is the producer-domain event time (when the business event
+	// actually happened in the producer's reference frame). Distinct from
+	// CreatedAt (outbox row INSERT time set by writer/store). Zero-value
+	// (omitempty) entries that do not need a domain event time omit the field.
+	//
+	// ref: CloudEvents v1.0 §3 Required Attributes "time" — occurrence time.
+	OccurredAt time.Time `json:"occurredAt,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // MarshalEnvelope serializes an Entry into the canonical v1 wire envelope.
@@ -102,6 +115,15 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: marshal envelope: invalid observability", err)
 	}
+	// Producer-side principal fail-fast: all four SafeID fields are validated
+	// before serialization. entry.Principal.Validate() already runs inside
+	// entry.Validate() (called by writers), but MarshalEnvelope may be called
+	// on entries that were constructed directly (e.g. relay replay), so the
+	// explicit check here mirrors the Observability fail-fast pattern above.
+	if err := entry.Principal.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: marshal envelope: invalid principal", err)
+	}
 	msg := wireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
 		ID:            id,
@@ -112,6 +134,8 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		Payload:       json.RawMessage(entry.Payload),
 		Metadata:      entry.Metadata,
 		Observability: entry.Observability,
+		Principal:     entry.Principal,
+		OccurredAt:    entry.OccurredAt,
 		CreatedAt:     entry.CreatedAt,
 	}
 	b, err := json.Marshal(msg)
@@ -164,6 +188,8 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 		Payload:       []byte(msg.Payload),
 		Metadata:      msg.Metadata,
 		Observability: msg.Observability,
+		Principal:     msg.Principal,
+		OccurredAt:    msg.OccurredAt,
 		CreatedAt:     msg.CreatedAt,
 	}
 	// Wire-boundary single-source fail-closed (PR #582 round-3 review F3 +
