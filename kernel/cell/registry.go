@@ -375,9 +375,11 @@ type ConfigReloadRequest struct {
 
 // RegistrySnapshot is the immutable result of a Cell's Init registration pass.
 // Bootstrap reads these fields to wire routes, subscriptions, lifecycle hooks,
-// and config-reload callbacks. Health probes are no longer stored in the
-// snapshot: they are registered directly on the healthz.Aggregator that was
-// injected into the RegistryRecorder at construction time.
+// config-reload callbacks, and readiness probes. Each field accumulates during
+// Init via the Registrar interface (e.g. reg.RegisterReadiness for probes) and
+// is drained by bootstrap into the runtime backbone after Init completes —
+// see each field's godoc for the write-side-accumulate / read-side-drain
+// pattern.
 type RegistrySnapshot struct {
 	RouteGroups     []RouteGroup
 	Subscriptions   []SubscriptionRequest

@@ -16,7 +16,9 @@
 // All probe names are typed as kernel/healthz.ProbeName (a typed string).
 // The sole construction entry point is NewProbeName(s string) (ProbeName, error),
 // which validates snake_case format (regex ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$,
-// length ≤ 48). Typed constants are declared in each owning package:
+// length ≤ 64 (aligns with K8s DNS-1123 label cap 63 + 1-char margin;
+// composed EmitterFailOpenProbeName worst-case 21+32=53; see probename.go
+// probeNameMaxLen budget chain)). Typed constants are declared in each owning package:
 //
 //   - Adapter probes: each adapter declares const ProbeReady ProbeName = "<name>_ready".
 //   - Framework probes: ConfigWatcherProbeName / ConfigDriftProbeName typed const
