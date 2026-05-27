@@ -24,7 +24,7 @@ import (
 
 func TestWithLogger(t *testing.T) {
 	logger := slog.Default()
-	c := NewAccessCore(WithClock(clock.Real()), WithLogger(logger), withTestCASProtocol())
+	c := NewAccessCore(clock.Real(), WithLogger(logger), withTestCASProtocol())
 	assert.Equal(t, logger, c.logger)
 }
 
@@ -35,7 +35,7 @@ func (stubSetupLock) Acquire(_ context.Context) error { return nil }
 
 func TestWithSetupLock(t *testing.T) {
 	lock := stubSetupLock{}
-	c := NewAccessCore(WithClock(clock.Real()), withSetupLock(lock), withTestCASProtocol())
+	c := NewAccessCore(clock.Real(), withSetupLock(lock), withTestCASProtocol())
 	assert.Equal(t, lock, c.setupLock)
 }
 
@@ -47,7 +47,7 @@ func TestWithSetupLock(t *testing.T) {
 // roots wire accesspg.NewBundle(pool, txm, clk).SetupLock().
 func TestInit_MissingSetupLock_FailsFast(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -88,7 +88,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewAccessCore(
-				WithClock(clock.Real()),
+				clock.Real(),
 				withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 				withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 				WithSessionStore(testutil.RealSessionRepo(t)),
@@ -112,7 +112,7 @@ func TestWithSetupLock_NilOption_RejectedAtInit(t *testing.T) {
 
 func TestWithInMemoryDefaults(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -140,7 +140,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	// through the cellgen-generated RegisterRepoReady funnel.
 	// MemStore.RepoReady returns nil — in-memory always ready.
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -167,7 +167,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	// session.Store satisfies healthz.RepoProber via RepoReady. The probe is
 	// registered unconditionally (including MemStore) through RegisterRepoReady.
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
@@ -221,7 +221,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 	// durableTxRunner is a non-Noop runner so the durable-mode CheckNotNoop
 	// passes and we reach the actual missing-outboxWriter assertion.
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		withTxManager(persistence.WrapForCell(durableTxRunner{})),
@@ -238,7 +238,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -261,7 +261,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithOutboxDeps(nil, outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		withTestCASProtocol(),
@@ -279,14 +279,14 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 // outbox_failopen_rate probe are registered.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
 		WithRefreshStore(newTestRefreshStore()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(eventbus.WithClock(clock.Real()))), nil),
+		WithOutboxDeps(outbox.WrapPublisherForCell(eventbus.New(clock.Real())), nil),
 		withTxManager(persistence.WrapForCell(durableTxRunner{})),
 		WithMetricsProvider(metrics.NopProvider{}),
 		withTestCASProtocol(),
@@ -314,7 +314,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	// WriterEmitter (NoopWriter path) does not implement healthz.ProbeSet,
 	// so no outbox_failopen_rate probe is registered.
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -355,7 +355,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 // phase0 — protecting the ChangePassword concurrent-write guard.
 func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),
@@ -382,7 +382,7 @@ func TestInit_MissingCASProtocol_FailsFast(t *testing.T) {
 // protocol (it is ignored, leaving phase0 to reject when nothing else wired one).
 func TestWithCASProtocol_NilOption_IgnoredAndCaughtAtInit(t *testing.T) {
 	c := NewAccessCore(
-		WithClock(clock.Real()),
+		clock.Real(),
 		withUserRepository(mem.NewStore(clock.Real()).UserRepository()),
 		withRoleRepository(mem.NewStore(clock.Real()).RoleRepository()),
 		WithSessionStore(testutil.RealSessionRepo(t)),

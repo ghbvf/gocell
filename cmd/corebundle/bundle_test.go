@@ -144,7 +144,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.InternalGuard = newTestInternalGuard(t)
-	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
@@ -172,13 +172,12 @@ func TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError(t *testing.T) {
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 	// Inject a PGProvider whose DB() returns a non-*pgxpool.Pool value to
 	// trigger the pgxPoolFromProvider type-assertion failure branch.
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		PG:               capability.NewPGProvider(nil, nil, "wrong-type"),
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with wrong PG DB() type must return an error")
@@ -220,7 +219,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
@@ -327,7 +326,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		Topology:               topo,
 		JWTDeps:                jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:              ps,
-		EventBus:               eventbus.New(eventbus.WithClock(clock.Real())),
+		EventBus:               eventbus.New(clock.Real()),
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
 		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
@@ -364,7 +363,7 @@ func TestDevtoolsOption_EmptyRoot(t *testing.T) {
 	require.NotNil(t, opt, "devtoolsOption must always return a non-nil Option")
 
 	// Apply option to a bootstrap and verify devtoolsMeta is nil (disabled).
-	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	b := bootstrap.New(shared.Clock, opt)
 	require.NotNil(t, b)
 }
 
@@ -379,7 +378,7 @@ func TestDevtoolsOption_RootOutsideCwd(t *testing.T) {
 	opt := devtoolsOption(shared)
 	require.NotNil(t, opt)
 
-	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	b := bootstrap.New(shared.Clock, opt)
 	require.NotNil(t, b)
 }
 
@@ -464,7 +463,7 @@ func buildBootstrapFromShared(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return newBootstrapFromOptions(opts), nil
+	return newBootstrapFromOptions(shared.Clock, opts), nil
 }
 
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {

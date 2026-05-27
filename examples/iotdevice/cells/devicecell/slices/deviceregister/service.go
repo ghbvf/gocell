@@ -57,24 +57,15 @@ func WithEmitter(e outbox.CellEmitter) Option {
 	}
 }
 
-// WithClock sets the clock used for device timestamps. Defaults to
-// clock.Real() when not provided.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
-	}
-}
-
 // NewService creates a device-register Service. Returns an error if any required
 // dependency is nil (repo).
-func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "deviceregister.NewService")
 	s := &Service{
 		repo:    repo,
 		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
-		clock:   clock.Real(),
+		clock:   clk,
 	}
 	for _, o := range opts {
 		o(s)

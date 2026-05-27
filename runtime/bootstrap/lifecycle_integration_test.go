@@ -69,7 +69,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	var onStartCalled bool
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
@@ -152,7 +152,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 	integLn := newIntegrationListener(t)
 	healthLn := newIntegrationListener(t)
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithListener(cell.PrimaryListener, integLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(integLn)),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D3s),

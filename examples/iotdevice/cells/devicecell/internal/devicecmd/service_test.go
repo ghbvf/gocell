@@ -39,7 +39,7 @@ func enqueueTestCmd(ctx context.Context, q *commandtest.InMemQueue) error {
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
-	svc, err := NewService(q, devRepo, nil, slog.Default(), query.RunModeProd, WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), q, devRepo, nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	var ecErr *errcode.Error
@@ -50,7 +50,7 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 func newTestService() (*Service, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
-	svc, err := NewService(q, devRepo, testCodec(), slog.Default(), query.RunModeProd, WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}

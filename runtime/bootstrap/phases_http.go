@@ -110,7 +110,7 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 		if err != nil {
 			return nil, err
 		}
-		rtr, err := router.NewForListener(ref, rtrOpts...)
+		rtr, err := router.NewForListener(b.clock, ref, rtrOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("bootstrap: build router for listener %q: %w", ref.String(), err)
 		}
@@ -299,11 +299,6 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
 func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
 	opts := make([]router.Option, 0, len(b.routerOpts)+7)
-	// Always inject the bootstrap clock into every listener router so that
-	// middleware.AccessLog and middleware.Metrics get a real clock. This must
-	// come before b.routerOpts so a caller-supplied WithRouterClock can
-	// override it.
-	opts = append(opts, router.WithRouterClock(b.clock))
 	opts = append(opts, b.routerOpts...)
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
@@ -383,7 +378,8 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 			return nil, fmt.Errorf(
 				"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
 					"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
-					"Remove one side: %w", err)
+					"Remove one side: %w", err,
+			)
 		}
 		b.httpCollector = collector
 	}
@@ -395,7 +391,6 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 func (b *Bootstrap) buildAuthRouterOptions(v kauth.IntentTokenVerifier) ([]router.Option, error) {
 	opts := []router.Option{
 		router.WithAuthMiddleware(v),
-		router.WithRouterClock(b.clock),
 	}
 	if b.metricsProvider == nil {
 		return opts, nil

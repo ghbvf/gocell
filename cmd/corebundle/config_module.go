@@ -85,7 +85,7 @@ func (m ConfigCoreModule) Provide(
 	// 4. PG storage: consume the assembly's postgres capability provider
 	// (provisionCapabilities opened the pool before BuildApp). In memory mode
 	// shared.PG is nil and buildConfigCoreOpts takes the in-memory path.
-	modResult, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	modResult, err := buildConfigCoreOpts(shared.Clock, ConfigCoreModuleConfig{
 		Topology:         shared.Topology,
 		PG:               shared.PG,
 		Publisher:        shared.EventBus,
@@ -94,7 +94,6 @@ func (m ConfigCoreModule) Provide(
 		OnStaleCipher: func(_, _, _ string) {
 			staleCipherCounter.Inc()
 		},
-		Clock: shared.Clock,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -112,15 +111,14 @@ func (m ConfigCoreModule) Provide(
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
-		configcore.WithClock(shared.Clock),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
 		configcore.WithEventbusCacheCollector(shared.EventbusCacheCollector),
 		configcore.WithCASProtocol(casProto),
 	}
-	baseOpts = append(baseOpts, modResult.CellOptions...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
-	c := configcore.NewConfigCore(baseOpts...)
+	baseOpts = append(baseOpts, modResult.CellOptions...)
+	c := configcore.NewConfigCore(shared.Clock, baseOpts...)
 
 	return buildConfigCoreResult(c, kp, modResult)
 }

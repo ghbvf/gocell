@@ -82,16 +82,6 @@ type Service struct {
 // Option configures a device-command Service.
 type Option func(*Service)
 
-// WithClock sets the clock used for command timestamps. Defaults to
-// clock.Real() when not provided.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
-	}
-}
-
 // NewService creates a device-command Service. sliceName identifies the owning
 // slice in observability labels (e.g. "devicecommand" or "devicecommandinternal");
 // each slice must create its own Service instance so that cursor-error logs and
@@ -105,17 +95,18 @@ func WithClock(clk clock.Clock) Option {
 // NewService returns errcode.ErrCellMissingCodec so the cell Init() can
 // propagate a structured error instead of a runtime panic.
 func NewService(
-	q commandQueueStore, deviceRepo domain.DeviceRepository,
+	clk clock.Clock, q commandQueueStore, deviceRepo domain.DeviceRepository,
 	codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "devicecmd.NewService")
 	s := &Service{
 		queue:      q,
 		deviceRepo: deviceRepo,
 		codec:      codec,
 		logger:     logger,
 		runMode:    runMode,
-		clock:      clock.Real(),
+		clock:      clk,
 	}
 	for _, o := range opts {
 		o(s)

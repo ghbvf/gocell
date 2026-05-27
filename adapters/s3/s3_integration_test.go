@@ -67,7 +67,6 @@ func newIntegrationConfig(endpoint, user, pass string) Config {
 		UsePathStyle:    true,
 		HTTPTimeout:     testtime.D500ms, // fast-fail: 3 retries × 500ms ≈ 1.5s
 		HealthInterval:  testtime.D100ms,
-		Clock:           clock.Real(),
 	}
 }
 
@@ -133,7 +132,7 @@ func TestIntegration_S3_UploadHealthHappy(t *testing.T) {
 	endpoint := buildEndpoint(connStr)
 
 	cfg := newIntegrationConfig(endpoint, ctr.Username, ctr.Password)
-	client, err := New(ctx, cfg)
+	client, err := New(ctx, clock.Real(), cfg)
 	require.NoError(t, err, "s3.New should succeed with real MinIO")
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
@@ -184,7 +183,7 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	createBucket(t, ctx, endpoint, ctr.Username, ctr.Password)
 
 	cfg := newIntegrationConfig(endpoint, ctr.Username, ctr.Password)
-	client, err := New(ctx, cfg)
+	client, err := New(ctx, clock.Real(), cfg)
 	require.NoError(t, err, "s3.New initial construction")
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
@@ -217,7 +216,7 @@ func TestIntegration_S3_RecoveryAfterContainerRestart(t *testing.T) {
 	newEndpoint := buildEndpoint(newConnStr)
 
 	newCfg := newIntegrationConfig(newEndpoint, ctr.Username, ctr.Password)
-	newClient, err := New(ctx, newCfg)
+	newClient, err := New(ctx, clock.Real(), newCfg)
 	require.NoError(t, err, "s3.New on fresh endpoint after restart")
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
@@ -256,7 +255,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	createBucket(t, ctx, endpoint, ctr.Username, ctr.Password)
 
 	cfg := newIntegrationConfig(endpoint, ctr.Username, ctr.Password)
-	client, err := New(ctx, cfg)
+	client, err := New(ctx, clock.Real(), cfg)
 	require.NoError(t, err, "s3.New for worker test")
 
 	// Initial healthy wait: poison state, prove worker tick clears it.
@@ -284,7 +283,7 @@ func TestIntegration_S3_WorkerTickStateTracksContainer(t *testing.T) {
 	newEndpoint := buildEndpoint(newConnStr)
 
 	newCfg := newIntegrationConfig(newEndpoint, ctr.Username, ctr.Password)
-	newClient, err := New(ctx, newCfg)
+	newClient, err := New(ctx, clock.Real(), newCfg)
 	require.NoError(t, err, "s3.New on fresh endpoint after restart")
 
 	startWorkerWithTickProof(t, ctx, newClient, testtime.EventuallyExtraLong)

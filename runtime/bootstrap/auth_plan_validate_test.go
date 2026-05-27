@@ -139,13 +139,13 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Parallel()
 
-	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-	asmB := assembly.New(assembly.Config{ID: "asm-match-b", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asmA := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-a", DurabilityMode: outbox.DurabilityDemo})
+	asmB := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-b", DurabilityMode: outbox.DurabilityDemo})
 
 	t.Run("Match_SameInstance", func(t *testing.T) {
 		t.Parallel()
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmA)}),
@@ -157,7 +157,7 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Run("Mismatch_DifferentInstances", func(t *testing.T) {
 		t.Parallel()
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
@@ -172,10 +172,10 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 
 	t.Run("Mismatch_SameIDDifferentInstances", func(t *testing.T) {
 		t.Parallel()
-		asmWithID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
-		otherWithSameID := assembly.New(assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+		asmWithID := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo})
+		otherWithSameID := assembly.New(clock.Real(), assembly.Config{ID: "asm-match-same-id", DurabilityMode: outbox.DurabilityDemo})
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithAssembly(asmWithID),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(otherWithSameID)}),

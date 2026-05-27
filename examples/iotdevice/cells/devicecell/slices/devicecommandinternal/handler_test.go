@@ -33,8 +33,7 @@ func setupInternalHandler() (*Handler, *commandtest.InMemQueue) {
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	svc, err := devicecmd.NewService(
-		q, devRepo, codec, slog.Default(), query.RunModeProd,
-		devicecmd.WithClock(clock.Real()),
+		clock.Real(), q, devRepo, codec, slog.Default(), query.RunModeProd,
 		devicecmd.WithSliceName("devicecommandinternal"),
 	)
 	if err != nil {
@@ -97,8 +96,7 @@ func TestHandleScanActive_InvalidCursor(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	svc, err := devicecmd.NewService(
-		q, devRepo, codec, slog.Default(), query.RunModeProd,
-		devicecmd.WithClock(clock.Real()),
+		clock.Real(), q, devRepo, codec, slog.Default(), query.RunModeProd,
 		devicecmd.WithSliceName("devicecommandinternal"),
 	)
 	require.NoError(t, err)

@@ -35,8 +35,9 @@
 // legitimate callers) and threaded through to every consumer. Constructors
 // must declare clock as a required parameter — no default fallback, no
 // Option-style optional injection — and validate at the boundary via the
-// public helper [MustHaveClock]. The assembly.Config.Clock field carries the
-// root clock so that the assembly auto-propagates it to every cell's Init.
+// public helper [MustHaveClock]. The root clock is passed as the first
+// positional parameter to assembly.New(clk, cfg) and bootstrap.New(clk, opts...)
+// so that the assembly auto-propagates it to every cell's Init.
 //
 // Absolute-time vs relative-time timer API:
 //

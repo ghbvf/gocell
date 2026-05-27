@@ -90,24 +90,18 @@ func WithBufferSize(size int) Option {
 	}
 }
 
-// WithClock sets the clock used for retry delays. Default: clock.Real().
-func WithClock(clk clock.Clock) Option {
-	return func(b *InMemoryEventBus) {
-		b.clk = clk
-	}
-}
-
-// New creates an InMemoryEventBus. A clock must be provided via WithClock.
-func New(opts ...Option) *InMemoryEventBus {
+// New creates an InMemoryEventBus with the given clock and options.
+func New(clk clock.Clock, opts ...Option) *InMemoryEventBus {
 	b := &InMemoryEventBus{
 		groupSubs:  make(map[string]map[string]*groupState),
 		readyChans: make(map[string]chan struct{}),
 		bufSize:    256,
+		clk:        clk,
 	}
 	for _, o := range opts {
 		o(b)
 	}
-	clock.MustHaveClock(b.clk, "eventbus.New")
+	clock.MustHaveClock(clk, "eventbus.New")
 	return b
 }
 

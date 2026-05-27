@@ -42,10 +42,6 @@ type Config struct {
 	// KeyStore provides public keys for JWT verification. May be nil in non-real mode.
 	KeyStore auth.VerificationKeyStore
 
-	// Clock is required; pass clock.Real() at the composition root or
-	// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
-	Clock clock.Clock
-
 	// RealMode enforces non-empty Issuer and Audiences at construction time.
 	// Set to true in production; leave false for dev/test.
 	RealMode bool
@@ -56,7 +52,7 @@ type Config struct {
 //
 // Configuration errors use errcode.ErrAuthVerifierConfig so operators can
 // distinguish startup misconfigurations from runtime key errors.
-func New(cfg Config) (*Registry, error) {
+func New(clk clock.Clock, cfg Config) (*Registry, error) {
 	issuer := strings.TrimSpace(cfg.Issuer)
 
 	// Trim and filter whitespace-only audience elements before validation so
@@ -79,14 +75,14 @@ func New(cfg Config) (*Registry, error) {
 		}
 	}
 
-	clock.MustHaveClock(cfg.Clock, "auth/config.NewRegistry")
+	clock.MustHaveClock(clk, "auth/config.NewRegistry")
 
 	return &Registry{
 		issuer:    issuer,
 		audiences: auds,
 		keyProv:   cfg.KeyProv,
 		keyStore:  cfg.KeyStore,
-		clk:       cfg.Clock,
+		clk:       clk,
 		realMode:  cfg.RealMode,
 	}, nil
 }
@@ -114,7 +110,7 @@ func (r *Registry) SigningKeyProvider() auth.SigningKeyProvider { return r.keyPr
 func (r *Registry) VerificationKeyStore() auth.VerificationKeyStore { return r.keyStore }
 
 // Clock returns the clock used for token timestamps.
-// Always non-nil — required at construction time via Config.Clock.
+// Always non-nil — required as a positional parameter to New and FromEnv.
 func (r *Registry) Clock() clock.Clock { return r.clk }
 
 // ---- FromEnv ----
@@ -126,7 +122,6 @@ type envConfig struct {
 	realMode bool
 	keyProv  auth.SigningKeyProvider
 	keyStore auth.VerificationKeyStore
-	clock    clock.Clock
 }
 
 // WithRealMode enables real-mode validation (fail-fast on missing env vars).
@@ -163,11 +158,6 @@ func WithKeySeparate(prov auth.SigningKeyProvider, store auth.VerificationKeySto
 	}
 }
 
-// WithEnvClock overrides the clock for a FromEnv-built Registry.
-func WithEnvClock(clk clock.Clock) EnvOption {
-	return func(c *envConfig) { c.clock = clk }
-}
-
 // envVarIssuer is the environment variable for the JWT issuer.
 // Defined as constant to satisfy ≥3-use string rule.
 const envVarIssuer = "GOCELL_JWT_ISSUER"
@@ -184,7 +174,7 @@ const envVarAudience = "GOCELL_JWT_AUDIENCE"
 // When the value is empty and RealMode is false, Audiences will be nil.
 //
 // Returns an error in real mode when required env vars are missing or empty.
-func FromEnv(opts ...EnvOption) (*Registry, error) {
+func FromEnv(clk clock.Clock, opts ...EnvOption) (*Registry, error) {
 	ec := &envConfig{}
 	for _, o := range opts {
 		o(ec)
@@ -198,12 +188,11 @@ func FromEnv(opts ...EnvOption) (*Registry, error) {
 		audiences = []string{audience}
 	}
 
-	return New(Config{
+	return New(clk, Config{
 		Issuer:    issuer,
 		Audiences: audiences,
 		KeyProv:   ec.keyProv,
 		KeyStore:  ec.keyStore,
-		Clock:     ec.clock,
 		RealMode:  ec.realMode,
 	})
 }

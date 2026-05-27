@@ -25,7 +25,7 @@ import (
 // times without error (atomic closed flag guard).
 func TestPublisher_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	ctx := context.Background()
 	assert.NoError(t, pub.Close(ctx), "first Close must succeed")
@@ -36,7 +36,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 // pre-canceled ctx returns the ctx error promptly (< 50ms) without hanging.
 func TestPublisher_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
@@ -75,7 +75,7 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 	mockConn.nextChIface = blocking
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	// publishDone is closed when the Publish goroutine exits.
 	publishDone := make(chan struct{})
@@ -141,7 +141,7 @@ func TestPublisher_Close_WaitsForInFlightPublishes(t *testing.T) {
 	mockConn.nextChIface = blocking
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 
 	publishStarted := make(chan struct{})
 	publishDone := make(chan error, 1)
@@ -253,11 +253,7 @@ func TestPublish_NackReturnsNackErrcodeAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(
-		conn,
-		WithPublisherClock(clock.Real()),
-		WithPublisherCollector(col),
-	)
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err)
@@ -277,10 +273,10 @@ func TestPublish_TimeoutReturnsTimeoutAndRecords(t *testing.T) {
 		return mockConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:            "amqp://test@localhost/",
 		ConfirmTimeout: testtime.MediumPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -289,11 +285,7 @@ func TestPublish_TimeoutReturnsTimeoutAndRecords(t *testing.T) {
 	}()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(
-		conn,
-		WithPublisherClock(clock.Real()),
-		WithPublisherCollector(col),
-	)
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err)
@@ -317,11 +309,7 @@ func TestPublish_ConfirmChanClosedReturnsTimeoutAndRecords(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(
-		conn,
-		WithPublisherClock(clock.Real()),
-		WithPublisherCollector(col),
-	)
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
 	require.Error(t, err)
@@ -366,7 +354,7 @@ func TestPublisher_RecordsFailure_OnAcquireChannelError(t *testing.T) {
 	_ = mockConn                // mockConn referenced by dialFunc in connection.
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err, "Publish must fail when channel cap is exceeded")
@@ -391,7 +379,7 @@ func TestPublisher_RecordsFailure_OnExchangeDeclareError(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err, "Publish must fail on ExchangeDeclare error")
@@ -416,7 +404,7 @@ func TestPublisher_RecordsFailure_OnConfirmModeError(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err, "Publish must fail on Confirm error")
@@ -443,7 +431,7 @@ func TestPublisher_RecordsFailure_OnPublishSendError(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	col := &fakeCollector{}
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()), WithPublisherCollector(col))
+	pub := NewPublisher(clock.Real(), conn, WithPublisherCollector(col))
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	require.Error(t, err, "Publish must fail on PublishWithContext error")

@@ -86,7 +86,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		healthLn := newIntegrationListener(t)
 
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 			WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
@@ -197,7 +197,7 @@ func TestBootstrapIntegration_OwnerCancel_WorkerExitsBeforeStop(t *testing.T) {
 		healthLn := newIntegrationListener(t)
 
 		b := New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithListener(cell.PrimaryListener, addr, []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 			WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
 			WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),

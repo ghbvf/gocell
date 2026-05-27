@@ -68,7 +68,7 @@ func makeSimpleEnvelope(t testing.TB, topic string) []byte {
 // their relay publisher) delivered the envelope as-is; subscribers parsed
 // envelope fields as business fields and silently ACKed unknown actions.
 func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var got outbox.Entry
@@ -134,7 +134,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 //
 // ref: Watermill poison-queue middleware — undecodable → DLX, main route cleared
 func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var handlerCalled atomic.Bool
@@ -176,7 +176,7 @@ func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 }
 
 func TestPublishSubscribe(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var received []outbox.Entry
@@ -223,7 +223,7 @@ func TestPublishSubscribe(t *testing.T) {
 }
 
 func TestPublish_NoSubscribers(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	err := bus.Publish(context.Background(), "no.subs", makeSimpleEnvelope(t, "no.subs"))
@@ -231,7 +231,7 @@ func TestPublish_NoSubscribers(t *testing.T) {
 }
 
 func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -275,7 +275,7 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 }
 
 func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -317,7 +317,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 // maxRetries times; final DLX entry preserves the PermanentError wrap so
 // downstream metrics can still classify it.
 func TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -356,7 +356,7 @@ func TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget(t *testing.T) {
 }
 
 func TestClose_PreventsFurtherPublish(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	err := bus.Close(context.Background())
 	require.NoError(t, err)
 
@@ -365,13 +365,13 @@ func TestClose_PreventsFurtherPublish(t *testing.T) {
 }
 
 func TestClose_Idempotent(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	assert.NoError(t, bus.Close(context.Background()))
 	assert.NoError(t, bus.Close(context.Background()))
 }
 
 func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(32))
+	bus := New(clock.Real(), WithBufferSize(32))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -428,7 +428,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 }
 
 func TestSubscribe_ClosedBus(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	_ = bus.Close(context.Background())
 
 	err := bus.Subscribe(context.Background(),
@@ -440,7 +440,7 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 }
 
 func TestMultipleSubscribers(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var count1, count2 atomic.Int32
@@ -486,7 +486,7 @@ func TestMultipleSubscribers(t *testing.T) {
 }
 
 func TestSubscribe_SuccessAfterRetry(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -521,7 +521,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 }
 
 func TestHealth(t *testing.T) {
-	bus := New(WithClock(clock.Real()))
+	bus := New(clock.Real())
 	assert.Equal(t, "healthy", bus.Health())
 
 	_ = bus.Close(context.Background())
@@ -529,7 +529,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestSubscribe_CleansUpOnExit(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -589,7 +589,7 @@ func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
 }
 
 func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	receipt := &mockReceipt{}
@@ -619,7 +619,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 }
 
 func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	receipt := &mockReceipt{}
@@ -649,7 +649,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 }
 
 func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var receipts []*mockReceipt
@@ -693,7 +693,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 }
 
 func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	// Track all receipts across retry attempts to verify each is released
@@ -747,7 +747,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 }
 
 func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -809,7 +809,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 }
 
 func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -854,7 +854,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 }
 
 func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
@@ -902,7 +902,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 // in the SAME consumer group compete for messages (round-robin): each message
 // goes to exactly one subscriber, not both.
 func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -966,7 +966,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 // TestConsumerGroup_DifferentGroups_Fanout verifies that two subscribers in
 // DIFFERENT consumer groups each receive a full copy of every message (fanout).
 func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1027,7 +1027,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 // with an empty consumerGroup ("") get broadcast behavior — each subscriber
 // receives every message. This preserves backward compatibility.
 func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1087,7 +1087,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 // This test exists to guard the P1 fix (atomic.Uint64) and MUST be run with
 // -race to be effective.
 func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(256))
+	bus := New(clock.Real(), WithBufferSize(256))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1158,7 +1158,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 // succeed, both calls must return nil, and the bus must remain fully functional
 // (publish + subscribe) after StopIntake.
 func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	t.Cleanup(func() { _ = b.Close(context.Background()) })
 
 	// Type assertion must succeed.
@@ -1220,7 +1220,7 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 // with a receipt whose Release always fails. The message must still reach dead
 // letter — the Release error must not swallow the Reject outcome.
 func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	releaseErr := errors.New("release: backend unavailable")
@@ -1316,7 +1316,7 @@ func (r *failingCommitReceipt) Extend(_ context.Context, _ time.Duration) error 
 // Receipt.Commit fails, the spy observer receives CommitFailed with
 // DispositionRequeue, and the handler is retried.
 func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	spy := &spySettlementObserver{}
@@ -1359,7 +1359,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 // handler persistently returns Requeue and maxRetries is reached, the spy
 // observer receives Reject + RetryExhausted and the entry is dead-lettered.
 func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	spy := &spySettlementObserver{}
@@ -1401,7 +1401,7 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 }
 
 func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	spy := &spySettlementObserver{}
@@ -1447,7 +1447,7 @@ func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
 }
 
 func TestSubscribe_CommitFailureRetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	spy := &spySettlementObserver{}
@@ -1592,7 +1592,7 @@ func findDropRecord(records []slog.Record, msgSubstr string) *slog.Record {
 func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
-	bus := New(WithClock(clock.Real()), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	// Inject a subscription with a pre-filled channel directly.
@@ -1665,7 +1665,7 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
-	bus := New(WithClock(clock.Real()), WithBufferSize(1))
+	bus := New(clock.Real(), WithBufferSize(1))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	_, cancelSub := context.WithCancel(context.Background())
@@ -1738,7 +1738,7 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	cap := healthtest.NewCapture(t)
 
-	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	bus := New(clock.Real(), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
 	const topic = "retry.exhaust.fields.v1"

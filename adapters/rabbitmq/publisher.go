@@ -37,15 +37,6 @@ type Publisher struct {
 // PublisherOption configures a Publisher.
 type PublisherOption func(*Publisher)
 
-// WithPublisherClock sets the clock used by the Publisher for timeout and
-// latency tracking. Required — NewPublisher panics if no clock is supplied.
-// Pass clock.Real() at the composition root.
-func WithPublisherClock(clk clock.Clock) PublisherOption {
-	return func(p *Publisher) {
-		p.clock = clk
-	}
-}
-
 // WithPublisherCollector injects an observability collector. Defaults to
 // NoopPublisherCollector. Production wiring uses NewProviderPublisherCollector.
 func WithPublisherCollector(c PublisherCollector) PublisherOption {
@@ -57,14 +48,14 @@ func WithPublisherCollector(c PublisherCollector) PublisherOption {
 }
 
 // NewPublisher creates a Publisher backed by the given Connection.
-// A clock.Clock must be supplied via WithPublisherClock; NewPublisher panics
-// if no clock is provided.
-func NewPublisher(conn *Connection, opts ...PublisherOption) *Publisher {
-	p := &Publisher{conn: conn, collector: NoopPublisherCollector{}}
+// clk is required: NewPublisher panics via clock.MustHaveClock when clk is nil.
+// Use clock.Real() at the composition root.
+func NewPublisher(clk clock.Clock, conn *Connection, opts ...PublisherOption) *Publisher {
+	p := &Publisher{conn: conn, clock: clk, collector: NoopPublisherCollector{}}
 	for _, o := range opts {
 		o(p)
 	}
-	clock.MustHaveClock(p.clock, "rabbitmq.NewPublisher")
+	clock.MustHaveClock(clk, "rabbitmq.NewPublisher")
 	return p
 }
 

@@ -203,6 +203,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
 	}
 
+	// Single root clock for the entire composition root; all sub-functions
+	// receive clk as a parameter (ADR docs/architecture/202605270000 §Decision #4).
+	clk := clock.Real()
+
 	ctx := context.Background()
 	pool, err := newSSOBFFPool(ctx, cfg.databaseURL)
 	if err != nil {
@@ -211,10 +215,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clk)
 	// Demo only: test keys are generated in-process, so tokens do not survive
 	// restart and cannot be verified by another replica.
-	jwtIssuer, jwtVerifier, err := newSSOBFFJWT()
+	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(clk)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
@@ -229,13 +233,13 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// bootstrap middleware: runtime/audit.NewBootstrapAuthFailObserver needs
 	// the same ledger.Store auditcore drains into HTTP queries, so bootstrap
 	// 401/429s land in the auditcore hash chain (not slog-only).
-	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
-	auc, ledgerStore, err := buildSSOBFFAuditCore(cfg.logger, eb, pgOutboxWriter, pool, txMgr)
+	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
+	auc, ledgerStore, err := buildSSOBFFAuditCore(clk, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
 	}
-	authFailObserver, err := audit.NewBootstrapAuthFailObserver(cfg.logger, ledgerStore, clock.Real())
+	authFailObserver, err := audit.NewBootstrapAuthFailObserver(cfg.logger, ledgerStore, clk)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, fmt.Errorf("ssobff: audit.NewBootstrapAuthFailObserver: %w", err)
@@ -248,7 +252,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  ssobffBootstrapRateLimitPerSec,
 		Burst: ssobffBootstrapRateLimitBurst,
-	}, clock.Real())
+	}, clk)
 	bootstrapMW := auth.NewBootstrapMiddleware(
 		ssobffBootstrapCreds,
 		rlLimiter,
@@ -269,12 +273,11 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// PG path (lines 109-118 + WithRelay).
 	// outbox_entries table health is covered by the pool-level postgres_ready probe —
 	// acceptable for this demo example; production bundles use per-cell repo probes.
-	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
+	pgOutboxStore := adapterpg.NewOutboxStore(pool.DB(), clk)
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
-	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, eb, relayCfg)
 
-	asm, cb, primaryAuth, err := buildSSOBFFAssembly(ssobffBuildParams{
+	asm, cb, primaryAuth, err := buildSSOBFFAssembly(clk, ssobffBuildParams{
 		pool: pool, txMgr: txMgr, eb: eb, pgOutboxWriter: pgOutboxWriter,
 		jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
 		bootstrapMW: bootstrapMW, sessionProto: ssobffSessionProto, logger: cfg.logger,
@@ -286,7 +289,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 
 	b := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+		clk,
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
@@ -318,6 +321,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 // runtime/audit.NewBootstrapAuthFailObserver — bootstrap auth failures land in
 // the same hash chain that auditcore drains into HTTP queries.
 func buildSSOBFFAuditCore(
+	clk clock.Clock,
 	logger *slog.Logger,
 	eb outbox.Publisher,
 	outboxWriter *adapterpg.OutboxWriter,
@@ -342,12 +346,12 @@ func buildSSOBFFAuditCore(
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
 	}
-	pgLedgerStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, protocol, clock.Real())
+	pgLedgerStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, protocol, clk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
-		auditcore.WithClock(clock.Real()),
+		clk,
 		auditcore.WithLedgerProtocol(protocol),
 		auditcore.WithLedgerStore(pgLedgerStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(outboxWriter)),
@@ -388,8 +392,8 @@ type ssobffBuildParams struct {
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
 // CoreAssembly, and constructs the ConsumerBase and primary listener auth.
 // Extracted from NewSSOBFFApp to reduce cognitive complexity.
-func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, error) {
-	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(p.pool, p.txMgr, p.sessionProto)
+func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, error) {
+	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(clk, p.pool, p.txMgr, p.sessionProto)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -404,9 +408,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: create access cursor codec: %w", err)
 	}
-	ac := accesscore.NewAccessCore(append(
+	ac := accesscore.NewAccessCore(clk, append(
 		accessStorageOpts,
-		accesscore.WithClock(clock.Real()),
 		accesscore.WithBootstrapAuth(p.bootstrapMW),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
 		accesscore.WithJWTIssuer(p.jwtIssuer),
@@ -422,7 +425,7 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	// middleware constructs.
 	auc := p.auc
 
-	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(p.pool)
+	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(clk, p.pool)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -430,9 +433,8 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (configcore): %w", err)
 	}
-	cc := configcore.NewConfigCore(append(
+	cc := configcore.NewConfigCore(clk, append(
 		configStorageOpts,
-		configcore.WithClock(clock.Real()),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.pgOutboxWriter)),
 		configcore.WithTxManager(persistence.WrapForCell(p.txMgr)),
 		configcore.WithCASProtocol(configCAS),
@@ -440,14 +442,14 @@ func buildSSOBFFAssembly(p ssobffBuildParams) (*assembly.CoreAssembly, *outbox.C
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)...)
 
-	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable, Clock: clock.Real()})
+	asm := assembly.New(clk, assembly.Config{ID: "ssobff", DurabilityMode: outbox.DurabilityDurable})
 	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
 		return nil, nil, nil, err
 	}
 	cb, err := outbox.NewConsumerBase(
-		idempotency.NewInMemClaimer(clock.Real()),
+		idempotency.NewInMemClaimer(clk),
 		outbox.ConsumerBaseConfig{},
-		clock.Real(),
+		clk,
 	)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("ssobff: create consumer base: %w", err)
@@ -488,12 +490,12 @@ func newSSOBFFPool(ctx context.Context, databaseURL string) (*adapterpg.Pool, er
 
 // buildSSOBFFConfigCoreStorageOpts constructs the PG storage option and cursor
 // codec for configcore. Extracted to keep NewSSOBFFApp below gocognit ≤ 15.
-func buildSSOBFFConfigCoreStorageOpts(pool *adapterpg.Pool) ([]configcore.Option, error) {
+func buildSSOBFFConfigCoreStorageOpts(clk clock.Clock, pool *adapterpg.Pool) ([]configcore.Option, error) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
 	}
-	storageOpt, err := configpg.WithPool(pool.DB(), clock.Real())
+	storageOpt, err := configpg.WithPool(pool.DB(), clk)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: configpg.WithPool: %w", err)
 	}
@@ -506,19 +508,20 @@ func buildSSOBFFConfigCoreStorageOpts(pool *adapterpg.Pool) ([]configcore.Option
 // (UserRepository, RoleRepository, SetupLock, TxRunner) into a single typed
 // funnel so the four primitives provably share the same (pool, txMgr, clk).
 func buildSSOBFFAccessCoreStorageOpts(
+	clk clock.Clock,
 	pool *adapterpg.Pool,
 	txMgr *adapterpg.TxManager,
 	sessionProto *session.Protocol,
 ) ([]accesscore.Option, error) {
-	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clock.Real())
+	pgBundle, err := accesspg.NewBundle(pool.DB(), txMgr, clk)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: accesspg.NewBundle: %w", err)
 	}
-	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clock.Real())
+	sessionStore, err := adapterpg.NewSessionStore(pool.DB(), txMgr, sessionProto, clk)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: adapterpg.NewSessionStore: %w", err)
 	}
-	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clock.Real(), nil)
+	refreshStore, err := adapterpg.NewRefreshStore(pool.DB(), txMgr, accesscore.DefaultRefreshPolicy(), clk, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: adapterpg.NewRefreshStore: %w", err)
 	}
@@ -544,22 +547,22 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 // generated RSA key pair.
 //
 // Demo only: ephemeral in-process RSA keys; tokens invalidated on restart.
-func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
+func newSSOBFFJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
 	slog.Warn("ssobff: generating in-process JWT key — tokens become invalid on restart; do not use for multi-pod deployment")
 	privKey, pubKey, err := auth.GenerateRSAKeyPair()
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: generate RSA key pair: %w", err)
 	}
-	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
+	keySet, err := auth.NewKeySet(privKey, pubKey, clk)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)
 	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clock.Real(),
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clk,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT issuer: %w", err)
 	}
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(),
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clk,
 		auth.WithExpectedAudiences("gocell"),
 		auth.WithExpectedIssuer("ssobff-dev"))
 	if err != nil {

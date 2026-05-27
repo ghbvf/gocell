@@ -44,11 +44,6 @@ type Config struct {
 	Scopes       []string      // default: [openid, profile, email]
 	HTTPTimeout  time.Duration // default: 10s
 
-	// Clock is the time source injected by the composition root or tests.
-	// Required: New panics via clock.MustHaveClock when Clock is nil.
-	// Production wiring: clock.Real(); tests: clockmock.New(t).
-	Clock clock.Clock
-
 	// RefreshInterval controls how often the worker re-discovers OIDC provider
 	// metadata. Zero means defaultOIDCRefreshInterval (24h).
 	RefreshInterval time.Duration
@@ -106,13 +101,13 @@ type Adapter struct {
 // An unreachable or misconfigured issuer causes construction to fail
 // immediately (fail-fast at boot, not at first request).
 //
-// Clock is required: New panics via clock.MustHaveClock when cfg.Clock is nil.
+// clk is required: New panics via clock.MustHaveClock when clk is nil.
 // Use clock.Real() at the composition root; inject clockmock.New() in tests.
 //
 // ref: coreos/go-oidc — Provider.NewProvider semantics (sync HTTP round-trip).
 // ref: adapters/s3.New — same clock.MustHaveClock + state-machine field pattern.
-func New(ctx context.Context, cfg Config) (*Adapter, error) {
-	clock.MustHaveClock(cfg.Clock, "oidc.New")
+func New(ctx context.Context, clk clock.Clock, cfg Config) (*Adapter, error) {
+	clock.MustHaveClock(clk, "oidc.New")
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -130,7 +125,7 @@ func New(ctx context.Context, cfg Config) (*Adapter, error) {
 	a := &Adapter{
 		config:           cfg,
 		client:           &http.Client{Timeout: timeout},
-		clk:              cfg.Clock,
+		clk:              clk,
 		refreshCollector: rc,
 		stopCh:           make(chan struct{}),
 		workerDone:       make(chan struct{}),

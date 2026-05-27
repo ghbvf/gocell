@@ -54,17 +54,12 @@ type Config struct {
 	UsePathStyle    bool
 	HTTPTimeout     time.Duration // default 30s
 	HealthInterval  time.Duration // default 30s; background probe cadence
-	// Clock is the time source for the background health ticker.
-	// REQUIRED: panics via clock.MustHaveClock when nil at New().
-	// Composition root passes clock.Real(); tests pass clockmock.New(...).
-	Clock clock.Clock
 }
 
 // ConfigFromEnv creates a Config from environment variables.
 //
-// The returned Config.Clock field is zero (nil); callers MUST set Clock
-// before calling New() because s3.New panics via clock.MustHaveClock when
-// nil. Composition root: pass clock.Real(); tests: pass clockmock.New(...).
+// Callers must pass a clock.Clock as the second argument to New().
+// Composition root: pass clock.Real(); tests: pass clockmock.New(...).
 func ConfigFromEnv() Config {
 	return Config{
 		Endpoint:        envWithFallback("GOCELL_S3_ENDPOINT", "S3_ENDPOINT"),
@@ -144,13 +139,10 @@ type Client struct {
 // Compile-time assertion: *Client satisfies lifecycle.ManagedResource.
 var _ lifecycle.ManagedResource = (*Client)(nil)
 
-// New creates a Client with ctx and cfg. It synchronously runs one HeadBucket
+// New creates a Client with ctx, clk and cfg. It synchronously runs one HeadBucket
 // probe; failure returns a wrapped ErrAdapterS3Health error (fail-fast, symmetric
 // to oidc adapter).
-//
-// Breaking change from previous New(cfg Config): ctx is now the first argument.
-// There are zero production callers of adapters/s3 — the signature is safe to change.
-func New(ctx context.Context, cfg Config) (*Client, error) {
+func New(ctx context.Context, clk clock.Clock, cfg Config) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -173,7 +165,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		o.UsePathStyle = cfg.UsePathStyle
 	})
 
-	return newClientWithHead(ctx, cfg, s3Client)
+	return newClientWithHead(ctx, clk, cfg, s3Client)
 }
 
 // newClientWithHead is the internal constructor shared by New and tests.
@@ -181,20 +173,19 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 // going through the full AWS SDK setup. If head is a *awss3.Client, it is also
 // stored as c.s3 so SDK() and Upload() work; mock implementations leave c.s3 nil.
 //
-// Boundary validation: cfg.Clock is required (panics via clock.MustHaveClock
-// when nil or typed-nil). The composition root injects clock.Real(); tests
-// inject clockmock.New(...).
+// clk is required (panics via clock.MustHaveClock when nil or typed-nil).
+// The composition root injects clock.Real(); tests inject clockmock.New(...).
 // ref: KERNEL-CLOCK-LEAF-FALLBACK-01 — production leaves must not fallback to
 // clock.Real(); only the composition root may construct it.
-func newClientWithHead(ctx context.Context, cfg Config, head bucketHeader) (*Client, error) {
-	clock.MustHaveClock(cfg.Clock, "s3.New")
+func newClientWithHead(ctx context.Context, clk clock.Clock, cfg Config, head bucketHeader) (*Client, error) {
+	clock.MustHaveClock(clk, "s3.New")
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
 
 	c := &Client{
 		config:     cfg,
-		clk:        cfg.Clock,
+		clk:        clk,
 		head:       head,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),

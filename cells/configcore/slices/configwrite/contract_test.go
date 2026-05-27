@@ -31,7 +31,7 @@ func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	t.Helper()
 	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	require.NoError(t, err)

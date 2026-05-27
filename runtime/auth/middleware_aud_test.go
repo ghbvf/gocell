@@ -46,7 +46,7 @@ func TestAuthMiddleware_WrongAudience_Returns401(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(audProtectedHandler)
+	h := AuthMiddleware(clock.Real(), verifier)(audProtectedHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -63,7 +63,7 @@ func TestAuthMiddleware_MissingAudience_Returns401(t *testing.T) {
 	token, err := issuer.Issue(TokenIntentAccess, "alice", IssueOptions{})
 	require.NoError(t, err)
 
-	h := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(audProtectedHandler)
+	h := AuthMiddleware(clock.Real(), verifier)(audProtectedHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

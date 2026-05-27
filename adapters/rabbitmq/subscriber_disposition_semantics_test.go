@@ -33,7 +33,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
+	pub := NewPublisher(clock.Real(), conn)
 	ctx := context.Background()
 
 	t.Run("Ack/NoDLXNoRedeliver", func(t *testing.T) {
@@ -60,11 +60,10 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		conn.ReleaseChannel(rawCh)
 
 		// --- Start subscriber ---
-		sub := NewSubscriber(conn, SubscriberConfig{
+		sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 			QueueName:     mainQueue,
 			PrefetchCount: 1,
 			DLXExchange:   dlxExchange,
-			Clock:         clock.Real(),
 		})
 
 		subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
@@ -165,11 +164,10 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		conn.ReleaseChannel(rawCh)
 
 		// --- Start subscriber: Requeue first call, Ack second call ---
-		sub := NewSubscriber(conn, SubscriberConfig{
+		sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 			QueueName:     mainQueue,
 			PrefetchCount: 1,
 			DLXExchange:   dlxExchange,
-			Clock:         clock.Real(),
 		})
 
 		subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
@@ -282,11 +280,10 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		conn.ReleaseChannel(rawCh)
 
 		// --- Start subscriber: handler always returns DispositionReject ---
-		sub := NewSubscriber(conn, SubscriberConfig{
+		sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 			QueueName:     mainQueue,
 			PrefetchCount: 1,
 			DLXExchange:   dlxExchange,
-			Clock:         clock.Real(),
 		})
 
 		subCtx, subCancel := context.WithTimeout(ctx, testtime.D20s)

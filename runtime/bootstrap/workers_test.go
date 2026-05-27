@@ -36,13 +36,13 @@ func (w *countWorker) Stop(_ context.Context) error { return nil }
 
 func TestWithWorkers(t *testing.T) {
 	w := &countWorker{}
-	b := New(WithClock(clock.Real()), WithWorkers(w))
+	b := New(clock.Real(), WithWorkers(w))
 	assert.Len(t, b.workers, 1)
 }
 
 func TestWithRouterOptions(t *testing.T) {
 	opt := router.WithBodyLimit(512)
-	b := New(WithClock(clock.Real()), WithRouterOptions(opt))
+	b := New(clock.Real(), WithRouterOptions(opt))
 	assert.Len(t, b.routerOpts, 1)
 }
 
@@ -51,13 +51,13 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-workers", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-workers", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	w := &countWorker{}
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),

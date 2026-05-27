@@ -42,13 +42,12 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	writer := adapterpg.NewOutboxWriter(clock.Real())
 	pgProvider := capability.NewPGProvider(txMgr, writer, pool.DB())
 
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         topo,
 		PG:               pgProvider,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")

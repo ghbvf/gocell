@@ -23,9 +23,8 @@ func (c *AccessCore) refreshGCHook() cell.LifecycleHook {
 		StartTimeout: defaultAccessCoreRefreshGCStartTimeout,
 		StopTimeout:  defaultAccessCoreRefreshGCStopTimeout,
 		OnStart: func(ctx context.Context) error {
-			worker, err := refresh.NewGCWorker(refresh.GCWorkerConfig{
+			worker, err := refresh.NewGCWorker(c.clk, refresh.GCWorkerConfig{
 				Store:     c.refreshStore,
-				Clock:     c.clk,
 				Interval:  c.refreshGCInterval,
 				Retention: c.refreshGCRetention,
 				Logger:    c.logger,

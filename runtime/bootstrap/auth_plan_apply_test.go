@@ -90,8 +90,7 @@ func newMinimalBootstrap() *Bootstrap {
 func routerInstallsAuthMiddleware(t *testing.T, opts []routerpkg.Option) bool {
 	t.Helper()
 
-	allOpts := append([]routerpkg.Option{routerpkg.WithRouterClock(clock.Real())}, opts...)
-	rtr, err := routerpkg.NewForListener(cell.PrimaryListener, allOpts...)
+	rtr, err := routerpkg.NewForListener(clock.Real(), cell.PrimaryListener, opts...)
 	require.NoError(t, err)
 
 	require.NoError(t, auth.Mount(rtr, auth.Route{

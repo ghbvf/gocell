@@ -9,7 +9,7 @@ import (
 )
 
 func TestWithMetricsProvider_NopDefault(t *testing.T) {
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	p := b.MetricsProvider()
 	if p == nil {
 		t.Fatal("MetricsProvider must never return nil")
@@ -21,14 +21,14 @@ func TestWithMetricsProvider_NopDefault(t *testing.T) {
 
 func TestWithMetricsProvider_StoresValue(t *testing.T) {
 	custom := &recordingProvider{}
-	b := New(WithClock(clock.Real()), WithMetricsProvider(custom))
+	b := New(clock.Real(), WithMetricsProvider(custom))
 	if b.MetricsProvider() != custom {
 		t.Fatalf("MetricsProvider did not store the injected provider")
 	}
 }
 
 func TestWithMetricsProvider_NilRetainsDefault(t *testing.T) {
-	b := New(WithClock(clock.Real()), WithMetricsProvider(nil))
+	b := New(clock.Real(), WithMetricsProvider(nil))
 	if _, ok := b.MetricsProvider().(kernelmetrics.NopProvider); !ok {
 		t.Fatalf("nil provider must keep the NopProvider default, got %T", b.MetricsProvider())
 	}

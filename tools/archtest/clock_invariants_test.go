@@ -1,16 +1,12 @@
 // invariants:
-//   - INVARIANT: CLOCK-INJECTION-TEST-CALLSITE-01
-//   - INVARIANT: CLOCK-INJECTION-PROD-CALLSITE-01
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
 //   - INVARIANT: PROD-CLOCK-INJECTION-01
-//   - INVARIANT: CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
+//   - INVARIANT: CLOCK-POSITIONAL-INJECTION-01
 //
 // Package archtest — clock injection invariants.
 //
 // Merged from:
-//   - clock_injection_callsite_test.go      (CLOCK-INJECTION-TEST-CALLSITE-01)
-//   - clock_injection_prod_callsite_test.go (CLOCK-INJECTION-PROD-CALLSITE-01)
 //   - clock_leaf_fallback_test.go           (KERNEL-CLOCK-LEAF-FALLBACK-01)
 //   - clock_reset_relative_prod_test.go     (KERNEL-CLOCK-RESET-RELATIVE-PROD-01)
 //   - prod_clock_injection_test.go          (PROD-CLOCK-INJECTION-01)
@@ -22,284 +18,20 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // ---------------------------------------------------------------------------
-// CLOCK-INJECTION-TEST-CALLSITE-01
+// KERNEL-CLOCK-LEAF-FALLBACK-01
 // ---------------------------------------------------------------------------
-
-// clockViaSliceAllowMarker is the annotation that exempts a constructor call
-// from CLOCK-INJECTION-TEST-CALLSITE-01 when Go syntax prevents passing
-// WithClock as a direct arg (e.g. options come from a dynamically-built slice
-// that already includes WithClock, and positional + spread is not valid Go).
-// The annotation must appear on the same line as the call's closing ")" with
-// a non-empty reason: `//archtest:allow:clock-injection:via-slice <reason>`.
-const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
-
-// clockControlPlaneAllowMarker is the function-level annotation that exempts
-// a *ast.FuncDecl from PROD-CLOCK-INJECTION-01 when the function is a
-// named control-plane scheduling primitive that intentionally uses real stdlib
-// time (e.g. controlPlaneTicker / controlPlaneProbeTimer in
-// runtime/command/lifecycle.go).
-//
-// The marker must appear in the FuncDecl's doc comment (the CommentGroup
-// immediately preceding the "func" keyword) with a non-empty reason:
-// `//archtest:allow:clock-injection:control-plane <reason>`
-//
-// Carve-out scope: function-level only, AND gated by the explicit
-// controlPlaneClockCarveOut {rel → func names} allowlist (review P1-3). The
-// marker comment alone never exempts: the FuncDecl's (module-relative path,
-// name) must also be listed. The enclosing file and package are NOT exempted;
-// any other function — including a third function in the same allowlisted
-// file — is still checked.
-//
-// AI-robust grade: Medium (archtest-enforced: allowlist map + marker, not a
-// bare comment a business PR can add anywhere; not compile-time). Before P1-3
-// this was effectively Soft (any marked FuncDecl in any prod file self-exempt).
-//
-// Blind spots (function-level comment guard, AST-based detection):
-//   - A FuncDecl without a doc comment group will never match — the marker
-//     must appear in the "doc" block, not an inline comment. RED self-check:
-//     TestProdClockInjectionControlPlaneMarkerFixtures/no_marker_violates
-//     asserts that a function with //archtest:... in a non-doc inline comment
-//     is NOT exempted and still produces a violation.
-//   - A FuncLit (anonymous function / closure) cannot carry a doc comment;
-//     time.* calls inside closures in an exempted FuncDecl body are NOT
-//     themselves exempt — only the FuncDecl's direct body statements are
-//     within the carve-out scope. RED self-check: closure_violates fixture
-//     asserts a closure inside an otherwise-exempt function is flagged.
-//   - The marker reason must be non-empty; a bare marker with no trailing
-//     text is silently ignored (same rule as clockViaSliceAllowMarker).
-const clockControlPlaneAllowMarker = "//archtest:allow:clock-injection:control-plane"
-
-// controlPlaneClockCarveOut is the EXHAUSTIVE {module-relative path → func
-// names} allowlist of control-plane clock carve-out sites. The marker comment
-// alone is NOT sufficient: a FuncDecl is exempt only if (a) its doc comment
-// carries a valid clockControlPlaneAllowMarker AND (b) its (rel, name) pair is
-// listed here. This closes review P1-3 — previously any production FuncDecl in
-// any file could self-exempt PROD-CLOCK-INJECTION-01 just by adding the marker
-// (effectively Soft). The allowlist is the binding truth source; the in-source
-// marker is retained for self-documentation + the doc-comment blind-spot
-// self-checks.
-//
-// Adding an entry is a deliberate, reviewable archtest change (not a comment a
-// business PR can sneak in).
-var controlPlaneClockCarveOut = map[string]map[string]bool{
-	"runtime/command/lifecycle.go": {
-		"controlPlaneTicker":     true,
-		"controlPlaneProbeTimer": true,
-	},
-}
-
-// clockControlPlaneAllowedFuncs returns the set of FuncDecl name-positions in
-// file that are exempt from PROD-CLOCK-INJECTION-01: doc comment carries a
-// valid clockControlPlaneAllowMarker (non-empty reason) AND the (rel, name)
-// pair is in controlPlaneClockCarveOut. A marker on any other function — a
-// third function in the allowlisted file, or any function in any other file /
-// package — does NOT exempt (review P1-3 RED self-checks
-// control_plane_marker_wrong_func_violates / _wrong_path_violates).
-//
-// Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
-// direct children of *ast.File, so depth=1 is correct and sufficient.
-func clockControlPlaneAllowedFuncs(fset *token.FileSet, file *ast.File, rel string) map[string]bool {
-	out := map[string]bool{}
-	allowedNames := controlPlaneClockCarveOut[rel]
-	if allowedNames == nil {
-		return out // rel not an allowlisted carve-out path — nothing is exempt
-	}
-	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Doc == nil || !allowedNames[fd.Name.Name] {
-			return
-		}
-		for _, c := range fd.Doc.List {
-			text := strings.TrimSpace(c.Text)
-			if !strings.HasPrefix(text, clockControlPlaneAllowMarker) {
-				continue
-			}
-			rest := strings.TrimSpace(strings.TrimPrefix(text, clockControlPlaneAllowMarker))
-			if rest == "" {
-				continue
-			}
-			// Use the position of the func name as the unique key.
-			key := fset.Position(fd.Name.Pos()).String()
-			out[key] = true
-		}
-	})
-	return out
-}
-
-// enclosingFuncDeclKey returns the position-string key for the nearest
-// enclosing top-level *ast.FuncDecl that directly (not via a FuncLit/closure)
-// contains pos. Returns "" if pos is not inside any FuncDecl body, or if pos
-// is inside a nested FuncLit within a FuncDecl body.
-//
-// The key matches the format produced by clockControlPlaneAllowedFuncs.
-//
-// Why the FuncLit exclusion matters (carve-out boundary):
-//
-// Without the exclusion, `fd.Body.Pos() <= pos <= fd.Body.End()` is true for
-// any code inside the function — including closures/FuncLits. This would
-// exempt `time.*` calls inside closures of a marked function, which violates
-// the documented carve-out semantics: "the exemption does NOT extend to closures
-// within the exempt FuncDecl body."
-//
-// The exclusion is implemented by walking FuncLits within fd.Body and returning
-// "" whenever pos falls inside one.
-//
-// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
-//
-//  1. FuncLit nested inside another FuncLit inside a marked FuncDecl: also
-//     excluded (EachInSubtree[ast.FuncLit] is recursive, so all depths covered).
-//     Reverse self-check: control_plane_exempt_func_closure_violates fixture
-//     asserts that time.* inside a closure of a marked function IS flagged.
-//
-//  2. A method (receiver FuncDecl) declared inside a file-scope var init block:
-//     not possible in Go syntax; not a blind spot.
-//
-// Uses FindFirstChild[ast.FuncDecl](file, ...) — top-level FuncDecls are
-// direct children of *ast.File; no nested function literal can be a top-level
-// FuncDecl, so depth=1 is correct.
-//
-// The closure-check in step 2 uses EachInSubtree outside any EachInChildren
-// callback, so no sentinel flag is held inside an EachInChildren closure
-// (SCANNER-FRAMEWORK-USAGE-02 compliant).
-func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) string {
-	// Step 1: find the top-level FuncDecl whose body spans pos. FindFirstChild
-	// stops at depth=1 — correct because top-level FuncDecls are direct children
-	// of *ast.File and there is at most one enclosing FuncDecl per pos.
-	fd, ok := FindFirstChild[ast.FuncDecl](file, func(fd *ast.FuncDecl) bool {
-		return fd.Body != nil && fd.Body.Pos() <= pos && pos <= fd.Body.End()
-	})
-	if !ok {
-		return ""
-	}
-	// Step 2: reject pos if it falls inside a nested FuncLit body (closure).
-	// EachInSubtree[ast.FuncLit] walks all FuncLits at any depth inside fd.Body.
-	// The insideClosure flag is held outside any EachInChildren callback, so this
-	// is not the USAGE-02 forbidden pattern (USAGE-02 only monitors
-	// EachInChildren callbacks; this is a stand-alone EachInSubtree call).
-	insideClosure := false
-	EachInSubtree[ast.FuncLit](fd.Body, func(fl *ast.FuncLit) {
-		if fl.Body != nil && fl.Body.Pos() <= pos && pos <= fl.Body.End() {
-			insideClosure = true
-		}
-	})
-	if insideClosure {
-		return ""
-	}
-	return fset.Position(fd.Name.Pos()).String()
-}
-
-// clockCallsiteAllowedLines returns the set of source line numbers in file
-// that carry a valid clockViaSliceAllowMarker with a non-empty reason.
-func clockCallsiteAllowedLines(fset *token.FileSet, file *ast.File) map[int]bool {
-	out := map[int]bool{}
-	for _, cg := range file.Comments {
-		for _, c := range cg.List {
-			text := strings.TrimSpace(c.Text)
-			if !strings.HasPrefix(text, clockViaSliceAllowMarker) {
-				continue
-			}
-			// Require a non-empty reason after the marker.
-			rest := strings.TrimSpace(strings.TrimPrefix(text, clockViaSliceAllowMarker))
-			if rest == "" {
-				continue
-			}
-			line := fset.Position(c.Slash).Line
-			out[line] = true
-		}
-	}
-	return out
-}
-
-// clockRequiredCtor holds a collected constructor whose package has a WithClock
-// option function.
-type clockRequiredCtor struct {
-	ctorFullName      string // key: ctor.FullName()
-	withClockFullName string // key: withClock.FullName()
-}
-
-// collectClockRequiredCtorsFromPass scans a single package's types for
-// constructors (func name starting with "New", last param variadic) whose
-// package also exports a "WithClock" function. Returns entries to add to the
-// global ctors map.
-//
-// This is the per-Pass equivalent of the old collectClockRequiredCtors that
-// operated on []*packages.Package. RunTyped calls this once per package; the
-// caller accumulates results into a shared map keyed by FullName() strings.
-//
-// Using FullName() strings instead of *types.Func pointers avoids false
-// mismatches between the test-variant and non-test-variant of the same package
-// (RunTyped's dedup-by-*ast.File ensures files are not double-counted, but the
-// same *types.Package may appear via two load variants; keying on path-stable
-// FullName() strings provides the same guarantee as the original).
-func collectClockRequiredCtorsFromPass(p *Pass) []clockRequiredCtor {
-	if p.Pkg == nil {
-		return nil
-	}
-	scope := p.Pkg.Scope()
-
-	// Check if this package exports WithClock.
-	obj := scope.Lookup("WithClock")
-	if obj == nil {
-		return nil
-	}
-	fn, ok := obj.(*types.Func)
-	if !ok {
-		return nil
-	}
-	withClockFullName := fn.FullName()
-
-	// Collect New* constructors from this package (variadic last param).
-	var result []clockRequiredCtor
-	for _, name := range scope.Names() {
-		if !strings.HasPrefix(name, "New") {
-			continue
-		}
-		cobj := scope.Lookup(name)
-		cfn, ok := cobj.(*types.Func)
-		if !ok {
-			continue
-		}
-		sig, ok := cfn.Type().(*types.Signature)
-		if !ok || !sig.Variadic() {
-			continue
-		}
-		result = append(result, clockRequiredCtor{
-			ctorFullName:      cfn.FullName(),
-			withClockFullName: withClockFullName,
-		})
-	}
-	return result
-}
-
-// callsWithClock reports whether any of the call arguments in parent contains
-// a CallExpr whose callee's FullName matches withClockFullName. Uses the
-// FindFirstInSubtree typed funnel (implicit early-stop, no caller-held flag).
-func callsWithClock(parent *ast.CallExpr, info *types.Info, withClockFullName string) bool {
-	for _, arg := range parent.Args {
-		if _, ok := FindFirstInSubtree[ast.CallExpr](arg, func(call *ast.CallExpr) bool {
-			fn := resolvedFunc(call.Fun, info)
-			return fn != nil && fn.FullName() == withClockFullName
-		}); ok {
-			return true
-		}
-	}
-	return false
-}
 
 // resolvedFunc returns the *types.Func for a call expression's function
 // expression, or nil if it cannot be determined.
@@ -323,350 +55,26 @@ func resolvedFunc(fun ast.Expr, info *types.Info) *types.Func {
 	return obj
 }
 
-// scanClockCallsiteAST walks file looking for calls to any constructor in
-// ctors from test files, and reports violations where WithClock is missing.
-//
-// A call may be exempted by placing `//archtest:allow:clock-injection:via-slice
-// <reason>` on the same line as the call's closing ")" when Go syntax prevents
-// passing WithClock as a direct positional arg (e.g. options live in a
-// dynamically-built slice that already contains WithClock).
-func scanClockCallsiteAST(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-	ctors map[string]clockRequiredCtor,
-) []Diagnostic {
-	allowedLines := clockCallsiteAllowedLines(fset, file)
-	var out []Diagnostic
-	seen := map[string]bool{}
-
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		callee := resolvedFunc(call.Fun, info)
-		if callee == nil {
-			return
-		}
-		ctor, isCtor := ctors[callee.FullName()]
-		if !isCtor {
-			return
-		}
-		// Only flag calls that have at least one option argument (variadic slice
-		// non-empty). A bare NewXxx() with zero options has no WithXxx at all,
-		// which may be intentional (e.g. constructor with zero required options).
-		// We only flag the case where options ARE passed but WithClock is absent.
-		if len(call.Args) == 0 {
-			return
-		}
-		if callsWithClock(call, info, ctor.withClockFullName) {
-			return
-		}
-		// Check for explicit exemption via allow-marker on the closing-paren line.
-		closingLine := fset.Position(call.Rparen).Line
-		if allowedLines[closingLine] {
-			return
-		}
-		line := fset.Position(call.Pos()).Line
-		key := fmt.Sprintf("%s:%d:%s", rel, line, callee.Name())
-		if !seen[key] {
-			seen[key] = true
-			out = append(out, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"%s called without WithClock — "+
-						"must pass WithClock(clk) to satisfy the clock injection requirement. "+
-						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
-					callee.FullName(),
-				),
-			})
-		}
-	})
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Rel != out[j].Rel {
-			return out[i].Rel < out[j].Rel
-		}
-		return out[i].Line < out[j].Line
-	})
-	return out
-}
-
-// INVARIANT: CLOCK-INJECTION-TEST-CALLSITE-01
-//
-// TestClockInjectionCallsite enforces CLOCK-INJECTION-TEST-CALLSITE-01:
-// test files must pass WithClock when calling constructors whose package
-// exports WithClock.
-//
-// Detection strategy (option-pattern only, v1):
-//  1. Load all packages with tests=true and the integration+e2e build tags.
-//  2. For each non-test file, collect packages that export a function named
-//     "WithClock" (the canonical Clock option injector). Record the package
-//     path and the set of constructor names — functions in the same package
-//     whose last parameter is variadic and whose name starts with "New".
-//  3. Scan each test file for CallExpr whose callee resolves (via go/types) to
-//     one of the collected constructors.
-//  4. For each such call, walk the argument list looking for a nested CallExpr
-//     whose callee resolves to the WithClock function of the same package.
-//  5. If no WithClock call is found among the arguments — report a violation.
-//
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
-// ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
-func TestClockInjectionCallsite(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
-
-	// Phase 1: collect all ctors from packages that have WithClock.
-	// Load with tests=true so we see every package variant.
-	// The rule func only populates ctors and always returns nil; _ = discards
-	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
-	ctors := make(map[string]clockRequiredCtor)
-	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
-		func(p *Pass) []Diagnostic {
-			for _, c := range collectClockRequiredCtorsFromPass(p) {
-				ctors[c.ctorFullName] = c
-			}
-			return nil
-		})
-
-	// Phase 2: scan test files for callsite violations.
-	diags := RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns,
-		func(p *Pass) []Diagnostic {
-			var d []Diagnostic
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				// Only scan test files.
-				if !strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
-			}
-			return d
-		})
-
-	Report(t, "CLOCK-INJECTION-TEST-CALLSITE-01", diags)
-}
-
-// runClockCallsiteFixtureScan loads a fixture directory and returns violations.
-func runClockCallsiteFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
-	t.Helper()
-
-	// Phase 1: collect ctors from the fixture module.
-	// The rule func only populates ctors and always returns nil; _ = discards
-	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
-	ctors := make(map[string]clockRequiredCtor)
-	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
-		func(p *Pass) []Diagnostic {
-			for _, c := range collectClockRequiredCtorsFromPass(p) {
-				ctors[c.ctorFullName] = c
-			}
-			return nil
-		})
-
-	// Phase 2: scan test files for callsite violations.
-	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: true}, []string{"./..."},
-		func(p *Pass) []Diagnostic {
-			var d []Diagnostic
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !strings.HasSuffix(rel, "_test.go") {
-					continue
-				}
-				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
-			}
-			return d
-		})
-}
-
-// TestClockInjectionCallsiteFixtures validates fixture-based regression cases.
-// Each fixture dir owns a diag.golden capturing the rule's real output
-// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
-// in the regenerated golden, never in this table. See ADR
-// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
-func TestClockInjectionCallsiteFixtures(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based fixture test in -short mode")
-	}
-
-	root := findModuleRoot(t)
-	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_injection_callsite_fixtures")
-
-	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
-	dirs := []string{"compliant", "violates"}
-
-	for _, dir := range dirs {
-		dir := dir
-		t.Run(dir, func(t *testing.T) {
-			t.Parallel()
-			got := runClockCallsiteFixtureScan(t, base+"/"+dir)
-			AssertGolden(t, filepath.Join(base, dir, "diag.golden"), got)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// CLOCK-INJECTION-PROD-CALLSITE-01
-// ---------------------------------------------------------------------------
-
-// isCompositionRoot reports whether the given module-relative path is a
-// production composition-root file for CLOCK-INJECTION-PROD-CALLSITE-01.
-//
-// Composition roots are:
-//   - any non-test .go file under cmd/
-//   - any main.go file under examples/ at any depth
-//
-// Intentionally NOT flagging cells/, runtime/, kernel/ — those are injection
-// targets, not composition roots.
-func isCompositionRoot(rel string) bool {
-	if rel == "" {
-		return false
-	}
-	if strings.HasSuffix(rel, "_test.go") {
-		return false
-	}
-	if strings.HasPrefix(rel, "tools/archtest/") {
-		return false
-	}
-	if strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/") {
-		return false
-	}
-	// cmd/: all non-test Go files
-	if strings.HasPrefix(rel, "cmd/") {
-		return true
-	}
-	// examples/: only main.go files (composition roots, not library code)
-	if strings.HasPrefix(rel, "examples/") && strings.HasSuffix(rel, "/main.go") {
-		return true
-	}
-	return false
-}
-
-// compositionRootDirExists checks whether a directory exists under root.
-func compositionRootDirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
-// INVARIANT: CLOCK-INJECTION-PROD-CALLSITE-01
-//
-// TestClockInjectionProdCallsite enforces CLOCK-INJECTION-PROD-CALLSITE-01:
-// production composition-root files (cmd/ + examples/*/main.go) must pass
-// WithClock when calling constructors whose package exports WithClock.
-//
-// This is the production-side complement to CLOCK-INJECTION-TEST-CALLSITE-01
-// which only scans *_test.go files. Together they enforce clock injection
-// at every composition boundary.
-//
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
-// ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
-// ref: uber-go/fx fx.Provide DI graph validation
-func TestClockInjectionProdCallsite(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode")
-	}
-
-	root := findModuleRoot(t)
-
-	// Build patterns covering only cmd/ and examples/ (the composition roots).
-	// We deliberately exclude cells/runtime/kernel/ — those are injection targets.
-	var patterns []string
-	for _, dir := range []string{"cmd", "examples"} {
-		if compositionRootDirExists(filepath.Join(root, dir)) {
-			patterns = append(patterns, "./"+dir+"/...")
-		}
-	}
-	if len(patterns) == 0 {
-		t.Skip("no cmd/ or examples/ directories found")
-	}
-
-	// Load without tests=true — composition root files are not test files.
-
-	// Phase 1: collect all ctors from packages that have WithClock.
-	// The rule func only populates ctors and always returns nil; _ = discards
-	// the empty diagnostic slice intentionally (Phase 2 is the violation source).
-	ctors := make(map[string]clockRequiredCtor)
-	_ = RunTyped(t, TypedOpts{Tests: false}, patterns,
-		func(p *Pass) []Diagnostic {
-			for _, c := range collectClockRequiredCtorsFromPass(p) {
-				ctors[c.ctorFullName] = c
-			}
-			return nil
-		})
-
-	// Phase 2: scan composition-root files for callsite violations.
-	diags := RunTyped(t, TypedOpts{Tests: false}, patterns,
-		func(p *Pass) []Diagnostic {
-			var d []Diagnostic
-			for _, f := range p.Files {
-				rel := p.Rel(f)
-				if !isCompositionRoot(rel) {
-					continue
-				}
-				d = append(d, scanClockCallsiteAST(p.Fset, f, rel, p.TypesInfo, ctors)...)
-			}
-			return d
-		})
-
-	Report(t, "CLOCK-INJECTION-PROD-CALLSITE-01", diags)
-}
-
-// ---------------------------------------------------------------------------
-// KERNEL-CLOCK-LEAF-FALLBACK-01
-// ---------------------------------------------------------------------------
-
 // kernelClockPkgPath is the import path of the package whose Real() factory
-// the gate guards. Hard-coded so a rename of the clock package is loud
-// (test breaks and forces explicit migration).
+// the gate guards.
 const kernelClockPkgPath = "github.com/ghbvf/gocell/kernel/clock"
 
 // allowedRealCallerPaths lists the production-code paths that may call
-// kernel/clock.Real() directly. See package doc for rationale.
-//
-// Each entry is matched as either an exact file path (when it ends in .go)
-// or a directory prefix (otherwise). The exact-file form lets us exempt
-// kernel/clock/clock.go (the Real() factory definition itself) without
-// exempting kernel/clock/clockmock or any future sibling packages.
+// kernel/clock.Real() directly.
 var allowedRealCallerPaths = []string{
 	"kernel/clock/clock.go",                 // Real() factory definition
 	"cmd/corebundle/",                       // main composition root
 	"cmd/gocell/",                           // gocell CLI composition root
 	"gocell.go",                             // top-level entry
 	"tests/e2e/internal/clients/clients.go", // e2e suite composition root
-	// examples/ is excluded by fileroles.IsProductionCode (see package doc),
-	// so example composition roots (examples/iotdevice/main.go,
-	// examples/ssobff/app.go, examples/todoorder/main.go) do not need
-	// allowlist entries.
-	//
-	// Test-helper packages own clock.Real() construction so test callers
-	// don't repeat it. They are imported only by *_test.go files; the
-	// CLOCK-INJECTION-TEST-CALLSITE-01 archtest enforces that boundary.
-	"cells/accesscore/internal/testutil/", // SessionRepoForTest / RealSessionRepo
-	"cells/configcore/configcoretest/",    // BuildWriteService / BuildSubscribeService default clock
+	"cells/accesscore/internal/testutil/",   // SessionRepoForTest / RealSessionRepo
+	"cells/configcore/configcoretest/",      // BuildWriteService / BuildSubscribeService default clock
 }
 
 // INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //
 // TestKernelClockLeafFallback enforces KERNEL-CLOCK-LEAF-FALLBACK-01:
 // leaf-level clock.Real() construction is forbidden outside the composition root.
-//
-// Invariant: In every Go file whose role is "production code"
-// (tools/internal/fileroles.IsProductionCode), there must be no direct call
-// to kernel/clock.Real(). The single root Clock is constructed once at the
-// composition root and threaded through every consumer; any leaf-level
-// fallback re-introduces the wall-clock surface that PROD-CLOCK-INJECTION-01
-// was meant to abstract over.
-//
-// Resolution is type-driven: every *ast.SelectorExpr is run through
-// go/types.Info.ObjectOf to obtain the resolved *types.Func, then gated on
-// obj.Pkg().Path() == "github.com/ghbvf/gocell/kernel/clock" and
-// obj.Name() == "Real". This makes the check immune to import aliases and
-// dot-imports.
 //
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6 closure
@@ -696,8 +104,6 @@ func TestKernelClockLeafFallback(t *testing.T) {
 }
 
 // isAllowedRealCallerPath reports whether rel is exempt from the gate.
-// Entries ending in .go match exactly; other entries match as directory
-// prefixes.
 func isAllowedRealCallerPath(rel string) bool {
 	for _, allowed := range allowedRealCallerPaths {
 		if strings.HasSuffix(allowed, ".go") {
@@ -714,9 +120,7 @@ func isAllowedRealCallerPath(rel string) bool {
 }
 
 // scanLeafRealCallsAST walks file's AST and returns a sorted slice of
-// violation Diagnostics for every call to kernel/clock.Real(). Detection
-// is type-driven via info.ObjectOf so import aliases and dot-imports are
-// uniformly covered.
+// violation Diagnostics for every call to kernel/clock.Real().
 func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	seen := map[string]bool{}
@@ -737,13 +141,11 @@ func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info 
 	}
 
 	EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
-		// Standard form: clock.Real / c.Real (alias).
 		if matchedKernelClockReal(info, e.Sel) {
 			record(e)
 		}
 	})
 	EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
-		// Dot-import form: `import . "…/kernel/clock"; Real()`.
 		if matchedKernelClockReal(info, e) {
 			record(e)
 		}
@@ -758,12 +160,7 @@ func scanLeafRealCallsAST(fset *token.FileSet, file *ast.File, rel string, info 
 	return out
 }
 
-// matchedKernelClockReal reports whether ident resolves (via info.ObjectOf)
-// to the package-level function kernel/clock.Real.
-//
-// Filters explicitly to *types.Func with a nil receiver so that references
-// to a Real type / Real const / Real method on an unrelated package are
-// not flagged.
+// matchedKernelClockReal reports whether ident resolves to kernel/clock.Real.
 func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 	if info == nil || ident == nil {
 		return false
@@ -782,10 +179,7 @@ func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 }
 
 // runLeafFallbackFixtureScan loads the fixture package at fixtureDir and
-// returns the sorted slice of violation Diagnostics using the same predicate
-// as TestKernelClockLeafFallback (scanLeafRealCallsAST). The whitelist is
-// intentionally NOT applied here — every fixture path is treated as
-// production code so the gate's detection logic is the only thing under test.
+// returns the sorted slice of violation Diagnostics.
 func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 	t.Helper()
 	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
@@ -800,12 +194,8 @@ func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
 }
 
 // TestKernelClockLeafFallbackFixtures runs the KERNEL-CLOCK-LEAF-FALLBACK-01
-// scanner over each fixture subpackage and asserts against the golden.
-// Mirrors TestProdClockInjectionFixtures (sibling gate).
-// Each fixture dir owns a diag.golden capturing the rule's real output
-// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
-// in the regenerated golden, never in this table. See ADR
-// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+// scanner over each fixture subpackage.
+// Each fixture dir owns a diag.golden; GREEN fixtures have an empty golden.
 func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -815,7 +205,6 @@ func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_leaf_fallback_fixtures")
 
-	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {
@@ -833,7 +222,6 @@ func TestKernelClockLeafFallbackFixtures(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // clockResetRelativeExemptPaths lists path prefixes exempt from the gate.
-// These packages define or implement the Reset method itself, not callers.
 var clockResetRelativeExemptPaths = []string{
 	"kernel/clock/clock.go",   // interface definition
 	"kernel/clock/clockmock/", // fake implementation
@@ -842,13 +230,7 @@ var clockResetRelativeExemptPaths = []string{
 // INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
 //
 // TestKernelClockResetRelativeProd enforces KERNEL-CLOCK-RESET-RELATIVE-PROD-01:
-// production code must use the absolute Timer.ResetAt(deadline time.Time) API
-// instead of the relative Timer.Reset(d time.Duration) to eliminate the
-// read-then-act race between capturing a deadline and arming the timer.
-//
-// Detection is type-driven (go/types): identifies any CallExpr `<expr>.Reset(<arg>)`
-// where the resolved *types.Func has Reset(time.Duration) bool signature and the
-// receiver also exposes ResetAt — the structural marker for clock.Timer-like types.
+// production code must use the absolute Timer.ResetAt(deadline time.Time) API.
 //
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 func TestKernelClockResetRelativeProd(t *testing.T) {
@@ -890,10 +272,7 @@ func isClockResetRelativeExempt(rel string) bool {
 }
 
 // scanClockResetRelativeAST walks file's AST and returns a sorted slice of
-// violation Diagnostics for every call `<expr>.Reset(d)` where the receiver
-// structurally implements kernel/clock.Timer (has both Reset(Duration)bool and
-// ResetAt(Time)bool methods). This is the same predicate used by the fixture
-// regression tests.
+// violation Diagnostics for every call `<expr>.Reset(d)`.
 func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	seen := map[string]bool{}
@@ -914,16 +293,12 @@ func scanClockResetRelativeAST(fset *token.FileSet, file *ast.File, rel string, 
 		if !ok {
 			return
 		}
-		// Must be a method (has receiver).
 		if sig.Recv() == nil {
 			return
 		}
-		// Signature: Reset(time.Duration) bool
 		if !isResetDurationBool(sig) {
 			return
 		}
-		// Receiver type must also expose ResetAt(time.Time) bool — the
-		// structural marker for clock.Timer-like types.
 		recvType := sig.Recv().Type()
 		if !typeHasResetAt(recvType) {
 			return
@@ -965,13 +340,11 @@ func isResetDurationBool(sig *types.Signature) bool {
 	return ok && basic.Kind() == types.Bool
 }
 
-// typeHasResetAt reports whether t (or its underlying pointer/interface) exposes
-// a method named "ResetAt" with signature ResetAt(time.Time) bool.
+// typeHasResetAt reports whether t exposes a method ResetAt(time.Time) bool.
 func typeHasResetAt(t types.Type) bool {
 	mset := types.NewMethodSet(t)
 	sel := mset.Lookup(nil, "ResetAt")
 	if sel == nil {
-		// Try pointer receiver too.
 		mset = types.NewMethodSet(types.NewPointer(t))
 		sel = mset.Lookup(nil, "ResetAt")
 	}
@@ -1018,12 +391,7 @@ func isTimeTimeType(t types.Type) bool {
 	return obj.Pkg() != nil && obj.Pkg().Path() == "time" && obj.Name() == "Time"
 }
 
-// TestKernelClockResetRelativeFixtures verifies the scanner against the two
-// fixture packages: one that violates the rule, one that is compliant.
-// Each fixture dir owns a diag.golden capturing the rule's real output
-// (Rel:Line: Message); GREEN fixtures have an empty golden. Line numbers live
-// in the regenerated golden, never in this table. See ADR
-// docs/architecture/202605181200-adr-archtest-fixture-diagnostic-golden.md.
+// TestKernelClockResetRelativeFixtures verifies the scanner against fixture packages.
 func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1033,7 +401,6 @@ func TestKernelClockResetRelativeFixtures(t *testing.T) {
 	root := findModuleRoot(t)
 	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_reset_relative_fixtures")
 
-	// GREEN dir: empty diag.golden. RED dir: expected diagnostics captured in diag.golden.
 	dirs := []string{"compliant", "violates"}
 
 	for _, dir := range dirs {
@@ -1066,28 +433,9 @@ func runClockResetRelativeFixtureScan(t *testing.T, fixtureDir string) []Diagnos
 // ---------------------------------------------------------------------------
 
 // allowedRealClockPaths lists the paths whose files may legitimately
-// reference stdlib time symbols directly. See package doc for rationale.
+// reference stdlib time symbols directly.
 //
-// Entry semantics: a trailing "/" marks a directory prefix (all files under
-// that directory are allowed); otherwise the entry is an exact file path.
-// This distinction prevents a file-scoped exemption from silently covering
-// sibling files added later (e.g. a new "testwait_extra.go" in the same dir).
-//
-// Entries:
-//   - kernel/clock/: the canonical wall-clock injection abstraction; the
-//     primitive layer where stdlib time is unwrappable.
-//   - pkg/testutil/testwait/testwait.go: the typed-marker funnel for test-side
-//     polling waits (External + Deterministic). Test code uses this in lieu of
-//     bare require.Eventually; the pkg/ layer cannot import kernel/clock (see
-//     .claude/rules/gocell/go-standards.md), so wall-clock polling here is
-//     unavoidable and is structurally the same "primitive" tier as
-//     kernel/clock for tests. See docs/plans/202605181600-042-archtest.md
-//     §1.1 TEST-POLLING-DETERMINISM and TEST-POLLING-EXTERNAL-REASON-
-//     LITERAL-01 archtest (test_polling_external_reason_literal_test.go),
-//     which is the downstream Hard funnel enforcing that callsites only
-//     reach this primitive via const-literal reason.
-//     File-scoped (no trailing "/") so a future sibling file in the same
-//     directory does NOT silently inherit the exemption.
+// Entry semantics: a trailing "/" marks a directory prefix; otherwise exact.
 var allowedRealClockPaths = []string{
 	"kernel/clock/",
 	"pkg/testutil/testwait/testwait.go",
@@ -1095,18 +443,6 @@ var allowedRealClockPaths = []string{
 
 // forbiddenTimeFns maps each forbidden stdlib time function to the equivalent
 // Clock interface method that production callers must use instead.
-//
-// Note that time.After is mapped to NewTimerAt because the channel-returning
-// shortcut form has no ctx-aware analog; callers must rewrite as
-// `timer := clk.NewTimerAt(deadline); defer timer.Stop()` +
-// `select { case <-ctx.Done(): ... case <-timer.C(): ... }`.
-//
-// time.NewTicker and time.Tick map to clock.Clock.NewTicker (interval-based,
-// matching stdlib semantics: first fire at Now()+interval). The Clock
-// interface deliberately does not expose a "TickerAt" form — the
-// duration-based shape carries the same read-then-act gap on the very first
-// tick that NewTimerAt was designed to eliminate, but for tickers the
-// stdlib parity is more valuable than the absolute-deadline guarantee.
 var forbiddenTimeFns = map[string]string{
 	"Now":       "clock.Clock.Now",
 	"Since":     "clock.Clock.Since",
@@ -1117,6 +453,205 @@ var forbiddenTimeFns = map[string]string{
 	"AfterFunc": "clock.Clock.AfterFunc",
 	"Tick":      "clock.Clock.NewTicker",
 	"Sleep":     "clock.Clock.Sleep",
+}
+
+// exactSanctionedTimeCalls maps each controlPlaneClock method name to the
+// exact stdlib time.* function name (without the "time." prefix) that the
+// method body may call. The carve-out is keyed on the (method name, callee)
+// pair, NOT on receiver type alone — so any other stdlib time.* function call
+// inside a controlPlaneClock method (e.g. time.Sleep inside newTicker) is a
+// violation, and any new exempt method requires extending this map AND adding
+// the method to the sealed type.
+//
+// Extension policy (HARD form-uniqueness): the only way to add a new
+// (method, callee) pair is a deliberate code change here PLUS adding the
+// method to runtime/command/lifecycle.go controlPlaneClock. A new method on
+// controlPlaneClock without an entry here is a violation for every time.*
+// call it makes (the method exists but exactSanctionedTimeCalls lookup
+// returns ""); a new entry here without a matching method does nothing
+// (no FuncDecl position binds to it). Both halves are required.
+//
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
+var exactSanctionedTimeCalls = map[string]string{
+	"newTicker":     "NewTicker",
+	"newProbeTimer": "NewTimer",
+}
+
+// clockControlPlaneAllowedMethods returns the map of FuncDecl name-positions
+// (format: fset.Position(fd.Name.Pos()).String()) to method name for methods
+// in file that are candidates for the PROD-CLOCK-INJECTION-01 carve-out.
+//
+// A FuncDecl is a candidate if and only if ALL of:
+//
+//	(a) rel is under "runtime/command/" — this package gate prevents any other
+//	    package from claiming to host a "controlPlaneClock" method; the type is
+//	    package-private (unexported) so only code in runtime/command can declare
+//	    methods on it. This is the structural "seal" that replaces the old
+//	    hand-maintained allowlist map.
+//
+//	(b) fd.Recv != nil — it is a method, not a free function.
+//
+//	(c) The receiver's type name is "controlPlaneClock" (value receiver) or
+//	    "*controlPlaneClock" (pointer receiver), extracted from the AST. Both
+//	    forms are accepted for robustness, though the current impl uses value
+//	    receivers only.
+//
+//	(d) The method name appears as a key in exactSanctionedTimeCalls — methods
+//	    on controlPlaneClock that lack an entry never grant carve-out. This is
+//	    the form-uniqueness lock that closes the "any time.* in any method
+//	    body" gap (#1136 review F2).
+//
+// The returned map value is the method name; callers check the resolved time
+// function name against exactSanctionedTimeCalls[methodName] to decide whether
+// the specific time.* call is sanctioned (exact (method, callee) pair).
+//
+// Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
+// direct children of *ast.File, so depth=1 is correct and sufficient.
+//
+// AI-robust grade: Medium (permanent ceiling). The stdlib time.NewTicker /
+// time.NewTimer free functions cannot be made uncallable in Go, so receiver-type
+// confinement is the permanent ceiling here (same as SPAN-SETATTR-REDACT-01
+// package-internal axis). Form-uniqueness within that ceiling is now (method,
+// callee) exact-pair — the strongest available form for stdlib free-function
+// callouts. Gain over the former receiver-type-only carve-out (#1136 F2):
+//   - Any time.* call inside a controlPlaneClock method body other than the
+//     declared (method, callee) pair is a violation — no "method body wildcard".
+//   - Adding a controlPlaneClock method without an exactSanctionedTimeCalls
+//     entry leaves it ungated; any time.* call in it is flagged.
+//
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
+//  1. A FuncLit (anonymous function / closure) cannot be a method; time.* calls
+//     inside closures within a controlPlaneClock method are NOT exempt.
+//     enclosingFuncDeclKey explicitly excludes positions inside nested FuncLit
+//     bodies via EachInSubtree[ast.FuncLit], so closures are never granted
+//     the method-level carve-out.
+//     Reverse self-check: control_plane_exempt_func_closure_violates fixture
+//     asserts that time.* inside a closure of an exempt method is still flagged.
+//  2. A method named controlPlaneClock from an entirely different package would
+//     satisfy (b)+(c) without gate (a). Gate (a) prevents this by requiring
+//     the file's module-relative path to be under runtime/command/.
+//     Reverse self-check: control_plane_wrong_path_violates fixture has a struct
+//     named controlPlaneClock with a method outside runtime/command/ → still flagged.
+//  3. An unexported method on a different struct inside runtime/command/ with
+//     the name "controlPlaneClock" is not a legitimate bypass because (c) checks
+//     the *receiver type name*, not the method name. A struct named "otherClock"
+//     with a method named "controlPlaneClock" is NOT exempt.
+//     Reverse self-check: control_plane_wrong_receiver_type_violates asserts such
+//     a method is flagged (receiver type "otherClock" ≠ "controlPlaneClock").
+//  4. A new controlPlaneClock method (e.g. "harvest") that calls time.Sleep
+//     would have passed under the receiver-type-only form; the (method, callee)
+//     pair lock rejects it because "harvest" is not in exactSanctionedTimeCalls.
+//     Reverse self-check: control_plane_wrong_method_name_violates fixture.
+//  5. A sanctioned method (e.g. "newTicker") that calls the wrong time.*
+//     function (e.g. time.Sleep instead of time.NewTicker) would pass under
+//     the receiver-type-only form; the (method, callee) pair lock rejects it
+//     because exactSanctionedTimeCalls["newTicker"] != "Sleep".
+//     Reverse self-check: control_plane_wrong_callee_violates fixture.
+//
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
+// ref: PROD-CLOCK-INJECTION-01
+func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel string) map[string]string {
+	out := map[string]string{}
+	// Gate (a): only runtime/command/ files can host controlPlaneClock methods.
+	if !strings.HasPrefix(rel, "runtime/command/") {
+		return out
+	}
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		// Gate (b): must be a method (has receiver list).
+		if fd.Recv == nil || len(fd.Recv.List) == 0 {
+			return
+		}
+		// Gate (c): receiver type name must be "controlPlaneClock" (or pointer to it).
+		recvTypeName := clockReceiverTypeName(fd)
+		if recvTypeName != "controlPlaneClock" {
+			return
+		}
+		if fd.Name == nil {
+			return
+		}
+		// Gate (d): method name must be a key in exactSanctionedTimeCalls. Methods
+		// on controlPlaneClock that lack an entry are NOT carve-out candidates —
+		// any time.* call inside them is flagged the same as in any other production
+		// method. This is the form-uniqueness lock that prevents the "any method
+		// body wildcard" loophole (#1136 review F2).
+		if _, ok := exactSanctionedTimeCalls[fd.Name.Name]; !ok {
+			return
+		}
+		key := fset.Position(fd.Name.Pos()).String()
+		out[key] = fd.Name.Name
+	})
+	return out
+}
+
+// clockReceiverTypeName extracts the base type name of the first receiver in a
+// FuncDecl's receiver list. Returns "" if none. Uses the shared ReceiverTypeName
+// helper exported by the archtest package (walk.go). Renames the local helper to
+// avoid conflict with the receiverTypeName function in pg_repo_ambient_tx_test.go.
+func clockReceiverTypeName(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return ""
+	}
+	return ReceiverTypeName(fd.Recv.List[0].Type)
+}
+
+// findTopLevelFuncDecl returns the top-level *ast.FuncDecl named funcName and
+// true if found; otherwise nil and false.
+// Uses EachInChildren[ast.FuncDecl] (depth=1) because top-level FuncDecls are
+// direct children of *ast.File.
+func findTopLevelFuncDecl(file *ast.File, funcName string) (*ast.FuncDecl, bool) {
+	var result *ast.FuncDecl
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name != nil && fd.Name.Name == funcName {
+			result = fd
+		}
+	})
+	return result, result != nil
+}
+
+// enclosingFuncDeclKey returns the position-string key for the nearest
+// enclosing top-level *ast.FuncDecl that directly (not via a FuncLit/closure)
+// contains pos. Returns "" if pos is not inside any FuncDecl body, or if pos
+// is inside a nested FuncLit within a FuncDecl body.
+//
+// The key matches the format produced by clockControlPlaneAllowedMethods.
+//
+// Why the FuncLit exclusion matters (carve-out boundary):
+//
+// Without the exclusion, `fd.Body.Pos() <= pos <= fd.Body.End()` is true for
+// any code inside the function — including closures/FuncLits. This would
+// exempt `time.*` calls inside closures of an exempt method, which violates
+// the documented carve-out semantics.
+//
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
+//
+//  1. FuncLit nested inside another FuncLit inside an exempt FuncDecl: also
+//     excluded (EachInSubtree[ast.FuncLit] is recursive, all depths covered).
+//     Reverse self-check: control_plane_exempt_func_closure_violates fixture.
+//
+//  2. A method (receiver FuncDecl) declared inside a file-scope var init block:
+//     not possible in Go syntax; not a blind spot.
+//
+// Uses FindFirstChild[ast.FuncDecl](file, ...) — top-level FuncDecls are
+// direct children of *ast.File; depth=1 is correct.
+func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) string {
+	// Step 1: find the top-level FuncDecl whose body spans pos.
+	fd, ok := FindFirstChild[ast.FuncDecl](file, func(fd *ast.FuncDecl) bool {
+		return fd.Body != nil && fd.Body.Pos() <= pos && pos <= fd.Body.End()
+	})
+	if !ok {
+		return ""
+	}
+	// Step 2: reject pos if it falls inside a nested FuncLit body (closure).
+	insideClosure := false
+	EachInSubtree[ast.FuncLit](fd.Body, func(fl *ast.FuncLit) {
+		if fl.Body != nil && fl.Body.Pos() <= pos && pos <= fl.Body.End() {
+			insideClosure = true
+		}
+	})
+	if insideClosure {
+		return ""
+	}
+	return fset.Position(fd.Name.Pos()).String()
 }
 
 // INVARIANT: PROD-CLOCK-INJECTION-01
@@ -1131,24 +666,37 @@ var forbiddenTimeFns = map[string]string{
 // gated on obj.Pkg().Path() == "time" and obj.Name() in forbiddenTimeFns.
 // This makes the check immune to import aliases and dot-imports.
 //
-// Function-level carve-out: a FuncDecl is exempt only if its doc comment
-// contains `//archtest:allow:clock-injection:control-plane <reason>` (non-empty
-// reason) AND its (module-relative path, func name) is in the
-// controlPlaneClockCarveOut allowlist (review P1-3 — the marker alone is not
-// sufficient). The exemption does NOT extend to other functions in the same
-// file (incl. a third marked function) or to closures/FuncLits within the
-// exempt FuncDecl body. Allowlisted carve-out functions:
-//   - runtime/command/lifecycle.go: controlPlaneTicker, controlPlaneProbeTimer
-//     (control-plane scheduling)
+// Control-plane carve-out (receiver-type confinement, #619 upgrade):
+// A FuncDecl is exempt from PROD-CLOCK-INJECTION-01 only if it is a METHOD
+// whose receiver type name is "controlPlaneClock" AND the file's module-relative
+// path is under "runtime/command/". This replaces the former comment-marker +
+// hand-maintained allowlist-map form (which was AI-abusable: any marked
+// FuncDecl in any allowlisted file could self-exempt by adding the comment).
 //
-// Registry: the carve-out ADR (docs/architecture/202605121800-adr-archtest-carveout-narrow.md)
-// is scoped to ERRCODE-KIND-LITERAL-01 and does not govern clock carve-outs.
-// Clock function-level carve-outs are self-documented here in the INVARIANT
-// godoc + in the marker functions' own godoc. The in-source marker is the
-// single enforcement truth source; this godoc is documentation only.
+// The exemption does NOT extend to closures/FuncLits within an exempt method
+// body. enclosingFuncDeclKey explicitly rejects positions inside FuncLit nodes.
+//
+// AI-robust grade: Medium. Permanent ceiling: stdlib time.NewTicker/time.NewTimer
+// free functions cannot be made uncallable in Go (same as SPAN-SETATTR-REDACT-01
+// package-internal axis). Gain over prior form: eliminated AI-abusable comment
+// marker and hand-maintained allowlist map (see clockControlPlaneAllowedMethods).
+//
+// Blind spots (documented per ai-robust.md §"工具选定后强制盲区自检"):
+//  1. time.* inside a FuncLit/closure within an exempt method: NOT exempt.
+//     enclosingFuncDeclKey excludes positions inside nested FuncLit bodies.
+//     Reverse self-check A: control_plane_closure_violates — a non-exempt
+//     function's closure calling time.NewTicker is flagged.
+//     Reverse self-check B: control_plane_exempt_func_closure_violates — a
+//     closure inside an exempt controlPlaneClock method is still flagged.
+//  2. A struct named "controlPlaneClock" with methods outside runtime/command/:
+//     the path gate prevents exemption.
+//     Reverse self-check: control_plane_wrong_path_violates fixture.
+//  3. A receiver type other than "controlPlaneClock" inside runtime/command/:
+//     only the exact type name matches; wrong receiver type is NOT exempt.
+//     Reverse self-check: control_plane_wrong_receiver_type_violates fixture.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 // ref: dominikh/go-tools analysis/code/code.go CallName / IsCallToAny
 func TestProdClockInjection(t *testing.T) {
@@ -1178,10 +726,7 @@ func TestProdClockInjection(t *testing.T) {
 }
 
 // isAllowedRealClockPath reports whether rel is covered by one of the
-// allowedRealClockPaths entries. Entries with a trailing "/" are directory
-// prefixes (match any file under that directory); entries without "/" are
-// exact file paths. The exact-file form prevents a sibling file from silently
-// inheriting a per-file exemption.
+// allowedRealClockPaths entries.
 func isAllowedRealClockPath(rel string) bool {
 	for _, p := range allowedRealClockPaths {
 		if strings.HasSuffix(p, "/") {
@@ -1197,35 +742,18 @@ func isAllowedRealClockPath(rel string) bool {
 
 // scanProdClockInjectionAST walks file's AST and returns a sorted slice of
 // violation Diagnostics for every reference to one of the forbidden stdlib
-// time functions. Both call positions (time.Now()) and function-value
-// positions (now := time.Now, struct field assignment `{now: time.Now}`) are
-// detected. Detection is type-driven via info.ObjectOf, so import aliases and
-// dot-imports are covered uniformly.
+// time functions.
 //
-// Function-level carve-out: if the forbidden reference sits inside a
-// *ast.FuncDecl whose doc comment contains
-// `//archtest:allow:clock-injection:control-plane <reason>` (non-empty reason
-// required), that reference is exempt. The carve-out is function-level only —
-// other functions in the same file without the marker are still checked.
+// Control-plane carve-out: if the forbidden reference sits inside a top-level
+// *ast.FuncDecl that is a METHOD on receiver type "controlPlaneClock" AND the
+// file's module-relative path is under "runtime/command/", that reference is
+// exempt. The carve-out is method-level only — closures within the exempt
+// method body are NOT exempt (enclosingFuncDeclKey rejects positions in FuncLit
+// nodes). Other methods in the same file with a different receiver type are
+// still checked.
 //
-// AI-robust grade: Medium (comment guard).
-//
-// Blind spots (documented per ai-robust.md §"工具选定后强制盲区自检"):
-//  1. Marker in a non-doc inline comment (e.g. // inside the function body):
-//     NOT recognized — only doc comments (fd.Doc) are scanned.
-//     Reverse self-check: control_plane_no_marker_violates fixture asserts
-//     such a function IS flagged.
-//  2. time.* inside a FuncLit/closure within an exempt FuncDecl: NOT exempt.
-//     enclosingFuncDeclKey explicitly excludes positions inside nested FuncLit
-//     bodies via EachInSubtree[ast.FuncLit], so closures are never granted
-//     the FuncDecl-level carve-out.
-//     Reverse self-check A: control_plane_closure_violates — a non-exempt
-//     function's closure calling time.NewTicker is flagged.
-//     Reverse self-check B: control_plane_exempt_func_closure_violates — a
-//     closure inside a marked (exempt) function calling time.NewTicker is
-//     still flagged (blind-spot-A closure-within-exempt-func self-check).
-//
-// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
+// AI-robust grade: Medium (receiver-type confinement; see godoc of
+// clockControlPlaneAllowedMethods for the permanent ceiling rationale).
 //
 // scanProdClockInjectionAST is exported within the archtest package so the
 // fixture-based regression tests in prod_clock_injection_fixtures_test.go can
@@ -1234,14 +762,26 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []Diagnostic
 	seen := map[string]bool{}
 
-	// Compute which FuncDecls are control-plane carve-out exempt: marker doc
-	// comment AND (rel, name) ∈ controlPlaneClockCarveOut (review P1-3).
-	allowedFuncs := clockControlPlaneAllowedFuncs(fset, file, rel)
+	// Receiver-type + (method, callee) confinement: compute which FuncDecls in
+	// this file may host a sanctioned time.* call, mapped to the controlPlaneClock
+	// method name. Only FuncDecls that are methods of controlPlaneClock AND whose
+	// file is under runtime/command/ AND whose name appears as a key in
+	// exactSanctionedTimeCalls qualify. The final (method, callee) pair check
+	// happens inside record() against exactSanctionedTimeCalls[methodName].
+	allowedFuncs := clockControlPlaneAllowedMethods(fset, file, rel)
 
 	record := func(node ast.Node, name string) {
-		// Function-level carve-out: skip if inside an exempt FuncDecl.
-		if funcKey := enclosingFuncDeclKey(fset, file, node.Pos()); allowedFuncs[funcKey] {
-			return
+		// (method, callee) exact-pair carve-out: skip only if pos is inside an
+		// exempt FuncDecl (not inside a closure) AND the time.* function name
+		// matches exactSanctionedTimeCalls[methodName].
+		if funcKey := enclosingFuncDeclKey(fset, file, node.Pos()); funcKey != "" {
+			if methodName, isCandidate := allowedFuncs[funcKey]; isCandidate {
+				if exactSanctionedTimeCalls[methodName] == name {
+					return // sanctioned (method, callee) pair
+				}
+				// fall through: method is a carve-out candidate but the callee
+				// does not match the declared pair — record violation.
+			}
 		}
 		line := fset.Position(node.Pos()).Line
 		key := fmt.Sprintf("%s:%d:%s", rel, line, name)
@@ -1260,16 +800,11 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	}
 
 	EachInSubtree[ast.SelectorExpr](file, func(e *ast.SelectorExpr) {
-		// Standard form: time.Now, t.Now (alias), pkg.Now (any pkg).
-		// Type info on .Sel resolves the actual function regardless of
-		// the receiver identifier name.
 		if name, ok := matchedTimeFn(info, e.Sel); ok {
 			record(e, name)
 		}
 	})
 	EachInSubtree[ast.Ident](file, func(e *ast.Ident) {
-		// Dot-import form: `import . "time"; Now()`. The Ident is the
-		// call function reference itself — no SelectorExpr surrounds it.
 		if name, ok := matchedTimeFn(info, e); ok {
 			record(e, name)
 		}
@@ -1287,19 +822,7 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	return out
 }
 
-// matchedTimeFn reports whether ident resolves (via info.ObjectOf) to a
-// package-level function in the standard library's time package whose name is
-// in the forbidden set.
-//
-// Filters explicitly to *types.Func so that legitimate references to
-// time.Time (a Type), time.Second (a Const), or any same-named field on a
-// non-time package are not flagged.
-//
-// Methods on time.Time (e.g. t.After(u), t.Before(u)) share the same name as
-// the forbidden package-level functions but are semantically unrelated — they
-// compare two time.Time values and return bool. They are excluded by checking
-// Signature().Recv(): a non-nil receiver indicates a method, not a package-level
-// function. Production code should use these method comparisons freely.
+// matchedTimeFn reports whether ident resolves to a forbidden stdlib time function.
 func matchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 	if info == nil || ident == nil {
 		return "", false
@@ -1311,8 +834,7 @@ func matchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 	if fn.Pkg() == nil || fn.Pkg().Path() != "time" {
 		return "", false
 	}
-	// Exclude methods (e.g. time.Time.After, time.Time.Before) — only flag
-	// package-level functions such as time.After(d Duration) <-chan time.Time.
+	// Exclude methods (e.g. time.Time.After) — only flag package-level functions.
 	if sig, _ := fn.Type().(*types.Signature); sig != nil && sig.Recv() != nil {
 		return "", false
 	}
@@ -1324,156 +846,628 @@ func matchedTimeFn(info *types.Info, ident *ast.Ident) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
+// CLOCK-POSITIONAL-INJECTION-01
 // ---------------------------------------------------------------------------
 
-// INVARIANT: CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01
+// mustHaveClockPkgPath is the import path of the package containing
+// clock.MustHaveClock. Hard-coded so an import rename is loud (test breaks).
+const mustHaveClockPkgPath = "github.com/ghbvf/gocell/kernel/clock"
+
+// mustHaveClockFuncName is the function name in mustHaveClockPkgPath.
+const mustHaveClockFuncName = "MustHaveClock"
+
+// INVARIANT: CLOCK-POSITIONAL-INJECTION-01
 //
-// TestControlPlaneClockCarveOutAllowlistIsLive asserts that every entry in
-// controlPlaneClockCarveOut is live — i.e. not orphaned by a rename or deletion:
+// TestClockPositionalInjection enforces CLOCK-POSITIONAL-INJECTION-01:
+// two sub-checks over production code (excludes _test.go, generated/,
+// testdata/, and recognized test-helper packages such as configcoretest/,
+// auditcoretest/, accesscoretest/).
 //
-//	(a) The file at the module-relative path parses without error.
-//	(b) Each listed function name exists as a top-level *ast.FuncDecl in that file.
-//	(c) The FuncDecl's doc comment carries a valid clockControlPlaneAllowMarker
-//	    with a non-empty reason.
+// Sub-check A: MustHaveClock positional-param enforcement.
+// Every production call to clock.MustHaveClock(arg0, ...) must have arg0
+// resolve (via go/types) to a PARAMETER of the enclosing function (a
+// *types.Var that is in the enclosing FuncDecl's parameter list). Selector
+// expressions like cfg.Clock, s.clock, c.clk, config.Clock are violations —
+// they represent struct-field or variable sources, not injected parameters.
+// Non-ident arg0 (selector expression, method call, etc.) → violation.
 //
-// Without this guard, a rename of controlPlaneTicker or controlPlaneProbeTimer
-// silently orphans the allowlist entry: enforcement keeps working (unknown names
-// are never exempt), but the allowlist stops being a trustworthy record of what
-// is actually exempt, violating ai-robust.md §"ADR amendment 落地必查" Medium
-// anchor integrity.
+// The callee is resolved to kernel/clock.MustHaveClock via go/types so import
+// aliases do not allow bypass.
 //
-// Detection strategy: pure go/parser AST scan (no types loading needed).
-// EachInChildren[ast.FuncDecl](file, ...) at depth=1 finds top-level FuncDecls,
-// which are direct children of *ast.File — correct and sufficient.
+// Sub-check B: clock option-injector ban (broadened).
+// Any exported free function (no receiver) in a production package is a
+// violation if it satisfies ALL of the following precise typed predicates:
 //
-// Blind spots (AST-based, no type resolution):
-//   - A method (receiver FuncDecl) could share the same name as a top-level
-//     FuncDecl; EachInChildren[ast.FuncDecl] only reaches top-level declarations
-//     (direct children of *ast.File), so receiver methods are never matched —
-//     the check is correct by depth=1 constraint.
-//   - The marker is required in the doc comment (fd.Doc), not an inline comment
-//     inside the body. A function whose marker appears only in a body comment
-//     would pass the carve-out allowlist check but fail PROD-CLOCK-INJECTION-01
-//     (which uses the same doc-comment predicate). This test validates the same
-//     predicate, so both sides agree.
+//	(1) name contains "Clock" (catches WithClock, WithEnvClock, WithRouterClock,
+//	    WithServiceTokenClock, etc. — any suffixed variant)
+//	(2) parameter list includes a kernel/clock.Clock-typed parameter (resolved
+//	    via go/types so aliases cannot bypass; the clock param need not be
+//	    first — the check scans the full parameter list)
+//	(3) return type is a function type OR a named type whose underlying type is a
+//	    function (the functional-option shape, e.g. Option = func(*T), EnvOption
+//	    = func(*cfg)) — this prevents false-flagging constructors and helpers
+//	    that also contain "Clock" in their name.
 //
-// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
-// ref: PROD-CLOCK-INJECTION-01 (clock_invariants_test.go clockControlPlaneAllowedFuncs)
-func TestControlPlaneClockCarveOutAllowlistIsLive(t *testing.T) {
+// All three predicates must hold simultaneously. Non-receiver functions that
+// contain "Clock" but do NOT take clock.Clock and return an option are NOT
+// flagged (e.g. clock.MustHaveClock itself, utility functions).
+//
+// Sub-check C: input Config/Options struct field ban (#1136 review F1).
+// Any EXPORTED type declaration whose name has the suffix "Config" / "Options"
+// / "Opts" AND which has an EXPORTED struct field whose type resolves (via
+// go/types) to kernel/clock.Clock is a violation. The closed naming convention
+// {Config, Options, Opts} is the framework's input-struct surface — declaring
+// an exported Clock field on such a struct lets external callers omit it via
+// struct literal omission (zero-value Clock = nil interface), bypassing the
+// positional parameter promise of CLOCK-POSITIONAL-INJECTION-01.
+//
+// Predicates (all must hold):
+//
+//	(1) the TypeSpec name is exported (capitalized) AND has suffix "Config",
+//	    "Options", or "Opts" — exported input-struct naming convention
+//	(2) the underlying type is a struct
+//	(3) at least one EXPORTED field has type resolving to kernel/clock.Clock
+//	    (via go/types — aliases cannot bypass)
+//
+// Carve-outs (by design, not by hand-maintained allowlist):
+//
+//   - Composition-root holders such as cmd/corebundle.SharedDeps (single source
+//     where clock.Real() enters per ADR 202605270000 §Decision #4) do not match
+//     the Config/Options/Opts suffix, so they are excluded by naming convention.
+//   - Unexported option-pattern accumulator structs (e.g. runtime/auth.authConfig,
+//     runtime/auth.serviceTokenConfig, runtime/config.watcherConfig) hold the
+//     clock as an unexported field and are constructed only inside their own
+//     package by `defaultFooConfig()` + WithFoo option loop; the positional
+//     `clk clock.Clock` parameter on the public constructor assigns into the
+//     internal field. External callers cannot construct the struct directly.
+//     These are excluded because the field is unexported.
+//   - Unexported config structs with exported Clock fields (e.g. dispatcherConfig
+//     in kernel/assembly/hook_dispatcher.go before the dead-field cleanup) are
+//     also excluded: the struct cannot be constructed outside its package, so
+//     external callers cannot omit the clock via struct literal. Same-package
+//     dead-field hygiene is handled as a separate code-review concern.
+//
+// AI-robust grade: Medium downstream (this archtest is type-aware struct-field
+// + name suffix + exported-name lock). Upstream Hard is the Go compiler: with
+// no exported Clock field on the input struct, a callsite like `Cfg{Clock: nil}`
+// produces a compile error (unknown field), and the positional parameter is
+// mandatory by signature.
+//
+// Test-helper packages (configcoretest/, auditcoretest/, accesscoretest/, etc.)
+// are classified as test code by fileroles.IsProductionCode and are therefore
+// excluded. Their With*Clock builders (e.g. configcoretest.WithWriteClock,
+// auditcoretest.WithChainClock, accesscoretest.WithIdentityClock) intentionally
+// use the option pattern for test-infra ergonomics; the production constructors
+// they wrap are already positional.
+//
+// Both sub-checks are now GREEN against the current tree (zero violations).
+// The archtest is the downstream-Hard gate: any regression to the old pattern
+// (option injector or non-param arg0) is caught immediately at PR time.
+//
+// AI-robust grading:
+//
+//   - Downstream Hard: this archtest locks the form (any MustHaveClock call
+//     with a non-param arg0 is a violation; any exported clock-option-injector
+//     function is a violation). Once the migration is complete, regression to
+//     the old pattern is caught immediately.
+//
+//   - Upstream Hard: the Go compiler is the upstream enforcement. A mandatory
+//     positional `clk clock.Clock` parameter makes omission a compile error —
+//     that is the compiler-enforced presence guarantee. This archtest only
+//     ensures the FORM stays positional (arg0 is a parameter, not a
+//     field/variable) so presence can never regress to an omittable option.
+//
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
+//  1. Callee resolution: if MustHaveClock is invoked through an interface
+//     method or function value (not a direct qualified ident), it may not
+//     resolve to the canonical *types.Func. In practice MustHaveClock is always
+//     called as clock.MustHaveClock (or aliased import). The callee is checked
+//     via types.Info.ObjectOf on the call's Fun Sel, so aliases are handled.
+//     Reverse self-check: aliased_import_selector_violates fixture confirms
+//     that `import clk "...kernel/clock"; clk.MustHaveClock(cfg.Clock, ...)`
+//     is still detected as a violation.
+//  2. Multi-return enclosing function: param lookup scans all params in the
+//     enclosing FuncDecl's type including variadic params. A *types.Var that
+//     IS a param but is being passed via a selector expression (e.g. params.Clock
+//     where params is itself a param struct) would have a non-ident arg0 →
+//     violation. This is the intended behavior: params.Clock is a field access,
+//     not a direct parameter.
+//  3. Closures / anonymous function parameters: if MustHaveClock is called
+//     inside a closure, the enclosing FuncDecl is found via FindFirstChild (same
+//     depth=1 constraint as enclosingFuncDeclKey), not the inner FuncLit. A
+//     closure parameter (not a top-level FuncDecl param) passing its own local
+//     clock would be flagged. Accepted: closures wrapping constructors must pass
+//     the param down explicitly.
+//  4. Sub-check B relies on go/types for clock.Clock param resolution. A
+//     function that takes an interface type with the same method set as
+//     clock.Clock but defined in a different package would not be flagged —
+//     the check is exact package-path comparison. Accepted: all production
+//     clock injection must use kernel/clock.Clock per architecture rules.
+//  5. Sub-check B return-type check uses types.Signature.Results().At(0) and
+//     inspects the underlying type. A multi-return function is not a functional
+//     option and is not flagged — multi-return clock constructors are intentional
+//     (error-first pattern). A function returning (Option, error) is checked only
+//     on the first return: if the first return is a function type the check fires.
+//     Accepted: (Option, error) constructors are banned for the same reason as
+//     single-return options — they still make clock injection omittable.
+//
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
+// ref: docs/plans/202605011500-029-master-roadmap.md Track D
+func TestClockPositionalInjection(t *testing.T) {
 	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
 
 	root := findModuleRoot(t)
+	patterns := prodscan.PatternsExtended(root)
 
-	// Collect sorted keys for deterministic error ordering.
-	rels := make([]string, 0, len(controlPlaneClockCarveOut))
-	for rel := range controlPlaneClockCarveOut {
-		rels = append(rels, rel)
-	}
-	sort.Strings(rels)
-
-	for _, rel := range rels {
-		funcNames := controlPlaneClockCarveOut[rel]
-		rel := rel // capture for t.Run
-		t.Run(rel, func(t *testing.T) {
-			t.Parallel()
-			absPath := filepath.Join(root, filepath.FromSlash(rel))
-
-			file, fset, err := parseCarveOutFile(absPath)
-			assert.NoError(t, err,
-				"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: file must exist and parse; "+
-					"update controlPlaneClockCarveOut if the file was renamed or deleted", rel)
-			if err != nil {
-				return
+	diags := RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns,
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !fileroles.IsProductionCode(rel) {
+					continue
+				}
+				d = append(d, scanClockPositionalInjectionAST(p.Fset, f, rel, p.TypesInfo)...)
 			}
+			return d
+		})
 
-			// Sort func names for deterministic sub-test order.
-			names := sortedKeys(funcNames)
-			for _, name := range names {
-				name := name
-				t.Run(name, func(t *testing.T) {
-					t.Parallel()
-					checkCarveOutFuncDecl(t, fset, file, rel, name)
+	Report(t, "CLOCK-POSITIONAL-INJECTION-01", diags)
+}
+
+// scanClockPositionalInjectionAST runs all three sub-checks (A, B, C) over a
+// single file and returns all violations, sorted by line.
+func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	var out []Diagnostic
+	seen := map[string]bool{}
+
+	// Sub-check A: MustHaveClock arg0 must be a parameter.
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isMustHaveClockCall(call, info) {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		arg0 := call.Args[0]
+		if !clockArg0IsParam(file, arg0, info) {
+			line := fset.Position(call.Pos()).Line
+			key := fmt.Sprintf("%s:%d:A", rel, line)
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: line,
+					Message: "clock.MustHaveClock: arg0 must be a function parameter (positional injection); " +
+						"selector or non-ident arg0 (e.g. cfg.Clock, s.clk) violates the positional-param contract. " +
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
 				})
 			}
-		})
-	}
-}
-
-// parseCarveOutFile parses the Go source file at absPath using go/parser and
-// returns the *ast.File and its *token.FileSet. It does not load type
-// information — a pure AST parse is sufficient for allowlist liveness checks.
-func parseCarveOutFile(absPath string) (*ast.File, *token.FileSet, error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, absPath, nil, parser.ParseComments)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse %s: %w", absPath, err)
-	}
-	return file, fset, nil
-}
-
-// checkCarveOutFuncDecl asserts that funcName exists as a top-level *ast.FuncDecl
-// in file AND that its doc comment carries a valid clockControlPlaneAllowMarker
-// with a non-empty reason.
-func checkCarveOutFuncDecl(t *testing.T, fset *token.FileSet, file *ast.File, rel, funcName string) {
-	t.Helper()
-
-	fd, found := findTopLevelFuncDecl(file, funcName)
-	assert.True(t, found,
-		"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: top-level func %q not found; "+
-			"update controlPlaneClockCarveOut or rename the allowlist entry", rel, funcName)
-	if !found {
-		return
-	}
-
-	hasMarker := funcDeclHasAllowMarker(fset, fd)
-	assert.True(t, hasMarker,
-		"CONTROL-PLANE-CARVEOUT-ALLOWLIST-LIVE-01: %s: func %q exists but its doc comment "+
-			"does not carry a valid %q marker with a non-empty reason; "+
-			"add the marker or remove the allowlist entry",
-		rel, funcName, clockControlPlaneAllowMarker)
-}
-
-// findTopLevelFuncDecl returns the top-level *ast.FuncDecl named funcName and
-// true if found; otherwise nil and false.
-// Uses EachInChildren[ast.FuncDecl] (depth=1) because top-level FuncDecls are
-// direct children of *ast.File — the same depth used by clockControlPlaneAllowedFuncs.
-func findTopLevelFuncDecl(file *ast.File, funcName string) (*ast.FuncDecl, bool) {
-	var result *ast.FuncDecl
-	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-		if fd.Name != nil && fd.Name.Name == funcName {
-			result = fd
 		}
 	})
-	return result, result != nil
+
+	// Sub-check B: ban exported clock option-injector free functions.
+	// Predicate (all three must hold):
+	//   (1) name contains "Clock" (catches WithClock, WithEnvClock, WithRouterClock, etc.)
+	//   (2) parameter list includes a kernel/clock.Clock-typed param (type-resolved)
+	//   (3) return type is a function/option type (functional-option shape)
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil {
+			return
+		}
+		// (1) name must contain "Clock"
+		if !strings.Contains(fd.Name.Name, "Clock") {
+			return
+		}
+		// Must be exported.
+		if !fd.Name.IsExported() {
+			return
+		}
+		// Must be a free function (no receiver).
+		if fd.Recv != nil && len(fd.Recv.List) > 0 {
+			return
+		}
+		// (2) parameter list must include a kernel/clock.Clock-typed param.
+		if !clockOptionInjectorHasClockParam(fd, info) {
+			return
+		}
+		// (3) return type must be a function/option type (functional-option shape).
+		if !clockOptionInjectorReturnsOption(fd, info) {
+			return
+		}
+		line := fset.Position(fd.Name.Pos()).Line
+		key := fmt.Sprintf("%s:%d:B", rel, line)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"exported clock option-injector %q found — With*Clock option injectors are banned by "+
+						"CLOCK-POSITIONAL-INJECTION-01; migrate to a mandatory positional clock.Clock parameter. "+
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
+					fd.Name.Name,
+				),
+			})
+		}
+	})
+
+	// Sub-check C: input Config/Options struct field ban.
+	// Predicates (all must hold):
+	//   (1) TypeSpec name is exported AND has suffix Config/Options/Opts (the
+	//       framework's externally-constructable input-struct naming convention)
+	//   (2) underlying type is *ast.StructType
+	//   (3) at least one EXPORTED field has type resolving to kernel/clock.Clock
+	//       (via go/types — unexported fields cannot be set via struct literal
+	//       from external packages, so they cannot bypass positional injection)
+	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || !ts.Name.IsExported() || !isInputConfigStructName(ts.Name.Name) {
+			return
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return
+		}
+		for _, field := range st.Fields.List {
+			if !structFieldIsKernelClock(field, info) {
+				continue
+			}
+			// Sub-check C predicate (3): only exported fields permit external
+			// caller bypass via struct literal. Anonymous (embedded) fields are
+			// exported when the embedded type name is exported.
+			if !structFieldIsExported(field) {
+				continue
+			}
+			// Field with a single name is the common shape (`Clock clock.Clock`);
+			// rare anonymous fields are reported against the type expression line.
+			reportPos := field.Type.Pos()
+			fieldName := "<anonymous>"
+			if len(field.Names) > 0 {
+				reportPos = field.Names[0].Pos()
+				fieldName = field.Names[0].Name
+			}
+			line := fset.Position(reportPos).Line
+			key := fmt.Sprintf("%s:%d:C", rel, line)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"input Config/Options struct %s declares exported %s field of type clock.Clock; "+
+						"clock must enter via positional parameter, not struct literal — "+
+						"struct-field injection lets callers omit the clock at compile time. "+
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
+					ts.Name.Name, fieldName,
+				),
+			})
+		}
+	})
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
+	return out
 }
 
-// funcDeclHasAllowMarker reports whether fd's doc comment contains a valid
-// clockControlPlaneAllowMarker with a non-empty reason. Mirrors the predicate
-// in clockControlPlaneAllowedFuncs so both sides stay in sync.
-func funcDeclHasAllowMarker(_ *token.FileSet, fd *ast.FuncDecl) bool {
-	if fd.Doc == nil {
+// isInputConfigStructName reports whether name matches the framework's input
+// Config/Options struct naming convention used by sub-check C.
+//
+// The convention is a closed suffix set: Config, Options, Opts. This is the
+// HARD form-uniqueness lock that obviates a hand-maintained allowlist —
+// composition-root holders such as cmd/corebundle.SharedDeps (the single
+// sanctioned threading source per ADR 202605270000 §Decision #4) naturally
+// fall outside the suffix set and are exempt without explicit carve-out.
+func isInputConfigStructName(name string) bool {
+	return strings.HasSuffix(name, "Config") ||
+		strings.HasSuffix(name, "Options") ||
+		strings.HasSuffix(name, "Opts")
+}
+
+// structFieldIsExported reports whether field has at least one exported name,
+// or — for anonymous (embedded) fields — whether the embedded type's terminal
+// identifier is exported. This mirrors Go's own export rules for struct
+// literal field accessibility from external packages.
+func structFieldIsExported(field *ast.Field) bool {
+	if field == nil {
 		return false
 	}
-	for _, c := range fd.Doc.List {
-		text := strings.TrimSpace(c.Text)
-		if !strings.HasPrefix(text, clockControlPlaneAllowMarker) {
-			continue
+	if len(field.Names) > 0 {
+		for _, name := range field.Names {
+			if name.IsExported() {
+				return true
+			}
 		}
-		rest := strings.TrimSpace(strings.TrimPrefix(text, clockControlPlaneAllowMarker))
-		if rest != "" {
-			return true
+		return false
+	}
+	// Anonymous field: terminal ident determines the implicit field name.
+	ident, ok := typeExprToIdent(field.Type)
+	if !ok {
+		return false
+	}
+	return ident.IsExported()
+}
+
+// structFieldIsKernelClock reports whether field declares at least one
+// kernel/clock.Clock-typed identifier (resolved via go/types). The check
+// uses the first name's *types.Var for typed fields; anonymous fields fall
+// back to AST identifier resolution via typeExprToIdent.
+func structFieldIsKernelClock(field *ast.Field, info *types.Info) bool {
+	if info == nil || field == nil {
+		return false
+	}
+	if len(field.Names) > 0 {
+		obj, ok := info.ObjectOf(field.Names[0]).(*types.Var)
+		if !ok {
+			return false
+		}
+		return isKernelClockType(obj.Type())
+	}
+	// Anonymous (embedded) field — inspect the type expression directly.
+	ident, ok := typeExprToIdent(field.Type)
+	if !ok {
+		return false
+	}
+	obj, ok := info.ObjectOf(ident).(*types.TypeName)
+	if !ok {
+		return false
+	}
+	return isKernelClockType(obj.Type())
+}
+
+// isMustHaveClockCall reports whether call is a call to kernel/clock.MustHaveClock.
+// Resolution is type-driven via go/types.Info so import aliases do not bypass.
+func isMustHaveClockCall(call *ast.CallExpr, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	fn := resolvedFunc(call.Fun, info)
+	if fn == nil {
+		return false
+	}
+	if fn.Pkg() == nil || fn.Pkg().Path() != mustHaveClockPkgPath {
+		return false
+	}
+	return fn.Name() == mustHaveClockFuncName
+}
+
+// clockArg0IsParam reports whether arg0 (the first argument to MustHaveClock)
+// is a direct reference to a parameter of the enclosing top-level FuncDecl.
+//
+// Returns false (violation) if:
+//   - arg0 is not an *ast.Ident (e.g. selector cfg.Clock, method call, etc.)
+//   - arg0 is an *ast.Ident but it does not resolve to a *types.Var
+//   - arg0 resolves to a *types.Var that is NOT in the enclosing FuncDecl's
+//     parameter list (i.e. it is a struct field, local variable, package-level
+//     var, etc.)
+//
+// Uses FindFirstChild[ast.FuncDecl] at depth=1 to find the enclosing top-level
+// FuncDecl — the same depth constraint as enclosingFuncDeclKey.
+func clockArg0IsParam(file *ast.File, arg0 ast.Expr, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	// arg0 must be a bare identifier (not a selector, index, call, etc.)
+	ident, ok := arg0.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	// Resolve to a *types.Var.
+	obj, ok := info.ObjectOf(ident).(*types.Var)
+	if !ok {
+		return false
+	}
+	// Find the enclosing top-level FuncDecl.
+	fd, found := FindFirstChild[ast.FuncDecl](file, func(fd *ast.FuncDecl) bool {
+		return fd.Body != nil && fd.Body.Pos() <= arg0.Pos() && arg0.End() <= fd.Body.End()
+	})
+	if !found {
+		return false
+	}
+	// Collect all parameters from the FuncDecl's signature (including receiver
+	// treated as a param? NO — receiver is not a param; only Params list).
+	if fd.Type == nil || fd.Type.Params == nil {
+		return false
+	}
+	return funcDeclHasParam(fd, obj, info)
+}
+
+// funcDeclHasParam reports whether obj is one of the parameters declared in
+// fd's parameter list. Comparison is done via *types.Var pointer identity —
+// the same object resolved by info.ObjectOf in the declaration site.
+//
+// We iterate the AST field list and call info.ObjectOf on each param name
+// ident to get the canonical *types.Var. We then compare by pointer identity
+// (or position as a fallback) against obj.
+func funcDeclHasParam(fd *ast.FuncDecl, obj *types.Var, info *types.Info) bool {
+	if fd.Type == nil || fd.Type.Params == nil {
+		return false
+	}
+	for _, field := range fd.Type.Params.List {
+		for _, nameIdent := range field.Names {
+			paramVar, ok := info.ObjectOf(nameIdent).(*types.Var)
+			if !ok {
+				continue
+			}
+			if paramVar == obj {
+				return true
+			}
+			// Fallback: compare by position — handles edge cases where the
+			// types.Info returns different *types.Var instances for the same
+			// underlying variable across load variants.
+			if paramVar.Pos() == obj.Pos() {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// sortedKeys returns the keys of m sorted lexicographically.
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// clockOptionInjectorHasClockParam reports whether fd's parameter list includes
+// a parameter of type kernel/clock.Clock (resolved via go/types). This is
+// predicate (2) of sub-check B in CLOCK-POSITIONAL-INJECTION-01.
+//
+// The check scans all parameters in the FuncDecl's parameter list (including
+// multi-parameter functions). A parameter is considered clock.Clock-typed if
+// its go/types resolved type is the named type in kernelClockPkgPath.
+//
+// Blind spot: if info is nil (untyped scan), returns false conservatively.
+func clockOptionInjectorHasClockParam(fd *ast.FuncDecl, info *types.Info) bool {
+	if info == nil || fd.Type == nil || fd.Type.Params == nil {
+		return false
 	}
-	sort.Strings(out)
-	return out
+	for _, field := range fd.Type.Params.List {
+		for _, nameIdent := range field.Names {
+			obj, ok := info.ObjectOf(nameIdent).(*types.Var)
+			if !ok {
+				continue
+			}
+			if isKernelClockType(obj.Type()) {
+				return true
+			}
+		}
+		// Handle anonymous parameters (no name) — check the field type directly.
+		if len(field.Names) == 0 {
+			if ident, ok := typeExprToIdent(field.Type); ok {
+				if obj, ok2 := info.ObjectOf(ident).(*types.TypeName); ok2 {
+					if isKernelClockType(obj.Type()) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// typeExprToIdent extracts the terminal *ast.Ident from a potentially qualified
+// type expression (SelectorExpr or Ident). Returns (nil, false) for other forms.
+func typeExprToIdent(expr ast.Expr) (*ast.Ident, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e, true
+	case *ast.SelectorExpr:
+		return e.Sel, true
+	}
+	return nil, false
+}
+
+// isKernelClockType reports whether t is the kernel/clock.Clock named interface type.
+func isKernelClockType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Pkg() != nil && obj.Pkg().Path() == kernelClockPkgPath && obj.Name() == "Clock"
+}
+
+// clockOptionInjectorReturnsOption reports whether fd's return type is a
+// function/option type — i.e. the functional-option shape. This is predicate (3)
+// of sub-check B in CLOCK-POSITIONAL-INJECTION-01.
+//
+// A return type qualifies if its underlying type (after resolving named types)
+// is a *types.Signature (function type). This covers both direct `func(*T)`
+// returns and named types like `type Option func(*T)` and `type EnvOption func(*cfg)`.
+//
+// Multi-return functions: checks only the first return value — a function
+// returning (Option, error) still makes clock injection omittable.
+func clockOptionInjectorReturnsOption(fd *ast.FuncDecl, info *types.Info) bool {
+	if info == nil || fd.Type == nil || fd.Type.Results == nil {
+		return false
+	}
+	// Collect all result type expressions from the AST.
+	results := fd.Type.Results.List
+	if len(results) == 0 {
+		return false
+	}
+	// Check the first return type.
+	firstField := results[0]
+	return isOptionTypeExpr(firstField.Type, info)
+}
+
+// isOptionTypeExpr reports whether the AST type expression resolves to a
+// function type (or named type with function underlying type) via go/types.
+func isOptionTypeExpr(expr ast.Expr, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok {
+		return false
+	}
+	t := tv.Type
+	if t == nil {
+		return false
+	}
+	return isUnderlyingFunc(t)
+}
+
+// isUnderlyingFunc reports whether t's underlying type is a *types.Signature.
+func isUnderlyingFunc(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, isSig := t.Underlying().(*types.Signature)
+	return isSig
+}
+
+// runClockPositionalInjectionFixtureScan loads the fixture package at fixtureDir
+// and returns the sorted slice of violation Diagnostics using the same predicate
+// as TestClockPositionalInjection.
+func runClockPositionalInjectionFixtureScan(t *testing.T, fixtureDir string) []Diagnostic {
+	t.Helper()
+	return RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				d = append(d, scanClockPositionalInjectionAST(p.Fset, f, rel, p.TypesInfo)...)
+			}
+			return d
+		})
+}
+
+// TestClockPositionalInjectionFixtures runs CLOCK-POSITIONAL-INJECTION-01
+// over each fixture subpackage and asserts against the golden.
+// GREEN fixtures have an empty golden; RED fixtures capture the expected output.
+func TestClockPositionalInjectionFixtures(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	base := filepath.Join(root, "tools", "archtest", "testdata", "clock_positional_injection_fixtures")
+
+	// GREEN: compliant (arg0 is a param; no clock option-injector).
+	// RED: violations (selector arg0; exported With*Clock option-injector).
+	dirs := []string{
+		"param_passes",                     // GREEN: MustHaveClock(clk, ...) where clk is a param
+		"selector_violates",                // RED: MustHaveClock(cfg.Clock, ...) — selector arg0
+		"withclock_violates",               // RED: exported func WithClock(...) — exact name
+		"withfooclock_violates",            // RED: exported func WithFooClock(...) — suffixed name (broadened predicate)
+		"aliased_import_selector_violates", // RED: aliased import + selector arg0
+		"ctx_param_passes",                 // GREEN: (ctx, clk) two-param form — clk is a param
+		"struct_field_violates",            // RED: exported Config-suffix struct with exported Clock field (sub-check C)
+		"struct_field_unexported_ok",       // GREEN: unexported struct + unexported field; non-Config suffix
+	}
+
+	for _, dir := range dirs {
+		dir := dir
+		t.Run(dir, func(t *testing.T) {
+			t.Parallel()
+			fixtureDir := filepath.Join(base, dir)
+			diags := runClockPositionalInjectionFixtureScan(t, fixtureDir)
+			AssertGolden(t, filepath.Join(fixtureDir, "diag.golden"), diags)
+		})
+	}
 }

@@ -27,10 +27,9 @@ func TestRedact_SpeculativeStatesCleared(t *testing.T) {
 		},
 	}
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.Len(t, doc.StatusBoard, 2)
 
@@ -60,10 +59,9 @@ func TestRedact_OperationalStatesPreserved(t *testing.T) {
 		},
 	}
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 	}
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 	require.Len(t, doc.StatusBoard, 3)
 
@@ -103,10 +101,9 @@ func TestRedact_DoesNotMutatePM(t *testing.T) {
 	origBlocker := pm.StatusBoard[0].Blocker
 
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 	}
-	_, err := catalog.BuildDocument(pm, opts)
+	_, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	assert.Equal(t, origRisk, pm.StatusBoard[0].Risk, "original Risk must not be mutated")

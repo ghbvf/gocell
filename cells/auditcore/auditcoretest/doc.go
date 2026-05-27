@@ -21,11 +21,12 @@
 // # Relationship to cells/auditcore/cell.go
 //
 // BuildAuditcoreChain wires the same options as the production composition
-// root (WithLedgerProtocol, WithLedgerStore, WithEmitter, WithTxManager,
-// WithMetricsProvider, WithLogger, WithClock) and then calls c.Init to
-// trigger subscription registration — mirroring what bootstrap phase3
-// does in production. The resulting handler is the exact same
-// outbox.EntryHandler that a broker delivery loop would invoke.
+// root (clock as the first positional parameter to NewAuditCore, then
+// WithLedgerProtocol, WithLedgerStore, WithEmitter, WithTxManager,
+// WithMetricsProvider, WithLogger) and then calls c.Init to trigger
+// subscription registration — mirroring what bootstrap phase3 does in
+// production. The resulting handler is the exact same outbox.EntryHandler
+// that a broker delivery loop would invoke.
 //
 // # Usage
 //

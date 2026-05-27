@@ -127,13 +127,6 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
 }
 
-// WithClock sets the time source for this Cell. Required — Init() panics via
-// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
-// inject a deterministic clock to control time-sensitive logic.
-func WithClock(clk clock.Clock) Option {
-	return func(c *ConfigCore) { c.clk = clk }
-}
-
 // WithCASProtocol sets the CAS protocol declaration for this Cell. Required in
 // durable mode — initInternal() fails fast if nil. Both bare-nil and typed-nil
 // *cas.Protocol values are rejected via sticky sentinel. Composition root
@@ -219,9 +212,11 @@ type ConfigCore struct {
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
-func NewConfigCore(opts ...Option) *ConfigCore {
+func NewConfigCore(clk clock.Clock, opts ...Option) *ConfigCore {
+	clock.MustHaveClock(clk, "configcore.New")
 	c := &ConfigCore{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		clk:      clk,
 		logger:   slog.Default(),
 	}
 	for _, o := range opts {

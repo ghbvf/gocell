@@ -170,12 +170,12 @@ func BuildIdentityManageService(
 	rawInv := cfg.invalidator.inv
 
 	svc, err := identitymanage.NewService(
+		cfg.clock,
 		cfg.fixture.bundle.UserRepository(),
 		rawInv,
 		cfg.logger,
 		identitymanage.WithEmitter(rec.CellEmitter()),
 		identitymanage.WithTxManager(cfg.fixture.TxRunner()),
-		identitymanage.WithClock(cfg.clock),
 		identitymanage.WithTokenIssuer(cfg.issuer),
 		identitymanage.WithLastAdminProtection(cfg.fixture.bundle.RoleRepository()),
 	)

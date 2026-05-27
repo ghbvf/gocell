@@ -27,7 +27,7 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	privKey, pubKey := keystest.MustGenerateKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)

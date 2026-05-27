@@ -46,7 +46,7 @@ func minimalPkgGraph() *kerneldepgraph.Graph {
 // remains nil — endpoint silently absent, no panic.
 func TestPhase5InitDevtoolsHandler_NilMeta(t *testing.T) {
 	t.Parallel()
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	// b.devtoolsMeta is nil by default.
 
 	_, s := newPhaseState()
@@ -61,7 +61,7 @@ func TestPhase5InitDevtoolsHandler_NilMeta(t *testing.T) {
 func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 	t.Parallel()
 	pm := minimalProjectMeta()
-	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", nil))
+	b := New(clock.Real(), WithDevtoolsCatalog(pm, "/tmp/test", nil))
 
 	_, s := newPhaseState()
 	err := b.phase5InitDevtoolsHandler(context.Background(), s)
@@ -75,7 +75,7 @@ func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 func TestPhase5InitDevtoolsHandler_WithPkgGraph(t *testing.T) {
 	t.Parallel()
 	pm := minimalProjectMeta()
-	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", minimalPkgGraph()))
+	b := New(clock.Real(), WithDevtoolsCatalog(pm, "/tmp/test", minimalPkgGraph()))
 
 	_, s := newPhaseState()
 	err := b.phase5InitDevtoolsHandler(context.Background(), s)
@@ -130,7 +130,7 @@ func TestBuildCellDepGraph_Sorted(t *testing.T) {
 // targeting PrimaryListener.
 func TestPhase5CollectRouteGroups_AppendsDevtools(t *testing.T) {
 	t.Parallel()
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	s := buildPhase5State(t)
 
 	// Install a devtools handler on the phaseState to simulate phase5InitDevtoolsHandler.
@@ -160,7 +160,7 @@ func TestPhase5CollectRouteGroups_AppendsDevtools(t *testing.T) {
 // is nil, no extra groups are added beyond health groups.
 func TestPhase5CollectRouteGroups_NoDevtools(t *testing.T) {
 	t.Parallel()
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	s := buildPhase5State(t)
 	// s.devtoolsHandler is nil by default.
 

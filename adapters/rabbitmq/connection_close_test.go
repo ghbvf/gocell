@@ -148,11 +148,11 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 		return blockingConn, nil
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:             testAMQPURL,
 		ChannelPoolSize: 1,
 		ConfirmTimeout:  testtime.D2s,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 
 	// Short budget — should expire before the gate is released.

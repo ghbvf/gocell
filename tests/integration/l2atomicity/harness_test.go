@@ -233,7 +233,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	primaryLn := localListener(t)
 	internalLn := localListener(t)
 	healthLn := localListener(t)
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	pgOutboxWriter := pickOutboxWriter(pgOutboxOverride)
 
 	ac, cc, auc, auditStore := buildCells(t, pg, authDeps, eb, pgOutboxWriter)
@@ -244,14 +244,13 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	// producer → relay → publisher → consumer chain on the in-process
 	// transport (not the broker). The full broker path is not yet covered.
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
-	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+	relayWorker := outboxruntime.NewRelay(clock.Real(), pgOutboxStore, eb, relayCfg)
 
 	// DurabilityDemo only describes the assembly construction mode; the
 	// relay above is the durable bridge between PG outbox_entries and the
 	// in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -399,9 +398,8 @@ func buildCells(
 	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
 
-	ac := accesscore.NewAccessCore(append(
+	ac := accesscore.NewAccessCore(clock.Real(), append(
 		pg.storeOpts,
-		accesscore.WithClock(clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(a.jwtIssuer),
 		accesscore.WithJWTVerifier(a.jwtVerifier),
@@ -410,9 +408,8 @@ func buildCells(
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
 		accesscoretest.MinCostPasswordHasherOption(),
-	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	)...)
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -422,9 +419,7 @@ func buildCells(
 	)
 	auditHMACKey := mustRandom32Bytes()
 	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
-	//archtest:allow:clock-injection:via-slice WithClock in first slice arg
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
@@ -454,8 +449,7 @@ func runBootstrap(
 	relayWorker *outboxruntime.Relay,
 ) {
 	t.Helper()
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, lns.primary.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},

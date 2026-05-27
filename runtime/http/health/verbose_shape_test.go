@@ -87,7 +87,7 @@ func TestSlogDependencyEntry_ZeroValueAccessors(t *testing.T) {
 // (package health) so it can construct via the production funnel without an
 // exported testing constructor.
 func TestSlogDependencyEntry_AccessorsViaRealHandler(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-acc", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-acc", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -158,7 +158,7 @@ func TestLogDiagnostics_EmitsGroupWithSnakeCaseViaJSONHandler(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	asm := assembly.New(assembly.Config{ID: "test-json", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-json", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -246,7 +246,7 @@ func TestLogDiagnostics_PropagatesRequestCtx(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test-ctx", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+			asm := assembly.New(clock.Real(), assembly.Config{ID: "test-ctx", DurabilityMode: outbox.DurabilityDemo})
 			require.NoError(t, asm.Start(context.Background()))
 			t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
@@ -302,7 +302,7 @@ func TestLogDiagnostics_TextHandlerRoundTrip(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	asm := assembly.New(assembly.Config{ID: "test-text", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-text", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 

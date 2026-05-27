@@ -75,7 +75,7 @@ func TestProvider_Discovery(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	p, err := adapter.Provider(context.Background())
@@ -87,7 +87,7 @@ func TestProvider_Cache(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	// First call — discovery.
@@ -105,7 +105,7 @@ func TestRefresh(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	// Refresh should re-discover (provider already cached from New).
@@ -118,7 +118,7 @@ func TestVerifier(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	v, err := adapter.Verifier(context.Background())
@@ -130,10 +130,9 @@ func TestOAuth2Config_DefaultScopes(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{
 		IssuerURL: srv.URL, ClientID: "test-client",
 		ClientSecret: "secret", RedirectURL: "http://localhost/callback",
-		Clock: clockmock.New(testEpoch),
 	})
 	require.NoError(t, err)
 
@@ -152,10 +151,9 @@ func TestOAuth2Config_CustomScopes(t *testing.T) {
 	srv := mockOIDCServer(t)
 	defer srv.Close()
 
-	adapter, err := New(context.Background(), Config{
+	adapter, err := New(context.Background(), clockmock.New(testEpoch), Config{
 		IssuerURL: srv.URL, ClientID: "test-client",
 		Scopes: []string{"openid", "custom"},
-		Clock:  clockmock.New(testEpoch),
 	})
 	require.NoError(t, err)
 
@@ -211,7 +209,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 	issuer = srv.URL
 
 	// New() discovers synchronously while the handler is unblocked.
-	a, err := New(context.Background(), Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	a, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 	oldProvider, err := a.Provider(context.Background())
 	require.NoError(t, err)
@@ -263,7 +261,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 func TestProvider_DiscoveryError(t *testing.T) {
 	// After the breaking constructor change, New itself fails for unreachable
 	// issuers (fail-fast at boot). The error carries the discovery failure.
-	_, err := New(context.Background(), Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	_, err := New(context.Background(), clockmock.New(testEpoch), Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "discovery failed")
 }

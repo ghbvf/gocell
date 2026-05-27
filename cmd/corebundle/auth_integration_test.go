@@ -73,7 +73,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -89,8 +89,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -99,8 +98,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -109,15 +107,14 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("test-hmac-key-32-bytes-long!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "auth-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -126,8 +123,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// inside accesscore's RegisterRoutes. PolicyJWTFromAssembly is now a
 	// cell.Policy (round-3 collapse): its Validate hook resolves the verifier
 	// from accesscore's authProvider during phase4.
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
@@ -293,7 +289,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, err)
 	guard := auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(nonceStore))
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("guard-test-audit-key-32-bytes!!!"))
@@ -309,8 +305,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -319,8 +314,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -329,15 +323,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("guard-test-hmac-key-32-bytes!!!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "guard-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -353,8 +346,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// #673: a dedicated HealthListener is mandatory; /healthz moves there.
 	healthLn := newCorebundleLocalListener(t)
 	internalAuthChain := []kauth.ListenerAuth{authtest.MustAuthServiceToken(nonceStore, ring)}
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
@@ -525,7 +517,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("health-test-audit-key-32-bytes!!"))
@@ -541,8 +533,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		setupTestAllowAllLimiter{},
 		nil,
 	)
-	ac := accesscore.NewAccessCore(append(buildAccessCoreMemOptions(t, clock.Real()),
-		accesscore.WithClock(clock.Real()),
+	ac := accesscore.NewAccessCore(clock.Real(), append(buildAccessCoreMemOptions(t, clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -551,8 +542,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -561,21 +551,19 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...) //archtest:allow:clock-injection:via-slice WithClock is in the first slice arg passed to append; spread prevents direct positional arg
+	}, auditcoreLedgerOpts(t, []byte("health-test-hmac-key-32-bytes!!!"))...)...)
 
-	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "health-listener-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),

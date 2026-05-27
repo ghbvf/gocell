@@ -24,6 +24,8 @@ const maxCookieSize = 4096
 const errfCookieSession = "cookie_session: %w"
 
 // CookieSessionConfig configures the BFF cookie session middleware.
+// Clock is not part of this struct; it is passed as a mandatory positional
+// parameter to NewCookieSession, NewSessionCookieWriter, and SetSessionCookie.
 type CookieSessionConfig struct {
 	// Secret is the HMAC key for SecureCookie signing (≥32 bytes, required).
 	Secret []byte
@@ -46,11 +48,6 @@ type CookieSessionConfig struct {
 
 	// MaxAge is the cookie max age in seconds. Default: 900 (15min, matches JWT TTL).
 	MaxAge int
-
-	// Clock is used for cookie timestamp and expiry checks.
-	// Required: must be set by the composition root (e.g. clock.Real() in
-	// production, clockmock.New(...) in tests).
-	Clock clock.Clock
 }
 
 // DefaultCookieSessionConfig returns a CookieSessionConfig with safe defaults.
@@ -84,14 +81,18 @@ func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
 // NewCookieSession creates the cookie session middleware, returning an error
 // if the configuration is invalid (e.g., Secret too short).
 //
+// clk is required and must be a non-nil clock.Clock (clock.Real() in
+// production, clockmock.New(...) in tests).
+//
 // ref: labstack/echo — ToMiddleware() (MiddlewareFunc, error) pattern
-func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler, error) {
+func NewCookieSession(clk clock.Clock, cfg CookieSessionConfig) (func(http.Handler) http.Handler, error) {
+	clock.MustHaveClock(clk, "middleware.NewCookieSession")
 	normalizeCookieSessionConfig(&cfg)
 
 	sc, err := securecookie.New(securecookie.Config{
 		HashKey:  cfg.Secret,
 		BlockKey: cfg.EncryptKey,
-		Clock:    cfg.Clock,
+		Clock:    clk,
 		MaxAge:   cfg.MaxAge,
 	})
 	if err != nil {
@@ -135,13 +136,16 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 
 // NewSessionCookieWriter creates a reusable writer for setting session cookies.
 // Pre-builds the SecureCookie instance to avoid per-call reconstruction.
-func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, error) {
+//
+// clk is required and must be a non-nil clock.Clock.
+func NewSessionCookieWriter(clk clock.Clock, cfg CookieSessionConfig) (*SessionCookieWriter, error) {
+	clock.MustHaveClock(clk, "middleware.NewSessionCookieWriter")
 	normalizeCookieSessionConfig(&cfg)
 
 	sc, err := securecookie.New(securecookie.Config{
 		HashKey:  cfg.Secret,
 		BlockKey: cfg.EncryptKey,
-		Clock:    cfg.Clock,
+		Clock:    clk,
 		MaxAge:   cfg.MaxAge,
 	})
 	if err != nil {
@@ -200,15 +204,18 @@ func (w *SessionCookieWriter) Clear(rw http.ResponseWriter) {
 // SetSessionCookie writes a signed (optionally encrypted) JWT cookie to the response.
 // Returns an error if encoding fails or cookie exceeds browser size limit.
 //
+// clk is required and must be a non-nil clock.Clock.
+//
 // For better performance, use NewSessionCookieWriter to pre-build the SecureCookie
 // instance instead of calling this function per-request.
-func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string) error {
+func SetSessionCookie(w http.ResponseWriter, clk clock.Clock, cfg CookieSessionConfig, jwt string) error {
+	clock.MustHaveClock(clk, "middleware.SetSessionCookie")
 	normalizeCookieSessionConfig(&cfg)
 
 	sc, err := securecookie.New(securecookie.Config{
 		HashKey:  cfg.Secret,
 		BlockKey: cfg.EncryptKey,
-		Clock:    cfg.Clock,
+		Clock:    clk,
 		MaxAge:   cfg.MaxAge,
 	})
 	if err != nil {

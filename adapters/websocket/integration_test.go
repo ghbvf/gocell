@@ -33,9 +33,9 @@ func (s *stubIntegrationAuth) Authenticate(_ *http.Request) (*authpkg.Principal,
 // setupIntegrationHub creates a running Hub + httptest server for integration tests.
 func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
-	hub := rtws.NewHub(cfg, handler)
+	hub := rtws.NewHub(clock.Real(), cfg, handler)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -196,9 +196,9 @@ func checkTCPAvailable(t *testing.T) {
 func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 	checkTCPAvailable(t)
 
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
-	hub := rtws.NewHub(cfg, nil)
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -238,9 +238,9 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
 	checkTCPAvailable(t)
 
-	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
-	hub := rtws.NewHub(cfg, nil)
+	hub := rtws.NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()

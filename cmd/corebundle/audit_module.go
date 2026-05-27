@@ -84,7 +84,6 @@ func (AuditCoreModule) Provide(
 	// Build ledger.Store: postgres or mem.
 	var ledgerStore ledger.Store
 	auditOpts := []auditcore.Option{
-		auditcore.WithClock(shared.Clock),
 		auditcore.WithLedgerProtocol(protocol),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// outbox.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
@@ -136,7 +135,7 @@ func (AuditCoreModule) Provide(
 	// AuditCoreModule.Provide populates it.
 	shared.BootstrapLedgerStore = ledgerStore
 
-	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above
+	c := auditcore.NewAuditCore(shared.Clock, auditOpts...)
 	return c, nil, nil, nil
 }
 

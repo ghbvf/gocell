@@ -166,13 +166,6 @@ type SubscriberConfig struct {
 	// If exceeded, StopIntake returns ErrAdapterAMQPCloseTimeout and logs a
 	// slog.Warn with the remaining inflight count. Default: 30s.
 	StopIntakeDrainTimeout time.Duration
-
-	// Clock is the time source used to schedule the drainRemaining timer.
-	// Required: NewSubscriber calls clock.MustHaveClock(config.Clock, ...) to
-	// fail-fast on nil. Pass clock.Real() at the composition root, or a
-	// clockmock.FakeClock in tests when they need to drive the drain deadline
-	// deterministically.
-	Clock clock.Clock
 }
 
 func (sc *SubscriberConfig) setDefaults() {
@@ -231,16 +224,15 @@ type Subscriber struct {
 }
 
 // NewSubscriber creates a Subscriber with the given connection and config.
-// SubscriberConfig.Clock must be set (pass clock.Real() at the composition
-// root, or a clockmock.FakeClock in tests). NewSubscriber panics if Clock
-// is nil.
-func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
-	clock.MustHaveClock(config.Clock, "rabbitmq.NewSubscriber")
+// clk is required: NewSubscriber panics via clock.MustHaveClock when clk is nil.
+// Use clock.Real() at the composition root, or clockmock.FakeClock in tests.
+func NewSubscriber(clk clock.Clock, conn *Connection, config SubscriberConfig) *Subscriber {
+	clock.MustHaveClock(clk, "rabbitmq.NewSubscriber")
 	config.setDefaults()
 	return &Subscriber{
 		conn:         conn,
 		config:       config,
-		clock:        config.Clock,
+		clock:        clk,
 		closeCh:      make(chan struct{}),
 		stopIntakeCh: make(chan struct{}),
 		runs:         make(map[*subscriptionRun]struct{}),

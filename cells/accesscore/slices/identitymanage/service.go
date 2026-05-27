@@ -104,15 +104,6 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
-// WithClock sets the clock used for timestamping operations.
-// clk must not be nil; pass clock.Real() for production use.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		clock.MustHaveClock(clk, "identitymanage.WithClock")
-		s.clock = clk
-	}
-}
-
 // WithTokenIssuer injects the token issuer used by ChangePassword to issue a
 // fresh TokenPair after a successful password change. tokenIssuer must not be
 // nil; NewService returns an error if it is not provided or is nil.
@@ -193,17 +184,20 @@ type Service struct {
 // nil resolved at factory; here the factory auto-constructs rather than
 // fail-fast because the inputs are provably valid).
 func NewService(
+	clk clock.Clock,
 	repo ports.UserRepository,
 	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "identitymanage.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
 		repo:        repo,
 		invalidator: invalidator,
+		clock:       clk,
 		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 		hasher:      credential.NewProductionHasher(),
@@ -229,7 +223,6 @@ func NewService(
 		}
 		s.lastAdminGuard = guard
 	}
-	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
 

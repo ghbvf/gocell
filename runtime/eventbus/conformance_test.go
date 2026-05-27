@@ -21,7 +21,7 @@ func TestInMemoryEventBus_Conformance(t *testing.T) {
 		BlockingSubscribe:  true,
 		BroadcastSubscribe: true,
 	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
-		bus := eventbus.New(eventbus.WithClock(clock.Real()), eventbus.WithBufferSize(256))
+		bus := eventbus.New(clock.Real(), eventbus.WithBufferSize(256))
 		t.Cleanup(func() { _ = bus.Close(context.Background()) })
 		return bus, bus
 	})

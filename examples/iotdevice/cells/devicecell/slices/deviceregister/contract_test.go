@@ -54,7 +54,7 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	if err != nil {
 		panic(err)
 	}
-	svc, err2 := NewService(repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)), WithClock(clock.Real()))
+	svc, err2 := NewService(clock.Real(), repo, slog.Default(), WithEmitter(outbox.WrapEmitterForCell(emitter)))
 	if err2 != nil {
 		panic(err2)
 	}

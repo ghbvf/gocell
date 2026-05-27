@@ -32,15 +32,6 @@ func WithDeadline(d time.Duration) Option {
 	}
 }
 
-// WithClock injects a custom [clock.Clock]. Required like other runtime
-// constructors; NewAggregator panics (via [clock.MustHaveClock]) if the clock
-// is nil or typed-nil.
-func WithClock(clk clock.Clock) Option {
-	return func(a *aggregator) {
-		a.clk = clk
-	}
-}
-
 // aggregator is the unexported concrete implementation of [healthz.Aggregator].
 // All exported access is through the interface value returned by NewAggregator.
 type aggregator struct {
@@ -62,15 +53,16 @@ type aggregator struct {
 // Concurrent safety: Register / Deregister / Evaluate are all safe for
 // concurrent use. Evaluate never holds the write lock; Register and Deregister
 // take the write lock only during map mutation.
-func NewAggregator(opts ...Option) healthz.Aggregator {
+func NewAggregator(clk clock.Clock, opts ...Option) healthz.Aggregator {
 	a := &aggregator{
 		probes:   make(map[string]healthz.Probe),
 		deadline: defaultDeadline,
+		clk:      clk,
 	}
 	for _, o := range opts {
 		o(a)
 	}
-	clock.MustHaveClock(a.clk, "runtime/observability/healthz.NewAggregator")
+	clock.MustHaveClock(clk, "runtime/observability/healthz.NewAggregator")
 	clock.MustHavePositiveInterval(a.deadline, "runtime/observability/healthz.NewAggregator deadline")
 	return a
 }

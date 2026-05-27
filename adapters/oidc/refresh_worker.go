@@ -36,10 +36,10 @@
 //     is responsible for single-Start enforcement; this adapter does not add a
 //     guard.
 //
-// (e) clock enforcement — oidc.Adapter uses a struct-field Clock rather than a
-//     WithClock option, so CLOCK-INJECTION-TEST-CALLSITE-01 archtest (which
-//     covers WithClock-option constructors) does not cover oidc.New. Enforcement
-//     is instead the runtime clock.MustHaveClock panic in New().
+// (e) clock enforcement — oidc.New(ctx, clk, cfg) takes clk as a positional
+//     parameter enforced by the compiler. Presence is additionally guarded at
+//     runtime by clock.MustHaveClock in New(). CLOCK-POSITIONAL-INJECTION-01
+//     archtest covers this form.
 
 package oidc
 

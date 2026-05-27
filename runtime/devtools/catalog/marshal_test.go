@@ -17,11 +17,10 @@ import (
 func TestMarshalDocument_JSONGolden(t *testing.T) {
 	pm := minimalPM()
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Root:   "/projects/gocell",
 		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
-	d, err := catalog.BuildDocument(pm, opts)
+	d, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	got, err := catalog.MarshalDocument(d, "json")
@@ -41,11 +40,10 @@ func TestMarshalDocument_JSONGolden(t *testing.T) {
 func TestMarshalDocument_YAMLGolden(t *testing.T) {
 	pm := fullPM()
 	opts := catalog.ExportOptions{
-		Clock:  fixedClock(),
 		Root:   "/projects/gocell",
 		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
-	d, err := catalog.BuildDocument(pm, opts)
+	d, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	got, err := catalog.MarshalDocument(d, "yaml")
@@ -69,8 +67,7 @@ func TestMarshalDocument_FilteredGolden(t *testing.T) {
 		Edges: []catalog.CellEdge{{From: "accesscore", To: "auditcore"}},
 	}
 	opts := catalog.ExportOptions{
-		Clock: fixedClock(),
-		Root:  "/projects/gocell",
+		Root: "/projects/gocell",
 		Filter: catalog.Filter{
 			Cells:   []string{"accesscore"},
 			Include: catalog.IncludeOptions{CellDeps: true, PackageDeps: true},
@@ -78,7 +75,7 @@ func TestMarshalDocument_FilteredGolden(t *testing.T) {
 		CellDeps: cellDeps,
 		Packages: &catalog.PackageDepsView{}, // loading state: Graph==nil, Error==""
 	}
-	d, err := catalog.BuildDocument(pm, opts)
+	d, err := catalog.BuildDocument(fixedClock(), pm, opts)
 	require.NoError(t, err)
 
 	got, err := catalog.MarshalDocument(d, "json")

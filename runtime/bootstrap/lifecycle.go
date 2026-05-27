@@ -133,7 +133,6 @@ type LifecycleConfig struct {
 	DefaultStartTimeout time.Duration // 0 → DefaultStartTimeout constant
 	DefaultStopTimeout  time.Duration // 0 → DefaultStopTimeout constant
 	Logger              *slog.Logger  // nil → slog.Default()
-	Clock               clock.Clock   // required: NewLifecycle panics when nil
 }
 
 // lifecycleState represents the current state of the lifecycle state machine.
@@ -186,7 +185,7 @@ type lifecycle struct {
 }
 
 // NewLifecycle creates a new Lifecycle with the given config.
-func NewLifecycle(cfg LifecycleConfig) Lifecycle {
+func NewLifecycle(clk clock.Clock, cfg LifecycleConfig) Lifecycle {
 	defaultStart := cfg.DefaultStartTimeout
 	if defaultStart == 0 {
 		defaultStart = DefaultStartTimeout
@@ -199,8 +198,7 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	clock.MustHaveClock(cfg.Clock, "bootstrap.NewLifecycle")
-	clk := cfg.Clock
+	clock.MustHaveClock(clk, "bootstrap.NewLifecycle")
 	return &lifecycle{
 		state:        stateStopped,
 		names:        make(map[string]struct{}),

@@ -78,13 +78,12 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	result, err := buildConfigCoreOpts(ConfigCoreModuleConfig{
+	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
 		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
 		PG:               pgProvider,
 		Publisher:        discardPublisher{},
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
-		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")

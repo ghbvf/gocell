@@ -43,7 +43,7 @@ import (
 // newEventsTestAggregator returns a fresh in-memory healthz.Aggregator for use in
 // event-phase tests that call health.New directly (bypassing bootstrap phase5).
 func newEventsTestAggregator() healthz.Aggregator {
-	return obshealthz.NewAggregator(obshealthz.WithClock(clock.Real()))
+	return obshealthz.NewAggregator(clock.Real())
 }
 
 // stubEventCell is a minimal cell that registers a single contract-first
@@ -83,7 +83,7 @@ func (c *stubEventCell) Init(ctx context.Context, reg cell.Registrar) error {
 func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	bus := eventbus.New(clock.Real())
 
 	var mwInvocations atomic.Int32
 	spyMW := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
@@ -91,13 +91,13 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		return next
 	}
 
-	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-mw-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.mw.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -153,13 +153,13 @@ func (neverReadySubscriber) Close(_ context.Context) error { return nil }
 func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	t.Parallel()
 
-	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-rt-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.rt.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithSubscriber(neverReadySubscriber{}),
 		WithConsumerBase(newTestConsumerBase(t)),
@@ -201,14 +201,14 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-drift-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-drift-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.drift.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -253,14 +253,14 @@ func TestPhase6_DrainCellSubscriptions_DriftedCellID_ReturnsError(t *testing.T) 
 func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-missing-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-missing-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.no-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -297,14 +297,14 @@ func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testin
 func TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-zero-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-zero-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.zero-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -331,14 +331,14 @@ func TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
 func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New(eventbus.WithClock(clock.Real()))
-	asm := assembly.New(assembly.Config{ID: "phase6-with-cb-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	bus := eventbus.New(clock.Real())
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-with-cb-test", DurabilityMode: outbox.DurabilityDemo})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("event.phase6.with-cb.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -375,9 +375,8 @@ func newEventsTestRelay() *runtimeoutbox.Relay {
 		PollFailureBudget:    3,
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
-		Clock:                clock.Real(),
 	}
-	return runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
+	return runtimeoutbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
 }
 
 // TestWithRelay_AutoLifecycle_AdapterAddedToManagedResources verifies that
@@ -390,7 +389,7 @@ func TestWithRelay_AutoLifecycle_AdapterAddedToManagedResources(t *testing.T) {
 
 	relay := newEventsTestRelay()
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithRelay(relay),
 	)
 
@@ -420,7 +419,7 @@ func TestWithRelay_AutoLifecycle_CloseCalledDuringTeardown(t *testing.T) {
 
 	relay := newEventsTestRelay()
 	b := New(
-		WithClock(clock.Real()),
+		clock.Real(),
 		WithRelay(relay),
 	)
 
@@ -455,7 +454,7 @@ func TestWithRelay_Rebind_Panics(t *testing.T) {
 
 	assert.Panics(t, func() {
 		_ = New(
-			WithClock(clock.Real()),
+			clock.Real(),
 			WithRelay(r1),
 			WithRelay(r2),
 		)

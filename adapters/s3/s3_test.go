@@ -45,8 +45,6 @@ func (m *mockHeadBucket) HeadBucket(
 }
 
 // validConfig returns a minimal Config that passes Validate() (loopback endpoint).
-// Clock is set to clock.Real() — Config.Clock is required after KERNEL-CLOCK-
-// LEAF-FALLBACK-01 (s3.New panics via clock.MustHaveClock when nil).
 func validConfig() Config {
 	return Config{
 		Endpoint:        "http://127.0.0.1:9000",
@@ -54,19 +52,17 @@ func validConfig() Config {
 		Bucket:          "test-bucket",
 		AccessKeyID:     "key",
 		SecretAccessKey: "secret",
-		Clock:           clock.Real(),
 	}
 }
 
-// newTestClient creates a Client with an injected mock, bypassing New's sync probe.
-// cfg.Clock must be non-nil (validConfig provides clock.Real() by default).
-func newTestClient(cfg Config, mock bucketHeader) *Client {
+// newTestClient creates a Client with an injected clock and mock, bypassing New's sync probe.
+func newTestClient(clk clock.Clock, cfg Config, mock bucketHeader) *Client {
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
 	}
 	return &Client{
 		config:     cfg,
-		clk:        cfg.Clock,
+		clk:        clk,
 		head:       mock,
 		stopCh:     make(chan struct{}),
 		workerDone: make(chan struct{}),
@@ -178,7 +174,7 @@ func respondSuccess() stepFn {
 // strictly test-only.
 //
 // ref: aws-sdk-go-v2 aws/retry NopRetryer
-func newTestClientWithSDK(t *testing.T, cfg Config, tr aws.HTTPClient) *Client {
+func newTestClientWithSDK(t *testing.T, clk clock.Clock, cfg Config, tr aws.HTTPClient) *Client {
 	t.Helper()
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultS3HealthInterval
@@ -198,7 +194,7 @@ func newTestClientWithSDK(t *testing.T, cfg Config, tr aws.HTTPClient) *Client {
 	})
 	return &Client{
 		config:     cfg,
-		clk:        cfg.Clock,
+		clk:        clk,
 		s3:         s3c,
 		head:       s3c,
 		stopCh:     make(chan struct{}),
@@ -337,12 +333,11 @@ func TestNew_FailsSyncOnHeadBucketError(t *testing.T) {
 		AccessKeyID:     "k",
 		SecretAccessKey: "s",
 		HealthInterval:  testtime.D30s,
-		Clock:           clock.Real(), // required after KERNEL-CLOCK-LEAF-FALLBACK-01
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 
-	client, err := New(ctx, cfg)
+	client, err := New(ctx, clock.Real(), cfg)
 	require.Error(t, err, "New must fail when HeadBucket cannot reach the endpoint")
 	require.Nil(t, client)
 	var ec *errcode.Error
@@ -358,7 +353,7 @@ func TestNew_SucceedsWhenHeadBucketSucceeds(t *testing.T) {
 	cfg.HealthInterval = testtime.D30s
 
 	ctx := context.Background()
-	client, err := newClientWithHead(ctx, cfg, mock)
+	client, err := newClientWithHead(ctx, clock.Real(), cfg, mock)
 	require.NoError(t, err)
 	require.NotNil(t, client)
 	assert.EqualValues(t, 1, mock.callCount.Load(), "constructor must call HeadBucket exactly once")
@@ -370,7 +365,7 @@ func TestNew_SucceedsWhenHeadBucketSucceeds(t *testing.T) {
 
 func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 	mock := &mockHeadBucket{}
-	c := newTestClient(validConfig(), mock)
+	c := newTestClient(clock.Real(), validConfig(), mock)
 	// state is nil (healthy by default after zero-value)
 	checkers := c.Checkers()
 	require.Contains(t, checkers, string(ProbeReady))
@@ -379,7 +374,7 @@ func TestCheckers_ReadyWhenStateHealthy(t *testing.T) {
 
 func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 	mock := &mockHeadBucket{}
-	c := newTestClient(validConfig(), mock)
+	c := newTestClient(clock.Real(), validConfig(), mock)
 
 	// Inject an error into state.
 	sentinel := errors.New("injected health failure")
@@ -396,7 +391,7 @@ func TestCheckers_UnhealthyWhenStateError(t *testing.T) {
 // HeadBucket (i.e. it only reads state).
 func TestCheckers_NoNetworkCall(t *testing.T) {
 	mock := &mockHeadBucket{}
-	c := newTestClient(validConfig(), mock)
+	c := newTestClient(clock.Real(), validConfig(), mock)
 	checkers := c.Checkers()
 
 	_ = checkers[string(ProbeReady)](context.Background())
@@ -416,7 +411,7 @@ func TestWorker_TickerCallsHeadBucket(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = tickInterval
 
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -449,7 +444,7 @@ func TestWorker_UpdatesStateOnError(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = tickInterval
 
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -490,7 +485,7 @@ func TestWorker_StateBecomesHealthyAfterRecovery(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = tickInterval
 
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -523,7 +518,7 @@ func TestClose_StopsWorkerLoop(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = tickInterval
 
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 	w := c.Worker()
 
 	ctx := context.Background()
@@ -553,7 +548,7 @@ func TestClose_StopsWorkerLoop(t *testing.T) {
 // error (ErrAdapterS3Upload) when the full SDK client is nil (mock-only build).
 func TestUpload_NilSDKReturnsError(t *testing.T) {
 	mock := &mockHeadBucket{}
-	c := newTestClient(validConfig(), mock)
+	c := newTestClient(clock.Real(), validConfig(), mock)
 	// c.s3 is nil because newTestClient injects a mock, not *awss3.Client.
 
 	err := c.Upload(context.Background(), "key", []byte("data"), "")
@@ -567,7 +562,7 @@ func TestUpload_NilSDKReturnsError(t *testing.T) {
 // error (ErrAdapterS3Health) when the full SDK client is nil (mock-only build).
 func TestHealth_NilSDKReturnsError(t *testing.T) {
 	mock := &mockHeadBucket{}
-	c := newTestClient(validConfig(), mock)
+	c := newTestClient(clock.Real(), validConfig(), mock)
 	// c.s3 is nil because newTestClient injects a mock, not *awss3.Client.
 
 	err := c.Health(context.Background())
@@ -588,7 +583,7 @@ func TestClose_NeverStarted_ReturnsImmediately(t *testing.T) {
 	mock := &mockHeadBucket{}
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D30s
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -605,7 +600,7 @@ func TestClose_AfterWorkerStop_Idempotent(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
 
-	c := newTestClient(cfg, mock)
+	c := newTestClient(clock.Real(), cfg, mock)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -654,7 +649,7 @@ func TestNew_SDKAccessorAvailable(t *testing.T) {
 	// tested here is that SDK() does not panic and returns the stored (possibly nil) value.
 	mock := &mockHeadBucket{errFn: func(_ int64) error { return nil }}
 	ctx := context.Background()
-	client, err := newClientWithHead(ctx, cfg, mock)
+	client, err := newClientWithHead(ctx, clock.Real(), cfg, mock)
 	require.NoError(t, err)
 	// When built with a mock (not a *awss3.Client), SDK() returns nil.
 	// That is correct: callers going through New() get a non-nil SDK().
@@ -672,7 +667,7 @@ func TestNew_SDKAccessorAvailable(t *testing.T) {
 func TestUpload_403Permanent(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
 	require.Error(t, err)
@@ -690,7 +685,7 @@ func TestUpload_403Permanent(t *testing.T) {
 func TestUpload_5xxTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
 	require.Error(t, err)
@@ -709,7 +704,7 @@ func TestUpload_5xxTransient(t *testing.T) {
 func TestUpload_TimeoutTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Upload(context.Background(), "obj/key", []byte("data"), "")
 	require.Error(t, err)
@@ -731,7 +726,7 @@ func TestUpload_RecoveryAfter5xx(t *testing.T) {
 		respondStatus(503, "ServiceUnavailable"),
 		respondSuccess(),
 	}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	// First call — must fail as transient.
 	err1 := c.Upload(context.Background(), "obj/key", []byte("data"), "")
@@ -767,7 +762,7 @@ func TestUpload_RecoveryAfter5xx(t *testing.T) {
 func TestHealth_403Permanent(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(403, "AccessDenied")}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Health(context.Background())
 	require.Error(t, err)
@@ -785,7 +780,7 @@ func TestHealth_403Permanent(t *testing.T) {
 func TestHealth_5xxTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondStatus(503, "ServiceUnavailable")}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Health(context.Background())
 	require.Error(t, err)
@@ -804,7 +799,7 @@ func TestHealth_5xxTransient(t *testing.T) {
 func TestHealth_TimeoutTransient(t *testing.T) {
 	t.Parallel()
 	tr := &recordingTransport{steps: []stepFn{respondNetError()}}
-	c := newTestClientWithSDK(t, validConfig(), tr)
+	c := newTestClientWithSDK(t, clock.Real(), validConfig(), tr)
 
 	err := c.Health(context.Background())
 	require.Error(t, err)
@@ -835,7 +830,7 @@ func TestWorker_Tick403_StateUnhealthyPermanent(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
 
-	c := newTestClientWithSDK(t, cfg, tr)
+	c := newTestClientWithSDK(t, clock.Real(), cfg, tr)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -872,7 +867,7 @@ func TestWorker_Tick5xx_StateUnhealthyTransient(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
 
-	c := newTestClientWithSDK(t, cfg, tr)
+	c := newTestClientWithSDK(t, clock.Real(), cfg, tr)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -914,7 +909,7 @@ func TestWorker_TickTimeoutThenRecovery(t *testing.T) {
 	cfg := validConfig()
 	cfg.HealthInterval = testtime.D50ms
 
-	c := newTestClientWithSDK(t, cfg, tr)
+	c := newTestClientWithSDK(t, clock.Real(), cfg, tr)
 	w := c.Worker()
 
 	ctx, cancel := context.WithCancel(context.Background())

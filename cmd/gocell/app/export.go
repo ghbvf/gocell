@@ -101,13 +101,13 @@ func exportCatalog(args []string) error {
 		return err
 	}
 
+	clk := clock.Real()
 	opts := catalog.ExportOptions{
-		Clock:  clock.Real(),
 		Root:   rootDir,
 		Filter: filter,
 	}
 
-	if err := attachCellDeps(&opts, filter, pm, opts.Clock); err != nil {
+	if err := attachCellDeps(&opts, filter, pm, clk); err != nil {
 		return err
 	}
 
@@ -117,7 +117,7 @@ func exportCatalog(args []string) error {
 
 	attachWireSummaries(&opts, rootDir, pm)
 
-	doc, err := catalog.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(clk, pm, opts)
 	if err != nil {
 		return err
 	}
