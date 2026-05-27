@@ -12,6 +12,10 @@ const (
 	traceParent   ctxKey = "traceparent"
 	requestID     ctxKey = "request_id"
 	realIP        ctxKey = "real_ip"
+	actor         ctxKey = "actor_id"
+	subject       ctxKey = "subject_id"
+	tenant        ctxKey = "tenant_id"
+	session       ctxKey = "session_id"
 )
 
 // --- CorrelationID ---
@@ -90,5 +94,54 @@ func WithRealIP(ctx context.Context, ip string) context.Context {
 // RealIPFrom extracts the client's real IP from ctx. The boolean indicates presence.
 func RealIPFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(realIP).(string)
+	return v, ok
+}
+
+// --- Principal (OAuth/OIDC) ---
+
+// WithActor returns a new context carrying the actor identifier (OAuth
+// impersonator — the principal actually triggering the action; in non-
+// impersonation flows equals the Subject).
+func WithActor(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, actor, id)
+}
+
+// ActorFrom extracts the actor identifier from ctx. The boolean indicates presence.
+func ActorFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(actor).(string)
+	return v, ok
+}
+
+// WithSubject returns a new context carrying the subject identifier (OAuth
+// subject-of-record — the user the action is performed on behalf of).
+func WithSubject(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, subject, id)
+}
+
+// SubjectFrom extracts the subject identifier from ctx. The boolean indicates presence.
+func SubjectFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(subject).(string)
+	return v, ok
+}
+
+// WithTenant returns a new context carrying the tenant identifier.
+func WithTenant(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, tenant, id)
+}
+
+// TenantFrom extracts the tenant identifier from ctx. The boolean indicates presence.
+func TenantFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(tenant).(string)
+	return v, ok
+}
+
+// WithSession returns a new context carrying the session identifier.
+func WithSession(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, session, id)
+}
+
+// SessionFrom extracts the session identifier from ctx. The boolean indicates presence.
+func SessionFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(session).(string)
 	return v, ok
 }
