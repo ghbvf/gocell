@@ -345,10 +345,12 @@ func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *typ
 			Line: fset.Position(call.Pos()).Line,
 			Message: "R3: pgexec.ExecDirect callsite must pass an inline " +
 				"pgrepoapproved.Approve(<kebab-case-literal>) as its FIRST argument " +
-				"(call-bound authorization). Rejected forms: missing approval, a " +
+				"(call-bound authorization). Valid reason format: ^[a-z][a-z0-9-]+$ " +
+				"(min length 2, lowercase start, no placeholder todo/fixme/tbd/xxx/" +
+				"placeholder/wip). Rejected forms: missing approval, a " +
 				"reused/pre-constructed Approval variable, Approve with a const " +
-				"identifier / \"a\"+\"b\" concatenation / empty / placeholder " +
-				"(todo/fixme/…) reason. Production reference: " +
+				"identifier / \"a\"+\"b\" concatenation / empty / placeholder reason. " +
+				"Production reference: " +
 				"adapters/postgres/refresh_store.go::revokeSessionDetachedAt. ADR " +
 				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
@@ -622,74 +624,103 @@ func TestPGRepoAmbientTx_InterfaceSealed(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	pkgs := []string{
-		"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec",
-		"github.com/ghbvf/gocell/adapters/postgres/saga/internal/pgexec",
-		"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec",
-		"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec",
-	}
-	want := make(map[string]bool, len(pkgs))
-	for _, p := range pkgs {
-		want[p] = false
-	}
+	// Dynamic discovery: scan the whole production module and check EVERY
+	// package whose import path ends /internal/pgexec. A new PG adapter
+	// sub-package is covered automatically — no hand-maintained allowlist (which
+	// would be the same Soft scope this funnel exists to remove). The sanity
+	// anchor below guards the only failure mode dynamic discovery introduces:
+	// silently finding zero pgexec packages (e.g. prodscan regression) → the
+	// seal guard would vacuously pass.
+	root := findModuleRoot(t)
+	patterns := prodscan.Patterns(root)
+	const anchorPkg = "github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 
-	_ = RunTyped(t, TypedOpts{}, pkgs, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil {
+	var checked []string
+	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || !isPgexecSubpackage(p.Pkg.Path()) {
 			return nil
 		}
-		path := p.Pkg.Path()
-		if _, ok := want[path]; !ok {
-			return nil // a transitively loaded dependency, not a target
-		}
-		want[path] = true
-
-		ifaceObj := p.Pkg.Scope().Lookup(pgExecutorInterfaceName)
-		if ifaceObj == nil {
-			t.Errorf("%s: no %s type declared", path, pgExecutorInterfaceName)
-			return nil
-		}
-		named, ok := ifaceObj.Type().(*types.Named)
-		if !ok {
-			t.Errorf("%s: %s is not a named type", path, pgExecutorInterfaceName)
-			return nil
-		}
-		iface, ok := named.Underlying().(*types.Interface)
-		if !ok {
-			t.Errorf("%s: %s underlying is not an interface", path, pgExecutorInterfaceName)
-			return nil
-		}
-		unexported := 0
-		for i := range iface.NumMethods() {
-			if !iface.Method(i).Exported() {
-				unexported++
-			}
-		}
-		if unexported != 1 {
-			t.Errorf("%s: %s must have exactly one unexported marker method (seal); "+
-				"got %d — the seal makes the interface unimplementable outside the "+
-				"package; removing or duplicating it breaks the upstream Hard guarantee",
-				path, pgExecutorInterfaceName, unexported)
-		}
-
-		implObj := p.Pkg.Scope().Lookup(pgExecutorImplName)
-		if implObj == nil {
-			t.Errorf("%s: no %s impl type declared", path, pgExecutorImplName)
-			return nil
-		}
-		// typesutil.ImplementsInterface tries value-or-pointer (TYPESUTIL-
-		// IMPLEMENTS-FUNNEL-01: raw go/types.Implements is funnel-banned here);
-		// *pgExecutor (pointer-receiver methods incl. sealPGExecutor) satisfies iface.
-		if !typesutil.ImplementsInterface(implObj.Type(), iface) {
-			t.Errorf("%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
-				path, pgExecutorImplName, pgExecutorInterfaceName)
-		}
+		checked = append(checked, p.Pkg.Path())
+		assertSealedInterface(t, p.Pkg, pgExecutorInterfaceName, pgExecutorImplName)
 		return nil
 	})
 
-	for path, seen := range want {
-		if !seen {
-			t.Errorf("InterfaceSealed: target package %s was not loaded/checked", path)
+	assert.Contains(t, checked, anchorPkg,
+		"InterfaceSealed: prodscan discovery did not find the canonical "+
+			anchorPkg+" — discovery may have regressed; without it the seal "+
+			"regression guard would vacuously pass")
+}
+
+// TestPGRepoApprovedSealed is the symmetric regression backstop for the
+// pgrepoapproved.Approval token interface. R3 is the primary gate (arg[0] must
+// be an inline Approve(literal) CallExpr), but the sealed Approval interface is
+// defense-in-depth: if its unexported marker method were deleted, Approval
+// would collapse to interface{} and a forged value could be passed as the
+// approval token. This asserts the seal stays intact.
+func TestPGRepoApprovedSealed(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	const approvedPkg = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	found := false
+	_ = RunTyped(t, TypedOpts{}, []string{approvedPkg}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != approvedPkg {
+			return nil
 		}
+		found = true
+		assertSealedInterface(t, p.Pkg, "Approval", "approval")
+		return nil
+	})
+	assert.True(t, found, "TestPGRepoApprovedSealed: pkg/pgrepoapproved was not loaded/checked")
+}
+
+// assertSealedInterface asserts pkg's ifaceName interface has exactly one
+// unexported marker method (structural, not name-anchored — the seal makes the
+// interface unimplementable outside the package) and that *implName implements
+// it. Removing the marker (interface still compiles) or adding a second
+// unexported method both fail here.
+func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName string) {
+	t.Helper()
+	path := pkg.Path()
+	ifaceObj := pkg.Scope().Lookup(ifaceName)
+	if ifaceObj == nil {
+		t.Errorf("%s: no %s type declared", path, ifaceName)
+		return
+	}
+	named, ok := ifaceObj.Type().(*types.Named)
+	if !ok {
+		t.Errorf("%s: %s is not a named type", path, ifaceName)
+		return
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok {
+		t.Errorf("%s: %s underlying is not an interface", path, ifaceName)
+		return
+	}
+	unexported := 0
+	for i := range iface.NumMethods() {
+		if !iface.Method(i).Exported() {
+			unexported++
+		}
+	}
+	if unexported != 1 {
+		t.Errorf("%s: %s must have exactly one unexported marker method (seal); "+
+			"got %d — the seal makes the interface unimplementable outside the "+
+			"package; removing or duplicating it breaks the upstream Hard guarantee",
+			path, ifaceName, unexported)
+	}
+
+	implObj := pkg.Scope().Lookup(implName)
+	if implObj == nil {
+		t.Errorf("%s: no %s impl type declared", path, implName)
+		return
+	}
+	// typesutil.ImplementsInterface tries value-or-pointer (TYPESUTIL-
+	// IMPLEMENTS-FUNNEL-01: raw go/types.Implements is funnel-banned here).
+	if !typesutil.ImplementsInterface(implObj.Type(), iface) {
+		t.Errorf("%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
+			path, implName, ifaceName)
 	}
 }
 

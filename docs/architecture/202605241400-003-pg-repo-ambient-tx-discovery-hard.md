@@ -251,6 +251,12 @@ ADR-approved bypass 站点显式调 `pgexec.ExecDirect(s.db, ...)` + 同 scope p
 callsite marker `pgrepoapproved.ApprovedExecDirect("<reason>")`（round-3 C4：
 M==E 1:1 配对）。
 
+> **⚠️ 已被 2026-05-28 amendment 取代**：上段「`pgexec.ExecDirect(s.db, ...)` + 同 scope
+> sibling marker `ApprovedExecDirect` / M==E 1:1 配对」与 `ExecDirect` 签名
+> `(e PGExecutor, ctx, ...)` 是 2026-05-27 当时形态。现 ExecDirect 首参为
+> `pgrepoapproved.Approval`，审批是 call-bound（`pgexec.ExecDirect(pgrepoapproved.Approve("…"), s.db, …)`），
+> 无独立 marker / 无 scope co-location。以 §Amendment 2026-05-28 为准。
+
 **Implementation summary**：
 - 新增 4 个 sub-package（adapters/postgres/internal/pgexec/、adapters/postgres/saga/internal/pgexec/、cells/accesscore/internal/adapters/postgres/internal/pgexec/、examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec/）；
 - 删除 4 个旧 pg_executor.go（root + saga + accesscore 重命名为 tx_assert.go 保留 assertAmbientTx helper + devicecell）；

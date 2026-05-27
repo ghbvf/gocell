@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
@@ -117,9 +118,16 @@ func TestExecDirect_PanicsOnNonSealedExecutor(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected panic value to be an error, got %T", r)
 		}
+		var ec *errcode.Error
+		if !errors.As(err, &ec) {
+			t.Fatalf("expected A-class *errcode.Error panic payload (errcode.Assertion), got %T: %v", err, err)
+		}
 		if !strings.Contains(err.Error(), "must originate from pgexec.New") {
 			t.Fatalf("unexpected panic error: %v", err)
 		}
 	}()
+	// The Approve token here only satisfies the compiler (ExecDirect's first
+	// param is Approval); this is a test-only mock path, not an ADR bypass —
+	// the !ok branch is unreachable in production (sealed interface).
 	_, _ = ExecDirect(pgrepoapproved.Approve("test-non-sealed"), mockExec{}, context.Background(), "SELECT 1")
 }

@@ -39,7 +39,8 @@ func (approval) approvedExecDirect() {}
 
 // Approve mints an Approval for the pgexec.ExecDirect callsite it is passed to.
 //
-// reason MUST be a kebab-case string LITERAL in source (^[a-z][a-z0-9-]+$, not
+// reason MUST be a kebab-case string LITERAL in source (^[a-z][a-z0-9-]+$ —
+// minimum length 2, lowercase-letter start, e.g. "revoke-session-cascade"; not
 // a placeholder such as todo/fixme/tbd/xxx/placeholder/wip) — archtest
 // PG-REPO-AMBIENT-TX-01 R3 rejects const identifiers, "a"+"b" concatenation,
 // variables, and empty/placeholder reasons. The reason is not cross-checked
