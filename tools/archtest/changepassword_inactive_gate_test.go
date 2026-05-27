@@ -21,13 +21,17 @@
 // AI-robust: Medium. The security-critical callee (credentialauthority.Assert)
 // is type-resolved via archtest.ResolvePackageRef to its exact *types.Func
 // identity (pkgPath+name, not a string name anchor), so an unrelated `Assert`
-// method does not satisfy the gate. Ordering is an AST token.Pos comparison
-// within the same function body. Medium (not Hard) because a cross-function
-// helper extraction is a residual escape (see blind-spot inventory); Hard
-// (e.g. a type-state token proving Assert ran before the write) would be
-// over-engineering for a single call site, so Medium is the documented
-// ceiling. No gh upgrade issue is opened (won't-do, like
-// HEALTHZ-HOLDER-SEAL-01 #893).
+// method does not satisfy the gate. Ordering uses statement-level
+// dominance-lite: the Assert must be an UNCONDITIONAL top-level statement
+// (ExprStmt/AssignStmt expr, IfStmt.Init guard, or ReturnStmt result) ordered
+// before the first top-level statement containing the mutation — a token.Pos
+// comparison alone (the pre-#1017-F2 form) is insufficient because a
+// conditional `if cond { Assert(...) }` is textually earlier yet does not
+// dominate the mutation. Medium (not Hard) because (a) a cross-function helper
+// extraction is a residual escape and (b) dominance-lite is not full control-
+// flow dominance (see blind-spot inventory). Full CFG/SSA dominance — the path
+// to Hard — is tracked in #1212; a type-state token proving Assert ran is
+// over-engineering for a single call site, so Medium is the documented ceiling.
 //
 // Blind-spot inventory (tools: archtest.RunTyped + archtest.ResolvePackageRef
 // + scanner.EachInSubtree[ast.CallExpr]):
@@ -62,12 +66,20 @@
 //     reverse-self-check below asserts no such capture appears in the target
 //     function.
 //
-// Self-check: TestChangePasswordInactiveGate_01_NegativeFixture loads three
-// testdata packages (green / red_no_gate / red_gate_after_mutation) via
-// archtest.RunTyped, sharing the same changePasswordGateDiagnostics core as
-// the production scan. Fixtures live under cells/accesscore/ (not
-// tools/archtest/testdata/) because they import the internal
-// credentialauthority package.
+//   - Dominance-lite, not full CFG (#1212): the unconditional-slot check
+//     (ExprStmt/AssignStmt/IfStmt.Init/ReturnStmt) + statement-index ordering
+//     approximates "Assert dominates the mutation" for a linear function body.
+//     It does NOT model switch/select cases, early-return/goto, or labeled
+//     control flow. The known directions are fail-closed (a non-top-level or
+//     out-of-order gate is rejected). Full x/tools/go/cfg or go/ssa dominator
+//     verification is the path to Hard, tracked in #1212.
+//
+// Self-check: TestChangePasswordInactiveGate_01_NegativeFixture loads four
+// testdata packages (green / red_no_gate / red_gate_after_mutation /
+// red_conditional_gate_bypass) via archtest.RunTyped, sharing the same
+// changePasswordGateDiagnostics core as the production scan. Fixtures live
+// under cells/accesscore/ (not tools/archtest/testdata/) because they import
+// the internal credentialauthority package.
 package archtest
 
 import (
@@ -208,56 +220,137 @@ func changePasswordGateDiagnostics(info *types.Info, fset *token.FileSet, file *
 	return diags, foundFunc
 }
 
-// checkGateOrdering reports a diagnostic when changePasswordInTx is missing the
-// credentialauthority.Assert gate, missing the mutation anchor, or calls Assert
-// after the mutation.
+// checkGateOrdering reports a diagnostic unless changePasswordInTx contains an
+// UNCONDITIONAL top-level credentialauthority.Assert guard that precedes the
+// UpdatePassword mutation statement.
+//
+// Dominance-lite (#1017 F2): instead of comparing token.Pos (which a
+// conditional `if cond { Assert(...) }` defeats — Assert is textually earlier
+// yet does not run on every path), it walks fd.Body.List top-level statements
+// and requires the Assert to sit in an UNCONDITIONAL evaluation slot
+// (ExprStmt/AssignStmt expression, IfStmt.Init guard, or ReturnStmt result) of a
+// statement that is ordered before the first statement containing the mutation.
+// An Assert nested only inside a conditional/loop body is rejected. This is not
+// full CFG dominance (see godoc blind-spot inventory + the SSA-upgrade issue).
 func checkGateOrdering(info *types.Info, fset *token.FileSet, fd *ast.FuncDecl, rel string) []Diagnostic {
-	var assertPos, mutationPos token.Pos // token.NoPos until first match (min over occurrences)
-
-	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-		// Security-critical callee: type-resolve to credentialauthority.Assert.
-		if pkgPath, name, ok := ResolvePackageRef(info, call.Fun); ok &&
-			pkgPath == credAuthorityPkgPath && name == credAuthorityFnName {
-			if !assertPos.IsValid() || call.Pos() < assertPos {
-				assertPos = call.Pos()
-			}
-			return
+	assertIdx, mutationIdx := -1, -1
+	var assertNode, mutationNode ast.Node
+	for i, stmt := range fd.Body.List {
+		if assertIdx == -1 && stmtIsUnconditionalAssert(info, stmt) {
+			assertIdx, assertNode = i, stmt
 		}
-		// Mutation anchor: selector-name match (positional marker, see godoc).
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil &&
-			sel.Sel.Name == cpgMutationMethod {
-			if !mutationPos.IsValid() || call.Pos() < mutationPos {
-				mutationPos = call.Pos()
-			}
+		if mutationIdx == -1 && stmtContainsMutationAnchor(stmt) {
+			mutationIdx, mutationNode = i, stmt
 		}
-	})
+	}
 
-	line := func(p token.Pos) int {
-		if !p.IsValid() {
+	line := func(n ast.Node) int {
+		if n == nil {
 			return 0
 		}
-		return fset.Position(p).Line
+		return fset.Position(n.Pos()).Line
 	}
 
 	switch {
-	case !mutationPos.IsValid():
-		return []Diagnostic{{Rel: rel, Line: line(fd.Pos()), Message: fmt.Sprintf(
-			"%s: %s contains no %s(...) mutation anchor — function shape changed; "+
-				"the inactive-gate ordering check cannot verify the gate precedes the "+
-				"password write. Update cpgMutationMethod if the repo method was renamed.",
+	case mutationIdx == -1:
+		return []Diagnostic{{Rel: rel, Line: line(fd), Message: fmt.Sprintf(
+			"%s: %s contains no top-level %s(...) mutation anchor — function shape "+
+				"changed; the inactive-gate dominance check cannot verify the gate "+
+				"precedes the password write. Update cpgMutationMethod if the repo "+
+				"method was renamed.",
 			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
-	case !assertPos.IsValid():
-		return []Diagnostic{{Rel: rel, Line: line(mutationPos), Message: fmt.Sprintf(
-			"%s: %s does not call credentialauthority.Assert — a suspended/locked "+
-				"account's password would be rewritten with no inactive gate (issue #1017).",
-			ruleChangePasswordInactiveGate01, cpgTargetFunc)}}
-	case assertPos > mutationPos:
-		return []Diagnostic{{Rel: rel, Line: line(assertPos), Message: fmt.Sprintf(
-			"%s: credentialauthority.Assert runs AFTER %s in %s — the inactive gate "+
-				"must run BEFORE the credential mutation, else the password is committed "+
-				"before the 403 (issue #1017 regression).",
+	case assertIdx == -1:
+		return []Diagnostic{{Rel: rel, Line: line(mutationNode), Message: fmt.Sprintf(
+			"%s: %s has no UNCONDITIONAL top-level credentialauthority.Assert guard "+
+				"before the %s mutation — a suspended/locked account's password would "+
+				"be rewritten. A gate nested inside a conditional does not dominate the "+
+				"mutation; place `if err := credentialauthority.Assert(user); err != nil "+
+				"{ return ... }` as a top-level statement (issue #1017).",
+			ruleChangePasswordInactiveGate01, cpgTargetFunc, cpgMutationMethod)}}
+	case assertIdx >= mutationIdx:
+		return []Diagnostic{{Rel: rel, Line: line(assertNode), Message: fmt.Sprintf(
+			"%s: the credentialauthority.Assert guard does not precede %s in %s — the "+
+				"inactive gate must run BEFORE the credential mutation, else the password "+
+				"is committed before the 403 (issue #1017 regression).",
 			ruleChangePasswordInactiveGate01, cpgMutationMethod, cpgTargetFunc)}}
 	default:
 		return nil
 	}
+}
+
+// stmtIsUnconditionalAssert reports whether stmt evaluates a
+// credentialauthority.Assert call on every path that reaches it — i.e. the call
+// sits in a slot that always runs: an ExprStmt/AssignStmt expression, an
+// IfStmt.Init guard (`if err := Assert(...); err != nil`), or a ReturnStmt
+// result. An Assert in an IfStmt/ForStmt/etc. BODY is conditional and returns
+// false (that is the #1017 F2 bypass the Pos-only detector missed).
+func stmtIsUnconditionalAssert(info *types.Info, stmt ast.Stmt) bool {
+	for _, slot := range unconditionalSlots(stmt) {
+		if nodeContainsAssertCall(info, slot) {
+			return true
+		}
+	}
+	return false
+}
+
+// unconditionalSlots returns the sub-nodes of stmt that are evaluated whenever
+// stmt is reached. Crucially it excludes IfStmt.Body/Else, ForStmt.Body, etc.,
+// which run only conditionally.
+func unconditionalSlots(stmt ast.Stmt) []ast.Node {
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		return []ast.Node{s.X}
+	case *ast.AssignStmt:
+		out := make([]ast.Node, 0, len(s.Rhs))
+		for _, e := range s.Rhs {
+			out = append(out, e)
+		}
+		return out
+	case *ast.IfStmt:
+		if s.Init != nil {
+			return []ast.Node{s.Init} // Init runs unconditionally; Body/Else do not
+		}
+		return nil
+	case *ast.ReturnStmt:
+		out := make([]ast.Node, 0, len(s.Results))
+		for _, e := range s.Results {
+			out = append(out, e)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// nodeContainsAssertCall reports whether n's subtree contains a CallExpr whose
+// callee type-resolves to credentialauthority.Assert.
+func nodeContainsAssertCall(info *types.Info, n ast.Node) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		if pkgPath, name, ok := ResolvePackageRef(info, call.Fun); ok &&
+			pkgPath == credAuthorityPkgPath && name == credAuthorityFnName {
+			found = true
+		}
+	})
+	return found
+}
+
+// stmtContainsMutationAnchor reports whether stmt's subtree contains a call to
+// the UpdatePassword mutation anchor (selector-name match; see godoc). The
+// mutation itself may be nested — only the GATE must be unconditional.
+func stmtContainsMutationAnchor(stmt ast.Stmt) bool {
+	found := false
+	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
+		if found {
+			return
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil &&
+			sel.Sel.Name == cpgMutationMethod {
+			found = true
+		}
+	})
+	return found
 }

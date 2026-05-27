@@ -817,18 +817,32 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// (F18: new session must not be caught by the RevokeForSubject sweep inside the
 	// tx, and signing failure should not roll back a committed password change).
 	//
-	// CAS guard (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01): GetByID inside the tx
+	// Row-lock read (#1017 F1): changePasswordInTx reads via GetByIDForUpdate
+	// (PG SELECT ... FOR UPDATE), mirroring sessionlogin and identitymanage.Update.
+	// This serializes the inactive gate + credential write against a concurrent
+	// Lock/Suspend (authzmutate.ApplyInTx → UpdateLockState, which takes the same
+	// row lock): the freeze either commits first (the locked read then rejects at
+	// the gate) or blocks until this tx commits (the change ran while the account
+	// was genuinely active). Without the lock, a freeze committing between a plain
+	// GetByID and UpdatePassword would let a now-frozen account's credential be
+	// rewritten — the CAS guard below does NOT cover this (it pins
+	// password_version, which the freeze does not touch).
+	//
+	// CAS guard (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01): the locked read
 	// snapshots user.PasswordVersion; UpdatePassword's WHERE password_version=$expected
-	// clause rejects the write if a concurrent change raced us to the commit.
+	// clause rejects the write if a concurrent ChangePassword raced us to the commit.
 	// The caller receives ErrVersionConflict (HTTP 409) and should reload + retry.
+	// This is orthogonal to the row lock above (one guards status, the other version).
 	//
 	// bcrypt inside the tx (B-class decision): ChangePassword is low-frequency;
 	// the ~100ms bcrypt cost is acceptable inside a short-lived tx, and keeping
 	// the hash computation next to the CAS write avoids a TOCTOU window where a
 	// concurrent change could replace the hash between hash computation and write.
+	// The FOR UPDATE row lock is held across bcrypt, but only contends with other
+	// writers of the SAME user row — acceptable for a per-user password change.
 	//
-	// mem path outside a live tx (foreign / non-locking TxRunner): GetByID and
-	// UpdatePassword each acquire store.mu independently (per-call), so bcrypt
+	// mem path outside a live tx (foreign / non-locking TxRunner): GetByIDForUpdate
+	// and UpdatePassword each acquire store.mu independently (per-call), so bcrypt
 	// runs between the two locks rather than under a held lock. Cross-method
 	// atomicity is only guaranteed by the mem Store's own TxRunner (live lease)
 	// and by PG; the CAS version check still guards correctness on the mem path
@@ -861,7 +875,9 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 // active transaction. Caller MUST invoke inside RunInTx. Returns the resolved
 // userID so the caller can log and issue a token after the tx commits.
 func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePasswordInput) (string, error) {
-	user, err := s.repo.GetByID(txCtx, input.UserID)
+	// GetByIDForUpdate (FOR UPDATE row lock) — serializes the gate + write against
+	// concurrent Lock/Suspend; see the row-lock note in ChangePassword's godoc (#1017 F1).
+	user, err := s.repo.GetByIDForUpdate(txCtx, input.UserID)
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}
