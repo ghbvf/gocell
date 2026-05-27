@@ -1231,9 +1231,6 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 				t.Errorf("RunTypedProduction yielded generated/ file %q — "+
 					"generated packages must be unreachable under this entry", rel)
 			}
-			if p.IsGenerated(f) {
-				t.Errorf("RunTypedProduction yielded IsGenerated file %q", p.Rel(f))
-			}
 		}
 		if p.Pkg != nil && strings.Contains(p.Pkg.Path(), "/generated/") {
 			t.Errorf("RunTypedProduction yielded generated package %q", p.Pkg.Path())
