@@ -624,7 +624,11 @@ func projectAppend(inst *saga.Instance, kind journal.EventKind, now time.Time) (
 			return 0, err
 		}
 		return saga.StatusCompensating, nil
-	case journal.KindStepCompensated:
+	case journal.KindStepCompensated, journal.KindStepCompensationFailed:
+		// Compensate-phase per-step outcomes — both legal only while
+		// Compensating, status unchanged. KindStepCompensationFailed
+		// (#1181) is the failure variant; see memjournal.applyProjection
+		// for the parallel mem-side branch.
 		if st != saga.StatusCompensating {
 			return 0, journal.NewEventPhaseError(inst.ID, kind, st)
 		}

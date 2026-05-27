@@ -52,6 +52,19 @@ func (a *alwaysOKHeartbeater) Heartbeat(_ context.Context, instanceID, leaseID i
 
 func (a *alwaysOKHeartbeater) Count() int { return int(atomic.LoadInt32(&a.callCount)) }
 
+// staleAfterFirstHeartbeater returns ok=true on the first call (typically the
+// synchronous preflight heartbeat in Execute) and ok=false on every subsequent
+// call (the async tick). This lets tests exercise the "step started → async
+// tick observes stale → cancel" path while still passing the #1181 F6 preflight.
+type staleAfterFirstHeartbeater struct {
+	callCount int32
+}
+
+func (s *staleAfterFirstHeartbeater) Heartbeat(_ context.Context, _, _ idutil.SafeID, _ time.Duration) (bool, error) {
+	n := atomic.AddInt32(&s.callCount, 1)
+	return n == 1, nil // first call ok; subsequent stale
+}
+
 // waitForOnePendingTimer waits for the FakeClock to have at least one pending
 // timer, ensuring the executor goroutine has registered its backoff Sleep
 // before Advance is called. There is no channel signal for "timer registered",
@@ -527,7 +540,10 @@ func TestExecute_LeaseLost_CancelsStepAndReturnsLeaseLost(t *testing.T) {
 	t.Parallel()
 	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
-	hb := newFakeHeartbeater(false) // stale lease from the first beat
+	// First HB call (preflight, #1181 F6) returns ok=true so the step runs;
+	// the next async tick returns ok=false so the goroutine observes stale
+	// mid-execution and cancels the step ctx.
+	hb := &staleAfterFirstHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),

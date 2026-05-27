@@ -21,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // File-local duration consts for values not present in testtime.
@@ -79,23 +78,15 @@ func newTestHarness(t *testing.T, defs ...*ksaga.Definition) *testHarness {
 	disp := &recordingDispatcher{}
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms, // fast tick for clock-driven tests
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
-	}
-
-	exec, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if err != nil {
-		t.Fatalf("newTestHarness: NewExecutor: %v", err)
+		PollInterval:      testtime.D10ms, // fast tick for clock-driven tests
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	c, err := NewCoordinator(j, tx, em, reg, clk,
 		WithConfig(cfg),
 		WithDispatcher(disp),
-		WithExecutor(exec),
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -426,37 +417,24 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 1, // each coordinator claims at most 1 instance
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    1, // each coordinator claims at most 1 instance
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
-	exec1, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if err != nil {
-		t.Fatalf("NewExecutor c1: %v", err)
-	}
 	disp1 := &recordingDispatcher{}
 	em1 := newSafeFakeEmitter()
 	tx1 := newSafeFakeTxRunner()
-	c1, err := NewCoordinator(j, tx1, em1, reg, clk, WithConfig(cfg), WithDispatcher(disp1), WithExecutor(exec1))
+	c1, err := NewCoordinator(j, tx1, em1, reg, clk, WithConfig(cfg), WithDispatcher(disp1))
 	if err != nil {
 		t.Fatalf("NewCoordinator c1: %v", err)
 	}
 
-	exec2, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if err != nil {
-		t.Fatalf("NewExecutor c2: %v", err)
-	}
 	disp2 := &recordingDispatcher{}
 	em2 := newSafeFakeEmitter()
 	tx2 := newSafeFakeTxRunner()
-	c2, err := NewCoordinator(j, tx2, em2, reg, clk, WithConfig(cfg), WithDispatcher(disp2), WithExecutor(exec2))
+	c2, err := NewCoordinator(j, tx2, em2, reg, clk, WithConfig(cfg), WithDispatcher(disp2))
 	if err != nil {
 		t.Fatalf("NewCoordinator c2: %v", err)
 	}
@@ -578,9 +556,10 @@ func TestIntegration_ResumeAfterRestart(t *testing.T) {
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry(def)
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	inst := newInstance(t, defID, clk.Now())
@@ -634,22 +613,8 @@ func startCoordinatorForResume(
 	name string,
 ) (*Coordinator, resumeCoordinatorHandles) {
 	t.Helper()
-	// The executor needs a Heartbeater; use a fresh MemJournal so each
-	// coordinator instance has its own heartbeat journal (the saga journal j is
-	// shared across coordinators for resume semantics).
-	execJ, execJErr := journal.NewMemJournal(clk)
-	if execJErr != nil {
-		t.Fatalf("startCoordinatorForResume %s: NewMemJournal: %v", name, execJErr)
-	}
-	exec, execErr := executor.NewExecutor(execJ, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("startCoordinatorForResume %s: NewExecutor: %v", name, execErr)
-	}
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(cfg), WithDispatcher(&recordingDispatcher{}), WithExecutor(exec))
+		WithConfig(cfg), WithDispatcher(&recordingDispatcher{}))
 	if err != nil {
 		t.Fatalf("NewCoordinator %s: %v", name, err)
 	}
@@ -750,9 +715,10 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	}
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -762,15 +728,7 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 	disp := &recordingDispatcher{}
 
-	exec, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if err != nil {
-		t.Fatalf("NewExecutor: %v", err)
-	}
-
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg), WithDispatcher(disp), WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg), WithDispatcher(disp))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

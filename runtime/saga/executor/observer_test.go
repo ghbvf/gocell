@@ -224,7 +224,11 @@ func (s *staleHeartbeater) Heartbeat(_ context.Context, _, _ idutil.SafeID, _ ti
 func TestExecute_ObserveHeartbeatFailure_StaleLease(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
-	hb := &staleHeartbeater{}
+	// #1181 F6 preflight needs the FIRST heartbeat to be ok=true so the step
+	// actually runs; subsequent (async) ticks go stale and exercise the
+	// observer fan-out. staleHeartbeater (always-false) would short-circuit
+	// at preflight, never invoking the observer for an async tick.
+	hb := &staleAfterFirstHeartbeater{}
 	obs := &recordingObserver{}
 	exec, err := NewExecutor(hb, fc,
 		WithLogger(noopLogger()),
@@ -300,7 +304,7 @@ func TestRunHeartbeat_ObserveHeartbeatFailure_InfraError(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, "inst-err", "lease-err",
+		runHeartbeat(ctx, fc, hb, "inst-err", "lease-err", "def-x",
 			testtime.D5s, testtime.D30s, noopLogger(), noStale, onHBFailure)
 	}()
 

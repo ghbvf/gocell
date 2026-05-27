@@ -45,11 +45,22 @@ const (
 	KindSagaFailed      // saga_failed
 	KindSagaCompensated // saga_compensated
 	KindSagaExpired     // saga_expired
+
+	// KindStepCompensationFailed — a compensation step's CompensateFunc returned
+	// a non-nil error. Legal only while Compensating; status unchanged. Issued
+	// per-step (carries StepName) and distinct from KindStepFailed (which is a
+	// forward Step.Run failure during Running phase). Appended at iota position
+	// 10 (after the terminal kinds) so existing kind wire values 1..9 stay
+	// stable — adding a new kind in the middle would re-number persisted rows.
+	// Introduced by #1181 to give reverse-compensation failures a wire-distinct
+	// vocabulary (previously runCompensation co-opted KindStepFailed, which
+	// the Compensating-phase projection rejected).
+	KindStepCompensationFailed // step_compensation_failed
 )
 
 // Valid reports whether k is a recognized EventKind.
 func (k EventKind) Valid() bool {
-	return k >= KindStepStarted && k <= KindSagaExpired
+	return k >= KindStepStarted && k <= KindStepCompensationFailed
 }
 
 // String returns a human-readable label for k. The snake_case labels map 1:1
@@ -74,6 +85,8 @@ func (k EventKind) String() string {
 		return "saga_compensated"
 	case KindSagaExpired:
 		return "saga_expired"
+	case KindStepCompensationFailed:
+		return "step_compensation_failed"
 	default:
 		return fmt.Sprintf("eventkind(%d)", k)
 	}
@@ -84,7 +97,8 @@ func (k EventKind) String() string {
 // step-scoped.
 func (k EventKind) isStepKind() bool {
 	switch k {
-	case KindStepStarted, KindStepCompleted, KindStepFailed, KindStepCompensated:
+	case KindStepStarted, KindStepCompleted, KindStepFailed, KindStepCompensated,
+		KindStepCompensationFailed:
 		return true
 	default:
 		return false

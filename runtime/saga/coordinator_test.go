@@ -25,7 +25,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // File-local duration consts for values not present in testtime.
@@ -33,21 +32,6 @@ const (
 	// testNegativeDuration is used to test that negative PollInterval is rejected.
 	testNegativeDuration = -testtime.D1ms
 )
-
-// newTestExecutor builds a minimal Executor for coordinator tests using the
-// given MemJournal as Heartbeater. The executor uses a short heartbeat interval
-// so FakeClock-based tests can drive it deterministically.
-func newTestExecutor(t *testing.T, j *journal.MemJournal, clk clock.Clock) *executor.Executor {
-	t.Helper()
-	exec, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if err != nil {
-		t.Fatalf("newTestExecutor: %v", err)
-	}
-	return exec
-}
 
 // ---------------------------------------------------------------------------
 // Minimal in-test fakes (will be reused/shared with integration tests in
@@ -161,36 +145,40 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "zero PollInterval",
 			cfg: Config{
-				PollInterval:   0,
-				ClaimBatchSize: 16,
-				LeaseDuration:  testtime.D30s,
+				PollInterval:      0,
+				ClaimBatchSize:    16,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative PollInterval",
 			cfg: Config{
-				PollInterval:   testNegativeDuration,
-				ClaimBatchSize: 16,
-				LeaseDuration:  testtime.D30s,
+				PollInterval:      testNegativeDuration,
+				ClaimBatchSize:    16,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 			},
 			wantErr: true,
 		},
 		{
 			name: "zero ClaimBatchSize",
 			cfg: Config{
-				PollInterval:   testtime.D200ms,
-				ClaimBatchSize: 0,
-				LeaseDuration:  testtime.D30s,
+				PollInterval:      testtime.D200ms,
+				ClaimBatchSize:    0,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 			},
 			wantErr: true,
 		},
 		{
 			name: "negative ClaimBatchSize",
 			cfg: Config{
-				PollInterval:   testtime.D200ms,
-				ClaimBatchSize: -1,
-				LeaseDuration:  testtime.D30s,
+				PollInterval:      testtime.D200ms,
+				ClaimBatchSize:    -1,
+				LeaseDuration:     testtime.D30s,
+				HeartbeatInterval: testtime.D10s,
 			},
 			wantErr: true,
 		},
@@ -329,9 +317,8 @@ func TestNewCoordinator_HappyPath(t *testing.T) {
 	tx := &fakeTxRunner{}
 	em := &fakeEmitter{}
 	reg := newRegistry()
-	exec := newTestExecutor(t, j, clk)
 
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -601,8 +588,7 @@ func TestRepoReady_BeforeStart_NotRunning(t *testing.T) {
 	clk := newFakeClock()
 	memJ := newMemJournal(clk)
 	j := &stubRepoProberJournal{MemJournal: memJ}
-	exec := newTestExecutor(t, memJ, clk)
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -625,8 +611,7 @@ func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 		MemJournal: memJ,
 		repoErr:    errors.New("repo down"),
 	}
-	exec := newTestExecutor(t, memJ, clk)
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -707,9 +692,7 @@ func TestCoordinator_RepoReadinessConformance(t *testing.T) {
 // RepoReady reflects the journal-delegation path rather than the lifecycle gate.
 func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *Coordinator {
 	t.Helper()
-	memJ := newMemJournal(clk)
-	exec := newTestExecutor(t, memJ, clk)
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -742,8 +725,7 @@ func mustCoordinator(t *testing.T, clk clock.Clock) *Coordinator {
 	tx := &fakeTxRunner{}
 	em := &fakeEmitter{}
 	reg := newRegistry()
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -794,12 +776,12 @@ func TestStop_DrainsInflight(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg), WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -920,12 +902,12 @@ func TestStop_DrainTimeout(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg), WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1150,12 +1132,12 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	tx := &fakeTxRunner{}
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg), WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1246,52 +1228,31 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestNewCoordinator_NilExecutor_FailFast
+// TestNewCoordinator_ConstructsInternalExecutor
 // ---------------------------------------------------------------------------
 
-// TestNewCoordinator_NilExecutor_FailFast verifies that NewCoordinator rejects
-// both a bare-nil and a typed-nil *executor.Executor at construction time.
-func TestNewCoordinator_NilExecutor_FailFast(t *testing.T) {
+// TestNewCoordinator_ConstructsInternalExecutor verifies that NewCoordinator
+// builds its own Executor from the same journal + Config (#1181 F5: WithExecutor
+// was deleted to guarantee claim-and-heartbeat share a journal by construction
+// rather than by caller convention). The test asserts the Coordinator becomes
+// usable without any executor-related option, and that the internal Executor
+// uses the Coordinator's HeartbeatInterval / LeaseDuration.
+func TestNewCoordinator_ConstructsInternalExecutor(t *testing.T) {
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
 	em := &fakeEmitter{}
 	reg := newRegistry()
 
-	tests := []struct {
-		name string
-		opt  Option
-	}{
-		{
-			name: "bare_nil",
-			opt:  WithExecutor(nil),
-		},
-		{
-			name: "typed_nil",
-			opt:  WithExecutor((*executor.Executor)(nil)),
-		},
-		{
-			name: "missing_WithExecutor",
-			opt:  WithConfig(DefaultConfig()), // no WithExecutor at all
-		},
+	c, err := NewCoordinator(j, tx, em, reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator (no opts): %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c, err := NewCoordinator(j, tx, em, reg, clk, tc.opt)
-			if c != nil {
-				t.Error("expected nil Coordinator on nil executor")
-			}
-			if err == nil {
-				t.Fatal("expected non-nil error for nil executor")
-			}
-			var ecErr *errcode.Error
-			if !errors.As(err, &ecErr) {
-				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-			}
-			if ecErr.Kind != errcode.KindInvalid {
-				t.Errorf("kind = %v, want KindInvalid", ecErr.Kind)
-			}
-		})
+	if c == nil {
+		t.Fatal("expected non-nil Coordinator")
+	}
+	if c.executor == nil {
+		t.Error("internal Executor must be constructed; got nil — #1181 F5 invariant violated")
 	}
 }
 
@@ -1326,9 +1287,8 @@ func TestDriveOne_DelegatesToExecutor_Success(t *testing.T) {
 	}
 	em := newSafeFakeEmitter()
 	tx := newSafeFakeTxRunner()
-	exec := newTestExecutor(t, j, clk)
 
-	c, err := NewCoordinator(j, tx, em, reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, tx, em, reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1392,8 +1352,7 @@ func TestDriveOne_OutcomeFailed_NoCompensation_MarksFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1477,8 +1436,7 @@ func TestDriveOne_OutcomeFailed_TriggersReverseCompensation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1566,8 +1524,7 @@ func TestDriveOne_OutcomeExpired_MarksExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1642,8 +1599,7 @@ func TestDriveOne_OutcomeCanceled_NoTerminalWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1708,13 +1664,6 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 	j := &staleAfterFirstHBJournal{MemJournal: memJ}
 
 	// Short heartbeat interval so the loss is detected quickly.
-	exec, execErr := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10ms),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("NewExecutor: %v", execErr)
-	}
 
 	reg, err := ksaga.NewInMemoryRegistry(&ksaga.Definition{
 		ID: defID,
@@ -1736,8 +1685,17 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 
 	var logBuf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Use a short HeartbeatInterval so the executor's heartbeat goroutine
+	// fires after the test's clk.Advance(testtime.D10ms) below and observes
+	// the SetStale flag (forcing OutcomeLeaseLost).
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithExecutor(exec), WithLogger(logger))
+		WithLogger(logger),
+		WithConfig(Config{
+			PollInterval:      testtime.D10ms,
+			ClaimBatchSize:    16,
+			LeaseDuration:     testtime.D60s,
+			HeartbeatInterval: 5 * time.Millisecond,
+		}))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1872,8 +1830,7 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed(t *testing.
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	exec := newTestExecutor(t, j, clk)
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithExecutor(exec))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1972,13 +1929,13 @@ func TestDriveOne_EmitFails_AppendRolledBack(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-	exec := newTestExecutor(t, memJ, clk)
 
-	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg), WithExecutor(exec))
+	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -2048,13 +2005,13 @@ func TestDriveOne_MarkTerminalFails_AppendRolledBack(t *testing.T) {
 	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-	exec := newTestExecutor(t, memJ, clk)
 
-	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg), WithExecutor(exec))
+	c, err := NewCoordinator(staged, tx, em, reg, clk, WithConfig(cfg))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

@@ -55,13 +55,27 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	defaultCoordPollInterval   = 200 * time.Millisecond
-	defaultCoordClaimBatchSize = 16
-	defaultCoordLeaseDuration  = 30 * time.Second
+	defaultCoordPollInterval      = 200 * time.Millisecond
+	defaultCoordClaimBatchSize    = 16
+	defaultCoordLeaseDuration     = 30 * time.Second
+	defaultCoordHeartbeatInterval = 10 * time.Second // = LeaseDuration / 3
 )
 
+// minLeaseToHeartbeatRatio is the minimum factor by which LeaseDuration must
+// exceed HeartbeatInterval (LeaseDuration > HeartbeatInterval * ratio) so at
+// least one heartbeat fires before lease expiry. Mirrors the Executor's
+// internal heartbeatLeaseSafetyFactor and is checked here so the Coordinator's
+// Config validation fails fast at construction (#1181 F5: Executor is
+// constructed internally with the Coordinator's journal — caller cannot
+// inject mismatched intervals).
+const minLeaseToHeartbeatRatio = 2
+
 // Config holds tunable parameters for the Coordinator engine. Zero values are
-// replaced by DefaultConfig() inside NewCoordinator.
+// replaced by DefaultConfig() inside NewCoordinator. HeartbeatInterval +
+// LeaseDuration flow into the internally-constructed Executor as the single
+// source of truth — #1181 F5 deleted the WithExecutor option that previously
+// allowed callers to inject an Executor with a different journal / lease;
+// claim and heartbeat are now guaranteed same-source by construction.
 type Config struct {
 	// PollInterval is how often tickLoop calls ClaimPending. Default 200ms.
 	PollInterval time.Duration
@@ -69,20 +83,28 @@ type Config struct {
 	// Default 16.
 	ClaimBatchSize int
 	// LeaseDuration is how long a claimed lease is held. Default 30s.
-	// Also used as the per-instance distlock TTL in leader-elect mode.
+	// Also used as the per-instance distlock TTL in leader-elect mode AND
+	// forwarded to the internal Executor for heartbeat lease renewal.
 	LeaseDuration time.Duration
+	// HeartbeatInterval is how often the internal Executor's per-step
+	// heartbeat goroutine renews the lease. Default 10s (= LeaseDuration/3).
+	// Must satisfy HeartbeatInterval * minLeaseToHeartbeatRatio < LeaseDuration
+	// so at least one heartbeat lands before expiry.
+	HeartbeatInterval time.Duration
 }
 
 // DefaultConfig returns a Config with documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		PollInterval:   defaultCoordPollInterval,
-		ClaimBatchSize: defaultCoordClaimBatchSize,
-		LeaseDuration:  defaultCoordLeaseDuration,
+		PollInterval:      defaultCoordPollInterval,
+		ClaimBatchSize:    defaultCoordClaimBatchSize,
+		LeaseDuration:     defaultCoordLeaseDuration,
+		HeartbeatInterval: defaultCoordHeartbeatInterval,
 	}
 }
 
-// Validate returns nil iff all fields are positive.
+// Validate returns nil iff all fields are positive and the heartbeat /
+// lease ratio is safe.
 func (c Config) Validate() error {
 	if c.PollInterval <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -95,6 +117,14 @@ func (c Config) Validate() error {
 	if c.LeaseDuration <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.LeaseDuration must be positive")
+	}
+	if c.HeartbeatInterval <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga coordinator: Config.HeartbeatInterval must be positive")
+	}
+	if c.HeartbeatInterval*minLeaseToHeartbeatRatio >= c.LeaseDuration {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga coordinator: Config.HeartbeatInterval*2 must be < LeaseDuration")
 	}
 	return nil
 }
@@ -139,11 +169,16 @@ type Coordinator struct {
 	locker         distlock.Locker
 	leaderElectNil bool
 
-	// executor is the required per-step execution engine. Injected via
-	// WithExecutor. executorNil records a typed-nil passed to WithExecutor
-	// so NewCoordinator can fail-fast (strong-dependency wiring option).
-	executor    *executor.Executor
-	executorNil bool
+	// executor is the per-step execution engine constructed internally by
+	// NewCoordinator using c.journal + cfg.HeartbeatInterval / LeaseDuration.
+	// #1181 F5: previously injected via WithExecutor — that path allowed a
+	// caller to inject an Executor with a different journal / lease config,
+	// breaking the "claim and heartbeat are same-source" invariant. The
+	// invariant is now enforced by construction (Executor's Heartbeater = the
+	// Coordinator's journal). observer / tracer are caller-configurable via
+	// WithObserver / WithTracer and forwarded into the internal Executor.
+	executor *executor.Executor
+	observer executor.Observer // default NopObserver{}, fan-out via WithObserver
 
 	// lifecycle (mirrors runtime/outbox.Relay)
 	state   atomic.Int32
@@ -207,6 +242,7 @@ func NewCoordinator(
 		logger:     slog.Default(),
 		cfg:        DefaultConfig(),
 		tracer:     wrapper.NoopTracer{},
+		observer:   executor.NopObserver{},
 		readyCh:    make(chan struct{}),
 	}
 	for _, o := range opts {
@@ -216,13 +252,24 @@ func NewCoordinator(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga: WithLeaderElect locker must not be nil; pass a non-nil distlock.Locker or omit the option")
 	}
-	if c.executorNil || c.executor == nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"runtime/saga: executor required; pass a non-nil *executor.Executor via WithExecutor")
-	}
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
 	}
+	// Construct the internal Executor with c.journal as its Heartbeater so
+	// claim and heartbeat are guaranteed same-source by type-system
+	// construction (#1181 F5). observer / tracer flow from Coordinator-level
+	// options into Executor — single tracing root, single observer fan-out.
+	exec, err := executor.NewExecutor(j, clk,
+		executor.WithHeartbeatInterval(c.cfg.HeartbeatInterval),
+		executor.WithLeaseDuration(c.cfg.LeaseDuration),
+		executor.WithObserver(c.observer),
+		executor.WithTracer(c.tracer),
+		executor.WithLogger(c.logger),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("runtime/saga: construct internal executor: %w", err)
+	}
+	c.executor = exec
 	// Leader-elect uses LeaseDuration as the per-instance distlock TTL, which
 	// distlock.Acquire rejects below distlock.MinTTL (sub-ms TTLs truncate to a
 	// permanent lock in Redis). Fail fast at construction rather than silently
@@ -544,6 +591,18 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 	if err != nil {
 		return fmt.Errorf("load events: %w", err)
 	}
+
+	// 3a. Status-recovery branch (#1181 F1). A reclaimed instance whose
+	// projection is Compensating (KindCompensationStarted already on the log)
+	// must NOT run any forward Step.Run — that would produce duplicate
+	// external side-effects on leader handoff or process restart mid-rollback.
+	// runCompensation is idempotent: it derives the remaining work from
+	// events (committed - already-compensated) and short-circuits when the
+	// reverse walk is complete.
+	if ci.Instance.Status == ksaga.StatusCompensating {
+		return c.runCompensation(ctx, ci, def, events, nil /* trigger reason recovered from events */)
+	}
+
 	cursor, prevState, foldErr := foldEvents(events, def)
 	if foldErr != nil {
 		c.logger.WarnContext(ctx, "saga: fold failed, marking terminal",
@@ -671,6 +730,13 @@ func shouldCompensate(events []journal.Event, def *ksaga.Definition) bool {
 //
 // ref: itimofeev/go-saga coordinator.go abort() — best-effort reverse
 // compensation with error aggregation.
+// runErr is the trigger error from the forward-step failure that originally
+// invoked compensation. It is nil when this is a RECOVERY invocation
+// (#1181 F1): driveOne re-entered runCompensation because the projection
+// is already Compensating (a prior coordinator crashed mid-rollback or a
+// leader handoff occurred between KindCompensationStarted and StatusCompensated).
+// In recovery mode appendCompensationStarted is skipped (event already on
+// log) and the reverse walk derives remaining work from events.
 func (c *Coordinator) runCompensation(
 	ctx context.Context,
 	ci journal.ClaimedInstance,
@@ -678,33 +744,26 @@ func (c *Coordinator) runCompensation(
 	events []journal.Event,
 	runErr error,
 ) error {
-	// Step a: append KindCompensationStarted in tx to push status → Compensating.
-	if err := c.appendCompensationStarted(ctx, ci, runErr); err != nil {
-		return err
+	// Step a: append KindCompensationStarted unless we are recovering — in
+	// recovery the event is already on the log (otherwise the projected
+	// Status would not be Compensating).
+	recovering := ci.Instance.Status == ksaga.StatusCompensating
+	if !recovering {
+		if err := c.appendCompensationStarted(ctx, ci, runErr); err != nil {
+			return err
+		}
 	}
 
-	// Step b: collect committed steps + build step index.
+	// Step b: collect committed steps + build step index. Steps that already
+	// emitted KindStepCompensated / KindStepCompensationFailed are filtered
+	// out so a recovering reverse walk only runs the work that remains
+	// (#1181 F2). Side-effects are NOT re-applied on recovery.
 	committed, stepByName := collectCommittedSteps(events, def)
 
 	// Step c: reverse-walk under heartbeat.
 	var compensateErrors []error
 	walkErr := c.executor.RunWithHeartbeat(ctx, &ci.Instance, ci.LeaseID, func(hbCtx context.Context) error {
-		for i := len(committed) - 1; i >= 0; i-- {
-			if hbCtx.Err() != nil {
-				break // lease lost or parent canceled; stop accepting new compensate work
-			}
-			cs := committed[i]
-			step, found := stepByName[cs.name]
-			if !found {
-				c.logger.WarnContext(hbCtx, "saga: compensation: unknown committed step name, skipping",
-					slog.String("instance_id", string(ci.Instance.ID)),
-					slog.String("step_name", string(cs.name)))
-				continue
-			}
-			if compensateErr := c.compensateOneStep(hbCtx, ci, step, cs.payload); compensateErr != nil {
-				compensateErrors = append(compensateErrors, compensateErr)
-			}
-		}
+		c.reverseWalkCompensate(hbCtx, ci, committed, stepByName, &compensateErrors)
 		// hbCtx.Err() is propagated so RunWithHeartbeat's lease-loss override
 		// kicks in when the cancel-cause is errLeaseLost; the outer
 		// IsLeaseLost(walkErr) check then routes to the "another coordinator
@@ -727,6 +786,37 @@ func (c *Coordinator) runCompensation(
 	return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusCompensated)
 }
 
+// reverseWalkCompensate iterates committed steps in reverse order under an
+// active heartbeat, invoking compensateOneStep for each. Errors are appended
+// to compensateErrors (slice owned by the caller). The walk short-circuits on
+// hbCtx.Err() so a stale-lease cancellation drops out without performing
+// further side effects. Extracted from runCompensation to keep that
+// function's cognitive complexity ≤ 15.
+func (c *Coordinator) reverseWalkCompensate(
+	hbCtx context.Context,
+	ci journal.ClaimedInstance,
+	committed []committedStepEntry,
+	stepByName map[idutil.SafeID]ksaga.Step,
+	compensateErrors *[]error,
+) {
+	for i := len(committed) - 1; i >= 0; i-- {
+		if hbCtx.Err() != nil {
+			return
+		}
+		cs := committed[i]
+		step, found := stepByName[cs.name]
+		if !found {
+			c.logger.WarnContext(hbCtx, "saga: compensation: unknown committed step name, skipping",
+				slog.String("instance_id", string(ci.Instance.ID)),
+				slog.String("step_name", string(cs.name)))
+			continue
+		}
+		if compensateErr := c.compensateOneStep(hbCtx, ci, step, cs.payload); compensateErr != nil {
+			*compensateErrors = append(*compensateErrors, compensateErr)
+		}
+	}
+}
+
 // appendCompensationStarted appends KindCompensationStarted in a transaction.
 func (c *Coordinator) appendCompensationStarted(ctx context.Context, ci journal.ClaimedInstance, runErr error) error {
 	if err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
@@ -747,17 +837,43 @@ type committedStepEntry struct {
 	payload []byte
 }
 
-// collectCommittedSteps collects all KindStepCompleted events in forward order
-// and builds a name→Step index. Extracted from runCompensation to reduce complexity.
+// collectCommittedSteps collects committed steps eligible for reverse
+// compensation. A step is eligible when KindStepCompleted appears in the
+// event log AND no KindStepCompensated / KindStepCompensationFailed already
+// records its compensate outcome (#1181 F2 — without this filter, recovery
+// after a crash mid-rollback would re-run compensate on steps already
+// rolled back, producing duplicate external side effects).
+//
+// Returns committed entries in forward order; runCompensation walks them
+// reverse. The name→Step index is built from def.Steps for compensate
+// dispatch.
 func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]committedStepEntry, map[idutil.SafeID]ksaga.Step) {
+	// Mark every step name that already has a compensate outcome (success or
+	// failure). Both kinds remove the step from the reverse-walk frontier:
+	// once the executor's CompensateFunc has run we MUST NOT run it a second
+	// time on the same persisted state, even if the first attempt failed —
+	// the operator can rerun the saga or surface the failure via the
+	// terminal StatusFailed projection.
+	compensated := make(map[idutil.SafeID]struct{})
+	for i := range events {
+		switch events[i].Kind {
+		case journal.KindStepCompensated, journal.KindStepCompensationFailed:
+			compensated[events[i].StepName] = struct{}{}
+		}
+	}
+
 	var committed []committedStepEntry
 	for i := range events {
-		if events[i].Kind == journal.KindStepCompleted {
-			committed = append(committed, committedStepEntry{
-				name:    events[i].StepName,
-				payload: events[i].Payload,
-			})
+		if events[i].Kind != journal.KindStepCompleted {
+			continue
 		}
+		if _, done := compensated[events[i].StepName]; done {
+			continue
+		}
+		committed = append(committed, committedStepEntry{
+			name:    events[i].StepName,
+			payload: events[i].Payload,
+		})
 	}
 	stepByName := make(map[idutil.SafeID]ksaga.Step, len(def.Steps))
 	for _, s := range def.Steps {
@@ -776,6 +892,15 @@ func (c *Coordinator) compensateOneStep(
 	step ksaga.Step,
 	committedPayload []byte,
 ) error {
+	// #1181 F4: a step with no CompensateFunc has nothing to undo. Writing
+	// KindStepCompensated for it would falsely claim a rollback happened —
+	// downstream replay would treat the step as compensated when in fact the
+	// forward side-effect is still in place. Skip both the executor call
+	// AND the journal event; the step is structurally outside the reverse
+	// walk's vocabulary.
+	if step.Compensate == nil {
+		return nil
+	}
 	compensateErr := c.executor.Compensate(ctx, &ci.Instance, step, committedPayload)
 	if compensateErr != nil {
 		c.logger.WarnContext(ctx, "saga: compensation: step compensate failed, continuing",
@@ -785,13 +910,13 @@ func (c *Coordinator) compensateOneStep(
 			slog.Any("error", compensateErr))
 		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 			_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
-				Kind:     journal.KindStepFailed,
+				Kind:     journal.KindStepCompensationFailed,
 				StepName: step.Name,
 				Payload:  failurePayload(compensateErr),
 			})
 			return aErr
 		}); txErr != nil {
-			c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepFailed",
+			c.logger.WarnContext(ctx, "saga: compensation: failed to append KindStepCompensationFailed",
 				slog.String("instance_id", string(ci.Instance.ID)),
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("step_name", string(step.Name)),

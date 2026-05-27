@@ -35,8 +35,9 @@ func TestEventKind_Valid(t *testing.T) {
 		{journal.KindSagaFailed, true},
 		{journal.KindSagaCompensated, true},
 		{journal.KindSagaExpired, true},
+		{journal.KindStepCompensationFailed, true},
 		{journal.EventKind(0), false},
-		{journal.EventKind(10), false},
+		{journal.EventKind(11), false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -62,6 +63,7 @@ func TestEventKind_String(t *testing.T) {
 		{journal.KindSagaFailed, "saga_failed"},
 		{journal.KindSagaCompensated, "saga_compensated"},
 		{journal.KindSagaExpired, "saga_expired"},
+		{journal.KindStepCompensationFailed, "step_compensation_failed"},
 		{journal.EventKind(0), "eventkind(0)"},
 		{journal.EventKind(99), "eventkind(99)"},
 	}
@@ -91,6 +93,7 @@ func TestEventKind_IsTerminal(t *testing.T) {
 		{journal.KindSagaFailed, true},
 		{journal.KindSagaCompensated, true},
 		{journal.KindSagaExpired, true},
+		{journal.KindStepCompensationFailed, false},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -142,6 +145,7 @@ func TestEvent_ValidateForAppend_StepKinds(t *testing.T) {
 		journal.KindStepCompleted,
 		journal.KindStepFailed,
 		journal.KindStepCompensated,
+		journal.KindStepCompensationFailed,
 	}
 
 	payloads := []struct {
@@ -249,7 +253,7 @@ func TestEvent_ValidateForAppend_InvalidKind(t *testing.T) {
 	t.Parallel()
 	tests := []journal.EventKind{
 		journal.EventKind(0),
-		journal.EventKind(10),
+		journal.EventKind(11),
 	}
 	for _, k := range tests {
 		k := k
@@ -274,6 +278,7 @@ func TestEvent_ValidateForAppend_StepNameRequired(t *testing.T) {
 		journal.KindStepCompleted,
 		journal.KindStepFailed,
 		journal.KindStepCompensated,
+		journal.KindStepCompensationFailed,
 	}
 	for _, kind := range stepKinds {
 		kind := kind

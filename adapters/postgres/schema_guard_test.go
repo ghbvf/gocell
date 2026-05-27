@@ -60,9 +60,10 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup);
 	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout);
 	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
-	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10).
-	assert.Equal(t, int64(40), v,
-		"expected version should be exactly 40 (current migration max — 040 saga tables)")
+	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10);
+	// 041 extends saga_events.kind CHECK range from 1..9 to 1..10 (#1181 F3 — adds KindStepCompensationFailed).
+	assert.Equal(t, int64(41), v,
+		"expected version should be exactly 41 (current migration max — 041 saga_events kind range)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Option is a functional option for Executor construction.
@@ -51,9 +52,12 @@ func WithLeaseDuration(d time.Duration) Option {
 // Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md):
 // Tracer is an optional adapter wiring, not a fail-fast requirement —
 // NoopTracer is a correct zero-allocation default for tests and dev mode.
+// Typed-nil (e.g. (*adapters/otel.Tracer)(nil)) is rejected via
+// validation.IsNilInterface (#1181 F9) so a downstream tracer.Start call
+// never dereferences a nil receiver.
 func WithTracer(t wrapper.Tracer) Option {
 	return func(e *Executor) {
-		if t != nil {
+		if !validation.IsNilInterface(t) {
 			e.tracer = t
 		}
 	}
@@ -67,10 +71,12 @@ func WithTracer(t wrapper.Tracer) Option {
 // Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md): Observer
 // is an optional best-effort sink, not a wiring-required dependency. NopObserver
 // is a correct zero-value default. New composition roots may attach a metrics
-// collector without forcing every test to inject one.
+// collector without forcing every test to inject one. Typed-nil (e.g. a nil
+// *SagaStepCollector) is rejected via validation.IsNilInterface (#1181 F8)
+// so a downstream method call never dereferences a nil receiver.
 func WithObserver(o Observer) Option {
 	return func(e *Executor) {
-		if o != nil {
+		if !validation.IsNilInterface(o) {
 			e.observer = o
 		}
 	}

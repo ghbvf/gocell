@@ -67,6 +67,19 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 			"runtime/observability/metrics: SagaStepCollector cellID is required")
 	}
 
+	// #1181 F11: atomic registration. If any CounterVec call fails mid-way,
+	// the successfully-registered counters from earlier in the sequence are
+	// torn down LIFO so the provider's registry does not retain orphans (a
+	// subsequent retry must be free to re-register under the same names).
+	// prometheus/client_golang Registry.Unregister provides the equivalent
+	// rollback primitive that this mirrors.
+	var registered []kernelmetrics.Collector
+	rollbackOnErr := func() {
+		for i := len(registered) - 1; i >= 0; i-- {
+			_ = p.Unregister(registered[i])
+		}
+	}
+
 	outcome, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name: "saga_step_outcome_total",
 		Help: "Total saga step Execute outcomes (succeeded/failed/expired/canceled/lease_lost). " +
@@ -77,6 +90,7 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 	if err != nil {
 		return nil, fmt.Errorf("runtime/observability/metrics: register saga_step_outcome_total: %w", err)
 	}
+	registered = append(registered, outcome)
 
 	retry, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name:       "saga_step_retry_total",
@@ -84,8 +98,10 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 		LabelNames: []string{"cell", "definition_id", "step_name"},
 	})
 	if err != nil {
+		rollbackOnErr()
 		return nil, fmt.Errorf("runtime/observability/metrics: register saga_step_retry_total: %w", err)
 	}
+	registered = append(registered, retry)
 
 	hbFail, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name: "saga_heartbeat_failed_total",
@@ -95,6 +111,7 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
+		rollbackOnErr()
 		return nil, fmt.Errorf("runtime/observability/metrics: register saga_heartbeat_failed_total: %w", err)
 	}
 

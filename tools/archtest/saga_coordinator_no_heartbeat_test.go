@@ -84,12 +84,27 @@ const heartbeatMethodName = "Heartbeat"
 
 // TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga
 // fails if any production (non-test) file under runtime/saga/ — excluding
-// the runtime/saga/executor/ subpackage — invokes journal.Journal.Heartbeat.
+// the runtime/saga/executor/ subpackage — references a Heartbeat method
+// whose signature matches the Heartbeater shape:
 //
-// Uses RunTyped because correctness requires resolving the method's
-// receiver type to kernel/saga/journal.Journal — a string-anchor scan on
-// the literal "Heartbeat" identifier would Soft-fail an unrelated future
-// method named Heartbeat on a different type (e.g., http.Heartbeat helper).
+//	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID,
+//	          leaseDuration time.Duration) (bool, error)
+//
+// This is broader than the original "only flag journal.Journal.Heartbeat"
+// check (#1181 F13) because the same anti-pattern can be re-introduced via:
+//
+//   - executor.Heartbeater (narrow interface) re-imported by a coordinator
+//   - a local helper interface in package saga that duplicates the shape
+//   - a struct method on a coordinator-private type
+//
+// All such forms violate the funnel — Coordinator must delegate lease
+// maintenance to executor.Execute / RunWithHeartbeat, never call Heartbeat
+// itself.
+//
+// AST coverage (#1181 F14): both direct calls (`x.Heartbeat(...)`) AND
+// method values (`f := x.Heartbeat`) are scanned. A method value would
+// otherwise let a coordinator stash the function pointer and call it later
+// via Ident, bypassing a SelectorExpr-only check.
 func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 
@@ -112,38 +127,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t
 				continue
 			}
 
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return
-				}
-				if sel.Sel == nil || sel.Sel.Name != heartbeatMethodName {
-					return
-				}
-				fn, ok := ResolveMethodCall(p.TypesInfo, sel)
-				if !ok || fn == nil {
-					return
-				}
-				// Confirm the method belongs to kernel/saga/journal.Journal
-				// (not some other interface that happens to also have a
-				// Heartbeat method).
-				if !methodFromJournalInterface(fn) {
-					return
-				}
-				pos := p.Fset.Position(call.Pos())
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"%s: forbidden direct call to journal.Journal.Heartbeat in runtime/saga; "+
-							"per-step lease maintenance is funneled through runtime/saga/executor "+
-							"(Executor.Execute / Executor.RunWithHeartbeat). If you need a "+
-							"non-step heartbeat (e.g. extending lease across an outer operation), "+
-							"call Executor.RunWithHeartbeat — do NOT re-introduce a centralized "+
-							"heartbeat goroutine.",
-						sagaCoordinatorNoHeartbeatLoopRule),
-				})
-			})
+			out = append(out, scanHeartbeatSelectors(p, file, rel)...)
 		}
 		return out
 	})
@@ -151,16 +135,53 @@ func TestSagaCoordinatorNoHeartbeatLoop_A1_NoJournalHeartbeatCallInRuntimeSaga(t
 	Report(t, sagaCoordinatorNoHeartbeatLoopRule+"-A1", diags)
 }
 
-// methodFromJournalInterface reports whether fn (a method func object) was
-// declared on kernel/saga/journal.Journal. The receiver of a method on an
-// interface is the interface type itself; we unwrap that to a *types.Named
-// and check (Pkg.Path, Name) == (kernel/saga/journal, Journal).
+// scanHeartbeatSelectors walks every SelectorExpr whose Sel.Name == "Heartbeat"
+// (both inside CallExpr and as a method value) and emits a diagnostic when the
+// receiver implements the Heartbeater-shape signature.
+func scanHeartbeatSelectors(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var out []Diagnostic
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != heartbeatMethodName {
+			return
+		}
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+		if !ok || fn == nil {
+			return
+		}
+		if !methodIsHeartbeaterShape(fn) {
+			return
+		}
+		pos := p.Fset.Position(sel.Pos())
+		out = append(out, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"%s: forbidden reference to a Heartbeater-shape .Heartbeat method in runtime/saga; "+
+					"per-step lease maintenance is funneled through runtime/saga/executor "+
+					"(Executor.Execute / Executor.RunWithHeartbeat). If you need a "+
+					"non-step heartbeat (e.g. extending lease across an outer operation), "+
+					"call Executor.RunWithHeartbeat — do NOT re-introduce a centralized "+
+					"heartbeat goroutine.",
+				sagaCoordinatorNoHeartbeatLoopRule),
+		})
+	})
+	return out
+}
+
+// methodIsHeartbeaterShape reports whether fn (a method func object) has the
+// signature `Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID,
+// leaseDuration time.Duration) (bool, error)`. The shape check is structural
+// — it does not require the receiver to be kernel/saga/journal.Journal so
+// new interfaces / local helpers that duplicate the shape are also caught
+// (#1181 F13).
 //
-// This pattern mirrors sagaJournalHolderSealRule's resolvedTypeIsJournal —
-// kept inline (rather than calling out to that helper) so the two archtests
-// can evolve independently if Journal moves packages, and so a misdirected
-// future generalization can't accidentally relax both at once.
-func methodFromJournalInterface(fn *types.Func) bool {
+// Shape constants:
+//
+//	params: 4 ⇒ context.Context, idutil.SafeID, idutil.SafeID, time.Duration
+//	results: 2 ⇒ bool, error
+//
+// Receiver type is not inspected; only the parameter and result types matter.
+func methodIsHeartbeaterShape(fn *types.Func) bool {
 	if fn == nil {
 		return false
 	}
@@ -168,31 +189,66 @@ func methodFromJournalInterface(fn *types.Func) bool {
 	if !ok {
 		return false
 	}
-	recv := sig.Recv()
-	if recv == nil {
+	if sig.Recv() == nil {
+		return false // not a method
+	}
+	params := sig.Params()
+	if params.Len() != 4 {
 		return false
 	}
-	recvType := recv.Type()
-	// Unwrap a pointer receiver (interfaces don't normally have pointer
-	// receivers, but cover both shapes for defensive consistency with
-	// resolvedTypeIsJournal).
-	if ptr, ok := recvType.(*types.Pointer); ok {
-		recvType = ptr.Elem()
+	results := sig.Results()
+	if results.Len() != 2 {
+		return false
 	}
-	named, ok := recvType.(*types.Named)
+	if !typeIsNamed(params.At(0).Type(), "context", "Context") {
+		return false
+	}
+	if !typeIsNamed(params.At(1).Type(), heartbeaterIdutilPkgName, heartbeaterSafeIDType) {
+		return false
+	}
+	if !typeIsNamed(params.At(2).Type(), heartbeaterIdutilPkgName, heartbeaterSafeIDType) {
+		return false
+	}
+	if !typeIsNamed(params.At(3).Type(), "time", "Duration") {
+		return false
+	}
+	if b, ok := results.At(0).Type().(*types.Basic); !ok || b.Kind() != types.Bool {
+		return false
+	}
+	if named, ok := results.At(1).Type().(*types.Named); !ok ||
+		named.Obj() == nil || named.Obj().Name() != "error" {
+		return false
+	}
+	return true
+}
+
+// heartbeaterIdutilPkgName / heartbeaterSafeIDType carry the package-suffix
+// and type-name used by Heartbeater-shape param-1 + param-2
+// (instanceID, leaseID idutil.SafeID). Names are package-prefixed to avoid
+// colliding with safeid_funnel_test.go's constants of the same intent.
+const (
+	heartbeaterIdutilPkgName = "idutil"
+	heartbeaterSafeIDType    = "SafeID"
+)
+
+// typeIsNamed reports whether t resolves to a named type whose enclosing
+// package's import-path *suffix* equals pkgSuffix and whose declared name
+// equals typeName. Suffix matching is used because callers refer to
+// idutil.SafeID via the local name even when the package is at a long path.
+func typeIsNamed(t types.Type, pkgSuffix, typeName string) bool {
+	named, ok := t.(*types.Named)
 	if !ok {
 		return false
 	}
 	obj := named.Obj()
-	if obj == nil {
-		return false
-	}
-	if obj.Name() != journalInterfaceTypeName {
+	if obj == nil || obj.Name() != typeName {
 		return false
 	}
 	pkg := obj.Pkg()
 	if pkg == nil {
+		// "error" lives in the universe scope (Pkg == nil); caller handles
+		// that case directly without typeIsNamed.
 		return false
 	}
-	return pkg.Path() == journalInterfacePkgPath
+	return pkg.Path() == pkgSuffix || strings.HasSuffix(pkg.Path(), "/"+pkgSuffix)
 }

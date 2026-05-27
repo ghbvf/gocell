@@ -59,7 +59,7 @@ func runHeartbeat(
 	ctx context.Context,
 	clk clock.Clock,
 	hb Heartbeater,
-	instanceID, leaseID idutil.SafeID,
+	instanceID, leaseID, definitionID idutil.SafeID,
 	interval, leaseDuration time.Duration,
 	logger *slog.Logger,
 	onStale func(),
@@ -75,9 +75,14 @@ func runHeartbeat(
 		case <-ticker.C():
 			ok, err := hb.Heartbeat(ctx, instanceID, leaseID, leaseDuration)
 			if err != nil {
+				// #1181 F12: include reason + definition_id so per-definition
+				// dashboards can group heartbeat failures without parsing the
+				// observer counter labels separately.
 				logger.WarnContext(ctx, "saga executor: heartbeat failed",
 					slog.String("instance_id", string(instanceID)),
+					slog.String("definition_id", string(definitionID)),
 					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureInfraError)),
 					slog.Any("error", err),
 				)
 				onHBFailure(HeartbeatFailureInfraError)
@@ -86,7 +91,9 @@ func runHeartbeat(
 			if !ok {
 				logger.InfoContext(ctx, "saga executor: lease lost (stale); canceling step",
 					slog.String("instance_id", string(instanceID)),
+					slog.String("definition_id", string(definitionID)),
 					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureStaleLease)),
 				)
 				onHBFailure(HeartbeatFailureStaleLease)
 				onStale()

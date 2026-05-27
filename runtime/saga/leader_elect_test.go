@@ -26,15 +26,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
-	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // leaderElectCfg is a fast-tick config shared by the leader-elect tests.
 func leaderElectCfg() Config {
 	return Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 16,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
 }
 
@@ -63,15 +63,8 @@ func newLeaderElectCoordinator(
 ) (*Coordinator, *recordingDispatcher) {
 	t.Helper()
 	disp := &recordingDispatcher{}
-	exec, execErr := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("newLeaderElectCoordinator: NewExecutor: %v", execErr)
-	}
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(leaderElectCfg()), WithDispatcher(disp), WithLeaderElect(locker), WithExecutor(exec))
+		WithConfig(leaderElectCfg()), WithDispatcher(disp), WithLeaderElect(locker))
 	if err != nil {
 		t.Fatalf("NewCoordinator(WithLeaderElect): %v", err)
 	}
@@ -148,15 +141,8 @@ func TestAcquireLead_SingleProcess_AlwaysLeads(t *testing.T) {
 	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry()
-	exec, execErr := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("NewExecutor: %v", execErr)
-	}
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(leaderElectCfg()), WithExecutor(exec))
+		WithConfig(leaderElectCfg()))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -381,15 +367,8 @@ func TestStart_LeaderElect_EmitsLeaderElectMode(t *testing.T) {
 	// log via slog — bytes.Buffer is not concurrency-safe (go test -race race).
 	var buf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	exec, execErr := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("NewExecutor: %v", execErr)
-	}
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger), WithExecutor(exec))
+		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -440,15 +419,8 @@ func captureLeaderCoord(t *testing.T, clk *clockmock.FakeClock, locker distlock.
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry()
-	exec, execErr := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D10s),
-		executor.WithLeaseDuration(testtime.D30s),
-	)
-	if execErr != nil {
-		t.Fatalf("captureLeaderCoord: NewExecutor: %v", execErr)
-	}
 	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger), WithExecutor(exec))
+		WithConfig(leaderElectCfg()), WithLeaderElect(locker), WithLogger(logger))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -609,9 +581,10 @@ const (
 func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 	t.Parallel()
 	subMsCfg := Config{
-		PollInterval:   subMsPoll,
-		ClaimBatchSize: 16,
-		LeaseDuration:  subMsLease,
+		PollInterval:      subMsPoll,
+		ClaimBatchSize:    16,
+		LeaseDuration:     subMsLease,
+		HeartbeatInterval: 100 * time.Microsecond, // satisfies HeartbeatInterval*2 < LeaseDuration
 	}
 	if err := subMsCfg.Validate(); err != nil {
 		t.Fatalf("precondition: sub-ms cfg must pass Config.Validate, got %v", err)
@@ -623,22 +596,12 @@ func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry()
 
-	// newSubMsExecutor builds an executor with sub-ms lease matching subMsCfg.
-	newSubMsExec := func(t *testing.T) *executor.Executor {
-		t.Helper()
-		exec, err := executor.NewExecutor(j, clk,
-			executor.WithHeartbeatInterval(100*time.Microsecond),
-			executor.WithLeaseDuration(subMsLease),
-		)
-		if err != nil {
-			t.Fatalf("NewExecutor(sub-ms): %v", err)
-		}
-		return exec
-	}
-
-	// Leader-elect mode → must fail fast (distlock MinTTL floor).
+	// Leader-elect mode → must fail fast (distlock MinTTL floor). NewCoordinator
+	// constructs its internal Executor from the same journal + subMsCfg so the
+	// sub-ms HeartbeatInterval / LeaseDuration are carried into the Executor
+	// automatically (#1181 F5).
 	if _, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(subMsCfg), WithLeaderElect(locker), WithExecutor(newSubMsExec(t))); err == nil {
+		WithConfig(subMsCfg), WithLeaderElect(locker)); err == nil {
 		t.Error("NewCoordinator(leader-elect, sub-ms lease) = nil error, want fail-fast")
 	} else if !strings.Contains(err.Error(), "LeaseDuration") {
 		t.Errorf("error = %q, want mention of LeaseDuration", err.Error())
@@ -646,7 +609,7 @@ func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 
 	// Single-process mode → sub-ms lease is fine (distlock not used).
 	if _, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
-		WithConfig(subMsCfg), WithExecutor(newSubMsExec(t))); err != nil {
+		WithConfig(subMsCfg)); err != nil {
 		t.Errorf("NewCoordinator(single-process, sub-ms lease) = %v, want nil (distlock floor must not apply)", err)
 	}
 }

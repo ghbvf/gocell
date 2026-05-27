@@ -42,38 +42,40 @@ func WithConfig(cfg Config) Option {
 	}
 }
 
-// WithTracer sets the Tracer used for the per-instance `saga.coordinator.driveOne`
-// span. A nil tracer is silently ignored; the Coordinator falls back to
-// wrapper.NoopTracer{} (set in NewCoordinator). Must be called before Start.
+// WithTracer sets the Tracer used for both the per-instance
+// `saga.coordinator.driveOne` span owned by Coordinator AND the per-step
+// `saga.executor.step.run` / `saga.executor.step.compensate` spans owned by
+// the internally-constructed Executor. A typed-nil tracer is silently
+// ignored; the Coordinator falls back to wrapper.NoopTracer{} (set in
+// NewCoordinator). Must be called before Start.
 //
 // Category: builder-noop (cf. runtime-api.md) — tracing is an optional
-// adapter wiring. The per-step `saga.executor.step.run` /
-// `saga.executor.step.compensate` spans are owned by the Executor; see
-// executor.WithTracer.
+// adapter wiring. Coordinator does NOT accept a separately-injected Executor;
+// the same tracer reaches both layers via NewCoordinator's internal Executor
+// construction, so the trace parent/child relationship is guaranteed by
+// type-system construction (single source of tracing config).
 func WithTracer(t wrapper.Tracer) Option {
 	return func(c *Coordinator) {
-		if t != nil {
+		if !validation.IsNilInterface(t) {
 			c.tracer = t
 		}
 	}
 }
 
-// WithExecutor injects the per-step Executor. Required dependency — every
-// Coordinator MUST be constructed with a non-nil Executor; the wiring layer
-// owns Executor's heartbeat / retry / observer configuration. Both bare-nil
-// and typed-nil are rejected at NewCoordinator with KindInvalid /
-// ErrValidationFailed: "runtime/saga: executor required; pass a non-nil
-// *executor.Executor via WithExecutor".
+// WithObserver attaches an executor.Observer that receives per-step outcome /
+// retry / heartbeat-failure events. A typed-nil observer is silently ignored;
+// the internally-constructed Executor falls back to executor.NopObserver{}.
+// Must be called before Start.
 //
-// Category: strong-dependency wiring option (cf. runtime-api.md). The Executor
-// is not optional — it owns the per-step execution loop the Coordinator
-// delegates to in driveOne.
-func WithExecutor(exec *executor.Executor) Option {
+// Category: builder-noop (cf. runtime-api.md). The Observer is wired into
+// the Executor that NewCoordinator constructs internally — there is no
+// way to inject a fully-formed Executor at the Coordinator level (#1181 F5
+// design decision: Executor must use the Coordinator's journal so claim and
+// heartbeat are guaranteed same-source by construction, not by convention).
+func WithObserver(o executor.Observer) Option {
 	return func(c *Coordinator) {
-		if exec == nil {
-			c.executorNil = true
-			return
+		if !validation.IsNilInterface(o) {
+			c.observer = o
 		}
-		c.executor = exec
 	}
 }
