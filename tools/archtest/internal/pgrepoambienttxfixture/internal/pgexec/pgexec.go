@@ -25,8 +25,11 @@ type PGExecutor interface {
 	ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// pgExecutor is the sanctioned holder of *pgxpool.Pool. R1's predicate
-// exempts this file because pgexec.go is not _repo.go / _store.go.
+// pgExecutor is the sanctioned holder of *pgxpool.Pool. Two gates keep this
+// file out of the production R1 scan: (1) the //go:build archtest_fixture
+// tag keeps it out of the production module scan entirely; (2) the filename
+// is pgexec.go (not _repo.go / _store.go) so R1's file-extension filter
+// would also exempt it if it were ever loaded under production patterns.
 type pgExecutor struct {
 	pool *pgxpool.Pool
 }

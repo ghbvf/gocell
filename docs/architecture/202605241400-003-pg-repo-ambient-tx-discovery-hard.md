@@ -152,27 +152,26 @@ marker（marker 存在但同 scope 无 ExecDirect → audit-trail 退化）。
 
 | 威胁 | 缓解 |
 |------|------|
-| 新 PG 适配包沿用 `pgExecutor` 范式 | 自动被 `discoverPGAdapterPackages` 发现，R1/R2/R3 自动覆盖 ✓ |
+| 新 PG 适配包沿用 `pgExecutor` 范式 | R1 / R2 全局谓词（_repo.go / _store.go scope）自动覆盖；新 sub-pkg 通过路径后缀 /internal/pgexec 自动入 funnel ✓ |
 | 新 PG 适配包发明新 funnel（如 configcore Session） | 本 archtest 不覆盖；约定 + code-review + new-pattern-requires-ADR 兜底（不是回归 — 升级前也不覆盖） |
-| Refactor 把 pgExecutor 改名 / 移出包 scope | `TestPGRepoAmbientTx_DiscoveryCoverage` exact-set match 失败 + `TestPGRepoAmbientTx` 的 coverage floor (≥3) 兜底 ✓ |
 | 新 ExecDirect callsite 漏加 marker | R3(b) 同 body marker presence 检查失败 ✓ |
 | Marker reason 写成 `fmt.Sprintf` / 变量 / 函数返回值隐藏审计串 | `bodyHasApprovedExecDirectMarker` 要求 arg[0] 为 `*ast.BasicLit + token.STRING`；non-literal 表达式 AST 节点不是 BasicLit → 拒绝 ✓（与"const ident / 常量折叠"威胁同源，见下文专行）|
-| 移到不相关 func body 放 marker 制造"看似 approved"的错觉 | BS-8 反向自检：marker 必须与同 body 的 `pgExecutor.ExecDirect` 调用共存 — 孤立 marker 失败 ✓ |
+| 移到不相关 func body 放 marker 制造"看似 approved"的错觉 | BS-8 反向自检：marker 必须与同 body 的 `pgexec.PGExecutor.ExecDirect` 调用共存 — 孤立 marker 失败 ✓ |
 | 拷贝 `pgrepoapproved` 包到其他位置绕过 funnel | callee 解析锁 `Pkg().Path()` 到精确字符串 `"github.com/ghbvf/gocell/pkg/pgrepoapproved"`，重定向 import 不改 package path ✓ |
 | import 别名绕过 marker callee 识别 | callee 解析锁 `fn.Pkg().Path()`（via *types.Info.Uses），import alias 不改 package path ✓ |
 | build-tag 隔离的条件性 ExecDirect 调用 | RunTyped 用 default build context；如需覆盖须扩展 TypedOpts；当前 production 代码库无 build-tag 隔离 ExecDirect 先例；以 code review 兜底（accepted threat） |
-| ExecDirect 仅 adapters/postgres 当前持有 | accesscore / iotdevice 的 pgExecutor 当前不暴露 ExecDirect 方法；R3(b) 对其当前零 callsite 覆盖；新包加 ExecDirect 时第一次违规由 CI 抓 ✓ |
+| ExecDirect 仅 adapters/postgres 当前持有 | accesscore 的 pgexec.PGExecutor 包含 ExecDirect（当前无 production callsite）；devicecell 的省略（compile-blocks future bypass）；saga 的省略（使用 AcquireTx 进行 tx ownership） ✓ |
 | nested closure 走私 marker / ExecDirect（marker 在内层 closure 批准外层 ExecDirect，或反向） | `bodyHasApprovedExecDirectMarker` / `scanR3ExecDirect` 用 `inspectStopAtFuncLit` 把扫描限定到当前 FuncDecl/FuncLit body；`scanR3UsagePoints` 把每个 nested FuncLit body 视为独立 approval scope；RED fixture `badR3MarkerInNestedClosure` + `badR3MarkerOuterExecInNestedClosure` 守 ✓ |
 | marker reason 退化（const ident / `"a"+"b"` concat / 空串 / 占位符 todo/fixme/…） | arg[0] 必须 `*ast.BasicLit + token.STRING` + kebab regex + placeholder ban 5-门串行（落地对标 panicregister）；RED fixture `badR3ApprovedConstIdent` / `badR3ApprovedConcat` / `badR3ApprovedEmpty` / `badR3ApprovedPlaceholder` 4 个用例守 ✓ |
 
 ## Implementation matrix
 
 ```
-Contract: PG-REPO-AMBIENT-TX-01 archtest（上游 Soft → Medium；下游 R3(b) Soft → Hard）
-Change: 引入 pkg/pgrepoapproved typed marker + 类型感知 discovery；删除 hand-maintained list + allowlist map
-Implementations: [x] adapters/postgres (refresh_store.go marker)  [x] cells/accesscore/internal/adapters/postgres（自动发现）  [x] examples/iotdevice/cells/devicecell/internal/adapters/postgres（自动发现）
-Conformance test: tools/archtest.TestPGRepoAmbientTx + TestPGRepoAmbientTx_RedFixtureDetected + TestPGRepoAmbientTx_SelfCheck + TestPGRepoAmbientTx_DiscoveryCoverage
-Repro: go test ./tools/archtest/... -run TestPGRepoAmbientTx
+Contract: PG-REPO-AMBIENT-TX-01 archtest（上游 Medium → Hard via sealed internal/pgexec sub-package; closes gh #738 / #916）
+Change: 把 pgExecutor 移到 <adapter-pkg>/internal/pgexec sub-package；parent-pkg 持有 pgexec.PGExecutor interface；archtest 删除 discovery，R1/R2/R3 改为全局谓词
+Implementations: [x] adapters/postgres/internal/pgexec  [x] adapters/postgres/saga/internal/pgexec  [x] cells/accesscore/internal/adapters/postgres/internal/pgexec  [x] examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec
+Conformance test: tools/archtest.TestPGRepoAmbientTx + TestPGRepoAmbientTx_RedFixtureDetected + TestPGRepoAmbientTx_SelfCheck
+Repro: go -C worktrees/522-pgexec-seal-hard test ./tools/archtest/ -run 'TestPGRepoAmbientTx'
 Dependent contracts (governance scan): none
 ```
 

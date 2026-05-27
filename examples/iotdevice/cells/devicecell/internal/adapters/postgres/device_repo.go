@@ -306,7 +306,7 @@ func (r *PGDeviceRepository) RepoReady(ctx context.Context) error {
 	err := r.db.QueryRow(ctx, `SELECT 1 FROM devices LIMIT 1`).Scan(&dummy)
 	// pgx.ErrNoRows means the table exists but is empty — that is healthy.
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("device_repo: readiness probe: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: readiness probe", err)
 	}
 	return nil
 }

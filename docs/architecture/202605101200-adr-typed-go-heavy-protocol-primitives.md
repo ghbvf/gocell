@@ -363,9 +363,9 @@ cell := accesscore.New(
 
 三条规则，均通过 `*types.Info` 解析，无字符串锚点、无手工 allowlist（完整规则描述见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc）：
 
-- **R1（单一合法持有者）**：每个 `*ast.StructType` 字段，若其类型解析为 `*pgxpool.Pool`，则宿主结构体名称必须精确等于 `pgExecutor`。
-- **R2（构造函数 wrap funnel）**：每个 `*ast.FuncDecl` 参数，若其类型解析为 `*pgxpool.Pool`，则 (a) 函数名必须以 `New` 为前缀，且 (b) 函数体内必须有 `CallExpr` 其 `Fun` 通过 `*types.Info.Uses` 解析到包内 `newPGExecutor`，且第一个参数是该 pool param 的 `*ast.Ident`。两条件 AND，缺一失败。
-- **R3（使用点 funnel）**：repo/store 方法不得直接访问 `pgExecutor.pool` 字段，也不得在 callsite allowlist 之外调用 `pgExecutor.ExecDirect`。通过 `*types.Info.Types` 解析 receiver 类型。
+- **R1（单一合法持有者）**：在 *_repo.go / *_store.go 文件中，无 struct 可声明 `*pgxpool.Pool` 字段（全局谓词，无包发现机制）。pool 由 `pgexec.PGExecutor` 接口字段持有；底层 unexported `pgExecutor` struct 在 `internal/pgexec` sub-pkg 内。
+- **R2（构造函数 wrap funnel）**：在 *_repo.go / *_store.go 文件中，所有 `*pgxpool.Pool` 函数参数必须在 `New*` 前缀的构造函数内，且函数体必须调用 `pgexec.New(pool)`（callee 解析到 `*types.Func`，`Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"`）。
+- **R3**：(a) retired（compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段）；(b) 在 *_repo.go / *_store.go 中，任何 `ExecDirect` 调用（receiver 类型 `pgexec.PGExecutor`）必须有同 scope 的 `pgrepoapproved.ApprovedExecDirect` typed marker。
 
 扫描范围为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个此类文件，防止包名变更导致覆盖静默归零。
 
@@ -378,7 +378,7 @@ cell := accesscore.New(
 
 **RED/GREEN fixture 权威集**（amended 2026-05-27）：`tools/archtest/internal/pgrepoambienttxfixture/` 是 RED/GREEN fixture 的权威单一来源，含 `fixture.go`（package doc）、`fixture_repo.go`（所有 RED + GREEN repo controls，文件后缀触发 archtest 扫描）、`internal/pgexec/pgexec.go`（sub-package 镜像 production 形态）。`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
 
-**C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
+**C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgexec.PGExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
 
 ---
 

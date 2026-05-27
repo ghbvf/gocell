@@ -46,6 +46,7 @@ func TestAssertAmbientTx_WithTx(t *testing.T) {
 func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
+	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
 	_, err := repo.GetByIDForUpdate(context.Background(), "some-id")
 	require.Error(t, err, "GetByIDForUpdate must error without ambient tx")
 
@@ -62,6 +63,7 @@ func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
 func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
+	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
 	_, err := repo.GetByUsernameForUpdate(context.Background(), "alice")
 	require.Error(t, err, "GetByUsernameForUpdate must error without ambient tx")
 
@@ -78,6 +80,7 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 func TestBumpAuthzEpoch_NoAmbientTx(t *testing.T) {
 	repo := &PGUserRepo{db: pgexec.New(nil)}
 
+	// pool is nil; assertAmbientTx fires before any DB call, so nothing dereferences pool.
 	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001", credentialfence.Mint())
 	require.Error(t, err, "BumpAuthzEpoch must error without ambient tx")
 

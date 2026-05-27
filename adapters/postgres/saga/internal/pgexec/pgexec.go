@@ -18,6 +18,11 @@
 // *pgxpool.Pool field must live in a package whose import path ends with
 // /internal/pgexec) and R2 (cross-package wrap funnel: New*-constructors with
 // a *pgxpool.Pool parameter must call pgexec.New(pool)).
+//
+// Usage: call pgexec.New(pool) once inside your NewPG*-prefixed constructor
+// and store the returned PGExecutor as an unexported field on your repo /
+// store struct. All SQL goes through that field; the raw pool stays sealed
+// in this sub-package.
 package pgexec
 
 import (
@@ -39,6 +44,10 @@ import (
 // nil) so the caller skips Commit/Rollback (lifecycle is the outer caller's
 // responsibility). Otherwise it opens a fresh transaction on the pool — caller
 // MUST Commit on success and Rollback on error (owned=true).
+//
+// ExecDirect is not included — saga mutations either join an ambient
+// transaction or open their own via AcquireTx. Independent-commit bypass is
+// not a saga concept.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -56,6 +65,11 @@ type pgExecutor struct {
 // sanctioned constructor; archtest R2 enforces that any New*-prefixed function
 // in any package receiving a *pgxpool.Pool parameter must call pgexec.New on
 // that parameter.
+//
+// Passing a nil pool is permitted in unit tests that exercise logic firing
+// before any SQL method is called (e.g. ambient-tx guard tests in
+// cells/accesscore/internal/adapters/postgres/tx_assert_test.go). Any SQL
+// method invocation on a New(nil) instance will panic at the pool dereference.
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }

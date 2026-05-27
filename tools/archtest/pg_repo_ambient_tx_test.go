@@ -18,8 +18,8 @@
 //     the sub-package's own pgexec.go legitimately hold the raw pool and are
 //     out of scope by file-extension filter.
 //
-//   - R2 (cross-package wrap funnel): every function parameter of type
-//     *pgxpool.Pool in any production file must satisfy BOTH (a) function
+//   - R2 (cross-package wrap funnel): every *_repo.go / *_store.go file's
+//     function parameter of type *pgxpool.Pool must satisfy BOTH (a) function
 //     name starts with "New" AND (b) function body contains a CallExpr whose
 //     Fun resolves via *types.Info.Uses to a *types.Func with Pkg().Path()
 //     ending /internal/pgexec AND Name() == "New", with the pool param as
@@ -81,8 +81,9 @@
 // tools/archtest/internal/pgrepoambienttxfixture/ exercises:
 //
 //   - R1 violations in fixture_repo.go (the _repo.go file extension triggers
-//     R1 scope; fixture.go is exempt by filename for non-R1 fixtures)
-//   - R2 violations in fixture.go (R2 is a global predicate, no file filter)
+//     R1 scope; fixture.go is exempt by filename)
+//   - R2 violations in fixture_repo.go (file-extension filter applies to all
+//     three rules including R2)
 //   - R3(b) violations in fixture_repo.go (parent-pkg holds the fixture's own
 //     /internal/pgexec/PGExecutor interface; methods call ExecDirect through it)
 //
@@ -106,6 +107,12 @@
 // BS-4 *pgxpool.Pool type alias: `type myPool = *pgxpool.Pool` — Go type
 // aliases resolve to the same underlying *types.Named so isPgxPoolType still
 // matches. Documented for completeness.
+//
+// BS-9 Interface type alias re-export: `type MyExec = pgexec.PGExecutor` in
+// the parent package is permitted (same method set, same identity to
+// archtest's type resolver). The underlying *pgxpool.Pool is still
+// unreachable because the interface does not expose it; the alias adds no
+// bypass surface. Documented for completeness; no archtest cost.
 //
 // BS-5 cells/accesscore PGBundle helper: the cells/accesscore root package
 // owns NewPGBundle which accepts *pgxpool.Pool as a constructor parameter
@@ -402,8 +409,9 @@ func scanR3ExecDirectInScope(fset *token.FileSet, body *ast.BlockStmt, rel strin
 				"approval scope (FuncDecl/FuncLit body, not nested closure) to document the " +
 				"ADR-approved bypass of ambient tx; " +
 				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before the " +
-				"ExecDirect call; see pkg/pgrepoapproved and ADR " +
-				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+				"ExecDirect call; see pkg/pgrepoapproved; " +
+				"example: pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in same func body before the ExecDirect call; only one production callsite exists at adapters/postgres/refresh_store.go::revokeSessionDetachedAt. " +
+				"ADR docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
 	})
 	return diags
@@ -584,8 +592,9 @@ type fixtureViolation struct {
 // and this set together.
 //
 // File layout:
-//   - fixture.go: R2 RED + GREEN helpers (no file-extension filter for R2)
-//   - fixture_repo.go: R1 RED + R3 RED (filtered to _repo.go for R1/R3)
+//   - fixture.go: package godoc only (no rules apply — not _repo.go)
+//   - fixture_repo.go: ALL RED cases (R1 + R2 + R3) + GREEN repo controls
+//   - internal/pgexec/pgexec.go: sealed sub-package mirroring production form
 var expectedFixtureViolations = []fixtureViolation{
 	// R1 RED (fixture_repo.go) — pointer to field type pos.
 	{"R1:", 20}, // badR1Repo.pool
@@ -973,7 +982,9 @@ func findExecDirectValueUses(fset *token.FileSet, file *ast.File, rel string, in
 
 // embeddedStructHasPoolField reports whether the type denoted by expr (an
 // anonymous/embedded field type) is a named struct type containing a
-// *pgxpool.Pool field.
+// *pgxpool.Pool field. Checks one level of struct embedding only — does NOT
+// recurse into nested embeddings. Sufficient for current production patterns
+// where embedding is rare; documented as accepted limitation in BS-1.
 func embeddedStructHasPoolField(expr ast.Expr, info *types.Info) bool {
 	tv, ok := info.Types[expr]
 	if !ok || tv.Type == nil {
