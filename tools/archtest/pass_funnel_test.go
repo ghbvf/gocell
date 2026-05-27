@@ -711,9 +711,10 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 // TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
 //
 // Archtest tools/archtest/<file>_test.go must NOT call the 9 typeseval helper
-// symbols (ResolvePackageRef, ResolveMethodCall, EvaluateConstString,
-// FlatNonDefaultTags, KnownNonDefaultTags, ParseBuildConstraint,
-// IsGeneratedRelPath, BuildContextPredicate) or scanner.ImportBan directly.
+// symbols (ResolvePackageRef, ResolveMethodCall, ResolveEnclosingFunc,
+// EvaluateConstString, FlatNonDefaultTags, KnownNonDefaultTags,
+// ParseBuildConstraint, IsGeneratedRelPath, BuildContextPredicate) or
+// scanner.ImportBan directly.
 // Use the archtest façade instead:
 //   - typeseval helpers → archtest.ResolvePackageRef / .ResolveMethodCall /
 //     .EvaluateConstString / .FlatNonDefaultTags / .KnownNonDefaultTags

@@ -7,11 +7,13 @@ import (
 
 // ResolveEnclosingFunc returns the OUTERMOST top-level *ast.FuncDecl that
 // encloses node in file, mapped to its *types.Func identity via typesInfo.Defs.
-// The identity form (callers usually call fn.FullName()):
+// The identity form (callers usually call fn.FullName(), which is the go/types
+// canonical form — parentheses around the receiver type for both pointer and
+// value methods):
 //
 //   - Top-level function:   "pkg/path.FuncName"             (e.g. "fixture.DoThing")
 //   - Pointer method:       "(*pkg/path.Recv).MethodName"   (e.g. "(*fixture.Service).Run")
-//   - Value method:         "pkg/path.Recv.MethodName"      (e.g. "fixture.Counter.Inc")
+//   - Value method:         "(pkg/path.Recv).MethodName"    (e.g. "(fixture.Counter).Inc")
 //   - init() function:      "pkg/path.init"                 (Go reflection form)
 //
 // Returns (nil, false) when node is NOT inside any top-level FuncDecl:

@@ -36,7 +36,7 @@
 //
 // Plus a direct packages-import violation for PASS-FUNNEL-PACKAGES-IMPORT-01.
 //
-// PASS-FUNNEL-RESOLVE-01 violations are added below for the 8 typeseval
+// PASS-FUNNEL-RESOLVE-01 violations are added below for the 9 typeseval
 // helpers and scanner.ImportBan, exercising the same three import forms.
 package passfunnelfixture
 
@@ -83,7 +83,7 @@ var (
 	_ packages.Config
 
 	// ── PASS-FUNNEL-RESOLVE-01 violations ─────────────────────────────────
-	// typeseval helper symbols banned from business *_test.go (8 symbols).
+	// typeseval helper symbols banned from business *_test.go (9 symbols).
 	// Three import forms each (qualified / alias / dot-import where applicable).
 
 	// ResolvePackageRef

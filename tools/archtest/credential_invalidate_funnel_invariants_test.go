@@ -1,16 +1,19 @@
 package archtest
 
-// credential_invalidate_funnel_invariants_test.go — four closed-caller-set
+// credential_invalidate_funnel_invariants_test.go — five closed-caller-set
 // funnel rules covering both ends of the S4b/S4d credential-invalidation
 // pipeline. The first three guard the DOWNSTREAM (store implementations);
-// the fourth guards the UPSTREAM (the funnel's Apply entry point).
+// the fourth guards the UPSTREAM (the funnel's Apply entry point); the
+// fifth keeps the Applier interface canonical (declared only in the
+// credentialinvalidate package) so callsite-level scanning stays uniform.
 //
 // INVARIANT: CREDENTIAL-INVALIDATE-FUNNEL-01
 // INVARIANT: USER-AUTHZ-EPOCH-BUMP-FUNNEL-01
 // INVARIANT: REFRESH-REVOKE-USER-FUNNEL-01
 // INVARIANT: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01
+// INVARIANT: CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01
 //
-// # AI-robust grade (post #1033)
+// # AI-robust grade (post #1033 + #732)
 //
 // The credential-invalidation safety model rests on three mechanisms with
 // distinct enforcement layers — do not conflate them into one "Hard":
@@ -46,36 +49,27 @@ package archtest
 // backstop for the residual "pass nil" form; it does NOT elevate any static
 // grade, and the static Hard claims above stand on (1)+(2)+(3) alone.
 //
-// UPSTREAM-CALLER-01 (rule 4) is mixed-grade post #1033 + #732 — split per
-// caller channel (direct-typed vs interface-routed):
+// UPSTREAM-CALLER-01 (rule 4) is Hard post #1033 + #732. Five known
+// production callers (authzmutate ApplyInTx, identitymanage Delete +
+// changePasswordInTx, rbacassign persistChange, sessionrefresh
+// handleReuseDetected) are all callsite-level allowlisted; the FenceToken
+// seal (2)+(3) closes the "missing caller" hole structurally — a new
+// mutator cannot revoke without a FenceToken it cannot mint.
 //
-//   - Direct-typed callers (4 of 5 known production sites: identitymanage
-//     Delete + changePasswordInTx, rbacassign persistChange, authzmutate
-//     ApplyInTx) hold `*credentialinvalidate.Invalidator` as a concrete
-//     field. The callsite-level allowlist + FenceToken seal (2)+(3) close
-//     these as **Hard**: a new mutator cannot revoke without a FenceToken
-//     it cannot mint, and any direct-typed reference (call or capture) outside
-//     the allowlist fails archtest. ADR §A16 closure proof applies here.
-//
-//   - Interface-routed callers (1 of 5: sessionrefresh.handleReuseDetected
-//     via the local invalidatorApplier interface, chosen for unit-test spy
-//     injection) — info.Selections resolves the call to the local interface
-//     method, NOT to credentialinvalidate.(*Invalidator).Apply, so the
-//     scanner cannot match the (targetPkg, targetMethod) filter. This
-//     channel is **Soft for archtest** (no machine verification of the
-//     enclosing FuncDecl identity), tracked by gh issue #1198
-//     (ARCHTEST-FUNNEL-INTERFACE-INDIRECTION-HARD) for Hard-ification.
-//     ADR §A16 closure proof does NOT apply here — a FenceToken is still
-//     required at runtime, but archtest cannot statically verify the caller
-//     identity. Until #1198 lands, the Soft channel is documented and the
-//     RED fixture (sessionlogin_direct_apply_red) uses a concrete
-//     *Invalidator type so all direct-typed paths remain locked.
+// PR #1196 (#732) closes the prior sessionrefresh "interface-routed Soft
+// channel": its invalidator field was typed as a local
+// sessionrefresh.invalidatorApplier interface, which made info.Selections
+// resolve Apply outside the credentialinvalidate package and hid the
+// callsite from the scanner. The fix is structural — Applier is now an
+// exported interface in credentialinvalidate, so info.Selections resolves
+// Apply with Pkg=credentialinvalidate for all five callers uniformly, and
+// the callsite-level allowlist reaches every production reference (direct
+// call or function-value capture).
 //
 // See tools/archtest/fence_token_mint_funnel_test.go for the
 // FENCE-TOKEN-MINT-FUNNEL-01 godoc, and ADR
 // docs/architecture/202605101400-adr-credential-session-protocol.md §A16
-// for the closure proof and threat-matrix re-evaluation (note: §A16
-// covers direct-typed channel only).
+// for the closure proof and threat-matrix re-evaluation.
 //
 // Scanning tool: ResolveMethodCall + EachInSubtree[ast.SelectorExpr]. The scan
 // is form-complete — it resolves EVERY SelectorExpr (not only the Fun of a
@@ -100,20 +94,16 @@ package archtest
 //  2. //go:linkname / unsafe — the universal class that defeats any static
 //     analysis; out of scope for an archtest funnel.
 //
-//  3. Interface-indirection routing (Rule 4 specific). When a slice injects
-//     the funnel via a locally-defined interface (e.g.
-//     sessionrefresh.invalidatorApplier in service.go) for unit-testability
-//     with a spy, info.Selections resolves the call to that local interface's
-//     Apply method — NOT to credentialinvalidate.(*Invalidator).Apply. The
-//     fn.Pkg().Path() check rejects it as out-of-scope, so the callsite is
-//     scanner-invisible. Documented trade-off: sessionrefresh.handleReuseDetected
-//     is a legitimate Apply caller but cannot appear in
-//     upstreamCallerCallsiteAllowlist (the meta-invariant test would then
-//     flag it as stale). Future analogous interface-routed callers will also
-//     be scanner-invisible; this is a known limit of info.Selections-based
-//     resolution. The reverse RED fixture (sessionlogin_direct_apply_red)
-//     uses the concrete *credentialinvalidate.Invalidator type, so all
-//     direct-typed paths remain locked.
+// Interface-routed Apply via caller-package local interfaces is NOT a blind
+// spot: archtest CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01 forces
+// the Applier interface to live in the credentialinvalidate package (not in
+// any caller package), so info.Selections always resolves Apply with
+// Pkg=credentialinvalidate. Pre-#1196 the sessionrefresh package defined a
+// local invalidatorApplier interface that defeated this resolution; the fix
+// is structural (Applier moved to credentialinvalidate). A regression
+// reintroducing a caller-package local interface with method signature
+// Apply(ctx, string, session.CredentialEvent) error would be caught by the
+// canonical-interface archtest (see below).
 //
 // Covered without a separate self-check: embedded struct method promotion
 // (`type Wrapper struct { session.Store }; w.RevokeForSubject(...)`) —
@@ -142,6 +132,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -208,22 +200,6 @@ const (
 // production caller of an entry triggers
 // TestCredentialInvalidateFunnel_AllowlistEntriesAreLive (meta-invariant),
 // forcing same-PR cleanup.
-// NOTE: sessionrefresh.handleReuseDetected is a LEGITIMATE production caller
-// of Invalidator.Apply, but it is NOT listed here — and cannot be listed —
-// because sessionrefresh injects the funnel via a locally-defined
-// `invalidatorApplier` interface (see slices/sessionrefresh/service.go:60)
-// for unit-testability with a spy. info.Selections resolves the call
-// `s.invalidator.Apply(...)` to (sessionrefresh.invalidatorApplier).Apply, NOT
-// to (credentialinvalidate.Invalidator).Apply, so the scanner cannot match
-// the (targetPkg, targetMethod) filter and never reaches the callsite check.
-// This is a structural blind spot of info.Selections-based method resolution
-// when business code intentionally routes through an interface contract.
-// Trade-off accepted: sessionrefresh's testability requires the interface
-// (the spy implements invalidatorApplier without depending on credentialinvalidate);
-// any future caller that introduces an analogous interface field would also be
-// scanner-invisible. The reverse RED fixture (sessionlogin_direct_apply_red)
-// uses the concrete *credentialinvalidate.Invalidator type, so direct-typed
-// callsites remain locked.
 // Allowlist keys are types.Func.FullName() values; split via string concat
 // to keep lines under the lll limit while preserving the literal key.
 //
@@ -231,6 +207,15 @@ const (
 // `reference to credentialinvalidate.Apply from caller "<KEY>" not in
 // upstreamCallerCallsiteAllowlist`. Paste the quoted "<KEY>" verbatim into
 // this map.
+//
+// All five production callers are now scanner-detectable. The pre-#1196
+// sessionrefresh blind spot (local invalidatorApplier interface in the
+// caller package made info.Selections resolve Apply outside
+// credentialinvalidate) is closed structurally by moving the interface to
+// credentialinvalidate.Applier; sessionrefresh.Service.invalidator now has
+// type credentialinvalidate.Applier, so info.Selections resolves Apply with
+// fn.Pkg().Path() == credentialinvalidate and the scanner reaches the
+// callsite check uniformly.
 var upstreamCallerCallsiteAllowlist = map[string]string{
 	"(*github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate.Mutator).ApplyInTx": "" +
 		"primary funnel — routes all live-aggregate authz mutations",
@@ -240,6 +225,8 @@ var upstreamCallerCallsiteAllowlist = map[string]string{
 		"co-tx atomicity: password write + revoke in one transaction",
 	"(*github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign.Service).persistChange": "" +
 		"co-tx atomicity: role-row write + revoke in one transaction",
+	"(*github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh.Service).handleReuseDetected": "" +
+		"reuse / stale-epoch cascade entry point (interface routing via credentialinvalidate.Applier)",
 }
 
 // funnelAllowlistPathPrefixes lists the module-relative path prefixes that
@@ -482,7 +469,7 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 	)
 }
 
-// ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Hard, post #1033) ──
+// ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Hard, post #1033 + #732) ──
 
 // TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01 enforces
 // CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every reference (call or
@@ -497,36 +484,22 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // directly on the reviewer's diff.
 //
 // AI-robust grade (post #1033 + #732), per ai-robust.md §"Funnel 双向锁评级":
+// **Hard** uniformly across all five known production callers.
 //
-//   - Direct-typed callsites (caller holds `*credentialinvalidate.Invalidator`
-//     as a concrete field type) — **Hard**: callsite identity is type-resolved
-//     via (ResolveMethodCall callee identity) + (ResolveEnclosingFunc caller
-//     identity); form-uniqueness applies. 4 of 5 known production callers fall
-//     into this category and ARE in upstreamCallerCallsiteAllowlist.
-//
-//   - Interface-indirection callsites (caller holds a locally-defined
-//     interface like sessionrefresh.invalidatorApplier as the field type) —
-//     **Soft for that channel**: info.Selections resolves the call to the
-//     local interface's method, NOT to credentialinvalidate.(*Invalidator).Apply,
-//     so the scanner cannot match the (targetPkg, targetMethod) filter. The
-//     only known instance is sessionrefresh.handleReuseDetected (see the
-//     comment above upstreamCallerCallsiteAllowlist for the architectural
-//     justification: testability via spy substitution).
-//
-// Per ai-robust.md the Hard-upstream / Soft-channel mix is a transitional
-// posture and requires a tracking issue for Hard-ification — gh issue #1198
-// (ARCHTEST-FUNNEL-INTERFACE-INDIRECTION-HARD). Proposed resolution:
-// introduce a `WithConcreteInvalidator(*Invalidator)` option alongside the
-// current `WithInvalidator(invalidatorApplier)`, then archtest against the
-// concrete field type. Until that lands, the Soft channel is documented and
-// the RED fixture (sessionlogin_direct_apply_red) covers all direct-typed
-// paths.
+// Callsite identity is type-resolved via (ResolveMethodCall callee identity)
+// + (ResolveEnclosingFunc caller identity); form-uniqueness applies. The
+// "interface-routed channel" Soft residual from PR #1196 round-1/2 (where
+// sessionrefresh held a local invalidatorApplier interface that made
+// info.Selections resolve Apply outside credentialinvalidate) is closed
+// structurally in round-3: Applier is an exported interface in the
+// credentialinvalidate package, sessionrefresh.Service.invalidator has
+// type credentialinvalidate.Applier, so all five callers' Apply references
+// resolve with Pkg=credentialinvalidate uniformly.
 //
 // The "missing caller" problem (a new mutator forgetting to call Apply at
 // all) is closed structurally by the sealed FenceToken capability proof
 // (see package godoc + ADR §A16) — a new mutator that tries to revoke
-// without going through Invalidator.Apply cannot mint a FenceToken,
-// independent of the interface-indirection blind spot.
+// without going through Invalidator.Apply cannot mint a FenceToken.
 //
 // RED fixture: cells/accesscore/internal/credentialinvalidate/testdata/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
@@ -753,6 +726,165 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 	assert.Empty(t, violations,
 		"funnel blind-spot: reflect.MethodByName of banned method names found in production code — "+
 			"the archtest cannot see reflect-based invocations. Refactor to use direct calls.")
+}
+
+// ─── Rule 5: CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01 ──────
+
+// TestCredentialInvalidateApplierInterfaceCanonical_01 enforces that the
+// `Apply(ctx context.Context, subjectID string, event session.CredentialEvent)
+// error` method signature appears in EXACTLY ONE production interface:
+// credentialinvalidate.Applier. A caller package redeclaring an interface
+// with the same signature would re-create the pre-#1196 sessionrefresh
+// "interface-routed Soft channel" — info.Selections would resolve Apply to
+// the caller-package interface, hiding the callsite from the
+// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan.
+//
+// Mechanism: load credentialinvalidate.Applier.Apply's *types.Func via the
+// package scope; scan caller production packages (./cells/... ./runtime/...
+// ./cmd/...) for any *types.TypeName whose underlying type is an interface
+// that explicitly declares a method Apply whose *types.Signature is
+// types.Identical to the canonical one. Skip the credentialinvalidate
+// package itself; skip *_test.go (Tests:false).
+//
+// AI-robust grade: Medium (archtest-bound; type-resolved via go/types
+// identity comparison — no string anchor, no name pattern). Hard upstream
+// would require a sealed Applier (unexported marker method) but that
+// breaks the spy-injection testability pattern; this archtest is the
+// pragmatic backstop. Form-uniqueness: types.Identical on the method
+// signature object — any other shape (same name + different signature, or
+// same signature on a renamed method) does not match and is not the
+// regression vector this rule guards.
+//
+// RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
+// noncanonical_applier_interface_red declares
+// `type LocalApplier interface { Apply(ctx, string, event) error }` in a
+// non-credentialinvalidate package; the scanner must flag it.
+func TestCredentialInvalidateApplierInterfaceCanonical_01(t *testing.T) {
+	t.Parallel()
+
+	// Production scan: load credentialinvalidate (canonical home) + caller
+	// trees in ONE RunTyped, so types.Identical sees matching stdlib
+	// *types.Named instances. The canonical *types.Type is captured during
+	// the same pass that records candidate interfaces; comparison runs
+	// AFTER RunTyped returns (every package has been visited and canonical
+	// is set).
+	prodViolations := scanApplierInterfaceCanonical(t, []string{
+		"./cells/accesscore/internal/credentialinvalidate",
+		"./cells/...",
+		"./runtime/...",
+		"./cmd/...",
+	})
+
+	sort.Strings(prodViolations)
+	for _, v := range prodViolations {
+		t.Log(v)
+	}
+	assert.Empty(t, prodViolations,
+		"CREDENTIAL-INVALIDATE-APPLIER-INTERFACE-CANONICAL-01: non-canonical "+
+			"interface redeclares credentialinvalidate.Applier's Apply signature — "+
+			"info.Selections would resolve Apply outside credentialinvalidate, "+
+			"hiding the callsite from CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 scan. "+
+			"Move the interface to the credentialinvalidate package "+
+			"(or rename/reshape the method if the use case is unrelated).")
+
+	// RED fixture: same single-Load pattern (canonical + fixture together).
+	redViolations := scanApplierInterfaceCanonical(t, []string{
+		"./cells/accesscore/internal/credentialinvalidate",
+		"./tools/archtest/testdata/credential_invalidate_fixtures/noncanonical_applier_interface_red",
+	})
+	assert.GreaterOrEqual(t, len(redViolations), 1,
+		"RED fixture self-check FAILED: noncanonical_applier_interface_red — "+
+			"expected ≥ 1 violation, got %d. Check that the fixture declares an "+
+			"interface with method Apply(ctx, string, session.CredentialEvent) error "+
+			"and that ./cells/accesscore/internal/credentialinvalidate is in the same Load.",
+		len(redViolations))
+}
+
+// applierInterfaceCandidate records a *types.TypeName whose underlying type
+// is an interface with an explicitly declared Apply method, captured during
+// a single RunTyped pass. methodType is the *types.Signature of that Apply
+// method, comparable via types.Identical against the canonical signature
+// loaded by the same pass.
+type applierInterfaceCandidate struct {
+	pkgPath    string
+	typeName   string
+	methodType types.Type
+	pos        token.Position
+}
+
+// scanApplierInterfaceCanonical loads the canonical credentialinvalidate
+// package together with the scan-target patterns in a SINGLE RunTyped call,
+// then compares each candidate interface's Apply signature against the
+// canonical via types.Identical.
+//
+// Single-Load constraint: types.Identical requires matching *types.Named
+// instances for embedded stdlib types (e.g. context.Context). Separate
+// packages.Load invocations produce distinct *types.Named for the same
+// import path, defeating the comparison. Always pass the
+// credentialinvalidate package together with scan targets in the same
+// patterns slice.
+func scanApplierInterfaceCanonical(t *testing.T, patterns []string) []string {
+	t.Helper()
+	var canonical types.Type
+	var candidates []applierInterfaceCandidate
+	_ = RunTyped(t, TypedOpts{Tests: false}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+		if p.Pkg.Path() == invalidatorPkg {
+			applier := p.Pkg.Scope().Lookup("Applier")
+			if applier == nil {
+				return nil
+			}
+			iface, ok := applier.Type().Underlying().(*types.Interface)
+			if !ok || iface.NumExplicitMethods() != 1 {
+				return nil
+			}
+			canonical = iface.ExplicitMethod(0).Type()
+			return nil
+		}
+		scope := p.Pkg.Scope()
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			tn, ok := obj.(*types.TypeName)
+			if !ok || tn.IsAlias() {
+				continue
+			}
+			iface, ok := tn.Type().Underlying().(*types.Interface)
+			if !ok {
+				continue
+			}
+			for i := 0; i < iface.NumExplicitMethods(); i++ {
+				m := iface.ExplicitMethod(i)
+				if m.Name() != "Apply" {
+					continue
+				}
+				candidates = append(candidates, applierInterfaceCandidate{
+					pkgPath:    p.Pkg.Path(),
+					typeName:   tn.Name(),
+					methodType: m.Type(),
+					pos:        p.Fset.Position(tn.Pos()),
+				})
+			}
+		}
+		return nil
+	})
+	require.NotNil(t, canonical,
+		"credentialinvalidate.Applier signature not captured — ensure "+
+			"./cells/accesscore/internal/credentialinvalidate is in the patterns slice")
+
+	var violations []string
+	for _, c := range candidates {
+		if types.Identical(c.methodType, canonical) {
+			violations = append(violations, fmt.Sprintf(
+				"%s: interface %s.%s declares Apply with the same signature "+
+					"as credentialinvalidate.Applier — interface must live in "+
+					"credentialinvalidate package",
+				c.pos, c.pkgPath, c.typeName,
+			))
+		}
+	}
+	return violations
 }
 
 // ─── shared helpers ──────────────────────────────────────────────────────
