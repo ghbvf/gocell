@@ -230,9 +230,33 @@ auth:
 
 **owner-guard 必须在 service 层，不可上移 handler**：
 
-owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层比对 `sess.SubjectID != subjectID` 时返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
+owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层通过 `auth.CheckOwner` typed funnel 比对，funnel 内统一返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
 
-archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` type-aware 守该形态：扫描 serving slice 的 **service.go**，若**不包含**满足条件的 owner-guard IfStmt（条件为非 nil 的 `!=` 比较（如 `sess.SubjectID != callerUserID`），body 返回 `errcode.New(errcode.KindNotFound, ...)`），则 fail。删除 service 层 guard、guard 使用错误的 errcode Kind（如 `KindPermissionDenied`）均会触发 fail。注意：该 archtest 扫 service.go 而非 handler.go；handler 层本身不含 owner-guard 代码。当前评级 Medium（跨函数 helper 封装形态存在理论逃逸空间）。
+**单源 funnel**：`runtime/auth.CheckOwner[T]` 是唯一 sanctioned 出口。lookup-failure 与 owner-mismatch 通过 nil-safe accessor 在 funnel 内自然 collapse（accessor 对 nil resource 返回空字符串，与已校验非空的 callerID 不等，funnel 返回 KindNotFound——与 owner-mismatch 同 envelope）。canonical 形态：
+
+```go
+// cells/accesscore/slices/sessionlogout/service.go
+sess, err := s.sessionStore.Get(txCtx, sessionID)
+if err != nil && errcode.IsInfraError(err) {
+    return errcode.Wrap(errcode.KindUnavailable, ...)
+}
+if err := auth.CheckOwner(sess, func(s *session.ValidateView) string {
+    if s == nil { return "" }
+    return s.SubjectID
+}, callerUserID, errcode.ErrSessionNotFound, "session not found"); err != nil {
+    return err
+}
+```
+
+`callerID` 必须由调用方在 handler 入口预先校验非空（否则 `"" != ""` 会让攻击者绕过 IDOR）；sessionlogout/service.go:99-104 即为参考前置不变式。
+
+archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` (Hard) 3 个 predicates 闭合该形态：
+
+- **B1 callsite lock** (Hard)：每个 serviceOwned slice 的 service.go 必须有 ≥1 个 `auth.CheckOwner` 调用，callee 经 `types.Info` 解析包路径到 `runtime/auth`
+- **B2 funnel body lock** (Hard)：`runtime/auth/owner_guard.go::CheckOwner` body 内 `errcode.New` 调用恰 1 次且 type-resolve 到 `KindNotFound`，无其他 Kind
+- **B3 zero-tolerance ban** (Hard)：serviceOwned slice 的 service.go 内 `errcode.New(errcode.KindNotFound, ...)` 调用计数 == 0（无 carve-out）
+
+任一违反即 archtest fail。funnel 上下游均 Hard：违反「在 service.go 直接构造 KindNotFound」在 archtest 层不可表达，违反「漏调 funnel」同样在 archtest 层不可表达。详见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc。
 
 ## ADV-05 治理规则：active event 必须有 subscriber
 
