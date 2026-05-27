@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -26,14 +27,12 @@ import (
 // (the same downstream pattern applied here to the bootstrap chain handle).
 //
 // Enforcement note (AI-robust grading, see ADR 202605270230 §AI-robust):
-// downstream is Hard (the type-checker rejects every `ledger.Store` argument
-// at the AppendBootstrapAuthFail / NewBootstrapAuthFailObserver call sites);
-// upstream is Medium (ledger.Store has no Protocol() method, so
-// NewBootstrapLedgerStore cannot itself verify the inner store carries
-// BootstrapNamespace() — that invariant is enforced by the
-// AUDIT-NS-DISJOINT-01 archtest scanning cmd/corebundle production wiring).
-// A future Hard upstream upgrade would add `Store.Protocol() *Protocol` and
-// an explicit namespace check here.
+// downstream is Hard (the type-checker rejects every bare `ledger.Store`
+// argument at the AppendBootstrapAuthFail / NewBootstrapAuthFailObserver call
+// sites); upstream is also Hard because ledger.Store exposes Protocol() and
+// NewBootstrapLedgerStore rejects any store not scoped to BootstrapNamespace().
+// AUDIT-NS-DISJOINT-01 remains a composition-root backstop for production
+// wiring, but namespace correctness no longer depends on that static scan.
 type BootstrapLedgerStore struct {
 	inner ledger.Store
 }
@@ -41,15 +40,25 @@ type BootstrapLedgerStore struct {
 // NewBootstrapLedgerStore wraps an inner ledger.Store as the bootstrap-chain
 // handle. Returns an error when:
 //   - inner is nil or typed-nil (validation.IsNilInterface)
-//
-// The inner store's namespace correctness (must equal BootstrapNamespace())
-// is enforced by composition-root wiring + the AUDIT-NS-DISJOINT-01 archtest,
-// not at construction time — see the type-level godoc above for the grade
-// rationale.
+//   - inner.Protocol() is nil
+//   - inner.Protocol().Namespace() is not BootstrapNamespace()
 func NewBootstrapLedgerStore(inner ledger.Store) (*BootstrapLedgerStore, error) {
 	if validation.IsNilInterface(inner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit: NewBootstrapLedgerStore requires non-nil ledger.Store")
+	}
+	protocol := inner.Protocol()
+	if protocol == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit: NewBootstrapLedgerStore requires ledger.Store with non-nil Protocol")
+	}
+	if actual := protocol.Namespace(); actual != BootstrapNamespace() {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit: NewBootstrapLedgerStore requires bootstrap namespace",
+			errcode.WithDetails(
+				slog.String("expectedNamespace", string(BootstrapNamespace())),
+				slog.String("actualNamespace", string(actual)),
+			))
 	}
 	return &BootstrapLedgerStore{inner: inner}, nil
 }

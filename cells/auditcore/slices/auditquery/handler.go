@@ -17,7 +17,9 @@ import (
 )
 
 // auditQueryPolicy permits the request when:
-//   - actorId query param is empty or equals authenticated subject (self-access)
+//   - actorId query param is empty. List scopes non-admin callers to self and
+//     treats admin callers as global queries.
+//   - OR actorId equals authenticated subject (self-access)
 //   - OR subject has the "admin" role
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
@@ -38,7 +40,7 @@ func auditQueryPolicy(r *http.Request) error {
 }
 
 // ListAdapter wraps Service to implement auditlist.Service for http.audit.list.v1.
-// It handles actor defaulting to subject, time parsing, and pagination mapping.
+// It handles actor scoping, time parsing, and pagination mapping.
 type ListAdapter struct {
 	S *Service
 }
@@ -48,16 +50,19 @@ type ListAdapter struct {
 // B2-C-09: Payload is redacted of sensitive fields before returning to client.
 func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
-	if !ok {
+	if !ok || p.Subject == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	subject := p.Subject
 
 	actorID := req.ActorID
-	if actorID == "" {
+	if actorID == "" && !p.HasRole(auth.RoleAdmin) {
 		actorID = subject
 	}
-	if actorID != subject {
+	switch {
+	case actorID == "":
+		slog.Info("audit: admin querying all actors", slog.String("admin", subject))
+	case actorID != subject:
 		slog.Info(
 			"audit: admin querying other user",
 			slog.String("admin", subject),

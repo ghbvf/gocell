@@ -27,6 +27,31 @@ func TestNewBootstrapLedgerStore_RejectsNilInner(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
 }
 
+// TestNewBootstrapLedgerStore_RejectsNonBootstrapNamespace asserts the
+// upstream namespace guard. A relay-chain store must not be sealable as the
+// bootstrap chain handle.
+func TestNewBootstrapLedgerStore_RejectsNonBootstrapNamespace(t *testing.T) {
+	t.Parallel()
+	relayNS, err := ledger.ParseNamespaceID("auditcore")
+	require.NoError(t, err)
+	p, err := ledger.NewProtocol(
+		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
+		ledger.WithNamespace(relayNS),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err)
+	mem, err := ledger.NewMemStore(p, clockmock.New(testNow))
+	require.NoError(t, err)
+
+	_, err = audit.NewBootstrapLedgerStore(mem)
+	require.Error(t, err)
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, errcode.ErrValidationFailed, coded.Code)
+	assert.Contains(t, coded.Message, "bootstrap namespace")
+}
+
 // TestBootstrapLedgerStore_DelegatesAppend wraps a MemStore on the bootstrap
 // namespace and confirms Append flows through to the inner store.
 func TestBootstrapLedgerStore_DelegatesAppend(t *testing.T) {

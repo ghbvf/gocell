@@ -593,16 +593,12 @@ func TestWalkthrough(t *testing.T) {
 		// a short visibility window may exist under contention. testwait.External
 		// mirrors the sibling outbox-route audit subtest's posture.
 		//
-		// The actorId param is mandatory here: auditquery defaults actorId to the
-		// caller's JWT subject when the param is absent (cells/auditcore/slices/
-		// auditquery/handler.go owner-guard, IDOR-safe default), and bootstrap
-		// entries are scoped to the platform actor "system:bootstrap" — without
-		// the explicit actorId override the WHERE clause filters them out before
-		// the eventType predicate ever runs.
+		// Admin audit queries with no actorId are global. Non-admin callers keep
+		// the IDOR-safe self default in cells/auditcore/slices/auditquery/handler.go.
 		var entries []json.RawMessage
 		testwait.External(t, "ssobff-bootstrap-audit-fail-entry-available", func() bool {
 			data, ok := fetchAuditEntries(
-				base+"/api/v1/audit/entries?eventType=bootstrap.auth.fail&actorId=system%3Abootstrap",
+				base+"/api/v1/audit/entries?eventType=bootstrap.auth.fail",
 				adminToken)
 			if ok {
 				entries = data
