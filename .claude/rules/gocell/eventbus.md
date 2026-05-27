@@ -173,3 +173,21 @@ ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell �
 - 每个事件包含 `eventId`（UUID）作为 envelope wire 字段，用于幂等键构造（DB 列名仍是 `event_id` per CLAUDE.md DB 字段 snake_case）
 - 负载变更向后兼容（新字段 optional，或版本化如 `device.enrolled.v2`）
 - 不兼容变更：先部署 consumer 再部署 producer
+
+### Envelope 三族横切字段（业务无关，不计入 payload schema）
+
+`outbox.Entry` wire envelope 跨 async 边界透传三族横切字段，**不进入** `payload.schema.json`：业务事件 schema 只描述 domain payload，三族字段由 framework 单源管理。详见 `.claude/rules/gocell/observability.md` "Outbox Wire Envelope 三族字段集"。
+
+| 族 | wire 字段 | producer 注入 | consumer 接入 |
+|----|-----------|--------------|--------------|
+| Correlation (`Observability`) | `traceId / traceParent / requestId / correlationId` | `entry.InjectObservabilityFromContext(ctx)` | `SubscriberWithMiddleware` 自动还原 ctx |
+| Principal (`Principal`) | `actorId / subjectId / tenantId / sessionId` | `entry.InjectPrincipalFromContext(ctx)` | `SubscriberWithMiddleware` 自动还原 ctx |
+| Time-Causality | `occurredAt` (producer 域事件时间，与 store-clock `createdAt` 分层) | `entry.OccurredAt = clk.Now().UTC()` | `entry.OccurredAt` 直接读，不还原 ctx |
+
+业务**严禁**通过 `entry.Metadata` 伪造三族字段：12 个 reserved key（trace_id/traceparent/trace_state/tracestate/span_id/request_id/correlation_id + actor_id/subject_id/tenant_id/session_id + occurred_at）在 `Entry.Validate()` fail-fast 被拒。新增 reserved key 须扩展 `kernel/outbox.ReservedMetadataKeys` + 对应 typed envelope 字段（不开 metadata 旁路）。
+
+三族字段集冻结 archtest：
+
+- `SAFEID-WIREMESSAGE-USAGE-01`：wireMessage 所有 exported 字段必须 `idutil.SafeID`（deny-by-default carve-out）
+- `SAFEID-UPSTREAM-FUNNEL-HARD-01`：wireMessage unexported 无任意名 re-export
+- `PRINCIPAL-SEALED-FIELD-FROZEN-01`：PrincipalMetadata 字段名 / JSON tag / 方法集 frozen + AST 盲区反向自检

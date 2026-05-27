@@ -108,6 +108,7 @@ const (
 	wireMessageType        = "wireMessage"
 	wireMessageExportedOld = "WireMessage"
 	observabilityType      = "ObservabilityMetadata"
+	principalType          = "PrincipalMetadata"
 )
 
 // safeIDExemptFields lists, per guarded type, the exported fields that are
@@ -127,11 +128,18 @@ var safeIDExemptFields = map[string]map[string]string{
 		"Payload":       "json.RawMessage business payload bytes",
 		"Metadata":      "map[string]string business metadata (validated separately by validateMetadata)",
 		"Observability": "nested ObservabilityMetadata struct, walked recursively",
+		"Principal":     "nested PrincipalMetadata struct, walked recursively",
 		"CreatedAt":     "time.Time, not ID-shaped",
+		"OccurredAt":    "time.Time producer-domain event time, not ID-shaped",
 	},
 	observabilityType: {
 		"TraceParent": "W3C 55-byte fixed-format string with its own validator (validTraceParent)",
 	},
+	// PrincipalMetadata has no exempt fields — all four (ActorID/SubjectID/
+	// TenantID/SessionID) are SafeID-typed. Listed here so the walker
+	// iterates PrincipalMetadata's fields and applies the SafeID invariant
+	// to any future field added.
+	principalType: {},
 }
 
 // safeIDBlindSpotAllowlist lists OTHER named structs in kernel/outbox that
@@ -158,7 +166,9 @@ var wireMessageCanonicalFields = []string{
 	"Payload",
 	"Metadata",
 	"Observability",
+	"Principal",
 	"CreatedAt",
+	"OccurredAt",
 }
 
 // TestSAFEIDWireMessageUsage01 reflectively asserts that every exported
@@ -562,7 +572,7 @@ func TestSAFEIDUpstreamFunnelHard01(t *testing.T) {
 						canonicalMatchCount++
 					}
 				}
-				const reShapeMatchThreshold = 7 // out of 10 canonical fields
+				const reShapeMatchThreshold = 9 // out of 12 canonical fields
 				if hasSchemaVersion && canonicalMatchCount >= reShapeMatchThreshold {
 					diags = append(diags, Diagnostic{
 						Message: fmt.Sprintf(

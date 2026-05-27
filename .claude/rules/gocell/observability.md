@@ -156,6 +156,31 @@ readyz 各字段归属：
 
 详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
 
+## Outbox Wire Envelope 三族字段集（Principal / Correlation / Time-Causality）
+
+`kernel/outbox.Entry` 通过 `kernel/outbox.wireMessage`（unexported sealed envelope）跨 async 边界传递三族业务无关的横切字段：
+
+| 族 | 字段 | 来源 | 注入点 | 还原点 | redaction |
+|----|------|------|--------|--------|-----------|
+| **Correlation** | `Observability.{TraceID,TraceParent,RequestID,CorrelationID}` | `pkg/ctxkeys.{Trace,Request,Correlation}ID*` | `Entry.InjectObservabilityFromContext(ctx)` | `SubscriberWithMiddleware` dispatch 前自动调 `Observability.RestoreToContext(ctx)` | wire 上 `idutil.SafeID` 字符集；不在敏感 key 集 — span attr 走 free-form RedactString + Truncate |
+| **Principal** | `Principal.{ActorID,SubjectID,TenantID,SessionID}` (OAuth/OIDC) | `pkg/ctxkeys.{Actor,Subject,Tenant,Session}*` | `Entry.InjectPrincipalFromContext(ctx)` | `SubscriberWithMiddleware` dispatch 前自动调 `Principal.RestoreToContext(ctx)` | 同上 |
+| **Time-Causality** | `Entry.OccurredAt time.Time` (producer-domain 事件时间，与 `Entry.CreatedAt` store-clock 持久化时间分层) | producer-side `clk.Now().UTC()` | producer 直接赋值或 emitter wiring 决定 | 不还原到 ctx — handler 通过 `entry.OccurredAt` 直接读 | wire 上 RFC3339；span attr 走 typed int64 (`gocell.event.occurred_at_unix_nano`)，绕过 string redact |
+
+**Hard funnel 双向锁**：
+
+- 上游：`wireMessage` unexported + `SAFEID-UPSTREAM-FUNNEL-HARD-01`（无任意名 re-export）
+- 下游：`SAFEID-WIREMESSAGE-USAGE-01`（所有 wireMessage exported 字段必须 `idutil.SafeID` 或 carve-out 登记）+ `PRINCIPAL-SEALED-FIELD-FROZEN-01`（reflect 锁 PrincipalMetadata 4 字段名 + JSON tag + AST 锁方法集 IsZero/Validate/RestoreToContext + ContextPrincipal/Entry.InjectPrincipalFromContext + 盲区反向自检）
+- 反伪造：`ReservedMetadataKeys` 拒业务通过 `Entry.Metadata` 伪造 12 个 reserved key（observability 7: trace_id/traceparent/trace_state/tracestate/span_id/request_id/correlation_id；principal 4: actor_id/subject_id/tenant_id/session_id；time 1: occurred_at），由 `validateMetadata` 在 `Entry.Validate()` fail-fast
+
+**Consumer span attrs**：`kernel/wrapper.WrapConsumer/WrapSubscriber` 自动通过 `entryEnvelopeAttrs(entry)` 把非空 Principal/OccurredAt 写入 delivery span：
+
+- `gocell.principal.actor_id` / `subject_id` / `tenant_id` / `session_id`（string，free-form redact path）
+- `gocell.event.occurred_at_unix_nano`（int64，typed scalar — 不走 string redact）
+
+零值字段不写 — 保持事件 span 在 producer 未注入 Principal 时安静。
+
+ref: `kernel/outbox/observability.go`（Correlation 族范本）/ `kernel/outbox/principal.go`（Principal 族镜像）/ `kernel/outbox/envelope.go`（wireMessage seal）
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
