@@ -147,6 +147,7 @@ func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 		{subdir: "green", wantViolations: false},
 		{subdir: "red_no_gate", wantViolations: true},
 		{subdir: "red_gate_after_mutation", wantViolations: true},
+		{subdir: "red_conditional_gate_bypass", wantViolations: true},
 	}
 
 	for _, tc := range cases {

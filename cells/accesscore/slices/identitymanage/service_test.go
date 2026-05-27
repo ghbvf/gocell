@@ -782,6 +782,68 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 	}
 }
 
+// staleReadThenLockedRepo models the PG read-committed window in #1017 F1: a
+// concurrent Lock/Suspend commits between a non-locking GetByID (which returns
+// the stale active snapshot) and a FOR-UPDATE read (which observes the committed
+// locked state). changePasswordInTx must read via GetByIDForUpdate so the
+// inactive gate sees the freeze and rejects before the credential write — a
+// plain GetByID would miss it and rewrite a now-frozen account's password.
+type staleReadThenLockedRepo struct {
+	ports.UserRepository
+}
+
+func (r *staleReadThenLockedRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
+	u, err := r.UserRepository.GetByIDForUpdate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// mem GetByIDForUpdate returns a clone, so mutating it does not touch the
+	// store; it stands in for "the row was frozen by a concurrent committed tx".
+	u.SetStatus(domain.StatusLocked, time.Now())
+	return u, nil
+}
+
+// TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate pins
+// #1017 F1: when a concurrent freeze commits before the locked read, the
+// credential write must be rejected. The fix is reading via GetByIDForUpdate
+// (row lock, consistent with login/Update) instead of a non-locking GetByID.
+func TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate(t *testing.T) {
+	memRepo := mem.NewStore(clock.Real()).UserRepository()
+	spy := &staleReadThenLockedRepo{UserRepository: memRepo}
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "must-not-issue"}}
+	svc, err := NewService(clock.Real(), spy,
+		newInvalidator(t, memRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(stub), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+	require.NoError(t, err)
+
+	user := seedUserWithHash(t, memRepo, "cp-freeze", "oldpass", false) // active at seed
+	beforeHash := user.PasswordHash
+	beforePV := user.PasswordVersion
+
+	_, cpErr := svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      user.ID,
+		OldPassword: "oldpass",
+		NewPassword: "newpass",
+	})
+
+	// The FOR-UPDATE read observes the concurrent freeze → 403 before mutation.
+	require.Error(t, cpErr)
+	var ce *errcode.Error
+	require.True(t, errors.As(cpErr, &ce), "expected *errcode.Error, got %T", cpErr)
+	assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
+
+	after, gerr := memRepo.GetByID(context.Background(), user.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, beforeHash, after.PasswordHash,
+		"credential must not be rewritten when a freeze committed before the locked read")
+	assert.Equal(t, beforePV, after.PasswordVersion,
+		"passwordVersion must not advance when the locked read rejects")
+	assert.Equal(t, int64(0), stub.calls.Load(),
+		"IssueForUser must not run when the locked read rejects pre-mutation")
+}
+
 func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 	stub := &stubTokenIssuer{}
 	svc, repo := newServiceWithIssuer(t, stub)
