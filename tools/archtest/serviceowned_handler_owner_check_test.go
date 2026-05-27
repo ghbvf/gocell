@@ -8,19 +8,31 @@
 //
 // AI-robust evaluation:
 //
-//   - **B1 downstream callsite lock** — Hard. Each serviceOwned slice's
-//     service.go must contain ≥1 CallExpr resolving via types.Info to
-//     runtime/auth.CheckOwner. Resolution is package-path-bound through
-//     archtest.ResolvePackageRef, so import aliasing / dot-import does
-//     not evade. Form uniqueness: a same-named "CheckOwner" in a
-//     different package fails the path check.
+//   - **B1 downstream call-graph reachability lock** — Hard. Each
+//     serviceOwned slice's service.go must invoke runtime/auth.CheckOwner
+//     transitively from at least one exported FuncDecl (BFS closure over
+//     intra-file function/method calls). Resolution is package-path-bound
+//     through archtest.ResolvePackageRef, so import aliasing / dot-import
+//     does not evade; same-named "CheckOwner" in another package fails
+//     the path check. Reachability binding (not bare AST existence)
+//     rejects dead-code escapes such as `var _ = auth.CheckOwner[any]`
+//     at file scope and unexported helpers that no exported method
+//     transitively calls. Conservative entry set (every exported func)
+//     is the cheapest way to avoid coupling to handler.go's
+//     contract→method mapping; a future SSA-based strengthening to
+//     specifically the contract-mapped entry method is tracked in
+//     gh issue #1199 (ARCHTEST-SERVICEOWNED-SSA-CALLGRAPH-UPGRADE).
 //
 //   - **B2 funnel body lock** — Hard. The single production CheckOwner
-//     function in runtime/auth/owner_guard.go must contain exactly one
-//     errcode.New call whose first argument type-resolves to KindNotFound,
-//     and zero errcode.New calls with any other Kind. Drift to
-//     KindPermissionDenied / KindForbidden / additional New calls is
-//     immediately detected.
+//     function in runtime/auth/owner_guard.go must satisfy two
+//     conditions: (a) exactly one errcode.New call resolving to
+//     KindNotFound with zero other-Kind errcode.New calls (count
+//     uniqueness); and (b) every non-nil return value in the body is the
+//     canonical errcode.New(KindNotFound, ...) call (return-form
+//     uniqueness). Together these prove all non-nil exits go through the
+//     IDOR-safe 404 collapse form — drift to KindPermissionDenied,
+//     additional errcode.New paths, or bypass returns like `return
+//     errors.New(...)` are all rejected.
 //
 //   - **B3 upstream zero-tolerance ban** — Hard. service.go files in
 //     serviceOwned slices must contain zero errcode.New(KindNotFound, ...)
@@ -58,12 +70,15 @@
 //     convention.
 //
 // Self-check: TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture
-// loads six testdata packages with full types.Info via archtest.RunTyped,
+// loads nine testdata packages with full types.Info via archtest.RunTyped,
 // sharing the same predicate closures as the production scans. Each
 // predicate is exercised on both a green path (silent) and one or more red
 // paths (firing), and cross-predicate silence is asserted on red fixtures
 // targeting other predicates (B1 RED fixtures must be silent on B3, etc.)
-// to keep B1/B2/B3 independently distinguishable.
+// to keep B1/B2/B3 independently distinguishable. B1 reachability is
+// validated by the red_b1_dead_callsite and red_b1_unreachable_helper
+// fixtures; B2 return-form lock is validated by the red_b2_alternative_return
+// fixture.
 //
 // CI gating: this archtest is **nightly-only** at present — it runs via
 // archtest-nightly.yml (16-shard) and locally via `make verify` /
@@ -244,10 +259,19 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 //   - red_missing_check_owner/service.go: no auth.CheckOwner → B1 fires; B3 silent
 //   - red_raw_kindnotfound_in_service/service.go: has CheckOwner AND raw
 //     errcode.New(KindNotFound,...) → B3 fires; B1 silent
+//   - red_b1_dead_callsite/service.go: auth.CheckOwner at file scope
+//     inside `var _ = func() { ... }`, not reachable from any exported
+//     FuncDecl → B1 fires; B3 silent
+//   - red_b1_unreachable_helper/service.go: auth.CheckOwner inside an
+//     unexported helper that no exported entry method calls → B1 fires;
+//     B3 silent
 //   - red_funnel_body_wrong_kind/owner_guard.go: CheckOwner returns
 //     KindPermissionDenied → B2 fires
 //   - red_funnel_body_extra_new/owner_guard.go: CheckOwner has two errcode.New
 //     calls → B2 fires
+//   - red_b2_alternative_return/owner_guard.go: CheckOwner has canonical
+//     KindNotFound exit AND a bypass `return errors.New(...)` path → B2
+//     fires (return-form lock)
 func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
 
@@ -274,10 +298,17 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 		// B3 RED + B1 silent cross-check
 		{subdir: "red_raw_kindnotfound_in_service", pred: predB1, wantViolations: false},
 		{subdir: "red_raw_kindnotfound_in_service", pred: predB3, wantViolations: true},
+		// B1 reachability RED fixtures (file-scope dead code + unreachable helper)
+		{subdir: "red_b1_dead_callsite", pred: predB1, wantViolations: true},
+		{subdir: "red_b1_dead_callsite", pred: predB3, wantViolations: false},
+		{subdir: "red_b1_unreachable_helper", pred: predB1, wantViolations: true},
+		{subdir: "red_b1_unreachable_helper", pred: predB3, wantViolations: false},
 		// B2 fixtures (owner_guard.go scope) — green + red
 		{subdir: "green_funnel_body", pred: predB2, wantViolations: false},
 		{subdir: "red_funnel_body_wrong_kind", pred: predB2, wantViolations: true},
 		{subdir: "red_funnel_body_extra_new", pred: predB2, wantViolations: true},
+		// B2 return-form RED: canonical exit PLUS a bypass return path
+		{subdir: "red_b2_alternative_return", pred: predB2, wantViolations: true},
 	}
 
 	for _, tc := range cases {
@@ -481,7 +512,69 @@ func checkFunnelBody(pass *Pass, file *ast.File, rel string) []Diagnostic {
 			),
 		})
 	}
+	// Return-form lock: every non-nil return value in the funnel body must be
+	// the canonical errcode.New(KindNotFound, ...) form. Count-based check
+	// above does not catch `return otherErr` paths that bypass errcode.New;
+	// this walker does.
+	diags = append(diags, checkFunnelReturnForms(pass, fn, rel)...)
 	return diags
+}
+
+// checkFunnelReturnForms (B2 supplement) reports a diagnostic for every
+// non-nil return value in the CheckOwner body that is NOT the canonical
+// `errcode.New(errcode.KindNotFound, _, _)` call. Combined with the
+// count==1 + no-other-Kind checks above, this proves all non-nil exits
+// from CheckOwner are the IDOR-safe 404 collapse form (no return-path
+// bypass possible).
+func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnostic {
+	var diags []Diagnostic
+	EachInSubtree[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
+		for _, expr := range ret.Results {
+			if isNilLiteralExpr(expr) {
+				continue
+			}
+			line := pass.Fset.Position(expr.Pos()).Line
+			call, ok := expr.(*ast.CallExpr)
+			if !ok {
+				diags = append(diags, Diagnostic{
+					Rel: rel, Line: line,
+					Message: fmt.Sprintf(
+						"%s CheckOwner has a non-nil return that is not a "+
+							"call expression — every non-nil exit must be "+
+							"the canonical errcode.New(errcode.KindNotFound, "+
+							"...) call (IDOR collapse uniqueness).",
+						rel,
+					),
+				})
+				continue
+			}
+			if !isErrCodeNewCall(pass.TypesInfo, call) {
+				diags = append(diags, Diagnostic{
+					Rel: rel, Line: line,
+					Message: fmt.Sprintf(
+						"%s CheckOwner has a non-nil return constructing an "+
+							"error via a call other than errcode.New — every "+
+							"non-nil exit must be the canonical "+
+							"errcode.New(errcode.KindNotFound, ...) call.",
+						rel,
+					),
+				})
+				continue
+			}
+			if len(call.Args) == 0 || !isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
+				// already covered by the otherCalls (Kind drift) accumulator
+				// above with a more specific message; skip to avoid duplicate
+				continue
+			}
+		}
+	})
+	return diags
+}
+
+// isNilLiteralExpr reports whether expr is the bare identifier "nil".
+func isNilLiteralExpr(expr ast.Expr) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && id.Name == "nil"
 }
 
 // isErrCodeNewCall reports whether call resolves via go/types to
@@ -510,34 +603,107 @@ func isKindNotFoundArg(typesInfo *types.Info, arg ast.Expr) bool {
 	return pkgPath == serviceOwnedErrcodePkg && name == serviceOwnedKindNotFoundSym
 }
 
-// fileCallsAuthCheckOwner reports whether file contains at least one CallExpr
-// whose callee type-resolves via go/types to runtime/auth.CheckOwner.
+// fileCallsAuthCheckOwner reports whether file's exported FuncDecl bodies —
+// transitively through intra-file function/method calls — invoke
+// runtime/auth.CheckOwner. This is a call-graph reachability check, not a
+// bare AST-existence scan: dead code at file scope (e.g. `var _ =
+// auth.CheckOwner[any]{...}`) and unreachable unexported helpers that
+// no exported entry calls do not satisfy this predicate.
 //
-// Handles three AST shapes for the callee:
-//   - `auth.CheckOwner(...)` — SelectorExpr (type inferred)
-//   - `auth.CheckOwner[T](...)` — IndexExpr wrapping SelectorExpr (explicit single type arg)
-//   - `auth.CheckOwner[T, U](...)` — IndexListExpr wrapping SelectorExpr (multiple type args)
+// Entry set = exported FuncDecls in file (methods on Service or top-level
+// funcs; "exported" = name starts with uppercase). The conservative
+// approach treats every exported func as a possible entry because the
+// adapter that wires HTTP handlers to service methods lives in a sibling
+// file (handler.go); without parsing handler.go we cannot pinpoint which
+// exported method is the contract-mapped entry. False positive
+// implication: a slice with two exported methods (one owner-scoped, one
+// read-only) where only the owner-scoped one calls CheckOwner still
+// passes — accepted: at least one exported path traverses the funnel.
 //
-// Bare-Ident `CheckOwner(...)` after a dot-import also resolves correctly.
+// Closure expansion walks CallExpr nodes in each visited body. A call
+// follows an edge into `allFuncs` (intra-file FuncDecls keyed by name)
+// when the callee identifier matches; calls to external packages or to
+// methods on non-Service types are not followed (closed-world over the
+// file). Same-name collisions between local helpers and stdlib symbols
+// over-expand the closure but never miss CheckOwner.
+//
+// Three AST shapes for the CheckOwner callee are recognized via
+// unwrapCalleeForResolve: SelectorExpr (`auth.CheckOwner`), IndexExpr
+// (`auth.CheckOwner[T]`), IndexListExpr (defensive multi-type-arg).
+// Bare-Ident `CheckOwner(...)` after a dot-import resolves through
+// ResolvePackageRef and is also caught.
 func fileCallsAuthCheckOwner(typesInfo *types.Info, file *ast.File) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
+	allFuncs := map[string]*ast.FuncDecl{}
+	var entry []*ast.FuncDecl
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil {
 			return
 		}
-		ref := unwrapCalleeForResolve(call.Fun)
-		if ref == nil {
-			return
-		}
-		pkgPath, name, ok := ResolvePackageRef(typesInfo, ref)
-		if !ok {
-			return
-		}
-		if pkgPath == serviceOwnedAuthPkg && name == serviceOwnedCheckOwnerSym {
-			found = true
+		allFuncs[fd.Name.Name] = fd
+		if fd.Name.IsExported() {
+			entry = append(entry, fd)
 		}
 	})
-	return found
+	if len(entry) == 0 {
+		return false // no exported entry → nothing reachable, definitely no funnel
+	}
+
+	visited := map[string]bool{}
+	queue := append([]*ast.FuncDecl{}, entry...)
+	for len(queue) > 0 {
+		fn := queue[0]
+		queue = queue[1:]
+		if fn.Name == nil || visited[fn.Name.Name] || fn.Body == nil {
+			continue
+		}
+		visited[fn.Name.Name] = true
+
+		found := false
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			if found {
+				return
+			}
+			ref := unwrapCalleeForResolve(call.Fun)
+			if ref == nil {
+				return
+			}
+			// Check if this is auth.CheckOwner — terminal success
+			if pkgPath, name, ok := ResolvePackageRef(typesInfo, ref); ok {
+				if pkgPath == serviceOwnedAuthPkg && name == serviceOwnedCheckOwnerSym {
+					found = true
+					return
+				}
+			}
+			// Otherwise expand BFS into intra-file callees by name
+			calleeName := calleeIdentName(ref)
+			if calleeName == "" {
+				return
+			}
+			if next, ok := allFuncs[calleeName]; ok && !visited[calleeName] {
+				queue = append(queue, next)
+			}
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// calleeIdentName extracts the function/method name from a callee
+// expression (SelectorExpr.Sel.Name or bare Ident.Name) for intra-file
+// BFS expansion. Returns empty when the callee shape is not a plain
+// name-bearing reference.
+func calleeIdentName(ref ast.Expr) string {
+	switch v := ref.(type) {
+	case *ast.SelectorExpr:
+		if v.Sel != nil {
+			return v.Sel.Name
+		}
+	case *ast.Ident:
+		return v.Name
+	}
+	return ""
 }
 
 // unwrapCalleeForResolve strips IndexExpr / IndexListExpr wrappers added by

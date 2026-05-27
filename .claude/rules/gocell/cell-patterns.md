@@ -232,7 +232,7 @@ auth:
 
 owner 信息（如 `sess.SubjectID`）只在 domain state（service 通过 DB 查询得到），handler 层结构上不可达。强行上移 handler 会引入双重 DB 读（Get-for-auth + Get-for-business = TOCTOU 窗口）并产生 403 泄漏（向攻击者确认资源存在）。正确形态：service 层通过 `auth.CheckOwner` typed funnel 比对，funnel 内统一返回 `errcode.KindNotFound`，与"资源不存在"合并为同一错误（= IDOR-safe 404 collapse，防跨用户枚举）。
 
-**单源 funnel**：`runtime/auth.CheckOwner[T]` 是唯一 sanctioned 出口。lookup-failure 与 owner-mismatch 通过 nil-safe accessor 在 funnel 内自然 collapse（accessor 对 nil resource 返回空字符串，与已校验非空的 callerID 不等，funnel 返回 KindNotFound——与 owner-mismatch 同 envelope）。canonical 形态：
+**单源 funnel**：`runtime/auth.CheckOwner[T]` 是唯一 sanctioned 出口。lookup-failure 与 owner-mismatch 通过 nil-safe accessor 在 funnel 内自然 collapse（accessor 对 nil resource 返回空字符串，与已校验非空的 callerID 不等，funnel 返回 KindNotFound——与 owner-mismatch 同 envelope）。funnel 签名 4 参（resource, ownerID accessor, callerID, code）——wire message 是 const 字面量 `"not found"` 在 funnel body 内固化（resource type 由 errcode.Code 承载，msg 不再是调用方参数），保证 funnel 自身满足 MESSAGE-CONST-LITERAL-01 无需 carve-out。canonical 形态：
 
 ```go
 // cells/accesscore/slices/sessionlogout/service.go
@@ -240,15 +240,19 @@ sess, err := s.sessionStore.Get(txCtx, sessionID)
 if err != nil && errcode.IsInfraError(err) {
     return errcode.Wrap(errcode.KindUnavailable, ...)
 }
-if err := auth.CheckOwner(sess, func(s *session.ValidateView) string {
-    if s == nil { return "" }
-    return s.SubjectID
-}, callerUserID, errcode.ErrSessionNotFound, "session not found"); err != nil {
+if err := auth.CheckOwner(sess, sessionSubjectID, callerUserID,
+    errcode.ErrSessionNotFound); err != nil {
     return err
+}
+
+// 同包 file-scope helper (nil-safe accessor)
+func sessionSubjectID(v *session.ValidateView) string {
+    if v == nil { return "" }
+    return v.SubjectID
 }
 ```
 
-`callerID` 必须由调用方在 handler 入口预先校验非空（否则 `"" != ""` 会让攻击者绕过 IDOR）；sessionlogout/service.go:99-104 即为参考前置不变式。
+`callerID` 由调用方在 handler 入口预校验非空（sessionlogout.Service.Logout 的 empty-callerUserID guard 返回 KindInvalid 是参考前置不变式）；funnel 本身也对空 callerID fail-closed 作为 defense-in-depth backstop。
 
 archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` 3 个 predicates 闭合该形态（B1/B2/B3）：callsite lock + funnel body lock + zero-tolerance ban；每个 predicate 通过 `types.Info` 包路径绑定 + AST 形态唯一性达成 Hard 范本目录中「typed function choice」+「typed marker funnel for unbounded ops」形态。完整 AI-robust 评级论据（包括 funnel 双向锁分析与盲区清单）见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc——本节不复制评级表述以避免双源漂移。
 
