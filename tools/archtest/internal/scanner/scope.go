@@ -24,12 +24,17 @@ func (e *DirsScopeEscapeError) Error() string {
 }
 
 // defaultSkipDirs is the set of directory base-names that are never walked.
+// `.venv` covers Python virtualenv directories that developers may create at
+// the repo root for tooling (e.g. spec-kit scripts); the dir is gitignored,
+// absent on CI, and contains symlinks that the walker would otherwise refuse
+// via walk.go's errSymlink fail-closed contract.
 var defaultSkipDirs = map[string]struct{}{
 	"vendor":       {},
 	"testdata":     {},
 	"worktrees":    {},
 	"generated":    {},
 	".git":         {},
+	".venv":        {},
 	"node_modules": {},
 }
 
