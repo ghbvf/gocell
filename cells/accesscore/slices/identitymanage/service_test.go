@@ -458,13 +458,17 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 		"email-only Update must not cascade-revoke (only status demotion does)")
 }
 
-// stubTokenIssuer is a test double for TokenIssuer.
+// stubTokenIssuer is a test double for TokenIssuer. calls records how many
+// times IssueForUser was invoked so tests can assert the post-commit token
+// issue does NOT run when an upstream gate rejects (see #1017).
 type stubTokenIssuer struct {
-	pair dto.TokenPair
-	err  error
+	pair  dto.TokenPair
+	err   error
+	calls int
 }
 
 func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
+	s.calls++
 	return s.pair, s.err
 }
 
@@ -479,6 +483,21 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 	if markReset {
 		user.SetPasswordResetRequired(true, time.Now())
 	}
+	require.NoError(t, repo.Create(context.Background(), user))
+	return user
+}
+
+// seedInactiveUserWithHash creates a user with a known bcrypt hash and a
+// non-active account status (suspended/locked) persisted before Create, so the
+// ChangePassword inactive-gate regression (#1017) sees a real inactive row.
+func seedInactiveUserWithHash(t *testing.T, repo *mem.UserRepository, username, password string, status domain.UserStatus) *domain.User {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	require.NoError(t, err)
+	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-" + username
+	user.SetStatus(status, time.Now())
 	require.NoError(t, repo.Create(context.Background(), user))
 	return user
 }
@@ -706,6 +725,58 @@ func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 	// No side effects: hash unchanged.
 	orig, _ := repo.GetByID(context.Background(), "usr-cp-bad")
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(orig.PasswordHash), []byte("correctpass")))
+}
+
+// TestService_ChangePassword_InactiveUser_RejectsPreMutation pins the #1017
+// fix: a suspended/locked account's ChangePassword must be rejected by the
+// credentialauthority.Assert gate BEFORE any credential mutation — the old hash
+// must not be rewritten, PasswordVersion must not advance, and the post-commit
+// token issue (IssueForUser) must not run.
+func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
+	cases := []struct {
+		name   string
+		status domain.UserStatus
+	}{
+		{name: "suspended", status: domain.StatusSuspended},
+		{name: "locked", status: domain.StatusLocked},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "must-not-issue"}}
+			svc, repo := newServiceWithIssuer(t, stub)
+			user := seedInactiveUserWithHash(t, repo, "cp-"+tc.name, "oldpass", tc.status)
+			beforeHash := user.PasswordHash
+			beforePV := user.PasswordVersion
+
+			_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+				UserID:      user.ID,
+				OldPassword: "oldpass",
+				NewPassword: "newpass",
+			})
+
+			// 403 ERR_AUTH_USER_NOT_ACTIVE, gate fires before mutation.
+			require.Error(t, err)
+			var ce *errcode.Error
+			require.True(t, errors.As(err, &ce), "expected *errcode.Error, got %T", err)
+			assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
+
+			// Old hash NOT rewritten + version unchanged (UpdatePassword not committed).
+			after, gerr := repo.GetByID(context.Background(), user.ID)
+			require.NoError(t, gerr)
+			assert.Equal(t, beforeHash, after.PasswordHash,
+				"inactive account password hash must be unchanged")
+			assert.NoError(t, bcrypt.CompareHashAndPassword(
+				[]byte(after.PasswordHash), []byte("oldpass")),
+				"stored hash must still match the old password")
+			assert.Equal(t, beforePV, after.PasswordVersion,
+				"passwordVersion must not advance when gate rejects")
+
+			// IssueForUser must not run after a pre-mutation rejection.
+			assert.Equal(t, 0, stub.calls,
+				"IssueForUser must not be called when inactive gate rejects pre-mutation")
+		})
+	}
 }
 
 func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
