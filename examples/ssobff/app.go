@@ -232,7 +232,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// returned by buildSSOBFFAuditCore (issue #1121 — the bootstrap chain is
 	// physically isolated from the auditcore relay chain).
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clock.Real())
-	auc, bootstrapAuditStore, err := buildSSOBFFAuditCore(cfg.logger, eb, pgOutboxWriter, pool, txMgr)
+	auc, bootstrapAuditStore, err := buildSSOBFFAuditCore(ctx, cfg.logger, eb, pgOutboxWriter, pool, txMgr)
 	if err != nil {
 		_ = pool.Close(ctx)
 		return nil, err
@@ -322,6 +322,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 // key. auditquery reads from both via ledger.MultiStore; the returned
 // *audit.BootstrapLedgerStore is handed to runtime/audit.NewBootstrapAuthFailObserver.
 func buildSSOBFFAuditCore(
+	ctx context.Context,
 	logger *slog.Logger,
 	eb outbox.Publisher,
 	outboxWriter *adapterpg.OutboxWriter,
@@ -370,7 +371,7 @@ func buildSSOBFFAuditCore(
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: wrap bootstrap ledger store: %w", err)
 	}
-	if err := audit.VerifyBootstrapTailOnStartup(context.Background(), bootstrapWrapped, logger); err != nil {
+	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, logger); err != nil {
 		return nil, nil, fmt.Errorf("ssobff: bootstrap audit tail verify: %w", err)
 	}
 	multiStore, err := ledger.NewMultiStore(relayStore, bootstrapStore)

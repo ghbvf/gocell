@@ -13,25 +13,27 @@ import (
 // NewBootstrapAuthFailObserver — passing the auditcore-namespace store there
 // is a compile error rather than a runtime fork of the hash chain.
 //
-// Downstream defense (Hard, type system): the type-checker rejects every
-// `ledger.Store` argument at the call sites of AppendBootstrapAuthFail and
-// NewBootstrapAuthFailObserver — the only way to invoke them is through this
-// typed pointer. The `inner` field is unexported and the package exposes no
-// accessor that returns it, so callers cannot extract the wrapped store and
+// Construct with NewBootstrapLedgerStore(inner) at the composition root
+// (cmd/corebundle / examples/*/app.go) after building the
+// BootstrapNamespace()-scoped ledger.Store, and hand the returned pointer
+// to NewBootstrapAuthFailObserver. The Append/Tail/Verify/RepoReady methods
+// delegate to the wrapped store; the `inner` field is unexported and no
+// accessor returns it, so callers cannot extract the wrapped store and
 // route writes around the sealed surface.
-//
-// Upstream backstop (Medium, archtest): ledger.Store is an interface without
-// a Protocol() method, so `NewBootstrapLedgerStore` cannot itself verify that
-// the inner store actually carries `BootstrapNamespace()`. That invariant is
-// instead enforced by the AUDIT-NS-DISJOINT-01 archtest, which scans cmd/
-// corebundle production wiring for the canonical two-protocol composition.
-// The grade is therefore "Hard downstream + Medium upstream" — see ADR
-// 202605270230 §AI-robust enforcement. A future Hard upstream upgrade would
-// add `Store.Protocol() *Protocol` and an explicit namespace check here.
 //
 // ref: google/trillian storage.ReadWriteTransaction(ctx, *trillian.Tree, ...) —
 // typed *Tree pointer prevents cross-tree writes at the type-system layer
 // (the same downstream pattern applied here to the bootstrap chain handle).
+//
+// Enforcement note (AI-robust grading, see ADR 202605270230 §AI-robust):
+// downstream is Hard (the type-checker rejects every `ledger.Store` argument
+// at the AppendBootstrapAuthFail / NewBootstrapAuthFailObserver call sites);
+// upstream is Medium (ledger.Store has no Protocol() method, so
+// NewBootstrapLedgerStore cannot itself verify the inner store carries
+// BootstrapNamespace() — that invariant is enforced by the
+// AUDIT-NS-DISJOINT-01 archtest scanning cmd/corebundle production wiring).
+// A future Hard upstream upgrade would add `Store.Protocol() *Protocol` and
+// an explicit namespace check here.
 type BootstrapLedgerStore struct {
 	inner ledger.Store
 }

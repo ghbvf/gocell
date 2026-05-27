@@ -86,6 +86,7 @@ func NewBootstrapAuthFailObserver(
 		if err := AppendBootstrapAuthFail(appendCtx, store, clk, reason, ip); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
 				slog.String("event", "bootstrap_audit_append_failed"),
+				slog.String("namespace", "bootstrap"),
 				slog.String("reason", reason),
 				slog.String("client_ip", ip),
 				slog.Any("error", err))

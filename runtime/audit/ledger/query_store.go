@@ -16,8 +16,9 @@ import (
 // inclusion (Query has the same signature); existing callers continue to wire
 // concrete stores through ledger.Store without change.
 //
-// ref: k8s.io/apiserver/pkg/audit/union.go — single-method Backend interface
-// for the read-side fan-out pattern.
+// ref: k8s.io/apiserver/pkg/audit/union.go — read-side fan-out aggregator
+// pattern (Union(backends ...Backend) Backend); the write side stays per-
+// backend independent.
 type QueryStore interface {
 	// Query lists entries matching AuditFilters using keyset cursor pagination
 	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
