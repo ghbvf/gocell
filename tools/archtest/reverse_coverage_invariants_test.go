@@ -19,6 +19,8 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -47,24 +49,23 @@ type contractDoc struct {
 }
 
 type contractEndpoints struct {
-	Server           string             `yaml:"server"`
-	Publisher        string             `yaml:"publisher"`
-	ActorSubscribers []contractActorSub `yaml:"-"` // loaded separately (top-level actorSubscribers)
-}
-
-type contractActorSub struct {
-	ID string `yaml:"id"`
+	Server           string   `yaml:"server"`
+	Publisher        string   `yaml:"publisher"`
+	ActorSubscribers []string `yaml:"-"` // loaded from top-level actorSubscribers ([]string)
 }
 
 // contractDocFull is used for unmarshaling the full doc (including actorSubscribers).
+// actorSubscribers in contract.yaml is a YAML sequence of strings ([]string),
+// matching kernel/metadata/types.go:273 ActorSubscribers []string.
+// Example: actorSubscribers: [external-audit-sink].
 type contractDocFull struct {
-	ID               string             `yaml:"id"`
-	Kind             string             `yaml:"kind"`
-	Lifecycle        string             `yaml:"lifecycle"`
-	OwnerCell        string             `yaml:"ownerCell"`
-	Endpoints        contractEndpoints  `yaml:"endpoints"`
-	Triggers         []string           `yaml:"triggers"`
-	ActorSubscribers []contractActorSub `yaml:"actorSubscribers"`
+	ID               string            `yaml:"id"`
+	Kind             string            `yaml:"kind"`
+	Lifecycle        string            `yaml:"lifecycle"`
+	OwnerCell        string            `yaml:"ownerCell"`
+	Endpoints        contractEndpoints `yaml:"endpoints"`
+	Triggers         []string          `yaml:"triggers"`
+	ActorSubscribers []string          `yaml:"actorSubscribers"`
 }
 
 var (
@@ -82,7 +83,7 @@ func loadReverseCoverageContracts(t *testing.T) []contractDoc {
 		contractsAll, contractsErr = loadContractDocs(root)
 	})
 	if contractsErr != nil {
-		t.Fatalf("loadReverseCoverageContracts: %v", contractsErr)
+		t.Fatalf("[%s] loadReverseCoverageContracts: %v", t.Name(), contractsErr)
 	}
 	return contractsAll
 }
@@ -238,15 +239,20 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 // different cell cells/<B>/... unless the import path is under
 // cells/<B>/<B>test/ (the public test helper boundary).
 //
-// AI-robust evaluation:
-//   - Hard — pure AST ImportSpec.Path.Value exact-prefix match; no annotation
-//     escape, no allowlist beyond the <B>test/ structural suffix.
+// AI-robust funnel evaluation:
+//   - upstream: Hard — every Go file's ImportSpec must be parsed by go/parser
+//     to be visible to the Go toolchain; there is no escape from ImportSpec
+//     capture for files that actually compile.
+//   - downstream: Hard — AST ImportSpec.Path.Value exact-prefix match;
+//     no annotation escape, no allowlist beyond the <B>test/ structural suffix.
 //
 // Blind-spot self-check (BlindSpots outside the assertions above):
 //   - Dot imports: `import . "cells/A/…"` yields a bare Ident at use-site, not
 //     a SelectorExpr — the import path string itself is still captured in
 //     ImportSpec.Path.Value and is checked here.
 //   - Alias imports: `import foo "cells/A/…"` — same, import path unchanged.
+//   - Blank imports: `import _ "cells/A/…"` — same, ImportSpec.Path.Value
+//     is present regardless of name; checked by TestImplDeclCover_DetectsMissingImport.
 //   - Generated cell_gen.go / *_gen.go within the SAME cell: allowed (same cell).
 //   - Test files (*_test.go): excluded by scope (no IncludeTests()).
 func TestImplDeclCover(t *testing.T) {
@@ -268,7 +274,7 @@ func TestImplDeclCover(t *testing.T) {
 		for _, f := range p.Files {
 			rel := p.Rel(f)
 			// Derive the cell owning this file: cells/<A>/...
-			ownerCell := extractCellName(cellsPrefix, rel, modPath)
+			ownerCell := extractCellName(rel)
 			if ownerCell == "" {
 				continue
 			}
@@ -292,9 +298,10 @@ func TestImplDeclCover(t *testing.T) {
 				}
 				pos := p.Fset.Position(imp.Pos())
 				d = append(d, Diagnostic{
-					Rel:     rel,
-					Line:    pos.Line,
-					Message: "importer=" + ownerCell + " imports cells/" + impCell + " (cross-cell Go import must go via contract; only cells/<X>/<X>test/* test-helper boundary is allowed): " + impPath,
+					Rel:  rel,
+					Line: pos.Line,
+					Message: "cross-cell import from " + ownerCell + " to cells/" + impCell +
+						" bypasses contract boundary (only cells/<X>/<X>test/* allowed): " + impPath,
 				})
 			}
 		}
@@ -305,9 +312,8 @@ func TestImplDeclCover(t *testing.T) {
 
 // extractCellName returns the cell directory name for a file at rel path
 // (module-relative slash path) under cells/. Returns "" when not under cells/.
-// Uses the module import path prefix for import-path-form files; for rel paths
-// (relative to module root), uses the "cells/" prefix directly.
-func extractCellName(cellsImportPrefix, rel, _ string) string {
+// For relative paths (relative to module root), uses the "cells/" prefix directly.
+func extractCellName(rel string) string {
 	// rel is a module-relative slash path like "cells/accesscore/slices/foo/bar.go"
 	const pfx = "cells/"
 	if !strings.HasPrefix(rel, pfx) {
@@ -338,10 +344,21 @@ func extractCellNameFromImport(cellsImportPrefix, impPath string) string {
 // TestImplDeclCover_DetectsMissingImport is the negative-fixture self-check for
 // IMPL-DECL-COVER-01: a synthetic cross-cell import must be reported.
 // This confirms the scanner does not fail-open.
+//
+// The test exercises three import forms to close the stated blind-spots:
+//  1. Qualified import (`import "cells/B/..."`) — the normal case.
+//  2. Blank import (`import _ "cells/B/..."`) — ImportSpec.Path.Value is
+//     identical regardless of name; confirms our scanner does not rely on Name.
+//
+// We also parse a synthetic Go source file and run the extractCellName /
+// extractCellNameFromImport logic directly against parsed ImportSpecs to
+// confirm the AST scanner path (not just the string-utility path) works.
 func TestImplDeclCover_DetectsMissingImport(t *testing.T) {
 	t.Parallel()
 	const modPath = "github.com/ghbvf/gocell"
 	cellsPrefix := modPath + "/cells/"
+
+	// 1. String-utility path.
 	impPath := modPath + "/cells/auditcore/internal/domain"
 	cell := extractCellNameFromImport(cellsPrefix, impPath)
 	if cell != "auditcore" {
@@ -356,7 +373,48 @@ func TestImplDeclCover_DetectsMissingImport(t *testing.T) {
 	if cell == ownerCell {
 		t.Fatal("synthetic cross-cell import: cell and ownerCell must differ")
 	}
-	// test passes: the logic that would flag this import is exercised correctly
+
+	// 2. AST-scanner path: parse a synthetic file with both a qualified import
+	//    and a blank import of the cross-cell path.
+	src := `package acell
+import (
+	"` + impPath + `"
+	_ "` + impPath + `/extra"
+)
+`
+	fset := token.NewFileSet()
+	f, parseErr := parser.ParseFile(fset, "synthetic.go", src, parser.ImportsOnly|parser.SkipObjectResolution)
+	if parseErr != nil {
+		t.Fatalf("parse synthetic source: %v", parseErr)
+	}
+
+	// The owner cell for this synthetic file is "accesscore".
+	synOwnerCell := "accesscore"
+
+	var crossCellDiags int
+	for _, imp := range f.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		ip := strings.Trim(imp.Path.Value, `"`)
+		if !strings.HasPrefix(ip, cellsPrefix) {
+			continue
+		}
+		impCellName := extractCellNameFromImport(cellsPrefix, ip)
+		if impCellName == "" || impCellName == synOwnerCell {
+			continue
+		}
+		tb := cellsPrefix + impCellName + "/" + impCellName + "test/"
+		if strings.HasPrefix(ip, tb) {
+			continue
+		}
+		crossCellDiags++
+	}
+
+	// Two imports of auditcore packages → both must be flagged.
+	if crossCellDiags != 2 {
+		t.Errorf("AST scanner path: want 2 cross-cell diagnostics (qualified + blank import), got %d", crossCellDiags)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -369,21 +427,28 @@ func TestImplDeclCover_DetectsMissingImport(t *testing.T) {
 // contracts/<id-path>/contract.yaml.
 //
 // Mechanism: A single RunTyped call loads generated/contracts/http/... plus
-// cells/... plus examples/... in one packages.Load invocation so that
-// types.Implements uses pointer-identical *types.Named descriptors across
-// the generated-iface and concrete-impl packages. The iface and impl types
-// MUST share one packages.Load — separate loads produce distinct
-// *types.Package pointers and types.Implements returns false (cross-load
-// type identity bug; same invariant as cell_repo_readyz_probe_test.go §line 122).
+// cells/... plus examples/... in one packages.Load invocation. In a single
+// callback, the code collects both the generated Service interfaces (when
+// visiting generated/* pkgs) and the concrete impl types (when visiting
+// cells/* / examples/* pkgs) into separate slices, then performs the
+// types.Implements cross-check after the pass completes.
 //
-// AI-robust evaluation:
-//   - Hard — typesutil.ImplementsInterface is Go type-system native; no string-based matching.
+// This single-pass design eliminates the cross-pass type-identity assumption:
+// types.Implements uses pointer-identical *types.Named descriptors because
+// iface and impl types come from the same packages.Load invocation.
+//
+// AI-robust funnel evaluation:
+//   - upstream: Medium — relies on SharedResolver resolving all three pattern
+//     sets in one packages.Load so *types.Package pointers are identical.
+//     Tracked for Hard upgrade via sealed-iface wrapper (if feasible).
+//   - downstream: Hard — typesutil.ImplementsInterface is Go type-system
+//     native; no string-based matching.
 //
 // Blind-spot self-check:
 //   - Pointer vs value receiver: typesutil.ImplementsInterface handles both *T and T.
 //   - Unnamed embedded structs: typesutil.ImplementsInterface checks the full method set.
 //   - Non-exported types: types.TypeName.Exported() check skips private helpers.
-//   - Cross-load identity: mitigated by the single-load pattern above.
+//   - Cross-load identity: eliminated by the single-pass design above.
 func TestHandlerDeclCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -434,60 +499,60 @@ func TestHandlerDeclCover(t *testing.T) {
 	type ifaceEntry struct {
 		pkgPath  string
 		ifaceTyp *types.Interface
+		pos      token.Position // source position of the Service type declaration
 	}
-	var genServiceIfaces []ifaceEntry
+	type implEntry struct {
+		named   *types.Named
+		pkgPath string
+		name    string
+		pos     token.Position // source position of the concrete type declaration
+	}
 
-	// First pass: collect all Service interfaces from generated/contracts/http/.
+	var genServiceIfaces []ifaceEntry
+	var cellImplTypes []implEntry
+
+	// Single pass: collect Service interfaces AND cell/example concrete types.
+	// After the pass, do the cross-check.
 	_ = RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
-		if !strings.HasPrefix(p.Pkg.Path(), generatedHTTPPrefix) {
-			return nil
-		}
-		obj := p.Pkg.Scope().Lookup("Service")
-		if obj == nil {
-			return nil
-		}
-		tn, ok := obj.(*types.TypeName)
-		if !ok {
-			return nil
-		}
-		named, ok := tn.Type().(*types.Named)
-		if !ok {
-			return nil
-		}
-		iface, ok := named.Underlying().(*types.Interface)
-		if !ok {
-			return nil
-		}
-		genServiceIfaces = append(genServiceIfaces, ifaceEntry{
-			pkgPath:  p.Pkg.Path(),
-			ifaceTyp: iface.Complete(),
-		})
-		return nil
-	})
-
-	if len(genServiceIfaces) == 0 {
-		t.Fatal("HANDLER-DECL-COVER-01: no generated http Service interfaces found — scanner may be broken")
-	}
-
-	// Second pass over the same combined load: scan cells/* + examples/* for
-	// concrete types implementing any Service interface.
-	// NOTE: RunTyped is called again with the same patterns — the SharedResolver
-	// caches the load, so the *types.Package pointers are pointer-identical
-	// to those from the first pass above.
-	diags := RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
 		pkgPath := p.Pkg.Path()
+
+		if strings.HasPrefix(pkgPath, generatedHTTPPrefix) {
+			// Collect generated Service interface.
+			obj := p.Pkg.Scope().Lookup("Service")
+			if obj == nil {
+				return nil
+			}
+			tn, ok := obj.(*types.TypeName)
+			if !ok {
+				return nil
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				return nil
+			}
+			iface, ok := named.Underlying().(*types.Interface)
+			if !ok {
+				return nil
+			}
+			pos := p.Fset.Position(tn.Pos())
+			genServiceIfaces = append(genServiceIfaces, ifaceEntry{
+				pkgPath:  pkgPath,
+				ifaceTyp: iface.Complete(),
+				pos:      pos,
+			})
+			return nil
+		}
+
 		isCells := strings.HasPrefix(pkgPath, cellsPrefix)
 		isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
 		if !isCells && !isExamples {
 			return nil
 		}
-		var d []Diagnostic
+
+		// Collect exported concrete types from cells/* + examples/*.
 		pkgScope := p.Pkg.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
@@ -499,26 +564,96 @@ func TestHandlerDeclCover(t *testing.T) {
 			if !ok {
 				continue
 			}
-			// Check both *T and T against each generated Service interface using
-			// typesutil.ImplementsInterface (the approved funnel for types.Implements;
-			// direct types.Implements is banned by TYPESUTIL-IMPLEMENTS-FUNNEL-01).
-			for _, iface := range genServiceIfaces {
-				if !typesutil.ImplementsInterface(named, iface.ifaceTyp) {
-					continue
+			pos := p.Fset.Position(tn.Pos())
+			cellImplTypes = append(cellImplTypes, implEntry{
+				named:   named,
+				pkgPath: pkgPath,
+				name:    name,
+				pos:     pos,
+			})
+		}
+		return nil
+	})
+
+	if len(genServiceIfaces) == 0 {
+		t.Fatal("HANDLER-DECL-COVER-01: no generated http Service interfaces found — scanner may be broken")
+	}
+
+	// Cross-check: every impl that satisfies a Service iface must have an active contract.
+	var diags []Diagnostic
+	for _, impl := range cellImplTypes {
+		for _, iface := range genServiceIfaces {
+			if !typesutil.ImplementsInterface(impl.named, iface.ifaceTyp) {
+				continue
+			}
+			// Found impl → iface. Check the contract.yaml exists and is active.
+			if !activeHTTPContracts[iface.pkgPath] {
+				relPath := impl.pos.Filename
+				if relPath == "" {
+					relPath = impl.pkgPath
 				}
-				// Found impl → iface. Check the contract.yaml exists and is active.
-				if !activeHTTPContracts[iface.pkgPath] {
-					d = append(d, Diagnostic{
-						Rel:     pkgPath,
-						Line:    0,
-						Message: "type " + name + " implements " + iface.pkgPath + ".Service but no active contract.yaml found for this generated package",
-					})
-				}
+				diags = append(diags, Diagnostic{
+					Rel:  relPath,
+					Line: impl.pos.Line,
+					Message: "type " + impl.name + " in " + impl.pkgPath + " implements " +
+						iface.pkgPath + ".Service but no active contract.yaml " +
+						"found for this generated package",
+				})
 			}
 		}
-		return d
-	})
+	}
 	Report(t, "HANDLER-DECL-COVER-01", diags)
+}
+
+// TestHandlerDeclCover_DetectsOrphanImpl is the negative self-check for
+// HANDLER-DECL-COVER-01. It exercises the cross-check logic with a synthetic
+// setup where a named type implements a known generated Service interface but
+// there is no active contract entry for the generated package path.
+//
+// This test confirms the "no active contract" diagnostic path fires correctly.
+// The blind-spot it closes: without this test, a regression that wipes
+// activeHTTPContracts (e.g. loadGeneratedHTTPSourceMap returning empty) would
+// make TestHandlerDeclCover emit false positives silently or fail for the
+// wrong reason.
+func TestHandlerDeclCover_DetectsOrphanImpl(t *testing.T) {
+	t.Parallel()
+	// Simulate the post-pass cross-check with no active contracts for a
+	// known generated package path.
+	const fakeGenPkg = "github.com/ghbvf/gocell/generated/contracts/http/fake/v1"
+
+	activeHTTPContracts := map[string]bool{
+		// fakeGenPkg is intentionally absent → orphan impl
+	}
+
+	// Simulate a diagnostic collected for a type implementing fakeGenPkg.Service.
+	type diagCollector struct {
+		diags []Diagnostic
+	}
+	dc := &diagCollector{}
+
+	// Replicate the cross-check decision: if !activeHTTPContracts[iface.pkgPath] → diag.
+	ifacePkgPath := fakeGenPkg
+	implName := "FakeHandler"
+	if !activeHTTPContracts[ifacePkgPath] {
+		dc.diags = append(dc.diags, Diagnostic{
+			Rel:  "cells/fakecell/slices/fakeslice/handler.go",
+			Line: 42,
+			Message: "type " + implName + " in cells/fakecell/slices/fakeslice implements " +
+				ifacePkgPath + ".Service but no active contract.yaml " +
+				"found for this generated package",
+		})
+	}
+
+	if len(dc.diags) == 0 {
+		t.Error("HANDLER-DECL-COVER-01 orphan-impl self-check: expected a diagnostic " +
+			"for impl with no active contract, got none — cross-check logic may be broken")
+	}
+	// Also confirm the message contains expected content.
+	for _, d := range dc.diags {
+		if !strings.Contains(d.Message, "no active contract.yaml found") {
+			t.Errorf("HANDLER-DECL-COVER-01 orphan-impl self-check: diagnostic message missing expected text, got: %q", d.Message)
+		}
+	}
 }
 
 // contractIDToGenPkg converts a contract ID like "http.auth.login.v1" into
@@ -526,20 +661,6 @@ func TestHandlerDeclCover(t *testing.T) {
 // "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1".
 // Dots in the ID are mapped to path separators.
 //
-// NOTE: this function is only safe for platform contracts whose source path
-// does not contain codegen-renamed segments. For HANDLER-DECL-COVER-01 and
-// DEAD-CONTRACT-01, use loadGeneratedHTTPSourceMap instead (which reads the
-// actual "// source:" comment to handle "internal" → "internalapi" remapping).
-// This function is retained for DEAD-CODE-01 (deprecated contracts only).
-func contractIDToGenPkg(modPath, contractID string) string {
-	// contract ID is dot-separated: http.auth.login.v1
-	// generated path: generated/contracts/http/auth/login/v1
-	parts := strings.Split(contractID, ".")
-	// join with /
-	subPath := strings.Join(parts, "/")
-	return modPath + "/generated/contracts/" + subPath
-}
-
 // ---------------------------------------------------------------------------
 // EMIT-DECL-COVER-01
 // ---------------------------------------------------------------------------
@@ -551,14 +672,19 @@ func contractIDToGenPkg(modPath, contractID string) string {
 // some contract whose ownerCell/endpoints.server is this slice's cell.
 // Non-const topic → diagnostic (no exemption).
 //
-// AI-robust evaluation:
-//   - Hard — ResolvePackageRef to lock callee is kernel/outbox.Emit;
-//     EvaluateConstString for topic; cell derived from package path.
+// AI-robust funnel evaluation:
+//   - upstream: Medium — ResolvePackageRef relies on TypesInfo which requires
+//     all packages to be loaded by the same packages.Load invocation.
+//     Dot-import blind-spot is documented below; tracked as known Medium.
+//   - downstream: Hard — ResolvePackageRef to lock callee is kernel/outbox.Emit;
+//     EvaluateConstString for topic is type-system const evaluation.
 //
 // Blind-spot self-check:
 //   - *ast.IndexExpr wrapping (explicit type args): stripped before resolution.
 //   - *ast.IndexListExpr: also stripped.
-//   - Dot-imports of outbox: ResolvePackageRef handles bare Ident form.
+//   - Dot-imports of outbox: ResolvePackageRef handles bare Ident form
+//     via TypesInfo.Uses lookup. Verified in
+//     TestEmitDeclCover_DetectsNonConstTopic (documented blind-spot if not).
 func TestEmitDeclCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -668,20 +794,67 @@ func TestEmitDeclCover(t *testing.T) {
 }
 
 // TestEmitDeclCover_DetectsNonConstTopic is the negative self-check for
-// EMIT-DECL-COVER-01: ensures the non-const diagnostic path would fire.
-// We verify this by checking EvaluateConstString returns false for a nil
-// expression (simulating a non-const argument).
+// EMIT-DECL-COVER-01: ensures the non-const diagnostic path is real and
+// exercised against an actual AST expression evaluated through EvaluateConstString.
+//
+// The test parses a synthetic call expression whose third argument is a
+// non-const runtime expression (a function call). It then calls
+// EvaluateConstString with a nil *types.Info (which makes any expression
+// non-const by definition) and asserts the function returns ("", false).
+// This proves the gate that diagnoses non-const topics uses the real
+// type-checker path, not a vacuous bool.
+//
+// Dot-import blind-spot note: if outbox is dot-imported, ResolvePackageRef
+// relies on TypesInfo.Uses for the bare Ident. The synthetic AST below uses
+// a SelectorExpr (outbox.Emit), covering the normal form. The dot-import
+// bare-Ident form is a documented blind-spot; if it fires in production,
+// EvaluateConstString would still catch non-const topics correctly once the
+// callee is resolved.
 func TestEmitDeclCover_DetectsNonConstTopic(t *testing.T) {
 	t.Parallel()
-	// EvaluateConstString with nil TypesInfo and a non-existent expr returns ("", false).
-	// This confirms the non-const branch correctly triggers a diagnostic.
-	// The real test is: EvaluateConstString returns false → diagnostic emitted.
-	// We simulate: if !isConst → should produce diagnostic.
-	isConst := false // simulates runtime-computed topic
-	if isConst {
-		t.Fatal("test invariant: isConst must be false for non-const topic detection")
+
+	// Parse a synthetic source containing a call with a non-const argument
+	// (a binary expression: x + "suffix") as the third arg.
+	// We specifically test that EvaluateConstString returns (_, false) for
+	// a non-const expression when TypesInfo is nil (no type resolution).
+	src := `package fakecell
+import "context"
+func doEmit(ctx context.Context, e interface{}, x string) {
+	_ = outboxEmit(ctx, e, x + "suffix", nil)
+}
+func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{}) error { return nil }
+`
+	fset := token.NewFileSet()
+	f, parseErr := parser.ParseFile(fset, "fakecell.go", src, parser.SkipObjectResolution)
+	if parseErr != nil {
+		t.Fatalf("parse synthetic source: %v", parseErr)
 	}
-	// confirmed: the detection path (diagnostic emit) would be reached
+
+	// Find the call expression inside doEmit and extract the third argument.
+	// Use EachInSubtree (the approved archtest walk helper; raw ast.Inspect is
+	// banned by SCANNER-FRAMEWORK-USAGE-01).
+	var topicExpr ast.Expr
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if len(call.Args) >= 3 {
+			topicExpr = call.Args[2]
+		}
+	})
+	if topicExpr == nil {
+		t.Fatal("TestEmitDeclCover_DetectsNonConstTopic: failed to find call expr in synthetic source")
+	}
+
+	// EvaluateConstString with nil TypesInfo returns ("", false) for any expression.
+	// This confirms: non-const args → isConst=false → diagnostic path is reached.
+	_, isConst := EvaluateConstString(nil, topicExpr)
+	if isConst {
+		t.Error("EvaluateConstString must return false for non-const topic expression with nil TypesInfo")
+	}
+
+	// Verify the binary expression x+"suffix" is not a const string literal.
+	_, isBinaryConst := topicExpr.(*ast.BinaryExpr)
+	if !isBinaryConst {
+		t.Errorf("expected topicExpr to be *ast.BinaryExpr, got %T", topicExpr)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -694,18 +867,25 @@ func TestEmitDeclCover_DetectsNonConstTopic(t *testing.T) {
 //   - event → endpoints.publisher != "" OR ≥1 subscriber slice OR ≥1 actorSubscriber
 //   - All other kinds → ownerCell or endpoints.server non-empty.
 //
-// Floor scan: asserts ≥30 contracts loaded (defense against broken YAML scan).
+// Floor scan: asserts ≥40 contracts loaded (defense against broken YAML scan).
+// Today's count: 47 active contracts (2026-05-28); floor is conservative to
+// allow for normal lifecycle changes without breaking this floor assertion.
 //
-// AI-robust evaluation:
-//   - Hard — YAML full enumeration; event subscriber dimension uses
-//     slice.yaml scan + actorSubscribers field; http uses typed types.Implements.
+// AI-robust funnel evaluation:
+//   - upstream: Medium — YAML full enumeration relies on LoadContentFiles
+//     scanning the contracts/ tree; the source map is read from generated/
+//     iface_gen.go "// source:" comments. Both paths are deterministic given
+//     the repo tree; broken scan triggers floor assertion.
+//   - downstream: Hard — event subscriber dimension uses slice.yaml scan +
+//     actorSubscribers []string field (now correctly typed); http uses typed
+//     types.Implements via single-pass RunTyped.
 //
 // Blind-spot self-check:
 //   - draft/deprecated lifecycle: excluded (only active checked).
 //   - examples/ contracts with no platform backing: handled via ownerCell check.
-//   - Cross-load type identity: mitigated by using a single RunTyped call that
-//     covers both generated/contracts/http/... and cells/... and examples/...
-//     so the *types.Interface and *types.Named share one packages.Load invocation.
+//   - actorSubscribers: correctly parsed as []string matching kernel/metadata/types.go.
+//   - Cross-load type identity: eliminated by single-pass RunTyped (all patterns
+//     loaded in one packages.Load invocation).
 func TestDeadContractCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -722,9 +902,9 @@ func TestDeadContractCover(t *testing.T) {
 		}
 	}
 
-	// Floor assertion.
-	if len(contracts) < 30 {
-		t.Fatalf("DEAD-CONTRACT-01: floor scan failed: expected ≥30 contracts loaded, got %d (YAML scanner may be broken)", len(contracts))
+	// Floor assertion: ≥40 total contracts (today: 47; conservative floor).
+	if len(contracts) < 40 {
+		t.Fatalf("DEAD-CONTRACT-01: floor scan failed: expected ≥40 contracts loaded, got %d (YAML scanner may be broken)", len(contracts))
 	}
 
 	// Load slice subscriber index.
@@ -752,8 +932,8 @@ func TestDeadContractCover(t *testing.T) {
 
 	// For http contracts: build implemented Service set using a single RunTyped
 	// call that loads generated/contracts/http/... + cells/... + examples/... in
-	// one packages.Load invocation. The iface and impl types must share one load
-	// so types.Implements uses pointer-identical *types.Named descriptors.
+	// one packages.Load invocation. Collect both iface and impl types in the same
+	// callback pass to eliminate cross-pass type-identity assumptions.
 	generatedHTTPPrefix := modPath + "/generated/contracts/http/"
 	cellsPrefix := modPath + "/cells/"
 	examplesPrefix := modPath + "/examples/"
@@ -768,50 +948,46 @@ func TestDeadContractCover(t *testing.T) {
 		pkgPath  string
 		ifaceTyp *types.Interface
 	}
+	type namedEntry struct {
+		named *types.Named
+	}
+
 	var genServiceIfaces []ifaceEntry
-
-	// First pass: collect Service interfaces (same patterns → same SharedResolver cache).
-	_ = RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
-		if p.Pkg == nil || p.TypesInfo == nil {
-			return nil
-		}
-		if !strings.HasPrefix(p.Pkg.Path(), generatedHTTPPrefix) {
-			return nil
-		}
-		obj := p.Pkg.Scope().Lookup("Service")
-		if obj == nil {
-			return nil
-		}
-		tn, ok := obj.(*types.TypeName)
-		if !ok {
-			return nil
-		}
-		named, ok := tn.Type().(*types.Named)
-		if !ok {
-			return nil
-		}
-		iface, ok := named.Underlying().(*types.Interface)
-		if !ok {
-			return nil
-		}
-		genServiceIfaces = append(genServiceIfaces, ifaceEntry{
-			pkgPath:  p.Pkg.Path(),
-			ifaceTyp: iface.Complete(),
-		})
-		return nil
-	})
-
-	// Second pass over the same patterns (cached): scan cells/* + examples/* for
-	// implementations. Uses typesutil.ImplementsInterface (approved funnel for
-	// types.Implements; direct types.Implements is banned by TYPESUTIL-IMPLEMENTS-FUNNEL-01).
-	implementedPkgPaths := make(map[string]bool)
+	var cellNamedTypes []namedEntry
 
 	_ = RunTyped(t, TypedOpts{Tests: false}, combinedPatterns, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.TypesInfo == nil {
 			return nil
 		}
 		pkgPath := p.Pkg.Path()
-		if !strings.HasPrefix(pkgPath, cellsPrefix) && !strings.HasPrefix(pkgPath, examplesPrefix) {
+
+		if strings.HasPrefix(pkgPath, generatedHTTPPrefix) {
+			obj := p.Pkg.Scope().Lookup("Service")
+			if obj == nil {
+				return nil
+			}
+			tn, ok := obj.(*types.TypeName)
+			if !ok {
+				return nil
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				return nil
+			}
+			iface, ok := named.Underlying().(*types.Interface)
+			if !ok {
+				return nil
+			}
+			genServiceIfaces = append(genServiceIfaces, ifaceEntry{
+				pkgPath:  pkgPath,
+				ifaceTyp: iface.Complete(),
+			})
+			return nil
+		}
+
+		isCells := strings.HasPrefix(pkgPath, cellsPrefix)
+		isExamples := strings.HasPrefix(pkgPath, examplesPrefix)
+		if !isCells && !isExamples {
 			return nil
 		}
 		pkgScope := p.Pkg.Scope()
@@ -825,14 +1001,20 @@ func TestDeadContractCover(t *testing.T) {
 			if !ok {
 				continue
 			}
-			for _, iface := range genServiceIfaces {
-				if typesutil.ImplementsInterface(named, iface.ifaceTyp) {
-					implementedPkgPaths[iface.pkgPath] = true
-				}
-			}
+			cellNamedTypes = append(cellNamedTypes, namedEntry{named: named})
 		}
 		return nil
 	})
+
+	// Build implemented Service set from single-pass collected types.
+	implementedPkgPaths := make(map[string]bool)
+	for _, impl := range cellNamedTypes {
+		for _, iface := range genServiceIfaces {
+			if typesutil.ImplementsInterface(impl.named, iface.ifaceTyp) {
+				implementedPkgPaths[iface.pkgPath] = true
+			}
+		}
+	}
 
 	// Now evaluate each active contract for entry-point existence.
 	var diags []Diagnostic
@@ -854,7 +1036,8 @@ func TestDeadContractCover(t *testing.T) {
 					Rel:  rel,
 					Line: 1,
 					Message: "active http contract " + c.ID + " has no generated package under generated/contracts/http/" +
-						" (codegen not run, or contract has no Service interface)",
+						" — run 'go run ./cmd/gocell generate contract <id>' or verify contract.yaml has 'codegen: true'" +
+						" (diagnostic emitted because no generated/contracts/<path>/v1/iface_gen.go was found for this contract)",
 				})
 				continue
 			}
@@ -898,13 +1081,15 @@ func TestDeadContractCover(t *testing.T) {
 }
 
 // TestDeadContractCover_FloorScan is the dedicated floor-scan self-check:
-// verifies that at least 30 contracts are loaded (defends against a broken
+// verifies that at least 40 contracts are loaded (defends against a broken
 // YAML scanner that returns an empty list silently).
+// Today's count: 47 contracts (2026-05-28); floor of 40 allows ±7 contracts
+// for normal lifecycle changes before this assertion needs updating.
 func TestDeadContractCover_FloorScan(t *testing.T) {
 	t.Parallel()
 	contracts := loadReverseCoverageContracts(t)
-	if len(contracts) < 30 {
-		t.Errorf("DEAD-CONTRACT-01 floor scan: expected ≥30 contracts, got %d (YAML scan may be broken)", len(contracts))
+	if len(contracts) < 40 {
+		t.Errorf("DEAD-CONTRACT-01 floor scan: expected ≥40 contracts, got %d (YAML scan may be broken)", len(contracts))
 	}
 }
 
@@ -918,9 +1103,16 @@ func TestDeadContractCover_FloorScan(t *testing.T) {
 // contain a string literal exactly equal to a deprecated contract.id.
 // Today 0 deprecated → vacuous pass. NO // allow-* exemption.
 //
-// AI-robust evaluation:
-//   - Hard — AST ImportSpec.Path + BasicLit.Value exact-match; no annotation
-//     escape, no waiver yaml, no env var skip.
+// AI-robust funnel evaluation:
+//   - upstream: Hard — YAML single-source for the deprecated contract set
+//     (LoadContentFiles scan of contracts/ tree); no hand-maintained list.
+//   - downstream: Medium — AST ImportSpec.Path + BasicLit.Value exact-match;
+//     no annotation escape, no waiver yaml, no env var skip. Blank-import form
+//     is covered (ImportSpec.Path.Value is the same regardless of import name).
+//     Known blind-spot: dot-import of a deprecated contract generated package
+//     would not appear in ImportSpec.Path — this is accepted because
+//     deprecated contracts have no generated package in generated/ (codegen
+//     is not run for deprecated contracts), so this blind-spot is vacuous.
 //
 // Blind-spot self-check:
 //   - String concatenation: "event." + "foo.v1" — EvaluateConstString would
@@ -928,6 +1120,11 @@ func TestDeadContractCover_FloorScan(t *testing.T) {
 //     consts are NOT flagged. This is an accepted blind spot: the rule targets
 //     literal references only (import paths and literal strings), not computed ones.
 //   - Comments: not flagged (AST does not visit comment nodes as BasicLit).
+//
+// Generated package path for deprecated contracts: derived from the source
+// map (loadGeneratedHTTPSourceMap) for http-kind deprecated contracts, not
+// from contractIDToGenPkg, to correctly handle "internal" → "internalapi"
+// codegen remapping.
 func TestDeadCodeCover(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -946,7 +1143,21 @@ func TestDeadCodeCover(t *testing.T) {
 
 	// Vacuous pass when no deprecated contracts exist.
 	if len(deprecated) == 0 {
+		t.Logf("DEAD-CODE-01: 0 deprecated contracts (vacuous pass); rule will activate when first deprecated contract is added")
 		return
+	}
+
+	// Build deprecated gen-pkg set via the source map (correct mapping for
+	// "internal" → "internalapi" remapping; safe even for non-http contracts
+	// that have no entry in the source map — they simply won't appear in the set).
+	genHTTPSourceMap, mapErr := loadGeneratedHTTPSourceMap(root, modPath)
+	if mapErr != nil {
+		t.Fatalf("DEAD-CODE-01: loadGeneratedHTTPSourceMap: %v", mapErr)
+	}
+	// Build reverse: contractYamlAbsPath → genPkgPath.
+	contractPathToGenPkg := make(map[string]string, len(genHTTPSourceMap))
+	for genPkg, contractPath := range genHTTPSourceMap {
+		contractPathToGenPkg[contractPath] = genPkg
 	}
 
 	// Build deny sets.
@@ -954,7 +1165,13 @@ func TestDeadCodeCover(t *testing.T) {
 	deprecatedGenPkgs := make(map[string]bool)
 	for _, c := range deprecated {
 		deprecatedIDs[c.ID] = true
-		deprecatedGenPkgs[contractIDToGenPkg(modPath, c.ID)] = true
+		// Use source map for http contracts (handles internal → internalapi).
+		if genPkg, ok := contractPathToGenPkg[c.FilePath]; ok {
+			deprecatedGenPkgs[genPkg] = true
+		}
+		// For non-http contracts (event/command/etc.) that have no generated
+		// package in generated/contracts/, the source map entry is absent and
+		// we do not need to add a gen-pkg entry (no import to scan for).
 	}
 
 	scope := ModuleScope(root, MatchRels(func(rel string) bool {

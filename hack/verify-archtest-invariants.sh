@@ -15,6 +15,16 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# nightly-only (whole-module typed scan, not eligible for PR-time due to
+# packages.Load memory/time budget on 2-CPU CI runners):
+#   IMPL-DECL-COVER-01   (TestImplDeclCover)
+#   HANDLER-DECL-COVER-01 (TestHandlerDeclCover)
+#   EMIT-DECL-COVER-01   (TestEmitDeclCover)
+#   DEAD-CONTRACT-01     (TestDeadContractCover)
+#   DEAD-CODE-01         (TestDeadCodeCover)
+# These run in archtest-nightly.yml (full 16-shard suite) and locally via
+# `make verify` / `bash hack/verify-archtest.sh`.
+
 # CLOCK-POSITIONAL-INJECTION-01 (TestClockPositionalInjection + …Fixtures) is
 # intentionally NOT in this PR-time set: it is a whole-prod-tree packages.Load
 # scan whose memory footprint, added to the ~5 existing whole-tree scans here,
