@@ -31,6 +31,29 @@ type Entry struct {
 	// ActorID identifies the principal that triggered the event.
 	ActorID string
 
+	// SubjectID is the OAuth subject-of-record (the end-user's stable identity).
+	// Empty string when not available. NOT NULL DEFAULT '' in the DB.
+	SubjectID string
+
+	// TenantID is the tenant boundary identifier.
+	// Empty string when not available. NOT NULL DEFAULT '' in the DB.
+	TenantID string
+
+	// SessionID is the session identifier for the triggering request.
+	// Empty string when not available. NOT NULL DEFAULT '' in the DB.
+	SessionID string
+
+	// CorrelationID carries the cross-cell correlation identifier from the
+	// outbox observability envelope.
+	// Empty string when not available. NOT NULL DEFAULT '' in the DB.
+	CorrelationID string
+
+	// OccurredAt is the producer-clock event time (distinct from Timestamp which
+	// is the ledger persistence / HMAC time). Set from outbox.Entry.Principal /
+	// outbox.Entry.OccurredAt at the appender layer.
+	// NOT NULL DEFAULT '1970-01-01 00:00:00+00' in the DB.
+	OccurredAt time.Time
+
 	// Timestamp is the event wall-clock time in UTC. Used in the HMAC input
 	// as UnixNano so the hash is timestamp-sensitive.
 	Timestamp time.Time

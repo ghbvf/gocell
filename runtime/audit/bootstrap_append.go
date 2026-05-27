@@ -119,12 +119,18 @@ func AppendBootstrapAuthFail(ctx context.Context, store *BootstrapLedgerStore, c
 		// corruption; wrap for diagnostic surface and propagate.
 		return fmt.Errorf("audit: marshal bootstrap auth-fail payload: %w", err)
 	}
+	now := clk.Now().UTC()
 	entry := &ledger.Entry{
-		EventID:   uuid.NewString(),
-		EventType: bootstrapAuthFailEventType,
-		ActorID:   bootstrapAuthFailActorID,
-		Timestamp: clk.Now().UTC(),
-		Payload:   payload,
+		EventID:       uuid.NewString(),
+		EventType:     bootstrapAuthFailEventType,
+		ActorID:       bootstrapAuthFailActorID,
+		SubjectID:     "",
+		TenantID:      "",
+		SessionID:     "",
+		CorrelationID: "",
+		OccurredAt:    now,
+		Timestamp:     now,
+		Payload:       payload,
 	}
 	if err := store.Append(ctx, entry); err != nil {
 		return fmt.Errorf("audit: append bootstrap auth-fail entry: %w", err)

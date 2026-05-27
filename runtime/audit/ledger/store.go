@@ -32,6 +32,18 @@ type AuditFilters struct {
 	// ActorID filters by exact actor identifier. Empty means no filter.
 	ActorID string
 
+	// SubjectID filters by exact OAuth subject-of-record. Empty means no filter.
+	SubjectID string
+
+	// TenantID filters by exact tenant boundary identifier. Empty means no filter.
+	TenantID string
+
+	// SessionID filters by exact session identifier. Empty means no filter.
+	SessionID string
+
+	// CorrelationID filters by exact cross-cell correlation identifier. Empty means no filter.
+	CorrelationID string
+
 	// From filters entries with Timestamp >= From. Zero means no lower bound.
 	From time.Time
 

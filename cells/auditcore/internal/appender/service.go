@@ -127,12 +127,17 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	}
 
 	e := &ledger.Entry{
-		ID:        auditEntryIDPrefix + uuid.NewString(),
-		EventID:   entry.ID,
-		EventType: entry.EventType,
-		ActorID:   actorID,
-		Timestamp: tsForLedger(entry, s.clk, s.logger, s.spec.name),
-		Payload:   entry.Payload,
+		ID:            auditEntryIDPrefix + uuid.NewString(),
+		EventID:       entry.ID,
+		EventType:     entry.EventType,
+		ActorID:       actorID,
+		SubjectID:     string(entry.Principal.SubjectID),
+		TenantID:      string(entry.Principal.TenantID),
+		SessionID:     string(entry.Principal.SessionID),
+		CorrelationID: string(entry.Observability.CorrelationID),
+		OccurredAt:    occurredAtForLedger(entry),
+		Timestamp:     tsForLedger(entry, s.clk, s.logger, s.spec.name),
+		Payload:       entry.Payload,
 	}
 
 	appendedEvent := dto.AuditAppendedEvent{
@@ -183,6 +188,22 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
+}
+
+// occurredAtForLedger returns the producer-clock event time for the OccurredAt
+// ledger field. It prefers outbox.Entry.OccurredAt (the business-event occurrence
+// time set by the producer); falls back to CreatedAt (the outbox persistence time)
+// when OccurredAt is zero. Returns the zero time.Time when both are zero —
+// the DB column carries NOT NULL DEFAULT '1970-01-01' so a zero-value Go time.Time
+// serializes to a near-epoch timestamp rather than NULL.
+func occurredAtForLedger(entry outbox.Entry) time.Time {
+	if !entry.OccurredAt.IsZero() {
+		return entry.OccurredAt
+	}
+	if !entry.CreatedAt.IsZero() {
+		return entry.CreatedAt
+	}
+	return time.Time{}
 }
 
 // tsForLedger picks the audit entry timestamp source. Prefers outbox.Entry.CreatedAt

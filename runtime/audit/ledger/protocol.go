@@ -140,17 +140,25 @@ func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 // configured HMAC key. The message format is byte-for-byte compatible with
 // cells/auditcore/internal/domain/hashchain.go computeHash:
 //
-//	msg = prevHash|eventID|eventType|actorID|UnixNano|payload
+//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+//
+// No backwards compatibility: the format was rewritten in B3 (issue #1042)
+// to include the five principal/correlation fields.
 //
 // ref: cells/auditcore/internal/domain/hashchain.go computeHash (must remain
 // byte-for-byte equivalent to preserve chain continuity when PG store lands).
 func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
 	mac := hmac.New(sha256.New, p.hmacKey)
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
+	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
 		prevHash,
 		e.EventID,
 		e.EventType,
 		e.ActorID,
+		e.SubjectID,
+		e.TenantID,
+		e.SessionID,
+		e.CorrelationID,
+		e.OccurredAt.UnixNano(),
 		e.Timestamp.UnixNano(),
 		string(e.Payload),
 	)

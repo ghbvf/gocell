@@ -92,7 +92,7 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 // matches the algorithm in cells/auditcore/internal/domain/hashchain.go
 // byte-for-byte. The reference implementation uses:
 //
-//	msg = prevHash|eventID|eventType|actorID|UnixNano|payload
+//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
 //	hash = hex(HMAC-SHA256(key, msg))
 func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	t.Parallel()
@@ -107,25 +107,32 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	}
 
 	payload := []byte(`{"action":"login"}`)
+	var zeroOccurredAt time.Time
 	entry := &ledger.Entry{
 		EventID:   "evt-001",
 		EventType: "user.login",
 		ActorID:   "user-42",
 		Timestamp: fixedNow,
 		Payload:   payload,
+		// SubjectID/TenantID/SessionID/CorrelationID are empty strings; OccurredAt is zero.
 	}
 
 	if err := store.Append(context.Background(), entry); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 
-	// Compute expected hash using the reference algorithm.
+	// Compute expected hash using the reference algorithm (new B3 format).
 	prevHash := ""
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
+	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
 		prevHash,
 		entry.EventID,
 		entry.EventType,
 		entry.ActorID,
+		"", // SubjectID
+		"", // TenantID
+		"", // SessionID
+		"", // CorrelationID
+		zeroOccurredAt.UnixNano(),
 		fixedNow.UnixNano(),
 		string(payload),
 	)
@@ -649,6 +656,7 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 
 // TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the
 // reference algorithm from cells/auditcore/internal/domain/hashchain.go.
+// New B3 format includes SubjectID/TenantID/SessionID/CorrelationID/OccurredAt.
 func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
 	key := testHMACKey()
@@ -670,21 +678,33 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	}
 
 	fixedNow := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	occurredAt := time.Date(2025, 1, 1, 11, 59, 0, 0, time.UTC)
 	e := &ledger.Entry{
-		EventID:   "evt-abc",
-		EventType: "user.logout",
-		ActorID:   "user-99",
-		Timestamp: fixedNow,
-		Payload:   []byte(`{"reason":"timeout"}`),
-		PrevHash:  "deadbeef",
+		EventID:       "evt-abc",
+		EventType:     "user.logout",
+		ActorID:       "user-99",
+		SubjectID:     "subj-99",
+		TenantID:      "tenant-1",
+		SessionID:     "sess-abc",
+		CorrelationID: "corr-xyz",
+		OccurredAt:    occurredAt,
+		Timestamp:     fixedNow,
+		Payload:       []byte(`{"reason":"timeout"}`),
+		PrevHash:      "deadbeef",
 	}
 
-	// Reference computation (mirrors hashchain.go computeHash):
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
+	// Reference computation (mirrors hashchain.go computeHash, B3 format):
+	//   prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
 		e.PrevHash,
 		e.EventID,
 		e.EventType,
 		e.ActorID,
+		e.SubjectID,
+		e.TenantID,
+		e.SessionID,
+		e.CorrelationID,
+		occurredAt.UnixNano(),
 		fixedNow.UnixNano(),
 		string(e.Payload),
 	)

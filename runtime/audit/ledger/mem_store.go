@@ -320,16 +320,37 @@ func contentFingerprint(e *Entry) string {
 
 // matchesFilters reports whether e matches all non-zero filter predicates.
 func matchesFilters(e *Entry, f AuditFilters) bool {
-	if f.EventType != "" && e.EventType != f.EventType {
-		return false
-	}
-	if f.ActorID != "" && e.ActorID != f.ActorID {
+	if !matchesStringFields(e, f) {
 		return false
 	}
 	if !f.From.IsZero() && e.Timestamp.Before(f.From) {
 		return false
 	}
 	if !f.To.IsZero() && e.Timestamp.After(f.To) {
+		return false
+	}
+	return true
+}
+
+// matchesStringFields checks all string-identity filter predicates. Extracted to
+// keep matchesFilters within the cognitive-complexity limit.
+func matchesStringFields(e *Entry, f AuditFilters) bool {
+	if f.EventType != "" && e.EventType != f.EventType {
+		return false
+	}
+	if f.ActorID != "" && e.ActorID != f.ActorID {
+		return false
+	}
+	if f.SubjectID != "" && e.SubjectID != f.SubjectID {
+		return false
+	}
+	if f.TenantID != "" && e.TenantID != f.TenantID {
+		return false
+	}
+	if f.SessionID != "" && e.SessionID != f.SessionID {
+		return false
+	}
+	if f.CorrelationID != "" && e.CorrelationID != f.CorrelationID {
 		return false
 	}
 	return true

@@ -54,19 +54,25 @@ FOR UPDATE`
 	// insertEntrySQL inserts a new audit entry row.
 	insertEntrySQL = `
 INSERT INTO audit_entries
-    (id, namespace, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+    (id, namespace, seq_no, event_id, event_type, actor_id,
+     subject_id, tenant_id, session_id, correlation_id, occurred_at,
+     timestamp, payload, prev_hash, hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
 
 	// selectBySeqSQL fetches a single entry by namespace + seq_no.
 	selectBySeqSQL = `
-SELECT id, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE namespace = $1
   AND seq_no    = $2`
 
 	// selectRangeSQL fetches a contiguous seq_no range for Verify in ascending order.
 	selectRangeSQL = `
-SELECT seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+SELECT seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE namespace = $1
   AND seq_no >= $2
@@ -231,8 +237,9 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 		id := uuid.New()
 		if _, insertErr := s.db.Exec(txCtx, insertEntrySQL,
 			id.String(), ns, e.SeqNo,
-			e.EventID, e.EventType, e.ActorID, e.Timestamp,
-			e.Payload, e.PrevHash, e.Hash,
+			e.EventID, e.EventType, e.ActorID,
+			e.SubjectID, e.TenantID, e.SessionID, e.CorrelationID, e.OccurredAt,
+			e.Timestamp, e.Payload, e.PrevHash, e.Hash,
 		); insertErr != nil {
 			return ctxcancel.WrapOrInfra(insertErr, "insert", ns,
 				ErrAdapterPGQuery, "audit ledger: insert entry failed")
@@ -357,8 +364,9 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 	var e ledger.Entry
 	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
 		&e.ID, &e.SeqNo,
-		&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-		&e.Payload, &e.PrevHash, &e.Hash,
+		&e.EventID, &e.EventType, &e.ActorID,
+		&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+		&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
@@ -390,10 +398,16 @@ func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, pa
 	}
 
 	b := pgquery.NewBuilder()
-	b.AppendParam(`SELECT id, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+	b.AppendParam(`SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
+	b.AppendIf(filters.SubjectID != "", `AND subject_id = `, filters.SubjectID)
+	b.AppendIf(filters.TenantID != "", `AND tenant_id = `, filters.TenantID)
+	b.AppendIf(filters.SessionID != "", `AND session_id = `, filters.SessionID)
+	b.AppendIf(filters.CorrelationID != "", `AND correlation_id = `, filters.CorrelationID)
 	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
 	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
 	if ksErr := pgquery.AppendKeyset(b, params); ksErr != nil {
@@ -464,8 +478,9 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 		var e ledger.Entry
 		if err := rows.Scan(
 			&e.ID, &e.SeqNo,
-			&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-			&e.Payload, &e.PrevHash, &e.Hash,
+			&e.EventID, &e.EventType, &e.ActorID,
+			&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); err != nil {
 			return nil, ctxcancel.WrapOrInfra(err, "scan", ns,
 				ErrAdapterPGQuery, "audit ledger: scan entry failed")
@@ -549,8 +564,9 @@ func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq
 		var e ledger.Entry
 		if scanErr := rows.Scan(
 			&e.SeqNo,
-			&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-			&e.Payload, &e.PrevHash, &e.Hash,
+			&e.EventID, &e.EventType, &e.ActorID,
+			&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); scanErr != nil {
 			return false, 0, ctxcancel.WrapOrInfra(scanErr, "verify_scan", ns,
 				ErrAdapterPGQuery, "audit ledger: verify scan failed")
