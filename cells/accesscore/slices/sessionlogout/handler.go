@@ -31,9 +31,13 @@ type DeleteAdapter struct{ S *Service }
 func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (deletegen.DeleteResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		// Auth middleware guarantees subject presence on protected routes.
-		// Reaching this branch means the route was misconfigured as public —
-		// fail closed rather than leak a revoke op to an unauthenticated caller.
+		// Reaching this branch means no principal in context, or a principal
+		// with no user Subject. The latter happens for service principals
+		// (auth.PrincipalService.Subject == "" by design — service tokens
+		// identify a callerCell, not a user) and would also occur if this
+		// route were misconfigured as public. Either way, sessionlogout is
+		// user-owned; fail closed rather than leak a revoke op to a
+		// non-user caller.
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")
 	}
 	callerUserID := p.Subject

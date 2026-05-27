@@ -250,13 +250,7 @@ if err := auth.CheckOwner(sess, func(s *session.ValidateView) string {
 
 `callerID` 必须由调用方在 handler 入口预先校验非空（否则 `"" != ""` 会让攻击者绕过 IDOR）；sessionlogout/service.go:99-104 即为参考前置不变式。
 
-archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` (Hard) 3 个 predicates 闭合该形态：
-
-- **B1 callsite lock** (Hard)：每个 serviceOwned slice 的 service.go 必须有 ≥1 个 `auth.CheckOwner` 调用，callee 经 `types.Info` 解析包路径到 `runtime/auth`
-- **B2 funnel body lock** (Hard)：`runtime/auth/owner_guard.go::CheckOwner` body 内 `errcode.New` 调用恰 1 次且 type-resolve 到 `KindNotFound`，无其他 Kind
-- **B3 zero-tolerance ban** (Hard)：serviceOwned slice 的 service.go 内 `errcode.New(errcode.KindNotFound, ...)` 调用计数 == 0（无 carve-out）
-
-任一违反即 archtest fail。funnel 上下游均 Hard：违反「在 service.go 直接构造 KindNotFound」在 archtest 层不可表达，违反「漏调 funnel」同样在 archtest 层不可表达。详见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc。
+archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` 3 个 predicates 闭合该形态（B1/B2/B3）：callsite lock + funnel body lock + zero-tolerance ban；每个 predicate 通过 `types.Info` 包路径绑定 + AST 形态唯一性达成 Hard 范本目录中「typed function choice」+「typed marker funnel for unbounded ops」形态。完整 AI-robust 评级论据（包括 funnel 双向锁分析与盲区清单）见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc——本节不复制评级表述以避免双源漂移。
 
 ## ADV-05 治理规则：active event 必须有 subscriber
 

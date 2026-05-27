@@ -32,7 +32,7 @@ func (svc *Service) Logout(ctx context.Context, sessionID, callerUserID string) 
 			return ""
 		}
 		return s.SubjectID
-	}, callerUserID, errcode.ErrSessionNotFound, "session not found"); err != nil {
+	}, callerUserID, errcode.ErrSessionNotFound); err != nil {
 		return err
 	}
 	return svc.s.Revoke(ctx, sessionID)

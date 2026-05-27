@@ -58,9 +58,24 @@
 //     convention.
 //
 // Self-check: TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture
-// loads five testdata packages with full types.Info via
-// archtest.RunTyped, sharing the same predicate closures as the
-// production scans.
+// loads six testdata packages with full types.Info via archtest.RunTyped,
+// sharing the same predicate closures as the production scans. Each
+// predicate is exercised on both a green path (silent) and one or more red
+// paths (firing), and cross-predicate silence is asserted on red fixtures
+// targeting other predicates (B1 RED fixtures must be silent on B3, etc.)
+// to keep B1/B2/B3 independently distinguishable.
+//
+// CI gating: this archtest is **nightly-only** at present — it runs via
+// archtest-nightly.yml (16-shard) and locally via `make verify` /
+// `bash hack/verify-archtest.sh`, but is NOT in PR-time
+// `hack/verify-archtest-invariants.sh`. The PR-time set is frozen by ADR
+// `docs/architecture/202605120000` §Amendment 2026-05-23 §D8 to four
+// categories (clock / duration / testtime / panic) plus the
+// fence-token-funnel addition; adding SERVICEOWNED requires a §D8
+// amendment evaluating CPU/RSS budget against the existing whole-tree
+// scans. Until then, IDOR-regression catch latency is at most one nightly
+// cycle (developers running `make verify` locally also see violations
+// pre-PR).
 package archtest
 
 import (
@@ -164,7 +179,7 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 
 				// B2: funnel body check on owner_guard.go
 				if rel == serviceOwnedOwnerGuardFile {
-					d = append(d, checkFunnelBody(pass.TypesInfo, file, rel)...)
+					d = append(d, checkFunnelBody(pass, file, rel)...)
 					continue
 				}
 
@@ -179,8 +194,8 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 				if matched == nil {
 					continue
 				}
-				d = append(d, checkServiceFileCalleeLock(pass.TypesInfo, file, rel, matched.contractID)...)
-				d = append(d, checkServiceFileZeroToleranceBan(pass.TypesInfo, file, rel, matched.contractID)...)
+				d = append(d, checkServiceFileCalleeLock(pass, file, rel, matched.contractID)...)
+				d = append(d, checkServiceFileZeroToleranceBan(pass, file, rel, matched.contractID)...)
 			}
 			return d
 		})
@@ -216,15 +231,22 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01(t *testing.T) {
 // TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture verifies all three
 // predicates fire correctly on RED fixtures and stay silent on GREEN.
 //
+// Fixture naming convention: `green*/` = expected B1/B3/B2 silent;
+// `red_*/` = expected to fire the named predicate. The matrix asserts both
+// firing (RED) and silence (GREEN, plus cross-predicate silence on RED
+// fixtures targeting other predicates) so B1/B2/B3 are independently
+// distinguishable.
+//
 // Fixture layout:
 //
-//   - green/service.go: uses auth.CheckOwner, no raw KindNotFound → 0 diags
-//   - red_missing_check_owner/service.go: no auth.CheckOwner → B1 fires
+//   - green/service.go: uses auth.CheckOwner, no raw KindNotFound → B1+B3 silent
+//   - green_funnel_body/owner_guard.go: canonical funnel body → B2 silent
+//   - red_missing_check_owner/service.go: no auth.CheckOwner → B1 fires; B3 silent
 //   - red_raw_kindnotfound_in_service/service.go: has CheckOwner AND raw
-//     errcode.New(KindNotFound,...) → B3 fires
-//   - funnel_body_wrong_kind/owner_guard.go: CheckOwner returns
+//     errcode.New(KindNotFound,...) → B3 fires; B1 silent
+//   - red_funnel_body_wrong_kind/owner_guard.go: CheckOwner returns
 //     KindPermissionDenied → B2 fires
-//   - funnel_body_extra_new/owner_guard.go: CheckOwner has two errcode.New
+//   - red_funnel_body_extra_new/owner_guard.go: CheckOwner has two errcode.New
 //     calls → B2 fires
 func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 	t.Parallel()
@@ -243,15 +265,19 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 		pred           predicate
 		wantViolations bool
 	}{
-		// B1 / B3 fixtures (service.go scope)
+		// B1 / B3 fixtures (service.go scope) — green path
 		{subdir: "green", pred: predB1, wantViolations: false},
 		{subdir: "green", pred: predB3, wantViolations: false},
+		// B1 RED + B3 silent cross-check
 		{subdir: "red_missing_check_owner", pred: predB1, wantViolations: true},
+		{subdir: "red_missing_check_owner", pred: predB3, wantViolations: false},
+		// B3 RED + B1 silent cross-check
 		{subdir: "red_raw_kindnotfound_in_service", pred: predB1, wantViolations: false},
 		{subdir: "red_raw_kindnotfound_in_service", pred: predB3, wantViolations: true},
-		// B2 fixtures (owner_guard.go scope)
-		{subdir: "funnel_body_wrong_kind", pred: predB2, wantViolations: true},
-		{subdir: "funnel_body_extra_new", pred: predB2, wantViolations: true},
+		// B2 fixtures (owner_guard.go scope) — green + red
+		{subdir: "green_funnel_body", pred: predB2, wantViolations: false},
+		{subdir: "red_funnel_body_wrong_kind", pred: predB2, wantViolations: true},
+		{subdir: "red_funnel_body_extra_new", pred: predB2, wantViolations: true},
 	}
 
 	for _, tc := range cases {
@@ -272,11 +298,11 @@ func TestSERVICEOWNED_HANDLER_OWNER_CHECK_01_NegativeFixture(t *testing.T) {
 						rel := pass.Rel(file)
 						switch tc.pred {
 						case predB1:
-							d = append(d, checkServiceFileCalleeLock(pass.TypesInfo, file, rel, "fixture-contract")...)
+							d = append(d, checkServiceFileCalleeLock(pass, file, rel, "fixture-contract")...)
 						case predB2:
-							d = append(d, checkFunnelBody(pass.TypesInfo, file, rel)...)
+							d = append(d, checkFunnelBody(pass, file, rel)...)
 						case predB3:
-							d = append(d, checkServiceFileZeroToleranceBan(pass.TypesInfo, file, rel, "fixture-contract")...)
+							d = append(d, checkServiceFileZeroToleranceBan(pass, file, rel, "fixture-contract")...)
 						}
 					}
 					return d
@@ -322,8 +348,8 @@ func collectServiceOwnedContracts(project *metadata.ProjectMeta) map[string][]*m
 
 // checkServiceFileCalleeLock (B1) reports a diagnostic if file contains zero
 // CallExpr whose callee type-resolves to runtime/auth.CheckOwner.
-func checkServiceFileCalleeLock(typesInfo *types.Info, file *ast.File, rel, contractID string) []Diagnostic {
-	if fileCallsAuthCheckOwner(typesInfo, file) {
+func checkServiceFileCalleeLock(pass *Pass, file *ast.File, rel, contractID string) []Diagnostic {
+	if fileCallsAuthCheckOwner(pass.TypesInfo, file) {
 		return nil
 	}
 	return []Diagnostic{{
@@ -333,7 +359,11 @@ func checkServiceFileCalleeLock(typesInfo *types.Info, file *ast.File, rel, cont
 				"is missing an auth.CheckOwner call. Service-layer "+
 				"ownership checks must go through the CheckOwner funnel "+
 				"(see runtime/auth/owner_guard.go). Canonical form: "+
-				"cells/accesscore/slices/sessionlogout/service.go.",
+				"cells/accesscore/slices/sessionlogout/service.go "+
+				"(Service.Logout revokeAndPublish closure) — note the "+
+				"nil-safe accessor pattern collapsing lookup-failure into "+
+				"the funnel. B3 separately enforces zero raw "+
+				"errcode.New(errcode.KindNotFound, ...) calls in this file.",
 			contractID, rel,
 		),
 	}}
@@ -342,28 +372,32 @@ func checkServiceFileCalleeLock(typesInfo *types.Info, file *ast.File, rel, cont
 // checkServiceFileZeroToleranceBan (B3) reports a diagnostic for every
 // errcode.New(errcode.KindNotFound, ...) call in file. Zero is the only
 // passing count.
-func checkServiceFileZeroToleranceBan(typesInfo *types.Info, file *ast.File, rel, contractID string) []Diagnostic {
+func checkServiceFileZeroToleranceBan(pass *Pass, file *ast.File, rel, contractID string) []Diagnostic {
 	var diags []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isErrCodeNewCall(call) {
+		if !isErrCodeNewCall(pass.TypesInfo, call) {
 			return
 		}
 		if len(call.Args) == 0 {
 			return
 		}
-		if !isKindNotFoundArg(typesInfo, call.Args[0]) {
+		if !isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
 			return
 		}
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
-			Line: 0,
+			Line: pass.Fset.Position(call.Pos()).Line,
 			Message: fmt.Sprintf(
 				"contract %q (auth.serviceOwned=true): %s contains a raw "+
 					"errcode.New(errcode.KindNotFound, ...) call. All "+
 					"KindNotFound returns in serviceOwned service.go must "+
 					"come from the runtime/auth.CheckOwner funnel "+
 					"(zero-tolerance ban — IDOR collapse depends on a "+
-					"single sanctioned funnel body).",
+					"single sanctioned funnel body). Fix: delete this "+
+					"errcode.New call and let the nil-safe accessor (returns "+
+					"\"\" on nil/not-found resource) collapse lookup-failure "+
+					"into the funnel. See testdata fixtures green/ (correct "+
+					"form) and red_raw_kindnotfound_in_service/ (anti-pattern).",
 				contractID, rel,
 			),
 		})
@@ -379,8 +413,9 @@ func checkServiceFileZeroToleranceBan(typesInfo *types.Info, file *ast.File, rel
 //   - no other errcode.New calls with any other Kind
 //
 // Called with the file = production owner_guard.go OR a fixture
-// funnel_body_*/owner_guard.go (which must declare a top-level CheckOwner func).
-func checkFunnelBody(typesInfo *types.Info, file *ast.File, rel string) []Diagnostic {
+// {green,red}_funnel_body_*/owner_guard.go (which must declare a top-level
+// CheckOwner func).
+func checkFunnelBody(pass *Pass, file *ast.File, rel string) []Diagnostic {
 	var fn *ast.FuncDecl
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fn != nil {
@@ -410,19 +445,19 @@ func checkFunnelBody(typesInfo *types.Info, file *ast.File, rel string) []Diagno
 		otherCalls    []Diagnostic
 	)
 	EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-		if !isErrCodeNewCall(call) {
+		if !isErrCodeNewCall(pass.TypesInfo, call) {
 			return
 		}
 		if len(call.Args) == 0 {
 			return
 		}
-		if isKindNotFoundArg(typesInfo, call.Args[0]) {
+		if isKindNotFoundArg(pass.TypesInfo, call.Args[0]) {
 			notFoundCalls++
 			return
 		}
 		otherCalls = append(otherCalls, Diagnostic{
 			Rel:  rel,
-			Line: 0,
+			Line: pass.Fset.Position(call.Pos()).Line,
 			Message: fmt.Sprintf(
 				"%s CheckOwner body contains errcode.New with a "+
 					"non-KindNotFound first argument — funnel has "+
@@ -436,7 +471,7 @@ func checkFunnelBody(typesInfo *types.Info, file *ast.File, rel string) []Diagno
 	diags = append(diags, otherCalls...)
 	if notFoundCalls != 1 {
 		diags = append(diags, Diagnostic{
-			Rel: rel, Line: 0,
+			Rel: rel, Line: pass.Fset.Position(fn.Pos()).Line,
 			Message: fmt.Sprintf(
 				"%s CheckOwner body must contain exactly one "+
 					"errcode.New(errcode.KindNotFound, ...) call; found %d. "+
@@ -449,18 +484,20 @@ func checkFunnelBody(typesInfo *types.Info, file *ast.File, rel string) []Diagno
 	return diags
 }
 
-// isErrCodeNewCall reports whether call is shaped like errcode.New(...).
-// Accepts SelectorExpr (qualified) and bare Ident (dot-import) forms.
-// Package identity is confirmed by isKindNotFoundArg via type resolution.
-func isErrCodeNewCall(call *ast.CallExpr) bool {
-	switch fn := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		return fn.Sel.Name == "New"
-	case *ast.Ident:
-		return fn.Name == "New"
-	default:
+// isErrCodeNewCall reports whether call resolves via go/types to
+// errcode.New from pkg/errcode. Both name and package path are verified;
+// a same-named "New" function in any other package fails the check, closing
+// the blindspot that would exist if only the selector name were matched.
+func isErrCodeNewCall(typesInfo *types.Info, call *ast.CallExpr) bool {
+	ref := unwrapCalleeForResolve(call.Fun)
+	if ref == nil {
 		return false
 	}
+	pkgPath, name, ok := ResolvePackageRef(typesInfo, ref)
+	if !ok {
+		return false
+	}
+	return pkgPath == serviceOwnedErrcodePkg && name == "New"
 }
 
 // isKindNotFoundArg reports whether arg resolves via go/types to
@@ -506,6 +543,13 @@ func fileCallsAuthCheckOwner(typesInfo *types.Info, file *ast.File) bool {
 // unwrapCalleeForResolve strips IndexExpr / IndexListExpr wrappers added by
 // explicit generic type arguments so the underlying SelectorExpr / Ident can
 // be passed to ResolvePackageRef.
+//
+// IndexExpr handles single-type-arg generic dispatch (`CheckOwner[T](...)`,
+// the only currently-instantiable form for `CheckOwner[T any]`). IndexListExpr
+// is defensive coverage for future multi-type-arg signatures (e.g.
+// `CheckOwner[T, U]`) — Go parses `Foo[X, Y]` as IndexListExpr. The current
+// CheckOwner declares a single type parameter, so production code never
+// produces IndexListExpr; the branch is defensive only.
 func unwrapCalleeForResolve(fun ast.Expr) ast.Expr {
 	switch v := fun.(type) {
 	case *ast.SelectorExpr, *ast.Ident:
