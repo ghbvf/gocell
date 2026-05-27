@@ -701,7 +701,21 @@ func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status kou
 }
 
 // conformOldestEligibleAtPublished verifies that with multiple published rows,
-// the smallest published_at is returned and lies in the recent past.
+// the smallest published_at (MIN) is returned, not a later row.
+//
+// The test publishes entries one at a time in ClaimPending order (which is
+// created_at ASC), recording a time upper-bound after the FIRST MarkPublished
+// returns. Because ClaimPending orders by created_at ASC, claimed[0] is the
+// oldest entry; its published_at ≤ t_first_upper. The remaining entries are
+// published after t_first_upper, so their published_at > t_first_upper.
+// If the implementation returns MIN (oldest), at ≤ t_first_upper.
+// If the implementation returns MAX or any later row, at > t_first_upper,
+// causing the assertion to fail. This distinguishes correct MIN from any
+// non-MIN implementation without requiring an injected clock or sleep.
+//
+// conformRFC: ClaimPending ORDER BY next_retry_at NULLS FIRST, created_at ASC
+// guarantees the oldest entry is returned first — both FakeStore and
+// PGOutboxStore observe this ordering.
 func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
@@ -715,8 +729,8 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 
 	// All eligible rows are claimed in a single batch (PG ClaimPending uses
 	// MATERIALIZED with ORDER BY); per-iteration ClaimPending would return
-	// empty after the first call. Claim once, then publish each entry with
-	// the lease the batch carried.
+	// empty after the first call. Claim once, then publish each entry in
+	// order so we can establish a time boundary between the oldest and the rest.
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil {
 		t.Fatalf(msgClaimPending, err)
@@ -724,13 +738,26 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	if len(claimed) != len(seed) {
 		t.Fatalf("ClaimPending: expected %d, got %d", len(seed), len(claimed))
 	}
-	for _, ce := range claimed {
+
+	// Publish the FIRST (oldest) entry separately and record the upper bound
+	// of its published_at. ClaimPending returns entries sorted by
+	// (next_retry_at NULLS FIRST, created_at ASC), so claimed[0] is e1 (oldest).
+	firstEntry := claimed[0]
+	if _, err := store.MarkPublished(ctx, firstEntry.ID, firstEntry.LeaseID); err != nil {
+		t.Fatalf("MarkPublished(first): %v", err)
+	}
+	// t_first_upper is recorded AFTER the first MarkPublished returns. The
+	// remaining entries are published after this point, so their published_at
+	// values are guaranteed to be ≥ t_first_upper.
+	tFirstUpper := time.Now()
+
+	// Publish the remaining entries.
+	for _, ce := range claimed[1:] {
 		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
 			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
 		}
 	}
 
-	beforeFirst := now.Add(-time.Minute)
 	at, ok, err := store.OldestEligibleAt(ctx, kout.StatePublished)
 	if err != nil {
 		t.Fatalf("OldestEligibleAt: %v", err)
@@ -738,11 +765,17 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	if !ok {
 		t.Fatal("OldestEligibleAt: expected ok=true, got false")
 	}
-	if at.Before(beforeFirst) {
-		t.Errorf("OldestEligibleAt: returned %v before any published_at could exist (%v)", at, beforeFirst)
+	// MIN assertion: the result must not be after tFirstUpper. Any implementation
+	// that returns MAX or a later row's published_at (which is > tFirstUpper by
+	// construction) will fail here.
+	if at.After(tFirstUpper) {
+		t.Errorf("OldestEligibleAt: returned %v, which is after the first published_at upper bound %v; "+
+			"expected the MINIMUM published_at (oldest row) — implementation may be returning MAX instead of MIN",
+			at, tFirstUpper)
 	}
-	if at.After(time.Now()) {
-		t.Errorf("OldestEligibleAt: returned %v in the future", at)
+	// Sanity lower bound: result must not predate the test run.
+	if at.Before(now.Add(-2 * time.Minute)) {
+		t.Errorf("OldestEligibleAt: returned %v which is unreasonably old (before test start - 2min)", at)
 	}
 }
 

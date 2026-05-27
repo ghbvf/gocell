@@ -613,8 +613,16 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 	if !updated {
 		// Lease lost — entry was reclaimed (or its row vanished). At-least-
 		// once delivery means the broker may already have the message;
-		// silently skip and let the new lease owner re-issue if needed.
+		// skip the write-back and let the new lease owner re-issue if needed.
+		// Logged at Warn (mirrors the fail-write sibling) so duplicate-publish
+		// / lease-race investigations have entry-level evidence, not just a count.
 		stats.skipped++
+		slog.Warn(
+			"outbox relay: stale lease lost write-back",
+			slog.String("entry_id", res.entry.ID),
+			slog.String("lease_id", res.entry.LeaseID),
+			slog.String("outcome", "published"),
+		)
 	} else {
 		stats.published++
 	}
