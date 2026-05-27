@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto reconnect jitter; gosec G404 already silenced at usage sites
-	"math/rand/v2"
 	"net"
 	"net/url"
 	"strings"
@@ -21,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -892,50 +889,12 @@ func (c *Connection) markRecovered() {
 }
 
 // backoffDelay calculates the reconnect delay for the given attempt using
-// exponential backoff (base * 2^attempt) with +-25% jitter.
+// exponential backoff with ±25% jitter. Delegates to the shared
+// adapterutil.ExponentialBackoffWithJitter helper (lifted from this package).
 //
-// When the exponential value reaches or exceeds ReconnectMaxBackoff, jitter
-// is applied to ReconnectMaxBackoff itself (not the uncapped value), so the
-// capped result is always in [0.75*max, max]. This prevents thundering-herd
-// at the cap while keeping ReconnectMaxBackoff as a true upper bound.
+// ref: adapters/adapterutil/backoff.go ExponentialBackoffWithJitter.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	delay := outbox.ExponentialDelay(c.config.ReconnectBaseDelay, c.config.ReconnectMaxBackoff, attempt)
-	if delay >= c.config.ReconnectMaxBackoff {
-		return addDownJitter(c.config.ReconnectMaxBackoff)
-	}
-
-	// Uncapped region: jitter on actual delay. Cap any overshoot from +25%.
-	withJitter := addJitter(delay)
-	if withJitter > c.config.ReconnectMaxBackoff {
-		return c.config.ReconnectMaxBackoff
-	}
-	return withJitter
-}
-
-// addDownJitter applies 0-25% downward jitter to a duration.
-// The result is in the range [0.75*d, d]. Used when d is already at the
-// maximum allowed value so the result never exceeds the cap.
-func addDownJitter(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	// Remove up to 25% of d.
-	reduction := rand.Int64N(int64(d)/4 + 1) //nolint:gosec // G404 R2-approved: reconnect down-jitter has no cryptographic requirement
-	return d - time.Duration(reduction)
-}
-
-// addJitter applies +-25% random jitter to a duration.
-// The result is in the range [0.75*d, 1.25*d].
-func addJitter(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	// jitter range: 50% of d (from -25% to +25%)
-	jitterRange := int64(d) / 2
-	// offset: random value in [0, jitterRange]
-	offset := rand.Int64N(jitterRange + 1) //nolint:gosec // G404 R2-approved: reconnect jitter has no cryptographic requirement
-	// shift to [-25%, +25%]: subtract 25% of d
-	return time.Duration(int64(d) - jitterRange/2 + offset)
+	return adapterutil.ExponentialBackoffWithJitter(c.config.ReconnectBaseDelay, c.config.ReconnectMaxBackoff, attempt)
 }
 
 func (c *Connection) drainChannelPool() {

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -904,6 +905,9 @@ func TestConnection_BackoffDelay(t *testing.T) {
 	}
 }
 
+// TestAddJitter and TestAddDownJitter now delegate to adapterutil since
+// addJitter/addDownJitter were lifted to adapters/adapterutil/backoff.go.
+// The assertions are preserved verbatim to ensure identical behavior.
 func TestAddJitter(t *testing.T) {
 	tests := []struct {
 		name string
@@ -918,12 +922,15 @@ func TestAddJitter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.d == 0 {
-				assert.Equal(t, time.Duration(0), addJitter(tt.d))
+				// ExponentialBackoffWithJitter with d=0 base → returns 0
+				got := adapterutil.ExponentialBackoffWithJitter(0, time.Second, 0)
+				assert.Equal(t, time.Duration(0), got)
 				return
 			}
 			// Run multiple times to check range.
+			// ExponentialBackoffWithJitter(d, d, 0) == ExponentialDelay(d,d,0)=d, then addJitter.
 			for range 100 {
-				got := addJitter(tt.d)
+				got := adapterutil.ExponentialBackoffWithJitter(tt.d, tt.d*2, 0)
 				minD := time.Duration(float64(tt.d) * 0.75)
 				maxD := time.Duration(float64(tt.d) * 1.25)
 				assert.GreaterOrEqual(t, got, minD)
@@ -935,15 +942,15 @@ func TestAddJitter(t *testing.T) {
 
 func TestAddDownJitter(t *testing.T) {
 	t.Run("zero returns zero", func(t *testing.T) {
-		assert.Equal(t, time.Duration(0), addDownJitter(0))
+		assert.Equal(t, time.Duration(0), adapterutil.DownJitter(0))
 	})
 	t.Run("negative returns zero", func(t *testing.T) {
-		assert.Equal(t, time.Duration(0), addDownJitter(testtime.DNeg1s))
+		assert.Equal(t, time.Duration(0), adapterutil.DownJitter(testtime.DNeg1s))
 	})
 	t.Run("positive in [0.75*d, d]", func(t *testing.T) {
 		d := testtime.D30s
 		for range 100 {
-			got := addDownJitter(d)
+			got := adapterutil.DownJitter(d)
 			assert.GreaterOrEqual(t, got, time.Duration(float64(d)*0.75))
 			assert.LessOrEqual(t, got, d)
 		}
