@@ -2,16 +2,20 @@
 //
 // # NO-DELETED-AUTH-SYMBOLS-01
 //
-// Invariant: no production or test .go file (outside the canonical
-// definition site under runtime/auth/) may reference the deleted symbols
+// Invariant: no production or test .go file (in any package, including
+// runtime/auth/ itself) may reference or re-declare the deleted symbols
 //   - auth.RoleInternalAdmin
 //   - auth.ServiceNameInternal
 //   - auth.BuiltinServiceRoles
 //
 // These symbols were removed in Wave 2 of the SVCTOKEN-CALLER-IDENTITY
 // migration (PR #362 "A5 service token caller_cell + contract.clients
-// runtime enforce"). The rule enforces a "0 references" check so
-// re-introduction at any call site fails CI.
+// runtime enforce"). The rule enforces a literal "0 references / 0
+// re-declarations" check — re-introduction in ANY package (external,
+// dot-imported, OR runtime/auth itself) fails CI. There is NO package-level
+// carve-out for runtime/auth: the symbols were physically deleted, so
+// re-declaration or self-use inside runtime/auth is exactly what the rule
+// must catch (closing the BS-同包 gap raised in PR #1180 review).
 //
 // # AI-robust 评级：Medium-true (type-aware via typeseval.ResolvePackageRef)
 //
@@ -26,20 +30,26 @@
 //
 // # Detection
 //
-// Two AST forms together cover every cross-package reference to a banned
-// identifier — qualified or dot-imported, const / var / func / typename:
+// Three AST forms together cover every cross-package reference AND every
+// in-package re-declaration of a banned identifier:
 //   - (A) qualified SelectorExpr `pkg.X` — alias-transparent via
 //     info.Uses[sel.X].(*types.PkgName).Imported().Path() (covers consts +
 //     funcs at any expression position, including value-capture
 //     `var fn = auth.BuiltinServiceRoles`). Resolution delegates to
 //     ResolvePackageRef typed façade.
-//   - (B) bare *ast.Ident — covers dot-imported references (`import .
-//     "...runtime/auth"; _ = RoleInternalAdmin / _ = ServiceNameInternal /
-//     BuiltinServiceRoles(...)`). Uses info.Uses[id] directly with type
-//     switch over {*types.Const, *types.Var, *types.Func, *types.TypeName},
-//     bypassing ResolvePackageRef's typed-callable filter (which intentionally
-//     rejects Const/Var per its godoc). Same-package self-references inside
-//     authImportPath are excluded by the pass-level filter at function entry.
+//   - (B) bare *ast.Ident reference (info.Uses) — covers dot-imported
+//     references (`import . "...runtime/auth"; _ = RoleInternalAdmin / _ =
+//     ServiceNameInternal / BuiltinServiceRoles(...)`) AND same-package
+//     self-references inside authImportPath. Uses info.Uses[id] directly
+//     with type switch over {*types.Const, *types.Var, *types.Func,
+//     *types.TypeName}, bypassing ResolvePackageRef's typed-callable filter
+//     (which intentionally rejects Const/Var per its godoc).
+//   - (C) bare *ast.Ident declaration (info.Defs) — catches package-scope
+//     re-declaration inside authImportPath (`const RoleInternalAdmin =
+//     "..."` / `func BuiltinServiceRoles(...)`). Only fires when the pass
+//     IS authImportPath; declarations in other packages with matching
+//     names are unrelated symbols. Local scope (function bodies, struct
+//     fields) is excluded via obj.Parent() == obj.Pkg().Scope() check.
 //
 // # Blind spots
 //
@@ -101,24 +111,21 @@ var deletedAuthSymbols = map[string]bool{
 }
 
 // scanDeletedAuthSymbolsAgainst walks a typed Pass and records every
-// reference to a banned identifier whose owning package resolves to
-// authImportPath. Parametrized over authImportPath so the production
-// invariant test (authRuntimeImportPath) and the fixture self-check
-// (fixtureAuthImportPath) share one implementation.
+// reference OR package-scope re-declaration of a banned identifier whose
+// owning package resolves to authImportPath. Parametrized over authImportPath
+// so the production invariant test (authRuntimeImportPath) and the fixture
+// self-check (fixtureAuthImportPath) share one implementation.
 //
-// Passes whose own package IS authImportPath are skipped — the canonical
-// definition site is allowed to use its own symbols (the rule guards
-// external references, not the def site's own scope).
+// No package-level carve-out: the symbols were physically deleted in Wave 2,
+// so re-introduction inside authImportPath itself is exactly what the rule
+// must catch. The PR文案 "0 references / re-introduction fails CI" is
+// implemented literally — any reference or package-scope re-declaration in
+// any package (including authImportPath itself) is reported.
 func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic {
 	if p.TypesInfo == nil {
 		return nil
 	}
-	if p.Pkg != nil && p.Pkg.Path() == authImportPath {
-		// Canonical definition site — same-package self-references are
-		// in-scope by design (e.g. auth.go's `return []string{
-		// RoleInternalAdmin}` inside BuiltinServiceRoles).
-		return nil
-	}
+	selfPackage := p.Pkg != nil && p.Pkg.Path() == authImportPath
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
@@ -149,17 +156,18 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    p.Fset.Position(sel.Pos()).Line,
-				Message: formatBannedSymbolDiag(authImportPath, name, false),
+				Message: formatBannedSymbolDiag(authImportPath, name, ""),
 			})
 		})
 
-		// (B) Bare *ast.Ident — dot-imported Const / Var / Func / TypeName.
+		// (B) Bare *ast.Ident — Const / Var / Func / TypeName.
 		// Uses info.Uses[id] directly with type switch over the four
-		// package-level object kinds so dot-imported const/var bare refs are
-		// detected (ResolvePackageRef intentionally rejects Const/Var per
-		// its typed-callable filter; that limitation is bypassed at caller
-		// site here, keeping the façade unchanged — façade extension is
-		// tracked separately by #1037).
+		// package-level object kinds so both dot-imported bare refs AND
+		// same-package self-references inside authImportPath are detected
+		// (ResolvePackageRef intentionally rejects Const/Var per its
+		// typed-callable filter; that limitation is bypassed at caller site
+		// here, keeping the façade unchanged — façade extension is tracked
+		// separately by #1037).
 		EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
 			if selSelPositions[id.Pos()] {
 				return
@@ -177,29 +185,78 @@ func scanDeletedAuthSymbolsAgainst(p *Pass, authImportPath string) []Diagnostic 
 			default:
 				return
 			}
+			qualifier := " (dot-imported)"
+			if selfPackage {
+				qualifier = " (same-package self-reference)"
+			}
 			diags = append(diags, Diagnostic{
 				Rel:     rel,
 				Line:    p.Fset.Position(id.Pos()).Line,
-				Message: formatBannedSymbolDiag(authImportPath, obj.Name(), true),
+				Message: formatBannedSymbolDiag(authImportPath, obj.Name(), qualifier),
 			})
 		})
+
+		// (C) Package-scope re-declaration inside authImportPath. Catches
+		// `const RoleInternalAdmin = "..."` / `func BuiltinServiceRoles(...)`
+		// reintroductions that would otherwise sit in the package as
+		// dead-but-declared symbols (zero usage outside ⇒ (A)/(B) silent),
+		// breaking the "re-introduction fails CI" contract. Only runs when
+		// the pass IS the authImportPath; declarations in other packages
+		// with the same name are unrelated symbols.
+		if selfPackage {
+			EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+				if !deletedAuthSymbols[id.Name] {
+					return
+				}
+				obj := p.TypesInfo.Defs[id]
+				if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != authImportPath {
+					return
+				}
+				// Package scope only — local vars / params / struct fields
+				// that happen to share a name are not re-introductions of
+				// the deleted package-scope symbol.
+				if obj.Parent() == nil || obj.Parent() != obj.Pkg().Scope() {
+					return
+				}
+				switch obj.(type) {
+				case *types.Func, *types.Const, *types.Var, *types.TypeName:
+					// covered
+				default:
+					return
+				}
+				diags = append(diags, Diagnostic{
+					Rel:     rel,
+					Line:    p.Fset.Position(id.Pos()).Line,
+					Message: formatBannedSymbolDeclDiag(authImportPath, obj.Name()),
+				})
+			})
+		}
 	}
 	return diags
 }
 
 // formatBannedSymbolDiag composes the diagnostic message for a banned symbol
-// reference. The dotImported suffix differentiates (A) qualified vs (B)
-// dot-imported hits so log readers can tell at a glance which AST form
-// triggered.
-func formatBannedSymbolDiag(authImportPath, name string, dotImported bool) string {
-	qualifier := ""
-	if dotImported {
-		qualifier = " (dot-imported)"
-	}
+// reference. The qualifier suffix differentiates the three reference shapes
+// — (A) qualified `pkg.X`, (B) dot-imported bare, (B) same-package self-ref
+// — so log readers can tell at a glance which AST form triggered.
+func formatBannedSymbolDiag(authImportPath, name, qualifier string) string {
 	return fmt.Sprintf(
 		"deprecated symbol %s.%s%s — replace with auth.RequireCallerCell (authz) "+
 			"or auth.TestServiceContext (test principals); see PR #362 SVCTOKEN-CALLER-IDENTITY",
 		shortPkg(authImportPath), name, qualifier)
+}
+
+// formatBannedSymbolDeclDiag composes the diagnostic message for a
+// package-scope re-declaration of a deleted symbol inside authImportPath.
+// Distinct from formatBannedSymbolDiag because the actionable advice differs
+// (delete the re-introduced declaration; do not just rewrite call sites).
+func formatBannedSymbolDeclDiag(authImportPath, name string) string {
+	return fmt.Sprintf(
+		"deleted symbol %s.%s re-declared at package scope — delete the declaration; "+
+			"these symbols were removed in Wave 2 of SVCTOKEN-CALLER-IDENTITY (PR #362) "+
+			"and callers must migrate to auth.RequireCallerCell (authz) or "+
+			"auth.TestServiceContext (test principals)",
+		shortPkg(authImportPath), name)
 }
 
 // productionScanPatterns is the seven production roots scanned by both the
@@ -233,13 +290,19 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 
 // TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms exercises every
 // import form the scanner must catch (default alias, custom alias,
-// dot-imported func) and the false-positive form it must reject (same-name
+// dot-imported func, same-package self-reference, same-package
+// re-declaration) and the false-positive form it must reject (same-name
 // decoy from a different package). The fixture-local auth import path
 // replaces the runtime/auth path so the same scanner code path runs
 // unchanged.
 //
 // Expected hit breakdown (drift would break exact-count assertion):
 //
+//   - auth/auth.go                 → 4 hits (3 re-decls via (C) info.Defs:
+//     RoleInternalAdmin const + ServiceNameInternal const + BuiltinServiceRoles
+//     func; + 1 self-use via (B): RoleInternalAdmin inside BuiltinServiceRoles
+//     body). Closes BS-同包 — without (C) re-decl + self-use detection, the
+//     fixture's auth package would silently bypass the rule.
 //   - caller_default_alias.go      → 3 hits (2 consts + 1 func, default alias)
 //   - caller_custom_alias.go       → 3 hits (2 consts + 1 func, custom alias)
 //   - caller_dot_import.go         → 3 hits (2 consts + 1 func, dot-imported;
@@ -268,19 +331,23 @@ func TestNO_DELETED_AUTH_SYMBOLS_01_FixtureCatchesAllForms(t *testing.T) {
 		t.Logf("fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
 	}
 
-	require.Len(t, diags, 9,
-		"fixture must yield exactly 9 hits (3 default + 3 custom-alias + 3 dot-import + 0 negative + 0 reflect-bs1 + 0 doc); "+
+	require.Len(t, diags, 13,
+		"fixture must yield exactly 13 hits "+
+			"(4 auth/auth.go re-decl+self + 3 default + 3 custom-alias + "+
+			"3 dot-import + 0 negative + 0 reflect-bs1 + 0 doc); "+
 			"any change in the fixture must update the expected count")
 
 	// Per-file breakdown so a re-shuffled fixture cannot silently keep the
 	// total constant while losing a form. doc.go and caller_reflect_bs1.go
 	// assertions (0 hits each) catch silent drift if someone adds a banned
-	// reference to those files.
+	// reference to those files. auth/auth.go assertion guards the BS-同包
+	// closure (re-decl + self-use must both fire).
 	type expect struct {
 		suffix string
 		want   int
 	}
 	expectations := []expect{
+		{"auth/auth.go", 4},
 		{"caller_default_alias.go", 3},
 		{"caller_custom_alias.go", 3},
 		{"caller_dot_import.go", 3},
