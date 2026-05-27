@@ -9,5 +9,5 @@ import (
 
 // NewAssembly creates a new CoreAssembly with the given identifier.
 func NewAssembly(id string) *assembly.CoreAssembly {
-	return assembly.New(assembly.Config{ID: id, DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	return assembly.New(clock.Real(), assembly.Config{ID: id, DurabilityMode: outbox.DurabilityDemo})
 }

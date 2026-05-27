@@ -95,8 +95,8 @@ func setupContractHandler(t testing.TB) http.Handler {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
-	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
-		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
+	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(contractStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
 	}
@@ -109,9 +109,9 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	writer := &contractRecordingWriter{}
-	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, writer))), WithTxManager(persistence.WrapForCell(contractTxRunner{})),
-		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(contractStubIssuer))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
 	}
@@ -138,8 +138,8 @@ func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Hand
 	repo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
-	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
-		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(issuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)
 	}

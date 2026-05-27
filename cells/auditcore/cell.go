@@ -149,13 +149,6 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AuditCore) { c.cursorCodec = codec }
 }
 
-// WithClock sets the time source for this Cell. Required — Init() panics via
-// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
-// inject a deterministic clock to control time-sensitive logic.
-func WithClock(clk clock.Clock) Option {
-	return func(c *AuditCore) { c.clk = clk }
-}
-
 // AuditCore is the auditcore Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1/audit
 type AuditCore struct {
@@ -195,9 +188,11 @@ type AuditCore struct {
 }
 
 // NewAuditCore creates a new AuditCore Cell.
-func NewAuditCore(opts ...Option) *AuditCore {
+func NewAuditCore(clk clock.Clock, opts ...Option) *AuditCore {
+	clock.MustHaveClock(clk, "auditcore.New")
 	c := &AuditCore{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		clk:      clk,
 		logger:   slog.Default(),
 	}
 	for _, o := range opts {
@@ -212,8 +207,6 @@ func NewAuditCore(opts ...Option) *AuditCore {
 // generated route-group and subscribe blocks. This is a permanent convention,
 // not a transitional shim.
 func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registrar) error {
-	clock.MustHaveClock(c.clk, "auditcore.initInternal")
-
 	// Validate injected ledger deps (strong-dependency wiring options).
 	if c.ledgerProtocolNil || c.ledgerProtocol == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -341,7 +334,7 @@ func (c *AuditCore) strictTailVerifyOnStartup(ctx context.Context) error {
 // per-entry via outbox.Entry.FailurePolicy, and archtest
 // OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
 func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
-	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(c.clk, outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "auditcore",
 			Mode:              mode,
@@ -351,7 +344,6 @@ func (c *AuditCore) resolveEmitter(mode outbox.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),

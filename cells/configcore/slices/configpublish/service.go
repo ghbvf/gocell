@@ -61,7 +61,7 @@ type Service struct {
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
 // TxRunner must be provided via WithTxManager; nil txRunner is rejected to
 // prevent silent loss of L1 atomicity guarantees on snapshot creation.
-func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "configpublish.NewService")
 	s := &Service{
 		repo:    repo,
@@ -92,7 +92,8 @@ func actorFromContext(ctx context.Context) (string, error) {
 // Publish creates a versioned snapshot of a config entry.
 // All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrConfigPublishInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err
@@ -146,7 +147,8 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 // ErrVersionConflict (409) if a concurrent write changed the entry since the
 // caller read it.
 func (s *Service) Rollback(ctx context.Context, key string, targetVersion int, expectedVersion int) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotEmpty(errcode.ErrConfigPublishInvalidInput,
+	if err := validation.RequireNotEmpty(
+		errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err

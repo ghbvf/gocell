@@ -57,8 +57,8 @@ func setup(t testing.TB) http.Handler {
 	userRepo := mem.NewStore(clock.Real()).UserRepository()
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
-	svc, err := NewService(userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
-		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
+	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(handlerStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setup: " + err.Error())
 	}
@@ -82,8 +82,8 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 	}
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
-	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
-		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
+	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
+		WithTokenIssuer(effectiveIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
 	}
@@ -602,8 +602,8 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 
 	handlerSessionStore := testutil.RealSessionRepo(t)
 	handlerRefreshStore := newHandlerIdentityRefreshStore()
-	svc, err := NewService(repo, newInvalidator(t, repo, handlerSessionStore, handlerRefreshStore),
-		slog.Default(), WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()),
+	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, handlerSessionStore, handlerRefreshStore),
+		slog.Default(), WithTokenIssuer(handlerStubIssuer),
 		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -844,8 +844,8 @@ func TestChangePasswordAdapter_UserNotActive_Returns403(t *testing.T) {
 
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
-	svc, err := NewService(repo, newInvalidator(t, repo, sessionStore, refreshStore),
-		slog.Default(), WithTokenIssuer(stub), WithClock(clock.Real()),
+	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore),
+		slog.Default(), WithTokenIssuer(stub),
 		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 

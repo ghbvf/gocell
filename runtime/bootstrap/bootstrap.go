@@ -154,7 +154,7 @@ type Bootstrap struct {
 	runOnce sync.Once // Run() single-execution guard
 
 	// --- time source ---
-	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
+	clock clock.Clock // required: first positional param of bootstrap.New(clk, opts...); MustHaveClock guards typed-nil
 
 	// --- owner ctx: long-lived worker context (controller-runtime pattern) ---
 	// Derived from runCtx (background-derived assembly runtime ctx) in Run(),
@@ -316,26 +316,26 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 // "register at start-up" convention used by relay_collector.go and the hook
 // dispatcher. On registration failure the error is stored and surfaced by
 // Run() at phase0, before any side effects start.
-func New(opts ...Option) *Bootstrap {
+func New(clk clock.Clock, opts ...Option) *Bootstrap {
 	b := &Bootstrap{}
 	b.shutdownTimeout = shutdown.DefaultTimeout
 	b.configWatcherFactory = config.NewWatcher
 	b.metricsProvider = kernelmetrics.NopProvider{}
+	b.clock = clk
 
 	for _, o := range opts {
 		o(b)
 	}
-	clock.MustHaveClock(b.clock, "bootstrap.New (use bootstrap.WithClock)")
+	clock.MustHaveClock(clk, "bootstrap.New")
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
 	logger := slog.Default()
-	b.lifecycle = NewLifecycle(LifecycleConfig{
+	b.lifecycle = NewLifecycle(b.clock, LifecycleConfig{
 		DefaultStartTimeout: b.defaultStartTimeout,
 		DefaultStopTimeout:  b.defaultStopTimeout,
 		Logger:              logger,
-		Clock:               b.clock,
 	})
 	for _, reg := range b.lifecycleRegistrars {
 		reg(b.lifecycle)

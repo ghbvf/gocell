@@ -61,10 +61,9 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "drain-detached-queue",
 		DLXExchange: "drain-detached.dlx",
-		Clock:       clock.Real(),
 	})
 
 	// Pre-load deliveries before Subscribe starts.
@@ -170,10 +169,9 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:   "inflight-wait-queue",
 		DLXExchange: "inflight-wait.dlx",
-		Clock:       clock.Real(),
 	})
 
 	body := makeDeliveryBody(t, outbox.Entry{
@@ -271,11 +269,10 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:              "drain-timeout-queue",
 		DLXExchange:            "drain-timeout.dlx",
 		StopIntakeDrainTimeout: stopIntakeDrainTimeoutBudget, // slightly longer than drainRemaining timer
-		Clock:                  clock.Real(),
 	})
 
 	body := makeDeliveryBody(t, outbox.Entry{
@@ -357,11 +354,10 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 		return outbox.Ack()
 	})
 
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		QueueName:              "drain-outer-cancel-queue",
 		DLXExchange:            "drain-outer-cancel.dlx",
 		StopIntakeDrainTimeout: testtime.D5s, // generous drain budget
-		Clock:                  clock.Real(),
 	})
 
 	body := makeDeliveryBody(t, outbox.Entry{

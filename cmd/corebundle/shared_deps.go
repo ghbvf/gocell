@@ -278,7 +278,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		}
 	}()
 
-	eb := eventbus.New(eventbus.WithClock(clk))
+	eb := eventbus.New(clk)
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 

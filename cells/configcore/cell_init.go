@@ -18,7 +18,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -32,8 +31,6 @@ import (
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registrar) error {
-	clock.MustHaveClock(c.clk, "configcore.initInternal")
-
 	if c.casProtocolNil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configcore: typed-nil *cas.Protocol rejected; use cas.NewProtocol(cas.WithVersionField(\"version\")) in composition root")
@@ -124,7 +121,7 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 // (outbox.Entry.FailurePolicy) lets individual topics opt into fail-open;
 // configwrite uses the default.
 func (c *ConfigCore) resolveEmitter(mode outbox.DurabilityMode) error {
-	resolved, err := outbox.ResolveCellEmitter(outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(c.clk, outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:            "configcore",
 			Mode:              mode,
@@ -134,7 +131,6 @@ func (c *ConfigCore) resolveEmitter(mode outbox.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),
@@ -188,7 +184,7 @@ func (c *ConfigCore) ensureCursorCodec(reg cell.Registrar) error {
 
 func (c *ConfigCore) initWriteSlice() error {
 	opts := []configwrite.Option{configwrite.WithEmitter(c.emitter), configwrite.WithTxManager(c.txRunner)}
-	writeSvc, err := configwrite.NewService(c.configRepo, c.logger, c.clk, opts...)
+	writeSvc, err := configwrite.NewService(c.clk, c.configRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init write slice: %w", err)
 	}
@@ -224,7 +220,7 @@ func (c *ConfigCore) initPublishSlice() error {
 		configpublish.WithEmitter(c.emitter),
 		configpublish.WithTxManager(c.txRunner),
 	}
-	publishSvc, err := configpublish.NewService(c.configRepo, c.logger, c.clk, opts...)
+	publishSvc, err := configpublish.NewService(c.clk, c.configRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init publish slice: %w", err)
 	}
@@ -235,9 +231,9 @@ func (c *ConfigCore) initPublishSlice() error {
 
 func (c *ConfigCore) initSubscribeSlice() error {
 	svc, err := configsubscribe.NewService(
+		c.clk,
 		c.logger,
 		configsubscribe.WithConfigEventCollector(c.configEventCollector),
-		configsubscribe.WithClock(c.clk),
 		configsubscribe.WithTombstoneTTL(c.tombstoneTTL),
 		configsubscribe.WithEventbusCacheCollector(c.cacheCollector),
 	)
@@ -263,7 +259,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 // with local transaction only (no outbox emission).
 func (c *ConfigCore) initFlagWriteSlice() error {
 	opts := []flagwrite.Option{flagwrite.WithTxManager(c.txRunner)}
-	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, c.clk, opts...)
+	flagWriteSvc, err := flagwrite.NewService(c.clk, c.flagRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}

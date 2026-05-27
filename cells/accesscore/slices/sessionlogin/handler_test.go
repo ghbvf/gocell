@@ -60,9 +60,8 @@ func setup(t *testing.T) http.Handler {
 
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerRefreshStore()
-	svc, err := NewService(userRepo, sessionStore, mem.NewStore(clock.Real()).RoleRepository(),
+	svc, err := NewService(clock.Real(), userRepo, sessionStore, mem.NewStore(clock.Real()).RoleRepository(),
 		refreshStore, testIssuer, slog.Default(),
-		WithClock(clock.Real()),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 		WithSessionTTL(time.Hour),
 		WithAccountLockout(newTestLockout(userRepo, sessionStore, refreshStore)))

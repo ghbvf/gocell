@@ -12,7 +12,6 @@ import (
 
 type GCWorkerConfig struct {
 	Store     Store
-	Clock     clock.Clock
 	Interval  time.Duration
 	Retention time.Duration
 	Logger    *slog.Logger
@@ -32,11 +31,11 @@ type GCWorker struct {
 	done   chan struct{}
 }
 
-func NewGCWorker(cfg GCWorkerConfig) (*GCWorker, error) {
+func NewGCWorker(clk clock.Clock, cfg GCWorkerConfig) (*GCWorker, error) {
 	if cfg.Store == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "refresh gc: store is required")
 	}
-	clock.MustHaveClock(cfg.Clock, "auth/refresh.NewGCWorker")
+	clock.MustHaveClock(clk, "auth/refresh.NewGCWorker")
 	if cfg.Interval <= 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "refresh gc: interval must be positive")
 	}
@@ -51,7 +50,7 @@ func NewGCWorker(cfg GCWorkerConfig) (*GCWorker, error) {
 	}
 	return &GCWorker{
 		store:     cfg.Store,
-		clock:     cfg.Clock,
+		clock:     clk,
 		interval:  cfg.Interval,
 		retention: cfg.Retention,
 		logger:    cfg.Logger,

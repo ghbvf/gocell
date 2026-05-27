@@ -61,12 +61,12 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 	// no longer races a real wall-clock deadline (the #930 flake).
 	fc := clockmock.New(time.Time{})
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(fc, Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(fc))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err, "initial dial must succeed (phase=0)")
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -78,9 +78,8 @@ func TestSubscriber_Subscribe_PropagatesPermanentError(t *testing.T) {
 	// connection-level reconnect backoff. The subscriber clock drives the
 	// graceful-drain timer, which this scenario never enters (the propagation
 	// path is consumeLoop→awaitReconnect→WaitConnected, no subscriber timer).
-	sub := NewSubscriber(conn, SubscriberConfig{
+	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{
 		DLXExchange: "test.terminal.dlx",
-		Clock:       clock.Real(),
 	})
 	defer func() { _ = sub.Close(context.Background()) }()
 

@@ -79,8 +79,8 @@ func buildAuthRouter(t *testing.T, principalRole string) *router.Router {
 	}
 
 	rtr, err := router.New(
+		clock.Real(),
 		router.WithAuthMiddleware(verifier),
-		router.WithRouterClock(clock.Real()),
 		router.WithSuppressNoAuthVerifierWarn(),
 	)
 	if err != nil {

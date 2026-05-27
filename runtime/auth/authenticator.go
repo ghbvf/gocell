@@ -133,7 +133,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //   - no NonceStore was supplied via WithServiceTokenNonceStore;
 //   - a NoopNonceStore (Kind() == NonceStoreKindNoop) was supplied — replay
 //     protection is mandatory at every layer; dev/test wiring must use
-//     InMemoryNonceStore (NewInMemoryNonceStore(ServiceTokenNonceTTL)).
+//     InMemoryNonceStore (NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real())).
 //
 // This aligns runtime/auth construction with the existing reject-Noop guards in
 // kernel/auth.NewAuthServiceToken, runtime/bootstrap.auth_plan_validate, and
@@ -163,7 +163,7 @@ func NewServiceTokenAuthenticator(ring kauth.HMACKeyring, clk clock.Clock, opts 
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"auth: NewServiceTokenAuthenticator requires a NonceStore via "+
 				"WithServiceTokenNonceStore (use NewInMemoryNonceStore("+
-				"ServiceTokenNonceTTL) for dev/test)")
+				"ServiceTokenNonceTTL, clock.Real()) for dev/test)")
 	}
 	if cfg.nonceStore.Kind() == NonceStoreKindNoop {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

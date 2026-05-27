@@ -20,10 +20,9 @@ func buildAssembly(
 	clk clock.Clock,
 	cells ...cell.Cell,
 ) (*assembly.CoreAssembly, error) {
-	asm := assembly.New(assembly.Config{
+	asm := assembly.New(clk, assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
-		Clock:           clk,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.

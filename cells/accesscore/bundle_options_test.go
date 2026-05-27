@@ -19,7 +19,7 @@ import (
 // is inexpressible — the four accessor outputs all come from the same Store.
 func TestWithMemBundle_WiresFourPrimitives(t *testing.T) {
 	b := accessmem.NewBundle(clock.Real())
-	c := NewAccessCore(WithClock(clock.Real()), WithMemBundle(b))
+	c := NewAccessCore(clock.Real(), WithMemBundle(b))
 
 	assert.NotNil(t, c.userRepo, "WithMemBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithMemBundle must wire roleRepo")
@@ -45,7 +45,7 @@ func TestWithPGBundle_WiresFourPrimitives(t *testing.T) {
 	b, err := accesspg.NewBundle(fakePool, fakeTxm, clock.Real())
 	require.NoError(t, err)
 
-	c := NewAccessCore(WithClock(clock.Real()), WithPGBundle(b))
+	c := NewAccessCore(clock.Real(), WithPGBundle(b))
 
 	assert.NotNil(t, c.userRepo, "WithPGBundle must wire userRepo")
 	assert.NotNil(t, c.roleRepo, "WithPGBundle must wire roleRepo")

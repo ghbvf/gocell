@@ -75,10 +75,9 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 
 	// Build an assembly that contains our misbehaving test cell.
-	asm := assembly.New(assembly.Config{
+	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "test-validator-wiring",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(newConfigSubscriberWithoutOwner()))
 
@@ -107,7 +106,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 			return bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, chain)
 		}(),
 	)
-	b := newBootstrapFromOptions(opts)
+	b := newBootstrapFromOptions(shared.Clock, opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()

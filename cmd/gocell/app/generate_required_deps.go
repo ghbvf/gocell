@@ -14,6 +14,10 @@ import (
 
 const requiredDepsGenFileName = "service_required_gen.go"
 
+// requiredDepsKind is the codegen "kind" token for this command, passed to
+// writeDriftFixHint / driftErrorTemplate. Extracted to satisfy go:S1192.
+const requiredDepsKind = "required-deps"
+
 // generateRequiredDeps implements `gocell generate required-deps`.
 //
 // Modes:
@@ -113,8 +117,8 @@ func runRequiredDepsAll(root string, dryRun, verify bool) error {
 	}
 
 	if verify && len(drifted) > 0 {
-		writeDriftFixHint("required-deps")
-		return fmt.Errorf(driftErrorTemplate, len(drifted), "required-deps")
+		writeDriftFixHint(requiredDepsKind)
+		return fmt.Errorf(driftErrorTemplate, len(drifted), requiredDepsKind)
 	}
 	return nil
 }
@@ -138,8 +142,8 @@ func writeRequiredDepsFile(root, outPath string, content []byte, dryRun, verify 
 		fmt.Printf("Would write: %s\n", outPath)
 	case codegen.ActionDrifted:
 		fmt.Fprintf(os.Stderr, "drift: %s\n", outPath)
-		writeDriftFixHint("required-deps")
-		return fmt.Errorf(driftErrorTemplate, 1, "required-deps")
+		writeDriftFixHint(requiredDepsKind)
+		return fmt.Errorf(driftErrorTemplate, 1, requiredDepsKind)
 	}
 	return nil
 }

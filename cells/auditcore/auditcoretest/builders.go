@@ -79,7 +79,7 @@ func BuildAuditcoreChain(t *testing.T, opts ...BuildChainOption) (
 	}
 
 	c := auditcore.NewAuditCore(
-		auditcore.WithClock(cfg.clk),
+		cfg.clk,
 		auditcore.WithLedgerProtocol(proto),
 		auditcore.WithLedgerStore(memStore),
 		auditcore.WithEmitter(outbox.DemoCellEmitter()),

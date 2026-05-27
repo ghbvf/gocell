@@ -233,7 +233,7 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	primaryLn := localListener(t)
 	internalLn := localListener(t)
 	healthLn := localListener(t)
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(clock.Real())
 	pgOutboxWriter := pickOutboxWriter(pgOutboxOverride)
 
 	ac, cc, auc, auditStore := buildCells(t, pg, authDeps, eb, pgOutboxWriter)
@@ -244,19 +244,18 @@ func bootL2Assembly(t *testing.T, pgOutboxOverride outbox.Writer) *l2Harness {
 	// producer → relay → publisher → consumer chain on the in-process
 	// transport (not the broker). The full broker path is not yet covered.
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.Clock = clock.Real()
 	pgOutboxStore := adapterpg.NewOutboxStore(pg.pool.DB(), clock.Real())
-	relayWorker := outboxruntime.NewRelay(pgOutboxStore, eb, relayCfg)
+	relayWorker := outboxruntime.NewRelay(clock.Real(), pgOutboxStore, eb, relayCfg)
 
 	// DurabilityDemo only describes the assembly construction mode; the
 	// relay above is the durable bridge between PG outbox_entries and the
 	// in-process eventbus.
-	asm := assembly.New(assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "l2-atomicity-test", DurabilityMode: outbox.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	runBootstrap(t, asm, primaryLn, internalLn, healthLn, eb, authDeps, relayWorker)
+	runBootstrap(t, asm, listenerSet{primary: primaryLn, internal: internalLn, health: healthLn}, eb, authDeps, relayWorker)
 	base := "http://" + primaryLn.Addr().String()
 	healthBase := "http://" + healthLn.Addr().String()
 	waitForHealthz(t, healthBase, base)
@@ -399,9 +398,8 @@ func buildCells(
 	configCursorCodec, err := query.NewCursorCodec(mustRandom32Bytes())
 	require.NoError(t, err)
 
-	ac := accesscore.NewAccessCore(append(
+	ac := accesscore.NewAccessCore(clock.Real(), append(
 		pg.storeOpts,
-		accesscore.WithClock(clock.Real()),
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(a.jwtIssuer),
 		accesscore.WithJWTVerifier(a.jwtVerifier),
@@ -410,9 +408,8 @@ func buildCells(
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
 		accesscoretest.MinCostPasswordHasherOption(),
-	)...) //archtest:allow:clock-injection:via-slice WithClock spread via append; no positional arg
-	cc := configcore.NewConfigCore(
-		configcore.WithClock(clock.Real()),
+	)...)
+	cc := configcore.NewConfigCore(clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
@@ -422,9 +419,7 @@ func buildCells(
 	)
 	auditHMACKey := mustRandom32Bytes()
 	auditLedgerOpts, auditStore := buildAuditcoreLedgerOpts(t, auditHMACKey)
-	//archtest:allow:clock-injection:via-slice WithClock in first slice arg
-	auc := auditcore.NewAuditCore(append([]auditcore.Option{
-		auditcore.WithClock(clock.Real()),
+	auc := auditcore.NewAuditCore(clock.Real(), append([]auditcore.Option{
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
@@ -434,30 +429,37 @@ func buildCells(
 	return ac, cc, auc, auditStore
 }
 
+// listenerSet bundles the three bootstrap listeners so runBootstrap stays
+// within the 7-parameter limit (go:S107).
+type listenerSet struct {
+	primary  net.Listener
+	internal net.Listener
+	health   net.Listener
+}
+
 // runBootstrap launches bootstrap.App on the supplied listeners and registers
 // the LIFO cleanup that drains it gracefully. The relay is registered as a
 // ManagedResource so bootstrap drives its Start/Close lifecycle.
 func runBootstrap(
 	t *testing.T,
 	asm *assembly.CoreAssembly,
-	primaryLn, internalLn, healthLn net.Listener,
+	lns listenerSet,
 	eb *eventbus.InMemoryEventBus,
 	a *authLayer,
 	relayWorker *outboxruntime.Relay,
 ) {
 	t.Helper()
-	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+	app := bootstrap.New(clock.Real(),
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(),
+		bootstrap.WithListener(cell.PrimaryListener, lns.primary.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
-			bootstrap.WithListenerNet(primaryLn)),
-		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(),
+			bootstrap.WithListenerNet(lns.primary)),
+		bootstrap.WithListener(cell.InternalListener, lns.internal.Addr().String(),
 			[]kauth.ListenerAuth{authtest.MustAuthServiceToken(a.nonceStore, a.ring)},
-			bootstrap.WithListenerNet(internalLn)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(),
+			bootstrap.WithListenerNet(lns.internal)),
+		bootstrap.WithListener(cell.HealthListener, lns.health.Addr().String(),
 			[]kauth.ListenerAuth{kauth.AuthNone{}},
-			bootstrap.WithListenerNet(healthLn)),
+			bootstrap.WithListenerNet(lns.health)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
 		bootstrap.WithRelay(relayWorker),

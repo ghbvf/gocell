@@ -23,6 +23,9 @@ const internalCellPlainFmt = "cell=%s"
 // MetricsProvider is required for DirectEmitter resolution paths. Pass
 // metrics.NopProvider{} explicitly in tests.
 //
+// The clock is NOT a field here — it is a mandatory positional parameter to
+// ResolveEmitter (see ADR 202605270000-adr-clock-positional-injection-funnel).
+//
 // ref: outbox.CheckNotNoop — sibling durability guard.
 type EmitterConfig struct {
 	CellID            string
@@ -34,10 +37,6 @@ type EmitterConfig struct {
 	DirectPublishMode DirectPublishFailureMode
 	// MetricsProvider is REQUIRED when DurabilityDemo mode resolves to a DirectEmitter.
 	MetricsProvider metrics.Provider
-	// Clock is the time source injected into DirectEmitter for CreatedAt stamping.
-	// Required when DurabilityDemo mode resolves to a DirectEmitter; pass
-	// clock.Real() in production and clockmock.New(...) in tests.
-	Clock clock.Clock
 }
 
 // EmitterOutcome reports the resolved emitter and whether it is durable
@@ -53,6 +52,9 @@ type EmitterOutcome struct {
 // per-cell resolveOutboxDeps+resolveDemoEmitter pair that accesscore/
 // configcore/auditcore each carried.
 //
+// clk is the mandatory clock injected into DirectEmitter for CreatedAt stamping.
+// Pass clock.Real() in production and clockmock.New(...) in tests.
+//
 // Durable mode: requires real writer+txRunner (non-noop); nil/noop → error.
 //
 // Demo mode: prefers DirectEmitter when publisher is present and writer is
@@ -61,7 +63,9 @@ type EmitterOutcome struct {
 //
 // ref: outbox.CheckNotNoop — sibling durability guard.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.
-func ResolveEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
+func ResolveEmitter(clk clock.Clock, cfg EmitterConfig) (EmitterOutcome, error) {
+	clock.MustHaveClock(clk, "outbox.ResolveEmitter")
+
 	// Durability gate: rejects noop deps in durable mode, validates mode value.
 	if err := CheckNotNoop(cfg.Mode, cfg.CellID, cfg.OutboxWriter, cfg.TxRunner, cfg.Publisher); err != nil {
 		return EmitterOutcome{}, err
@@ -75,7 +79,7 @@ func ResolveEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 	if cfg.Mode == DurabilityDurable {
 		return resolveDurableEmitter(cfg)
 	}
-	return resolveDemoEmitter(cfg, logger)
+	return resolveDemoEmitter(clk, cfg, logger)
 }
 
 // resolveDurableEmitter handles DurabilityDurable mode.
@@ -95,7 +99,7 @@ func resolveDurableEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 
 // resolveDemoEmitter handles DurabilityDemo mode.
 // Applies pairing invariant: OutboxWriter and TxRunner must be provided together.
-func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome, error) {
+func resolveDemoEmitter(clk clock.Clock, cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome, error) {
 	// Pairing invariant: writer and txRunner must be together.
 	writerAbsent := cfg.OutboxWriter == nil
 	txAbsent := cfg.TxRunner == nil
@@ -124,7 +128,7 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 		}
 		emitter, err := NewDirectEmitter(
 			cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider,
-			cfg.Clock, cfg.CellID, WithLogger(logger),
+			clk, cfg.CellID, WithLogger(logger),
 		)
 		if err != nil {
 			return EmitterOutcome{}, err
@@ -181,13 +185,20 @@ type CellEmitterInputs struct {
 //     level is cellvocab.L2 or higher, emit a Warn explaining the degraded atomicity
 //     guarantee. The log carries cell, consistency_level, durability_mode.
 //
+// clk is the mandatory clock passed through to ResolveEmitter for DirectEmitter
+// CreatedAt stamping. Pass clock.Real() in production and clockmock.New(...) in
+// tests. When PreResolved is set, clk is still validated via MustHaveClock to
+// catch wiring mistakes early; it is not consumed in that path.
+//
 // Returns a sealed CellEmitter: the PreResolved emitter is already sealed, and
 // the WithOutboxDeps path wraps the kernel-built emitter via WrapEmitterForCell
 // so cells store CellEmitter uniformly. Callers read the resolved durability
 // via the returned emitter's Durable() for any composition-root decision.
 //
 // ref: outbox.ResolveEmitter — the primitive this wraps.
-func ResolveCellEmitter(in CellEmitterInputs) (CellEmitter, error) {
+func ResolveCellEmitter(clk clock.Clock, in CellEmitterInputs) (CellEmitter, error) {
+	clock.MustHaveClock(clk, "outbox.ResolveCellEmitter")
+
 	hasEmitter := in.PreResolved != nil
 	hasPending := in.Publisher != nil || in.OutboxWriter != nil
 	if hasEmitter && hasPending {
@@ -209,7 +220,7 @@ func ResolveCellEmitter(in CellEmitterInputs) (CellEmitter, error) {
 		}
 		emitter = in.PreResolved
 	} else {
-		resolved, err := ResolveEmitter(in.EmitterConfig)
+		resolved, err := ResolveEmitter(clk, in.EmitterConfig)
 		if err != nil {
 			return nil, err
 		}

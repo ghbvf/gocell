@@ -1,17 +1,17 @@
 // Package control_plane_no_marker_violates is a RED reverse self-check fixture
 // for PROD-CLOCK-INJECTION-01.
 //
-// Blind spot verified: placing //archtest:allow:clock-injection:control-plane
-// in a non-doc inline comment inside the function body is NOT recognized as a
-// carve-out. The function is still flagged (1 violation expected).
+// A free function (no receiver) in a path other than runtime/command/ that
+// calls time.NewTicker must be flagged. This verifies that only methods of
+// controlPlaneClock inside runtime/command/ are exempt — a plain free function
+// with the same logic is still a violation (1 violation expected).
 package control_plane_no_marker_violates
 
 import "time"
 
-// wrongPlaceFunc has the marker in an inline comment inside the body, not in
-// the doc comment group. The marker is therefore ignored by
-// clockControlPlaneAllowedFuncs, which only scans fd.Doc.
-func wrongPlaceFunc(interval time.Duration) *time.Ticker {
-	//archtest:allow:clock-injection:control-plane this inline comment is NOT a doc comment and must NOT exempt this function
-	return time.NewTicker(interval) // must be flagged
+// plainFunc is a free function (no receiver) calling time.NewTicker.
+// It must be flagged — the carve-out only applies to controlPlaneClock methods
+// inside runtime/command/, not to free functions anywhere.
+func plainFunc(interval time.Duration) *time.Ticker {
+	return time.NewTicker(interval) // must be flagged — free function, not a controlPlaneClock method
 }

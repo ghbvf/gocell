@@ -283,12 +283,12 @@ func main() {
     defer cancel()
 
     clk := clock.Real()
-    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo, Clock: clk})
+    asm := assembly.New(clk, assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
     asm.Register(mycell.New())
 
     app := bootstrap.New(
+        clk,
         bootstrap.WithAssembly(asm),
-        bootstrap.WithClock(clk),
         // QUICKSTART ONLY — auth.AuthNone disables JWT entirely on the public
         // listener. Production wires `auth.NewAuthJWTFromAssembly(asm)` here
         // (PrimaryListener) and `auth.NewAuthServiceToken(store, ring)` on
@@ -368,10 +368,10 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 
 ```go
 // Production
-asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: outbox.DurabilityDurable})
+asm := assembly.New(clock.Real(), assembly.Config{ID: "prod", DurabilityMode: outbox.DurabilityDurable})
 
 // Development / tests
-asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: outbox.DurabilityDemo})
+asm := assembly.New(clock.Real(), assembly.Config{ID: "dev", DurabilityMode: outbox.DurabilityDemo})
 ```
 
 `cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;
@@ -417,7 +417,7 @@ CI (`make verify`) and can be reproduced locally:
 | `PROD-CLOCK-INJECTION-01` | `tools/archtest TestProdClockInjection` | Production code must inject `kernel/clock.Clock`; stdlib `time.Now / Since / Until / NewTimer / NewTicker / After / AfterFunc / Tick / Sleep` are forbidden outside leaf adapters |
 | `KERNEL-CLOCK-LEAF-FALLBACK-01` | `tools/archtest TestKernelClockLeafFallback` | Leaf code must not silently default to `clock.Real()` — composition root must inject explicitly |
 | `KERNEL-CLOCK-RESET-RELATIVE-PROD-01` | `tools/archtest TestKernelClockResetRelativeProd` | Production code must use `Timer.ResetAt(deadline)` rather than `Timer.Reset(d duration)` to eliminate read-then-act race |
-| `CLOCK-INJECTION-TEST-CALLSITE-01` | `tools/archtest TestClockInjectionCallsite` | Every `*_test.go` callsite of a constructor whose package exports `WithClock(Clock)` and accepts variadic Options must include `WithClock(...)` among the options. v1 covers option-pattern only; positional Clock parameters are out of scope. |
+| `CLOCK-POSITIONAL-INJECTION-01` | `tools/archtest TestClockPositionalInjection` | Downstream Hard: bans `MustHaveClock` selector args and clock option-injectors (any exported `With*Clock` function). Clock is a mandatory first positional parameter; the compiler enforces its presence. |
 | `PROD-CLOCKMOCK-IMPORT-01` | `.golangci.yml depguard rule clockmock-test-only` | Production code must not import `kernel/clock/clockmock` (test-helper packages under `**/testutil/` and `**/storetest/` are exempt) |
 | `LAYER-01..04` | `.golangci.yml depguard rules kernel/pkg/runtime/adapters-isolation` | Layered import boundaries (kernel ⇏ runtime/adapters/cells, etc.) |
 | `SUPPLY-CHAIN-VULN` | `hack/verify-supply-chain-clean.sh`, `govulncheck`, `gosec`, Semgrep, CodeQL | Vulnerable dependencies + insecure code patterns |
@@ -453,8 +453,10 @@ The transactional outbox is split across three layers — Cell services depend o
 `runtime/outbox`, and persistence lives in `adapters/postgres`:
 
 ```go
+clk := clock.Real()
+
 // 1. Adapt the durable writer at the Cell boundary.
-emitter, err := outbox.NewWriterEmitter(postgres.NewOutboxWriter())
+emitter, err := outbox.NewWriterEmitter(postgres.NewOutboxWriter(clk))
 if err != nil {
     return err
 }
@@ -466,8 +468,8 @@ err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 })
 
 // 3. Compose the relay at bootstrap (cmd/corebundle, examples, etc.)
-store := postgres.NewOutboxStore(pool.DB())
-relay := outbox.NewRelay(store, publisher, outbox.DefaultRelayConfig())
+store := postgres.NewOutboxStore(pool.DB(), clk)
+relay := outbox.NewRelay(clk, store, publisher, outbox.DefaultRelayConfig())
 // relay implements worker.Worker — register with bootstrap to manage lifecycle.
 ```
 
@@ -490,6 +492,8 @@ bootstrap applications must configure `WithConsumerBase`; phase6 fails fast
 without it so idempotency and broker settlement are explicit:
 
 ```go
+clk := clock.Real()
+
 cb, err := outbox.NewConsumerBase(
     idempotency.NewInMemClaimer(clk),
     outbox.ConsumerBaseConfig{},
@@ -500,6 +504,7 @@ if err != nil {
 }
 
 app := bootstrap.New(
+    clk,
     bootstrap.WithSubscriber(rawSub),
     bootstrap.WithConsumerBase(cb),
     bootstrap.WithTracer(tracer),
@@ -549,9 +554,11 @@ tracer, shutdown, err := otel.NewTracer(ctx, otel.TracerConfig{ServiceName: "my-
 if err != nil { /* handle */ }
 defer shutdown(context.Background())
 
+clk := clock.Real()
 jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 if err != nil { /* handle */ }
 app := bootstrap.New(
+    clk,
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
         []auth.ListenerAuth{jwtAuth}),
@@ -559,7 +566,8 @@ app := bootstrap.New(
 )
 
 // router (standalone)
-r := router.New(router.WithTracer(tracer))
+r, err := router.New(clk, router.WithTracer(tracer))
+if err != nil { /* handle */ }
 ```
 
 > Without `WithTracer`, span creation falls back to `wrapper.NoopTracer{}`.

@@ -34,7 +34,7 @@ import (
 // newTestAggregator returns a fresh in-memory healthz.Aggregator suitable for
 // tests that need to call health.New directly (bypassing bootstrap phase5).
 func newTestAggregator() healthz.Aggregator {
-	return obshealthz.NewAggregator(obshealthz.WithClock(clock.Real()))
+	return obshealthz.NewAggregator(clock.Real())
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +160,9 @@ func (c *subscribeRegisterCell) Init(ctx context.Context, reg cell.Registrar) er
 // buildStartedAsm builds and starts an assembly with the given cells.
 func buildStartedAsm(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{
+	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "test-phase3-asm",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	for _, c := range cells {
 		require.NoError(t, asm.Register(c))
@@ -207,10 +206,9 @@ func TestPhase3_InitErrorAbortsBeforeStart(t *testing.T) {
 	goodCell := newSnapshotCheckCell("good")
 	badCell := newInitFailCell("bad", errors.New("init exploded"))
 
-	asm := assembly.New(assembly.Config{
+	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "abort-test",
 		DurabilityMode: outbox.DurabilityDemo,
-		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(goodCell))
 	require.NoError(t, asm.Register(badCell))
@@ -235,7 +233,7 @@ func TestPhase3b_LIFOAppendOfLifecycleHooksFromSnapshots(t *testing.T) {
 	asm := buildStartedAsm(t, alpha, beta)
 
 	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	b.lifecycle = ml
 
 	s := buildPhaseStateWithSnapshots(t, asm)
@@ -255,7 +253,7 @@ func TestPhase5_RouteGroupsDrainedFromSnapshots(t *testing.T) {
 	r1 := newRouteRegisterCell("svc1")
 	asm := buildStartedAsm(t, r1)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
@@ -298,7 +296,7 @@ func TestBootstrap_NoSubscriptionsAndNoSubscriber_Succeeds(t *testing.T) {
 	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "plain", Type: "core"})
 	asm := buildStartedAsm(t, plain)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
@@ -316,7 +314,7 @@ func TestBootstrap_HasSubscriptionsButNoSubscriber_FailsFast(t *testing.T) {
 	subCell := newSubscribeRegisterCell("needs-sub", "event.no.subscriber.v1")
 	asm := buildStartedAsm(t, subCell)
 
-	b := New(WithClock(clock.Real()))
+	b := New(clock.Real())
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm

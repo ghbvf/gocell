@@ -18,7 +18,7 @@ import (
 
 func setupRegisterHandler() *registercontract.Handler {
 	repo := mem.NewDeviceRepository()
-	svc, err := NewService(repo, slog.Default(), WithClock(clock.Real()))
+	svc, err := NewService(clock.Real(), repo, slog.Default())
 	if err != nil {
 		panic(err)
 	}

@@ -54,7 +54,8 @@ func setupWriteService(t *testing.T) writeBundle {
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, outboxWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -68,7 +69,8 @@ func setupWriteService(t *testing.T) writeBundle {
 func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType string) int {
 	t.Helper()
 	var count int
-	err := pool.QueryRow(context.Background(),
+	err := pool.QueryRow(
+		context.Background(),
 		`SELECT COUNT(*) FROM outbox_entries WHERE event_type = $1`,
 		eventType,
 	).Scan(&count)
@@ -180,7 +182,8 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -206,7 +209,8 @@ func TestL2Atomicity_configwrite_RollsBack(t *testing.T) {
 	// Negative control: pass-through Service on the same pool/txMgr must
 	// succeed, proving the rollback assertion above is not vacuously trivial
 	// (i.e., Create genuinely writes a row on the happy path).
-	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+	passSvc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -234,7 +238,8 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 
 	// Phase 1: seed the entry with a pass-through writer so the Create commits.
-	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+	passSvc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -250,7 +255,8 @@ func TestL2Atomicity_configwrite_RollsBack_Update(t *testing.T) {
 	// Phase 2: construct a second Service against the SAME pool/txMgr but with
 	// a failing writer. Update must error and the row must stay at version 1.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
-	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
+	failSvc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -286,7 +292,8 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 
 	// Phase 1: seed the entry with a pass-through writer so the Create commits.
-	passSvc, err := NewService(repo, slog.Default(), clock.Real(),
+	passSvc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, adapterpg.NewOutboxWriter(clock.Real())))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -300,7 +307,8 @@ func TestL2Atomicity_configwrite_RollsBack_Delete(t *testing.T) {
 
 	// Phase 2: failing-writer Service — Delete must error and the row must survive.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
-	failSvc, err := NewService(repo, slog.Default(), clock.Real(),
+	failSvc, err := NewService(
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)

@@ -40,7 +40,7 @@ func TestAuthMiddleware_CallsVerifyIntentWithAccessExpectation(t *testing.T) {
 	verifier := &intentMockVerifier{
 		accessClaims: Claims{Subject: "u1", Roles: []string{"user"}, TokenUse: TokenIntentAccess},
 	}
-	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(clock.Real(), verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := FromContext(r.Context())
 		assert.True(t, ok)
 		assert.Equal(t, "u1", p.Subject)
@@ -61,7 +61,7 @@ func TestAuthMiddleware_RejectsRefreshIntentToken_401(t *testing.T) {
 	verifier := &intentMockVerifier{
 		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "refresh token used at business endpoint"),
 	}
-	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(clock.Real(), verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be called when intent mismatches")
 	}))
 
@@ -90,7 +90,7 @@ func TestAuthMiddleware_RefreshAndInvalidToken_SameResponse(t *testing.T) {
 	}
 
 	makeHandler := func(v IntentTokenVerifier) http.Handler {
-		return AuthMiddleware(v, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return AuthMiddleware(clock.Real(), v)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("inner handler must not be called")
 		}))
 	}
@@ -124,7 +124,7 @@ func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
 	verifier := &intentMockVerifier{
 		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
 	}
-	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
+	handler := AuthMiddleware(clock.Real(), verifier, WithLogger(logger))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler must not be called")
 		}))
@@ -145,6 +145,6 @@ func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
 // without VerifyIntent to be plugged in — this test pins the constraint.
 func TestAuthMiddleware_IntentVerifierIsRequiredAtCompileTime(t *testing.T) {
 	var v IntentTokenVerifier = &intentMockVerifier{}
-	_ = AuthMiddleware(v, WithAuthClock(clock.Real()))
+	_ = AuthMiddleware(clock.Real(), v)
 	var _ IntentTokenVerifier = (*intentMockVerifier)(nil)
 }

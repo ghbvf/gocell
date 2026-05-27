@@ -124,7 +124,7 @@ func buildBootstrapWithFakeKeyProvider(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return newBootstrapFromOptions(opts), nil
+	return newBootstrapFromOptions(shared.Clock, opts), nil
 }
 
 // TestA19_ConfigCoreModule_RegistersKeyProviderReadiness is the bootstrap-level

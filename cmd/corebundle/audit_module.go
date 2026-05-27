@@ -120,7 +120,6 @@ func (AuditCoreModule) Provide(
 	}
 
 	auditOpts := []auditcore.Option{
-		auditcore.WithClock(shared.Clock),
 		auditcore.WithLedgerProtocol(auditProtocol),
 		auditcore.WithLedgerStore(auditcoreStore),
 		auditcore.WithQueryStore(multiStore),
@@ -151,7 +150,7 @@ func (AuditCoreModule) Provide(
 	//     shared_deps_validate.go:103).
 	shared.BootstrapLedgerStore = bootstrapWrapped
 
-	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above
+	c := auditcore.NewAuditCore(shared.Clock, auditOpts...)
 	return c, nil, nil, nil
 }
 

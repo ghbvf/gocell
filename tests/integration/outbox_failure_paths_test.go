@@ -198,7 +198,6 @@ func fastRelayConfig() outboxruntime.RelayConfig {
 		ReclaimInterval:     testtime.SlowPoll,
 		RetentionPeriod:     testtime.D1h,
 		DeadRetentionPeriod: testtime.D24h,
-		Clock:               clock.Real(),
 	}
 }
 
@@ -247,7 +246,7 @@ func TestIntegration_PGRelay_TransientPublishRetry(t *testing.T) {
 	id := writeOutboxEntry(t, pool, topic, []byte(`{"phase":"transient"}`))
 
 	pub := newFlakyPublisher(2) // fail twice, succeed third
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, fastRelayConfig())
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, fastRelayConfig())
 
 	stop := runRelay(t, relay)
 	defer stop()
@@ -276,7 +275,7 @@ func TestIntegration_PGRelay_MaxAttemptsDeadLetter(t *testing.T) {
 	pub := &alwaysFailPublisher{}
 	cfg := fastRelayConfig()
 	cfg.MaxAttempts = 3 // bound the test
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
 
 	stop := runRelay(t, relay)
 	defer stop()
@@ -346,8 +345,8 @@ func TestIntegration_PGRelay_ConcurrentRelaysNoDoublePublish(t *testing.T) {
 	cfg := fastRelayConfig()
 	cfg.BatchSize = 5 // small batch so the two relays interleave
 
-	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
-	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
+	relayA := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
+	relayB := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
 
 	stopA := runRelay(t, relayA)
 	defer stopA()
@@ -392,7 +391,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	cfg := fastRelayConfig()
 	cfg.MaxAttempts = 5
 
-	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), stuck, cfg)
+	relayA := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), stuck, cfg)
 
 	stopACtx, cancelA := context.WithCancel(context.Background())
 	doneA := make(chan error, 1)
@@ -424,7 +423,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	// Relay B starts fresh; ReclaimStale should rescue the row and a new
 	// publish (now via a always-success publisher) will mark it published.
 	successPub := newCountingPublisher()
-	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), successPub, cfg)
+	relayB := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), successPub, cfg)
 	stopB := runRelay(t, relayB)
 	defer stopB()
 

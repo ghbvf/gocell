@@ -44,7 +44,7 @@ func newContractMux(svc *Service) http.Handler {
 func newContractService(t *testing.T) *Service {
 	t.Helper()
 	repo := mem.NewFlagRepository(clock.Real())
-	svc, err := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithTxManager(persistence.WrapForCell(&testutil.NoopTxRunner{})))
 	if err != nil {
 		t.Fatal(err)

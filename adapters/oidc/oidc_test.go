@@ -16,7 +16,7 @@ import (
 
 // testEpoch is a fixed deterministic time used by test callsites that need
 // a clock but do not exercise time-sensitive logic. Using a named constant
-// avoids magic literals and satisfies CLOCK-INJECTION-TEST-CALLSITE-01.
+// avoids magic literals.
 var testEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // Compile-time assertion: Adapter satisfies ManagedResource.
@@ -43,7 +43,7 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestNew_InvalidConfig(t *testing.T) {
-	_, err := New(context.Background(), Config{Clock: clockmock.New(testEpoch)})
+	_, err := New(context.Background(), clockmock.New(testEpoch), Config{})
 	require.Error(t, err)
 }
 
@@ -53,7 +53,7 @@ func TestNew_FailsSyncOnUnreachableIssuer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	_, err := New(ctx, Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	_, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: "http://127.0.0.1:1", ClientID: "test-client"})
 	require.Error(t, err, "New must fail when issuer is unreachable")
 }
 
@@ -66,7 +66,7 @@ func TestNew_PopulatesProviderSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	// Close the server — if discover is called again it would fail.
@@ -87,7 +87,7 @@ func TestCheckers_OIDCReadyHealthyAfterConstruction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	checkers := adapter.Checkers()
@@ -109,7 +109,7 @@ func TestWorker_ReturnsNonNil(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	assert.NotNil(t, adapter.Worker(), "Worker() must return non-nil after PR-11/A-02")
@@ -123,7 +123,7 @@ func TestClose_Idempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	require.NoError(t, adapter.Close(context.Background()))
@@ -139,7 +139,7 @@ func TestRefresh_StillCallableAfterConstruction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	adapter, err := New(ctx, Config{IssuerURL: srv.URL, ClientID: "test-client", Clock: clockmock.New(testEpoch)})
+	adapter, err := New(ctx, clockmock.New(testEpoch), Config{IssuerURL: srv.URL, ClientID: "test-client"})
 	require.NoError(t, err)
 
 	p, err := adapter.Refresh(context.Background())

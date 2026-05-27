@@ -478,12 +478,12 @@ func TestReconnectLoop_PermanentAndRecovery(t *testing.T) {
 		}
 	}
 
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(clock.Real(), Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {
@@ -550,12 +550,12 @@ func TestWaitConnected_WokenAcrossPermanentChannelSwaps(t *testing.T) {
 	}
 
 	fc := clockmock.New(time.Time{})
-	conn, err := NewConnection(Config{
+	conn, err := NewConnection(fc, Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
 		ReconnectBaseDelay:  testtime.D1ms,
 		ReconnectMaxBackoff: testtime.FastPoll,
-	}, WithDialFunc(dialFunc), WithConnectionClock(fc))
+	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
 		if cErr := conn.Close(context.Background()); cErr != nil {

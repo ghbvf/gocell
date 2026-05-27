@@ -15,12 +15,12 @@
 //
 // # Usage
 //
-//	agg := healthz.NewAggregator(healthz.WithClock(clock.Real()))
+//	agg := healthz.NewAggregator(clock.Real())
 //	agg.Register(healthz.NewProbe("postgres_ready", pool.Ping))
 //	snap := agg.Evaluate(ctx)
 //
-// NewAggregator requires a clock (WithClock) and panics without one; pass
-// clock.Real() in production or clockmock.New(...) in tests.
+// NewAggregator requires a clock as its first positional parameter and panics
+// without one; pass clock.Real() in production or clockmock.New(...) in tests.
 //
 // # Conformance harness
 //

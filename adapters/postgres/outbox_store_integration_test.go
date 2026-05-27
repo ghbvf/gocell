@@ -77,7 +77,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 
 	store := NewOutboxStore(pool.DB(), clock.Real())
 	pub := &recordingPublisher{}
-	relay := rout.NewRelay(store, pub, rout.RelayConfig{
+	relay := rout.NewRelay(clock.Real(), store, pub, rout.RelayConfig{
 		PollInterval:        testtime.FastPoll,
 		ReclaimInterval:     testtime.MediumPoll,
 		BatchSize:           10,
@@ -88,7 +88,6 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 		RetentionPeriod:     time.Hour,
 		DeadRetentionPeriod: time.Hour,
 		CleanupWaitFloor:    testtime.MediumPoll,
-		Clock:               clock.Real(),
 	})
 
 	runCtx, cancel := context.WithCancel(ctx)

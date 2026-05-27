@@ -77,7 +77,7 @@ func setupPublishBundleWithTransformer(t *testing.T, transformer crypto.ValueTra
 	txMgr := adapterpg.NewTxManager(pool)
 
 	svc, err := NewService(
-		repo, slog.Default(), clock.Real(),
+		clock.Real(), repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, outboxWriter))),
 		WithTxManager(persistence.WrapForCell(txMgr)),
 	)
@@ -233,7 +233,7 @@ func TestL2Atomicity_configpublish_RollsBack(t *testing.T) {
 		err:      errors.New("outbox broker down"),
 	}
 	svcFail, err := NewService(
-		bundle.repo, slog.Default(), clock.Real(),
+		clock.Real(), bundle.repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)
@@ -296,7 +296,7 @@ func TestL2Atomicity_configpublish_RollsBack_Publish(t *testing.T) {
 		err:      errors.New("outbox broker down"),
 	}
 	svcFail, err := NewService(
-		bundle.repo, slog.Default(), clock.Real(),
+		clock.Real(), bundle.repo, slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, failingWriter))),
 		WithTxManager(persistence.WrapForCell(bundle.txMgr)),
 	)

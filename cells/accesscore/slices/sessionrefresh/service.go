@@ -37,15 +37,6 @@ const errMsgInvalidRefreshToken = "invalid refresh token"
 // Option configures a session-refresh Service.
 type Option func(*Service)
 
-// WithClock sets the clock used for token expiry calculation.
-// clk must not be nil; pass clock.Real() for production use.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		clock.MustHaveClock(clk, "sessionrefresh.WithClock")
-		s.clock = clk
-	}
-}
-
 // WithTxManager wires the cross-store CellTxManager. The Refresh flow wraps
 // the validate→update→rotate sequence in a single RunInTx so the session
 // repo and refresh store updates share one commit boundary; nil tx is
@@ -111,6 +102,7 @@ type Service struct {
 //
 // opts allows future functional extensions without breaking callers (F8).
 func NewService(
+	clk clock.Clock,
 	sessionStore session.Store,
 	roleRepo ports.RoleRepository,
 	userRepo ports.UserRepository,
@@ -119,6 +111,7 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "sessionrefresh.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -127,6 +120,7 @@ func NewService(
 		roleRepo:     roleRepo,
 		userRepo:     userRepo,
 		refreshStore: refreshStore,
+		clock:        clk,
 		issuer:       issuer,
 		logger:       logger,
 	}
@@ -136,7 +130,6 @@ func NewService(
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
-	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
 
@@ -292,10 +285,9 @@ func (s *Service) refreshInTx(ctx context.Context, outerCtx context.Context, ref
 	// sid claim as the original login. AuthzEpoch / password-reset state is
 	// re-evaluated per refresh via the user lookup above; the session row
 	// itself is not rotated.
-	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(ctx, s.clock, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
-		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                sess.SubjectID,
 		SessionID:             sess.ID,

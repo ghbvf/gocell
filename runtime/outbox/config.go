@@ -3,7 +3,6 @@ package outbox
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -99,10 +98,6 @@ type RelayConfig struct {
 	// constant. <= 0 uses the package default (5s).
 	// Tests can set it directly via the RelayConfig literal.
 	CleanupWaitFloor time.Duration
-
-	// Clock is the time source for polling and cleanup sleeps. Required;
-	// pass clock.Real() in production and clockmock.New() in tests.
-	Clock clock.Clock
 }
 
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.

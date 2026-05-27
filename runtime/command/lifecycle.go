@@ -41,39 +41,38 @@ const defaultSweeperHookName = "command.sweeper"
 // sweeper is fire-and-forget so we use a time-bounded probe instead).
 const startProbeTimeout = 50 * time.Millisecond
 
-// controlPlaneTicker creates a real-time ticker for control-plane scheduling.
-// All stdlib time.NewTicker calls in this package are funneled here.
+// controlPlaneClock is the sealed, real-only clock for control-plane scheduling.
+// It is an empty package-private struct: no package outside runtime/command can
+// name it, construct it, or supply a substitute, so "drive control-plane
+// ticker/probe with a non-real (e.g. fake) clock" is unrepresentable. Its two
+// methods are the sole sanctioned sites for stdlib time.NewTicker / time.NewTimer
+// in this package — PROD-CLOCK-INJECTION-01 confines those calls to receiver type
+// controlPlaneClock (receiver-type confinement; no comment-marker, no allowlist
+// map). This replaces the former comment-guard carve-out (#619 Hard upgrade).
 //
-// Carve-out rationale: control-plane scheduling (sweeper ticker interval) must
-// use real wall-clock time. Injecting a fake clock into the control-plane ticker
-// reintroduces the startup-deadlock regression fixed in C.1: a frozen fake clock
-// with no Advance calls blocks Start() permanently.
+// Carve-out rationale (unchanged): control-plane scheduling — the sweeper ticker
+// interval and the 50 ms startup probe — must use real wall-clock time. Injecting
+// a frozen fake clock with no Advance calls would deadlock Start() permanently
+// (the startup-deadlock regression fixed in C.1).
 //
-// AI-robust grade: Medium (comment-guard carve-out).
-//
-// Do NOT add new functions with this marker without explicit review.
+// AI-robust grade: Medium. The stdlib time.NewTicker / time.NewTimer free
+// functions cannot be made uncallable in Go, so receiver-type confinement is the
+// achievable ceiling (same permanent ceiling as SPAN-SETATTR-REDACT-01's
+// package-internal axis). The net gain over the prior form is the elimination of
+// the AI-abusable //archtest:allow comment-marker and its hand-maintained
+// allowlist map: a new time.* call site now requires adding a method to this
+// sealed type, which is a deliberate, reviewable change.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
-//
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
-func controlPlaneTicker(interval time.Duration) *time.Ticker {
+type controlPlaneClock struct{}
+
+// newTicker creates a real-time ticker for control-plane scheduling.
+func (controlPlaneClock) newTicker(interval time.Duration) *time.Ticker {
 	return time.NewTicker(interval)
 }
 
-// controlPlaneProbeTimer creates a real-time timer for the startup probe window.
-// All stdlib time.NewTimer calls in this package are funneled here.
-//
-// Carve-out rationale: the 50 ms startup probe must use real time. A fake clock
-// probe that is never advanced would deadlock Start() (same root cause as C.1).
-//
-// AI-robust grade: Medium (comment-guard carve-out).
-//
-// Do NOT add new functions with this marker without explicit review.
-//
-// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
-//
-//archtest:allow:clock-injection:control-plane startup-deadlock-regression-C1
-func controlPlaneProbeTimer(d time.Duration) *time.Timer {
+// newProbeTimer creates a real-time timer for the startup probe window.
+func (controlPlaneClock) newProbeTimer(d time.Duration) *time.Timer {
 	return time.NewTimer(d)
 }
 
@@ -104,10 +103,9 @@ var _ SweepTicker = (*kcommand.Sweeper)(nil)
 // NO clock field (Hard, type-unrepresentable). SweeperLifecycle holds a
 // BusinessClock used ONLY for the SweepTick `now` argument (business-plane
 // expiry time). All control-plane stdlib time.* calls (ticker, startup probe)
-// are funneled through controlPlaneTicker / controlPlaneProbeTimer
-// (function-level marker //archtest:allow:clock-injection:control-plane,
-// anchored by PROD-CLOCK-INJECTION-01) — control-plane scheduling is never
-// driven by an injected clock.
+// are funneled through the sealed controlPlaneClock type (receiver-type
+// confinement, anchored by PROD-CLOCK-INJECTION-01) — control-plane scheduling
+// is never driven by an injected clock.
 //
 // C.2 Owner ctx: OnStart receives the long-lived owner ctx (controller-runtime
 // Runnable.Start semantics). The worker derives its runCtx from ownerCtx so
@@ -137,8 +135,8 @@ type SweeperLifecycle struct {
 	// BusinessClock supplies the business-plane "now" passed to SweepTick (the
 	// time against which command deadlines are evaluated). It is read-only here
 	// (only .Now() is called) and is NEVER used for control-plane scheduling —
-	// the ticker / startup probe stay on real wall-clock via controlPlaneTicker
-	// / controlPlaneProbeTimer. Sourcing `now` from the real-time ticker.C
+	// the ticker / startup probe stay on real wall-clock via the sealed
+	// controlPlaneClock type. Sourcing `now` from the real-time ticker.C
 	// instead (the pre-fix behavior) mismatched a cell whose command-creation
 	// time came from an injected (e.g. fake) clock, corrupting expiry decisions
 	// in fake-clock assemblies (review P2-2). Inject the cell clock here
@@ -166,9 +164,8 @@ type SweeperLifecycle struct {
 //
 // businessClock supplies the business-plane "now" for SweepTick. It is NOT a
 // control-plane scheduling clock: the ticker / startup probe remain on real
-// wall-clock via controlPlaneTicker / controlPlaneProbeTimer (function-level
-// //archtest:allow:clock-injection:control-plane marker, anchored by
-// PROD-CLOCK-INJECTION-01).
+// wall-clock via the sealed controlPlaneClock type (receiver-type confinement,
+// anchored by PROD-CLOCK-INJECTION-01).
 // Validated non-nil at construction via clock.MustHaveClock (composition root
 // passes the cell clock, e.g. clock.Real() in production / a fake in tests).
 //
@@ -200,9 +197,8 @@ func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 // so that assembly shutdown (ownerCancel) exits the goroutine automatically,
 // even before OnStop is called.
 //
-// All stdlib time.* calls are funneled through controlPlaneTicker /
-// controlPlaneProbeTimer (function-level marker
-// //archtest:allow:clock-injection:control-plane).
+// All stdlib time.* calls are funneled through the sealed controlPlaneClock
+// type (receiver-type confinement, PROD-CLOCK-INJECTION-01).
 func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 	if l == nil || validation.IsNilInterface(l.Sweeper) {
 		return fmt.Errorf("runtime/command: sweeper lifecycle requires non-nil Sweeper")
@@ -260,8 +256,8 @@ func (l *SweeperLifecycle) Start(ownerCtx context.Context) error {
 	earlyExit := make(chan error, 1)
 
 	// C.1: real-time ticker — not injected via business-plane clock.
-	// Funneled through controlPlaneTicker (function-level marker).
-	ticker := controlPlaneTicker(interval)
+	// Funneled through the sealed controlPlaneClock (receiver-type confinement).
+	ticker := controlPlaneClock{}.newTicker(interval)
 	go l.runLoop(runCtx, ticker, earlyExit, done)
 
 	// awaitProbe waits for the goroutine startup signal or context cancellation.
@@ -340,13 +336,13 @@ func (l *SweeperLifecycle) runLoop(
 //     goroutine will exit via runCtx.Done() on its own; l.cancel / l.done are
 //     cleared so a subsequent Stop is a no-op.
 //
-// C.1: probe timer is funneled through controlPlaneProbeTimer.
+// C.1: probe timer is funneled through the sealed controlPlaneClock.
 func (l *SweeperLifecycle) awaitProbe(
 	runCtx context.Context,
 	cancel context.CancelFunc,
 	earlyExit <-chan error,
 ) error {
-	probeTimer := controlPlaneProbeTimer(startProbeTimeout)
+	probeTimer := controlPlaneClock{}.newProbeTimer(startProbeTimeout)
 	defer probeTimer.Stop()
 
 	select {

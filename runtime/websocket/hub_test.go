@@ -154,9 +154,9 @@ func (f *fakeConn) getWrites() [][]byte {
 
 // startHub starts a Hub in a background goroutine and returns it.
 // The Hub is stopped via t.Cleanup.
-func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
+func startHub(t *testing.T, clk clock.Clock, cfg HubConfig, handler MessageHandler) *Hub {
 	t.Helper()
-	hub := NewHub(cfg, handler)
+	hub := NewHub(clk, cfg, handler)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	t.Cleanup(func() {
@@ -200,7 +200,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+			hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 			hub.state.Store(tt.state)
 			checkers := hub.Checkers()
 			require.NotEmpty(t, checkers, "Checkers must return a non-empty map")
@@ -218,7 +218,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 	// T4b: true stateStopping via a stuckConn — verifies that Checkers returns
 	// non-nil while shutdown is in progress (hub.wg.Wait is blocked).
 	t.Run("stopping_via_live_shutdown", func(t *testing.T) {
-		hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+		hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 		startErr := make(chan error, 1)
 		go func() { startErr <- hub.Start(context.Background()) }()
 		testwait.External(t, "hub-state-running", func() bool {
@@ -255,7 +255,7 @@ func TestHub_Checkers_StateMachine(t *testing.T) {
 
 // T5: Hub.Close is idempotent — second call returns nil.
 func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -275,7 +275,7 @@ func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
 // and tears it down via LIFO Close — composition root no longer needs a
 // manual `go hub.Start(ctx)` call.
 func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	w := hub.Worker()
 	require.NotNil(t, w, "Worker must return a non-nil worker so bootstrap can auto-start")
 
@@ -303,7 +303,7 @@ func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
 
 // T8: BroadcastFilter / BroadcastToSubject on stopped hub — no panic, returns nil.
 func TestHub_BroadcastFilter_OnStoppedHub_NoOp(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 
 	err := hub.BroadcastFilter(context.Background(), []byte("x"), func(Conn) bool { return true })
@@ -315,7 +315,7 @@ func TestHub_BroadcastFilter_OnStoppedHub_NoOp(t *testing.T) {
 
 // T9: Send on stopped hub returns ErrWSConnNotFound.
 func TestHub_Send_OnStoppedHub_ReturnsConnNotFound(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 
 	err := hub.Send(context.Background(), "any-id", []byte("x"))
@@ -334,9 +334,9 @@ func TestHub_Send_OnStoppedHub_ReturnsConnNotFound(t *testing.T) {
 // close. The test does NOT assert on DeadlineExceeded vs nil — that outcome
 // depends on timing and would make the test flaky.
 func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ConcurrentCloseLimit = 2
-	hub := NewHub(cfg, nil)
+	hub := NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -383,9 +383,9 @@ func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
 // called once releaseClose is signaled, regardless of whether Stop returned
 // DeadlineExceeded or nil.
 func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ConcurrentCloseLimit = 2 // Tight limit so most entries can't acquire a slot before ctx expiry.
-	hub := NewHub(cfg, nil)
+	hub := NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -440,9 +440,9 @@ func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
 		parallelBound = testtime.D500ms               // well within parallel budget
 	)
 
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ConcurrentCloseLimit = 8
-	hub := NewHub(cfg, nil)
+	hub := NewHub(clock.Real(), cfg, nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -475,9 +475,9 @@ func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
 // T12: External ctx cancel uses configured ShutdownTimeout, not hardcoded 10s.
 // ShutdownTimeout=50ms + 5 blocking conns → Start returns in < 500ms.
 func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ShutdownTimeout = testtime.D50ms
-	hub := NewHub(cfg, nil)
+	hub := NewHub(clock.Real(), cfg, nil)
 
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	startErr := make(chan error, 1)
@@ -529,7 +529,7 @@ func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
 //
 // for stability validation.
 func TestHub_StopAndExternalCancel_RaceCAS(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	startErr := make(chan error, 1)
@@ -599,7 +599,7 @@ func TestHub_StopAndExternalCancel_RaceCAS(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_StopUnblocksStart(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -621,7 +621,7 @@ func TestHub_StopUnblocksStart(t *testing.T) {
 }
 
 func TestHub_DoubleStart(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	err := hub.Start(context.Background())
 	require.Error(t, err)
@@ -629,7 +629,7 @@ func TestHub_DoubleStart(t *testing.T) {
 }
 
 func TestHub_DoubleStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -647,13 +647,13 @@ func TestHub_DoubleStop(t *testing.T) {
 }
 
 func TestHub_StopBeforeStart(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 	assert.Equal(t, stateStopped, hub.state.Load())
 }
 
 func TestHub_StartAfterStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 
 	err := hub.Start(context.Background())
@@ -662,7 +662,7 @@ func TestHub_StartAfterStop(t *testing.T) {
 }
 
 func TestHub_StopTimeout(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -686,7 +686,7 @@ func TestHub_StopTimeout(t *testing.T) {
 }
 
 func TestHub_ExternalContextCancel(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	startErr := make(chan error, 1)
@@ -742,7 +742,7 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 		mu.Unlock()
 	}
 
-	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), handler)
 
 	conn := newFakeConn("sender")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -768,7 +768,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 	const want = "trace-123"
 	got := make(chan any, 1)
 	registerCtx := context.WithValue(context.Background(), ctxKey("trace-id"), want)
-	hub := NewHub(DefaultHubConfig(clock.Real()), func(ctx context.Context, _ string, _ []byte) {
+	hub := NewHub(clock.Real(), DefaultHubConfig(), func(ctx context.Context, _ string, _ []byte) {
 		got <- ctx.Value(ctxKey("trace-id"))
 	})
 
@@ -799,7 +799,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 }
 
 func TestHub_RegisterDuringStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -824,7 +824,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 }
 
 func TestHub_RegisterOnStoppedHub(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	_ = hub.Stop(context.Background())
 
 	conn := newFakeConn("late")
@@ -835,7 +835,7 @@ func TestHub_RegisterOnStoppedHub(t *testing.T) {
 }
 
 func TestHub_Unregister(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newFakeConn("c1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -851,7 +851,7 @@ func TestHub_Unregister(t *testing.T) {
 }
 
 func TestHub_UnregisterIdempotent(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newFakeConn("c1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -866,7 +866,7 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 }
 
 func TestHub_RegisterDuplicateID(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	connA := newFakeConn("dup")
 	require.NoError(t, hub.Register(context.Background(), connA))
@@ -892,9 +892,9 @@ func TestHub_RegisterDuplicateID(t *testing.T) {
 }
 
 func TestHub_MaxConnections(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.MaxConnections = 2
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	c1 := newFakeConn("c1")
 	c2 := newFakeConn("c2")
@@ -918,7 +918,7 @@ func TestHub_MaxConnections(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_RegisterStopRace(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -952,7 +952,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_Send(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newFakeConn("target")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -967,7 +967,7 @@ func TestHub_Send(t *testing.T) {
 }
 
 func TestHub_SendNotFound(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	err := hub.Send(context.Background(), "nonexistent", []byte("x"))
 	require.Error(t, err)
 	var ecErrNotFound *errcode.Error
@@ -991,7 +991,7 @@ func TestHub_MessageHandler(t *testing.T) {
 		mu.Unlock()
 	}
 
-	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), handler)
 
 	conn := newFakeConn("h1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1017,12 +1017,12 @@ func TestHub_MessageHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_PingMissThreshold(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	conn := newFakeConn("pinger")
 	conn.pingErr = errors.New("timeout")
@@ -1035,12 +1035,12 @@ func TestHub_PingMissThreshold(t *testing.T) {
 }
 
 func TestHub_PingMissReset(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	conn := newFakeConn("resilient")
 	conn.pingErr = errors.New("fail")
@@ -1080,11 +1080,11 @@ func TestHub_PingMissReset(t *testing.T) {
 }
 
 func TestHub_PingLoopRunsOnInterval(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	conn := newFakeConn("counter")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1102,26 +1102,26 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 // T1: ShutdownTimeout defaults to defaultShutdownTimeout (10s) when zero;
 // explicit value is preserved.
 func TestHubConfig_ShutdownTimeout_Default(t *testing.T) {
-	cfgZero := HubConfig{Clock: clock.Real()}
-	hub := NewHub(cfgZero, nil)
+	cfgZero := HubConfig{}
+	hub := NewHub(clock.Real(), cfgZero, nil)
 	assert.Equal(t, defaultShutdownTimeout, hub.Config().ShutdownTimeout,
 		"zero ShutdownTimeout must be replaced with defaultShutdownTimeout")
 
-	cfgExplicit := HubConfig{Clock: clock.Real(), ShutdownTimeout: testtime.D30s}
-	hub2 := NewHub(cfgExplicit, nil)
+	cfgExplicit := HubConfig{ShutdownTimeout: testtime.D30s}
+	hub2 := NewHub(clock.Real(), cfgExplicit, nil)
 	assert.Equal(t, testtime.D30s, hub2.Config().ShutdownTimeout,
 		"explicit ShutdownTimeout must be preserved")
 }
 
 // T2: ConcurrentCloseLimit defaults to 64 when zero; explicit value is preserved.
 func TestHubConfig_ConcurrentCloseLimit_Default(t *testing.T) {
-	cfgZero := HubConfig{Clock: clock.Real()}
-	hub := NewHub(cfgZero, nil)
+	cfgZero := HubConfig{}
+	hub := NewHub(clock.Real(), cfgZero, nil)
 	assert.Equal(t, 64, hub.Config().ConcurrentCloseLimit,
 		"zero ConcurrentCloseLimit must be replaced with 64")
 
-	cfgExplicit := HubConfig{Clock: clock.Real(), ConcurrentCloseLimit: 32}
-	hub2 := NewHub(cfgExplicit, nil)
+	cfgExplicit := HubConfig{ConcurrentCloseLimit: 32}
+	hub2 := NewHub(clock.Real(), cfgExplicit, nil)
 	assert.Equal(t, 32, hub2.Config().ConcurrentCloseLimit,
 		"explicit ConcurrentCloseLimit must be preserved")
 }
@@ -1134,7 +1134,7 @@ func TestConn_RemoteAddr_InterfaceContract(t *testing.T) {
 }
 
 func TestDefaultHubConfig(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	assert.Equal(t, testtime.D30s, cfg.PingInterval)
 	assert.Equal(t, testtime.D5s, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
@@ -1151,18 +1151,17 @@ func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 		SendBufferSize:       16, // explicit non-zero; must be preserved as-is
 		ShutdownTimeout:      testtime.D30s,
 		ConcurrentCloseLimit: 32,
-		Clock:                clock.Real(),
 	}
 	handler := func(context.Context, string, []byte) {}
 
-	hub := NewHub(cfg, handler)
+	hub := NewHub(clock.Real(), cfg, handler)
 
 	assert.Equal(t, cfg, hub.Config())
 	assert.NotNil(t, hub.handler)
 }
 
 func TestHub_IsRunning(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	assert.False(t, hub.IsRunning(), "idle hub")
 
 	startErr := make(chan error, 1)
@@ -1177,7 +1176,7 @@ func TestHub_IsRunning(t *testing.T) {
 }
 
 func TestHub_StopDeadlineHonored(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -1206,7 +1205,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 }
 
 func TestNewHub_NilHandler(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	assert.NotNil(t, hub.handler, "nil handler should be replaced with noop")
 	hub.handler(context.Background(), "test", []byte("data"))
 }
@@ -1224,22 +1223,22 @@ const (
 // construction (panic, matching clock.MustHaveClock pattern) instead of
 // silently producing zero-budget shutdown at runtime.
 func TestNewHub_RejectsNegativeShutdownTimeout(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ShutdownTimeout = negativeShutdownTimeout
 	assertNewHubPanicsWithErrcodeMessage(t,
 		"websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0",
-		func() { NewHub(cfg, nil) })
+		func() { NewHub(clock.Real(), cfg, nil) })
 }
 
 // TestNewHub_RejectsNegativeConcurrentCloseLimit — negative ConcurrentCloseLimit
 // would panic at make(chan struct{}, limit) during shutdown. Reject at
 // construction so wiring bugs surface before any goroutine runs.
 func TestNewHub_RejectsNegativeConcurrentCloseLimit(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.ConcurrentCloseLimit = negativeConcurrentCloseLimit
 	assertNewHubPanicsWithErrcodeMessage(t,
 		"websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0",
-		func() { NewHub(cfg, nil) })
+		func() { NewHub(clock.Real(), cfg, nil) })
 }
 
 func assertNewHubPanicsWithErrcodeMessage(t *testing.T, wantMessage string, fn func()) {
@@ -1344,12 +1343,12 @@ func TestHub_StateMachine(t *testing.T) {
 	}{
 		{
 			"idle+Stop",
-			func() *Hub { return NewHub(DefaultHubConfig(clock.Real()), nil) },
+			func() *Hub { return NewHub(clock.Real(), DefaultHubConfig(), nil) },
 			stopAction, "",
 		},
 		{
 			"idle+Register",
-			func() *Hub { return NewHub(DefaultHubConfig(clock.Real()), nil) },
+			func() *Hub { return NewHub(clock.Real(), DefaultHubConfig(), nil) },
 			registerAction, "not running",
 		},
 		{
@@ -1371,7 +1370,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Start",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(clock.Real()), nil)
+				h := NewHub(clock.Real(), DefaultHubConfig(), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -1381,7 +1380,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Stop",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(clock.Real()), nil)
+				h := NewHub(clock.Real(), DefaultHubConfig(), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -1390,7 +1389,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Register",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(clock.Real()), nil)
+				h := NewHub(clock.Real(), DefaultHubConfig(), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -1415,7 +1414,7 @@ func TestHub_StateMachine(t *testing.T) {
 // startHubBackground starts a Hub and registers cleanup.
 func startHubBackground(t *testing.T) *Hub {
 	t.Helper()
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	testwait.External(t, "hub-state-running", func() bool {
@@ -1490,7 +1489,7 @@ func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
 // Real WebSocket upgrade tests are in adapters/websocket/handler_test.go.
 
 func TestHub_IsRunning_Contract(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	hub := NewHub(clock.Real(), DefaultHubConfig(), nil)
 
 	// idle → not running
 	assert.False(t, hub.IsRunning())
@@ -1519,14 +1518,14 @@ var (
 // ---------------------------------------------------------------------------
 
 func TestHub_BroadcastFilter_NilFilterFails(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	err := hub.BroadcastFilter(context.Background(), []byte("x"), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "filter")
 }
 
 func TestHub_BroadcastFilter_AllConns(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
 	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
 	a := newFakeConnWithPrincipal("a", pa)
@@ -1545,7 +1544,7 @@ func TestHub_BroadcastFilter_AllConns(t *testing.T) {
 }
 
 func TestHub_BroadcastFilter_SelectiveBySubject(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
 	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
 	a := newFakeConnWithPrincipal("a", pa)
@@ -1567,14 +1566,14 @@ func TestHub_BroadcastFilter_SelectiveBySubject(t *testing.T) {
 }
 
 func TestHub_BroadcastToSubject_EmptySubjectFails(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	err := hub.BroadcastToSubject(context.Background(), "", []byte("x"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "subject")
 }
 
 func TestHub_BroadcastToSubject_HitsAllConnsForSubject(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
 	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
 	a1 := newFakeConnWithPrincipal("a1", pa)
@@ -1596,7 +1595,7 @@ func TestHub_BroadcastToSubject_HitsAllConnsForSubject(t *testing.T) {
 }
 
 func TestHub_BroadcastToSubject_UnknownSubjectIsNoop(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	// No conns at all. Subject not present → returns nil, no error.
 	err := hub.BroadcastToSubject(context.Background(), "ghost", []byte("x"))
 	assert.NoError(t, err)
@@ -1609,11 +1608,11 @@ func TestHub_BroadcastToSubject_UnknownSubjectIsNoop(t *testing.T) {
 func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	cfg := DefaultHubConfig(fc)
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, fc, cfg, nil)
 
 	p := &auth.Principal{
 		Kind:      auth.PrincipalUser,
@@ -1642,11 +1641,11 @@ func TestHub_TokenExpiry_AtBoundaryEvicts(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(start)
 
-	cfg := DefaultHubConfig(fc)
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, fc, cfg, nil)
 
 	// Register at clock=start with ExpiresAt = start + 10ms.
 	exp := start.Add(testtime.D10ms)
@@ -1671,11 +1670,11 @@ func TestHub_TokenExpiry_AtBoundaryEvicts(t *testing.T) {
 func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
-	cfg := DefaultHubConfig(fc)
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, fc, cfg, nil)
 
 	// Anonymous principal: zero ExpiresAt = never expires.
 	p := &auth.Principal{Kind: auth.PrincipalAnonymous}
@@ -1721,9 +1720,9 @@ func (b *blockingFakeConn) Write(ctx context.Context, data []byte) error {
 }
 
 func TestHub_SlowClient_EvictedWhenSendBufferFull(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.SendBufferSize = 2 // tiny buffer
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "slow"}
 	slow := newBlockingFakeConn("slow", p)
@@ -1750,7 +1749,7 @@ func TestHub_SlowClient_EvictedWhenSendBufferFull(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_SubjectIdx_EmptyAfterRegisterUnregister(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
 	conn := newFakeConnWithPrincipal("a", p)
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1767,10 +1766,10 @@ func TestHub_SubjectIdx_EmptyAfterRegisterUnregister(t *testing.T) {
 
 func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	cfg := DefaultHubConfig(fc)
+	cfg := DefaultHubConfig()
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, fc, cfg, nil)
 
 	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice", ExpiresAt: fc.Now().Add(testtime.D1h)}
 	conn := newFakeConnWithPrincipal("a", p)
@@ -1791,7 +1790,7 @@ func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultHubConfig_SendBufferSize(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	assert.Equal(t, 32, cfg.SendBufferSize, "default SendBufferSize must be 32")
 }
 
@@ -1800,7 +1799,7 @@ func TestDefaultHubConfig_SendBufferSize(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_NewHub_ZeroSendBufferSize_GetsDefault(t *testing.T) {
-	hub := NewHub(HubConfig{Clock: clock.Real()}, nil)
+	hub := NewHub(clock.Real(), HubConfig{}, nil)
 	assert.Equal(t, defaultSendBufferSize, hub.Config().SendBufferSize,
 		"zero SendBufferSize must be replaced with defaultSendBufferSize at construction")
 }
@@ -1810,7 +1809,7 @@ func TestHub_NewHub_ZeroSendBufferSize_GetsDefault(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_BroadcastFilter_FilterRunsWithoutLock(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newFakeConn("target")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1846,7 +1845,7 @@ func TestHub_BroadcastFilter_FilterRunsWithoutLock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_Send_CanceledCtx_DoesNotEnqueue(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newFakeConn("target")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1866,7 +1865,7 @@ func TestHub_Send_CanceledCtx_DoesNotEnqueue(t *testing.T) {
 }
 
 func TestHub_BroadcastFilter_CanceledCtx_StopsEarly(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	// Register multiple conns to have something to iterate.
 	conns := make([]*fakeConn, 5)
@@ -1908,7 +1907,7 @@ func TestHub_Register_PrincipalInjectedToHandlerCtx(t *testing.T) {
 		gotPrincipal <- p
 	}
 
-	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), handler)
 
 	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
 	conn := newFakeConnWithPrincipal("conn-with-principal", p)
@@ -1931,7 +1930,7 @@ func TestHub_Register_PrincipalInjectedToHandlerCtx(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_PrincipalSnapshot_StableAfterMutation(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "original"}
 	conn := newFakeConnWithPrincipal("conn-snapshot", p)
@@ -1988,7 +1987,7 @@ func (w *writeFailConn) Write(ctx context.Context, data []byte) error {
 }
 
 func TestHub_WriteFailureEvictsConnection(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	hub := startHub(t, clock.Real(), DefaultHubConfig(), nil)
 
 	conn := newWriteFailConn("write-fail")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -2016,9 +2015,9 @@ func TestHub_WriteFailureEvictsConnection(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_PanicSafe_NoSendOnClosedChannel(t *testing.T) {
-	cfg := DefaultHubConfig(clock.Real())
+	cfg := DefaultHubConfig()
 	cfg.SendBufferSize = 1 // tiny buffer to trigger evictions quickly
-	hub := startHub(t, cfg, nil)
+	hub := startHub(t, clock.Real(), cfg, nil)
 
 	const n = 50
 	for i := range n {

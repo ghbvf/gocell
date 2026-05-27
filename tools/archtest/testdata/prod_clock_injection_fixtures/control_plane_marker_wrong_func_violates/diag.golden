@@ -1,1 +1,0 @@
-runtime/command/lifecycle.go:15: time.NewTicker — must use injected clock.Clock.NewTicker instead

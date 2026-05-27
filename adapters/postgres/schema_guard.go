@@ -300,6 +300,10 @@ type expectedCheck struct {
 // Extracted to satisfy go:S1192 (used in 16 expectedColumns entries).
 const pgTypeTSTZ = "timestamp with time zone"
 
+// queryErrFmt is the WithInternal detail format for failed schema-dimension
+// SQL probes. Extracted to satisfy go:S1192 (used in 4 dimension probes).
+const queryErrFmt = "query: %v"
+
 // ---------------------------------------------------------------------------
 // Expected shape registries (hardcoded per ADR-credential §5.1.3)
 // ---------------------------------------------------------------------------
@@ -605,7 +609,7 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					slog.String("table", ec.Table),
 					slog.String("column", ec.Column),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		if gotType != ec.Type {
@@ -756,7 +760,7 @@ func verifyIndexes(ctx context.Context, pool *Pool) error {
 					slog.String("table", idx.Table),
 					slog.String("index", idx.Name),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		if gotUnique != idx.Unique {
@@ -827,7 +831,7 @@ func verifyOneForeignKey(ctx context.Context, pool *Pool, fk expectedFK, fkQ str
 				slog.String("table", fk.Table),
 				slog.String("constraint", fk.Constraint),
 			),
-			errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+			errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 		)
 	}
 	if gotRefTable != fk.RefTable {
@@ -928,7 +932,7 @@ func verifyTriggers(ctx context.Context, pool *Pool) error {
 					slog.String("table", tr.Table),
 					slog.String("trigger", tr.Name),
 				),
-				errcode.WithInternal(fmt.Sprintf("query: %v", err)),
+				errcode.WithInternal(fmt.Sprintf(queryErrFmt, err)),
 			)
 		}
 		isEnabled := gotEnabled == "O"
