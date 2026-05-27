@@ -218,7 +218,7 @@ func TestCtxSafeProbe_CanceledCtxReturnsCtxErr(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	wrapped := wrapProbeCtxSafe(inner, clk)
+	wrapped := khealthz.WrapCtxSafe(inner, clk)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // immediately canceled

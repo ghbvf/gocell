@@ -26,12 +26,19 @@ import (
 // fail-open degraded condition with a sentinel error matched by the
 // transport layer).
 //
+// Probe is a sealed interface: the unexported marker method isHealthzProbe()
+// prevents package-external types from implementing it. Only funcProbe
+// (returned by [NewProbe]) and ctxSafeProbe (returned by [WrapCtxSafe]) can
+// implement this interface. This provides upstream Hard gate in the type
+// system — no archtest needed for this constraint; Go compiler enforces it.
+//
 // ref: kubernetes/kubernetes apiserver healthz.HealthChecker
 // (Name + Check). GoCell drops the *http.Request dependency: probes have
 // no HTTP context at the kernel layer.
 type Probe interface {
 	Name() ProbeName
 	Check(ctx context.Context) error
+	isHealthzProbe() // sealed marker — unexported; package-external types cannot implement Probe
 }
 
 // Prober is the check-only narrowing of [Probe], consumed by the typed
@@ -116,3 +123,4 @@ type funcProbe struct {
 
 func (p funcProbe) Name() ProbeName                 { return p.name }
 func (p funcProbe) Check(ctx context.Context) error { return p.fn(ctx) }
+func (funcProbe) isHealthzProbe()                   {}

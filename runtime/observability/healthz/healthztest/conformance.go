@@ -161,7 +161,9 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("empty_name_returns_invalid_probe_name", func(t *testing.T) {
 		agg := factory()
-		err := agg.Register(emptyNameProbe{})
+		// Use NewTestOnlyProbeWithAnyName to bypass the NewProbe empty-name guard
+		// so the Aggregator's own empty-name validation (ErrInvalidProbeName) is exercised.
+		err := agg.Register(khealthz.NewTestOnlyProbeWithAnyName("", func(_ context.Context) error { return nil }))
 		if !errors.Is(err, khealthz.ErrInvalidProbeName) {
 			t.Errorf("Register(empty-name probe) err = %v, want ErrInvalidProbeName", err)
 		}
@@ -277,15 +279,6 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		}
 	})
 }
-
-// emptyNameProbe is a deliberately malformed Probe whose Name() is empty. It
-// cannot be built via khealthz.NewProbe (which panics on an empty name), so the
-// conformance harness constructs it directly to exercise the Aggregator's
-// registration-time name validation (ErrInvalidProbeName).
-type emptyNameProbe struct{}
-
-func (emptyNameProbe) Name() khealthz.ProbeName      { return "" }
-func (emptyNameProbe) Check(_ context.Context) error { return nil }
 
 // probeNameForWorker returns a unique probe name for use in concurrency tests.
 // It avoids package-level state; the name just needs to be unique per worker.
