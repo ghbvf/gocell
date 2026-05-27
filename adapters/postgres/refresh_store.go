@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
@@ -118,7 +119,7 @@ WHERE id IN (
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
 type PGRefreshStore struct {
-	db       pgExecutor
+	db       pgexec.PGExecutor
 	txRunner persistence.TxRunner
 	policy   refresh.Policy
 	clock    clock.Clock
@@ -186,7 +187,7 @@ func NewRefreshStore(
 		randReader = rand.Reader
 	}
 	return &PGRefreshStore{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		policy:   policy,
 		clock:    clk,
@@ -601,7 +602,7 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
 	defer cancelCascade()
-	_, err := s.db.ExecDirect(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+	_, err := pgexec.ExecDirect(s.db, cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
 	return err
 }
 
