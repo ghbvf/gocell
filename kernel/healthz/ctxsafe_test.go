@@ -16,6 +16,11 @@ import (
 // short enough to surface a deadlock within the test run budget.
 const ctxSafeTimeout = testtime.EventuallyShort
 
+// cancelLagOverWatchThreshold is a fake-clock advance large enough that
+// `Since(cancelAt) > 1s` triggers watchLateOutcome's "slow probe" warn branch
+// (see TEST-TIME-LITERAL-01 — extract test-time durations to a package const).
+const cancelLagOverWatchThreshold = 2 * time.Second
+
 // TestWrapCtxSafe_ConstructorAndNameDelegation verifies that WrapCtxSafe returns
 // a Probe whose Name() transparently delegates to the inner Probe.
 func TestWrapCtxSafe_ConstructorAndNameDelegation(t *testing.T) {
@@ -268,7 +273,7 @@ func TestWatchLateOutcome_SlowProbeWarnPath(t *testing.T) {
 	start := clk.Now()
 	cancelAt := clk.Now()
 	// Advance the clock so cancelLag = Since(cancelAt) > 1s.
-	clk.Advance(2 * time.Second)
+	clk.Advance(cancelLagOverWatchThreshold)
 
 	watchDone := make(chan struct{})
 	go func() {
