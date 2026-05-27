@@ -684,7 +684,11 @@ func (c *Coordinator) runCompensation(
 				compensateErrors = append(compensateErrors, compensateErr)
 			}
 		}
-		return nil
+		// hbCtx.Err() is propagated so RunWithHeartbeat's lease-loss override
+		// kicks in when the cancel-cause is errLeaseLost; the outer
+		// IsLeaseLost(walkErr) check then routes to the "another coordinator
+		// took over" path. Returning bare nil would short-circuit that override.
+		return hbCtx.Err()
 	})
 
 	// Step d: if lease was lost, return nil — another coordinator will take over.
