@@ -273,7 +273,7 @@ func (e *Executor) runAttempt(
 		return e.classifyCanceled(runCtx, cause, attempt), true
 	}
 	// 2) Per-step timeout (clock-driven via buildStepCtx's AfterFunc).
-	if context.Cause(stepCtx) == errStepTimeout {
+	if errors.Is(context.Cause(stepCtx), errStepTimeout) {
 		return Result{Outcome: OutcomeExpired, Err: errStepTimeout, Attempts: attempt}, true
 	}
 	// 3) Success.
@@ -305,10 +305,11 @@ func (e *Executor) runAttempt(
 // observedErr is the error actually seen by the caller (ctx.Err() / Sleep err);
 // it is carried in Result.Err for logging.
 func (e *Executor) classifyCanceled(runCtx context.Context, observedErr error, attempt int) Result {
-	switch context.Cause(runCtx) {
-	case errLeaseLost:
+	cause := context.Cause(runCtx)
+	switch {
+	case errors.Is(cause, errLeaseLost):
 		return Result{Outcome: OutcomeLeaseLost, Err: errLeaseLost, Attempts: attempt}
-	case context.DeadlineExceeded:
+	case errors.Is(cause, context.DeadlineExceeded):
 		return Result{Outcome: OutcomeExpired, Err: observedErr, Attempts: attempt}
 	default:
 		return Result{Outcome: OutcomeCanceled, Err: observedErr, Attempts: attempt}
