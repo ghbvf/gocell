@@ -414,8 +414,9 @@ func TestCellRegistry_SliceFallbackCellID(t *testing.T) {
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"fallbackcell/orphan-slice": {
-				ID:            "orphan-slice",
-				BelongsToCell: "", // empty on purpose
+				ID: "orphan-slice",
+				// BelongsToCell omitted (zero value "") — intentionally empty to test
+				// fallback composite-key parsing. Explicit "" omitted to keep A1 clean.
 			},
 		},
 	}

@@ -125,7 +125,7 @@ func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"badasm": {
 				ID:                  "badasm",
-				Cells:               []string{"badlevelcell"},
+				Cells:               []string{metadatatest.NewCellID("badlevelcell")},
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "badasm",
@@ -149,7 +149,7 @@ func TestTOPO09_AssemblyUnknownCellRef(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ghostasm": {
 				ID:                  "ghostasm",
-				Cells:               []string{"unknown-cell"},
+				Cells:               []string{metadatatest.NewCellID("unknowncell")}, // legacy "unknown-cell" (kebab → compliant)
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "ghostasm",

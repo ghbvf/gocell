@@ -3029,7 +3029,7 @@ func TestADV05_ExitCode_Regression(t *testing.T) {
 			"event.dead.regression.v1": {
 				ID:               "event.dead.regression.v1",
 				Kind:             "event",
-				OwnerCell:        "",
+				// OwnerCell omitted (zero value "") — intentionally invalid for ADV-05 test.
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{

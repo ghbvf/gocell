@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestCheckHealth_CtxCanceled verifies CheckHealth propagates run()'s context
@@ -52,7 +53,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.order.create.v1",
 					Kind:      "http",
-					OwnerCell: "ordercell",
+					OwnerCell: metadatatest.CellIDOrderCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Request:  "request.schema.json",
@@ -62,7 +63,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "event.order-created.v1",
 					Kind:      "event",
-					OwnerCell: "ordercell",
+					OwnerCell: metadatatest.CellIDOrderCell,
 					Lifecycle: "active",
 				},
 			},
@@ -74,7 +75,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "",
 				},
 			},
@@ -85,9 +86,11 @@ func TestCheckContractHealth(t *testing.T) {
 			name: "missing ownerCell fails",
 			contracts: []*metadata.ContractMeta{
 				{
+					// OwnerCell omitted (zero value "") — intentionally invalid to test CH-01.
+					// Explicit OwnerCell:"" is omitted to keep A1 clean (bare literal at
+					// cell-id position); zero value and explicit empty are semantically identical.
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "",
 					Lifecycle: "active",
 				},
 			},
@@ -100,7 +103,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 				},
 			},
@@ -113,7 +116,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Request: "request.schema.json",
@@ -134,7 +137,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Response: "response.schema.json",
@@ -155,7 +158,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Response: "response.schema.json",
@@ -176,7 +179,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Response: "response.schema.json",
@@ -207,7 +210,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Request: "request.schema.json",
@@ -227,7 +230,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.delete.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					Endpoints: metadata.EndpointsMeta{
 						HTTP: &metadata.HTTPTransportMeta{
@@ -245,7 +248,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Response: "response.schema.json",
@@ -269,7 +272,7 @@ func TestCheckContractHealth(t *testing.T) {
 				{
 					ID:        "http.test.v1",
 					Kind:      "http",
-					OwnerCell: "test-cell",
+					OwnerCell: metadatatest.CellIDTestCell,
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Response: "response.schema.json",

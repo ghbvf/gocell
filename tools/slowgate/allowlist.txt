@@ -267,7 +267,8 @@ github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstr
 # 16-shard resolver-cache-loss class as the entries above.
 github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder
 # type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A2 body-shape lock —
-# single RunTypedProduction Tests:false over metadatatest package.
+# single RunTyped Tests:false over ./kernel/metadata/metadatatest/... (single
+# package); narrower scope than A1 but still pays packages.Load for that subtree.
 # Cost dominated by packages.Load warmup on cold-cache shards.
 github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_NewCellIDBodyShape
 # type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A3 negative fixture —

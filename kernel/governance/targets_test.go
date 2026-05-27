@@ -69,19 +69,19 @@ func targetsProject() *metadata.ProjectMeta {
 			"J-ssologin": {
 				ID:        "J-ssologin",
 				Goal:      "SSO login flow",
-				Cells:     []string{"accesscore", "auditcore"},
+				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
 			},
 			"J-audit-trail": {
 				ID:    "J-audit-trail",
 				Goal:  "Audit trail for login",
-				Cells: []string{"auditcore"},
+				Cells: []string{metadatatest.CellIDAuditCore},
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{"accesscore", "auditcore"},
+				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Build: metadata.BuildMeta{
 					Entrypoint: "cmd/corebundle/main.go",
 					Binary:     "corebundle",
@@ -403,7 +403,7 @@ func l0Project() *metadata.ProjectMeta {
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-l0-test": {
 				ID:    "J-l0-test",
-				Cells: []string{"sharedcrypto", "accesscore"},
+				Cells: []string{metadatatest.CellIDSharedCrypto, metadatatest.CellIDAccessCore},
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
@@ -530,7 +530,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-ordercreate": {
 				ID:        "J-ordercreate",
-				Cells:     []string{"ordercell"},
+				Cells:     []string{metadatatest.CellIDOrderCell},
 				Contracts: []string{"http.order.create.v1"},
 				File:      "examples/todoorder/journeys/J-ordercreate.yaml",
 			},
@@ -594,7 +594,7 @@ func TestSelectFromFiles_ExampleAssemblyPath(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"todoorder": {
 				ID:    "todoorder",
-				Cells: []string{"ordercell", "auditcell"},
+				Cells: []string{metadatatest.CellIDOrderCell, metadatatest.NewCellID("auditcell")},
 				File:  "examples/todoorder/assembly.yaml",
 			},
 		},

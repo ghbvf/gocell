@@ -23,5 +23,5 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # (verify-archtest.sh full sweep). #1053 review F6 (add to PR-time) reverted for
 # CI stability — the heavy whole-module form-lock belongs with the nightly suite.
 go test ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestFenceTokenMintFunnel_AllowlistEnforced)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope)$' \
   -count=1 -timeout 5m

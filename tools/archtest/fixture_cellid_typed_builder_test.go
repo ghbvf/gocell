@@ -9,6 +9,12 @@
 // or one of metadatatest's pre-validated package-level cell-id vars
 // (CellID*). Bare string literals at those positions are rejected.
 //
+// Scope: currently kernel/ only. Test fixtures in runtime/, cells/, cmd/,
+// examples/, and tools/ outside the migrated tools/codegen +
+// tools/generatedverify subset may still embed bare cell-id literals (Soft
+// state). Mirror backlog issue #1201 tracks scope expansion to non-kernel/
+// packages.
+//
 // METADATATEST-IMPORT-SCOPE-01: the metadatatest package
 // (kernel/metadata/metadatatest) must only be imported by *_test.go
 // files or archtest_fixture-tagged code. Importing it from production
@@ -22,13 +28,13 @@
 //
 //   - A1 TestFixtureCellIDTypedBuilder — typed-info funnel: scans all
 //     *ast.CompositeLit, resolves each to a kernel/metadata.* struct or
-//     map type, identifies the cell-id field positions (14-field
-//     enumeration below: 13 struct fields + 1 map key), and asserts
+//     map type, identifies the cell-id field positions (15-field
+//     enumeration below: 14 struct fields + 1 map key), and asserts
 //     every expression at such a position resolves to
-//     metadatatest.NewCellID(BasicLit) or metadatatest.<Var>. Hard
+//     metadatatest.NewCellID(BasicLit) or metadatatest.<CellIDVar>. Hard
 //     downstream: callsite identity is verified via go/types — Ident→
-//     BasicLit chains, third-party consts, and dynamic NewCellID
-//     arguments are rejected uniformly.
+//     BasicLit chains, third-party consts, dynamic NewCellID arguments,
+//     and non-CellID-prefixed metadatatest vars are rejected uniformly.
 //
 //     Known blind spots (A1 scope — documented per ai-robust.md §载体决策原则
 //     "强制盲区自检"):
@@ -84,13 +90,14 @@
 //     registry mirrored in ADR §2.
 //
 // AI-robust: downstream Hard (A1 typed-info callsite identity), upstream
-// Hard (A2 body form-uniqueness), meta Hard (A3 negative fixture + A4
-// ADR consistency). The 14-field enumeration (13 struct fields + 1 map
-// key) is a closed schema-derived set; new cell-id fields require a
-// same-PR update to both this file and the ADR §1 field table. See ADR
-// §3 升级路径. A1 is not in the PR-time governance.yml 4-class core
-// invariant set; it is covered by nightly archtest-nightly.yml 16-shard
-// matrix — this is an intentional latency tradeoff (see ADR §4).
+// Hard (A2 body form-uniqueness + pkg-path identity lock), meta Hard (A3
+// negative fixture + A4 ADR consistency). The 15-field enumeration (14
+// struct fields + 1 map key) is a closed schema-derived set; new cell-id
+// fields require a same-PR update to both this file and the ADR §1 field
+// table. See ADR §3 升级路径. A1 is not in the PR-time governance.yml
+// 4-class core invariant set; it is covered by nightly
+// archtest-nightly.yml 16-shard matrix — this is an intentional latency
+// tradeoff (see ADR §4).
 //
 // ref: tools/archtest/cell_id_pattern_single_source_test.go — sibling
 //
@@ -130,7 +137,7 @@ const (
 
 // cellIDFieldPosition identifies a struct field (or slice-field element
 // position) whose string value semantics is a cell-id and therefore must
-// be sourced from metadatatest. The 14-field enumeration (13 struct fields
+// be sourced from metadatatest. The 15-field enumeration (14 struct fields
 // + 1 map key via cellIDMapKeyValueStructs) mirrors the in-scope table in
 // plan #681 / ADR §1; new cell-id fields require a same-PR update here
 // AND in the ADR §1 table.
@@ -154,6 +161,11 @@ var cellIDFieldPositions = []cellIDFieldPosition{
 	{"EndpointsMeta", "Readers", true},
 	{"JourneyMeta", "Cells", true},
 	{"AssemblyMeta", "Cells", true},
+	// CellWireSummary.CellID: the derived wire-catalog struct in derived.go whose
+	// CellID field carries cell-id semantics. Fixtures constructing CellWireSummary
+	// live in runtime/ (outside A1's current kernel/ scope) and will be enforced
+	// once #1201 expands scope; this entry is forward-compatible.
+	{"CellWireSummary", "CellID", false},
 }
 
 // cellIDMapKeyValueStructs lists the named struct types T such that any
@@ -180,6 +192,13 @@ func TestFixtureCellIDTypedBuilder(t *testing.T) {
 	allowSelfFile := map[string]struct{}{
 		"kernel/metadata/metadatatest/cellid.go":      {},
 		"kernel/metadata/metadatatest/cellid_test.go": {},
+		// derived.go is the single production construction site for CellWireSummary.
+		// cellWireSummaryFrom sets CellID from a function parameter (not a literal),
+		// which is semantically correct — A1 does not gate production assignment from
+		// runtime values, only fixture literal embedding. CellWireSummary.CellID is in
+		// cellIDFieldPositions for forward-compatible enforcement in runtime/ test
+		// fixtures (tracked by #1201), not to gate this production constructor.
+		"kernel/metadata/derived.go": {},
 	}
 
 	violations := scanCellIDFixtureViolations(t, allowSelfFile, fixtureCellIDCarveOuts)
@@ -306,6 +325,14 @@ func scanCellIDComposite(p *Pass, _ *ast.File, rel string, comp *ast.CompositeLi
 		return scanCellIDMapComposite(p, rel, comp, under)
 	case *types.Struct:
 		return scanCellIDStructComposite(p, rel, comp, t)
+	case *types.Pointer:
+		// Pointer-elided composite literal: []*metadata.ContractMeta{{OwnerCell: "bare"}}
+		// has the inner literal typed as *metadata.ContractMeta. t.Underlying() is *types.Pointer
+		// (a pointer is its own underlying type). Unwrap to the element type and proceed as
+		// if the literal were a struct composite.
+		if _, ok := under.Elem().Underlying().(*types.Struct); ok {
+			return scanCellIDStructComposite(p, rel, comp, under.Elem())
+		}
 	}
 	return nil
 }
@@ -453,13 +480,18 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool {
 		}
 		return true
 	case *ast.SelectorExpr:
-		// metadatatest.<CellIDVar>
+		// metadatatest.<CellIDVar> — the var name must have a "CellID" prefix so that
+		// future non-CellID vars added to the metadatatest package are not silently
+		// accepted as sanctioned cell-id sources.
 		obj := p.TypesInfo.Uses[e.Sel]
 		v, ok := obj.(*types.Var)
 		if !ok || v.Pkg() == nil {
 			return false
 		}
-		return v.Pkg().Path() == metadatatestPkgPath
+		if v.Pkg().Path() != metadatatestPkgPath {
+			return false
+		}
+		return strings.HasPrefix(v.Name(), "CellID")
 	}
 	return false
 }
@@ -509,8 +541,15 @@ func exprSourceSnippet(expr ast.Expr) string {
 func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	t.Parallel()
 
-	var fn *ast.FuncDecl
-	_ = RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+	// A2 loads only the metadatatest package — no need to pull in the entire
+	// module type-graph. RunTyped with a single-package pattern is faster and
+	// matches the "narrow scope" guidance in ai-robust.md §载体决策原则.
+	type a2Result struct {
+		fn    *ast.FuncDecl
+		pInfo *types.Info
+	}
+	var result a2Result
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}, func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
 			return nil
 		}
@@ -519,14 +558,17 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 				continue
 			}
 			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fn != nil || fd.Name == nil || fd.Name.Name != metadatatestNewCellIDFunc {
+				if result.fn != nil || fd.Name == nil || fd.Name.Name != metadatatestNewCellIDFunc {
 					return
 				}
-				fn = fd
+				result.fn = fd
+				result.pInfo = p.TypesInfo
 			})
 		}
 		return nil
 	})
+	fn := result.fn
+	pInfo := result.pInfo
 	if fn == nil {
 		t.Fatalf("%s/A2: metadatatest.NewCellID FuncDecl not found", fixtureCellIDRuleID)
 	}
@@ -567,6 +609,17 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	if !ok || approvedSel.Sel.Name != "Approved" {
 		t.Fatalf("%s/A2: panic arg must be a SelectorExpr ending in .Approved", fixtureCellIDRuleID)
 	}
+	// F1: verify Approved resolves to panicregister.Approved via TypesInfo — a
+	// SelectorExpr with .Name=="Approved" is not sufficient; a homonymous function
+	// in another package would silently slip through. Package-path lock is Hard.
+	if pInfo != nil {
+		approvedObj := pInfo.Uses[approvedSel.Sel]
+		approvedFn, isFn := approvedObj.(*types.Func)
+		const panicregPkgPath = "github.com/ghbvf/gocell/pkg/panicregister"
+		if !isFn || approvedFn.Pkg() == nil || approvedFn.Pkg().Path() != panicregPkgPath || approvedFn.Name() != "Approved" {
+			t.Fatalf("%s/A2: Approved must resolve to %s.Approved, got %v", fixtureCellIDRuleID, panicregPkgPath, approvedObj)
+		}
+	}
 	if len(approvedCall.Args) != 2 {
 		t.Fatalf("%s/A2: panicregister.Approved must take 2 args", fixtureCellIDRuleID)
 	}
@@ -585,6 +638,15 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	assertSel, ok := assertCall.Fun.(*ast.SelectorExpr)
 	if !ok || assertSel.Sel.Name != "Assertion" {
 		t.Fatalf("%s/A2: second arg must be a SelectorExpr ending in .Assertion", fixtureCellIDRuleID)
+	}
+	// F1: verify Assertion resolves to errcode.Assertion via TypesInfo.
+	if pInfo != nil {
+		assertObj := pInfo.Uses[assertSel.Sel]
+		assertFn, isFn := assertObj.(*types.Func)
+		const errcodePkgPath = "github.com/ghbvf/gocell/pkg/errcode"
+		if !isFn || assertFn.Pkg() == nil || assertFn.Pkg().Path() != errcodePkgPath || assertFn.Name() != "Assertion" {
+			t.Fatalf("%s/A2: Assertion must resolve to %s.Assertion, got %v", fixtureCellIDRuleID, errcodePkgPath, assertObj)
+		}
 	}
 	retStmt, ok := fn.Body.List[1].(*ast.ReturnStmt)
 	if !ok || len(retStmt.Results) != 1 {
@@ -681,6 +743,9 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		"bad_endpoints_server.go",
 		"bad_endpoints_slices.go",
 		"bad_assembly_cells.go",
+		// F5 reverse fixtures: NewCellID(var) and non-CellID-prefixed local var ref.
+		"bad_dynamic_arg.go",
+		"bad_unsanctioned_var.go",
 	}
 	var missing []string
 	for _, want := range wantBadFiles {
@@ -727,15 +792,17 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		}
 	}
 
-	// Verify that good and blind-spot fixture files were actually loaded by
-	// RunTypedFixture. If a file is absent (e.g. build-tag mismatch or path
-	// error), the assertions above silently pass because there is nothing to
-	// check — a false positive on success.
+	// Verify that good, blind-spot, and new bad fixture files were actually
+	// loaded by RunTypedFixture. If a file is absent (e.g. build-tag mismatch
+	// or path error), the assertions above silently pass because there is
+	// nothing to check — a false positive on success.
 	wantVisited := []string{
 		"good_const_ref.go",
 		"good_call_literal.go",
 		"blind_spot_ident_slice.go",
 		"blind_spot_assign.go",
+		"bad_dynamic_arg.go",
+		"bad_unsanctioned_var.go",
 	}
 	for _, want := range wantVisited {
 		if _, ok := visitedFiles[want]; !ok {

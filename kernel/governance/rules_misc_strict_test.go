@@ -831,7 +831,7 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{"accesscore"},
+				Cells: []string{metadatatest.CellIDAccessCore},
 				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
 				Dir:   "corebundle",
 			},

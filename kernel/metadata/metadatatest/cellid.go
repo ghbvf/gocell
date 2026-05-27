@@ -7,6 +7,12 @@
 // Importing this package from production code is rejected by archtest
 // METADATATEST-IMPORT-SCOPE-01 — it is exclusively a test-only helper.
 //
+// Scope note: FIXTURE-CELLID-TYPED-BUILDER-01/A1 currently enforces typed
+// builder usage in kernel/ only. Test fixtures in runtime/, cells/, cmd/,
+// examples/, and tools/ (outside the migrated tools/codegen +
+// tools/generatedverify subset) may still embed bare cell-id literals (Soft
+// state). Backlog issue #1201 tracks scope expansion to non-kernel/ packages.
+//
 // AI-robust funnel (see .claude/rules/gocell/ai-robust.md §Hard 范本目录,
 // "string-typed concept funnel"):
 //   - Upstream (Hard): NewCellID body shape locked by archtest

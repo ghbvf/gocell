@@ -35,7 +35,8 @@ func TestApplyAssemblyDerivations_BuildAllOmitted(t *testing.T) {
 		ID:    "testbundle",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"mycelll1": "L1"}, []string{"mycelll1"}, asm)
+	mycelll1 := metadatatest.NewCellID("mycelll1")
+	pm := buildAssemblyProject(map[string]string{mycelll1: "L1"}, []string{mycelll1}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -51,7 +52,8 @@ func TestApplyAssemblyDerivations_PartialBuildOverride(t *testing.T) {
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 		Build: metadata.BuildMeta{Binary: "custom-bin"},
 	}
-	pm := buildAssemblyProject(map[string]string{"somecell": "L2"}, []string{"somecell"}, asm)
+	somecell := metadatatest.NewCellID("somecell")
+	pm := buildAssemblyProject(map[string]string{somecell: "L2"}, []string{somecell}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -88,7 +90,8 @@ func TestApplyAssemblyDerivations_MaxConsistencyAllL0(t *testing.T) {
 		ID:    "l0bundle",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"purecalc": "L0"}, []string{"purecalc"}, asm)
+	purecalc := metadatatest.NewCellID("purecalc")
+	pm := buildAssemblyProject(map[string]string{purecalc: "L0"}, []string{purecalc}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -105,7 +108,7 @@ func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
 		ID:    "badbundle",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{}, []string{"nonexistent"}, asm)
+	pm := buildAssemblyProject(map[string]string{}, []string{metadatatest.NewCellID("nonexistent")}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
@@ -127,7 +130,7 @@ func TestApplyAssemblyDerivations_ExamplesEntrypoint(t *testing.T) {
 		File:  "examples/todoorder/assembly.yaml",
 		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"ordercell": "L2"}, []string{"ordercell"}, asm)
+	pm := buildAssemblyProject(map[string]string{metadatatest.CellIDOrderCell: "L2"}, []string{metadatatest.CellIDOrderCell}, asm)
 
 	metadata.ExportedApplyAssemblyDerivations(pm)
 
