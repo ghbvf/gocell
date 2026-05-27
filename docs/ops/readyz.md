@@ -5,6 +5,29 @@ served by every GoCell binary. PR-A35 reshaped how the endpoint behaves; if
 you are carrying a runbook from before that PR some of the commands here
 have changed.
 
+## Recent breaking changes
+
+### PR #1187 (round-3) — outbox relay probe wire key rename
+
+The three outbox relay probes had their `/readyz?verbose` `dependencies[].name`
+field values renamed from hyphen-form to underscore-form as part of the
+`ProbeName` typed funnel rollout (`probeNamePattern` regex prohibits hyphens):
+
+| Old wire key (pre-#1187)  | New wire key (#1187+)     |
+|---------------------------|---------------------------|
+| `outbox-relay-poll`       | `outbox_relay_poll`       |
+| `outbox-relay-reclaim`    | `outbox_relay_reclaim`    |
+| `outbox-relay-cleanup`    | `outbox_relay_cleanup`    |
+
+Downstream consumers — Prometheus rules, Grafana dashboards, alerting rules,
+startup-validation scripts, runbook commands — that hard-coded the hyphen
+form must be updated. The repository itself was already verified to have
+zero hard-coded references to the old form. Recommended deployment order:
+update monitoring configuration **first**, then roll out the new binary.
+
+See ADR `docs/architecture/202605271100-adr-probename-sealed-funnel.md` F1
+amendment §3 for full background.
+
 ## What each endpoint returns
 
 | Path | Default status | Purpose |

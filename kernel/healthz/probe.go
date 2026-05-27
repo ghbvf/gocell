@@ -31,6 +31,11 @@ import (
 // (returned by [NewProbe]) and ctxSafeProbe (returned by [WrapCtxSafe]) can
 // implement this interface. This provides upstream Hard gate in the type
 // system — no archtest needed for this constraint; Go compiler enforces it.
+// Callers constructing or wrapping Probes go through [NewProbe] (raw closure
+// → Probe) or [WrapCtxSafe] (Probe → ctx-racing Probe); direct struct-
+// literal construction is unreachable because funcProbe / ctxSafeProbe are
+// unexported. In-package new implementers (Go can't gate this) are caught
+// by archtest PROBENAME-SEALED-FUNNEL-01/B5 reverse self-check.
 //
 // ref: kubernetes/kubernetes apiserver healthz.HealthChecker
 // (Name + Check). GoCell drops the *http.Request dependency: probes have

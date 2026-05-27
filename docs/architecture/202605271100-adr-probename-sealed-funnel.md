@@ -87,8 +87,11 @@ func NewProbeName(s string) (ProbeName, error)
 ```
 
 regex：`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`（snake_case，禁连字符 / 大写 / 前导数字），
-长度 ≤ 48。`_ready` 后缀不在 regex 层强制，由 archtest A1 在 sanctioned 包级分流。
-**不引入 `MustProbeName`**（优雅简洁自检原则）。
+长度 ≤ 64（**实施时调整为 64，与 K8s DNS-1123 label cap 63 + 1-char margin 对齐；
+composed EmitterFailOpenProbeName 21-prefix + 32-max-cellID = 53 worst-case fits；
+ADR 草稿原写 ≤ 48，实施前已扩到 64，见 `kernel/healthz/probename.go::probeNameMaxLen`
+budget chain godoc**）。`_ready` 后缀不在 regex 层强制，由 archtest A1 在
+sanctioned 包级分流。**不引入 `MustProbeName`**（优雅简洁自检原则）。
 
 ### D5 — cellgen 模板重命名 `RegisterReadiness`
 
