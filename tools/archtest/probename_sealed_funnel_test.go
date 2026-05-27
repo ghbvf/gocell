@@ -38,7 +38,6 @@
 //   - A5: EmitterFailOpenProbeName composed-name BinaryExpr (archtest, Medium upstream)
 //   - A6: Probe interface sealed marker `isHealthzProbe()` — Go compiler gate;
 //     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls
-//   - A7: NewTestOnlyProbeWithAnyName caller allowlist (archtest, Medium upstream)
 //   - B1: reflect.MethodByName("RegisterReadiness") blind-spot
 //   - B3: ProbeName(callExpr) cast blind-spot
 //   - B5: in-package new isHealthzProbe() implementer blind-spot
@@ -55,12 +54,13 @@
 //   - A2 downstream (callsite resolves to declared const):
 //     Hard downstream — RegisterReadiness(name ProbeName, ...) / NewProbe(
 //     name ProbeName, ...) / HealthToProbe(name ProbeName, ...) /
-//     bootstrap.WithHealthChecker(name ProbeName, ...) make passing a raw
-//     string a compile error at the typed-arg position; archtest A2 locks
-//     all four sanctioned callees + bans ProbeName(expr) casts where expr
-//     is not a sanctioned const (string-conversion bypass). Type system
-//     plus archtest closes both the form gap and the untyped-const implicit
-//     conversion gap.
+//     bootstrap.WithHealthChecker(name ProbeName, ...) make passing a
+//     `var s string` (typed var) a compile error at the typed-arg position.
+//     Note: untyped string literals (e.g. Register("foo", ...)) compile via
+//     Go's implicit untyped-const conversion to ProbeName; archtest A2
+//     rejects these at source level (callsite must resolve to a sanctioned
+//     ProbeName const). Type system closes the typed-var gap; archtest
+//     closes the untyped-literal gap.
 //   - A3 downstream (Aggregator.Register allowlist):
 //     Hard downstream via type system (Registrar.Healthz() removed — any
 //     attempt is a compile error). Archtest enforces the residual direct-
@@ -79,10 +79,6 @@
 //     NewProbe) and `kernel/healthz.ctxSafeProbe` (returned by WrapCtxSafe)
 //     can satisfy. No archtest rule needed — Go compiler is the gate.
 //     Cross-checked by B5 (in-package new implementer blind-spot).
-//   - A7 upstream (NewTestOnlyProbeWithAnyName caller allowlist):
-//     Medium archtest — Go-language ceiling (no sealed-construction path
-//     for an exported test-helper that must be reachable from healthztest
-//     conformance subpackage).
 //
 // # Blind-spot assertions (B class)
 //
@@ -253,17 +249,6 @@ var mustProbeNameAllowlist = map[string]bool{
 	"runtime/observability/healthz/healthztest/conformance.go": true,
 }
 
-// testOnlyProbeAllowlist names the production-path files (non-_test.go) that
-// may call healthz.NewTestOnlyProbeWithAnyName — exported test-helper that
-// bypasses NewProbe's empty-name guard for aggregator validation tests.
-// Same Medium-upstream pattern as mustProbeNameAllowlist (A4b).
-var testOnlyProbeAllowlist = map[string]bool{
-	// conformance.go uses NewTestOnlyProbeWithAnyName to construct empty-name
-	// probes for aggregator validation testing — production-path file (no
-	// _test.go suffix) but explicit test-infrastructure, not business logic.
-	"runtime/observability/healthz/healthztest/conformance.go": true,
-}
-
 // ─── Golden inventory ─────────────────────────────────────────────────────────
 
 // goldenProbeNames returns the authoritative sorted list of every
@@ -428,13 +413,6 @@ func isNewProbeNameCall(call *ast.CallExpr, info *types.Info) bool {
 func isMustProbeNameCall(call *ast.CallExpr, info *types.Info) bool {
 	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 	return ok && pkgPath == healthzPkgPath && name == "MustProbeName"
-}
-
-// isNewTestOnlyProbeCall reports whether call is a direct call to
-// healthz.NewTestOnlyProbeWithAnyName.
-func isNewTestOnlyProbeCall(call *ast.CallExpr, info *types.Info) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-	return ok && pkgPath == healthzPkgPath && name == "NewTestOnlyProbeWithAnyName"
 }
 
 // ─── Scanner functions ────────────────────────────────────────────────────────
@@ -890,54 +868,6 @@ func scanA5EmitterFailOpenPrefixBypass(
 	return out
 }
 
-// scanA7TestOnlyProbeAllowlist scans file for production (non-test) calls
-// to healthz.NewTestOnlyProbeWithAnyName outside the sanctioned allowlist.
-//
-// NewTestOnlyProbeWithAnyName is an exported test-helper that bypasses NewProbe's
-// empty-name guard. The only sanctioned production-path caller is
-// runtime/observability/healthz/healthztest/conformance.go, which uses it to
-// exercise aggregator validation of malformed probes. All *_test.go callers are
-// globally exempt (non-test filter applied upstream by the caller).
-func scanA7TestOnlyProbeAllowlist(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-) []Diagnostic {
-	if info == nil {
-		return nil
-	}
-
-	relSlash := filepath.ToSlash(rel)
-	for suffix := range testOnlyProbeAllowlist {
-		if strings.HasSuffix(relSlash, suffix) {
-			return nil
-		}
-	}
-
-	var out []Diagnostic
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !isNewTestOnlyProbeCall(call, info) {
-			return
-		}
-		pos := fset.Position(call.Pos())
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: pos.Line,
-			Message: fmt.Sprintf(
-				"PROBENAME-SEALED-FUNNEL-01/A7: healthz.NewTestOnlyProbeWithAnyName called at %s:%d "+
-					"from outside the sanctioned caller set "+
-					"(only healthztest/conformance.go may call NewTestOnlyProbeWithAnyName in "+
-					"production code; all test files are exempt — use healthz.NewProbe instead)",
-				rel, pos.Line,
-			),
-		})
-	})
-
-	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
-	return out
-}
-
 // ─── Golden inventory collector ───────────────────────────────────────────────
 
 // collectProbeNameConsts collects all healthz.ProbeName typed const entries
@@ -998,7 +928,7 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 // ─── Main production scan ─────────────────────────────────────────────────────
 
-// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A7)
+// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A6)
 // across the production tree.
 //
 // Sub-tests:
@@ -1018,8 +948,6 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 //     from production code outside kernel/healthz/probename.go.
 //   - A5_EmitterFailOpenPrefixBypass — the "outbox_failopen_rate_" string prefix
 //     must not appear in bare BinaryExpr concat outside probename.go.
-//   - A7_TestOnlyProbeAllowlist — healthz.NewTestOnlyProbeWithAnyName must not be
-//     called from production code outside the testOnlyProbeAllowlist.
 func TestProbenameSealedFunnel(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1029,7 +957,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 	root := findModuleRoot(t)
 	allPatterns := prodscan.PatternsExtended(root)
 
-	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags, a7Diags []Diagnostic
+	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags []Diagnostic
 
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
 		func(p *Pass) []Diagnostic {
@@ -1057,7 +985,6 @@ func TestProbenameSealedFunnel(t *testing.T) {
 				a4Diags = append(a4Diags, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a4bDiags = append(a4bDiags, scanA4bMustProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a5Diags = append(a5Diags, scanA5EmitterFailOpenPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
-				a7Diags = append(a7Diags, scanA7TestOnlyProbeAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
@@ -1100,11 +1027,6 @@ func TestProbenameSealedFunnel(t *testing.T) {
 	t.Run("A5_EmitterFailOpenPrefixBypass", func(t *testing.T) {
 		t.Parallel()
 		Report(t, "PROBENAME-SEALED-FUNNEL-01/A5", a5Diags)
-	})
-
-	t.Run("A7_TestOnlyProbeAllowlist", func(t *testing.T) {
-		t.Parallel()
-		Report(t, "PROBENAME-SEALED-FUNNEL-01/A7", a7Diags)
 	})
 }
 

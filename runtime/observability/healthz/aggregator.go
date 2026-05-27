@@ -81,6 +81,10 @@ func (a *aggregator) Register(p healthz.Probe) error {
 		return fmt.Errorf("%w: nil probe", healthz.ErrInvalidProbeName)
 	}
 	name := p.Name()
+	// Defense-in-depth for the (post-sealed-Probe) unreachable case: every Probe
+	// in sanctioned construction paths (NewProbe / WrapCtxSafe) has non-empty name
+	// by construction. Kept as safety belt; not directly testable without a
+	// sealed-marker bypass.
 	if name == "" {
 		return fmt.Errorf("%w: empty probe name", healthz.ErrInvalidProbeName)
 	}

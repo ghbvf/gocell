@@ -159,21 +159,6 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		}
 	})
 
-	t.Run("empty_name_returns_invalid_probe_name", func(t *testing.T) {
-		agg := factory()
-		// Use NewTestOnlyProbeWithAnyName to bypass the NewProbe empty-name guard
-		// so the Aggregator's own empty-name validation (ErrInvalidProbeName) is exercised.
-		err := agg.Register(khealthz.NewTestOnlyProbeWithAnyName("", func(_ context.Context) error { return nil }))
-		if !errors.Is(err, khealthz.ErrInvalidProbeName) {
-			t.Errorf("Register(empty-name probe) err = %v, want ErrInvalidProbeName", err)
-		}
-		// The rejected probe must not pollute the snapshot.
-		snap := agg.Evaluate(context.Background())
-		if len(snap.Probes) != 0 {
-			t.Errorf("after rejected Register: Probes len = %d, want 0", len(snap.Probes))
-		}
-	})
-
 	t.Run("deregister_removes_probe", func(t *testing.T) {
 		agg := factory()
 		downProbe := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error {
