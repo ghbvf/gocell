@@ -139,6 +139,9 @@ var safeIDExemptFields = map[string]map[string]string{
 	// TenantID/SessionID) are SafeID-typed. Listed here so the walker
 	// iterates PrincipalMetadata's fields and applies the SafeID invariant
 	// to any future field added.
+	// Cross-ref: PRINCIPAL-SEALED-FIELD-FROZEN-01 in
+	// tools/archtest/principal_sealed_field_frozen_test.go locks the
+	// orthogonal axes (field names, JSON tags, method set) not covered here.
 	principalType: {},
 }
 

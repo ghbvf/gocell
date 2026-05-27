@@ -140,10 +140,18 @@ func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 // configured HMAC key. The message format is byte-for-byte compatible with
 // cells/auditcore/internal/domain/hashchain.go computeHash:
 //
-//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
+//
+// The Payload field is hex-encoded (lowercase hex, [0-9a-f]) before
+// substitution into the format string. Hex chars cannot contain the `|`
+// separator, making separator-collision attacks on the Payload field
+// impossible: an attacker controlling arbitrary JSON bytes cannot craft a
+// `|`-containing payload that shifts the boundary between any two fields.
 //
 // No backwards compatibility: the format was rewritten in B3 (issue #1042)
-// to include the five principal/correlation fields.
+// to include the five principal/correlation fields; the hex-encoding of
+// Payload was added in PR #1218 to close the separator-collision attack
+// surface.
 //
 // ref: cells/auditcore/internal/domain/hashchain.go computeHash (must remain
 // byte-for-byte equivalent to preserve chain continuity when PG store lands).
@@ -160,7 +168,7 @@ func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
 		e.CorrelationID,
 		e.OccurredAt.UnixNano(),
 		e.Timestamp.UnixNano(),
-		string(e.Payload),
+		hex.EncodeToString(e.Payload), // hex-encoded: [0-9a-f] cannot contain '|'
 	)
 	// crypto/hmac hash.Write always returns (len(b), nil) per io.Writer contract.
 	mac.Write([]byte(msg))

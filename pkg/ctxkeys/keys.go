@@ -12,10 +12,10 @@ const (
 	traceParent   ctxKey = "traceparent"
 	requestID     ctxKey = "request_id"
 	realIP        ctxKey = "real_ip"
-	actor         ctxKey = "actor_id"
-	subject       ctxKey = "subject_id"
-	tenant        ctxKey = "tenant_id"
-	session       ctxKey = "session_id"
+	actorID       ctxKey = "actor_id"
+	subjectID     ctxKey = "subject_id"
+	tenantID      ctxKey = "tenant_id"
+	sessionID     ctxKey = "session_id"
 )
 
 // --- CorrelationID ---
@@ -99,49 +99,49 @@ func RealIPFrom(ctx context.Context) (string, bool) {
 
 // --- Principal (OAuth/OIDC) ---
 
-// WithActor returns a new context carrying the actor identifier (OAuth
+// WithActorID returns a new context carrying the actor identifier (OAuth
 // impersonator — the principal actually triggering the action; in non-
 // impersonation flows equals the Subject).
-func WithActor(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, actor, id)
+func WithActorID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, actorID, id)
 }
 
-// ActorFrom extracts the actor identifier from ctx. The boolean indicates presence.
-func ActorFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(actor).(string)
+// ActorIDFrom extracts the actor identifier from ctx. The boolean indicates presence.
+func ActorIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(actorID).(string)
 	return v, ok
 }
 
-// WithSubject returns a new context carrying the subject identifier (OAuth
+// WithSubjectID returns a new context carrying the subject identifier (OAuth
 // subject-of-record — the user the action is performed on behalf of).
-func WithSubject(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, subject, id)
+func WithSubjectID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, subjectID, id)
 }
 
-// SubjectFrom extracts the subject identifier from ctx. The boolean indicates presence.
-func SubjectFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(subject).(string)
+// SubjectIDFrom extracts the subject identifier from ctx. The boolean indicates presence.
+func SubjectIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(subjectID).(string)
 	return v, ok
 }
 
-// WithTenant returns a new context carrying the tenant identifier.
-func WithTenant(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, tenant, id)
+// WithTenantID returns a new context carrying the tenant identifier.
+func WithTenantID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, tenantID, id)
 }
 
-// TenantFrom extracts the tenant identifier from ctx. The boolean indicates presence.
-func TenantFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(tenant).(string)
+// TenantIDFrom extracts the tenant identifier from ctx. The boolean indicates presence.
+func TenantIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(tenantID).(string)
 	return v, ok
 }
 
-// WithSession returns a new context carrying the session identifier.
-func WithSession(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, session, id)
+// WithSessionID returns a new context carrying the session identifier.
+func WithSessionID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, sessionID, id)
 }
 
-// SessionFrom extracts the session identifier from ctx. The boolean indicates presence.
-func SessionFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(session).(string)
+// SessionIDFrom extracts the session identifier from ctx. The boolean indicates presence.
+func SessionIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(sessionID).(string)
 	return v, ok
 }

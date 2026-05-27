@@ -250,6 +250,27 @@ func TestRedactString(t *testing.T) {
 			want: `{"secret":"<REDACTED>","user":"alice"}`,
 		},
 		{
+			// session_id is a credential-associated identifier: leaking it
+			// to trace backends carries session-hijack risk. Redacted via
+			// IsSensitiveKey (key-aware path) and also by defaultPattern.
+			name: "session_id_snake",
+			in:   "dispatch: session_id=sess-abc-001 actor_id=user-1",
+			want: "dispatch: session_id=<REDACTED> actor_id=user-1",
+		},
+		{
+			// session-id with hyphen separator (e.g. HTTP header form).
+			name: "session_id_hyphen",
+			in:   "session-id=sess-xyz-999 end",
+			want: "session-id=<REDACTED> end",
+		},
+		{
+			// actor_id, subject_id, tenant_id are NOT in sensitiveKeyPattern —
+			// they are opaque UUIDs (business identity, no PII per design).
+			name: "actor_id_not_redacted",
+			in:   "actor_id=user-1 tenant_id=org-2 subject_id=subj-3",
+			want: "actor_id=user-1 tenant_id=org-2 subject_id=subj-3",
+		},
+		{
 			name: "noMatch_passthrough",
 			in:   "plain validation error: field foo missing",
 			want: "plain validation error: field foo missing",
@@ -454,6 +475,14 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"private_key", true},
 		{"signing_key", true},
 		{"dsn", true},
+		// session_id — credential-associated identifier; leaks carry session-hijack risk
+		{"session_id", true},
+		{"session-id", true},
+		{"SESSION_ID", true},
+		// actor_id / subject_id / tenant_id are opaque UUIDs — NOT sensitive keys
+		{"actor_id", false},
+		{"subject_id", false},
+		{"tenant_id", false},
 		// case insensitivity
 		{"PASSWORD", true},
 		{"API_KEY", true},

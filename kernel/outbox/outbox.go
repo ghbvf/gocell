@@ -35,6 +35,12 @@ const (
 	MaxPayloadBytes = 1 << 20
 
 	internalMetadataKeyQuotedFmt = "key=%q"
+
+	// reservedMetadataKeyMsg is the error message for reserved-key violations.
+	// Extracted as const to satisfy MESSAGE-CONST-LITERAL-01 and line-length limits.
+	reservedMetadataKeyMsg = "outbox: metadata key is reserved for the kernel" +
+		" observability/principal/time bridge —" +
+		" use the typed Entry.Observability / Entry.Principal / Entry.OccurredAt field instead"
 )
 
 // ReservedMetadataKeys lists keys that the kernel observability bridge owns
@@ -45,7 +51,12 @@ const (
 //
 // The list is exhaustive — these are the only keys the kernel bridge maps
 // in either direction. Adding a new bridge field requires extending this
-// list (caught by reservedMetadataKeyMembership invariant test).
+// list (extending this list is caught by PRINCIPAL-SEALED-FIELD-FROZEN-01
+// archtest reverse-check + RESERVED-METADATA-KEY-MEMBERSHIP invariant test).
+//
+// READ-ONLY. Mutating this slice at runtime does NOT affect validateMetadata's
+// check — the unexported reservedMetadataKeySet is built at package init and
+// never re-read. A test helper that appends to this slice would silently no-op.
 var ReservedMetadataKeys = []string{
 	"trace_id",
 	"traceparent",
@@ -83,7 +94,7 @@ func validateMetadata(m map[string]string) error {
 	for k := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
+				reservedMetadataKeyMsg,
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalMetadataKeyQuotedFmt, k))))
 		}
 	}
@@ -158,6 +169,13 @@ type Entry struct {
 	// optional model. Producers MAY set explicitly when domain semantics
 	// require a distinct event time; default leaves it zero and CreatedAt
 	// remains the only time reference.
+	//
+	// PROVENANCE NOTE: Until producer adoption, audit ledger's occurred_at
+	// column reflects store-clock time via the appender's occurredAtForLedger
+	// fallback (cells/auditcore/internal/appender/service.go). Audit consumers
+	// should not rely on occurred_at vs created_at semantic distinction until
+	// adoption completes. See ADR §Adoption Transition:
+	// docs/architecture/202605281200-1042-outbox-wire-envelope-principal-occurred-at.md.
 	//
 	// ref: CloudEvents v1.0 §3 Required Attributes — "time" carries event
 	// occurrence time; gocell separates this from the outbox row time.

@@ -113,10 +113,10 @@ func TestContextPrincipal(t *testing.T) {
 	})
 	t.Run("populated ctx returns populated principal", func(t *testing.T) {
 		ctx := context.Background()
-		ctx = ctxkeys.WithActor(ctx, "actor-1")
-		ctx = ctxkeys.WithSubject(ctx, "subj-1")
-		ctx = ctxkeys.WithTenant(ctx, "tenant-1")
-		ctx = ctxkeys.WithSession(ctx, "sess-1")
+		ctx = ctxkeys.WithActorID(ctx, "actor-1")
+		ctx = ctxkeys.WithSubjectID(ctx, "subj-1")
+		ctx = ctxkeys.WithTenantID(ctx, "tenant-1")
+		ctx = ctxkeys.WithSessionID(ctx, "sess-1")
 
 		p := ContextPrincipal(ctx)
 		assert.Equal(t, idutil.SafeID("actor-1"), p.ActorID)
@@ -124,12 +124,21 @@ func TestContextPrincipal(t *testing.T) {
 		assert.Equal(t, idutil.SafeID("tenant-1"), p.TenantID)
 		assert.Equal(t, idutil.SafeID("sess-1"), p.SessionID)
 	})
+	t.Run("ctx key present but empty string stays empty in principal", func(t *testing.T) {
+		// Exercises the `ok && id != ""` guard in ContextPrincipal: a ctx
+		// that carries an explicit empty-string actor_id must NOT produce a
+		// non-zero SafeID field (empty string → empty SafeID → field omitted).
+		ctx := ctxkeys.WithActorID(context.Background(), "")
+		p := ContextPrincipal(ctx)
+		assert.Equal(t, idutil.SafeID(""), p.ActorID, "empty ctx value must not populate ActorID")
+		assert.True(t, p.IsZero(), "PrincipalMetadata must remain zero when all ctx values are empty strings")
+	})
 }
 
 func TestPrincipalMetadata_RestoreToContext(t *testing.T) {
 	t.Run("empty principal is no-op", func(t *testing.T) {
 		ctx := PrincipalMetadata{}.RestoreToContext(context.Background())
-		_, ok := ctxkeys.ActorFrom(ctx)
+		_, ok := ctxkeys.ActorIDFrom(ctx)
 		assert.False(t, ok)
 	})
 	t.Run("populates all four context keys", func(t *testing.T) {
@@ -139,19 +148,19 @@ func TestPrincipalMetadata_RestoreToContext(t *testing.T) {
 		}
 		ctx := p.RestoreToContext(context.Background())
 
-		got, ok := ctxkeys.ActorFrom(ctx)
+		got, ok := ctxkeys.ActorIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "actor-1", got)
 
-		got, ok = ctxkeys.SubjectFrom(ctx)
+		got, ok = ctxkeys.SubjectIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "subj-1", got)
 
-		got, ok = ctxkeys.TenantFrom(ctx)
+		got, ok = ctxkeys.TenantIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "tenant-1", got)
 
-		got, ok = ctxkeys.SessionFrom(ctx)
+		got, ok = ctxkeys.SessionIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "sess-1", got)
 	})
@@ -160,15 +169,15 @@ func TestPrincipalMetadata_RestoreToContext(t *testing.T) {
 		// ctx may legitimately carry its own principal from an outer
 		// middleware; the entry's identity is a fallback, not a mandate.
 		ctx := context.Background()
-		ctx = ctxkeys.WithActor(ctx, "existing-actor")
+		ctx = ctxkeys.WithActorID(ctx, "existing-actor")
 		ctx = PrincipalMetadata{ActorID: "entry-actor"}.RestoreToContext(ctx)
-		got, _ := ctxkeys.ActorFrom(ctx)
+		got, _ := ctxkeys.ActorIDFrom(ctx)
 		assert.Equal(t, "existing-actor", got, "existing ctx value MUST win")
 	})
 	t.Run("unsafe values silently dropped", func(t *testing.T) {
 		p := PrincipalMetadata{ActorID: idutil.SafeID("actor\nevil")}
 		ctx := p.RestoreToContext(context.Background())
-		_, ok := ctxkeys.ActorFrom(ctx)
+		_, ok := ctxkeys.ActorIDFrom(ctx)
 		assert.False(t, ok, "unsafe SafeID must not be restored to ctx")
 	})
 }
@@ -179,10 +188,10 @@ func TestPrincipalMetadata_RestoreToContext(t *testing.T) {
 
 func TestEntry_InjectPrincipalFromContext(t *testing.T) {
 	ctx := context.Background()
-	ctx = ctxkeys.WithActor(ctx, "actor-x")
-	ctx = ctxkeys.WithSubject(ctx, "subj-x")
-	ctx = ctxkeys.WithTenant(ctx, "tenant-x")
-	ctx = ctxkeys.WithSession(ctx, "sess-x")
+	ctx = ctxkeys.WithActorID(ctx, "actor-x")
+	ctx = ctxkeys.WithSubjectID(ctx, "subj-x")
+	ctx = ctxkeys.WithTenantID(ctx, "tenant-x")
+	ctx = ctxkeys.WithSessionID(ctx, "sess-x")
 
 	e := &Entry{ID: "evt-1"}
 	e.InjectPrincipalFromContext(ctx)
@@ -201,7 +210,7 @@ func TestEntry_InjectPrincipalFromContext_Idempotent_Overwrite(t *testing.T) {
 		ID:        "evt-1",
 		Principal: PrincipalMetadata{ActorID: "stale"},
 	}
-	ctx := ctxkeys.WithActor(context.Background(), "fresh")
+	ctx := ctxkeys.WithActorID(context.Background(), "fresh")
 	e.InjectPrincipalFromContext(ctx)
 	assert.Equal(t, idutil.SafeID("fresh"), e.Principal.ActorID)
 }

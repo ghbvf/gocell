@@ -51,6 +51,10 @@
 //     tag (e.g. missing comma) would return "" and silently match the empty
 //     expectation. The expectation set explicitly lists each tag, so empty
 //     never matches a real entry.
+//   - Tag DRIFT (wrong tag value, e.g., actor_id instead of actorId) IS
+//     covered by the reflect tag check in TestPrincipalSealedFieldFrozen01:
+//     each field's f.Tag.Get("json") is compared against the canonical value
+//     in principalCanonicalFields. This is NOT a blind spot.
 package archtest
 
 import (

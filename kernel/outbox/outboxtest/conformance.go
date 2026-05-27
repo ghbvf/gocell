@@ -907,7 +907,9 @@ func RunBatch7Principal(t *testing.T, features Features, constructor PubSubConst
 // This function does NOT wire up SubscriberWithMiddleware — it drives the raw
 // Subscriber directly to verify that the wire envelope preserves the fields.
 // Tests that want to assert ctx restoration (RestoreToContext) should use the
-// kernel/outbox unit tests (TestSubscriberWithMiddleware_BuiltInRestore_*).
+// kernel/outbox unit tests (TestSubscriberWithMiddleware_BuiltInRestore_*)
+// for ctx-level restoration assertions paired with this raw-Subscriber
+// conformance suite. See kernel/outbox/outbox_test.go for those tests.
 func RunPrincipalRoundTripConformance(
 	t testing.TB,
 	pub outbox.Publisher,

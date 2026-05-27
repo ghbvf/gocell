@@ -53,10 +53,18 @@ var connectionStringPattern = regexp.MustCompile(
 // sensitiveKeyPattern is the single source for key names masked by both
 // defaultPattern and quotedJSONPattern. Keep specific token aliases before the
 // generic `token` entry so JSON and key=value coverage evolves together.
+//
+// session_id / session-id are credential-associated identifiers: a session ID
+// bound to an active session carries the same hijack risk as a token. It is
+// redacted from span attributes (via IsSensitiveKey key-aware path) and
+// free-form `key=value` log lines. actor_id / subject_id / tenant_id are
+// intentionally kept out — those are business identity (opaque UUIDs, no PII
+// per design) whose redaction would break traceability without a security gain.
 const sensitiveKeyPattern = `password|passwd|pwd|secret|` +
 	`access[_-]?token|refresh[_-]?token|id[_-]?token|token|` +
 	`authorization|connection[_ ]?string|api[_-]?key|bearer|` +
-	`private[_-]?key|signing[_-]?key|dsn`
+	`private[_-]?key|signing[_-]?key|dsn|` +
+	`session[_-]id`
 
 // defaultPattern matches single-token `key=value` / `key: value` forms.
 //

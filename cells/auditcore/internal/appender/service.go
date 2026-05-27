@@ -196,6 +196,12 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 // when OccurredAt is zero. Returns the zero time.Time when both are zero —
 // the DB column carries NOT NULL DEFAULT '1970-01-01' so a zero-value Go time.Time
 // serializes to a near-epoch timestamp rather than NULL.
+//
+// Fallback to entry.CreatedAt when OccurredAt is zero is intentional for the
+// W0 adoption transition window. Audit occurred_at column will silently store
+// store-clock time for events whose producers haven't yet adopted
+// InjectPrincipalFromContext. Time-Causality distinction value materializes
+// only after producer adoption (tracked separately).
 func occurredAtForLedger(entry outbox.Entry) time.Time {
 	if !entry.OccurredAt.IsZero() {
 		return entry.OccurredAt

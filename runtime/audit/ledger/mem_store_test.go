@@ -92,8 +92,10 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 // matches the algorithm in cells/auditcore/internal/domain/hashchain.go
 // byte-for-byte. The reference implementation uses:
 //
-//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+//	msg = prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
 //	hash = hex(HMAC-SHA256(key, msg))
+//
+// Payload is hex-encoded to prevent separator-collision attacks.
 func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	t.Parallel()
 
@@ -121,7 +123,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	// Compute expected hash using the reference algorithm (new B3 format).
+	// Compute expected hash using the reference algorithm (new B3 format with hex payload).
 	prevHash := ""
 	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
 		prevHash,
@@ -134,7 +136,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		"", // CorrelationID
 		zeroOccurredAt.UnixNano(),
 		fixedNow.UnixNano(),
-		string(payload),
+		hex.EncodeToString(payload), // hex-encoded payload
 	)
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(msg))
@@ -693,8 +695,8 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		PrevHash:      "deadbeef",
 	}
 
-	// Reference computation (mirrors hashchain.go computeHash, B3 format):
-	//   prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|payload
+	// Reference computation (mirrors hashchain.go computeHash, B3 format with hex payload):
+	//   prevHash|eventID|eventType|actorID|subjectID|tenantID|sessionID|correlationID|occurredAtUnixNano|timestampUnixNano|hexPayload
 	msg := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%s|%d|%d|%s",
 		e.PrevHash,
 		e.EventID,
@@ -706,7 +708,7 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		e.CorrelationID,
 		occurredAt.UnixNano(),
 		fixedNow.UnixNano(),
-		string(e.Payload),
+		hex.EncodeToString(e.Payload), // hex-encoded payload (PR #1218)
 	)
 	mac := hmac.New(sha256.New, keyCopy)
 	mac.Write([]byte(msg))

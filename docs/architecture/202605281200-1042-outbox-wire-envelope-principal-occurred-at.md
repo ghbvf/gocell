@@ -147,7 +147,22 @@ Dependent contracts (governance scan): none — 三族字段集是 framework 横
 **Future** (defer):
 - Lamport / causation_id — W3 Command Bus 引入
 - ReceivedAt（broker / consumer 接收时间）— 消费侧 telemetry，不进 producer envelope
-- OccurredAt 强制必填 — 等业务全面 adoption 后通过单独 PR 收紧 Entry.Validate（届时所有 emit 路径已有 producer clock）
+- OccurredAt 强制必填 — 等业务全面 adoption 后通过单独 PR 收紧 Entry.Validate（届时所有 emit 路径已有 producer clock）；暂定 W3 Command Bus milestone 阶段考虑（producer adoption 完成后）。No specific gh issue tracks this today; will be opened when the W3 Command Bus PR series starts.
+
+## Adoption Transition
+
+Until producers adopt `InjectPrincipalFromContext` + OccurredAt setting,
+`audit_entries.occurred_at` will store `entry.CreatedAt` (store-clock fallback
+via `occurredAtForLedger` in `cells/auditcore/internal/appender/service.go`)
+for legacy emit paths. Audit query consumers (e.g., `/correlate` endpoint)
+should not differentiate `occurred_at` vs `created_at` semantically until
+adoption completes.
+
+Adoption tracking is incremental — no single PR migrates all 241 producer
+sites; sub-feature PRs adopt opportunistically. The Time-Causality field's
+full product value materializes only after adoption. The sentinel value
+`'1970-01-01 00:00:00+00'` in `audit_entries.occurred_at` distinguishes
+rows persisted before adoption from rows with real producer-clock values.
 
 ## References
 

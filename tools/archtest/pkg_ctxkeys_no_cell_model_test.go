@@ -136,10 +136,13 @@ var allowedPkgCtxkeysValueDeclNames = map[string]struct{}{
 	// HTTP service in any framework conveys via similar ctx keys. Added
 	// for issue #1042 (W0 wire envelope Principal 族, mirroring the
 	// Correlation 族's pkg/ctxkeys placement).
-	"actor":   {},
-	"subject": {},
-	"tenant":  {},
-	"session": {},
+	// Const names use the *ID suffix (actorID, subjectID, tenantID, sessionID)
+	// to match the corresponding function names (ActorIDFrom, WithActorID etc.)
+	// and avoid ambiguity with plain-noun const names (PR #1218).
+	"actorID":   {},
+	"subjectID": {},
+	"tenantID":  {},
+	"sessionID": {},
 }
 
 // allowedPkgCtxkeysFuncNames is the golden allowlist of function declaration
@@ -156,11 +159,12 @@ var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 	"WithRequestID": {}, "RequestIDFrom": {},
 	"WithRealIP": {}, "RealIPFrom": {},
 	// Principal namespace getter/setter pairs (see allowedPkgCtxkeysValueDeclNames
-	// for rationale). issue #1042 W0.
-	"WithActor": {}, "ActorFrom": {},
-	"WithSubject": {}, "SubjectFrom": {},
-	"WithTenant": {}, "TenantFrom": {},
-	"WithSession": {}, "SessionFrom": {},
+	// for rationale). issue #1042 W0. Renamed to *ID suffix in PR #1218 to
+	// clarify that each function carries an identifier string, not a model object.
+	"WithActorID": {}, "ActorIDFrom": {},
+	"WithSubjectID": {}, "SubjectIDFrom": {},
+	"WithTenantID": {}, "TenantIDFrom": {},
+	"WithSessionID": {}, "SessionIDFrom": {},
 }
 
 // allowedPkgCtxkeysTypeNames is the golden allowlist of top-level type

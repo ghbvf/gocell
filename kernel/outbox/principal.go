@@ -93,17 +93,17 @@ func validatePrincipalSafeID(name string, id idutil.SafeID) error {
 // catches any drift before reaching wire.
 func ContextPrincipal(ctx context.Context) PrincipalMetadata {
 	var p PrincipalMetadata
-	if actorID, ok := ctxkeys.ActorFrom(ctx); ok && actorID != "" {
-		p.ActorID = idutil.SafeID(actorID)
+	if id, ok := ctxkeys.ActorIDFrom(ctx); ok && id != "" {
+		p.ActorID = idutil.SafeID(id)
 	}
-	if subjectID, ok := ctxkeys.SubjectFrom(ctx); ok && subjectID != "" {
-		p.SubjectID = idutil.SafeID(subjectID)
+	if id, ok := ctxkeys.SubjectIDFrom(ctx); ok && id != "" {
+		p.SubjectID = idutil.SafeID(id)
 	}
-	if tenantID, ok := ctxkeys.TenantFrom(ctx); ok && tenantID != "" {
-		p.TenantID = idutil.SafeID(tenantID)
+	if id, ok := ctxkeys.TenantIDFrom(ctx); ok && id != "" {
+		p.TenantID = idutil.SafeID(id)
 	}
-	if sessionID, ok := ctxkeys.SessionFrom(ctx); ok && sessionID != "" {
-		p.SessionID = idutil.SafeID(sessionID)
+	if id, ok := ctxkeys.SessionIDFrom(ctx); ok && id != "" {
+		p.SessionID = idutil.SafeID(id)
 	}
 	return p
 }
@@ -124,10 +124,10 @@ func ContextPrincipal(ctx context.Context) PrincipalMetadata {
 //     consumer ctx may legitimately carry its own principal propagated
 //     by an outer middleware; the entry's identity is a fallback).
 func (p PrincipalMetadata) RestoreToContext(ctx context.Context) context.Context {
-	ctx = withContextMetadata(ctx, string(p.ActorID), ctxkeys.ActorFrom, ctxkeys.WithActor)
-	ctx = withContextMetadata(ctx, string(p.SubjectID), ctxkeys.SubjectFrom, ctxkeys.WithSubject)
-	ctx = withContextMetadata(ctx, string(p.TenantID), ctxkeys.TenantFrom, ctxkeys.WithTenant)
-	ctx = withContextMetadata(ctx, string(p.SessionID), ctxkeys.SessionFrom, ctxkeys.WithSession)
+	ctx = withContextMetadata(ctx, string(p.ActorID), ctxkeys.ActorIDFrom, ctxkeys.WithActorID)
+	ctx = withContextMetadata(ctx, string(p.SubjectID), ctxkeys.SubjectIDFrom, ctxkeys.WithSubjectID)
+	ctx = withContextMetadata(ctx, string(p.TenantID), ctxkeys.TenantIDFrom, ctxkeys.WithTenantID)
+	ctx = withContextMetadata(ctx, string(p.SessionID), ctxkeys.SessionIDFrom, ctxkeys.WithSessionID)
 	return ctx
 }
 

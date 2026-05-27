@@ -450,3 +450,80 @@ func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 		t.Errorf("expected Warn-level log for zero CreatedAt fallback; got log output: %s", logOutput)
 	}
 }
+
+// TestHandleEvent_PrincipalFieldMapping verifies that all four Principal fields
+// and OccurredAt from outbox.Entry are mapped to the corresponding ledger.Entry
+// fields. This is F3.2 regression guard: the mapping was added in PR #1218 and
+// must survive future refactors of the HandleEvent service function.
+//
+// Sub-cases:
+//  1. All four Principal fields + OccurredAt populated → each written to ledger.Entry.
+//  2. OccurredAt zero, CreatedAt non-zero → OccurredAt falls back to CreatedAt
+//     (occurredAtForLedger fallback path).
+func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
+	t.Run("all four principal fields and occurred_at written to ledger entry", func(t *testing.T) {
+		p := newTestProtocol(t)
+		inner, err := ledger.NewMemStore(p, clock.Real())
+		require.NoError(t, err)
+		cap := &captureStore{Store: inner}
+		spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+
+		epoch := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
+		occurredAt := epoch.Add(-2 * time.Minute) // producer clock, before persistence
+		createdAt := epoch.Add(-1 * time.Minute)  // outbox persistence time
+
+		entry := outbox.Entry{
+			ID:         "evt-principal-map",
+			EventType:  "event.user.created.v1",
+			Payload:    mustJSON(t, map[string]any{"actorId": "actor-pm"}),
+			CreatedAt:  createdAt,
+			OccurredAt: occurredAt,
+			Principal: outbox.PrincipalMetadata{
+				ActorID:   "actor-pm",
+				SubjectID: "subj-pm",
+				TenantID:  "tenant-pm",
+				SessionID: "sess-pm",
+			},
+		}
+
+		svc := newService(t, spec, cap, p)
+		result := svc.HandleEvent(context.Background(), entry)
+		require.Equal(t, outbox.DispositionAck, result.Disposition)
+		require.Len(t, cap.appended, 1, "must append exactly one entry")
+
+		le := cap.appended[0]
+		assert.Equal(t, "subj-pm", le.SubjectID, "SubjectID must be mapped from entry.Principal.SubjectID")
+		assert.Equal(t, "tenant-pm", le.TenantID, "TenantID must be mapped from entry.Principal.TenantID")
+		assert.Equal(t, "sess-pm", le.SessionID, "SessionID must be mapped from entry.Principal.SessionID")
+		assert.True(t, le.OccurredAt.Equal(occurredAt),
+			"OccurredAt must prefer entry.OccurredAt when non-zero (got %v, want %v)", le.OccurredAt, occurredAt)
+	})
+
+	t.Run("occurred_at zero falls back to created_at", func(t *testing.T) {
+		p := newTestProtocol(t)
+		inner, err := ledger.NewMemStore(p, clock.Real())
+		require.NoError(t, err)
+		cap := &captureStore{Store: inner}
+		spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+
+		createdAt := time.Date(2026, 3, 15, 11, 0, 0, 0, time.UTC)
+
+		entry := outbox.Entry{
+			ID:        "evt-occurred-at-fallback",
+			EventType: "event.user.created.v1",
+			Payload:   mustJSON(t, map[string]any{"actorId": "actor-fb"}),
+			CreatedAt: createdAt,
+			// OccurredAt intentionally zero
+		}
+
+		svc := newService(t, spec, cap, p)
+		result := svc.HandleEvent(context.Background(), entry)
+		require.Equal(t, outbox.DispositionAck, result.Disposition)
+		require.Len(t, cap.appended, 1)
+
+		le := cap.appended[0]
+		assert.True(t, le.OccurredAt.Equal(createdAt),
+			"OccurredAt must fall back to entry.CreatedAt when OccurredAt is zero (got %v, want %v)",
+			le.OccurredAt, createdAt)
+	})
+}

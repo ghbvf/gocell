@@ -795,6 +795,214 @@ func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
 	assert.Empty(t, got.Observability.TraceParent)
 }
 
+// TestIntegration_OutboxFullChain_Principal validates that the Principal
+// envelope fields (ActorID/SubjectID/TenantID/SessionID) and OccurredAt
+// survive the full outbox pipeline: producer context injection → DB write
+// → relay publish → AMQP receive → consumer middleware restore → handler ctx.
+//
+// This is Fix F7 of PR #1218 reviewer findings. The Observability variant
+// (TestIntegration_OutboxFullChain) already covers the Correlation 族; this
+// test covers the Principal 族 with matching structure.
+//
+// Infrastructure: PostgreSQL + RabbitMQ (2 testcontainers).
+func TestIntegration_OutboxFullChain_Principal(t *testing.T) {
+	// Publish-side context carries Principal IDs injected into entry.Principal
+	// by InjectPrincipalFromContext at write time.
+	publishCtx := context.Background()
+	publishCtx = ctxkeys.WithActorID(publishCtx, "actor-principal-001")
+	publishCtx = ctxkeys.WithSubjectID(publishCtx, "subj-principal-001")
+	publishCtx = ctxkeys.WithTenantID(publishCtx, "tenant-principal-001")
+	publishCtx = ctxkeys.WithSessionID(publishCtx, "sess-principal-001")
+
+	// Infrastructure context is clean — no principal IDs. The only way they
+	// reach the handler is through SubscriberWithMiddleware's built-in restore.
+	ctx := context.Background()
+
+	// ---------------------------------------------------------------
+	// Step 1: Start containers.
+	// ---------------------------------------------------------------
+	pool, pgCleanup := setupPostgresContainer(t)
+	defer pgCleanup()
+
+	rmqConn, rmqCleanup := setupRabbitMQContainer(t)
+	defer rmqCleanup()
+
+	// ---------------------------------------------------------------
+	// Step 2: Run migrations.
+	// ---------------------------------------------------------------
+	migrator, mErr := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
+	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
+
+	// ---------------------------------------------------------------
+	// Step 3: Build components.
+	// ---------------------------------------------------------------
+	txm := postgres.NewTxManager(pool)
+	writer := postgres.NewOutboxWriter(clock.Real())
+	pub := rabbitmq.NewPublisher(clock.Real(), rmqConn)
+	sub := rabbitmq.NewSubscriber(clock.Real(), rmqConn, rabbitmq.SubscriberConfig{
+		QueueName:     "outbox.fullchain.principal.queue",
+		PrefetchCount: 1,
+		DLXExchange:   "test.dlx",
+	})
+
+	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.PollInterval = testtime.D200ms
+	relayCfg.BatchSize = 10
+	relay := outboxruntime.NewRelay(clock.Real(), postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
+
+	// ---------------------------------------------------------------
+	// Step 4: Business write + outbox write with OccurredAt.
+	// ---------------------------------------------------------------
+	entryID := uuid.New().String()
+	topic := "test.outbox.fullchain.principal"
+	occurredAt := time.Now().UTC().Add(-30 * time.Second) // distinct from write-time clock
+	entry := outbox.Entry{
+		ID:            entryID,
+		AggregateID:   "order-principal-42",
+		AggregateType: "order",
+		EventType:     topic,
+		Payload:       []byte(`{"orderId":"order-principal-42","status":"created"}`),
+		CreatedAt:     time.Now().UTC(),
+		OccurredAt:    occurredAt,
+	}
+
+	_, err := pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
+		id   TEXT PRIMARY KEY,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err, "create test_orders table")
+
+	// Use publishCtx so InjectPrincipalFromContext picks up the principal IDs.
+	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
+		tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
+		if !ok {
+			t.Fatal("transaction must be in context")
+		}
+		if _, execErr := tx.Exec(txCtx,
+			"INSERT INTO test_orders (id, data) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			"order-principal-42", "principal-chain-test",
+		); execErr != nil {
+			return execErr
+		}
+		return writer.Write(txCtx, entry)
+	})
+	require.NoError(t, err, "business + outbox write should succeed")
+
+	// ---------------------------------------------------------------
+	// Step 5: Start subscriber, then relay.
+	// ---------------------------------------------------------------
+	type principalDelivery struct {
+		entry     outbox.Entry
+		actorID   string
+		subjectID string
+		tenantID  string
+		sessionID string
+	}
+
+	received := make(chan principalDelivery, 1)
+	// Subscribe context is clean — principal IDs must come from middleware restore only.
+	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.CtxLong)
+	defer subCancel()
+
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(sub, newIntegrationTestConsumerBase(t, clock.Real()))
+	require.NoError(t, err)
+
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{
+			Topic: topic, ConsumerGroup: "fullchain-principal-test",
+			CellID: "fullchain-principal-test",
+			ContractID: "event.test.fullchain.principal.v1", ContractKind: "event", ContractTransport: "memory",
+		}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+			actorID, _ := ctxkeys.ActorIDFrom(handlerCtx)
+			subjectID, _ := ctxkeys.SubjectIDFrom(handlerCtx)
+			tenantID, _ := ctxkeys.TenantIDFrom(handlerCtx)
+			sessionID, _ := ctxkeys.SessionIDFrom(handlerCtx)
+			received <- principalDelivery{
+				entry:     e,
+				actorID:   actorID,
+				subjectID: subjectID,
+				tenantID:  tenantID,
+				sessionID: sessionID,
+			}
+			return outbox.Ack()
+		})
+	}()
+
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.principal.queue", subErrCh, testtime.SelectShutdown)
+
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	defer relayCancel()
+
+	relayErrCh := make(chan error, 1)
+	go func() {
+		relayErrCh <- relay.Start(relayCtx)
+	}()
+
+	// ---------------------------------------------------------------
+	// Step 6: Wait for the subscriber to receive the message.
+	// ---------------------------------------------------------------
+	var got principalDelivery
+	select {
+	case got = <-received:
+		// Success.
+	case err := <-subErrCh:
+		require.NoError(t, err, "subscriber exited before receiving the message")
+		t.Fatal("subscriber exited before receiving the message")
+	case err := <-relayErrCh:
+		require.NoError(t, err, "relay exited before publishing the message")
+		t.Fatal("relay exited before publishing the message")
+	case <-time.After(fullchainD20s):
+		t.Fatal("timed out waiting for message from subscriber")
+	}
+
+	// ---------------------------------------------------------------
+	// Step 7: Verify Principal fields survive the full chain.
+	// ---------------------------------------------------------------
+	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+
+	// Principal 族 must survive DB → relay → AMQP → consumer via entry.Principal.
+	assert.Equal(t, "actor-principal-001", string(got.entry.Principal.ActorID),
+		"ActorID must survive the full chain via entry.Principal")
+	assert.Equal(t, "subj-principal-001", string(got.entry.Principal.SubjectID),
+		"SubjectID must survive the full chain via entry.Principal")
+	assert.Equal(t, "tenant-principal-001", string(got.entry.Principal.TenantID),
+		"TenantID must survive the full chain via entry.Principal")
+	assert.Equal(t, "sess-principal-001", string(got.entry.Principal.SessionID),
+		"SessionID must survive the full chain via entry.Principal")
+
+	// Principal 族 must also be restored into consumer handler ctx by SubscriberWithMiddleware.
+	assert.Equal(t, "actor-principal-001", got.actorID,
+		"ActorID must be restored into consumer handler ctx (ctxkeys.ActorIDFrom)")
+	assert.Equal(t, "subj-principal-001", got.subjectID,
+		"SubjectID must be restored into consumer handler ctx (ctxkeys.SubjectIDFrom)")
+	assert.Equal(t, "tenant-principal-001", got.tenantID,
+		"TenantID must be restored into consumer handler ctx (ctxkeys.TenantIDFrom)")
+	assert.Equal(t, "sess-principal-001", got.sessionID,
+		"SessionID must be restored into consumer handler ctx (ctxkeys.SessionIDFrom)")
+
+	// OccurredAt must survive the chain as a non-zero value.
+	assert.False(t, got.entry.OccurredAt.IsZero(),
+		"OccurredAt must be non-zero after full chain round-trip")
+	// Allow ≤1 ms precision loss (DB round-trip, UTC truncation).
+	diff := got.entry.OccurredAt.Sub(occurredAt)
+	if diff < 0 {
+		diff = -diff
+	}
+	assert.LessOrEqual(t, diff, time.Millisecond,
+		"OccurredAt must survive the full chain with sub-millisecond precision (got %v, want ~%v)",
+		got.entry.OccurredAt, occurredAt)
+
+	// ---------------------------------------------------------------
+	// Cleanup.
+	// ---------------------------------------------------------------
+	relayCancel()
+	_ = relay.Stop(ctx)
+	subCancel()
+	_ = sub.Close(context.Background())
+}
+
 // publishedMessage captures a single Publish call.
 type publishedMessage struct {
 	topic   string

@@ -536,19 +536,19 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresPrincipal(t *testing.T)
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
 		testFullSub("test", "cg-principal"),
 		func(ctx context.Context, _ Entry) HandleResult {
-			actorID, ok := ctxkeys.ActorFrom(ctx)
+			actorID, ok := ctxkeys.ActorIDFrom(ctx)
 			require.True(t, ok, "actor_id must be set in handler ctx")
 			assert.Equal(t, "actor-restore", actorID)
 
-			subjectID, ok := ctxkeys.SubjectFrom(ctx)
+			subjectID, ok := ctxkeys.SubjectIDFrom(ctx)
 			require.True(t, ok, "subject_id must be set in handler ctx")
 			assert.Equal(t, "subj-restore", subjectID)
 
-			tenantID, ok := ctxkeys.TenantFrom(ctx)
+			tenantID, ok := ctxkeys.TenantIDFrom(ctx)
 			require.True(t, ok, "tenant_id must be set in handler ctx")
 			assert.Equal(t, "tenant-restore", tenantID)
 
-			sessionID, ok := ctxkeys.SessionFrom(ctx)
+			sessionID, ok := ctxkeys.SessionIDFrom(ctx)
 			require.True(t, ok, "session_id must be set in handler ctx")
 			assert.Equal(t, "sess-restore", sessionID)
 
@@ -580,7 +580,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroPrincipalIsNoOp(t *testing.
 		testFullSub("test", "cg-principal-noop"),
 		func(ctx context.Context, _ Entry) HandleResult {
 			called = true
-			_, ok := ctxkeys.ActorFrom(ctx)
+			_, ok := ctxkeys.ActorIDFrom(ctx)
 			assert.False(t, ok, "no actor_id should be set from zero PrincipalMetadata")
 			return Ack()
 		}))
@@ -599,7 +599,7 @@ func TestSubscriberWithMiddleware_PrincipalRestoreIsOutermost(t *testing.T) {
 	var seenActorInMiddleware string
 	userMW := func(_ Subscription, next EntryHandler) EntryHandler {
 		return func(ctx context.Context, entry Entry) HandleResult {
-			seenActorInMiddleware, _ = ctxkeys.ActorFrom(ctx)
+			seenActorInMiddleware, _ = ctxkeys.ActorIDFrom(ctx)
 			return next(ctx, entry)
 		}
 	}

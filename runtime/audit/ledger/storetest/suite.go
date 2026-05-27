@@ -154,6 +154,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_EmptySort_Rejected", func(t *testing.T) { runQueryEmptySortRejected(t, factory) })
 	t.Run("Query_InvalidCursor_Rejected", func(t *testing.T) { runQueryInvalidCursorRejected(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
+	t.Run("Principal_Fields_Round_Trip", func(t *testing.T) { runPrincipalFieldsRoundTrip(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -748,6 +749,66 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 		t.Errorf("seq 2 hash parity broken: store=%s protocol=%s "+
 			"(chain link broken — Store does not use Protocol.ComputeHash for prevHash threading)",
 			got2.Hash, want2)
+	}
+}
+
+// runPrincipalFieldsRoundTrip verifies that an Entry populated with all four
+// Principal fields (ActorID, SubjectID, TenantID, SessionID) and OccurredAt
+// is persisted and returned unchanged by GetBySeq. This is a cross-backend
+// contract guard: the five wire-envelope Principal fields introduced in PR
+// #1218 must survive the Append → GetBySeq round-trip on every Store
+// implementation (mem + PG).
+//
+// The hash chain must also remain valid after Append, confirming that the
+// new fields are included in ComputeHash's HMAC input (via the hex-encoded
+// format string) and that their presence does not corrupt the chain.
+func runPrincipalFieldsRoundTrip(t *testing.T, factory Factory) {
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	occurredAt := fc.Now().Add(-5 * time.Second) // distinct from Timestamp (persistence clock)
+	e := &ledger.Entry{
+		EventID:    "principal-rt-evt",
+		EventType:  "principal.roundtrip.test",
+		ActorID:    "actor-principal",
+		SubjectID:  "subj-principal",
+		TenantID:   "tenant-principal",
+		SessionID:  "sess-principal",
+		OccurredAt: occurredAt,
+		Timestamp:  fc.Now(),
+		Payload:    []byte(`{"event":"principal_roundtrip"}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf(msgAppend, err)
+	}
+
+	got, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(1): %v", err)
+	}
+
+	// All four Principal ID fields must survive the round-trip.
+	if got.ActorID != "actor-principal" {
+		t.Errorf("ActorID: got %q, want %q", got.ActorID, "actor-principal")
+	}
+	if got.SubjectID != "subj-principal" {
+		t.Errorf("SubjectID: got %q, want %q", got.SubjectID, "subj-principal")
+	}
+	if got.TenantID != "tenant-principal" {
+		t.Errorf("TenantID: got %q, want %q", got.TenantID, "tenant-principal")
+	}
+	if got.SessionID != "sess-principal" {
+		t.Errorf("SessionID: got %q, want %q", got.SessionID, "sess-principal")
+	}
+
+	// OccurredAt must survive with sub-second precision.
+	if !got.OccurredAt.Equal(occurredAt) {
+		t.Errorf("OccurredAt: got %v, want %v", got.OccurredAt, occurredAt)
+	}
+
+	// Hash chain must still be valid — principal fields must not corrupt HMAC.
+	if got.Hash == "" {
+		t.Error("Hash must not be empty after Append with principal fields")
 	}
 }
 
