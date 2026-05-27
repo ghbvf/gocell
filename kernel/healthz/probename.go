@@ -67,7 +67,8 @@ var probeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
 // backend's label budget (Prometheus 1024, OTel 256).
 //
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go::IsDNS1123Label
-//      (label max 63); pkg/scaffoldid.IdentifierPattern (cellID max 32).
+//
+//	(label max 63); pkg/scaffoldid.IdentifierPattern (cellID max 32).
 const probeNameMaxLen = 64
 
 // NewProbeName validates s and returns a typed [ProbeName]. It is the only
@@ -75,9 +76,9 @@ const probeNameMaxLen = 64
 // a literal+runtime concatenation, and tests use [MustProbeName] (panic
 // variant) so the validation regex governs every test fixture too.
 //
-// Returns [errcode.ErrValidationFailed] when s is empty, exceeds 48 runes,
-// contains uppercase letters, hyphens, whitespace, double-underscores, or
-// starts with a digit.
+// Returns [errcode.ErrValidationFailed] when s is empty, exceeds
+// probeNameMaxLen runes (64), contains uppercase letters, hyphens,
+// whitespace, double-underscores, or starts with a digit.
 func NewProbeName(s string) (ProbeName, error) {
 	if s == "" {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -108,8 +109,8 @@ func NewProbeName(s string) (ProbeName, error) {
 // It routes through [panicregister.Approved] so the kernel recovery layer
 // classifies the panic correctly. Production code that needs to validate a
 // runtime-supplied string must use [NewProbeName] (returns an error) instead
-// of MustProbeName (panics), to avoid availability risk when adapter Checkers()
-// map keys contain unexpected characters.
+// of MustProbeName (panics), to avoid availability risk when a runtime
+// input source supplies unexpected characters.
 func MustProbeName(s string) ProbeName {
 	name, err := NewProbeName(s)
 	if err != nil {

@@ -64,7 +64,7 @@
 //     in non-allowlist production files — availability risk since MustProbeName
 //     panics on invalid input. Covered by A4b scanner (caller allowlist).
 //     Post-F1A/F1B, zero production callers outside kernel/healthz/probename.go
-//     + healthztest/conformance.go.
+//   - healthztest/conformance.go.
 //
 // ref: kernel/healthz.ProbeName — typed concept type
 // ref: kernel/healthz.NewProbeName — sole validated entry point

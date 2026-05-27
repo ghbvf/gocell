@@ -19,9 +19,13 @@ import (
 // interface contract is held even if the production assertion is moved.
 var _ lifecycle.ManagedResource = (*Connection)(nil)
 
-func findProbe(probes []healthz.Probe, name healthz.ProbeName) healthz.Probe {
+// findReadyProbe returns the rabbitmq_ready probe from the typed slice.
+// Connection only exposes a single probe (ProbeReady), so the helper is
+// fixed to that name rather than parameterized — keeps the call sites
+// terse and makes the unparam linter happy.
+func findReadyProbe(probes []healthz.Probe) healthz.Probe {
 	for _, p := range probes {
-		if p.Name() == name {
+		if p.Name() == ProbeReady {
 			return p
 		}
 	}
@@ -33,7 +37,7 @@ func TestConnection_Checkers_HealthyConnected(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 
 	probes := conn.Probes()
-	probe := findProbe(probes, ProbeReady)
+	probe := findReadyProbe(probes)
 	if probe == nil {
 		t.Fatalf("Probes() missing 'rabbitmq_ready'; got names: %v", probeNames(probes))
 	}
@@ -49,7 +53,7 @@ func TestConnection_Checkers_HonorsCtxDeadline(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	probe := findProbe(conn.Probes(), ProbeReady)
+	probe := findReadyProbe(conn.Probes())
 	start := time.Now()
 	err := probe.Check(canceled)
 	elapsed := time.Since(start)
@@ -74,7 +78,7 @@ func TestConnection_Checkers_UnhealthyDisconnected(t *testing.T) {
 	conn.state = StateDisconnected
 	conn.mu.Unlock()
 
-	probe := findProbe(conn.Probes(), ProbeReady)
+	probe := findReadyProbe(conn.Probes())
 	err := probe.Check(context.Background())
 	if err == nil {
 		t.Fatal("rabbitmq_ready in StateDisconnected must return an error, got nil")
@@ -96,7 +100,7 @@ func TestConnection_Checkers_UnhealthyWhenPermanentRecorded(t *testing.T) {
 	conn.permanentErr = permanentErr
 	conn.mu.Unlock()
 
-	probe := findProbe(conn.Probes(), ProbeReady)
+	probe := findReadyProbe(conn.Probes())
 	err := probe.Check(context.Background())
 	if err == nil {
 		t.Fatal("rabbitmq_ready with permanentErr set must return that error, got nil")

@@ -30,15 +30,6 @@ func relayFindProbe(probes []healthz.Probe, name healthz.ProbeName) healthz.Prob
 	return nil
 }
 
-// relayCheckProbe returns the result of Check on the named probe, or an error if absent.
-func relayCheckProbe(probes []healthz.Probe, name healthz.ProbeName, ctx context.Context) error {
-	p := relayFindProbe(probes, name)
-	if p == nil {
-		return fmt.Errorf("probe %q not found", name)
-	}
-	return p.Check(ctx)
-}
-
 // relayMinRetention is the smallest positive RetentionPeriod that bypasses the
 // RelayConfig.WithDefaults "zero means missing" guard, ensuring the cleanup loop
 // deletes entries on its very first pass.
