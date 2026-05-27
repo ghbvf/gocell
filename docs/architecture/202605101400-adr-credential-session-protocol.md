@@ -760,6 +760,14 @@ pre-mutation）。对标 Django `PasswordChangeView`：`login_required` + 表单
 **修复后为 ✅**（pre-mutation Assert gate + Medium archtest 守放置）。无 ✅→⚠️/❌
 回退格子。
 
+**timing 旁路（accepted tradeoff）**：gate 前移到 `bcrypt` 之前，inactive 账户得
+到快速 403（<1ms），active-wrong-password 仍走 ~100ms bcrypt 才返 401，二者耗时
+可区分。与 §3 公开 login 端点的 timing 行（`dummyBcryptHash` 等时化）**不同**：
+ChangePassword 是**认证后**端点，调用方已通过 JWT 证明账户存在，账户 active/inactive
+状态对该调用方非机密，故**不为 ChangePassword 做 bcrypt 等时化**（等时化会为冻结
+账户重新引入昂贵 bcrypt，与本修复"inactive 早 gate"目标矛盾）。该 timing 差异是
+authenticated-endpoint 的接受代价，非新增枚举攻击面。
+
 ref: `cells/accesscore/slices/identitymanage/service.go::changePasswordInTx`。
 ref: `tools/archtest/changepassword_inactive_gate_test.go`
 (CHANGEPASSWORD-INACTIVE-GATE-01)。

@@ -774,10 +774,13 @@ type ChangePasswordInput struct {
 // Validation order (P1-9 fix: cheap checks before bcrypt to avoid wasted CPU):
 //  1. Required-field check (empty userID / oldPassword / newPassword).
 //  2. Cheap string equality check (new == old rejected before bcrypt cost).
-//  3. bcrypt.CompareHashAndPassword (old password verification).
-//  4. Hash new password.
-//  5. Persist updated user.
-//  6. Issue new TokenPair via tokenIssuer.
+//  3. Inactive-account gate (credentialauthority.Assert, #1017) — runs first
+//     inside the tx, before bcrypt/UpdatePassword, so a suspended/locked
+//     account's credential is never rewritten (see changePasswordInTx).
+//  4. bcrypt.CompareHashAndPassword (old password verification).
+//  5. Hash new password.
+//  6. Persist updated user.
+//  7. Issue new TokenPair via tokenIssuer.
 //
 // Consistency level: L1 (single-cell local transaction, no outbox event).
 // The token pair is issued synchronously so the client can replace stale tokens
@@ -869,9 +872,19 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	// and the session sweep — rather than post-commit inside IssueForUser. The
 	// IssueForUser Assert is retained as belt-and-braces for the narrow window
 	// where an admin freezes the account between this commit and the token issue.
-	// Mirrors sessionlogin.IssueForUser's (Assert-gate → 403 ErrAuthUserNotActive)
-	// shape so both paths return an identical wire envelope.
+	//
+	// GetByID returns a non-nil user or an error (handled above), so the only
+	// reachable Assert failure here is the baseline CanAuthenticate check — the
+	// nil-user / nil-Check arms of Assert are unreachable on this path. Mapping
+	// every Assert error to ErrAuthUserNotActive is therefore correct and mirrors
+	// sessionlogin.IssueForUser's (Assert-gate → 403) shape, so both paths return
+	// an identical wire envelope. Timing note: this gate returns before the
+	// ~100ms bcrypt, so an inactive account is rejected faster than an active
+	// wrong-password — an accepted trade-off on this authenticated endpoint
+	// (the caller already proved account existence via its token; see ADR §A17).
 	if err := credentialauthority.Assert(user); err != nil {
+		s.logger.Warn("change-password: inactive account gate rejected",
+			slog.String("user_id", user.ID))
 		return "", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
 			"account is not active",
 			errcode.WithInternal(errcode.InternalAttr("_", "identity-manage: change-password baseline assert failed")))

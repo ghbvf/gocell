@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -460,15 +461,17 @@ func TestService_Update_StatusUnchanged_NoCascadeRevoke(t *testing.T) {
 
 // stubTokenIssuer is a test double for TokenIssuer. calls records how many
 // times IssueForUser was invoked so tests can assert the post-commit token
-// issue does NOT run when an upstream gate rejects (see #1017).
+// issue does NOT run when an upstream gate rejects (see #1017). calls is
+// atomic because the package-level minimalStubIssuer is shared across tests,
+// including the concurrent goroutines in identitymanage_credential_race_test.go.
 type stubTokenIssuer struct {
 	pair  dto.TokenPair
 	err   error
-	calls int
+	calls atomic.Int64
 }
 
 func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
-	s.calls++
+	s.calls.Add(1)
 	return s.pair, s.err
 }
 
@@ -773,7 +776,7 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 				"passwordVersion must not advance when gate rejects")
 
 			// IssueForUser must not run after a pre-mutation rejection.
-			assert.Equal(t, 0, stub.calls,
+			assert.Equal(t, int64(0), stub.calls.Load(),
 				"IssueForUser must not be called when inactive gate rejects pre-mutation")
 		})
 	}

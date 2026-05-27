@@ -48,7 +48,12 @@
 //     because it is only a positional marker for "the credential write" within
 //     this one known function. Renaming the repo method requires updating
 //     cpgMutationMethod here; the rule fails loudly ("no mutation anchor") if
-//     the name disappears, so it cannot silently no-op.
+//     the name disappears, so it cannot silently no-op. If UpdatePassword is
+//     moved into a method-value capture (`fn := s.repo.UpdatePassword; fn(...)`)
+//     the anchor's CallExpr.Fun becomes an *ast.Ident and the selector match
+//     misses it → the rule reports "missing gate" rather than an ordering
+//     violation. That is still fail-closed (it forces the author back to the
+//     inline form), so the capture form is not a silent escape.
 //
 //   - Method-value capture (`fn := credentialauthority.Assert; fn(user)`):
 //     the deferred fn() CallExpr's Fun is an *ast.Ident, which
