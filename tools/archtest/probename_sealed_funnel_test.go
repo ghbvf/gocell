@@ -52,15 +52,21 @@
 //     highest achievable form on Go. No follow-up issue (won't-do, lang
 //     ceiling).
 //   - A2 downstream (callsite resolves to declared const):
-//     Hard downstream — RegisterReadiness(name ProbeName, ...) / NewProbe(
-//     name ProbeName, ...) / HealthToProbe(name ProbeName, ...) /
-//     bootstrap.WithHealthChecker(name ProbeName, ...) make passing a
-//     `var s string` (typed var) a compile error at the typed-arg position.
-//     Note: untyped string literals (e.g. Register("foo", ...)) compile via
-//     Go's implicit untyped-const conversion to ProbeName; archtest A2
-//     rejects these at source level (callsite must resolve to a sanctioned
-//     ProbeName const). Type system closes the typed-var gap; archtest
-//     closes the untyped-literal gap.
+//     Hard downstream via **two complementary gates**, not type system alone.
+//     The 4 sanctioned callees take `name ProbeName` (not `string`) as their
+//     first parameter — RegisterReadiness / NewProbe / HealthToProbe /
+//     bootstrap.WithHealthChecker. Go's type system enforcement is partial:
+//       (a) typed-var path:  `var s string; Register(s, p)` IS a compile
+//           error (`string` and `ProbeName` are distinct named types; no
+//           implicit conversion across them in this direction).
+//       (b) untyped-literal path:  `Register("foo", p)` COMPILES — Go's
+//           untyped string constant "foo" is implicitly converted to
+//           ProbeName per Go spec. The type system alone does NOT reject
+//           bare string literals at typed-arg positions.
+//     archtest A2 closes path (b): the callsite must resolve via info.Uses
+//     to a sanctioned `*types.Const`; BasicLit / BinaryExpr / Var / CallExpr
+//     fail closed. The combined gate is Hard downstream; neither gate alone
+//     would be.
 //   - A3 downstream (Aggregator.Register allowlist):
 //     Hard downstream via type system (Registrar.Healthz() removed — any
 //     attempt is a compile error). Archtest enforces the residual direct-

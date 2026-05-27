@@ -137,8 +137,13 @@ bypass / B4 NewProbeName 动态参 / B5 cellgen marker bypass）+ 7 个 RED fixt
 
 ### Positive
 
-- `reg.Healthz()` 是编译错误。新的 probe 注册路径：写 `reg.RegisterReadiness(name, p)`
-  — type system 拒绝裸 `string` 入参，编译期 Hard gate，无需 archtest 守此出口。
+- `reg.Healthz()` 是编译错误（方法已删，type-system Hard gate，无需 archtest 守此出口）。
+  新的 probe 注册路径：写 `reg.RegisterReadiness(name, p)`。type system 拒绝
+  **typed-var string 入参**（`var s string; reg.RegisterReadiness(s, p)` 编译错）；
+  **untyped string literal**（`reg.RegisterReadiness("foo", p)`）经 Go untyped-const
+  隐式转换通过编译，由 archtest A2 在源码层拒绝（callsite 必须解析到声明集 const）。
+  type system 关闭 typed-var 形态、archtest 关闭 untyped-literal 形态，二者闭合
+  Hard 下游 funnel。
 - 三条散落 archtest 合一（archtest 总量 3 → 1 for this domain），覆盖面更完整。
 - Framework probe（`config_watcher` / `config_drift` / `outbox_failopen_rate_<cell>`）
   接入 typed funnel，消除最后的 bare-string probe 注册路径。
@@ -262,9 +267,9 @@ Dependent contracts:
 
 | 轴 | 形态 | 评级 |
 |----|------|------|
-| A1 下游 type system | `NewProbe(name ProbeName, ...)` 让裸 string 编译错；`reg.Healthz()` 编译错 | **Hard 下游** |
+| A1 下游 type system | `NewProbe(name ProbeName, ...)` 让 typed-var string 编译错（untyped literal 通过 Go 隐式 const 转换编译通过，由 A2 archtest 拒）；`reg.Healthz()` 已删 = 编译错 | **Hard 下游**（type system + archtest 闭合） |
 | A2 下游 archtest | A2/A3 scan `RegisterReadiness` / `Aggregator.Register` callsite identity | **Hard 下游**（archtest-bound 补充） |
-| A1 上游 archtest | sanctioned 包 + value regex + adapter-suffix overlay | **Hard 上游**（archtest-bound，Go const-seal 上限） |
+| A1 上游 archtest | sanctioned 包 + value regex + adapter-suffix overlay | **Medium 上游**（archtest-bound；Go 包级可见性无 const-seal 表达 → 永久天花板，won't-do） |
 | A4/A5 上游 archtest | `NewProbeName` const-literal 入参 + composed-name helper allowlist | **Medium 上游**（同 PR 开 backlog 跟踪 Hard 升级方向，判断多半 won't-do） |
 
 backlog issue：`PROBENAME-NEWPROBENAME-CALLER-SEAL-01`（A4 Medium 上游 Hard 升级评估）
