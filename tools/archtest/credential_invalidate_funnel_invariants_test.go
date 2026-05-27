@@ -76,11 +76,44 @@ package archtest
 //  2. //go:linkname / unsafe — the universal class that defeats any static
 //     analysis; out of scope for an archtest funnel.
 //
+//  3. Interface-indirection routing (Rule 4 specific). When a slice injects
+//     the funnel via a locally-defined interface (e.g.
+//     sessionrefresh.invalidatorApplier in service.go) for unit-testability
+//     with a spy, info.Selections resolves the call to that local interface's
+//     Apply method — NOT to credentialinvalidate.(*Invalidator).Apply. The
+//     fn.Pkg().Path() check rejects it as out-of-scope, so the callsite is
+//     scanner-invisible. Documented trade-off: sessionrefresh.handleReuseDetected
+//     is a legitimate Apply caller but cannot appear in
+//     upstreamCallerCallsiteAllowlist (the meta-invariant test would then
+//     flag it as stale). Future analogous interface-routed callers will also
+//     be scanner-invisible; this is a known limit of info.Selections-based
+//     resolution. The reverse RED fixture (sessionlogin_direct_apply_red)
+//     uses the concrete *credentialinvalidate.Invalidator type, so all
+//     direct-typed paths remain locked.
+//
 // Covered without a separate self-check: embedded struct method promotion
 // (`type Wrapper struct { session.Store }; w.RevokeForSubject(...)`) —
 // ResolveMethodCall recovers the correct *types.Func via info.Selections, so
 // promotion is transparent. The function-value-capture form (formerly a
 // blind-spot self-check) is now caught directly by the form-complete scan.
+//
+// Rule 4 also has callsite-level identity invariants beyond the targetPkg
+// filter:
+//
+//  4. Package-level var init bypass: a setter call at package scope has no
+//     enclosing FuncDecl. ResolveEnclosingFunc returns (nil, false) and the
+//     scan emits an "outside any FuncDecl" violation automatically — handled
+//     in scanUpstreamCallerViolationsPass, no separate self-check needed
+//     (the var-init blind spot for similar funnels is documented at
+//     domain_authz_mutation_funnel_invariants_test.go §6).
+//
+//  5. FuncLit-inside-FuncDecl semantic choice (NOT a blind spot):
+//     ResolveEnclosingFunc collapses a nested FuncLit's identity to its
+//     outermost FuncDecl. Rationale: FuncLit author = FuncDecl author.
+//     Affected callers: identitymanage.deleteUserAndRevokeTokens (Apply
+//     inside RunInTx closure) — the closure's outer FuncDecl is correctly
+//     resolved to deleteUserAndRevokeTokens. Same pattern for all other
+//     allowlisted callers.
 
 import (
 	"fmt"
@@ -114,51 +147,70 @@ const (
 	invalidatorMethod = "Apply"
 )
 
-// upstreamCallerAllowlistPrefixes lists module-relative path prefixes whose
-// production code is permitted to invoke credentialinvalidate.Invalidator.Apply
-// directly. Every other caller is a violation: new authz-affecting state
-// transitions must route through one of these entry points.
+// upstreamCallerCallsiteAllowlist enumerates the exact production callsites
+// (enclosing FuncDecl identities) permitted to invoke or capture
+// credentialinvalidate.(*Invalidator).Apply. Keys are *types.Func.FullName()
+// values (canonical Go reflection form); values document the rationale.
 //
-// As of S4e (PR #494):
-//   - authzmutate/ owns all live-aggregate authz mutations (status demotion,
-//     RequirePasswordReset, role-revoke) via Mutator.Apply → inv.Apply.
-//   - identitymanage/ calls inv.Apply directly for two co-tx atomic operations:
-//     (a) Delete: user-row delete + revoke must be one transaction.
-//     (b) changePasswordInTx: password write + revoke must be one transaction.
-//     Routing through authzmutate would split these transactions; direct call is
-//     the intentional exception. Documented in service.go with
-//     "Routed through funnel (CREDENTIAL-INVALIDATE-FUNNEL-01)" comment.
-//   - sessionrefresh/ owns the reuse / stale-epoch cascade entry point.
-//   - rbacassign/ calls inv.Apply for role-revoke co-tx with the role-row write.
-//     Same atomicity reason as identitymanage.
-//   - The funnel package itself is always allowed (Apply is defined here).
+// Issue #732 upgrade (this file, 2026-05-27): replaces the prior file-level
+// upstreamCallerAllowlistPrefixes []string. callsite-level keying eliminates
+// the "same file / different function" slip path — any new function in an
+// already-allowed slice MUST explicitly add a callsite entry.
 //
-// S4e note: setup/ and adminprovision/ were removed from this list. Neither
-// package calls credentialinvalidate.Invalidator.Apply in production code
-// (verified by grep; provisioner.go only calls SetPasswordResetRequired on a
-// freshly constructed aggregate at creation time). Removing them tightens the
-// rule. The canonical allowlist is documented in ADR §A10 and is now in sync
-// with this set.
-var upstreamCallerAllowlistPrefixes = []string{
-	"cells/accesscore/internal/credentialinvalidate/",
-	"cells/accesscore/internal/authzmutate/",
-	"cells/accesscore/slices/identitymanage/",
-	"cells/accesscore/slices/sessionrefresh/",
-	"cells/accesscore/slices/rbacassign/",
-}
-
-// isUpstreamCallerAllowlisted reports whether a module-relative path is in
-// the upstream caller allowlist. Test files (*_test.go) always pass.
-func isUpstreamCallerAllowlisted(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	for _, prefix := range upstreamCallerAllowlistPrefixes {
-		if strings.HasPrefix(rel, prefix) {
-			return true
-		}
-	}
-	return false
+// As of S4e (PR #494), the legitimate callers are:
+//
+//   - authzmutate/ — Mutator.ApplyInTx routes all live-aggregate authz
+//     mutations through Invalidator.Apply.
+//   - identitymanage/ — Delete + changePasswordInTx call Invalidator.Apply
+//     directly for co-tx atomicity (user-row delete and revoke, or password
+//     write and revoke, must be one transaction). Routing through authzmutate
+//     would split these transactions.
+//   - sessionrefresh/ — handleReuseDetected owns the reuse / stale-epoch
+//     cascade entry point.
+//   - rbacassign/ — persistChange calls Invalidator.Apply co-tx with the
+//     role-row write. Same atomicity reason as identitymanage.
+//
+// The funnel package itself (credentialinvalidate/) contains only the Apply
+// implementation — no internal call site exists today, so no entry is
+// needed. If a future helper inside the funnel calls Apply on a sibling
+// receiver, an entry must be added explicitly (no silent package allowance).
+//
+// S4e note: setup/ and adminprovision/ are NOT in this list. Neither calls
+// Invalidator.Apply in production code (provisioner.go only calls
+// SetPasswordResetRequired on a freshly constructed aggregate at creation
+// time). The canonical allowlist is documented in ADR §A10.
+//
+// Test files (*_test.go) bypass this check unconditionally. Removing the last
+// production caller of an entry triggers
+// TestCredentialInvalidateFunnel_AllowlistEntriesAreLive (meta-invariant),
+// forcing same-PR cleanup.
+// NOTE: sessionrefresh.handleReuseDetected is a LEGITIMATE production caller
+// of Invalidator.Apply, but it is NOT listed here — and cannot be listed —
+// because sessionrefresh injects the funnel via a locally-defined
+// `invalidatorApplier` interface (see slices/sessionrefresh/service.go:60)
+// for unit-testability with a spy. info.Selections resolves the call
+// `s.invalidator.Apply(...)` to (sessionrefresh.invalidatorApplier).Apply, NOT
+// to (credentialinvalidate.Invalidator).Apply, so the scanner cannot match
+// the (targetPkg, targetMethod) filter and never reaches the callsite check.
+// This is a structural blind spot of info.Selections-based method resolution
+// when business code intentionally routes through an interface contract.
+// Trade-off accepted: sessionrefresh's testability requires the interface
+// (the spy implements invalidatorApplier without depending on credentialinvalidate);
+// any future caller that introduces an analogous interface field would also be
+// scanner-invisible. The reverse RED fixture (sessionlogin_direct_apply_red)
+// uses the concrete *credentialinvalidate.Invalidator type, so direct-typed
+// callsites remain locked.
+// Allowlist keys are types.Func.FullName() values; split via string concat
+// to keep lines under the lll limit while preserving the literal key.
+var upstreamCallerCallsiteAllowlist = map[string]string{
+	"(*github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate.Mutator).ApplyInTx": "" +
+		"primary funnel — routes all live-aggregate authz mutations",
+	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).deleteUserAndRevokeTokens": "" +
+		"co-tx atomicity: user-row delete + revoke in one transaction",
+	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).changePasswordInTx": "" +
+		"co-tx atomicity: password write + revoke in one transaction",
+	"(*github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign.Service).persistChange": "" +
+		"co-tx atomicity: role-row write + revoke in one transaction",
 }
 
 // funnelAllowlistPathPrefixes lists the module-relative path prefixes that
@@ -404,30 +456,25 @@ func TestCredentialInvalidateFunnel_RevokeUser_01(t *testing.T) {
 // ─── Rule 4: CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Hard, post #1033) ──
 
 // TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01 enforces
-// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every call to
-// credentialinvalidate.(*Invalidator).Apply in production code must come
-// from one of the allowlisted upstream entry points (authzmutate,
-// identitymanage, sessionrefresh, rbacassign) or the funnel package
-// itself. New callers must justify their addition via a PR that updates
-// upstreamCallerAllowlistPrefixes — this puts the funnel's surface area on
-// the reviewer's radar instead of relying on string convention.
-// See ADR §A10 + §A16 for the canonical allowlist and co-tx atomicity
-// rationale, and the type-system seal that brings this rule to Hard.
+// CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: every reference (call or
+// function-value capture) to credentialinvalidate.(*Invalidator).Apply in
+// production code must originate from an enclosing FuncDecl whose canonical
+// identity is listed in upstreamCallerCallsiteAllowlist.
 //
-// AI-robust grade (post #1033): Hard. The rule's call-site allowlist
-// catches "wrong caller" (cells outside the allowlist invoking Apply
-// directly). The "missing caller" problem — a new user-authz mutator
-// forgetting to call Apply at all — is now closed structurally by the
-// sealed FenceToken capability proof: any mutation method (BumpAuthzEpoch
-// / RevokeForSubject / RevokeUser) requires a credentialfence.FenceToken
-// that only credentialfence.Mint can produce, and Mint's callers are
-// locked by FENCE-TOKEN-MINT-FUNNEL-01 to the funnel + storetest +
-// conformance + *_test.go. A new mutator that tries to revoke without
-// going through Invalidator.Apply cannot mint a FenceToken — production
-// archtest fails. See the package godoc and ADR §A16 for the full
-// closure proof.
+// callsite-level keying (issue #732): the prior file-level allowlist admitted
+// any new function in an already-allowed slice silently. callsite identity =
+// outermost FuncDecl's *types.Func.FullName() rejects that slip path: a new
+// caller MUST add an explicit allowlist entry, putting the funnel surface
+// directly on the reviewer's diff.
 //
-// RED fixture: tools/archtest/testdata/credential_invalidate_fixtures/
+// AI-robust grade (post #1033 + #732): Hard. The callsite-level allowlist
+// catches "wrong caller" with type-resolved (callee, caller) form-uniqueness.
+// The "missing caller" problem is closed structurally by the sealed
+// FenceToken capability proof (see package godoc + ADR §A16) — a new
+// mutator that tries to revoke without going through Invalidator.Apply
+// cannot mint a FenceToken.
+//
+// RED fixture: cells/accesscore/internal/credentialinvalidate/testdata/
 // sessionlogin_direct_apply_red — the sessionlogin slice is NOT on the
 // allowlist; calling invalidator.Apply from there must be detected.
 func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
@@ -450,10 +497,10 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if isUpstreamCallerAllowlisted(rel) {
+			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			violations = append(violations, scanFunnelViolationsPass(
+			violations = append(violations, scanUpstreamCallerViolationsPass(
 				p, file, rel,
 				invalidatorPkg, invalidatorMethod,
 				"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01",
@@ -467,12 +514,11 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01: credentialinvalidate.Invalidator.Apply "+
-			"must only be called from the allowlisted upstream entry points "+
-			"(authzmutate, identitymanage, sessionrefresh, rbacassign) "+
-			"or the funnel package itself. Adding a new caller requires updating "+
-			"upstreamCallerAllowlistPrefixes; this puts the funnel surface on the "+
-			"reviewer's radar instead of relying on string convention. "+
+		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (callsite-level): "+
+			"credentialinvalidate.Invalidator.Apply must only be called from enclosing "+
+			"functions explicitly listed in upstreamCallerCallsiteAllowlist. "+
+			"Adding a new caller requires adding a callsite entry; "+
+			"this puts the funnel surface on the reviewer's diff. "+
 			"See ADR docs/architecture/202605101400-adr-credential-session-protocol.md §A10.")
 
 	verifyRedFixtureDetectedPass(
@@ -482,6 +528,124 @@ func TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01(t *testing.T) {
 		"CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 RED fixture",
 		1,
 	)
+}
+
+// scanUpstreamCallerViolationsPass walks file's AST for every SelectorExpr
+// resolving to (targetPkg, targetMethod) and emits a violation when the
+// SelectorExpr's enclosing FuncDecl identity is NOT in
+// upstreamCallerCallsiteAllowlist. Catches direct call AND function-value
+// capture forms (same form-completeness as scanFunnelViolationsPass — see
+// that function's godoc).
+//
+// A SelectorExpr located outside any FuncDecl (package-level var/const init)
+// is an automatic violation: it has no allowlistable identity. Test files
+// must be skipped by the caller (this function operates per-file but does
+// not filter *_test.go itself).
+func scanUpstreamCallerViolationsPass(
+	p *Pass,
+	file *ast.File,
+	rel string,
+	targetPkg, targetMethod, ruleID string,
+) []string {
+	var out []string
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != targetMethod {
+			return
+		}
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+		if !ok {
+			return
+		}
+		if fn.Pkg() == nil || fn.Pkg().Path() != targetPkg {
+			return
+		}
+		line := p.Fset.Position(sel.Pos()).Line
+		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
+		if !ok {
+			out = append(out, fmt.Sprintf(
+				"%s:%d: %s: reference to %s.%s outside any FuncDecl "+
+					"(package-level init or similar) — cannot be allowlisted",
+				rel, line, ruleID, filepath.Base(targetPkg), targetMethod,
+			))
+			return
+		}
+		callerID := caller.FullName()
+		if _, allowed := upstreamCallerCallsiteAllowlist[callerID]; allowed {
+			return
+		}
+		out = append(out, fmt.Sprintf(
+			"%s:%d: %s: reference to %s.%s from caller %q not in "+
+				"upstreamCallerCallsiteAllowlist (direct call or function-value capture)",
+			rel, line, ruleID, filepath.Base(targetPkg), targetMethod, callerID,
+		))
+	})
+	return out
+}
+
+// TestCredentialInvalidateFunnel_AllowlistEntriesAreLive enforces that every
+// entry in upstreamCallerCallsiteAllowlist corresponds to ≥ 1 actual
+// production reference (call or capture). Deleting the last caller of an
+// allowlisted function makes the entry stale; this test fails to force
+// same-PR cleanup.
+//
+// Test files are excluded — adding _test.go callers does NOT keep an entry
+// alive. The allowlist tracks production callers only.
+func TestCredentialInvalidateFunnel_AllowlistEntriesAreLive(t *testing.T) {
+	t.Parallel()
+
+	hits := map[string]int{}
+	_ = RunTyped(t, TypedOpts{Tests: false}, []string{
+		"./cells/accesscore/...",
+		"./cmd/...",
+	}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			countUpstreamAllowlistHits(p, file, hits)
+		}
+		return nil
+	})
+
+	var stale []string
+	for callerID := range upstreamCallerCallsiteAllowlist {
+		if hits[callerID] == 0 {
+			stale = append(stale, callerID)
+		}
+	}
+	sort.Strings(stale)
+	for _, s := range stale {
+		t.Errorf("CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 meta: allowlist entry %q "+
+			"has 0 production references — last caller removed; delete the entry in "+
+			"the same PR", s)
+	}
+}
+
+// countUpstreamAllowlistHits increments hits[callerID] for each production
+// SelectorExpr in file that resolves to credentialinvalidate.Invalidator.Apply
+// AND has a resolvable enclosing FuncDecl matching the allowlist.
+func countUpstreamAllowlistHits(p *Pass, file *ast.File, hits map[string]int) {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != invalidatorMethod {
+			return
+		}
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != invalidatorPkg {
+			return
+		}
+		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
+		if !ok {
+			return
+		}
+		callerID := caller.FullName()
+		if _, allowed := upstreamCallerCallsiteAllowlist[callerID]; allowed {
+			hits[callerID]++
+		}
+	})
 }
 
 // ─── Blind-spot self-check tests ─────────────────────────────────────────

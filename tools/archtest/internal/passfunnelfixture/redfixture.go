@@ -100,6 +100,10 @@ var (
 	_ = typeseval.ResolveMethodCall // qualified
 	_ = te.ResolveMethodCall        // alias-import
 
+	// ResolveEnclosingFunc
+	_ = typeseval.ResolveEnclosingFunc // qualified
+	_ = te.ResolveEnclosingFunc        // alias-import
+
 	// EvaluateConstString
 	_ = typeseval.EvaluateConstString // qualified
 	_ = te.EvaluateConstString        // alias-import

@@ -316,7 +316,7 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 //
 // # Per-form fixture coverage
 //
-// The 8 typeseval helper symbols are fixtured in two import forms (qualified +
+// The 9 typeseval helper symbols are fixtured in two import forms (qualified +
 // alias) only. A typeseval dot-import fixture is not present: conflicting imports
 // (a file can only dot-import a given package path once, but the package is
 // already imported under both a qualified and alias form in redfixture.go) make
@@ -342,14 +342,15 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // level. Reverting the *types.TypeName fix in call_target.go drops
 // scannerImportBanCount from 3 to 2, failing the assertion.
 func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
-	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,EvaluateConstString," +
-		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
+	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,ResolveEnclosingFunc," +
+		"EvaluateConstString,FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
 	return scanForForbiddenCallees(
 		tgt,
 		map[string]map[string]bool{
 			typesevalPkgPath: {
 				"ResolvePackageRef":     true,
 				"ResolveMethodCall":     true,
+				"ResolveEnclosingFunc":  true,
 				"EvaluateConstString":   true,
 				"FlatNonDefaultTags":    true,
 				"KnownNonDefaultTags":   true,
@@ -709,7 +710,7 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 
 // TestPassFunnelResolve01 — PASS-FUNNEL-RESOLVE-01.
 //
-// Archtest tools/archtest/<file>_test.go must NOT call the 8 typeseval helper
+// Archtest tools/archtest/<file>_test.go must NOT call the 9 typeseval helper
 // symbols (ResolvePackageRef, ResolveMethodCall, EvaluateConstString,
 // FlatNonDefaultTags, KnownNonDefaultTags, ParseBuildConstraint,
 // IsGeneratedRelPath, BuildContextPredicate) or scanner.ImportBan directly.
@@ -977,7 +978,7 @@ func loadPackagesImporters(t *testing.T) map[string]bool {
 // escape — the typed initial assignment still trips the rule, so wrapping
 // in a variable is a no-op disguise rather than a true bypass.
 //
-// For PASS-FUNNEL-RESOLVE-01 specifically: the 8 typeseval helpers are
+// For PASS-FUNNEL-RESOLVE-01 specifically: the 9 typeseval helpers are
 // fixtured in qualified + alias form only (2 forms). A typeseval dot-import
 // form is infeasible in redfixture.go (conflicting imports — the package is
 // already imported under qualified + alias; Go allows only one dot-import
@@ -1097,11 +1098,12 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	for _, tgt := range fixtureTargets {
 		resolveDiags = append(resolveDiags, diagsResolveHelpers(tgt)...)
 	}
-	// Per-symbol ≥1 assertion for the 8 typeseval helpers.
+	// Per-symbol ≥1 assertion for the 9 typeseval helpers.
 	// Diagnostic messages have the form "use X instead of <typesevalPkgPath>.<SymbolName>".
 	typesevalHelpers := []string{
 		"ResolvePackageRef",
 		"ResolveMethodCall",
+		"ResolveEnclosingFunc",
 		"EvaluateConstString",
 		"FlatNonDefaultTags",
 		"KnownNonDefaultTags",
