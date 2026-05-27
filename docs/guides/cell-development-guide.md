@@ -83,6 +83,7 @@ import (
     "log/slog"
 
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/kernel/clock"
 )
 
 // ISP split: cell.Cell is decomposed into four focused interfaces. Each assertion
@@ -97,13 +98,16 @@ var (
 
 type MyCell struct {
     *cell.BaseCell
+    clk    clock.Clock
     logger *slog.Logger
     // ... 依赖字段
 }
 
-func NewMyCell(opts ...Option) *MyCell {
+func NewMyCell(clk clock.Clock, opts ...Option) *MyCell {
+    clock.MustHaveClock(clk, "mycell.NewMyCell")
     c := &MyCell{
         BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+        clk:      clk,
         logger:   slog.Default(),
     }
     for _, o := range opts {

@@ -36,7 +36,7 @@
 //
 //	csrfMW := middleware.CSRF(csrfCfg)
 //	sessMW, err := middleware.NewCookieSession(clk, sessCfg)
-//	authMW := auth.AuthMiddleware(verifier, publicEndpoints)
+//	authMW := auth.AuthMiddleware(clk, verifier)
 //
 //	rtr.Route("/api/v1", func(r cell.RouteMux) {
 //	    protected := r.With(csrfMW, sessMW, authMW)

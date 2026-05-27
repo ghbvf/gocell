@@ -453,8 +453,10 @@ The transactional outbox is split across three layers — Cell services depend o
 `runtime/outbox`, and persistence lives in `adapters/postgres`:
 
 ```go
+clk := clock.Real()
+
 // 1. Adapt the durable writer at the Cell boundary.
-emitter, err := outbox.NewWriterEmitter(postgres.NewOutboxWriter())
+emitter, err := outbox.NewWriterEmitter(postgres.NewOutboxWriter(clk))
 if err != nil {
     return err
 }
@@ -466,8 +468,8 @@ err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 })
 
 // 3. Compose the relay at bootstrap (cmd/corebundle, examples, etc.)
-store := postgres.NewOutboxStore(pool.DB())
-relay := outbox.NewRelay(store, publisher, outbox.DefaultRelayConfig())
+store := postgres.NewOutboxStore(pool.DB(), clk)
+relay := outbox.NewRelay(clk, store, publisher, outbox.DefaultRelayConfig())
 // relay implements worker.Worker — register with bootstrap to manage lifecycle.
 ```
 
@@ -490,6 +492,8 @@ bootstrap applications must configure `WithConsumerBase`; phase6 fails fast
 without it so idempotency and broker settlement are explicit:
 
 ```go
+clk := clock.Real()
+
 cb, err := outbox.NewConsumerBase(
     idempotency.NewInMemClaimer(clk),
     outbox.ConsumerBaseConfig{},
@@ -500,6 +504,7 @@ if err != nil {
 }
 
 app := bootstrap.New(
+    clk,
     bootstrap.WithSubscriber(rawSub),
     bootstrap.WithConsumerBase(cb),
     bootstrap.WithTracer(tracer),
@@ -549,9 +554,11 @@ tracer, shutdown, err := otel.NewTracer(ctx, otel.TracerConfig{ServiceName: "my-
 if err != nil { /* handle */ }
 defer shutdown(context.Background())
 
+clk := clock.Real()
 jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 if err != nil { /* handle */ }
 app := bootstrap.New(
+    clk,
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
         []auth.ListenerAuth{jwtAuth}),
@@ -559,7 +566,8 @@ app := bootstrap.New(
 )
 
 // router (standalone)
-r := router.New(router.WithTracer(tracer))
+r, err := router.New(clk, router.WithTracer(tracer))
+if err != nil { /* handle */ }
 ```
 
 > Without `WithTracer`, span creation falls back to `wrapper.NoopTracer{}`.

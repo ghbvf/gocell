@@ -9,9 +9,11 @@
 // authChain is rejected at phase0 (`ErrListenerAuthChainMissing`); explicit
 // no-auth must use `auth.AuthNone{}`.
 //
+//	clk := clock.Real()
 //	jwtAuth, err := auth.NewAuthJWTFromAssembly(asm)
 //	if err != nil { /* handle */ }
 //	app := bootstrap.New(
+//	    clk,
 //	    bootstrap.WithAssembly(asm),
 //	    bootstrap.WithListener(cell.PrimaryListener, ":8080",
 //	        []auth.ListenerAuth{jwtAuth}),
