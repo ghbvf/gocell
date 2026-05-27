@@ -273,10 +273,12 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 // observe codegen output (false-positive risk + duplicated declarations).
 // It is the Pass-model successor of typeseval.LoadProductionPackages /
 // ProductionResolver: the generated/ filter is applied by the driver, NOT by
-// a per-callsite `if pass.IsGenerated(f) { continue }` discipline (which an
-// author can forget — a Hard→Soft regression).
+// a per-callsite generated-path skip discipline (which an author can forget —
+// a Hard→Soft regression). The corresponding per-file façades
+// ((*Pass).IsGenerated and archtest.IsGeneratedRelPath) were removed by #722
+// to seal the upstream funnel.
 //
-// AI-robust: downstream Hard / upstream Medium.
+// AI-robust: downstream Hard / upstream Hard (type-system seal).
 //
 //   - Downstream Hard: scanning generated/ output is NOT EXPRESSIBLE through
 //     this entry — a Pass it yields never contains a generated/ file. The
@@ -289,13 +291,17 @@ func RunTypedDir(t testing.TB, dir string, opts TypedOpts, patterns []string, ru
 //     / SharedResolver calls in business *_test.go; RunTypedProduction is the
 //     only legitimate production-load funnel (funnel widened, not bypassed).
 //
-//   - Upstream Medium (honest caveat): a rule author can still write
-//     RunTyped(t, opts, []string{"./..."}, rule) + manual pass.IsGenerated(f)
-//     skip per file. That form compiles and runs; generated/ files are present
-//     in the Pass but skipped per-file. It is not enforced to route through
-//     RunTypedProduction. The Hard "upstream" property (violation unrepresentable
-//     at the call site) is not achievable without sealing the RunTyped API,
-//     which would break fixture-module and partial-scan rules.
+//   - Upstream Hard (type-system seal): the bypass form
+//     RunTyped(t, opts, []string{"./..."}, rule) + per-file pass.IsGenerated(f)
+//     skip is no longer expressible. (*Pass).IsGenerated method and the
+//     archtest.IsGeneratedRelPath package-level re-export have been removed,
+//     so the per-file generated/ predicate has no archtest façade. The
+//     underlying oracle typeseval.IsGeneratedRelPath is banned by
+//     PASS-FUNNEL-RESOLVE-01 in business *_test.go (Medium archtest). The
+//     residual escape — hand-rolling strings.HasPrefix(rel, "generated/") —
+//     is a deliberate visible deviation from the framework filter, not a
+//     silent miss; it surfaces in code review. Closes #722.
+//     Ref: sealed construction (.claude/rules/gocell/ai-robust.md §Hard 范本).
 //
 // Failure modes (module-root not found, go.mod unreadable, load error)
 // fail-loud via t.Fatalf. For the full set including generated/, use
@@ -499,17 +505,4 @@ func (p *Pass) IsFileInScope(f *ast.File) bool {
 		return true
 	}
 	return expr.Eval(typeseval.BuildContextPredicate())
-}
-
-// IsGenerated reports whether f is a codegen output file under the repo's
-// generated/ tree. It delegates to typeseval.IsGeneratedRelPath on pass.Rel(f).
-//
-// Returns true when the file's module-relative path begins with "generated/".
-// Returns false (non-generated, conservative) when [Pass.Rel](f) yields the
-// absolute fallback path — i.e. when the file is outside the module root and
-// filepath.Rel returns the absolute path unchanged; IsGeneratedRelPath will
-// not match a "generated/" prefix on an absolute path.
-// f must come from pass.Files; behavior is undefined for files from other Passes.
-func (p *Pass) IsGenerated(f *ast.File) bool {
-	return typeseval.IsGeneratedRelPath(p.Rel(f))
 }

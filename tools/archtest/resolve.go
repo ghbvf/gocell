@@ -26,8 +26,14 @@
 //   - enumerate build-tag groups for multi-tag SharedResolver loops —
 //     FlatNonDefaultTags / KnownNonDefaultTags;
 //   - extract a file's build constraint expression for 3-way evaluation under
-//     custom tag sets — ParseBuildConstraint;
-//   - test whether a module-relative path is under generated/ — IsGeneratedRelPath.
+//     custom tag sets — ParseBuildConstraint.
+//
+// Deliberately NOT re-exported: any per-file "is this generated?" predicate.
+// Production-scope rules must take generated/ filtering at the driver level
+// via archtest.RunTypedProduction. The per-file Pass.IsGenerated method and
+// archtest.IsGeneratedRelPath package-level re-export were removed by #722 to
+// seal the upstream funnel (sealed construction; see pass.go::RunTypedProduction
+// godoc and .claude/rules/gocell/ai-robust.md §Hard 范本).
 //
 // Hand-rolling these patterns via raw go/types in each rule is error-prone
 // (missed dot-import bare-Ident path, missed alias form, missed untyped const
@@ -171,24 +177,4 @@ func BuildContextPredicate(extraTags ...string) func(string) bool {
 // absolute OS-native path (pass.Abs(f) is a suitable source).
 func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
 	return typeseval.ParseBuildConstraint(filePath)
-}
-
-// IsGeneratedRelPath reports whether rel is a codegen output path under the
-// repo's generated/ tree. rel must be a module-relative slash path (as
-// returned by pass.Rel(f) or pkgFileRel).
-//
-// Returns true when rel begins with "generated/" (top-level only). The repo
-// reserves exactly one generated/ directory at module root; a "generated/"
-// prefix inside a hand-written package would be a layout violation and is
-// intentionally not matched.
-//
-// Use [Pass.IsGenerated] when the path is derived from a *ast.File in
-// pass.Files — it calls pass.Rel(f) automatically. Use this function when
-// the module-relative path string is already available (e.g. iterating a
-// resolver's packages outside a Pass-Driver rule, as in the loader anchor
-// test TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3).
-//
-// Thin delegation to [typeseval.IsGeneratedRelPath].
-func IsGeneratedRelPath(rel string) bool {
-	return typeseval.IsGeneratedRelPath(rel)
 }

@@ -343,7 +343,8 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // scannerImportBanCount from 3 to 2, failing the assertion.
 func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,EvaluateConstString," +
-		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
+		"FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope} / archtest.ImportBan" +
+		" / archtest.RunTypedProduction (driver-level generated/ filter; no per-file façade)"
 	return scanForForbiddenCallees(
 		tgt,
 		map[string]map[string]bool{
@@ -717,7 +718,9 @@ func collectFixtureTagBoundObjects(info *types.Info, file *ast.File) map[types.O
 //   - typeseval helpers → archtest.ResolvePackageRef / .ResolveMethodCall /
 //     .EvaluateConstString / .FlatNonDefaultTags / .KnownNonDefaultTags
 //   - ParseBuildConstraint+BuildContextPredicate → pass.IsFileInScope(f)
-//   - IsGeneratedRelPath → pass.IsGenerated(f)
+//   - IsGeneratedRelPath → use archtest.RunTypedProduction (driver-level
+//     filter); the per-file Pass.IsGenerated / archtest.IsGeneratedRelPath
+//     façades were removed by #722 to seal the upstream funnel.
 //   - scanner.ImportBan → archtest.ImportBan (type alias, same struct API)
 //
 // Detection: SelectorExpr / bare Ident walk + typeseval.ResolvePackageRef

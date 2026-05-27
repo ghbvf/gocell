@@ -4,7 +4,7 @@
 // driver surface: archtest.Run / archtest.RunTyped / archtest.RunTypedDir
 // plus the unexported helpers buildTypedPass / newPackageRel /
 // isPackageWithTestFiles. Also covers the Stage 1.5 additions: Pass.Abs,
-// Pass.IsFileInScope, Pass.IsGenerated, the façade helpers (ResolvePackageRef,
+// Pass.IsFileInScope, the façade helpers (ResolvePackageRef,
 // ResolveMethodCall, EvaluateConstString, FlatNonDefaultTags,
 // KnownNonDefaultTags), and the ImportBan re-export. Stage 1.6 additions:
 // RunTypedDir (fixture-module driver) and runTypedWithRoot delegation.
@@ -506,46 +506,6 @@ func TestPass_IsFileInScope(t *testing.T) {
 	Run(t, ModuleScope(root, IncludeTests()), rule)
 }
 
-// TestPass_IsGenerated verifies Pass.IsGenerated delegates correctly to
-// typeseval.IsGeneratedRelPath. Files under generated/ return true; others false.
-// RED until (*Pass).IsGenerated is added.
-//
-// Oracle comparison: typeseval.IsGeneratedRelPath called on pass.Rel(f).
-// The import of typeseval here is legal (pass_test.go is permanently exempt).
-func TestPass_IsGenerated(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "go.mod"),
-		[]byte("module example.com/gen\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile go.mod: %v", err)
-	}
-	genDir := filepath.Join(root, "generated")
-	if err := os.Mkdir(genDir, 0o700); err != nil {
-		t.Fatalf("Mkdir generated: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(genDir, "code.go"),
-		[]byte("package generated\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile generated/code.go: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "normal.go"),
-		[]byte("package gen\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile normal.go: %v", err)
-	}
-
-	rule := func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			rel := p.Rel(f)
-			oracle := typeseval.IsGeneratedRelPath(rel)
-			got := p.IsGenerated(f)
-			if got != oracle {
-				t.Errorf("Pass.IsGenerated(%s) = %v, oracle typeseval.IsGeneratedRelPath = %v",
-					rel, got, oracle)
-			}
-		}
-		return nil
-	}
-	Run(t, ModuleScope(root, IncludeGenerated()), rule)
-}
-
 // TestImportBanReExport verifies that archtest.ImportBan is a type alias for
 // scanner.ImportBan, and that a trivial Run via the façade alias works.
 // RED until resolve.go adds `type ImportBan = scanner.ImportBan`.
@@ -993,41 +953,6 @@ func TestParseBuildConstraintReExported(t *testing.T) {
 	}
 }
 
-// TestIsGeneratedRelPathReExported verifies that archtest.IsGeneratedRelPath
-// is a thin delegate to typeseval.IsGeneratedRelPath: the returned bool must
-// agree with the oracle for generated/ and non-generated paths.
-//
-// RED proof: if IsGeneratedRelPath were removed from resolve.go (or not yet
-// added), this test would fail to compile.
-//
-// pass_test.go is permanently exempt from PASS-FUNNEL-RESOLVE-01 so the
-// direct typeseval oracle call here is legal.
-func TestIsGeneratedRelPathReExported(t *testing.T) {
-	cases := []struct {
-		rel  string
-		want bool
-	}{
-		{"generated/contracts/foo/v1/handler.go", true},
-		{"generated/foo.go", true},
-		// NOT generated: paths that don't start with "generated/"
-		{"cells/accesscore/slices/sessionlogin/handler.go", false},
-		{"kernel/outbox/result.go", false},
-		// Sub-directory named "generated" inside a hand-written package is not matched.
-		{"cells/foo/generated/bar.go", false},
-	}
-
-	for _, tc := range cases {
-		facade := IsGeneratedRelPath(tc.rel)
-		oracle := typeseval.IsGeneratedRelPath(tc.rel)
-		if facade != oracle {
-			t.Errorf("IsGeneratedRelPath(%q): façade=%v oracle=%v", tc.rel, facade, oracle)
-		}
-		if facade != tc.want {
-			t.Errorf("IsGeneratedRelPath(%q) = %v, want %v", tc.rel, facade, tc.want)
-		}
-	}
-}
-
 // ── Stage 1.6 additions ────────────────────────────────────────────────────
 
 // tbFatalSpy is a minimal testing.TB substitute that captures Fatalf/FailNow
@@ -1230,9 +1155,6 @@ func TestRunTypedProduction_excludesGeneratedPackages(t *testing.T) {
 			if strings.HasPrefix(rel, "generated/") {
 				t.Errorf("RunTypedProduction yielded generated/ file %q — "+
 					"generated packages must be unreachable under this entry", rel)
-			}
-			if p.IsGenerated(f) {
-				t.Errorf("RunTypedProduction yielded IsGenerated file %q", p.Rel(f))
 			}
 		}
 		if p.Pkg != nil && strings.Contains(p.Pkg.Path(), "/generated/") {

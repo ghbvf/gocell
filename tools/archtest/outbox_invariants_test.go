@@ -1711,17 +1711,13 @@ func TestOutboxHandleResultFactoryPreferred(t *testing.T) {
 //
 // Anchor (informational, not a TDD RED): documents that
 // `typeseval.SharedResolver(root, false, nil, "./...")` DOES include
-// generated/ packages, contradicting the comment block above
-// TestOutboxHandleResultFactoryPreferred which claims `go list ./...`
-// default-skips generated/. Wave 3 introduces typeseval.IsGeneratedRelPath
-// + applies it before scanForHandleResultLiterals so the rule no longer
-// scans generated/ paths even though they ARE loaded. The Wave 3 commit
-// also adds a fixture-driven sub-test that exercises the skip with a
-// synthetic generated/-rel path containing a HandleResult literal.
+// generated/ packages, so the rule's choice of RunTypedProduction (which
+// pre-filters generated/ at the driver) is load-bearing — switching to
+// RunTyped("./...") would silently scan generated/ output.
 //
 // This test pins the load behavior so a future packages.Load default
 // change (or a `cfg.BuildFlags=["-tags=nogen"]` style filter at the
-// loader layer) doesn't silently mask the need for IsGeneratedRelPath.
+// loader layer) doesn't silently mask the need for RunTypedProduction.
 func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing.T) {
 	t.Parallel()
 
@@ -1732,7 +1728,7 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if IsGeneratedRelPath(rel) {
+			if strings.HasPrefix(rel, "generated/") {
 				generatedFiles = append(generatedFiles, rel)
 			}
 		}
@@ -1741,11 +1737,11 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 
 	if len(generatedFiles) == 0 {
 		t.Fatalf("anchor invalidated: RunTyped(./...) loaded 0 generated/ files; " +
-			"the rule's outdated comment claiming `go list ./...` default-skips generated/ " +
-			"may now be accurate, but verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
-			"before removing the IsGeneratedRelPath skip")
+			"the rule's documented contrast against RunTypedProduction is vacuous. " +
+			"Verify by running `go list ./... | grep ^github.com/ghbvf/gocell/generated/` " +
+			"before relaxing the RunTypedProduction requirement.")
 	}
-	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — Wave 3's IsGeneratedRelPath must skip these", len(generatedFiles))
+	t.Logf("anchor: RunTyped(./...) loaded %d generated/ files — RunTypedProduction must continue to filter these", len(generatedFiles))
 }
 
 // ---------------------------------------------------------------------------
