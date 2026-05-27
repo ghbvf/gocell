@@ -368,10 +368,10 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 
 ```go
 // Production
-asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: outbox.DurabilityDurable})
+asm := assembly.New(clock.Real(), assembly.Config{ID: "prod", DurabilityMode: outbox.DurabilityDurable})
 
 // Development / tests
-asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: outbox.DurabilityDemo})
+asm := assembly.New(clock.Real(), assembly.Config{ID: "dev", DurabilityMode: outbox.DurabilityDemo})
 ```
 
 `cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;

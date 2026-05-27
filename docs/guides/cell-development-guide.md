@@ -385,7 +385,7 @@ EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
 ### 8. 注册到 Assembly
 
 ```go
-asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
+asm := assembly.New(clock.Real(), assembly.Config{ID: "myapp", DurabilityMode: outbox.DurabilityDemo})
 asm.Register(mycell.NewMyCell(...))
 ```
 

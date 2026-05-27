@@ -95,7 +95,7 @@ type ServiceTokenOption func(*serviceTokenConfig)
 // middleware rejects nonces already consumed within the store's TTL window.
 // Replay protection is mandatory — both ServiceTokenMiddleware and
 // NewServiceTokenAuthenticator reject nil/Noop NonceStore at construction
-// time. Use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test wiring.
+// time. Use NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real()) for dev/test wiring.
 //
 // Passing nil is a no-op: cfg.nonceStore stays nil and construction will fail.
 func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
