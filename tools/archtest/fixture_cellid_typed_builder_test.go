@@ -602,7 +602,8 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 		t.Fatalf("%s/A2: first statement must be *ast.IfStmt, got %T", fixtureCellIDRuleID, fn.Body.List[0])
 	}
 	if !isMatchCellIDNegateCond(pInfo, ifStmt.Cond) {
-		t.Fatalf("%s/A2: if condition must be !metadata.MatchCellID(s) resolved via TypesInfo to %s.MatchCellID", fixtureCellIDRuleID, metadataPkgPath)
+		t.Fatalf("%s/A2: if condition must be !metadata.MatchCellID(s) resolved via TypesInfo to %s.MatchCellID",
+			fixtureCellIDRuleID, metadataPkgPath)
 	}
 	if ifStmt.Else != nil {
 		t.Fatalf("%s/A2: if statement must have no else branch", fixtureCellIDRuleID)
@@ -796,7 +797,8 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 			}
 			if callee == nil || callee.Pkg() == nil ||
 				callee.Pkg().Path() != metadatatestPkgPath || callee.Name() != metadatatestNewCellIDFunc {
-				t.Errorf("%s/A5: %s initializer must call %s.%s, got %v", fixtureCellIDRuleID, name.Name, metadatatestPkgPath, metadatatestNewCellIDFunc, callee)
+				t.Errorf("%s/A5: %s initializer must call %s.%s, got %v",
+					fixtureCellIDRuleID, name.Name, metadatatestPkgPath, metadatatestNewCellIDFunc, callee)
 				continue
 			}
 			if len(call.Args) != 1 {

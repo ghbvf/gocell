@@ -3027,8 +3027,8 @@ func TestADV05_ExitCode_Regression(t *testing.T) {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Contracts: map[string]*metadata.ContractMeta{
 			"event.dead.regression.v1": {
-				ID:               "event.dead.regression.v1",
-				Kind:             "event",
+				ID:   "event.dead.regression.v1",
+				Kind: "event",
 				// OwnerCell omitted (zero value "") — intentionally invalid for ADV-05 test.
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
@@ -4474,7 +4474,8 @@ func TestFMT15(t *testing.T) {
 		// The schema resolver canonicalizes the fake root through filepath.Abs,
 		// which preserves the current drive on Windows.
 		expected, err := filepath.Abs(filepath.Join(
-			string([]byte{'/'}), "project", "contracts", "http", "auth", "login", "v1", "response.schema.json"))
+			string([]byte{'/'}), "project", "contracts", "http", "auth", "login", "v1", "response.schema.json",
+		))
 		require.NoError(t, err)
 		assert.Equal(t, expected, capturedPath)
 	})

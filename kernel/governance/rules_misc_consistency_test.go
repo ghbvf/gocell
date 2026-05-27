@@ -689,11 +689,13 @@ func register(sub handler) {
 		httpContract("http.test.a.v1", "L2", []string{topicA}),
 	})
 	project.Slices = map[string]*metadata.SliceMeta{}
-	addSliceUsages(project.Slices, ownerCell, "emitterslice",
+	addSliceUsages(
+		project.Slices, ownerCell, "emitterslice",
 		metadata.ContractUsage{Contract: "http.test.a.v1", Role: "serve"},
 		metadata.ContractUsage{Contract: topicA, Role: "publish"},
 	)
-	addSliceUsages(project.Slices, ownerCell, "subscriberslice",
+	addSliceUsages(
+		project.Slices, ownerCell, "subscriberslice",
 		metadata.ContractUsage{Contract: topicB, Role: "subscribe"},
 	)
 
@@ -976,11 +978,13 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		httpContract(httpID, "L2", []string{topic}),
 	})
 	project.Slices = map[string]*metadata.SliceMeta{}
-	addSliceUsages(project.Slices, ownerCell, "httpslice",
+	addSliceUsages(
+		project.Slices, ownerCell, "httpslice",
 		metadata.ContractUsage{Contract: httpID, Role: "serve"},
 		metadata.ContractUsage{Contract: topic, Role: "publish"},
 	)
-	addSliceUsages(project.Slices, ownerCell, "emitterslice",
+	addSliceUsages(
+		project.Slices, ownerCell, "emitterslice",
 		metadata.ContractUsage{Contract: topic, Role: "publish"},
 	)
 

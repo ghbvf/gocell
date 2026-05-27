@@ -1525,7 +1525,8 @@ func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts", "http", "test"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "contracts", "http", "test", "outside.schema.json"),
-		[]byte(`{"type":"object","additionalProperties":false}`), 0o644))
+		[]byte(`{"type":"object","additionalProperties":false}`), 0o644,
+	))
 	pm := fmt25Project(nil, nil)
 	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
 
@@ -1908,7 +1909,8 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"cursor": {Type: "string"}, // missing minLength + maxLength
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1927,7 +1929,8 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"limit": {Type: "integer"}, // missing minimum + maximum
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1946,7 +1949,8 @@ func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"ratio": {Type: "number"},
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -1965,7 +1969,8 @@ func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 	pm := fmt25Project(
 		map[string]metadata.ParamSchema{
 			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
-		}, nil)
+		}, nil,
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -2123,7 +2128,8 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 		map[string]metadata.ParamSchema{
 			"id":  {Type: "string", Format: "uuid"},                           // uuid exempt
 			"key": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix}, // plain string with constraints
-		})
+		},
+	)
 
 	results, err := NewValidator(pm, dir, clock.Real()).ValidateStrict(t.Context(), false, false)
 	require.NoError(t, err)
@@ -2206,7 +2212,8 @@ func TestFMT25_CrossFileRef(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(mixinDir, "expected_version.schema.json"),
 			[]byte(`{"type":"integer","minimum":0,"maximum":2147483647}`),
-			0o644))
+			0o644,
+		))
 
 		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
 		require.NoError(t, err)
@@ -2228,7 +2235,8 @@ func TestFMT25_CrossFileRef(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(mixinDir, "expected_version.schema.json"),
 			[]byte(`{"type":"integer","minimum":0}`),
-			0o644))
+			0o644,
+		))
 
 		violations, err := scanSchemaForInputConstraints(schemaPath, rootDir)
 		require.NoError(t, err)
@@ -2479,7 +2487,8 @@ func TestFMT20_EndpointResponsesSchemaRefIgnored(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(contractDir, "error-404.schema.json"),
 		[]byte(`{"type":"object","properties":{"message":{"type":"string"}}}`),
-		0o644))
+		0o644,
+	))
 
 	pm := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -2553,7 +2562,8 @@ func TestFMT20_MalformedRequestSchemaEmitsIssueInvalid(t *testing.T) {
 	require.NoError(t, os.MkdirAll(contractDir, 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(contractDir, "request.schema.json"),
-		[]byte(`not valid json {{{`), 0o644))
+		[]byte(`not valid json {{{`), 0o644,
+	))
 
 	pm := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},

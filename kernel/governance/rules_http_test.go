@@ -580,7 +580,8 @@ func h(w http.ResponseWriter, r *http.Request) {
 
 	project := makeProject(contractID, sliceRelDir)
 
-	c := makeContract(contractID, "contracts/http/test/legacy/v1/contract.yaml",
+	c := makeContract(
+		contractID, "contracts/http/test/legacy/v1/contract.yaml",
 		map[int]metadata.HTTPResponseMeta{
 			400: {Description: "bad request"},
 		},
