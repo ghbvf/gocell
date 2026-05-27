@@ -35,9 +35,11 @@ func TestNewCellID_PanicsOnInvalid(t *testing.T) {
 		{"uppercase", "FooBar"},
 		{"single_char", "a"},
 		{"leading_digit", "1foo"},
+		{"all_digits", "12"},
 		{"underscore", "foo_bar"},
 		{"empty", ""},
 		{"dot", "foo.bar"},
+		{"space", "foo bar"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,10 +89,6 @@ func TestPredefinedConstants(t *testing.T) {
 		"CellIDBeta":           metadatatest.CellIDBeta,
 		"CellIDDeviceCell":     metadatatest.CellIDDeviceCell,
 		"CellIDGood":           metadatatest.CellIDGood,
-		"CellIDPlain":          metadatatest.CellIDPlain,
-		"CellIDSomeCore":       metadatatest.CellIDSomeCore,
-		"CellIDMyCell":         metadatatest.CellIDMyCell,
-		"CellIDMyCore":         metadatatest.CellIDMyCore,
 		"CellIDCellA":          metadatatest.CellIDCellA,
 		"CellIDCellB":          metadatatest.CellIDCellB,
 		"CellIDCellC":          metadatatest.CellIDCellC,
@@ -123,10 +121,6 @@ func TestPredefinedConstants(t *testing.T) {
 		"CellIDBeta":           "beta",
 		"CellIDDeviceCell":     "devicecell",
 		"CellIDGood":           "good",
-		"CellIDPlain":          "plain",
-		"CellIDSomeCore":       "somecore",
-		"CellIDMyCell":         "mycell",
-		"CellIDMyCore":         "mycore",
 		"CellIDCellA":          "cella",
 		"CellIDCellB":          "cellb",
 		"CellIDCellC":          "cellc",

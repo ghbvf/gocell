@@ -9,7 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- JOURNEY-CONTRACT-EXISTENCE-01 (inverse direction of REF-07) ---

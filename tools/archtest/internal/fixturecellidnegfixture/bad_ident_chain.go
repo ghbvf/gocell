@@ -9,16 +9,22 @@ import "github.com/ghbvf/gocell/kernel/metadata"
 // must reject.
 var localBareCellID = "bareidentchain"
 
-// BadIdentChain uses an Ident bound to a bare BasicLit at the map key
-// position — must be flagged by A1 (callsite identity is not a
-// metadatatest reference, even though EvaluateConstString would resolve
-// it).
-var BadIdentChain = &metadata.ProjectMeta{
+// BadIdentChainMapKey uses an Ident at the map key position — must be
+// flagged by A1 (map[string]*metadata.CellMeta key position). First of
+// two violations expected from this file.
+var BadIdentChainMapKey = &metadata.ProjectMeta{
 	Cells: map[string]*metadata.CellMeta{
 		localBareCellID: {
-			ID:               localBareCellID,
+			ID:               "bareidentchain",
 			Type:             "core",
 			ConsistencyLevel: "L1",
 		},
 	},
+}
+
+// BadIdentChainFieldID uses an Ident at a direct CellMeta.ID field
+// position — must be flagged by A1 (direct field position). Second of
+// two violations expected from this file.
+var BadIdentChainFieldID = &metadata.CellMeta{
+	ID: localBareCellID,
 }

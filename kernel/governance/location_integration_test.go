@@ -14,7 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestLocation_REF01_SliceBelongsToCell verifies that a REF-01 finding

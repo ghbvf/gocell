@@ -432,7 +432,7 @@ func TestRenderSliceMetaLiteral_LifecycleProjected(t *testing.T) {
 	t.Parallel()
 	s := &metadata.SliceMeta{
 		ID:               "myslice",
-		BelongsToCell:    metadatatest.CellIDMyCell,
+		BelongsToCell:    metadatatest.NewCellID("mycell"),
 		ConsistencyLevel: "L1",
 		Lifecycle:        "candidate", // slice ≤ cell: cell=asset allows candidate
 	}

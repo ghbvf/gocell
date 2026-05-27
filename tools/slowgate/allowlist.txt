@@ -259,3 +259,27 @@ github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel_NoIndirectReferences
 # hardening. Same SLOW-flake class as the entries above (cumulative trigger
 # evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01
+
+# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A1 typed-info funnel —
+# two RunTyped passes (FlatNonDefaultTags + default) over ./kernel/...
+# with Tests:true; on cold-cache nightly shards without the cached
+# SharedResolver the combined cost is ~30–60s. Same type-graph-load /
+# 16-shard resolver-cache-loss class as the entries above.
+github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder
+# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A2 body-shape lock —
+# single RunTypedProduction Tests:false over metadatatest package.
+# Cost dominated by packages.Load warmup on cold-cache shards.
+github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_NewCellIDBodyShape
+# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A3 negative fixture —
+# RunTypedFixture over fixturecellidnegfixture/ with full type info; same
+# cold-cache class as A1 sibling above.
+github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_NegativeFixture
+# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A4 carveout ADR
+# consistency — file I/O + ADR parse; fast on its own but shares shard
+# budget with A1/A2/A3 siblings; allowlisted to prevent false SLOW.
+github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder_CarveOutADRConsistency
+# type-graph-load: METADATATEST-IMPORT-SCOPE-01 import scope guard —
+# two RunTypedProduction passes (FlatNonDefaultTags + default) over
+# ./... with Tests:true; whole-module SharedResolver profile identical
+# to TestFixtureCellIDTypedBuilder sibling above.
+github.com/ghbvf/gocell/tools/archtest	TestMetadatatestImportScope

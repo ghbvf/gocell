@@ -29,31 +29,37 @@ Introduce a typed-builder funnel mirrored across three loci:
    - **A4** (consistency lock): asserts the carveout map in archtest matches §2 below character-by-character.
 4. **Import scope guard** (`METADATATEST-IMPORT-SCOPE-01`, Medium): production code may not import `metadatatest`.
 
-## §1 — Cell-id field positions (15-field enumeration, schema-derived)
+## §1 — Cell-id field positions (14-field enumeration, schema-derived)
 
-Source: `kernel/metadata/types.go` + `kernel/metadata/derived.go`. Any **new** cell-id field added to `kernel/metadata.*` must be added here AND to `cellIDFieldPositions` / `cellIDMapKeyValueStructs` in the archtest in the **same PR**.
+Source: `kernel/metadata/types.go` + `kernel/metadata/derived.go`. The enumeration covers 13 struct-field positions plus 1 map-key position (ProjectMeta.Cells). Any **new** cell-id field added to `kernel/metadata.*` must be added here AND to `cellIDFieldPositions` / `cellIDMapKeyValueStructs` in the archtest in the **same PR**.
 
-| Struct                                          | Field           | Type                          | Position                          |
-|-------------------------------------------------|-----------------|-------------------------------|-----------------------------------|
-| `ProjectMeta`                                   | `Cells`         | `map[string]*CellMeta`        | map key                           |
-| `CellMeta`                                      | `ID`            | `string`                      | direct                            |
-| `SliceMeta`                                     | `BelongsToCell` | `string`                      | direct                            |
-| `L0DepMeta`                                     | `Cell`          | `string`                      | direct                            |
-| `ContractMeta`                                  | `OwnerCell`     | `string`                      | direct                            |
-| `EndpointsMeta`                                 | `Server`        | `string`                      | direct (HTTP server cell)         |
-| `EndpointsMeta`                                 | `Clients`       | `[]string`                    | slice element                     |
-| `EndpointsMeta`                                 | `Publisher`     | `string`                      | direct                            |
-| `EndpointsMeta`                                 | `Handler`       | `string`                      | direct (command handler cell)     |
-| `EndpointsMeta`                                 | `Invokers`      | `[]string`                    | slice element                     |
-| `EndpointsMeta`                                 | `Provider`      | `string`                      | direct (projection provider cell) |
-| `EndpointsMeta`                                 | `Readers`       | `[]string`                    | slice element                     |
-| `JourneyMeta`                                   | `Cells`         | `[]string`                    | slice element                     |
-| `AssemblyMeta`                                  | `Cells`         | `[]string`                    | slice element                     |
-| `LocatedSliceMeta` (in `kernel/metadata/derived.go`) | `CellID` | `string`                      | direct                            |
+| Struct                  | Field           | Type                          | Position                          |
+|-------------------------|-----------------|-------------------------------|-----------------------------------|
+| `ProjectMeta`           | `Cells`         | `map[string]*CellMeta`        | map key                           |
+| `CellMeta`              | `ID`            | `string`                      | direct                            |
+| `SliceMeta`             | `BelongsToCell` | `string`                      | direct                            |
+| `L0DepMeta`             | `Cell`          | `string`                      | direct                            |
+| `ContractMeta`          | `OwnerCell`     | `string`                      | direct                            |
+| `EndpointsMeta`         | `Server`        | `string`                      | direct (HTTP server cell)         |
+| `EndpointsMeta`         | `Clients`       | `[]string`                    | slice element                     |
+| `EndpointsMeta`         | `Publisher`     | `string`                      | direct                            |
+| `EndpointsMeta`         | `Handler`       | `string`                      | direct (command handler cell)     |
+| `EndpointsMeta`         | `Invokers`      | `[]string`                    | slice element                     |
+| `EndpointsMeta`         | `Provider`      | `string`                      | direct (projection provider cell) |
+| `EndpointsMeta`         | `Readers`       | `[]string`                    | slice element                     |
+| `JourneyMeta`           | `Cells`         | `[]string`                    | slice element                     |
+| `AssemblyMeta`          | `Cells`         | `[]string`                    | slice element                     |
+
+Note: `LocatedSliceMeta.CellID` (in `kernel/metadata/derived.go`) was listed in earlier drafts but does not exist in the codebase — removed in PR #1205.
 
 ### Out of scope (independent typed concepts, mirror backlog)
 
-Slice-id, contract-id, journey-id, assembly-id, and actor-id each share the cell-id pattern but are semantically distinct identifiers. The mirror upgrade for each is tracked under separate backlog issues (`pri-p3`, `flag-cond`, trigger: "when the corresponding domain fixture area is next touched").
+Slice-id, contract-id, journey-id, assembly-id, and actor-id each share the cell-id pattern but are semantically distinct identifiers. The mirror upgrade for each is tracked under separate backlog issues (`pri-p3`, `flag-cond`, trigger: "when the corresponding domain fixture area is next touched"):
+
+- `#1201` PR-FIXTURE-CELLID-EXPAND-NONKERNEL-01 — extend A1 scope to non-kernel packages
+- `#1202` PR-FIXTURE-SLICEID-TYPED-BUILDER-01 — slice-id typed builder
+- `#1203` PR-FIXTURE-CONTRACTID-TYPED-BUILDER-01 — contract-id typed builder
+- `#1204` PR-FIXTURE-JOURNEYID-TYPED-BUILDER-01 — journey/assembly/actor-id typed builder
 
 ## §2 — Carveout Registry
 
@@ -69,13 +75,21 @@ Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.
 - **RED case removed or refactored**: same PR removes the corresponding §2 entry AND the `fixtureCellIDCarveOuts` map entry. A4 enforces consistency.
 - **Builder body refactor**: A2 is a body-form lock — any structural change to `NewCellID` (e.g. extracting a helper, swapping `errcode.Assertion` for another constructor, adding extra logging) requires a synchronized A2 update. The lock prevents silent erosion of the typed-marker funnel.
 - **Production import accidentally added**: `METADATATEST-IMPORT-SCOPE-01` archtest catches it. Upgrade to Hard would require Go's test-only-package proposal; tracked alongside the broader `kernel/cell/celltest` import-boundary pattern.
+- **Scope expansion** (mirror backlog issues #1201–#1204): when a mirror backlog issue migration is complete, the same PR must (1) add the new path prefix to `scopePrefixes` in `scanCellIDFixtureViolations` and to the `RunTyped` pattern list, (2) remove the corresponding allowlist entry from `tools/slowgate/allowlist.txt` if one was added for the expanded scope, and (3) close the corresponding mirror issue.
 
 ## §4 — AI-robust 评级
 
 - **Downstream Hard** (A1): typed-info callsite identity — Ident→BasicLit chains, third-party const refs, and dynamic `NewCellID(var)` arguments all fail uniformly. There is no AST shape that resolves to "metadatatest.NewCellID(literal) or metadatatest.<Var>" while not actually being one of those two forms.
+
+  Documented blind spots (per ai-robust.md §载体决策原则 "强制盲区自检"):
+  - **Ident-typed slice values**: when a slice field (e.g. `JourneyMeta.Cells`) is assigned via an `*ast.Ident` pointing to a pre-built `[]string` var rather than an inline `[]string{...}` composite literal, A1 silently skips the check (the outer `kv.Value` is not a `*ast.CompositeLit`). Downstream Hard (with documented blind spot: Ident-typed slice values for slice-field positions; see archtest godoc Known blind spots). Reverse self-test: `blind_spot_ident_slice.go` in A3 fixture asserts A1 does not report a violation for this shape.
+  - **Assignment statement form** (`c.ID = id`): A1 scans `CompositeLit` nodes only; `var c = &metadata.CellMeta{}; c.ID = "rawassign"` is outside A1 scope. This form appears in `makeProject` helpers in `kernel/metadata/derived_test.go` and `assembly_derive_test.go`. Reverse self-test: `blind_spot_assign.go` in A3 fixture.
+
 - **Upstream Hard** (A2): the single sanctioned construction site (`NewCellID` body) is shape-locked. Any drift fails A2 immediately.
 - **Meta Hard** (A3, A4): A3 reverse self-test catches A1 regressions (over-broad or no-op). A4 keeps the carveout truth-source synchronized between archtest and ADR.
 - **Medium** (`METADATATEST-IMPORT-SCOPE-01`): path-based scope, not type-system. Go cannot express "test-only package" at the type level.
+
+**PR-time vs nightly enforcement latency**: A1 (`TestFixtureCellIDTypedBuilder`) is **not** among the 4 core invariants run at PR-time via `hack/verify-archtest-invariants.sh` in `governance.yml`. It is covered by the nightly `archtest-nightly.yml` 16-shard matrix. This is an intentional latency tradeoff: A1 loads the full `./kernel/...` type graph twice (FlatNonDefaultTags + default), which takes 30–60s on cold-cache CI shards and does not fit the ~30–60s PR-time budget shared across all 4 invariants. The nightly shard matrix amortizes the type-graph cost across 16 parallel jobs.
 
 The funnel forms the **string-typed concept funnel** template (per `.claude/rules/gocell/ai-robust.md` §Hard 范本目录): values are restricted to a sanctioned construction site (NewCellID) plus a closed enumeration of pre-validated constants, with callsite identity verified by go/types.
 

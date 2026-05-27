@@ -30,6 +30,15 @@ import (
 // rather than surviving until the specific test that happens to invoke
 // FMT-C1. The panic is wrapped with panicregister.Approved so that
 // PANIC-REGISTERED-01 accepts this call site.
+//
+// The argument s is expected to be a compile-time string literal per
+// FIXTURE-CELLID-TYPED-BUILDER-01/A1 enforcement — callers that pass a
+// variable or runtime-computed value are rejected by A1. The use of s
+// as a dynamic argument to errcode.Assertion(format, s) is intentional:
+// this is a B-class programmer-error panic (invalid literal supplied at
+// fixture construction time), not user input, so embedding s in the
+// assertion message is acceptable per the panic taxonomy in
+// .claude/rules/gocell/error-handling.md §Panic taxonomy.
 func NewCellID(s string) string {
 	if !metadata.MatchCellID(s) {
 		panic(panicregister.Approved(
@@ -80,10 +89,6 @@ var (
 	CellIDBeta       = NewCellID("beta")
 	CellIDDeviceCell = NewCellID("devicecell")
 	CellIDGood       = NewCellID("good")
-	CellIDPlain      = NewCellID("plain")
-	CellIDSomeCore   = NewCellID("somecore")
-	CellIDMyCell     = NewCellID("mycell")
-	CellIDMyCore     = NewCellID("mycore")
 	CellIDCellA      = NewCellID("cella")      // legacy "cell-a"
 	CellIDCellB      = NewCellID("cellb")      // legacy "cell-b"
 	CellIDCellC      = NewCellID("cellc")      // legacy "cell-c"

@@ -10,7 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // depCheck runs all PhaseDep rules (DEP-01, DEP-02, DEP-03) in order and

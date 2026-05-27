@@ -1,5 +1,6 @@
 // invariants asserted in this file:
 //   - INVARIANT: FIXTURE-CELLID-TYPED-BUILDER-01
+//   - INVARIANT: METADATATEST-IMPORT-SCOPE-01
 //
 // FIXTURE-CELLID-TYPED-BUILDER-01: every cell-id field position in a
 // kernel/metadata.* struct or map composite literal — anywhere in the
@@ -8,16 +9,46 @@
 // or one of metadatatest's pre-validated package-level cell-id vars
 // (CellID*). Bare string literals at those positions are rejected.
 //
-// Enforcement is split into four sub-tests:
+// METADATATEST-IMPORT-SCOPE-01: the metadatatest package
+// (kernel/metadata/metadatatest) must only be imported by *_test.go
+// files or archtest_fixture-tagged code. Importing it from production
+// code drags init-time panics into runtime and contradicts its
+// test-only purpose. AI-robust: Medium (archtest path-based scope; Go
+// cannot express "test-only package" at the type level). Upgrade
+// tracked alongside the broader go test-only-package proposal.
+//
+// Enforcement is split into four sub-tests (A1–A4) plus the import
+// scope guard:
 //
 //   - A1 TestFixtureCellIDTypedBuilder — typed-info funnel: scans all
 //     *ast.CompositeLit, resolves each to a kernel/metadata.* struct or
-//     map type, identifies the cell-id field positions (15-field
-//     enumeration below), and asserts every expression at such a
-//     position resolves to metadatatest.NewCellID(BasicLit) or
-//     metadatatest.<Var>. Hard downstream: callsite identity is
-//     verified via go/types — Ident→BasicLit chains, third-party
-//     consts, and dynamic NewCellID arguments are rejected uniformly.
+//     map type, identifies the cell-id field positions (14-field
+//     enumeration below: 13 struct fields + 1 map key), and asserts
+//     every expression at such a position resolves to
+//     metadatatest.NewCellID(BasicLit) or metadatatest.<Var>. Hard
+//     downstream: callsite identity is verified via go/types — Ident→
+//     BasicLit chains, third-party consts, and dynamic NewCellID
+//     arguments are rejected uniformly.
+//
+//     Known blind spots (A1 scope — documented per ai-robust.md §载体决策原则
+//     "强制盲区自检"):
+//
+//   - Ident-typed slice values: when a slice field (e.g.
+//     JourneyMeta.Cells) is assigned via an *ast.Ident pointing to a
+//     pre-built []string var rather than an inline []string{...}
+//     composite literal, the outer kv.Value is not a *ast.CompositeLit
+//     and scanCellIDStructComposite silently skips the check. A1 only
+//     enforces inline composite literals. Reverse self-test:
+//     blind_spot_ident_slice.go asserts A1 does not report a
+//     violation for this shape (documents the behavior, does not close
+//     the gap).
+//
+//   - Assignment statement form (c.ID = id): A1 scans CompositeLit
+//     nodes only; `var c = &metadata.CellMeta{}; c.ID = "rawassign"`
+//     is outside A1 scope. This form appears in makeProject helpers
+//     in kernel/metadata/derived_test.go and assembly_derive_test.go.
+//     Reverse self-test: blind_spot_assign.go asserts A1 does not
+//     report a violation for this shape.
 //
 //   - A2 TestFixtureCellIDTypedBuilder_NewCellIDBodyShape — locks
 //     the metadatatest.NewCellID FuncDecl body form: exactly
@@ -28,8 +59,9 @@
 //   - A3 TestFixtureCellIDTypedBuilder_NegativeFixture — loads the
 //     fixturecellidnegfixture/ archtest_fixture sub-package containing
 //     deliberate violations (bare map key, bare field value, bare slice
-//     element, Ident→BasicLit chain) plus pass-through good cases,
-//     and asserts A1 fires exactly on the bad cases. Reverse self-test
+//     element, Ident→BasicLit chain, additional struct/slice positions)
+//     plus pass-through good cases and blind-spot self-test files, and
+//     asserts A1 fires exactly on the bad cases. Reverse self-test
 //     that guards against A1 over-broad or no-op regressions.
 //
 //   - A4 TestFixtureCellIDTypedBuilder_CarveOutADRConsistency — parses
@@ -37,6 +69,11 @@
 //     registry table in docs/architecture/<ts>-adr-fixture-cellid-typed-
 //     builder.md, asserting both sides are character-identical. Mirrors
 //     ERRCODE-CARVEOUT-ADR-CONSISTENCY-01.
+//
+//   - TestMetadatatestImportScope — enforces METADATATEST-IMPORT-SCOPE-01:
+//     no production (.go non-_test.go) file may import metadatatest.
+//     Runs two RunTypedProduction passes (with FlatNonDefaultTags and
+//     without) to cover //go:build !X reverse directives.
 //
 // Carveouts (function-level only, per ai-robust.md):
 //
@@ -48,9 +85,12 @@
 //
 // AI-robust: downstream Hard (A1 typed-info callsite identity), upstream
 // Hard (A2 body form-uniqueness), meta Hard (A3 negative fixture + A4
-// ADR consistency). The 15-field enumeration is a closed schema-derived
-// set; new cell-id fields require a same-PR update to both this file and
-// the ADR §1 field table. See ADR §3 升级路径.
+// ADR consistency). The 14-field enumeration (13 struct fields + 1 map
+// key) is a closed schema-derived set; new cell-id fields require a
+// same-PR update to both this file and the ADR §1 field table. See ADR
+// §3 升级路径. A1 is not in the PR-time governance.yml 4-class core
+// invariant set; it is covered by nightly archtest-nightly.yml 16-shard
+// matrix — this is an intentional latency tradeoff (see ADR §4).
 //
 // ref: tools/archtest/cell_id_pattern_single_source_test.go — sibling
 //
@@ -85,9 +125,10 @@ const (
 
 // cellIDFieldPosition identifies a struct field (or slice-field element
 // position) whose string value semantics is a cell-id and therefore must
-// be sourced from metadatatest. The 15-field enumeration mirrors the
-// in-scope table in plan #681 / ADR §1; new cell-id fields require a
-// same-PR update here AND in the ADR §1 table.
+// be sourced from metadatatest. The 14-field enumeration (13 struct fields
+// + 1 map key via cellIDMapKeyValueStructs) mirrors the in-scope table in
+// plan #681 / ADR §1; new cell-id fields require a same-PR update here
+// AND in the ADR §1 table.
 type cellIDFieldPosition struct {
 	structName     string // e.g. "CellMeta"; package path is always metadataPkgPath
 	fieldName      string // e.g. "ID"
@@ -108,7 +149,6 @@ var cellIDFieldPositions = []cellIDFieldPosition{
 	{"EndpointsMeta", "Readers", true},
 	{"JourneyMeta", "Cells", true},
 	{"AssemblyMeta", "Cells", true},
-	{"LocatedSliceMeta", "CellID", false},
 }
 
 // cellIDMapKeyValueStructs lists the named struct types T such that any
@@ -422,16 +462,27 @@ func fmtPositionViolation(p *Pass, rel string, expr ast.Expr, fieldPath string) 
 func exprSourceSnippet(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
-		if e.Kind == token.STRING {
-			return e.Value
-		}
 		return e.Value
 	case *ast.Ident:
 		return "ident " + e.Name
 	case *ast.SelectorExpr:
-		return "selector"
+		// Return <pkg>.<Name> to give actionable context in violation messages.
+		if xIdent, ok := e.X.(*ast.Ident); ok {
+			return xIdent.Name + "." + e.Sel.Name
+		}
+		return "selector." + e.Sel.Name
 	case *ast.CallExpr:
-		return "call"
+		// Return <funcName>() for actionable context.
+		switch fn := e.Fun.(type) {
+		case *ast.Ident:
+			return fn.Name + "()"
+		case *ast.SelectorExpr:
+			if xIdent, ok := fn.X.(*ast.Ident); ok {
+				return xIdent.Name + "." + fn.Sel.Name + "()"
+			}
+			return fn.Sel.Name + "()"
+		}
+		return "call()"
 	default:
 		return fmt.Sprintf("%T", expr)
 	}
@@ -591,24 +642,36 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
 
+	const negFixturePrefix = "tools/archtest/internal/fixturecellidnegfixture/"
+
+	// hasFile reports whether any violation string contains an exact
+	// rel-path segment for the given filename, e.g.
+	// "tools/archtest/internal/fixturecellidnegfixture/bad_map_key.go:N:M:".
+	hasFile := func(filename string) bool {
+		prefix := negFixturePrefix + filename + ":"
+		for _, v := range violations {
+			if strings.HasPrefix(strings.TrimLeft(v, " "), prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Each bad file emits at least one finding.
 	wantBadFiles := []string{
 		"bad_map_key.go",
 		"bad_field.go",
 		"bad_slice_elem.go",
 		"bad_ident_chain.go",
-	}
-	seen := map[string]bool{}
-	for _, v := range violations {
-		for _, want := range wantBadFiles {
-			if strings.Contains(v, want) {
-				seen[want] = true
-			}
-		}
+		"bad_slice_belongs.go",
+		"bad_contract_owner.go",
+		"bad_endpoints_server.go",
+		"bad_endpoints_slices.go",
+		"bad_assembly_cells.go",
 	}
 	var missing []string
 	for _, want := range wantBadFiles {
-		if !seen[want] {
+		if !hasFile(want) {
 			missing = append(missing, want)
 		}
 	}
@@ -617,11 +680,37 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 			fixtureCellIDRuleID, missing, strings.Join(violations, "\n  "))
 	}
 
-	// Good files (good_const_ref.go, good_call_literal.go) must NOT
-	// produce any violations.
+	// bad_ident_chain.go uses localBareCellID at both map key AND
+	// CellMeta.ID — must produce at least 2 findings.
+	var identChainCount int
 	for _, v := range violations {
-		if strings.Contains(v, "good_const_ref.go") || strings.Contains(v, "good_call_literal.go") {
-			t.Errorf("%s/A3: archtest A1 produced false positive on good fixture: %s", fixtureCellIDRuleID, v)
+		if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+"bad_ident_chain.go:") {
+			identChainCount++
+		}
+	}
+	if identChainCount < 2 {
+		t.Errorf("%s/A3: bad_ident_chain.go should produce ≥ 2 findings (map key + CellMeta.ID), got %d",
+			fixtureCellIDRuleID, identChainCount)
+	}
+
+	// Good files must NOT produce any violations.
+	goodFiles := []string{"good_const_ref.go", "good_call_literal.go"}
+	for _, v := range violations {
+		for _, gf := range goodFiles {
+			if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+gf+":") {
+				t.Errorf("%s/A3: archtest A1 produced false positive on good fixture: %s", fixtureCellIDRuleID, v)
+			}
+		}
+	}
+
+	// Blind-spot files must NOT produce any violations (they document
+	// known A1 limitations, not bugs).
+	blindSpotFiles := []string{"blind_spot_ident_slice.go", "blind_spot_assign.go"}
+	for _, v := range violations {
+		for _, bf := range blindSpotFiles {
+			if strings.HasPrefix(strings.TrimLeft(v, " "), negFixturePrefix+bf+":") {
+				t.Errorf("%s/A3: archtest A1 produced unexpected violation on blind-spot fixture (known A1 limitation): %s", fixtureCellIDRuleID, v)
+			}
 		}
 	}
 }
@@ -720,6 +809,11 @@ func parseCarveOutTableFromADR(content string) (map[string]struct{}, error) {
 // drag init-time panics into runtime and contradict its test-only
 // purpose.
 //
+// Two RunTypedProduction passes are performed — one with
+// FlatNonDefaultTags and one without — to cover //go:build !X reverse
+// build directives (files that are excluded by default tags but included
+// with non-default tags, or vice-versa).
+//
 // AI-robust: Medium (archtest path-based scope; Go's type system cannot
 // express "test-only package"). Upgrade tracked alongside the broader
 // go test-only-package proposal.
@@ -727,31 +821,37 @@ func TestMetadatatestImportScope(t *testing.T) {
 	t.Parallel()
 
 	var violations []string
-	_ = RunTypedProduction(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			// Filter out files outside module root (build cache synthetic
-			// test runners, etc.) and *_test.go (test imports are allowed).
-			if strings.HasPrefix(rel, "..") || strings.Contains(rel, "/.cache/") {
-				continue
+	collectImportViolations := func(opts TypedOpts) {
+		_ = RunTypedProduction(t, opts, func(p *Pass) []Diagnostic {
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				// Filter out files outside module root (build cache synthetic
+				// test runners, etc.) and *_test.go (test imports are allowed).
+				if strings.HasPrefix(rel, "..") || strings.Contains(rel, "/.cache/") {
+					continue
+				}
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if !importsMetadatatest(file) {
+					continue
+				}
+				// archtest_fixture build tag files would have been filtered out by
+				// the loader unless explicitly enabled — RunTypedProduction does
+				// not enable archtest_fixture, so any non-test file seen here is
+				// production scope.
+				pos := p.Fset.Position(file.Pos())
+				violations = append(violations,
+					fmt.Sprintf("%s:%d: production file imports %s — restricted to *_test.go",
+						rel, pos.Line, metadatatestPkgPath))
 			}
-			if strings.HasSuffix(rel, "_test.go") {
-				continue
-			}
-			if !importsMetadatatest(file) {
-				continue
-			}
-			// archtest_fixture build tag files would have been filtered out by
-			// the loader unless explicitly enabled — RunTypedProduction does
-			// not enable archtest_fixture, so any non-test file seen here is
-			// production scope.
-			pos := p.Fset.Position(file.Pos())
-			violations = append(violations,
-				fmt.Sprintf("%s:%d: production file imports %s — restricted to *_test.go",
-					rel, pos.Line, metadatatestPkgPath))
-		}
-		return nil
-	})
+			return nil
+		})
+	}
+	// First pass: with FlatNonDefaultTags to cover //go:build !X forms.
+	collectImportViolations(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()})
+	// Second pass: without extra tags (default build context).
+	collectImportViolations(TypedOpts{Tests: true})
 	sort.Strings(violations)
 	violations = dedupSortedStrings(violations)
 	if len(violations) > 0 {

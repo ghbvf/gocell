@@ -755,7 +755,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
 			name:    "clientsOnly",
 			auth:    metadata.HTTPAuthMeta{ServiceOwned: true, ClientsOnly: true},
 			path:    "/internal/v1/service-owned/clients-only",
-			clients: []string{"edge-bff"},
+			clients: []string{metadatatest.CellIDEdgeBFF},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1393,7 +1393,7 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 			name:    "clients_only_on_internal_path_ok",
 			auth:    metadata.HTTPAuthMeta{ClientsOnly: true},
 			path:    "/internal/v1/foo",
-			clients: []string{"edge-bff"},
+			clients: []string{metadatatest.CellIDEdgeBFF},
 			wantErr: false,
 		},
 		{

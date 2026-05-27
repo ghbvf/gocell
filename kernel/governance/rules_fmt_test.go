@@ -6,7 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	metadatatest "github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestFMT13_MissingEndpointsHTTP verifies that an HTTP contract without
@@ -469,7 +469,7 @@ func TestFMT28_BootstrapOnNonSetupAdminPath(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  metadatatest.CellIDSomeCore,
+					Server:  metadatatest.NewCellID("somecore"),
 					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",
@@ -517,7 +517,7 @@ func TestFMT28_BootstrapOnSubstringMatchPath(t *testing.T) {
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  metadatatest.CellIDSomeCore,
+					Server:  metadatatest.NewCellID("somecore"),
 					Clients: []string{metadatatest.CellIDEdgeBFF},
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "POST",

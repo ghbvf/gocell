@@ -10,15 +10,19 @@
 // builds / tests.
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import (
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+)
 
 // BadMapKey constructs a ProjectMeta with a bare string literal as the
 // Cells map key — must be flagged by A1 (map[string]*metadata.CellMeta
-// key position).
+// key position). CellMeta.ID uses a sanctioned metadatatest call so A3
+// can independently verify that only the map-key position is detected.
 var BadMapKey = &metadata.ProjectMeta{
 	Cells: map[string]*metadata.CellMeta{
 		"bareliteralkey": {
-			ID:               "bareliteralkey",
+			ID:               metadatatest.NewCellID("bareliteralkey"),
 			Type:             "core",
 			ConsistencyLevel: "L1",
 		},
