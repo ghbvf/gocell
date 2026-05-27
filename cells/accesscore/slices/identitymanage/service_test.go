@@ -782,34 +782,39 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 	}
 }
 
-// staleReadThenLockedRepo models the PG read-committed window in #1017 F1: a
-// concurrent Lock/Suspend commits between a non-locking GetByID (which returns
-// the stale active snapshot) and a FOR-UPDATE read (which observes the committed
-// locked state). changePasswordInTx must read via GetByIDForUpdate so the
-// inactive gate sees the freeze and rejects before the credential write — a
-// plain GetByID would miss it and rewrite a now-frozen account's password.
-type staleReadThenLockedRepo struct {
+// freezeAfterReadRepo models the #1017 F1 concurrent-freeze window: a
+// Lock/Suspend commits right after changePasswordInTx's non-locking GetByID
+// (which returns the stale active snapshot) and before the write. UpdatePassword's
+// `status='active'` predicate must then reject, so the now-frozen account's
+// credential is not rewritten.
+type freezeAfterReadRepo struct {
 	ports.UserRepository
+	target string
+	froze  bool
 }
 
-func (r *staleReadThenLockedRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
-	u, err := r.UserRepository.GetByIDForUpdate(ctx, id)
-	if err != nil {
-		return nil, err
+func (r *freezeAfterReadRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	u, err := r.UserRepository.GetByID(ctx, id)
+	if err == nil && id == r.target && !r.froze {
+		r.froze = true
+		// simulate a concurrent Lock committing immediately after this read;
+		// the store row is now frozen while the caller holds a stale active view.
+		// UpdateLockState is not overridden, so the promoted method writes the
+		// underlying store directly.
+		_ = r.UpdateLockState(ctx, id, domain.StatusLocked, time.Now())
 	}
-	// mem GetByIDForUpdate returns a clone, so mutating it does not touch the
-	// store; it stands in for "the row was frozen by a concurrent committed tx".
-	u.SetStatus(domain.StatusLocked, time.Now())
-	return u, nil
+	return u, err // stale active snapshot
 }
 
-// TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate pins
-// #1017 F1: when a concurrent freeze commits before the locked read, the
-// credential write must be rejected. The fix is reading via GetByIDForUpdate
-// (row lock, consistent with login/Update) instead of a non-locking GetByID.
-func TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate(t *testing.T) {
+// TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard pins #1017 F1:
+// when a freeze commits between the (non-locking) read and the write, the
+// write-time status guard in UpdatePassword rejects with ErrAuthUserNotActive
+// and the credential is not rewritten. The read-time Assert gate saw the stale
+// active snapshot and passed — the write guard is the backstop.
+func TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard(t *testing.T) {
 	memRepo := mem.NewStore(clock.Real()).UserRepository()
-	spy := &staleReadThenLockedRepo{UserRepository: memRepo}
+	user := seedUserWithHash(t, memRepo, "cp-freeze", "oldpass", false) // active at seed
+	spy := &freezeAfterReadRepo{UserRepository: memRepo, target: user.ID}
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newIdentityRefreshStore()
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "must-not-issue"}}
@@ -818,7 +823,6 @@ func TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate(t *testi
 		WithTokenIssuer(stub), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
 	require.NoError(t, err)
 
-	user := seedUserWithHash(t, memRepo, "cp-freeze", "oldpass", false) // active at seed
 	beforeHash := user.PasswordHash
 	beforePV := user.PasswordVersion
 
@@ -828,7 +832,7 @@ func TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate(t *testi
 		NewPassword: "newpass",
 	})
 
-	// The FOR-UPDATE read observes the concurrent freeze → 403 before mutation.
+	// Write-time status guard rejects the freeze-during-tx window.
 	require.Error(t, cpErr)
 	var ce *errcode.Error
 	require.True(t, errors.As(cpErr, &ce), "expected *errcode.Error, got %T", cpErr)
@@ -837,11 +841,11 @@ func TestService_ChangePassword_ConcurrentFreeze_SerializesViaForUpdate(t *testi
 	after, gerr := memRepo.GetByID(context.Background(), user.ID)
 	require.NoError(t, gerr)
 	assert.Equal(t, beforeHash, after.PasswordHash,
-		"credential must not be rewritten when a freeze committed before the locked read")
+		"credential must not be rewritten when a freeze committed before the write")
 	assert.Equal(t, beforePV, after.PasswordVersion,
-		"passwordVersion must not advance when the locked read rejects")
+		"passwordVersion must not advance when the write guard rejects")
 	assert.Equal(t, int64(0), stub.calls.Load(),
-		"IssueForUser must not run when the locked read rejects pre-mutation")
+		"IssueForUser must not run when the write guard rejects")
 }
 
 func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {

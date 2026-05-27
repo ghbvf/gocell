@@ -116,6 +116,9 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("UpdatePassword_CASConflict", func(t *testing.T) {
 		conformUpdatePasswordCASConflict(t, factory, features)
 	})
+	t.Run("UpdatePassword_InactiveRejected", func(t *testing.T) {
+		conformUpdatePasswordInactiveRejected(t, factory)
+	})
 	t.Run("BumpAuthzEpoch_Succeeds", func(t *testing.T) {
 		conformBumpAuthzEpochSucceeds(t, factory)
 	})
@@ -371,6 +374,43 @@ func conformUpdatePasswordSucceeds(t *testing.T, factory UserRepoFactory) {
 	}
 	if newVersion != initialVersion+1 {
 		t.Errorf("UpdatePassword_Succeeds: want version %d, got %d", initialVersion+1, newVersion)
+	}
+}
+
+// conformUpdatePasswordInactiveRejected verifies the #1017 F1 write-time status
+// guard: UpdatePassword on a frozen (suspended/locked) account is rejected with
+// ErrAuthUserNotActive and does NOT rewrite the credential. This is the backstop
+// for a concurrent Lock/Suspend committing between the caller's read and write.
+func conformUpdatePasswordInactiveRejected(t *testing.T, factory UserRepoFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	u := seedActive(t, txRunner, repo, uuid.NewString(), "pwdInactive_"+uuid.NewString())
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := repo.UpdateLockState(context.Background(), u.ID, domain.StatusSuspended, now); err != nil {
+		t.Fatalf("UpdatePassword_InactiveRejected: UpdateLockState: %v", err)
+	}
+
+	// expectedPV matches (0) — the status guard must fire BEFORE the version
+	// guard, so the result is ErrAuthUserNotActive, not a CAS conflict.
+	_, err := repo.UpdatePassword(context.Background(), u.ID, "$2a$12$newhashafterfreeze", false, u.PasswordVersion)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAuthUserNotActive {
+		t.Fatalf("UpdatePassword_InactiveRejected: want ErrAuthUserNotActive, got %v", err)
+	}
+
+	got, gerr := repo.GetByID(context.Background(), u.ID)
+	if gerr != nil {
+		t.Fatalf("UpdatePassword_InactiveRejected: GetByID: %v", gerr)
+	}
+	if got.PasswordHash != u.PasswordHash {
+		t.Error("UpdatePassword_InactiveRejected: password_hash must be unchanged on a frozen account")
+	}
+	if got.PasswordVersion != u.PasswordVersion {
+		t.Errorf("UpdatePassword_InactiveRejected: password_version must not advance: got %d, want %d",
+			got.PasswordVersion, u.PasswordVersion)
 	}
 }
 

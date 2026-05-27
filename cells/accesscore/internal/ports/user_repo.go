@@ -117,16 +117,26 @@ type UserRepository interface {
 		now time.Time,
 	) error
 
-	// UpdatePassword applies a CAS-guarded password change.
+	// UpdatePassword applies a CAS-guarded password change, gated on the account
+	// being active at write time.
 	//
 	// The SQL (or in-memory equivalent) is:
 	//
-	//	WHERE id=$userID AND password_version=$expectedPasswordVersion
+	//	WHERE id=$userID AND password_version=$expectedPasswordVersion AND status='active'
 	//
-	// On version mismatch (0 rows affected) it returns ErrVersionConflict
-	// (KindConflict / HTTP 409). On success it returns the new
-	// password_version (= expectedPasswordVersion+1). Caller is responsible
-	// for bcrypt-hashing newHash before passing it here.
+	// The status='active' predicate (#1017 F1) is the write-time backstop for a
+	// concurrent Lock/Suspend committing between the caller's read and this write:
+	// a now-frozen account's credential MUST NOT be rewritten. On 0 rows affected
+	// the implementation re-reads the row to disambiguate the cause:
+	//
+	//   - row absent              → ErrAuthUserNotFound   (KindNotFound / 404)
+	//   - status != active        → ErrAuthUserNotActive  (KindPermissionDenied / 403)
+	//   - version mismatch (active) → ErrVersionConflict  (KindConflict / 409)
+	//
+	// Inactive is checked before version so a concurrent freeze is reported as
+	// 403 even if a concurrent change also advanced the version. On success it
+	// returns the new password_version (= expectedPasswordVersion+1). Caller is
+	// responsible for bcrypt-hashing newHash before passing it here.
 	UpdatePassword(
 		ctx context.Context,
 		userID string,
