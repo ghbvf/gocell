@@ -344,9 +344,14 @@ func extractCellName(rel string) string {
 // any "/cells/<X>/..." segment as contract-owned. Handles both platform cells
 // (modPath+"/cells/<X>/...") and example cells
 // (modPath+"/examples/<demo>/cells/<X>/...") by structural marker, not by
-// hand-maintained allowlist. Returns "" for non-cell packages (runtime/,
-// adapters/, kernel/, examples/<demo>/[non-cells]) — those are framework code
-// and structurally exempt from contract-owner rules.
+// hand-maintained allowlist. Returns "" for:
+//   - non-cell packages (runtime/, adapters/, kernel/, examples/<demo>/[non-cells])
+//   - the cell's public test-helper package "cells/<X>/<X>test/..." (structural
+//     test boundary — fixtures construct outbox.Entry literals for consumer
+//     tests, those are not real emissions; mirrors the IMPL-DECL-COVER-01
+//     <X>test exception)
+//
+// Both exclusions are structural (path-shape), not allowlist.
 func extractCellIDFromPkgPath(modPath, pkgPath string) string {
 	if !strings.HasPrefix(pkgPath, modPath+"/") {
 		return ""
@@ -357,10 +362,20 @@ func extractCellIDFromPkgPath(modPath, pkgPath string) string {
 		return ""
 	}
 	tail := pkgPath[idx+len(marker):]
+	cellID := tail
 	if next := strings.Index(tail, "/"); next >= 0 {
-		return tail[:next]
+		cellID = tail[:next]
+		// Structural test-helper boundary: cells/<X>/<X>test/...
+		rest := tail[next+1:]
+		nextSeg := rest
+		if slashIdx := strings.Index(rest, "/"); slashIdx >= 0 {
+			nextSeg = rest[:slashIdx]
+		}
+		if nextSeg == cellID+"test" {
+			return ""
+		}
 	}
-	return tail
+	return cellID
 }
 
 // extractCellNameFromImport extracts the cell name from a full import path like
@@ -786,27 +801,26 @@ func TestEmitDeclCover(t *testing.T) {
 		var d []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
+
+			// Form A: outbox.Emit[T](ctx, emitter, topic, payload) — generic helper,
+			// topic at positional arg[2]. Used by cells/{accesscore/sessionlogin,
+			// accesscore/sessionlogout, configcore/configpublish, configcore/configwrite,
+			// auditcore/internal/appender} as of 2026-05.
 			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-				// Strip generic type args: *ast.IndexExpr / *ast.IndexListExpr
 				fun := call.Fun
 				if idx, ok := fun.(*ast.IndexExpr); ok {
 					fun = idx.X
 				} else if idxl, ok := fun.(*ast.IndexListExpr); ok {
 					fun = idxl.X
 				}
-
-				// Resolve callee to (pkgPath, name)
 				pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, fun)
 				if !ok || pkgPath != outboxPkg || name != "Emit" {
 					return
 				}
-
-				// Emit[T](ctx, emitter, topic, payload) — topic is arg[2]
 				if len(call.Args) < 3 {
 					return
 				}
-				topicExpr := call.Args[2]
-				topic, isConst := EvaluateConstString(p.TypesInfo, topicExpr)
+				topic, isConst := EvaluateConstString(p.TypesInfo, call.Args[2])
 				if !isConst {
 					pos := p.Fset.Position(call.Pos())
 					d = append(d, Diagnostic{
@@ -817,9 +831,7 @@ func TestEmitDeclCover(t *testing.T) {
 					})
 					return
 				}
-
-				allowed := allowedTopics[cellID]
-				if !allowed[topic] {
+				if !allowedTopics[cellID][topic] {
 					pos := p.Fset.Position(call.Pos())
 					d = append(d, Diagnostic{
 						Rel:  rel,
@@ -827,6 +839,55 @@ func TestEmitDeclCover(t *testing.T) {
 						Message: "outbox.Emit topic " + topic + " not declared in any active contract " +
 							"for cell " + cellID + " (must be an event contract publisher or a triggers entry)",
 					})
+				}
+			})
+
+			// Form B: outbox.Entry{EventType: TOPIC, ...} composite-literal — the
+			// underlying CellEmitter.Emit(ctx, entry) public API. The topic lives
+			// in the EventType field, not in a positional arg. Used by cells/
+			// {accesscore/setup, accesscore/identitymanage, accesscore/rbacassign,
+			// accesscore/internal/accountlockout (×2)} and examples/{iotdevice/
+			// deviceregister, todoorder/ordercreate, todoorder/orderconfirm} as
+			// of 2026-05 — 8 production sites that Form A scan misses entirely.
+			//
+			// Zero-value `outbox.Entry{}` literals (return-error placeholders,
+			// no fields set) have no emission intent and are skipped.
+			EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+				typPkg, typName, ok := ResolvePackageRef(p.TypesInfo, lit.Type)
+				if !ok || typPkg != outboxPkg || typName != "Entry" {
+					return
+				}
+				for _, elt := range lit.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					keyIdent, ok := kv.Key.(*ast.Ident)
+					if !ok || keyIdent.Name != "EventType" {
+						continue
+					}
+					topic, isConst := EvaluateConstString(p.TypesInfo, kv.Value)
+					if !isConst {
+						pos := p.Fset.Position(kv.Pos())
+						d = append(d, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: "non-const EventType in outbox.Entry literal; convert to const string " +
+								"(EMIT-DECL-COVER-01: non-const topics cannot be statically validated)",
+						})
+						return
+					}
+					if !allowedTopics[cellID][topic] {
+						pos := p.Fset.Position(kv.Pos())
+						d = append(d, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: "outbox.Entry{EventType: " + topic + "} topic not declared in any " +
+								"active contract for cell " + cellID + " (must be an event contract " +
+								"publisher or a triggers entry)",
+						})
+					}
+					return
 				}
 			})
 		}
@@ -1032,11 +1093,15 @@ func TestDeadContractCover(t *testing.T) {
 		if !isCells && !isExamples {
 			return nil
 		}
+		// Visit every TypeName regardless of visibility (see F2 rationale on
+		// the HANDLER-DECL-COVER-01 collection loop). An unexported impl
+		// satisfying a generated Service via type-system check is just as
+		// valid as an exported one; the orphan check must catch both.
 		pkgScope := p.Pkg.Scope()
 		for _, name := range pkgScope.Names() {
 			obj := pkgScope.Lookup(name)
 			tn, ok := obj.(*types.TypeName)
-			if !ok || !tn.Exported() {
+			if !ok {
 				continue
 			}
 			named, ok := tn.Type().(*types.Named)

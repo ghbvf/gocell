@@ -4,7 +4,6 @@ package identitymanage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -305,7 +304,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
-		if err := s.publish(txCtx, TopicUserCreated, eventPayload); err != nil {
+		if err := outbox.Emit(txCtx, s.emitter, TopicUserCreated, eventPayload); err != nil {
 			return err
 		}
 		return nil
@@ -489,7 +488,7 @@ func (s *Service) applyUserUpdateTx(
 		}
 		u = refetched
 	}
-	if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
+	if err := outbox.Emit(txCtx, s.emitter, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
 		return nil, err
 	}
 	return u, nil
@@ -612,7 +611,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
-		if err := s.publish(txCtx, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
+		if err := outbox.Emit(txCtx, s.emitter, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
 		}
 		return nil
@@ -685,7 +684,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.LockUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		return s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.emitter, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
 	})
 }
 
@@ -751,7 +750,7 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.ActivateUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		return s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.emitter, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
 	}); err != nil {
 		return err
 	}
@@ -889,20 +888,4 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	}
 
 	return user.ID, nil
-}
-
-func (s *Service) publish(ctx context.Context, topic string, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
-	}
-	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: topic,
-		Payload:   data,
-	}
-	if err := s.emitter.Emit(ctx, entry); err != nil {
-		return fmt.Errorf("identity-manage: emit event: %w", err)
-	}
-	return nil
 }
