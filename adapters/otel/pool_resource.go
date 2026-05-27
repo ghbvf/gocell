@@ -6,6 +6,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -80,10 +81,10 @@ type poolMetricsResource struct {
 // Compile-time assertion: poolMetricsResource satisfies ManagedResource.
 var _ lifecycle.ManagedResource = (*poolMetricsResource)(nil)
 
-// Checkers returns nil: the OTel callback fires synchronously on each
+// Probes returns nil: the OTel callback fires synchronously on each
 // collect cycle. There is no out-of-band "are we healthy" probe — if the
 // callback panics, OTel surfaces it through its own diagnostic channel.
-func (*poolMetricsResource) Checkers() map[string]func(context.Context) error {
+func (*poolMetricsResource) Probes() []healthz.Probe {
 	return nil
 }
 

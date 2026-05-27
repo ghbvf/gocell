@@ -337,7 +337,7 @@ fallback.
 
 In addition to the adapter-level `postgres_ready` probe (a bare pool Ping), each
 platform Cell registers a cell-level repo readiness probe via the cellgen-generated
-`<cellpkg>.RegisterRepoReady(reg, prober)` helper (emitted into `healthz_gen.go`).
+`<cellpkg>.RegisterReadiness(reg, prober)` helper (emitted into `healthz_gen.go`).
 These probes represent a **distinct failure domain**:
 they execute a representative query against the Cell's own relation(s), surfacing
 schema/migration drift, missing tables, and table-level permission loss that a

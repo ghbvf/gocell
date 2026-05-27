@@ -196,7 +196,7 @@ func TestEvaluate_MultipleProbesAllStatus(t *testing.T) {
 			agg := NewAggregator(clock.Real())
 			for name, err := range tc.probes {
 				capturedErr := err
-				if regErr := agg.Register(khealthz.NewProbe(name, func(_ context.Context) error {
+				if regErr := agg.Register(khealthz.NewProbe(khealthz.MustProbeName(name), func(_ context.Context) error {
 					return capturedErr
 				})); regErr != nil {
 					t.Fatalf("Register %s: %v", name, regErr)
@@ -251,7 +251,7 @@ func TestEvaluate_SortedByName(t *testing.T) {
 	names := []string{"z_ready", "m_ready", "a_ready", "k_ready"}
 	for _, n := range names {
 		n := n
-		if err := agg.Register(khealthz.NewProbe(n, func(_ context.Context) error { return nil })); err != nil {
+		if err := agg.Register(khealthz.NewProbe(khealthz.MustProbeName(n), func(_ context.Context) error { return nil })); err != nil {
 			t.Fatalf("Register %s: %v", n, err)
 		}
 	}

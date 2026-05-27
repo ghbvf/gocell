@@ -10,7 +10,7 @@ package bootstrap
 //
 // ref: uber-go/fx lifecycle.go — lifecycle hook registration ordering and
 // duplicate-Name detection at Append time (kernel/lifecycle mirrors this contract).
-// ref: kernel/healthz.Aggregator — cells accumulate probes via reg.Healthz()
+// ref: kernel/healthz.Aggregator — cells accumulate probes via reg.RegisterReadiness
 // during Init into RegistrySnapshot.Probes; bootstrap drains them onto the
 // runtime aggregator here, alongside framework probes (config_watcher,
 // config_drift). The recorder holds no live aggregator.
@@ -68,9 +68,9 @@ func (b *Bootstrap) phase3bDrainLifecycleHooks(s *phaseState) error {
 // populated. Two probe sources:
 //
 //  1. Cell-level probes — accumulated into each cell's RegistrySnapshot.Probes
-//     when the typed funnels — the cellgen <cellpkg>.RegisterRepoReady helper
+//     when the typed funnels — the cellgen <cellpkg>.RegisterReadiness helper
 //     and the shared kernel cell.RegisterEmitterHealthProbes — call
-//     reg.Healthz().Register(...) during Init. The recorder is a pure
+//     reg.RegisterReadiness(...) during Init. The recorder is a pure
 //     accumulator (it holds no live aggregator);
 //     bootstrap owns the only runtime aggregator and drains the snapshot onto
 //     it here — exactly mirroring how RouteGroups / Subscriptions /
@@ -106,7 +106,7 @@ func (b *Bootstrap) drainProbes(s *phaseState) error {
 
 // drainCellProbes registers each cell's RegistrySnapshot.Probes onto
 // b.healthAggregator in cell-registration order. Probes were accumulated by
-// the cellgen RegisterRepoReady helper and the kernel
+// the cellgen RegisterReadiness helper and the kernel
 // cell.RegisterEmitterHealthProbes funnel during Init.
 // Duplicate probe names (within or across cells) fail-fast via the
 // aggregator's first-wins healthz.ErrDuplicateProbe.

@@ -10,8 +10,13 @@ import (
 // also satisfies healthz.ProbeSet (in practice outbox.DirectEmitter, which
 // exposes a fail-open-rate probe per cell). It is the single sanctioned funnel
 // for emitter health probes across all cells — handwritten cell Init code calls
-// this instead of re-deriving the type assertion + registration loop, and cells/
-// packages may not call reg.Healthz() directly (HEALTHZ-TYPED-REGISTER-01).
+// this instead of re-deriving the type assertion + registration loop.
+//
+// The funnel terminates in reg.RegisterReadiness(p.Name(), p) for each probe
+// returned by ps.Probes(). Probe names for emitter probes are constructed by
+// healthz.EmitterFailOpenProbeName(cellID) inside DirectEmitter.Probes(), so
+// they are fully inside the kernel/healthz.ProbeName funnel
+// (PROBENAME-SEALED-FUNNEL-01).
 //
 // Behavior:
 //   - bare-nil or typed-nil emitter → no-op (pkg/validation.IsNilInterface, the
@@ -19,22 +24,19 @@ import (
 //     assertion is what makes a typed-nil *DirectEmitter safe — calling Probes()
 //     on it would panic.
 //   - emitter that is not a healthz.ProbeSet → no-op (e.g. WriterEmitter).
-//   - emitter that is a ProbeSet → each Probe is registered; the first
-//     Aggregator.Register error (e.g. healthz.ErrDuplicateProbe) is returned and
-//     terminates the loop — already-registered probes are NOT deregistered
-//     (fail-fast; bootstrap drainProbes treats a duplicate as a startup error).
-//
-// This helper forwards ps.Probes() as-is and does NOT construct probe names:
-// emitter probe names ("outbox_failopen_rate_<cell>") stay bare strings owned by
-// the emitter, intentionally outside the kernel/healthz.ReadyProbeName funnel
-// (see that type's godoc), so this is orthogonal to OPS-CONTRACT-STRING-FUNNEL-01.
+//   - emitter that is a ProbeSet → each Probe is registered via
+//     reg.RegisterReadiness; the first error (e.g. healthz.ErrDuplicateProbe)
+//     is returned and terminates the loop — already-registered probes are NOT
+//     deregistered (fail-fast; bootstrap drainProbes treats a duplicate as a
+//     startup error).
 //
 // AI-robust rating: two orthogonal axes (authoritative grading lives in the
 // HEALTHZ-WRITE-01 godoc — not duplicated here):
-//   - downstream — the registration funnel's caller-side guards are Hard overall
-//     (cellgen + RepoProber typed param + HEALTHZ-TYPED-REGISTER-01 file-identity
-//     keep cells/ off reg.Healthz()); HEALTHZ-WRITE-01/A2 is the Medium archtest
-//     caller-identity backstop covering kernel/ + adapter paths. Unchanged here.
+//   - downstream — Registrar.Healthz() has been removed; reg.RegisterReadiness
+//     is the sole write surface; type system Hard gate (compile error on any
+//     attempt to call the removed method). HEALTHZ-WRITE-01/A2 is the Medium
+//     archtest caller-identity backstop covering Aggregator.Register direct
+//     callsites in kernel/ + adapter paths. Unchanged here.
 //   - upstream — a type-system seal of the Aggregator interface is the only Hard
 //     form, but it is infeasible (the holder axis is inexpressible in Go; plus
 //     cross-package impls + a kernel/healthz↔kernel/outbox import cycle), so
@@ -49,7 +51,7 @@ func RegisterEmitterHealthProbes(reg Registrar, emitter outbox.Emitter) error {
 		return nil
 	}
 	for _, p := range ps.Probes() {
-		if err := reg.Healthz().Register(p); err != nil {
+		if err := reg.RegisterReadiness(p.Name(), p); err != nil {
 			return err
 		}
 	}

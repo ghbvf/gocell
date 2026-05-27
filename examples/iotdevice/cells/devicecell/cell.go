@@ -357,12 +357,12 @@ func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registrar) error {
 		return err
 	}
 	// Cell-level repo readiness probes (observability.md §"Cell 级别 Repo Readiness Probe").
-	// M1 cellgen emits exactly one RegisterRepoReady helper per cell (the cell's
+	// M1 cellgen emits exactly one RegisterReadiness helper per cell (the cell's
 	// primary repo). Auxiliary repo probes (e.g. command_queue_ready) await M2
 	// cellgen multi-probe support — tracked as backlog CELLGEN-MULTI-PROBE-01
 	// (cap-13 §13.1, M1-OBSERVED follow-up).
 	if prober, ok := c.deviceRepo.(healthz.RepoProber); ok {
-		if err := RegisterRepoReady(reg, prober); err != nil {
+		if err := RegisterReadiness(reg, prober); err != nil {
 			return err
 		}
 	}

@@ -78,6 +78,7 @@ type DirectEmitter struct {
 	mode              DirectPublishFailureMode
 	clock             clock.Clock
 	cellID            string
+	failOpenProbeName healthz.ProbeName
 	logger            *slog.Logger
 	failOpenDroppedCv metrics.CounterVec
 	failOpenTracker   *failOpenTracker
@@ -143,6 +144,10 @@ func NewDirectEmitter(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: cellID must not be empty for DirectEmitter")
 	}
+	probeName, err := healthz.EmitterFailOpenProbeName(cellID)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: build fail-open probe name for cellID %q: %w", cellID, err)
+	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_emit_failopen_dropped_total",
 		Help:       "Total outbox entries dropped in fail-open mode. cell=Cell ID; topic=routing topic.",
@@ -166,6 +171,7 @@ func NewDirectEmitter(
 		mode:              mode,
 		clock:             clk,
 		cellID:            cellID,
+		failOpenProbeName: probeName,
 		logger:            cfg.logger,
 		failOpenDroppedCv: cv,
 		failOpenTracker:   newFailOpenTracker(cfg.failOpenRateThresh),
@@ -271,13 +277,15 @@ var _ healthz.ProbeSet = (*DirectEmitter)(nil)
 // Probes returns the fail-open rate probe for this emitter.
 //
 // The probe name "outbox_failopen_rate_<cellID>" is snake_case per the
-// READYZ-PROBE-NAMING-01 convention (a framework rate probe, so no "_ready"
-// suffix). The literal prefix is enforced by READYZ-PROBE-NAMING-01, which
-// checks string-literal operands of composed (prefix + runtime cellID) probe
-// names — a hyphen in the prefix fails the archtest.
+// PROBENAME-SEALED-FUNNEL-01 convention (a framework rate probe, so no
+// "_ready" suffix). The composed name flows through the typed
+// healthz.EmitterFailOpenProbeName(cellID) constructor at NewDirectEmitter
+// time; a hyphen or other illegal character in cellID fails construction
+// (no runtime drift possible — the value-shape check is funneled into
+// the same NewProbeName validator used at every other construction site).
 func (e *DirectEmitter) Probes() []healthz.Probe {
 	return []healthz.Probe{
-		healthz.NewProbe("outbox_failopen_rate_"+e.cellID, e.checkFailOpenRate),
+		healthz.NewProbe(e.failOpenProbeName, e.checkFailOpenRate),
 	}
 }
 

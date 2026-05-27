@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -71,8 +72,10 @@ type trackingManagedResource struct {
 	closeCalled bool
 }
 
-func (r *trackingManagedResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{r.name: func(context.Context) error { return nil }}
+func (r *trackingManagedResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("fake_resource_ready"), func(context.Context) error { return nil }),
+	}
 }
 
 func (r *trackingManagedResource) Worker() kworker.Worker { return nil }

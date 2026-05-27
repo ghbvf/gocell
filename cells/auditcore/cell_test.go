@@ -624,7 +624,7 @@ func TestStrictTailVerifyOnStartup_TimeoutCapped(t *testing.T) {
 }
 
 // TestAuditCore_HealthCheckers_AuditLedgerReady verifies that Init registers
-// the repo readiness probe via RegisterRepoReady typed funnel
+// the repo readiness probe via RegisterReadiness typed funnel
 // (ledger.Store implements healthz.RepoProber). The probe is always present
 // regardless of the emitter type — MemStore always returns nil.
 // ProbeRepoReady = "auditcore_repo_ready" (cellgen-generated constant).
@@ -635,7 +635,7 @@ func TestAuditCore_HealthCheckers_AuditLedgerReady(t *testing.T) {
 	agg := drainProbeSnapshot(t, recorder)
 
 	require.True(t, agg.HasProbe(ProbeRepoReady),
-		"repo probe must be registered via RegisterRepoReady")
+		"repo probe must be registered via RegisterReadiness")
 	require.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"MemStore repo probe must return nil (always ready)")
 }
@@ -661,7 +661,7 @@ func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	assert.False(t, agg.HasProbe("outbox_failopen_rate_auditcore"),
 		"WriterEmitter must not add outbox_failopen_rate probe")
 	assert.True(t, agg.HasProbe(ProbeRepoReady),
-		"repo probe must always be registered via RegisterRepoReady")
+		"repo probe must always be registered via RegisterReadiness")
 }
 
 func mustNewRouter(t *testing.T) *router.Router {

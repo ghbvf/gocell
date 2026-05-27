@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -542,11 +543,17 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 		)`)
 	require.NoError(t, err)
 
-	checkers := p.Checkers()
-	invalidIdxChecker, ok := checkers["postgres_indexes_valid_ready"]
-	require.True(t, ok, "postgres_indexes_valid_ready checker must be present in Checkers()")
+	probes := p.Probes()
+	var invalidIdxProbe healthz.Probe
+	for _, probe := range probes {
+		if probe.Name() == ProbeIndexesValidReady {
+			invalidIdxProbe = probe
+			break
+		}
+	}
+	require.NotNil(t, invalidIdxProbe, "postgres_indexes_valid_ready probe must be present in Probes()")
 
-	err = invalidIdxChecker(ctx)
+	err = invalidIdxProbe.Check(ctx)
 	require.Error(t, err, "invalid indexes must make postgres_indexes_valid_ready fail")
 	assert.False(t, errors.Is(err, outbox.ErrDegraded),
 		"invalid indexes must not be treated as fail-open degraded readiness")

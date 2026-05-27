@@ -19,6 +19,10 @@ const (
 	// defaultDeadline is the per-probe execution budget. Matches the Kubernetes
 	// readiness probe default periodSeconds=10 / timeoutSeconds=5 convention.
 	defaultDeadline = 5 * time.Second
+
+	// probeLogKey is the slog field key used to record the probe name in all
+	// aggregator diagnostic log messages (consolidating 3 occurrences).
+	probeLogKey = "probe"
 )
 
 // Option configures a [aggregator] at construction time.
@@ -36,7 +40,7 @@ func WithDeadline(d time.Duration) Option {
 // All exported access is through the interface value returned by NewAggregator.
 type aggregator struct {
 	mu       sync.RWMutex
-	probes   map[string]healthz.Probe // name → ctx-safe wrapped probe
+	probes   map[healthz.ProbeName]healthz.Probe // name → ctx-safe wrapped probe
 	deadline time.Duration
 	clk      clock.Clock
 }
@@ -55,7 +59,7 @@ type aggregator struct {
 // take the write lock only during map mutation.
 func NewAggregator(clk clock.Clock, opts ...Option) healthz.Aggregator {
 	a := &aggregator{
-		probes:   make(map[string]healthz.Probe),
+		probes:   make(map[healthz.ProbeName]healthz.Probe),
 		deadline: defaultDeadline,
 		clk:      clk,
 	}
@@ -71,7 +75,7 @@ func NewAggregator(clk clock.Clock, opts ...Option) healthz.Aggregator {
 // errors.Is) when p is nil or its Name() is empty, and [healthz.ErrDuplicateProbe]
 // when a probe with the same Name() is already registered. Name shape
 // (snake_case + _ready suffix for dependency probes) is enforced statically by
-// archtest READYZ-PROBE-NAMING-01, not at runtime — see Probe.Name godoc for
+// archtest PROBENAME-SEALED-FUNNEL-01, not at runtime — see Probe.Name godoc for
 // the single-source-of-truth rationale. The probe's Check function is wrapped
 // with a ctx-safe racing wrapper at registration time so that a canceled
 // context always terminates the outer call even when the underlying function
@@ -95,7 +99,7 @@ func (a *aggregator) Register(p healthz.Probe) error {
 
 // Deregister removes the probe with the given name. No-op if the name is not
 // currently registered.
-func (a *aggregator) Deregister(name string) {
+func (a *aggregator) Deregister(name healthz.ProbeName) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.probes, name)
@@ -184,7 +188,7 @@ func (a *aggregator) runOneProbe(ctx context.Context, p healthz.Probe) (pr healt
 		pr.Latency = a.clk.Since(start)
 		if r := recover(); r != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", pr.Name),
+				slog.String(probeLogKey, pr.Name.String()),
 				slog.Any("panic", redaction.RedactAny(r)),
 			)
 			pr.Status = healthz.StatusDown
@@ -239,7 +243,7 @@ type ctxSafeProbe struct {
 	clk   clock.Clock
 }
 
-func (w *ctxSafeProbe) Name() string { return w.inner.Name() }
+func (w *ctxSafeProbe) Name() healthz.ProbeName { return w.inner.Name() }
 
 func (w *ctxSafeProbe) Check(ctx context.Context) error {
 	done := make(chan probeOutcome, 1)
@@ -260,12 +264,12 @@ func (w *ctxSafeProbe) Check(ctx context.Context) error {
 		// values are not silently dropped and operators can grep slog for
 		// probes that take a long time to honor cancellation.
 		cancelAt := w.clk.Now()
-		go watchLateOutcome(w.inner.Name(), ctx.Err(), start, cancelAt, done, w.clk)
+		go watchLateOutcome(w.inner.Name().String(), ctx.Err(), start, cancelAt, done, w.clk)
 		return ctx.Err()
 	case o := <-done:
 		if o.panicV != nil {
 			slog.Warn("healthz: probe panicked",
-				slog.String("probe", w.inner.Name()),
+				slog.String(probeLogKey, w.inner.Name().String()),
 				slog.Any("panic", redaction.RedactAny(o.panicV)),
 			)
 			return fmt.Errorf("panic: %v", redaction.RedactAny(o.panicV))
@@ -284,7 +288,7 @@ func watchLateOutcome(name string, ctxErr error, start, cancelAt time.Time, done
 	switch {
 	case o.panicV != nil:
 		slog.Warn("healthz: probe panicked after ctx cancellation; result discarded",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("panic", redaction.RedactAny(o.panicV)),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
@@ -292,14 +296,14 @@ func watchLateOutcome(name string, ctxErr error, start, cancelAt time.Time, done
 		)
 	case cancelLag > time.Second:
 		slog.Warn("healthz: probe did not honor ctx cancellation promptly",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),
 		)
 	default:
 		slog.Debug("healthz: probe canceled, inner fn returned shortly after",
-			slog.String("probe", name),
+			slog.String(probeLogKey, name),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),

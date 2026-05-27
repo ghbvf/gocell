@@ -26,7 +26,7 @@ func TestAggregator_InterfaceContract(t *testing.T) {
 type aggregatorStub struct{}
 
 func (aggregatorStub) Register(Probe) error              { return nil }
-func (aggregatorStub) Deregister(string)                 {}
+func (aggregatorStub) Deregister(ProbeName)              {}
 func (aggregatorStub) Evaluate(context.Context) Snapshot { return Snapshot{} }
 
 // TestSnapshot_FieldsFrozen locks the field set so codegen / wire transports

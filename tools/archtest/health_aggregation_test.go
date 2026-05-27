@@ -3,20 +3,19 @@ package archtest
 // INVARIANT: HEALTH-AGG-01
 //
 // HEALTH-AGG-01: Any exported type in runtime/ or adapters/ that exposes a
-// Checkers() or HealthCheckers() method must implement the full
-// kernellifecycle.ManagedResource interface (i.e., also have Worker() and
-// Close() methods). This prevents the "register health checkers but forget the
-// rest of the lifecycle contract" class of bugs that WithRelayHealth
-// represented.
+// Probes() method must implement the full kernellifecycle.ManagedResource
+// interface (i.e., also have Worker() and Close() methods). This prevents the
+// "register health probes but forget the rest of the lifecycle contract" class
+// of bugs that WithRelayHealth represented.
 //
 // Implementation: golang.org/x/tools/go/packages + go/types — types.NewMethodSet
 // surfaces promoted methods from embedded fields, so a type that satisfies the
-// contract via embedding (e.g. struct embedding *PGResource) is correctly
+// contract via embedding (e.g. struct embedding *FakeResource) is correctly
 // recognized as implementing ManagedResource.
 //
 // Enforcement scope: runtime/, adapters/ packages only.
 // Excluded: cells/, kernel/cell/ — health probes are registered via
-// Registry.Health(...) and do not bundle Worker/Close.
+// Registry.RegisterReadiness(...) and do not bundle Worker/Close.
 
 import (
 	"go/ast"
@@ -87,28 +86,28 @@ func accumulateMethodSet(p *Pass, s *typeMethodSet) {
 }
 
 // isManagedResource returns true when qualified type carries the full
-// ManagedResource trio (Checkers + Worker + Close).
+// ManagedResource trio (Probes + Worker + Close).
 func isManagedResource(s *typeMethodSet, qualified string) bool {
-	return s.has(qualified, "Checkers") &&
+	return s.has(qualified, "Probes") &&
 		s.has(qualified, "Worker") &&
 		s.has(qualified, "Close")
 }
 
-// exposesHealthCheckerMethod returns true when qualified type advertises
-// health-checking via Checkers() or the legacy HealthCheckers() spelling.
+// exposesHealthProbeMethod returns true when qualified type advertises
+// health-checking via Probes().
 //
 // Note: "Health(ctx)" (e.g. adapters/postgres.Pool.Health) is intentionally
 // NOT included. Pool (adapters/postgres.Pool) now directly implements
 // ManagedResource; Pool.Health is a connectivity probe with different semantics
-// from Checkers(). Adding "Health" here would incorrectly flag Pool.
-func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
-	return s.has(qualified, "Checkers") || s.has(qualified, "HealthCheckers")
+// from Probes(). Adding "Health" here would incorrectly flag Pool.
+func exposesHealthProbeMethod(s *typeMethodSet, qualified string) bool {
+	return s.has(qualified, "Probes")
 }
 
 // healthAggSanctionedAdapterCarveOuts lists exported types in runtime/ or
 // adapters/ that intentionally do NOT implement ManagedResource directly even
-// though they expose Checkers() — their Checkers/Worker primitives are
-// consumed by a single sanctioned adapter that owns the Close obligation.
+// though they expose Probes() — their Probes/Worker primitives are consumed by
+// a single sanctioned adapter that owns the Close obligation.
 //
 // Each entry MUST cite the ADR that closes the carve-out semantically. The
 // downstream Hard guard for *runtime/outbox.Relay is archtest
@@ -116,7 +115,7 @@ func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
 // moment *Relay re-satisfies ManagedResource, so this allowlist cannot widen
 // in the wrong direction without an immediate second archtest failure.
 var healthAggSanctionedAdapterCarveOuts = map[string]string{
-	// *Relay's Checkers/Worker are consumed exclusively by the
+	// *Relay's Probes/Worker are consumed exclusively by the
 	// package-private runtime/bootstrap.relayAdapter (single sanctioned
 	// holder) which owns Close → relay.Stop. Re-adding Close to *Relay
 	// would regress the type isolation guarded by
@@ -125,9 +124,9 @@ var healthAggSanctionedAdapterCarveOuts = map[string]string{
 }
 
 // TestHealthCheckersImpliesManagedResource (HEALTH-AGG-01) asserts that every
-// exported type in runtime/ or adapters/ that exposes Checkers() or
-// HealthCheckers() also implements the full ManagedResource contract
-// (Checkers + Worker + Close), counting promoted methods from embedded fields.
+// exported type in runtime/ or adapters/ that exposes Probes() also implements
+// the full ManagedResource contract (Probes + Worker + Close), counting
+// promoted methods from embedded fields.
 //
 // Exceptions are limited to the sanctioned-adapter carve-out map
 // (healthAggSanctionedAdapterCarveOuts) where the Close obligation is owned
@@ -143,7 +142,7 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 
 	var violations []string
 	for qualified := range s.methods {
-		if !exposesHealthCheckerMethod(s, qualified) {
+		if !exposesHealthProbeMethod(s, qualified) {
 			continue
 		}
 		if isManagedResource(s, qualified) {
@@ -159,25 +158,22 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 		if !s.has(qualified, "Close") {
 			missing = append(missing, "Close()")
 		}
-		if s.has(qualified, "HealthCheckers") && !s.has(qualified, "Checkers") {
-			missing = append(missing, "Checkers() [rename from HealthCheckers]")
-		}
 		violations = append(violations,
-			qualified+" exposes health checker methods but is missing: "+
+			qualified+" exposes Probes() but is missing: "+
 				strings.Join(missing, ", ")+" (HEALTH-AGG-01: must implement ManagedResource)")
 	}
 
 	assert.Empty(t, violations,
-		"HEALTH-AGG-01 violation: types exposing health checker methods must implement kernellifecycle.ManagedResource")
+		"HEALTH-AGG-01 violation: types exposing Probes() must implement kernellifecycle.ManagedResource")
 }
 
-// TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly asserts the
+// TestHealthCheckersImpliesManagedResource_CarveOutsProbesOnly asserts the
 // integrity of the sanctioned-adapter carve-out: every entry must still
-// expose Checkers() (otherwise the carve-out is dead) and must still NOT
+// expose Probes() (otherwise the carve-out is dead) and must still NOT
 // satisfy the full ManagedResource contract (otherwise the carve-out is
 // vacuous / can be deleted). This guards against silent drift in either
 // direction without forcing the main HEALTH-AGG-01 assertion to re-scan.
-func TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly(t *testing.T) {
+func TestHealthCheckersImpliesManagedResource_CarveOutsProbesOnly(t *testing.T) {
 	s := newTypeMethodSet()
 	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."},
 		func(p *Pass) []Diagnostic {
@@ -186,8 +182,8 @@ func TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly(t *testing.T
 		})
 
 	for qualified, adr := range healthAggSanctionedAdapterCarveOuts {
-		assert.Truef(t, exposesHealthCheckerMethod(s, qualified),
-			"HEALTH-AGG-01 carve-out %q (ADR %s) no longer exposes Checkers — delete the carve-out entry",
+		assert.Truef(t, exposesHealthProbeMethod(s, qualified),
+			"HEALTH-AGG-01 carve-out %q (ADR %s) no longer exposes Probes — delete the carve-out entry",
 			qualified, adr)
 		assert.Falsef(t, isManagedResource(s, qualified),
 			"HEALTH-AGG-01 carve-out %q (ADR %s) now fully implements ManagedResource — delete the carve-out entry; "+
@@ -198,7 +194,7 @@ func TestHealthCheckersImpliesManagedResource_CarveOutsCheckersOnly(t *testing.T
 
 // TestHealthAggregation_FixtureRegression exercises the fixture set under
 // testdata/health_agg_fixtures/ to prove that promoted methods are detected
-// (promoted_ok.App must NOT be flagged) and that bare Checkers() declarations
+// (promoted_ok.App must NOT be flagged) and that bare Probes() declarations
 // are still flagged (checkers_only.Bad must be flagged).
 func TestHealthAggregation_FixtureRegression(t *testing.T) {
 	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "health_agg_fixtures")
@@ -210,22 +206,20 @@ func TestHealthAggregation_FixtureRegression(t *testing.T) {
 		})
 
 	const promotedOkApp = "healthaggfixtures/promoted_ok.App"
-	require.True(t, exposesHealthCheckerMethod(s, promotedOkApp),
-		"App should expose Checkers() via promoted method from embedded *FakeResource")
+	require.True(t, exposesHealthProbeMethod(s, promotedOkApp),
+		"App should expose Probes() via promoted method from embedded *FakeResource")
 	assert.True(t, isManagedResource(s, promotedOkApp),
 		"App should be ManagedResource via promoted Worker/Close (proves go/types upgrade)")
 
 	const checkersOnlyBad = "healthaggfixtures/checkers_only.Bad"
-	require.True(t, exposesHealthCheckerMethod(s, checkersOnlyBad))
+	require.True(t, exposesHealthProbeMethod(s, checkersOnlyBad))
 	assert.False(t, isManagedResource(s, checkersOnlyBad),
-		"Bad declares only Checkers() — must remain flagged as missing Worker/Close")
+		"Bad declares only Probes() — must remain flagged as missing Worker/Close")
 }
 
 // Adapter/runtime ready-probe NAME validation (snake_case + _ready, single
-// source) moved to the Hard funnel OPS-CONTRACT-STRING-FUNNEL-01
-// (ops_contract_string_funnel_test.go). The Soft regex scanners that lived here
+// source) moved to the Hard funnel PROBENAME-SEALED-FUNNEL-01
+// (probename_sealed_funnel_test.go). The Soft regex scanners that lived here
 // — adapterCheckerNameViolationsFromPass / checkerNamesFromFuncPass /
 // healthCheckerCallNameViolationsFromPass — were removed (no parallel
-// Soft+Hard). The bootstrap.WithHealthChecker scan had no production callsite
-// (vacuous); naming for any future composition-root WithHealthChecker call is
-// the composition root's responsibility.
+// Soft+Hard).

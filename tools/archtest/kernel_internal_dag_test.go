@@ -80,7 +80,7 @@ var allowedKernelEdges = map[string][]string{
 	"healthz":       nil,
 	"idempotency":   {"clock"},
 	"journey":       {"metadata"},
-	"lifecycle":     {"worker"},
+	"lifecycle":     {"healthz", "worker"},
 	"metadata":      {"cellvocab"},
 	"metautil":      nil,
 	"observability": nil,

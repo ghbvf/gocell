@@ -29,6 +29,7 @@ import (
 	kauthtest "github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -709,7 +710,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -766,7 +767,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error {
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
 		}),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -874,7 +875,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	// This test covers the framework-probe path: WithHealthChecker is the
 	// composition-root entry that drainProbes wires onto bootstrap's aggregator.
-	// The cell-registered probe path (reg.Healthz().Register during Init →
+	// The cell-registered probe path (reg.RegisterReadiness during Init →
 	// RegistrySnapshot.Probes → drainCellProbes) is covered by
 	// TestBootstrap_CellProbe_DrainAppearsInReadyz.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -894,7 +895,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 		// WithHealthChecker is the composition-root path that drainProbes wires
 		// into bootstrap's aggregator.
-		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -935,7 +936,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 }
 
 // TestBootstrap_CellProbe_DrainAppearsInReadyz proves the F1 fix end-to-end: a
-// cell that registers a probe via reg.Healthz().Register during Init has that
+// cell that registers a probe via reg.RegisterReadiness during Init has that
 // probe accumulated into RegistrySnapshot.Probes, drained onto the runtime
 // aggregator by drainCellProbes, and surfaced in /readyz verbose output. Before
 // the snapshot-drain fix the recorder discarded the probe into a noopAggregator.
@@ -944,7 +945,7 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-cell-probe", DurabilityMode: outbox.DurabilityDemo})
-	// snapshotCheckCell.Init registers healthz probe "probe.<id>" via reg.Healthz().
+	// snapshotCheckCell.Init registers healthz probe "probe_<id>" via reg.RegisterReadiness.
 	require.NoError(t, asm.Register(newSnapshotCheckCell("widget")))
 
 	healthLn := newLocalListener(t)
@@ -981,10 +982,10 @@ func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "200 verbose response must contain dependencies map")
-	probe, ok := deps["probe.widget"].(map[string]any)
+	probe, ok := deps["probe_widget"].(map[string]any)
 	require.True(t, ok, "cell-registered probe must appear in /readyz verbose dependencies")
 	assert.Equal(t, "healthy", probe["status"],
-		"cell probe registered via reg.Healthz() must be drained to /readyz")
+		"cell probe registered via reg.RegisterReadiness must be drained to /readyz")
 
 	cancel()
 	select {
@@ -1016,8 +1017,8 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 		WithShutdownTimeout(testtime.D2s),
 		// Two WithHealthChecker calls with the same name trigger duplicate detection
 		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
-		WithHealthChecker("accesscore_repo_ready", func(_ context.Context) error { return nil }),
-		newDupHealthCheckerOption("accesscore_repo_ready"),
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
+		newDupHealthCheckerOption(healthz.MustProbeName("accesscore_repo_ready")),
 	)
 
 	ctx := t.Context()
@@ -1033,7 +1034,7 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 // can register the same checker twice without tripping gocritic's dupOption
 // lint — the literal-equal arguments are now produced by two different
 // call expressions.
-func newDupHealthCheckerOption(name string) Option {
+func newDupHealthCheckerOption(name healthz.ProbeName) Option {
 	return WithHealthChecker(name, func(_ context.Context) error { return nil })
 }
 
@@ -1072,7 +1073,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
 	b := New(
 		clock.Real(),
-		WithHealthChecker("mycheck", nil),
+		WithHealthChecker(healthz.MustProbeName("mycheck"), nil),
 	)
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -1121,8 +1122,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
-		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("postgres"), func(_ context.Context) error { return fmt.Errorf("connection refused") }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1189,7 +1190,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithHealthChecker("rabbitmq", func(_ context.Context) error {
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
 			if unhealthy.Load() {
 				return fmt.Errorf("connection lost")
 			}
@@ -1295,7 +1296,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if !ok {
 			return false
 		}
-		probe, ok := deps[configWatcherCheckerName].(map[string]any)
+		probe, ok := deps[configWatcherCheckerName.String()].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1356,7 +1357,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 			return false
 		}
 		// Config drift checker should be registered and healthy (no drift).
-		probe, ok := deps[configDriftCheckerName].(map[string]any)
+		probe, ok := deps[configDriftCheckerName.String()].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1501,7 +1502,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
-		return captureHasReadyzDependencyStatus(driftSlogCapture, configDriftCheckerName, "unhealthy")
+		return captureHasReadyzDependencyStatus(driftSlogCapture, configDriftCheckerName.String(), "unhealthy")
 	}, testtime.EventuallyLong, testtime.SlowPoll, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
@@ -1554,7 +1555,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
-		WithHealthChecker("config_watcher", func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("config_watcher"), func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(testtime.D1s),
 	)
 

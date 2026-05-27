@@ -9,18 +9,19 @@ import (
 )
 
 // ProbeRepoReady is the canonical readiness probe name for the accesscore cell's
-// primary repository. The "_ready" suffix is required by the READYZ-PROBE-NAMING-01
+// primary repository. The "_ready" suffix is required by the PROBENAME-SEALED-FUNNEL-01
 // convention.
-const ProbeRepoReady = "accesscore_repo_ready"
+const ProbeRepoReady healthz.ProbeName = "accesscore_repo_ready"
 
-// RegisterRepoReady registers a healthz.RepoProber implementation as the
-// cell-level repository readiness probe on the given Registry. This is the
+// RegisterReadiness registers a healthz.RepoProber implementation as the
+// cell-level repository readiness probe on the given Registrar. This is the
 // sole sanctioned entry point — handwritten cell code must NOT call
-// reg.Healthz() directly (locked by HEALTHZ-TYPED-REGISTER-01).
+// reg.RegisterReadiness directly with a bare string (locked by
+// PROBENAME-SEALED-FUNNEL-01).
 //
 // Emitter health probes are NOT generated per-cell: they go through the shared
 // kernel funnel cell.RegisterEmitterHealthProbes(reg, emitter), which handles
 // the healthz.ProbeSet assertion and typed-nil guard in one place.
-func RegisterRepoReady(reg cell.Registrar, p healthz.RepoProber) error {
-	return reg.Healthz().Register(healthz.NewProbe(ProbeRepoReady, p.RepoReady))
+func RegisterReadiness(reg cell.Registrar, p healthz.RepoProber) error {
+	return reg.RegisterReadiness(ProbeRepoReady, healthz.ProberFunc(p.RepoReady))
 }

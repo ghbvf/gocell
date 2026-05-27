@@ -690,7 +690,7 @@ func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 }
 
 // TestConfigCore_HealthCheckers_ConfigRepoReady verifies that after Init the
-// repo readiness probe is registered via RegisterRepoReady and the mem-backed
+// repo readiness probe is registered via RegisterReadiness and the mem-backed
 // probe returns nil (always-ready MemStore convention).
 // ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
@@ -700,14 +700,14 @@ func TestConfigCore_HealthCheckers_ConfigRepoReady(t *testing.T) {
 	agg := drainProbeSnapshot(t, recorder)
 
 	require.True(t, agg.HasProbe(ProbeRepoReady),
-		"RegisterRepoReady must register repo probe in the aggregator")
+		"RegisterReadiness must register repo probe in the aggregator")
 	assert.NoError(t, agg.Probe(ProbeRepoReady).Check(context.Background()),
 		"mem-backed repo probe must return nil (MemStore always-ready convention)")
 }
 
 // TestConfigCore_HealthCheckers_NilEmitter verifies that when the emitter does
 // not implement healthz.ProbeSet, no emitter probes are registered.
-// The repo probe is always present (unconditionally via RegisterRepoReady).
+// The repo probe is always present (unconditionally via RegisterReadiness).
 // ProbeRepoReady = "configcore_repo_ready" (cellgen-generated constant).
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewConfigCore(
@@ -721,7 +721,7 @@ func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	assert.False(t, agg.HasProbe("outbox_failopen_rate_configcore"),
 		"WriterEmitter must not register outbox_failopen_rate probe")
 	assert.True(t, agg.HasProbe(ProbeRepoReady),
-		"repo probe must always be registered via RegisterRepoReady")
+		"repo probe must always be registered via RegisterReadiness")
 }
 
 // ---------------------------------------------------------------------------

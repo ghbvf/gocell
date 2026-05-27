@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -192,7 +193,7 @@ func (b *Bootstrap) validateAssemblyClockAlignment() error {
 // other in the health handler, making one probe invisible — surface the
 // error at phase 0 before any side effects.
 func (b *Bootstrap) validateHealthCheckers() error {
-	seen := make(map[string]struct{}, len(b.healthCheckers))
+	seen := make(map[healthz.ProbeName]struct{}, len(b.healthCheckers))
 	for _, hc := range b.healthCheckers {
 		if hc.name == "" {
 			return fmt.Errorf("bootstrap: health checker name must not be empty")

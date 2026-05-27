@@ -33,7 +33,7 @@ type Aggregator interface {
 
 	// Deregister removes the probe with the given name. No-op if the name
 	// is not currently registered.
-	Deregister(name string)
+	Deregister(name ProbeName)
 
 	// Evaluate runs all registered probes synchronously and returns a fresh
 	// Snapshot. Each probe is invoked with a context derived from ctx; the
@@ -67,7 +67,7 @@ type Snapshot struct {
 // Latency measures the wall-clock duration of Check(); the aggregator
 // records it under whatever clock its constructor was given.
 type ProbeResult struct {
-	Name    string
+	Name    ProbeName
 	Status  Status
 	Err     error
 	Latency time.Duration

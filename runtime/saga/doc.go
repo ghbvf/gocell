@@ -20,7 +20,7 @@
 // The Definition / Step / Resolver data primitives live in kernel/saga (a
 // pure data package). The Coordinator + Dispatcher engine lives here. No
 // cell wraps runtime/saga in PR-03 — the cell-side wiring (including
-// RegisterRepoReady) lands in PR-09.
+// RegisterReadiness) lands in PR-09.
 //
 // # Carry-over from PR-02 (#952)
 //
@@ -30,7 +30,7 @@
 //
 // Note: The `saga_coordinator_ready` probe is NOT registered with any cell in
 // PR-03; it becomes reachable via `/readyz` only after PR-09 wires it through
-// cellgen's `RegisterRepoReady`.
+// cellgen's `RegisterReadiness`.
 //
 // # PR-03 deferred scope
 //
@@ -55,7 +55,7 @@
 //
 // Stop is idempotent. Ready() returns a channel closed once Start transitions
 // to running. RepoReady delegates to journal.RepoReady so the wrapping cell
-// (PR-09) can register it via cellgen-emitted RegisterRepoReady.
+// (PR-09) can register it via cellgen-emitted RegisterReadiness.
 //
 // tickLoop processes claimed instances sequentially within one tick. If
 // Step.Run has high latency, set ClaimBatchSize=1 to keep ticks short and

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -66,7 +67,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("up_probe_returns_up_snapshot", func(t *testing.T) {
 		agg := factory()
-		p := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
+		p := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error { return nil })
 		if err := agg.Register(p); err != nil {
 			t.Fatalf(msgRegisterErr, err)
 		}
@@ -84,8 +85,8 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("one_down_probe_overall_down", func(t *testing.T) {
 		agg := factory()
-		upProbe := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
-		downProbe := khealthz.NewProbe("beta_ready", func(_ context.Context) error {
+		upProbe := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error { return nil })
+		downProbe := khealthz.NewProbe(khealthz.MustProbeName("beta_ready"), func(_ context.Context) error {
 			return errors.New("db unavailable")
 		})
 		if err := agg.Register(upProbe); err != nil {
@@ -102,10 +103,10 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("down_and_degraded_overall_down", func(t *testing.T) {
 		agg := factory()
-		downProbe := khealthz.NewProbe("alpha_ready", func(_ context.Context) error {
+		downProbe := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error {
 			return errors.New("hard failure")
 		})
-		degradedProbe := khealthz.NewProbe("beta_ready", func(_ context.Context) error {
+		degradedProbe := khealthz.NewProbe(khealthz.MustProbeName("beta_ready"), func(_ context.Context) error {
 			return outbox.ErrDegraded
 		})
 		if err := agg.Register(downProbe); err != nil {
@@ -122,8 +123,8 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("up_and_degraded_overall_degraded", func(t *testing.T) {
 		agg := factory()
-		upProbe := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
-		degradedProbe := khealthz.NewProbe("beta_ready", func(_ context.Context) error {
+		upProbe := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error { return nil })
+		degradedProbe := khealthz.NewProbe(khealthz.MustProbeName("beta_ready"), func(_ context.Context) error {
 			return outbox.ErrDegraded
 		})
 		if err := agg.Register(upProbe); err != nil {
@@ -140,7 +141,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("duplicate_register_returns_err_duplicate_probe", func(t *testing.T) {
 		agg := factory()
-		p := khealthz.NewProbe("alpha_ready", func(_ context.Context) error { return nil })
+		p := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error { return nil })
 		if err := agg.Register(p); err != nil {
 			t.Fatalf("first Register: %v", err)
 		}
@@ -173,7 +174,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("deregister_removes_probe", func(t *testing.T) {
 		agg := factory()
-		downProbe := khealthz.NewProbe("alpha_ready", func(_ context.Context) error {
+		downProbe := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error {
 			return errors.New("failure")
 		})
 		if err := agg.Register(downProbe); err != nil {
@@ -184,7 +185,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		if snap.Overall != khealthz.StatusDown {
 			t.Errorf("before deregister: Overall = %s, want Down", snap.Overall)
 		}
-		agg.Deregister("alpha_ready")
+		agg.Deregister(khealthz.MustProbeName("alpha_ready"))
 		// After deregister — should be Up (empty).
 		snap = agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusUp {
@@ -198,7 +199,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 	t.Run("deregister_unknown_name_noop", func(t *testing.T) {
 		agg := factory()
 		// Must not panic or return an error.
-		agg.Deregister("does_not_exist")
+		agg.Deregister(khealthz.MustProbeName("does_not_exist"))
 		snap := agg.Evaluate(context.Background())
 		if snap.Overall != khealthz.StatusUp {
 			t.Errorf("Overall = %s, want Up", snap.Overall)
@@ -207,7 +208,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 
 	t.Run("panicking_probe_returns_down_with_panic_prefix", func(t *testing.T) {
 		agg := factory()
-		p := khealthz.NewProbe("alpha_ready", func(_ context.Context) error {
+		p := khealthz.NewProbe(khealthz.MustProbeName("alpha_ready"), func(_ context.Context) error {
 			panic(panicregister.Approved("conformance-probe-panic-recovery",
 				errcode.Assertion("test panic payload")))
 		})
@@ -261,7 +262,7 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 		names := []string{"zeta_ready", "alpha_ready", "beta_ready"}
 		for _, n := range names {
 			n := n
-			if err := agg.Register(khealthz.NewProbe(n, func(_ context.Context) error { return nil })); err != nil {
+			if err := agg.Register(khealthz.NewProbe(khealthz.MustProbeName(n), func(_ context.Context) error { return nil })); err != nil {
 				t.Fatalf("Register %s: %v", n, err)
 			}
 		}
@@ -283,19 +284,19 @@ func RunAggregatorConformance(t *testing.T, factory func() khealthz.Aggregator) 
 // registration-time name validation (ErrInvalidProbeName).
 type emptyNameProbe struct{}
 
-func (emptyNameProbe) Name() string                  { return "" }
+func (emptyNameProbe) Name() khealthz.ProbeName      { return "" }
 func (emptyNameProbe) Check(_ context.Context) error { return nil }
 
 // probeNameForWorker returns a unique probe name for use in concurrency tests.
 // It avoids package-level state; the name just needs to be unique per worker.
-func probeNameForWorker(n int) string {
+func probeNameForWorker(n int) khealthz.ProbeName {
 	const digits = "0123456789"
 	// Simple: "probe_N" rendered without fmt to avoid fmt import in conformance.
 	s := []byte("probe_000")
 	s[8] = digits[n%10]
 	s[7] = digits[(n/10)%10]
 	s[6] = digits[(n/100)%10]
-	return string(s)
+	return khealthz.MustProbeName(string(s))
 }
 
 // NewFakeAggregator returns a [*FakeAggregator] that implements
@@ -310,7 +311,7 @@ func probeNameForWorker(n int) string {
 // The returned concrete type exposes [FakeAggregator.Probe] for tests that
 // need to inspect individual probe check functions by name.
 func NewFakeAggregator() *FakeAggregator {
-	return &FakeAggregator{probes: make(map[string]khealthz.Probe)}
+	return &FakeAggregator{probes: make(map[khealthz.ProbeName]khealthz.Probe)}
 }
 
 // FakeAggregator is a lightweight [kernel/healthz.Aggregator] stub for tests.
@@ -318,7 +319,7 @@ func NewFakeAggregator() *FakeAggregator {
 // requiring a type assertion.
 type FakeAggregator struct {
 	mu     sync.RWMutex
-	probes map[string]khealthz.Probe
+	probes map[khealthz.ProbeName]khealthz.Probe
 }
 
 // Register implements [kernel/healthz.Aggregator].
@@ -339,7 +340,7 @@ func (a *FakeAggregator) Register(p khealthz.Probe) error {
 }
 
 // Deregister implements [kernel/healthz.Aggregator].
-func (a *FakeAggregator) Deregister(name string) {
+func (a *FakeAggregator) Deregister(name khealthz.ProbeName) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.probes, name)
@@ -372,19 +373,24 @@ func (a *FakeAggregator) Evaluate(ctx context.Context) khealthz.Snapshot {
 		overall = khealthz.WorseStatus(overall, pr.Status)
 		results = append(results, pr)
 	}
+	// Sort by name for deterministic output — matches production aggregator behavior
+	// (runtime/observability/healthz.aggregator.Evaluate sorts before returning).
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
 	return khealthz.Snapshot{Overall: overall, Probes: results}
 }
 
 // Probe returns the registered probe for the given name, or nil if not found.
 // This is useful in tests that need to call the probe's Check function directly.
-func (a *FakeAggregator) Probe(name string) khealthz.Probe {
+func (a *FakeAggregator) Probe(name khealthz.ProbeName) khealthz.Probe {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.probes[name]
 }
 
 // HasProbe reports whether a probe with the given name is registered.
-func (a *FakeAggregator) HasProbe(name string) bool {
+func (a *FakeAggregator) HasProbe(name khealthz.ProbeName) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	_, ok := a.probes[name]
@@ -392,10 +398,10 @@ func (a *FakeAggregator) HasProbe(name string) bool {
 }
 
 // ProbeNames returns the names of all registered probes. Order is not guaranteed.
-func (a *FakeAggregator) ProbeNames() []string {
+func (a *FakeAggregator) ProbeNames() []khealthz.ProbeName {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	names := make([]string, 0, len(a.probes))
+	names := make([]khealthz.ProbeName, 0, len(a.probes))
 	for k := range a.probes {
 		names = append(names, k)
 	}

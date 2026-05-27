@@ -675,16 +675,19 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 // ProbeReady is the ops-contract name for the Redis readiness probe.
-// healthz.ReadyProbeName-typed, funneled by OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "redis_ready"
+// healthz.ProbeName-typed, funneled by PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "redis_ready"
 
-// Checkers returns the named health probe for /readyz. The single entry
-// redis_ready wraps Health with adapterutil.DefaultProbeTimeout so a slow
-// ping does not hold the readyz response indefinitely.
+// Probes returns the typed readyz probe for the Redis client. The single
+// entry ProbeReady (= "redis_ready") wraps Health with
+// adapterutil.DefaultProbeTimeout so a slow ping does not hold the readyz
+// response indefinitely.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
-func (c *Client) Checkers() map[string]func(context.Context) error {
-	return adapterutil.HealthToCheckers(ProbeReady, c.Health, adapterutil.DefaultProbeTimeout)
+func (c *Client) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		adapterutil.HealthToProbe(ProbeReady, c.Health, adapterutil.DefaultProbeTimeout),
+	}
 }
 
 // Worker returns nil — the Redis client has no background goroutine.

@@ -21,10 +21,10 @@ func TestParse_Accept(t *testing.T) {
 		{"a1", ""},
 		{"ab", "shortest all-letter valid ID (2 chars)"},
 		{"orderprocessor", ""},
-		// IdentifierPattern (^[a-z][a-z0-9]+$) has no upper length limit by
-		// design; this case verifies the current accept behavior so any future
-		// upper-limit addition shows up as a test failure requiring explicit review.
-		{strings.Repeat("a", 200), "no upper-length limit in IdentifierPattern"},
+		// IdentifierPattern caps identifiers at 32 chars so composed-name
+		// budgets (healthz.EmitterFailOpenProbeName prefix 21 + cellID + ≤64
+		// total) stay safe. 32 chars is the longest accepted identifier.
+		{strings.Repeat("a", 32), "32-char upper bound (longest accepted identifier)"},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -53,6 +53,7 @@ func TestParse_Reject(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"single-letter", "a"},
+		{"thirty-three-chars", strings.Repeat("a", 33)},
 		{"starts-with-digit", "9foo"},
 		{"uppercase", "Foo"},
 		{"dash", "foo-bar"},

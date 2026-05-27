@@ -13,12 +13,21 @@ type Worker interface {
 	Stop(ctx context.Context) error
 }
 
+// Probe is a local stand-in for kernel/healthz.Probe. The fixture module is
+// isolated (no gocell dependency), so we define the interface inline.
+// The archtest only checks that a method named "Probes" exists — the exact
+// return type is not relevant to the HEALTH-AGG-01 rule.
+type Probe interface {
+	Name() string
+	Check(ctx context.Context) error
+}
+
 // FakeResource is a minimal implementation of lifecycle.ManagedResource used
 // by fixture packages to test promoted-method detection. Renamed from
 // PGResource after adapters/postgres.PGResource was deleted; the type name
 // no longer implies any postgres-specific semantics.
 type FakeResource struct{}
 
-func (*FakeResource) Checkers() map[string]func(context.Context) error { return nil }
-func (*FakeResource) Worker() Worker                                   { return nil }
-func (*FakeResource) Close(_ context.Context) error                    { return nil }
+func (*FakeResource) Probes() []Probe                { return nil }
+func (*FakeResource) Worker() Worker                 { return nil }
+func (*FakeResource) Close(_ context.Context) error  { return nil }

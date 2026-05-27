@@ -863,8 +863,8 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	// Use a generous deadline so these tests do not time out.
 	agg := newAggWithDeadline(clock.Real(), testtime.D2s)
 	h := New(asm, agg, clock.Real())
-	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
-		require.NoError(t, agg.Register(khealthz.NewProbe(name, func(_ context.Context) error {
+	for _, name := range []string{"probe_a", "probe_b", "probe_c"} {
+		require.NoError(t, agg.Register(khealthz.NewProbe(khealthz.MustProbeName(name), func(_ context.Context) error {
 			time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 			return nil
 		})))

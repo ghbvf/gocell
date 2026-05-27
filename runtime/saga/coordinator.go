@@ -26,10 +26,10 @@ import (
 // Compile-time interface checks.
 var _ healthz.RepoProber = (*Coordinator)(nil)
 
-// ProbeCoordinatorReady is the healthz ReadyProbeName for the saga coordinator
-// journal readiness probe. Cell-side registration (RegisterRepoReady) is the
+// ProbeCoordinatorReady is the healthz ProbeName for the saga coordinator
+// journal readiness probe. Cell-side registration (RegisterReadiness) is the
 // cell holder's responsibility (PR-09).
-const ProbeCoordinatorReady healthz.ReadyProbeName = "saga_coordinator_ready"
+const ProbeCoordinatorReady healthz.ProbeName = "saga_coordinator_ready"
 
 // UnsafeModeLabel is the slog field value emitted at Start() to alert operators
 // that this Coordinator runs without distributed leader election.
@@ -434,7 +434,7 @@ func (c *Coordinator) Ready() <-chan struct{} {
 // "unsafe but ready to drive a saga in a single process". PR-05 leader-elect
 // is the path for multi-process safety; this probe stays binary.
 //
-// Cell-side registration (RegisterRepoReady funnel) is the Coordinator cell
+// Cell-side registration (RegisterReadiness funnel) is the Coordinator cell
 // holder's responsibility (PR-09).
 func (c *Coordinator) RepoReady(ctx context.Context) error {
 	switch coordState(c.state.Load()) {

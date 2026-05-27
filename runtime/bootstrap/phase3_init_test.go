@@ -56,10 +56,14 @@ func (c *snapshotCheckCell) Init(ctx context.Context, reg cell.Registrar) error 
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	// Register a probe via reg.Healthz() — the recorder accumulates it into
+	// Register a probe via reg.RegisterReadiness — the recorder accumulates it into
 	// RegistrySnapshot.Probes, which the bootstrap layer drains onto the
 	// runtime aggregator after Init (same as RouteGroups / Subscriptions).
-	return reg.Healthz().Register(healthz.NewProbe("probe."+c.ID(), func(_ context.Context) error { return nil }))
+	probeName, err := healthz.NewProbeName("probe_" + c.ID())
+	if err != nil {
+		return err
+	}
+	return reg.RegisterReadiness(probeName, healthz.ProberFunc(func(_ context.Context) error { return nil }))
 }
 
 // initFailCell fails during Init with a configurable error.
@@ -178,7 +182,7 @@ func buildStartedAsm(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 
 // TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots verifies that
 // after phase3InitAssembly completes, s.cellSnapshots contains one entry per
-// registered cell, and that each cell's reg.Healthz().Register(...) call during
+// registered cell, and that each cell's reg.RegisterReadiness(...) call during
 // Init is accumulated into RegistrySnapshot.Probes (the write-side the bootstrap
 // layer drains onto the runtime aggregator — same as RouteGroups / Subscriptions).
 func TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots(t *testing.T) {
@@ -192,12 +196,12 @@ func TestPhase3_AssemblyInitsAllCellsWithRegistry_PopulatesSnapshots(t *testing.
 	s1, ok := snaps["c1"]
 	require.True(t, ok, "c1 snapshot must be present after Init")
 	require.Len(t, s1.Probes, 1, "c1 probe must be accumulated in the snapshot")
-	assert.Equal(t, "probe.c1", s1.Probes[0].Name())
+	assert.Equal(t, healthz.MustProbeName("probe_c1"), s1.Probes[0].Name())
 
 	s2, ok := snaps["c2"]
 	require.True(t, ok, "c2 snapshot must be present after Init")
 	require.Len(t, s2.Probes, 1, "c2 probe must be accumulated in the snapshot")
-	assert.Equal(t, "probe.c2", s2.Probes[0].Name())
+	assert.Equal(t, healthz.MustProbeName("probe_c2"), s2.Probes[0].Name())
 }
 
 // TestPhase3_InitErrorAbortsBeforeStart verifies that when a cell's Init fails,

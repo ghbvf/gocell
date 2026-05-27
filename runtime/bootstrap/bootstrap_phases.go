@@ -83,7 +83,7 @@ type phaseState struct {
 
 	// registeredCheckers guards against duplicate health checker names across
 	// phases. Keyed by checker name; value is struct{}.
-	registeredCheckers map[string]struct{}
+	registeredCheckers map[healthz.ProbeName]struct{}
 }
 
 // newPhaseState creates a phaseState wrapping a fresh runState and returns
@@ -93,14 +93,14 @@ func newPhaseState() (context.Context, *phaseState) {
 	runCtx, rs := newRunState()
 	return runCtx, &phaseState{
 		runState:           rs,
-		registeredCheckers: make(map[string]struct{}),
+		registeredCheckers: make(map[healthz.ProbeName]struct{}),
 	}
 }
 
 // registerHealthChecker wraps fn as a healthz.Probe and registers it on agg.
 // Returns an error on duplicate names (ErrDuplicateProbe from the aggregator)
 // or when the name was already seen in this bootstrap session.
-func (s *phaseState) registerHealthChecker(name string, fn func(context.Context) error, agg healthz.Aggregator) error {
+func (s *phaseState) registerHealthChecker(name healthz.ProbeName, fn func(context.Context) error, agg healthz.Aggregator) error {
 	if _, exists := s.registeredCheckers[name]; exists {
 		return fmt.Errorf("bootstrap: duplicate health checker %q", name)
 	}

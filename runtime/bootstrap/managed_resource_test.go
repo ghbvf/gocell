@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -41,9 +42,9 @@ type fakeResource struct {
 	closed   bool
 }
 
-func (f *fakeResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		f.name: func(_ context.Context) error { return f.checkErr },
+func (f *fakeResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(f.name), func(_ context.Context) error { return f.checkErr }),
 	}
 }
 
@@ -84,7 +85,7 @@ func (w *fakeWorker) Stop(_ context.Context) error {
 // TestManagedResource_RegistersHealthChecker verifies that a resource registered
 // via WithManagedResource contributes its checkers to /readyz.
 func TestManagedResource_RegistersHealthChecker(t *testing.T) {
-	res := &fakeResource{name: "fake-pg", checkErr: nil}
+	res := &fakeResource{name: "fake_pg", checkErr: nil}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
@@ -108,7 +109,7 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	addr := healthLn.Addr().String()
 	waitForHealthy(t, addr)
 
-	// /readyz?verbose should include the "fake-pg" checker name in the body,
+	// /readyz?verbose should include the "fake_pg" checker name in the body,
 	// proving the checker was actually registered (not just that readyz returns 200).
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/readyz?verbose=true", addr), nil)
 	if err != nil {
@@ -124,8 +125,8 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "fake-pg") {
-		t.Errorf("expected /readyz?verbose body to contain checker name %q, got: %s", "fake-pg", string(body))
+	if !strings.Contains(string(body), "fake_pg") {
+		t.Errorf("expected /readyz?verbose body to contain checker name %q, got: %s", "fake_pg", string(body))
 	}
 }
 
@@ -133,7 +134,7 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 // and stopped by the bootstrap WorkerGroup.
 func TestManagedResource_RegistersWorker(t *testing.T) {
 	fw := newFakeWorker()
-	res := &fakeResource{name: "worker-res", worker: fw}
+	res := &fakeResource{name: "worker_res", worker: fw}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
@@ -231,9 +232,9 @@ type trackingResource struct {
 	closeOrder *[]string
 }
 
-func (r *trackingResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *trackingResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -247,7 +248,7 @@ func (r *trackingResource) Close(_ context.Context) error {
 // TestManagedResource_NilWorkerNoOp verifies that a resource with a nil worker
 // does not register any worker and does not produce errors.
 func TestManagedResource_NilWorkerNoOp(t *testing.T) {
-	res := &fakeResource{name: "no-worker-res", worker: nil}
+	res := &fakeResource{name: "no_worker_res", worker: nil}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
@@ -280,8 +281,8 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 // but does not prevent other resources from being closed (best-effort Close).
 func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 	closeErr := errors.New("simulated close failure")
-	res1 := &fakeResource{name: "bad-res", closeErr: closeErr}
-	res2 := &trackingResource{name: "good-res", closeOrder: new([]string)}
+	res1 := &fakeResource{name: "bad_res", closeErr: closeErr}
+	res2 := &trackingResource{name: "good_res", closeOrder: new([]string)}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
@@ -368,7 +369,7 @@ func TestWithManagedResource_TypedNilFailFast(t *testing.T) {
 // shutdown when a resource fails to close.
 func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	closeErr := errors.New("simulated close failure")
-	res := &fakeResource{name: "bad-res", closeErr: closeErr}
+	res := &fakeResource{name: "bad_res", closeErr: closeErr}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
@@ -457,12 +458,12 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 	return s.FakeStore.ClaimPending(ctx, batchSize)
 }
 
-// TM2: TestWithRelay_RegistersCheckers verifies that a Relay registered via
-// WithRelay contributes its three health checkers to /readyz?verbose. The
+// TM2: TestWithRelay_RegistersProbes verifies that a Relay registered via
+// WithRelay contributes its three health probes to /readyz?verbose. The
 // relay enters the ManagedResource pipeline through the package-private
 // relayAdapter (sole sanctioned holder; ADR 202605201400 +
 // RELAY-NOT-MANAGEDRESOURCE-01 / RELAY-SOLE-HOLDER-01 archtests).
-func TestWithRelay_RegistersCheckers(t *testing.T) {
+func TestWithRelay_RegistersProbes(t *testing.T) {
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)
 
@@ -500,9 +501,9 @@ func TestWithRelay_RegistersCheckers(t *testing.T) {
 	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "200 verbose response must contain dependencies map")
 
-	assert.Contains(t, deps, "outbox-relay-poll", "poll checker must be in /readyz?verbose")
-	assert.Contains(t, deps, "outbox-relay-reclaim", "reclaim checker must be in /readyz?verbose")
-	assert.Contains(t, deps, "outbox-relay-cleanup", "cleanup checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox_relay_poll", "poll checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox_relay_reclaim", "reclaim checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox_relay_cleanup", "cleanup checker must be in /readyz?verbose")
 
 	cancel()
 	select {
@@ -598,9 +599,9 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 	assertReadyzServiceUnavailable(t, body)
 
 	deps := readyzUnhealthyDeps(t, capture)
-	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in slog breakdown")
-	pollProbe := deps["outbox-relay-poll"]
-	assert.Equal(t, "unhealthy", pollProbe.Status(), "outbox-relay-poll: status must be unhealthy")
+	require.Contains(t, deps, "outbox_relay_poll", "poll checker must appear in slog breakdown")
+	pollProbe := deps["outbox_relay_poll"]
+	assert.Equal(t, "unhealthy", pollProbe.Status(), "outbox_relay_poll: status must be unhealthy")
 
 	// Phase 2: store recovers — budget resets — /readyz must return 200.
 	store.setClaimErr(nil)
@@ -615,7 +616,7 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 }
 
 // TM4: TestWithRelay_DisabledBudget_SkipsChecker verifies that a relay with
-// poll budget disabled (threshold=0) does not register the outbox-relay-poll
+// poll budget disabled (threshold=0) does not register the outbox_relay_poll
 // checker. The relay is registered via WithRelay → relayAdapter.
 func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
@@ -667,10 +668,10 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, _ := readyzPayload200(t, body)["dependencies"].(map[string]any)
 
-	assert.NotContains(t, deps, "outbox-relay-poll",
+	assert.NotContains(t, deps, "outbox_relay_poll",
 		"disabled poll budget must not register a checker")
-	assert.Contains(t, deps, "outbox-relay-reclaim")
-	assert.Contains(t, deps, "outbox-relay-cleanup")
+	assert.Contains(t, deps, "outbox_relay_reclaim")
+	assert.Contains(t, deps, "outbox_relay_cleanup")
 
 	cancel()
 	select {
@@ -688,9 +689,9 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 // nilWorkerResource is a ManagedResource whose Worker() always returns nil.
 type nilWorkerResource struct{}
 
-func (nilWorkerResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		"nil-worker-checker": func(_ context.Context) error { return nil },
+func (nilWorkerResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("nil_worker_checker"), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -716,9 +717,9 @@ func TestExpandManagedResources_NilWorker_Skip(t *testing.T) {
 // duplicateCheckerResource provides a single checker under a fixed key name.
 type duplicateCheckerResource struct{ key string }
 
-func (r duplicateCheckerResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.key: func(_ context.Context) error { return nil },
+func (r duplicateCheckerResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.key), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -739,8 +740,8 @@ func TestExpandManagedResources_DuplicateChecker_Phase0Error(t *testing.T) {
 	}
 
 	err := b.expandManagedResources()
-	require.Error(t, err, "duplicate checker key must cause expandManagedResources to fail")
-	assert.Contains(t, err.Error(), "duplicate checker",
+	require.Error(t, err, "duplicate probe name must cause expandManagedResources to fail")
+	assert.Contains(t, err.Error(), "duplicate probe name",
 		"error message must name the conflict so operators can identify the culprit")
 }
 
@@ -790,7 +791,7 @@ func TestExpandManagedResources_CloseFailure_TeardownErrorIncludesResourceType(t
 	b := &Bootstrap{}
 	b.managedResources = []kernellifecycle.ManagedResource{
 		&orderedCloseResource{
-			name: "typed-resource",
+			name: "typed_resource",
 			closeFn: func(context.Context) error {
 				return errors.New("close failed")
 			},
@@ -821,9 +822,9 @@ type orderedCloseResource struct {
 	closeFn func(context.Context) error
 }
 
-func (r *orderedCloseResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *orderedCloseResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -852,9 +853,9 @@ type sequencedResource struct {
 	closeSeq atomic.Int64  // sequence number captured at Close(); 0 = not yet closed
 }
 
-func (r *sequencedResource) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		r.name: func(_ context.Context) error { return nil },
+func (r *sequencedResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName(r.name), func(_ context.Context) error { return nil }),
 	}
 }
 
@@ -879,8 +880,8 @@ func (r *sequencedResource) Close(_ context.Context) error {
 // Ref: cmd/corebundle/shared_deps.go PG/poolMR "Happens-before contract".
 func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 	var counter atomic.Int64
-	pgRes := &sequencedResource{name: "fake-pg-pool", counter: &counter}
-	worker := &sequencedResource{name: "fake-consumer-worker", counter: &counter}
+	pgRes := &sequencedResource{name: "fake_pg_pool", counter: &counter}
+	worker := &sequencedResource{name: "fake_consumer_worker", counter: &counter}
 
 	ln := newLocalListener(t)
 	healthLn := newLocalListener(t)

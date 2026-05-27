@@ -406,11 +406,12 @@ func (h *Handler) aggregateProbeResults(
 			worst = r
 		}
 		if verbose {
-			wire[pr.Name] = verboseDependencyEntry{
+			name := pr.Name.String()
+			wire[name] = verboseDependencyEntry{
 				Status:     wireStatus,
 				DurationMs: pr.Latency.Milliseconds(),
 			}
-			slogDiag[pr.Name] = SlogDependencyEntry{
+			slogDiag[name] = SlogDependencyEntry{
 				status:     wireStatus,
 				durationMs: pr.Latency.Milliseconds(),
 				errorMsg:   newRedactedErrorMsg(pr.Err),

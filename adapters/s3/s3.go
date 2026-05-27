@@ -32,10 +32,10 @@ const (
 	defaultS3HealthInterval = 30 * time.Second
 
 	// ProbeReady is the ops-contract name for the S3 readiness probe registered
-	// by Checkers(). It is a healthz.ReadyProbeName-typed const (snake_case +
-	// "_ready" suffix), funneled by archtest OPS-CONTRACT-STRING-FUNNEL-01 so
+	// by Checkers(). It is a healthz.ProbeName-typed const (snake_case +
+	// "_ready" suffix), funneled by archtest PROBENAME-SEALED-FUNNEL-01 so
 	// production code and tests reference the same identifier without drift.
-	ProbeReady healthz.ReadyProbeName = "s3_ready"
+	ProbeReady healthz.ProbeName = "s3_ready"
 )
 
 // bucketHeader is the narrow interface used by the health state machine.
@@ -277,23 +277,23 @@ func (c *Client) Health(ctx context.Context) error {
 // lifecycle.ManagedResource implementation
 // ---------------------------------------------------------------------------
 
-// Checkers implements lifecycle.ManagedResource. It returns a single probe
-// keyed by ProbeReady ("s3_ready") that reads the latest health state
+// Probes implements lifecycle.ManagedResource. It returns a single typed
+// probe with name ProbeReady ("s3_ready") that reads the latest health state
 // without any network call.
 //
 // probe name follows the observability rule: snake_case + "_ready" suffix.
 // ProbeReady is the single source of truth; both this method and tests
 // reference it so the name cannot drift.
 //
-// ref: runtime/websocket/hub.go Checkers — state-read probe pattern.
-func (c *Client) Checkers() map[string]func(context.Context) error {
-	return map[string]func(context.Context) error{
-		string(ProbeReady): func(_ context.Context) error {
+// ref: runtime/websocket/hub.go Probes — state-read probe pattern.
+func (c *Client) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(ProbeReady, func(_ context.Context) error {
 			if errPtr := c.state.Load(); errPtr != nil {
 				return *errPtr
 			}
 			return nil
-		},
+		}),
 	}
 }
 

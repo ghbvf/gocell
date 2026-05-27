@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -303,20 +304,20 @@ func TestPool_Close_ImplementsContextCloser(t *testing.T) {
 // ManagedResource interface tests (absorbed from pool_resource_test.go)
 // ---------------------------------------------------------------------------
 
-// TestPool_CheckersReturnsBothProbes verifies that Checkers() returns exactly
+// TestPool_CheckersReturnsBothProbes verifies that Probes() returns exactly
 // two named probes: "postgres_ready" and "postgres_indexes_valid_ready".
-// No real DB is required — we only verify the map structure.
+// No real DB is required — we only verify the slice structure.
 func TestPool_CheckersReturnsBothProbes(t *testing.T) {
-	p := &Pool{} // stub: inner=nil; Checkers() must not dereference inner
-	checkers := p.Checkers()
-	require.Len(t, checkers, 2, "expected 2 checkers (postgres_ready + postgres_indexes_valid_ready)")
-	for _, name := range []string{string(ProbeReady), string(ProbeIndexesValidReady)} {
-		fn, ok := checkers[name]
-		if !ok {
-			t.Errorf("expected checker named %q", name)
-		}
-		if fn == nil {
-			t.Errorf("checker %q function must not be nil", name)
+	p := &Pool{} // stub: inner=nil; Probes() must not dereference inner
+	probes := p.Probes()
+	require.Len(t, probes, 2, "expected 2 probes (postgres_ready + postgres_indexes_valid_ready)")
+	names := make(map[healthz.ProbeName]bool)
+	for _, probe := range probes {
+		names[probe.Name()] = true
+	}
+	for _, name := range []healthz.ProbeName{ProbeReady, ProbeIndexesValidReady} {
+		if !names[name] {
+			t.Errorf("expected probe named %q", name)
 		}
 	}
 }
@@ -358,11 +359,12 @@ func TestPool_CheckerTimeout(t *testing.T) {
 		return nil
 	}
 
-	checkers := p.Checkers()
-	fn := checkers[string(ProbeReady)]
-	require.NotNil(t, fn, "postgres_ready checker must not be nil")
+	probes := p.Probes()
+	require.Len(t, probes, 2, "expected 2 probes")
+	// ProbeReady is the first probe.
+	require.Equal(t, ProbeReady, probes[0].Name(), "first probe must be postgres_ready")
 
-	require.NoError(t, fn(context.Background()))
+	require.NoError(t, probes[0].Check(context.Background()))
 
 	diff := time.Until(receivedDeadline)
 	if diff < testtime.D3s || diff > testtime.D7s {

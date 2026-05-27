@@ -71,8 +71,8 @@ func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest(context.Background(), "test-cell", "GET", "/api/v1/users", 200, 0.15)
-	c.RecordRequest(context.Background(), "test-cell", "POST", "/api/v1/users", 201, 0.05)
+	c.RecordRequest(context.Background(), "testcell", "GET", "/api/v1/users", 200, 0.15)
+	c.RecordRequest(context.Background(), "testcell", "POST", "/api/v1/users", 201, 0.05)
 
 	body := expose(t, reg)
 
@@ -86,10 +86,10 @@ func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 		}
 	}
 	// Label arity + expected values on the counter.
-	if !strings.Contains(body, `gocell_http_requests_total{cell="test-cell",method="GET",route="/api/v1/users",status="200"}`) {
+	if !strings.Contains(body, `gocell_http_requests_total{cell="testcell",method="GET",route="/api/v1/users",status="200"}`) {
 		t.Errorf("counter sample missing for GET 200 route; got:\n%s", body)
 	}
-	if !strings.Contains(body, `gocell_http_requests_total{cell="test-cell",method="POST",route="/api/v1/users",status="201"}`) {
+	if !strings.Contains(body, `gocell_http_requests_total{cell="testcell",method="POST",route="/api/v1/users",status="201"}`) {
 		t.Errorf("counter sample missing for POST 201 route; got:\n%s", body)
 	}
 	// DefaultDurationBuckets still present on the histogram — the first
@@ -106,7 +106,7 @@ func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 // dashboards and alert routes depend on them being identical.
 func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 	p, reg := newProvider(t)
-	c, err := outbox.NewProviderRelayCollector(p, "test-cell")
+	c, err := outbox.NewProviderRelayCollector(p, "testcell")
 	if err != nil {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
@@ -135,9 +135,9 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 	// Non-zero outcomes labeled correctly (skipped zero suppression is a
 	// collector rule inherited from the old adapter).
 	for _, want := range []string{
-		`gocell_outbox_relayed_total{cell="test-cell",outcome="published"} 2`,
-		`gocell_outbox_relayed_total{cell="test-cell",outcome="dead"} 1`,
-		`gocell_outbox_relayed_total{cell="test-cell",outcome="skipped"} 3`,
+		`gocell_outbox_relayed_total{cell="testcell",outcome="published"} 2`,
+		`gocell_outbox_relayed_total{cell="testcell",outcome="dead"} 1`,
+		`gocell_outbox_relayed_total{cell="testcell",outcome="skipped"} 3`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("exposition missing sample %q; got:\n%s", want, body)
@@ -186,7 +186,7 @@ func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T)
 
 	// Fail-open emitter: any Publish error is swallowed, counter incremented.
 	pub := &stubPublisher{err: errors.New("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, p, clock.Real(), "test-cell")
+	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, p, clock.Real(), "testcell")
 	if err != nil {
 		t.Fatalf("NewDirectEmitter: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T)
 	}
 
 	// 2. Sample must carry cell and topic labels with value = 1.
-	wantSample := `gocell_outbox_emit_failopen_dropped_total{cell="test-cell",topic="test.topic.v1"} 1`
+	wantSample := `gocell_outbox_emit_failopen_dropped_total{cell="testcell",topic="test.topic.v1"} 1`
 	if !strings.Contains(body, wantSample) {
 		t.Errorf("exposition missing sample %q; got:\n%s", wantSample, body)
 	}
