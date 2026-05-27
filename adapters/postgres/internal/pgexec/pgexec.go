@@ -26,27 +26,39 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
 // PGExecutor is the sealed read/write surface routed through the ambient
 // transaction (when ctx carries one) or directly against the pool. The
 // concrete implementation is unexported; the pool field is unreachable from
-// outside this package by Go visibility — type-asserting back to the concrete
-// type is impossible because the type name is unexported.
+// outside this package by Go visibility.
+//
+// The interface is SEALED via the unexported sealPGExecutor marker method:
+// only *pgExecutor (in this package) can implement it, so a parent package
+// cannot declare a parallel PGExecutor implementation that holds its own raw
+// pool and skips ambient-tx routing. Every PGExecutor value therefore
+// originates from New — a type-system guarantee that backstops the R1
+// file-extension archtest scope. Regression-guarded by archtest
+// PG-REPO-AMBIENT-TX-01 InterfaceSealed (asserts exactly one unexported marker
+// method, implemented only by *pgExecutor).
 //
 // ExecDirect is intentionally NOT a method on this interface — it is a
-// top-level function pgexec.ExecDirect(e PGExecutor, ctx, sql, args...). This
-// closes the subset-interface bypass vector (R3-Hard form, ai-robust.md §Hard
-// 范本 #2 typed marker funnel): a caller cannot declare a local interface
-// re-shape with the same method set and call ExecDirect through it, because
-// ExecDirect simply isn't a method anywhere. The only sanctioned callsite
-// form is `pgexec.ExecDirect(s.db, ctx, ...)`, identified by archtest R3 via
-// callee-identity resolution. Sibling deployment of
-// pgrepoapproved.ApprovedExecDirect.
+// top-level function pgexec.ExecDirect(approval, e, ctx, sql, args...). This
+// closes the subset-interface bypass vector (ai-robust.md §Hard 范本 #2 typed
+// marker funnel): a caller cannot declare a local interface re-shape with the
+// same method set and call ExecDirect through it, because ExecDirect simply
+// isn't a method anywhere. The only sanctioned callsite form is
+// pgexec.ExecDirect(pgrepoapproved.Approve("<reason>"), s.db, ctx, ...),
+// identified by archtest R3 via callee-identity resolution + the call-bound
+// approval token.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	sealPGExecutor()
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -67,6 +79,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
@@ -93,38 +107,31 @@ func (e *pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 // the underlying pool. It is the explicit compensation-path bypass reserved
 // for ADR-approved cascade-revoke and similar independent-commit semantics.
 //
-// Form is a top-level function, not a method, to make the call shape
-// `pgexec.ExecDirect(e, ctx, sql, args...)` the sole sanctioned callsite
-// identity. Local interface re-shape (subset / same-method-set redecl) cannot
-// invoke ExecDirect because it is not defined as a method on any interface.
+// The first parameter is a pgrepoapproved.Approval token that MUST be minted
+// inline as pgrepoapproved.Approve("<kebab-reason>") at the callsite: the
+// authorization is bound to the call expression itself, so a bypass cannot
+// exist without a documented reason and a reason cannot be stranded away from
+// its call. Form is a top-level function (not a method) so no local interface
+// re-shape can invoke it.
 //
-// archtest R3 enforces:
-//  1. callsite must call pgexec.ExecDirect (callee-identity check via
-//     *types.Info.Uses + Pkg().Path() ending /internal/pgexec + Name() == "ExecDirect")
-//  2. same approval scope (FuncDecl/FuncLit body) must contain sibling
-//     pgrepoapproved.ApprovedExecDirect("<kebab-case-reason>") marker
+// archtest R3 (global scope) enforces:
+//  1. callee identity is pgexec.ExecDirect (Pkg().Path() ending /internal/pgexec)
+//  2. arg[0] is an inline CallExpr to pgrepoapproved.Approve whose own arg[0]
+//     is a kebab-case string literal (not const ident / concat / placeholder /
+//     a reused variable)
 //
-// Currently exactly one production callsite holds a marker:
+// Currently exactly one production callsite exists:
 // adapters/postgres/refresh_store.go::revokeSessionDetachedAt.
-func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+func ExecDirect(_ pgrepoapproved.Approval, e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	impl, ok := e.(*pgExecutor)
 	if !ok {
-		// Programmer error: PGExecutor was produced outside pgexec.New (impossible
-		// in production because pgExecutor is unexported; only fixtures / tests
-		// could construct a satisfying mock). Fail loudly rather than corrupt
-		// ambient-tx semantics silently.
-		return pgconn.CommandTag{}, errExecDirectOnNonSealedExecutor
+		// Unreachable in production: PGExecutor is sealed (sealPGExecutor marker),
+		// so every value originates from New and is *pgExecutor. A non-*pgExecutor
+		// here is a programmer error reachable only from in-package test mocks —
+		// an A-class assertion panic (state-machine unreachable branch), not a
+		// recoverable error return.
+		panic(panicregister.Approved("pgexec-execdirect-non-sealed",
+			errcode.Assertion("pgexec.ExecDirect: PGExecutor must originate from pgexec.New")))
 	}
 	return impl.pool.Exec(ctx, sql, args...)
-}
-
-// errExecDirectOnNonSealedExecutor reports a misuse — a PGExecutor whose
-// dynamic type isn't *pgExecutor (e.g. a test mock). Sealed in this file via
-// unexported var to prevent caller-side construction with the same identity.
-var errExecDirectOnNonSealedExecutor = &execDirectMisuseError{}
-
-type execDirectMisuseError struct{}
-
-func (*execDirectMisuseError) Error() string {
-	return "pgexec.ExecDirect: PGExecutor must originate from pgexec.New (mock impls cannot bypass ambient-tx routing via this function)"
 }

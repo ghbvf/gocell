@@ -3,12 +3,14 @@ package pgexec
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
 // fakeTx is a minimal stub satisfying pgx.Tx for ambient-tx dispatch tests.
@@ -83,30 +85,41 @@ func TestQueryRow_RoutesThroughAmbientTx(t *testing.T) {
 	}
 }
 
-// mockExec is a non-sealed PGExecutor impl used to exercise ExecDirect's
-// type-assertion guard against external impls (security boundary check).
+// mockExec is an in-package non-*pgExecutor PGExecutor impl used to exercise
+// ExecDirect's type-assertion guard. PGExecutor is sealed (sealPGExecutor is
+// unexported), so this mock can only exist inside package pgexec — exactly the
+// residual surface the guard covers.
 type mockExec struct{}
 
-func (m mockExec) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+func (mockExec) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
 
-func (m mockExec) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+func (mockExec) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	return nil, errors.ErrUnsupported
 }
 
-func (m mockExec) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
+func (mockExec) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
 
-// TestExecDirect_RejectsNonSealedExecutor verifies that pgexec.ExecDirect's
-// type-assertion guard fires when given a PGExecutor whose dynamic type isn't
-// *pgExecutor (e.g., an external mock). This blocks mock-mediated bypass of
-// ambient-tx routing.
-func TestExecDirect_RejectsNonSealedExecutor(t *testing.T) {
-	_, err := ExecDirect(mockExec{}, context.Background(), "SELECT 1")
-	if err == nil {
-		t.Fatal("expected ExecDirect on non-sealed executor to return error")
-	}
-	if !errors.Is(err, errExecDirectOnNonSealedExecutor) {
-		t.Fatalf("expected errExecDirectOnNonSealedExecutor, got %v", err)
-	}
+func (mockExec) sealPGExecutor() {}
+
+// TestExecDirect_PanicsOnNonSealedExecutor verifies pgexec.ExecDirect's
+// type-assertion guard panics (A-class assertion) when given a PGExecutor
+// whose dynamic type isn't *pgExecutor. In production this branch is
+// unreachable; the in-package mock is the only way to reach it.
+func TestExecDirect_PanicsOnNonSealedExecutor(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected ExecDirect on non-*pgExecutor to panic")
+		}
+		err, ok := r.(error)
+		if !ok {
+			t.Fatalf("expected panic value to be an error, got %T", r)
+		}
+		if !strings.Contains(err.Error(), "must originate from pgexec.New") {
+			t.Fatalf("unexpected panic error: %v", err)
+		}
+	}()
+	_, _ = ExecDirect(pgrepoapproved.Approve("test-non-sealed"), mockExec{}, context.Background(), "SELECT 1")
 }

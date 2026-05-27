@@ -1,43 +1,52 @@
-// Package pgrepoapproved provides the only approved way to call
-// pgExecutor.ExecDirect from a PG repo/store method. Every legitimate
-// ExecDirect callsite in a *_repo.go / *_store.go file MUST contain a
-// pgrepoapproved.ApprovedExecDirect(reason) marker in the SAME approval
-// scope (FuncDecl body OR enclosing FuncLit body — markers in nested
-// closures do NOT approve outer-scope ExecDirect calls and vice versa).
-// This creates a typed funnel that archtest PG-REPO-AMBIENT-TX-01 R3(b)
-// statically verifies. See .claude/rules/gocell/ai-robust.md "Hard 范本"
-// (typed marker funnel for unbounded ops); this is the sibling deployment
-// of pkg/panicregister applied to ExecDirect.
+// Package pgrepoapproved provides the proof-of-authorization token that
+// pgexec.ExecDirect requires as its first argument. ExecDirect bypasses the
+// ambient transaction (independent-commit cascade/compensation paths), so
+// every callsite must be explicitly ADR-approved.
+//
+// The approval is bound to the call argument, not a sibling marker statement:
+//
+//	pgexec.ExecDirect(pgrepoapproved.Approve("revoke-session-cascade"),
+//	    s.db, cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+//
+// This makes "ExecDirect without approval" a compile error (the first
+// parameter is typed Approval) and "approval without a call" impossible
+// (there is no standalone marker statement to misplace, share, or strand in
+// the wrong scope). It supersedes the PR #1194 sibling-marker form
+// (the former ApprovedExecDirect), removing the entire same-approval-scope
+// co-location machinery. Sibling deployment of pkg/panicregister.Approved,
+// which likewise binds its token to the panic call expression.
+//
+// archtest PG-REPO-AMBIENT-TX-01 R3 statically enforces that arg[0] of every
+// pgexec.ExecDirect callsite is an inline CallExpr to pgrepoapproved.Approve
+// whose own arg[0] is a kebab-case string LITERAL (form-uniqueness, Hard). A
+// pre-constructed or reused Approval value (a := Approve("x"); ExecDirect(a,
+// ...)) is rejected because arg[0] is then an *ast.Ident, not the sanctioned
+// CallExpr form. See .claude/rules/gocell/ai-robust.md "Hard 范本目录"
+// §"typed marker funnel for unbounded ops".
 package pgrepoapproved
 
-// ApprovedExecDirect tags the enclosing repo/store function (or closure)
-// as an ADR-approved caller of pgExecutor.ExecDirect (which bypasses the
-// ambient transaction).
+// Approval is the sealed proof token for a single pgexec.ExecDirect callsite.
+// It is a sealed interface: only the unexported approval type (minted by
+// Approve) implements it, so callers cannot forge one via a composite literal
+// or a parallel implementation. The value carries no runtime data — ExecDirect
+// ignores it; it exists solely to make the bypass authorization an inseparable
+// part of the call expression that archtest can statically verify.
+type Approval interface{ approvedExecDirect() }
+
+type approval struct{}
+
+func (approval) approvedExecDirect() {}
+
+// Approve mints an Approval for the pgexec.ExecDirect callsite it is passed to.
 //
-// reason MUST be a *ast.BasicLit + token.STRING (a Go const string LITERAL
-// in source — not a const identifier, not "a" + "b" concatenation, not a
-// variable). The literal value must match the kebab-case regex
-// ^[a-z][a-z0-9-]+$ AND must not be a placeholder identifier (todo / fixme /
-// tbd / xxx / placeholder / wip). archtest PG-REPO-AMBIENT-TX-01 R3(b)
-// statically rejects every other form. The reason "is not cross-checked
-// against any catalog at build time; it serves as source-level documentation"
-// (sibling to pkg/panicregister.Approved); reviewers verify the corresponding
-// ADR rationale exists, and the placeholder/empty/non-kebab forms above are
-// rejected so the reason cannot be a meaningless audit-trail entry.
-//
-// ApprovedExecDirect is purely a source-level marker (no-op at runtime).
-// The archtest enforces that every ExecDirect call from a non-pgExecutor
-// receiver has a sibling ApprovedExecDirect(literal) call in the same
-// approval scope.
-//
-// Hard funnel rationale: this is the unique allowlist mechanism for
-// ExecDirect callsites in GoCell production code. The form-uniqueness
-// (callee = pgrepoapproved.ApprovedExecDirect, arg[0] = kebab-case BasicLit,
-// non-placeholder) plus the same-scope co-location check make any other
-// shape — missing marker, different callee, non-literal reason, const ident /
-// concat / empty / placeholder reason, marker in a different func/closure —
-// fail archtest immediately. See .claude/rules/gocell/ai-robust.md
-// "Hard 范本目录" §"typed marker funnel for unbounded ops".
-func ApprovedExecDirect(reason string) {
+// reason MUST be a kebab-case string LITERAL in source (^[a-z][a-z0-9-]+$, not
+// a placeholder such as todo/fixme/tbd/xxx/placeholder/wip) — archtest
+// PG-REPO-AMBIENT-TX-01 R3 rejects const identifiers, "a"+"b" concatenation,
+// variables, and empty/placeholder reasons. The reason is not cross-checked
+// against any catalog at build time; it serves as source-level documentation
+// (sibling to pkg/panicregister.Approved). Reviewers verify the corresponding
+// ADR rationale exists.
+func Approve(reason string) Approval {
 	_ = reason
+	return approval{}
 }

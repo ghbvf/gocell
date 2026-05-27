@@ -619,46 +619,53 @@ func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// fixtureViolation is a (ruleID_prefix, line) pair identifying one expected
-// RED fixture diagnostic.
+// fixtureViolation is a (base, ruleID_prefix, line) triple identifying one
+// expected RED fixture diagnostic. base is the file basename (filepath.Base of
+// the diagnostic's module-relative path): including it distinguishes
+// same-line diagnostics across fixture files (F2 — a {rulePrefix, line}-only
+// key collapses cross-file collisions and is blind to which file a regression
+// landed in).
 type fixtureViolation struct {
+	base       string
 	rulePrefix string
 	line       int
 }
 
-// expectedFixtureViolations is the authoritative expected set for
+// expectedFixtureViolations is the authoritative expected MULTISET for
 // TestPGRepoAmbientTx_RedFixtureDetected. Lines are pinned to the fixture
 // sources. When the fixture changes intentionally, update both the fixture
-// and this set together.
+// and this set together. The oracle compares exact per-key counts (F2), so a
+// duplicate diagnostic (same base+prefix+line emitted twice) is a mismatch
+// unless listed twice here.
 //
 // File layout:
 //   - fixture.go: package godoc only (no rules apply — not _repo.go)
-//   - fixture_repo.go: ALL RED cases (R1 + R2 + R3) + GREEN repo controls
+//   - fixture_repo.go: R1 + R2 RED (file-extension scoped) + R3 RED + GREEN controls
+//   - fixture_service.go: R3 RED in a NON-_repo.go file (proves R3 global scope)
 //   - internal/pgexec/pgexec.go: sealed sub-package mirroring production form
 var expectedFixtureViolations = []fixtureViolation{
 	// R1 RED (fixture_repo.go) — pointer to field type pos.
-	{"R1:", 20}, // badR1Repo.pool
+	{"fixture_repo.go", "R1:", 21}, // badR1Repo.pool
 	// R2 RED (fixture_repo.go) — pointer to FuncDecl name pos.
-	{"R2:", 31}, // badR2NonNew
-	{"R2:", 37}, // NewBadR2NoWrap
-	// R3 RED (fixture_repo.go) — pointer to call pos. After F2-Hard:
-	// pgexec.ExecDirect callsite identity (not method receiver type).
-	{"R3:", 52}, // badR3ExecDirect
-	{"R3:", 59}, // badR3MarkerInNestedClosure (outer call, marker in nested closure)
-	{"R3:", 70}, // badR3MarkerOuterExecInNestedClosure (inner call, marker in outer)
-	{"R3:", 79}, // badR3ApprovedConstIdent (marker reason is *ast.Ident)
-	{"R3:", 85}, // badR3ApprovedConcat (marker reason is BinaryExpr)
-	{"R3:", 91}, // badR3ApprovedEmpty (marker reason "" fails kebab regex)
-	{"R3:", 97}, // badR3ApprovedPlaceholder (marker reason "todo")
-	// Round-3 C4 per-callsite Hard: badR3SharedMarker has M=1 + E=2 — both
-	// ExecDirect calls flagged (no callsite has its own dedicated marker).
-	{"R3:", 113}, // badR3SharedMarker first ExecDirect
-	{"R3:", 114}, // badR3SharedMarker second ExecDirect
+	{"fixture_repo.go", "R2:", 31}, // badR2NonNew (named param)
+	{"fixture_repo.go", "R2:", 37}, // NewBadR2NoWrap (named param, no pgexec.New)
+	{"fixture_repo.go", "R2:", 44}, // badR2Unnamed (F1: unnamed non-New param)
+	{"fixture_repo.go", "R2:", 49}, // NewBadR2Unnamed (F1: unnamed New param, cannot wrap)
+	// R3 RED (fixture_repo.go) — pointer to pgexec.ExecDirect call pos.
+	// Call-bound approval: arg[0] must be inline Approve(<kebab-literal>).
+	{"fixture_repo.go", "R3:", 65}, // badR3ConstIdentReason (Approve arg is const ident)
+	{"fixture_repo.go", "R3:", 70}, // badR3ConcatReason (Approve arg is BinaryExpr)
+	{"fixture_repo.go", "R3:", 75}, // badR3EmptyReason (Approve arg "" fails kebab regex)
+	{"fixture_repo.go", "R3:", 80}, // badR3PlaceholderReason (Approve arg "todo")
+	{"fixture_repo.go", "R3:", 88}, // badR3ReusedApproval (arg[0] is *ast.Ident, not inline CallExpr)
+	// R3 RED (fixture_service.go) — NON-_repo.go file; proves R3 global scope.
+	{"fixture_service.go", "R3:", 21}, // serviceLayerBadExecDirect (reused approval, non-repo file)
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches every RED
 // violation in tools/archtest/internal/pgrepoambienttxfixture. The assertion
-// is an exact-set match on (ruleID_prefix, line) pairs.
+// is an exact MULTISET match on (base, ruleID_prefix, line) triples — counts
+// must match exactly (F2), so duplicate or cross-file collisions are caught.
 func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 
@@ -674,10 +681,11 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	}
 
 	type diagKey struct {
+		base       string
 		rulePrefix string
 		line       int
 	}
-	actualSet := make(map[diagKey]struct{}, len(diags))
+	actualCounts := make(map[diagKey]int, len(diags))
 	for _, d := range diags {
 		var prefix string
 		switch {
@@ -692,35 +700,29 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 				d.Rel, d.Line, d.Message)
 			continue
 		}
-		actualSet[diagKey{prefix, d.Line}] = struct{}{}
+		actualCounts[diagKey{filepath.Base(d.Rel), prefix, d.Line}]++
 	}
 
-	expectedSet := make(map[diagKey]struct{}, len(expectedFixtureViolations))
+	expectedCounts := make(map[diagKey]int, len(expectedFixtureViolations))
 	for _, v := range expectedFixtureViolations {
-		expectedSet[diagKey(v)] = struct{}{}
+		expectedCounts[diagKey(v)]++
 	}
 
-	for k := range expectedSet {
-		if _, ok := actualSet[k]; !ok {
-			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: expected %s violation at line %d "+
-				"but it was NOT produced — rule may have regressed or fixture line shifted; "+
+	for k, want := range expectedCounts {
+		if got := actualCounts[k]; got != want {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: %s %s:%d expected %d diagnostic(s) "+
+				"but got %d — rule may have regressed or fixture line shifted; "+
 				"update expectedFixtureViolations if fixture changed intentionally",
-				k.rulePrefix, k.line)
+				k.rulePrefix, k.base, k.line, want, got)
 		}
 	}
-	for k := range actualSet {
-		if _, ok := expectedSet[k]; !ok {
-			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: unexpected %s violation at line %d "+
-				"— rule produced an extra diagnostic not in expectedFixtureViolations; "+
-				"update expectedFixtureViolations if fixture changed intentionally",
-				k.rulePrefix, k.line)
+	for k, got := range actualCounts {
+		if want := expectedCounts[k]; want != got {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: %s %s:%d produced %d diagnostic(s) "+
+				"not matched by expectedFixtureViolations (want %d) — GREEN cases must "+
+				"produce 0; update expectedFixtureViolations if fixture changed intentionally",
+				k.rulePrefix, k.base, k.line, got, want)
 		}
-	}
-	if len(actualSet) != len(expectedSet) {
-		t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: got %d unique (rulePrefix, line) entries, "+
-			"want %d; GREEN cases must produce 0; "+
-			"see expectedFixtureViolations for the authoritative list",
-			len(actualSet), len(expectedSet))
 	}
 }
 

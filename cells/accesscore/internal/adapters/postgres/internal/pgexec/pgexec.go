@@ -26,26 +26,32 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
 // PGExecutor is the sealed read/write surface routed through the ambient
 // transaction (when ctx carries one) or directly against the pool. The
 // concrete implementation is unexported.
 //
-// ExecDirect is intentionally NOT a method on this interface — it is the
-// top-level function pgexec.ExecDirect(e PGExecutor, ctx, sql, args...). This
-// closes the subset-interface bypass vector (R3-Hard form, ai-robust.md §Hard
-// 范本 #2 typed marker funnel): a caller cannot declare a local interface
-// re-shape with the same method set and call ExecDirect through it.
+// The interface is SEALED via the unexported sealPGExecutor marker method:
+// only *pgExecutor implements it, so a parent package cannot declare a
+// parallel PGExecutor that holds its own raw pool. See
+// adapters/postgres/internal/pgexec.PGExecutor for full rationale. Regression-
+// guarded by archtest PG-REPO-AMBIENT-TX-01 InterfaceSealed.
 //
-// accesscore production code currently has no ExecDirect callsite; the
-// top-level function exists only for integration tests
-// (role_repo_integration_test.go) that need to manipulate DB state directly
-// for fixture setup / verification. Test files are outside R3's archtest scope.
+// ExecDirect is intentionally NOT a method on this interface — it is the
+// top-level function pgexec.ExecDirect(approval, e, ctx, sql, args...) whose
+// first argument is a call-bound pgrepoapproved.Approval token. accesscore
+// production code currently has no ExecDirect callsite; the top-level function
+// exists only for integration tests (role_repo_integration_test.go) that
+// manipulate DB state directly for fixture setup / verification.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	sealPGExecutor()
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -63,6 +69,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
@@ -85,20 +93,18 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
-// ExecDirect bypasses the ambient transaction. Sealed top-level function — see
+// ExecDirect bypasses the ambient transaction. The first parameter is a
+// call-bound pgrepoapproved.Approval token (mint inline via
+// pgrepoapproved.Approve("<reason>")). Sealed top-level function — see
 // adapters/postgres/internal/pgexec.ExecDirect for full design rationale.
-func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+func ExecDirect(_ pgrepoapproved.Approval, e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	impl, ok := e.(*pgExecutor)
 	if !ok {
-		return pgconn.CommandTag{}, errExecDirectOnNonSealedExecutor
+		// Unreachable in production: PGExecutor is sealed, so every value is
+		// *pgExecutor. A non-*pgExecutor here is an in-package-test-only
+		// programmer error — A-class assertion panic, not an error return.
+		panic(panicregister.Approved("pgexec-execdirect-non-sealed",
+			errcode.Assertion("pgexec.ExecDirect: PGExecutor must originate from pgexec.New")))
 	}
 	return impl.pool.Exec(ctx, sql, args...)
-}
-
-var errExecDirectOnNonSealedExecutor = &execDirectMisuseError{}
-
-type execDirectMisuseError struct{}
-
-func (*execDirectMisuseError) Error() string {
-	return "pgexec.ExecDirect: PGExecutor must originate from pgexec.New (mock impls cannot bypass ambient-tx routing via this function)"
 }

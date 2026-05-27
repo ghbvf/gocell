@@ -34,14 +34,21 @@ import (
 // outside this package by Go visibility — type-asserting back to the concrete
 // type is impossible because the type name is unexported.
 //
+// The interface is SEALED via the unexported sealPGExecutor marker method:
+// only *pgExecutor implements it. See adapters/postgres/internal/pgexec for
+// full rationale; regression-guarded by archtest
+// PG-REPO-AMBIENT-TX-01 InterfaceSealed.
+//
 // devicecell's executor is L1-style (single-statement Create/GetByID/List); it
 // does NOT expose an ExecDirect bypass — there is no ADR-approved compensation
-// path in this cell. If one is added later, extend this interface and add a
-// pgrepoapproved.ApprovedExecDirect marker at the callsite.
+// path in this cell. If one is added later, add a top-level ExecDirect taking a
+// call-bound pgrepoapproved.Approval (mint via pgrepoapproved.Approve) at the
+// callsite, mirroring adapters/postgres/internal/pgexec.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	sealPGExecutor()
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -62,6 +69,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
