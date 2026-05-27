@@ -455,11 +455,33 @@ var forbiddenTimeFns = map[string]string{
 	"Sleep":     "clock.Clock.Sleep",
 }
 
-// clockControlPlaneAllowedMethods returns the set of FuncDecl name-positions
-// (format: fset.Position(fd.Name.Pos()).String()) in file that are exempt from
-// PROD-CLOCK-INJECTION-01 via receiver-type confinement.
+// exactSanctionedTimeCalls maps each controlPlaneClock method name to the
+// exact stdlib time.* function name (without the "time." prefix) that the
+// method body may call. The carve-out is keyed on the (method name, callee)
+// pair, NOT on receiver type alone — so any other stdlib time.* function call
+// inside a controlPlaneClock method (e.g. time.Sleep inside newTicker) is a
+// violation, and any new exempt method requires extending this map AND adding
+// the method to the sealed type.
 //
-// A FuncDecl is exempt if and only if ALL of:
+// Extension policy (HARD form-uniqueness): the only way to add a new
+// (method, callee) pair is a deliberate code change here PLUS adding the
+// method to runtime/command/lifecycle.go controlPlaneClock. A new method on
+// controlPlaneClock without an entry here is a violation for every time.*
+// call it makes (the method exists but exactSanctionedTimeCalls lookup
+// returns ""); a new entry here without a matching method does nothing
+// (no FuncDecl position binds to it). Both halves are required.
+//
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
+var exactSanctionedTimeCalls = map[string]string{
+	"newTicker":     "NewTicker",
+	"newProbeTimer": "NewTimer",
+}
+
+// clockControlPlaneAllowedMethods returns the map of FuncDecl name-positions
+// (format: fset.Position(fd.Name.Pos()).String()) to method name for methods
+// in file that are candidates for the PROD-CLOCK-INJECTION-01 carve-out.
+//
+// A FuncDecl is a candidate if and only if ALL of:
 //
 //	(a) rel is under "runtime/command/" — this package gate prevents any other
 //	    package from claiming to host a "controlPlaneClock" method; the type is
@@ -474,18 +496,28 @@ var forbiddenTimeFns = map[string]string{
 //	    forms are accepted for robustness, though the current impl uses value
 //	    receivers only.
 //
+//	(d) The method name appears as a key in exactSanctionedTimeCalls — methods
+//	    on controlPlaneClock that lack an entry never grant carve-out. This is
+//	    the form-uniqueness lock that closes the "any time.* in any method
+//	    body" gap (#1136 review F2).
+//
+// The returned map value is the method name; callers check the resolved time
+// function name against exactSanctionedTimeCalls[methodName] to decide whether
+// the specific time.* call is sanctioned (exact (method, callee) pair).
+//
 // Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File, so depth=1 is correct and sufficient.
 //
-// AI-robust grade: Medium. The stdlib time.NewTicker / time.NewTimer free
-// functions cannot be made uncallable in Go, so receiver-type confinement is
-// the permanent ceiling here (same as SPAN-SETATTR-REDACT-01 package-internal
-// axis). The gain over the former comment-marker + allowlist-map form (#619):
-//   - Eliminates the AI-abusable //archtest:allow:clock-injection:control-plane
-//     marker that any production PR could add to any FuncDecl.
-//   - Eliminates the hand-maintained controlPlaneClockCarveOut map.
-//   - A new time.* callsite now requires adding a method to the sealed type,
-//     which is a deliberate, reviewable code change (not a comment addition).
+// AI-robust grade: Medium (permanent ceiling). The stdlib time.NewTicker /
+// time.NewTimer free functions cannot be made uncallable in Go, so receiver-type
+// confinement is the permanent ceiling here (same as SPAN-SETATTR-REDACT-01
+// package-internal axis). Form-uniqueness within that ceiling is now (method,
+// callee) exact-pair — the strongest available form for stdlib free-function
+// callouts. Gain over the former receiver-type-only carve-out (#1136 F2):
+//   - Any time.* call inside a controlPlaneClock method body other than the
+//     declared (method, callee) pair is a violation — no "method body wildcard".
+//   - Adding a controlPlaneClock method without an exactSanctionedTimeCalls
+//     entry leaves it ungated; any time.* call in it is flagged.
 //
 // Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
 //  1. A FuncLit (anonymous function / closure) cannot be a method; time.* calls
@@ -506,11 +538,20 @@ var forbiddenTimeFns = map[string]string{
 //     with a method named "controlPlaneClock" is NOT exempt.
 //     Reverse self-check: control_plane_wrong_receiver_type_violates asserts such
 //     a method is flagged (receiver type "otherClock" ≠ "controlPlaneClock").
+//  4. A new controlPlaneClock method (e.g. "harvest") that calls time.Sleep
+//     would have passed under the receiver-type-only form; the (method, callee)
+//     pair lock rejects it because "harvest" is not in exactSanctionedTimeCalls.
+//     Reverse self-check: control_plane_wrong_method_name_violates fixture.
+//  5. A sanctioned method (e.g. "newTicker") that calls the wrong time.*
+//     function (e.g. time.Sleep instead of time.NewTicker) would pass under
+//     the receiver-type-only form; the (method, callee) pair lock rejects it
+//     because exactSanctionedTimeCalls["newTicker"] != "Sleep".
+//     Reverse self-check: control_plane_wrong_callee_violates fixture.
 //
-// ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
 // ref: PROD-CLOCK-INJECTION-01
-func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel string) map[string]bool {
-	out := map[string]bool{}
+func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel string) map[string]string {
+	out := map[string]string{}
 	// Gate (a): only runtime/command/ files can host controlPlaneClock methods.
 	if !strings.HasPrefix(rel, "runtime/command/") {
 		return out
@@ -525,8 +566,19 @@ func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel st
 		if recvTypeName != "controlPlaneClock" {
 			return
 		}
+		if fd.Name == nil {
+			return
+		}
+		// Gate (d): method name must be a key in exactSanctionedTimeCalls. Methods
+		// on controlPlaneClock that lack an entry are NOT carve-out candidates —
+		// any time.* call inside them is flagged the same as in any other production
+		// method. This is the form-uniqueness lock that prevents the "any method
+		// body wildcard" loophole (#1136 review F2).
+		if _, ok := exactSanctionedTimeCalls[fd.Name.Name]; !ok {
+			return
+		}
 		key := fset.Position(fd.Name.Pos()).String()
-		out[key] = true
+		out[key] = fd.Name.Name
 	})
 	return out
 }
@@ -644,7 +696,7 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 //     Reverse self-check: control_plane_wrong_receiver_type_violates fixture.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 // ref: dominikh/go-tools analysis/code/code.go CallName / IsCallToAny
 func TestProdClockInjection(t *testing.T) {
@@ -710,15 +762,26 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []Diagnostic
 	seen := map[string]bool{}
 
-	// Receiver-type confinement: compute which FuncDecls in this file are exempt.
-	// Only FuncDecls that are methods of controlPlaneClock AND whose file is
-	// under runtime/command/ qualify.
+	// Receiver-type + (method, callee) confinement: compute which FuncDecls in
+	// this file may host a sanctioned time.* call, mapped to the controlPlaneClock
+	// method name. Only FuncDecls that are methods of controlPlaneClock AND whose
+	// file is under runtime/command/ AND whose name appears as a key in
+	// exactSanctionedTimeCalls qualify. The final (method, callee) pair check
+	// happens inside record() against exactSanctionedTimeCalls[methodName].
 	allowedFuncs := clockControlPlaneAllowedMethods(fset, file, rel)
 
 	record := func(node ast.Node, name string) {
-		// Carve-out: skip if inside an exempt FuncDecl (not inside a closure).
-		if funcKey := enclosingFuncDeclKey(fset, file, node.Pos()); allowedFuncs[funcKey] {
-			return
+		// (method, callee) exact-pair carve-out: skip only if pos is inside an
+		// exempt FuncDecl (not inside a closure) AND the time.* function name
+		// matches exactSanctionedTimeCalls[methodName].
+		if funcKey := enclosingFuncDeclKey(fset, file, node.Pos()); funcKey != "" {
+			if methodName, isCandidate := allowedFuncs[funcKey]; isCandidate {
+				if exactSanctionedTimeCalls[methodName] == name {
+					return // sanctioned (method, callee) pair
+				}
+				// fall through: method is a carve-out candidate but the callee
+				// does not match the declared pair — record violation.
+			}
 		}
 		line := fset.Position(node.Pos()).Line
 		key := fmt.Sprintf("%s:%d:%s", rel, line, name)
@@ -829,6 +892,47 @@ const mustHaveClockFuncName = "MustHaveClock"
 // contain "Clock" but do NOT take clock.Clock and return an option are NOT
 // flagged (e.g. clock.MustHaveClock itself, utility functions).
 //
+// Sub-check C: input Config/Options struct field ban (#1136 review F1).
+// Any EXPORTED type declaration whose name has the suffix "Config" / "Options"
+// / "Opts" AND which has an EXPORTED struct field whose type resolves (via
+// go/types) to kernel/clock.Clock is a violation. The closed naming convention
+// {Config, Options, Opts} is the framework's input-struct surface — declaring
+// an exported Clock field on such a struct lets external callers omit it via
+// struct literal omission (zero-value Clock = nil interface), bypassing the
+// positional parameter promise of CLOCK-POSITIONAL-INJECTION-01.
+//
+// Predicates (all must hold):
+//
+//	(1) the TypeSpec name is exported (capitalized) AND has suffix "Config",
+//	    "Options", or "Opts" — exported input-struct naming convention
+//	(2) the underlying type is a struct
+//	(3) at least one EXPORTED field has type resolving to kernel/clock.Clock
+//	    (via go/types — aliases cannot bypass)
+//
+// Carve-outs (by design, not by hand-maintained allowlist):
+//
+//   - Composition-root holders such as cmd/corebundle.SharedDeps (single source
+//     where clock.Real() enters per ADR 202605270000 §Decision #4) do not match
+//     the Config/Options/Opts suffix, so they are excluded by naming convention.
+//   - Unexported option-pattern accumulator structs (e.g. runtime/auth.authConfig,
+//     runtime/auth.serviceTokenConfig, runtime/config.watcherConfig) hold the
+//     clock as an unexported field and are constructed only inside their own
+//     package by `defaultFooConfig()` + WithFoo option loop; the positional
+//     `clk clock.Clock` parameter on the public constructor assigns into the
+//     internal field. External callers cannot construct the struct directly.
+//     These are excluded because the field is unexported.
+//   - Unexported config structs with exported Clock fields (e.g. dispatcherConfig
+//     in kernel/assembly/hook_dispatcher.go before the dead-field cleanup) are
+//     also excluded: the struct cannot be constructed outside its package, so
+//     external callers cannot omit the clock via struct literal. Same-package
+//     dead-field hygiene is handled as a separate code-review concern.
+//
+// AI-robust grade: Medium downstream (this archtest is type-aware struct-field
+// + name suffix + exported-name lock). Upstream Hard is the Go compiler: with
+// no exported Clock field on the input struct, a callsite like `Cfg{Clock: nil}`
+// produces a compile error (unknown field), and the positional parameter is
+// mandatory by signature.
+//
 // Test-helper packages (configcoretest/, auditcoretest/, accesscoretest/, etc.)
 // are classified as test code by fileroles.IsProductionCode and are therefore
 // excluded. Their With*Clock builders (e.g. configcoretest.WithWriteClock,
@@ -887,7 +991,7 @@ const mustHaveClockFuncName = "MustHaveClock"
 //     Accepted: (Option, error) constructors are banned for the same reason as
 //     single-return options — they still make clock injection omittable.
 //
-// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D
 func TestClockPositionalInjection(t *testing.T) {
 	t.Parallel()
@@ -914,8 +1018,8 @@ func TestClockPositionalInjection(t *testing.T) {
 	Report(t, "CLOCK-POSITIONAL-INJECTION-01", diags)
 }
 
-// scanClockPositionalInjectionAST runs both sub-checks A and B over a single
-// file and returns all violations, sorted by line.
+// scanClockPositionalInjectionAST runs all three sub-checks (A, B, C) over a
+// single file and returns all violations, sorted by line.
 func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	seen := map[string]bool{}
@@ -939,7 +1043,7 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 					Line: line,
 					Message: "clock.MustHaveClock: arg0 must be a function parameter (positional injection); " +
 						"selector or non-ident arg0 (e.g. cfg.Clock, s.clk) violates the positional-param contract. " +
-						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
 				})
 			}
 		}
@@ -984,8 +1088,62 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 				Message: fmt.Sprintf(
 					"exported clock option-injector %q found — With*Clock option injectors are banned by "+
 						"CLOCK-POSITIONAL-INJECTION-01; migrate to a mandatory positional clock.Clock parameter. "+
-						"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md",
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
 					fd.Name.Name,
+				),
+			})
+		}
+	})
+
+	// Sub-check C: input Config/Options struct field ban.
+	// Predicates (all must hold):
+	//   (1) TypeSpec name is exported AND has suffix Config/Options/Opts (the
+	//       framework's externally-constructable input-struct naming convention)
+	//   (2) underlying type is *ast.StructType
+	//   (3) at least one EXPORTED field has type resolving to kernel/clock.Clock
+	//       (via go/types — unexported fields cannot be set via struct literal
+	//       from external packages, so they cannot bypass positional injection)
+	EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+		if ts.Name == nil || !ts.Name.IsExported() || !isInputConfigStructName(ts.Name.Name) {
+			return
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return
+		}
+		for _, field := range st.Fields.List {
+			if !structFieldIsKernelClock(field, info) {
+				continue
+			}
+			// Sub-check C predicate (3): only exported fields permit external
+			// caller bypass via struct literal. Anonymous (embedded) fields are
+			// exported when the embedded type name is exported.
+			if !structFieldIsExported(field) {
+				continue
+			}
+			// Field with a single name is the common shape (`Clock clock.Clock`);
+			// rare anonymous fields are reported against the type expression line.
+			reportPos := field.Type.Pos()
+			fieldName := "<anonymous>"
+			if len(field.Names) > 0 {
+				reportPos = field.Names[0].Pos()
+				fieldName = field.Names[0].Name
+			}
+			line := fset.Position(reportPos).Line
+			key := fmt.Sprintf("%s:%d:C", rel, line)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, Diagnostic{
+				Rel:  rel,
+				Line: line,
+				Message: fmt.Sprintf(
+					"input Config/Options struct %s declares exported %s field of type clock.Clock; "+
+						"clock must enter via positional parameter, not struct literal — "+
+						"struct-field injection lets callers omit the clock at compile time. "+
+						"ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md",
+					ts.Name.Name, fieldName,
 				),
 			})
 		}
@@ -998,6 +1156,71 @@ func scanClockPositionalInjectionAST(fset *token.FileSet, file *ast.File, rel st
 		return out[i].Line < out[j].Line
 	})
 	return out
+}
+
+// isInputConfigStructName reports whether name matches the framework's input
+// Config/Options struct naming convention used by sub-check C.
+//
+// The convention is a closed suffix set: Config, Options, Opts. This is the
+// HARD form-uniqueness lock that obviates a hand-maintained allowlist —
+// composition-root holders such as cmd/corebundle.SharedDeps (the single
+// sanctioned threading source per ADR 202605270000 §Decision #4) naturally
+// fall outside the suffix set and are exempt without explicit carve-out.
+func isInputConfigStructName(name string) bool {
+	return strings.HasSuffix(name, "Config") ||
+		strings.HasSuffix(name, "Options") ||
+		strings.HasSuffix(name, "Opts")
+}
+
+// structFieldIsExported reports whether field has at least one exported name,
+// or — for anonymous (embedded) fields — whether the embedded type's terminal
+// identifier is exported. This mirrors Go's own export rules for struct
+// literal field accessibility from external packages.
+func structFieldIsExported(field *ast.Field) bool {
+	if field == nil {
+		return false
+	}
+	if len(field.Names) > 0 {
+		for _, name := range field.Names {
+			if name.IsExported() {
+				return true
+			}
+		}
+		return false
+	}
+	// Anonymous field: terminal ident determines the implicit field name.
+	ident, ok := typeExprToIdent(field.Type)
+	if !ok {
+		return false
+	}
+	return ident.IsExported()
+}
+
+// structFieldIsKernelClock reports whether field declares at least one
+// kernel/clock.Clock-typed identifier (resolved via go/types). The check
+// uses the first name's *types.Var for typed fields; anonymous fields fall
+// back to AST identifier resolution via typeExprToIdent.
+func structFieldIsKernelClock(field *ast.Field, info *types.Info) bool {
+	if info == nil || field == nil {
+		return false
+	}
+	if len(field.Names) > 0 {
+		obj, ok := info.ObjectOf(field.Names[0]).(*types.Var)
+		if !ok {
+			return false
+		}
+		return isKernelClockType(obj.Type())
+	}
+	// Anonymous (embedded) field — inspect the type expression directly.
+	ident, ok := typeExprToIdent(field.Type)
+	if !ok {
+		return false
+	}
+	obj, ok := info.ObjectOf(ident).(*types.TypeName)
+	if !ok {
+		return false
+	}
+	return isKernelClockType(obj.Type())
 }
 
 // isMustHaveClockCall reports whether call is a call to kernel/clock.MustHaveClock.
@@ -1234,6 +1457,8 @@ func TestClockPositionalInjectionFixtures(t *testing.T) {
 		"withfooclock_violates",            // RED: exported func WithFooClock(...) — suffixed name (broadened predicate)
 		"aliased_import_selector_violates", // RED: aliased import + selector arg0
 		"ctx_param_passes",                 // GREEN: (ctx, clk) two-param form — clk is a param
+		"struct_field_violates",            // RED: exported Config-suffix struct with exported Clock field (sub-check C)
+		"struct_field_unexported_ok",       // GREEN: unexported struct + unexported field; non-Config suffix
 	}
 
 	for _, dir := range dirs {

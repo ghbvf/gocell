@@ -88,6 +88,8 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		"control_plane_no_marker_violates",           // RED: free function in runtime/command/ (no receiver)
 		"control_plane_closure_violates",             // RED: closure inside non-exempt func
 		"control_plane_exempt_func_closure_violates", // RED: closure inside exempt controlPlaneClock method
+		"control_plane_wrong_method_name_violates",   // RED: new controlPlaneClock method not in exactSanctionedTimeCalls
+		"control_plane_wrong_callee_violates",        // RED: sanctioned method calls wrong time.* function
 	}
 
 	for _, dir := range dirs {
