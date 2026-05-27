@@ -24,6 +24,11 @@ var noopStepFunc StepFunc = func(_ context.Context, _ *Instance, _ []byte) ([]by
 	return nil, nil
 }
 
+// noopCompensateFunc is a minimal valid CompensateFunc used in table tests.
+var noopCompensateFunc CompensateFunc = func(_ context.Context, _ *Instance, _ []byte) error {
+	return nil
+}
+
 // requireErrKind asserts that err is a non-nil *errcode.Error with the
 // expected Kind, following the pattern in status_test.go / instance_test.go.
 func requireErrKind(t *testing.T, err error, kind errcode.Kind) {
@@ -237,6 +242,93 @@ func TestDefinition_Validate(t *testing.T) {
 					},
 				}
 			},
+		},
+		{
+			name: "step with Compensate is OK",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-compensate-ok"),
+					Steps: []Step{
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc, Compensate: noopCompensateFunc},
+					},
+				}
+			},
+		},
+		{
+			name: "nil Compensate is OK",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-nil-compensate"),
+					Steps: []Step{
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc, Compensate: nil},
+					},
+				}
+			},
+		},
+		{
+			name: "step with valid RetryPolicy is OK",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-step-retry-ok"),
+					Steps: []Step{
+						{
+							Name: idutil.SafeID("s1"), Run: noopStepFunc,
+							RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D1s, MaxInterval: testtime.D30s},
+						},
+					},
+				}
+			},
+		},
+		{
+			name: "definition with valid RetryPolicy is OK",
+			build: func() *Definition {
+				return &Definition{
+					ID:          idutil.SafeID("saga-def-retry-ok"),
+					Steps:       []Step{{Name: idutil.SafeID("s1"), Run: noopStepFunc}},
+					RetryPolicy: RetryPolicy{MaxAttempts: 5, BaseInterval: testtime.D1s, MaxInterval: testtime.D30s},
+				}
+			},
+		},
+		{
+			name: "step RetryPolicy invalid propagates KindInvalid",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-step-retry-bad"),
+					Steps: []Step{
+						{Name: idutil.SafeID("s1"), Run: noopStepFunc, RetryPolicy: RetryPolicy{MaxAttempts: -1}},
+					},
+				}
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name: "step RetryPolicy interval inversion propagates KindInvalid",
+			build: func() *Definition {
+				return &Definition{
+					ID: idutil.SafeID("saga-step-retry-inv"),
+					Steps: []Step{
+						{
+							Name: idutil.SafeID("s1"), Run: noopStepFunc,
+							RetryPolicy: RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D30s, MaxInterval: testtime.D1s},
+						},
+					},
+				}
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
+		},
+		{
+			name: "definition RetryPolicy invalid propagates KindInvalid",
+			build: func() *Definition {
+				return &Definition{
+					ID:          idutil.SafeID("saga-def-retry-bad"),
+					Steps:       []Step{{Name: idutil.SafeID("s1"), Run: noopStepFunc}},
+					RetryPolicy: RetryPolicy{MaxAttempts: -2},
+				}
+			},
+			wantErr:  true,
+			wantKind: errcode.KindInvalid,
 		},
 	}
 

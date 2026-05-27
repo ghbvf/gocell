@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_executor_rand_injected_fixtures/red_dot_import_rand/violator.go:15: SAGA-EXECUTOR-RAND-INJECTED-01: math/rand/v2.Int64N — must use an injected *rand.Rand source (rand.New(rand.NewPCG(...))) instead of the package-level global; global rand is not injectable and makes jitter non-deterministic in tests

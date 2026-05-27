@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_compensate_pure_fixtures/red_valuespec_funclit/violator.go:19: SAGA-STEP-COMPENSATE-PURE-01-A1: CompensateFunc body must be pure-reverse; it calls a method on outbox.Writer (Compensate runs in app domain only — the Coordinator owns the tx layer)
