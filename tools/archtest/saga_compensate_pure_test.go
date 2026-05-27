@@ -589,3 +589,41 @@ func TestSagaStepCompensatePure_Detector_RedNamedFuncFixture(t *testing.T) {
 	})
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
+
+// runCompensatePureFixture loads a compensate-pure fixture dir and runs the A1
+// scan over it, returning the diagnostics for golden assertion.
+func runCompensatePureFixture(t *testing.T, fixture string) (string, []Diagnostic) {
+	t.Helper()
+	root := findModuleRoot(t)
+	relDir, pattern := sagaCompensateFixturePattern(fixture)
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		ifaces := sagaResolveBannedReceivers(p.Pkg)
+		funcDecls := sagaFuncDeclsByObject(p)
+		var out []Diagnostic
+		for _, file := range p.Files {
+			out = append(out, scanCompensatePure(p, file, ifaces, funcDecls)...)
+		}
+		return out
+	})
+	return filepath.Join(root, relDir, "diag.golden"), diags
+}
+
+// TestSagaStepCompensatePure_Detector_RedValueSpecFuncLitFixture loads the
+// red_valuespec_funclit fixture (form 1: `var c saga.CompensateFunc = func(){}`)
+// and asserts the A1 detector fires. Closes the form-1 fixture gap: prior to
+// this fixture the ValueSpec-with-func-literal path was asserted by no golden.
+func TestSagaStepCompensatePure_Detector_RedValueSpecFuncLitFixture(t *testing.T) {
+	goldenPath, diags := runCompensatePureFixture(t, "red_valuespec_funclit")
+	AssertGolden(t, goldenPath, diags)
+}
+
+// TestSagaStepCompensatePure_Detector_RedAssignFuncLitFixture loads the
+// red_assign_funclit fixture (form 2: `c = func(){}` AssignStmt) and asserts the
+// A1 detector fires. Closes the form-2 fixture gap.
+func TestSagaStepCompensatePure_Detector_RedAssignFuncLitFixture(t *testing.T) {
+	goldenPath, diags := runCompensatePureFixture(t, "red_assign_funclit")
+	AssertGolden(t, goldenPath, diags)
+}

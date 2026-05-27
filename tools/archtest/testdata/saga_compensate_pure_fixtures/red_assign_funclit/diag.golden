@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_compensate_pure_fixtures/red_assign_funclit/violator.go:20: SAGA-STEP-COMPENSATE-PURE-01-A1: CompensateFunc body must be pure-reverse; it calls a method on *sql.Tx (Compensate runs in app domain only — the Coordinator owns the tx layer)

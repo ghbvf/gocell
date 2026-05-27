@@ -52,7 +52,18 @@ const (
 	// OutcomeCompensationRequired means retries were exhausted and the step
 	// has a non-nil Compensate function. The Coordinator should call
 	// Executor.Compensate for this step.
+	//
+	// Deprecated (RED-stub, removed in GREEN): the executor must not pre-empt
+	// the Coordinator's Compensating-vs-Failed decision; kept only so the RED
+	// commit compiles while the new behavior tests fail.
 	OutcomeCompensationRequired
+	// OutcomeCanceled means the parent context was explicitly canceled
+	// (orchestrator shutdown/abort) — NOT a business expiry. The Coordinator
+	// should leave the instance for re-claim, not terminate it.
+	OutcomeCanceled
+	// OutcomeLeaseLost means a heartbeat observed ok=false: another coordinator
+	// now owns the lease. The running step was canceled.
+	OutcomeLeaseLost
 )
 
 // String implements fmt.Stringer for readable log output.
@@ -66,6 +77,10 @@ func (o Outcome) String() string {
 		return "Expired"
 	case OutcomeCompensationRequired:
 		return "CompensationRequired"
+	case OutcomeCanceled:
+		return "Canceled"
+	case OutcomeLeaseLost:
+		return "LeaseLost"
 	default:
 		return "Outcome(" + strconv.Itoa(int(o)) + ")"
 	}
@@ -205,7 +220,7 @@ func (e *Executor) runAttempt(
 	go func() {
 		defer wg.Done()
 		runHeartbeat(hbCtx, e.clk, e.heartbeater,
-			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger)
+			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger, func() {})
 	}()
 
 	newState, runErr := safeRun(runCtx, step.Run, inst, prevState)

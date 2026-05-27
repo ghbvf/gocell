@@ -44,7 +44,9 @@ func runHeartbeat(
 	instanceID, leaseID idutil.SafeID,
 	interval, leaseDuration time.Duration,
 	logger *slog.Logger,
+	onStale func(),
 ) {
+	_ = onStale // RED stub: wired to cancel the running step in GREEN.
 	ticker := clk.NewTicker(interval)
 	defer ticker.Stop()
 

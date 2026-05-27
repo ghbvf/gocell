@@ -27,6 +27,13 @@ const (
 	DefaultMaxInterval = 30 * time.Second
 )
 
+// jitterDivisor sets the bounded-jitter window width: the jittered delay lies in
+// [d - d/jitterDivisor, d] where d = ExponentialDelay. A divisor of 5 yields a
+// Temporal-style [0.8d, d] spread, avoiding the thundering-herd of full-jitter
+// [0, d) while still decorrelating retriers. Referenced by Backoff and by the
+// retry_policy_test jitter-range assertion (single source of the window width).
+const jitterDivisor = 5
+
 // jitterSource is a source of bounded random integers used for retry backoff.
 // Declared here so executor.go and options.go can reference the same type;
 // tests inject a deterministic implementation.

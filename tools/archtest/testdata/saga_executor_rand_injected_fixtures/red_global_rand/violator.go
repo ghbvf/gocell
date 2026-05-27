@@ -3,6 +3,7 @@
 package redexecutorglobalrand
 
 import (
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // archtest red fixture; SAGA-EXECUTOR-RAND-INJECTED-01 global-rand detector self-test
 	"math/rand/v2"
 )
 

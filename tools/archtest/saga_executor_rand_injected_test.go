@@ -296,3 +296,24 @@ func TestSagaExecutorRandInjected_Detector_RedGlobalRandFixture(t *testing.T) {
 	})
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
+
+// TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture loads the
+// red_dot_import_rand fixture (dot-imported `Int64N(...)` as a bare Ident) and
+// asserts the A1 detector fires via its ast.Ident walk branch. Closes the B2
+// fixture gap: prior to this fixture the dot-import branch had only the reverse
+// self-test (asserting absence in production), not a positive detector proof.
+func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaExecutorRandFixturePattern("red_dot_import_rand")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, file := range p.Files {
+			out = append(out, scanRandGlobalCalls(p, file)...)
+		}
+		return out
+	})
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}

@@ -7,6 +7,7 @@ import (
 
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // deterministicJitter is a fixed-seed jitter source for deterministic tests.
@@ -44,34 +45,34 @@ func TestResolvePolicy(t *testing.T) {
 		{
 			name:         "def_overrides_defaults",
 			step:         ksaga.RetryPolicy{},
-			def:          ksaga.RetryPolicy{MaxAttempts: 5, BaseInterval: 200 * time.Millisecond, MaxInterval: 10 * time.Second},
+			def:          ksaga.RetryPolicy{MaxAttempts: 5, BaseInterval: testtime.D200ms, MaxInterval: testtime.D10s},
 			wantAttempts: 5,
-			wantBase:     200 * time.Millisecond,
-			wantMax:      10 * time.Second,
+			wantBase:     testtime.D200ms,
+			wantMax:      testtime.D10s,
 		},
 		{
 			name:         "step_overrides_def",
-			step:         ksaga.RetryPolicy{MaxAttempts: 3, BaseInterval: 50 * time.Millisecond, MaxInterval: 5 * time.Second},
-			def:          ksaga.RetryPolicy{MaxAttempts: 5, BaseInterval: 200 * time.Millisecond, MaxInterval: 10 * time.Second},
+			step:         ksaga.RetryPolicy{MaxAttempts: 3, BaseInterval: testtime.D50ms, MaxInterval: testtime.D5s},
+			def:          ksaga.RetryPolicy{MaxAttempts: 5, BaseInterval: testtime.D200ms, MaxInterval: testtime.D10s},
 			wantAttempts: 3,
-			wantBase:     50 * time.Millisecond,
-			wantMax:      5 * time.Second,
+			wantBase:     testtime.D50ms,
+			wantMax:      testtime.D5s,
 		},
 		{
 			name:         "step_partial_overrides_def_partial",
 			step:         ksaga.RetryPolicy{MaxAttempts: 7},
-			def:          ksaga.RetryPolicy{BaseInterval: 300 * time.Millisecond, MaxInterval: 20 * time.Second},
+			def:          ksaga.RetryPolicy{BaseInterval: testtime.D300ms, MaxInterval: testtime.D20s},
 			wantAttempts: 7,
-			wantBase:     300 * time.Millisecond,
-			wantMax:      20 * time.Second,
+			wantBase:     testtime.D300ms,
+			wantMax:      testtime.D20s,
 		},
 		{
 			name:         "step_partial_overrides_def_partial_base_only",
-			step:         ksaga.RetryPolicy{BaseInterval: 400 * time.Millisecond},
-			def:          ksaga.RetryPolicy{MaxAttempts: 4, MaxInterval: 15 * time.Second},
+			step:         ksaga.RetryPolicy{BaseInterval: testtime.D400ms},
+			def:          ksaga.RetryPolicy{MaxAttempts: 4, MaxInterval: testtime.D15s},
 			wantAttempts: 4,
-			wantBase:     400 * time.Millisecond,
-			wantMax:      15 * time.Second,
+			wantBase:     testtime.D400ms,
+			wantMax:      testtime.D15s,
 		},
 	}
 
@@ -110,7 +111,7 @@ func TestShouldRetry(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := resolvedPolicy{maxAttempts: tc.maxAttempts, base: 100 * time.Millisecond, max: 30 * time.Second}
+			p := resolvedPolicy{maxAttempts: tc.maxAttempts, base: testtime.D100ms, max: testtime.D30s}
 			got := p.ShouldRetry(tc.attempt)
 			if got != tc.want {
 				t.Errorf("ShouldRetry(%d) with maxAttempts=%d = %v, want %v",
@@ -124,7 +125,7 @@ func TestShouldRetry(t *testing.T) {
 func TestBackoff_Capped(t *testing.T) {
 	t.Parallel()
 	j := newDeterministicJitter(42, 1337)
-	p := resolvedPolicy{maxAttempts: 10, base: 100 * time.Millisecond, max: 500 * time.Millisecond}
+	p := resolvedPolicy{maxAttempts: 10, base: testtime.D100ms, max: testtime.D500ms}
 
 	// attempt=20 should far exceed the cap; result should be capped at max (with jitter)
 	d := p.Backoff(20, j)
@@ -139,10 +140,10 @@ func TestBackoff_JitterRange(t *testing.T) {
 	// Use a fresh jitter source for each sub-test to avoid coupling
 	for attempt := 0; attempt < 5; attempt++ {
 		j := newDeterministicJitter(uint64(attempt+1), 999)
-		p := resolvedPolicy{maxAttempts: 10, base: 100 * time.Millisecond, max: 30 * time.Second}
+		p := resolvedPolicy{maxAttempts: 10, base: testtime.D100ms, max: testtime.D30s}
 		d := p.Backoff(attempt, j)
 		raw := koutbox.ExponentialDelay(p.base, p.max, attempt)
-		lower := raw - raw/5
+		lower := raw - raw/jitterDivisor
 		if raw == 0 {
 			if d != 0 {
 				t.Errorf("attempt=%d: Backoff = %v, want 0 for zero raw", attempt, d)
@@ -163,7 +164,7 @@ func TestBackoff_Deterministic(t *testing.T) {
 	t.Parallel()
 	j1 := newDeterministicJitter(12345, 67890)
 	j2 := newDeterministicJitter(12345, 67890)
-	p := resolvedPolicy{maxAttempts: 5, base: 100 * time.Millisecond, max: 30 * time.Second}
+	p := resolvedPolicy{maxAttempts: 5, base: testtime.D100ms, max: testtime.D30s}
 
 	for attempt := 0; attempt < 5; attempt++ {
 		d1 := p.Backoff(attempt, j1)

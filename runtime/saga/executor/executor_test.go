@@ -15,6 +15,9 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // noopLogger returns a discarding logger.
@@ -49,20 +52,16 @@ func (a *alwaysOKHeartbeater) Heartbeat(_ context.Context, instanceID, leaseID i
 
 func (a *alwaysOKHeartbeater) Count() int { return int(atomic.LoadInt32(&a.callCount)) }
 
-// waitForOnePendingTimer waits up to 2 seconds for the FakeClock to have at
-// least one pending timer. This ensures the executor goroutine has registered
-// its backoff Sleep call before Advance is called, preventing flakiness under
-// CI load. Mirrors the waitForOneTicker pattern used in heartbeat_test.go.
+// waitForOnePendingTimer waits for the FakeClock to have at least one pending
+// timer, ensuring the executor goroutine has registered its backoff Sleep
+// before Advance is called. There is no channel signal for "timer registered",
+// so polling is unavoidable — the legitimate testwait.External carve-out.
 func waitForOnePendingTimer(t *testing.T, fc *clockmock.FakeClock) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if fc.PendingTimers() >= 1 {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("timed out waiting for a pending timer")
+	testwait.External(t, "fakeclock-timer-registration",
+		func() bool { return fc.PendingTimers() >= 1 },
+		testtime.EventuallyShort, testtime.FastPoll,
+		"executor did not register its backoff timer")
 }
 
 // --- NewExecutor validation tests ---
@@ -104,10 +103,10 @@ func TestNewExecutor_BadHeartbeatLeaseRatio(t *testing.T) {
 		hbInt    time.Duration
 		leaseDur time.Duration
 	}{
-		{"equal", 15 * time.Second, 30 * time.Second},   // 15*2 == 30, fails: must be <
-		{"greater", 20 * time.Second, 30 * time.Second}, // 20*2 > 30
-		{"zero_interval", 0, 30 * time.Second},
-		{"zero_lease", 10 * time.Second, 0},
+		{"equal", testtime.D15s, testtime.D30s},   // 15*2 == 30, fails: must be <
+		{"greater", testtime.D20s, testtime.D30s}, // 20*2 > 30
+		{"zero_interval", 0, testtime.D30s},
+		{"zero_lease", testtime.D10s, 0},
 	}
 
 	for _, tc := range tests {
@@ -128,8 +127,8 @@ func TestNewExecutor_ValidRatio(t *testing.T) {
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
 	_, err := NewExecutor(hb, fc,
-		WithHeartbeatInterval(10*time.Second),
-		WithLeaseDuration(30*time.Second),
+		WithHeartbeatInterval(testtime.D10s),
+		WithLeaseDuration(testtime.D30s),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -230,7 +229,7 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 		fc.Advance(delay)
 	}
 
-	result := <-resultCh
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "retry-backoff-result")
 	if result.Outcome != OutcomeSucceeded {
 		t.Errorf("Outcome = %v, want OutcomeSucceeded", result.Outcome)
 	}
@@ -239,9 +238,13 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 	}
 }
 
-// --- Execute exhausted + compensatable → CompensationRequired ---
-
-func TestExecute_ExhaustedWithCompensate_CompensationRequired(t *testing.T) {
+// --- Execute exhausted + compensatable → Failed (executor returns facts only) ---
+//
+// The executor must NOT pre-empt the Coordinator's Compensating-vs-Failed
+// decision (it has no view of committed-step history). Even when step.Compensate
+// is non-nil, a forward exhaustion is reported as OutcomeFailed; the Coordinator
+// decides whether to compensate based on committed history (kernel/saga/status.go).
+func TestExecute_ExhaustedWithCompensate_Failed(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
@@ -264,8 +267,8 @@ func TestExecute_ExhaustedWithCompensate_CompensationRequired(t *testing.T) {
 	}
 
 	result := exec.Execute(context.Background(), newTestInstance(), "lease-1", step, ksaga.RetryPolicy{}, nil)
-	if result.Outcome != OutcomeCompensationRequired {
-		t.Errorf("Outcome = %v, want OutcomeCompensationRequired", result.Outcome)
+	if result.Outcome != OutcomeFailed {
+		t.Errorf("Outcome = %v, want OutcomeFailed (executor reports facts; Coordinator decides compensation)", result.Outcome)
 	}
 	if result.Err == nil {
 		t.Error("Err should be non-nil")
@@ -273,7 +276,7 @@ func TestExecute_ExhaustedWithCompensate_CompensationRequired(t *testing.T) {
 	if result.Attempts != 1 {
 		t.Errorf("Attempts = %d, want 1", result.Attempts)
 	}
-	// Compensate is NOT called by Execute — it's called separately.
+	// Compensate is NOT called by Execute — it's called separately by the Coordinator.
 	if compensateCalled {
 		t.Error("Compensate should not be called by Execute")
 	}
@@ -305,9 +308,53 @@ func TestExecute_ExhaustedNoCompensate_Failed(t *testing.T) {
 	}
 }
 
-// --- Execute per-step timeout → Expired ---
+// --- Execute retry budget exhausted emits a Warn ops signal (C5/F2) ---
 
-func TestExecute_PerStepTimeout_Expired(t *testing.T) {
+func TestExecute_RetryExhausted_WarnLogged(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	hb := &alwaysOKHeartbeater{}
+	buf := sloghelper.NewSyncBuffer()
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	exec, err := NewExecutor(hb, fc, WithLogger(logger))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	step := ksaga.Step{
+		Name: "step-exhaust",
+		Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+		RetryPolicy: ksaga.RetryPolicy{MaxAttempts: 1},
+	}
+
+	result := exec.Execute(context.Background(), newTestInstance(), "lease-warn", step, ksaga.RetryPolicy{}, nil)
+	if result.Outcome != OutcomeFailed {
+		t.Fatalf("Outcome = %v, want OutcomeFailed", result.Outcome)
+	}
+
+	entry := sloghelper.FindLogEntry(buf.String(), "retry budget exhausted")
+	if entry == nil {
+		t.Fatal("expected a WARN log about retry budget exhausted")
+	}
+	if entry["level"] != "WARN" {
+		t.Errorf("log level = %v, want WARN", entry["level"])
+	}
+	if entry["attempts"] != float64(1) {
+		t.Errorf("log attempts = %v, want 1", entry["attempts"])
+	}
+	if entry["outcome"] != OutcomeFailed.String() {
+		t.Errorf("log outcome = %v, want %q", entry["outcome"], OutcomeFailed.String())
+	}
+	if _, ok := entry["error"]; !ok {
+		t.Error("log entry missing structured error field")
+	}
+}
+
+// --- Execute per-step timeout → Expired (clock-driven, C3/F3) ---
+
+func TestExecute_StepTimeout_Expired(t *testing.T) {
 	t.Parallel()
 	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
@@ -317,12 +364,12 @@ func TestExecute_PerStepTimeout_Expired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocked := make(chan struct{})
+	started := make(chan struct{})
 	step := ksaga.Step{
 		Name:    "step-timeout",
-		Timeout: 5 * time.Second,
+		Timeout: testtime.D5s,
 		Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
-			close(blocked)
+			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -334,11 +381,22 @@ func TestExecute_PerStepTimeout_Expired(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-3", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	<-blocked
-	// Advance past the step timeout.
-	fc.Advance(5*time.Second + time.Millisecond)
+	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
 
-	result := <-resultCh
+	// Negative assertion: advancing the fake clock short of the step deadline
+	// must NOT expire the step (the timeout is clock-driven, not wall-clock).
+	fc.Advance(testtime.D5s - testtime.D1ms)
+	select {
+	case r := <-resultCh:
+		t.Fatalf("step expired before its deadline: outcome=%v", r.Outcome)
+	default:
+		// still running — correct
+	}
+
+	// Now cross the deadline: the clock-driven AfterFunc fires and expires the step.
+	fc.Advance(testtime.D2ms)
+
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "step-timeout-result")
 	if result.Outcome != OutcomeExpired {
 		t.Errorf("Outcome = %v, want OutcomeExpired", result.Outcome)
 	}
@@ -347,9 +405,12 @@ func TestExecute_PerStepTimeout_Expired(t *testing.T) {
 	}
 }
 
-// --- Execute inherited context deadline → Expired ---
-
-func TestExecute_InheritedContextDeadline_Expired(t *testing.T) {
+// --- Execute parent ctx cancel → Canceled (C2/F7) ---
+//
+// An explicit parent-context cancellation (orchestrator shutdown/abort) is NOT
+// a business expiry: the executor reports OutcomeCanceled so the Coordinator can
+// leave the instance for re-claim rather than terminating it as Expired.
+func TestExecute_ParentCancel_Canceled(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Now())
 	hb := &alwaysOKHeartbeater{}
@@ -359,10 +420,12 @@ func TestExecute_InheritedContextDeadline_Expired(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
 	step := ksaga.Step{
 		Name: "step-ctx",
 		// step.Timeout = 0 → inherits ctx
 		Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -374,19 +437,56 @@ func TestExecute_InheritedContextDeadline_Expired(t *testing.T) {
 		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-4", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	// Give goroutine time to start.
-	time.Sleep(5 * time.Millisecond)
+	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
 	cancel()
 
-	result := <-resultCh
-	if result.Outcome != OutcomeExpired {
-		t.Errorf("Outcome = %v, want OutcomeExpired", result.Outcome)
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "parent-cancel-result")
+	if result.Outcome != OutcomeCanceled {
+		t.Errorf("Outcome = %v, want OutcomeCanceled", result.Outcome)
 	}
 }
 
-// --- Execute backoff parent ctx cancel → Expired ---
+// --- Execute parent ctx DEADLINE → Expired (GAP A: saga-level Definition.Timeout) ---
+//
+// A parent deadline (saga-level Definition.Timeout) is a terminal expiry, NOT a
+// shutdown cancel. It must map to OutcomeExpired, distinct from the explicit
+// cancel case above. Uses an already-elapsed deadline for determinism.
+func TestExecute_ParentDeadline_Expired(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	hb := &alwaysOKHeartbeater{}
+	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-func TestExecute_BackoffParentCancel_Expired(t *testing.T) {
+	// Parent ctx whose deadline has already elapsed → ctx.Err() == DeadlineExceeded.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(testtime.DNeg1h))
+	defer cancel()
+
+	step := ksaga.Step{
+		Name: "step-parent-deadline",
+		Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		RetryPolicy: ksaga.RetryPolicy{MaxAttempts: 1},
+	}
+
+	resultCh := make(chan Result, 1)
+	go func() {
+		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-deadline", step, ksaga.RetryPolicy{}, nil)
+	}()
+
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "parent-deadline-result")
+	if result.Outcome != OutcomeExpired {
+		t.Errorf("Outcome = %v, want OutcomeExpired (saga-level deadline, not Canceled)", result.Outcome)
+	}
+}
+
+// --- Execute backoff parent ctx cancel → Canceled (C2/F7) ---
+
+func TestExecute_BackoffParentCancel_Canceled(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	hb := &alwaysOKHeartbeater{}
@@ -415,10 +515,106 @@ func TestExecute_BackoffParentCancel_Expired(t *testing.T) {
 	waitForOnePendingTimer(t, fc)
 	cancel()
 
-	result := <-resultCh
-	if result.Outcome != OutcomeExpired {
-		t.Errorf("Outcome = %v, want OutcomeExpired", result.Outcome)
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "backoff-cancel-result")
+	if result.Outcome != OutcomeCanceled {
+		t.Errorf("Outcome = %v, want OutcomeCanceled", result.Outcome)
 	}
+}
+
+// --- Execute lease lost (heartbeat ok=false) → cancels step + LeaseLost (C1/F4) ---
+
+func TestExecute_LeaseLost_CancelsStepAndReturnsLeaseLost(t *testing.T) {
+	t.Parallel()
+	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(epoch)
+	hb := newFakeHeartbeater(false) // stale lease from the first beat
+	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	step := ksaga.Step{
+		Name: "step-lease-lost",
+		Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+			close(started)
+			<-ctx.Done() // unblocked only when the lost lease cancels the step
+			return nil, ctx.Err()
+		},
+		RetryPolicy: ksaga.RetryPolicy{MaxAttempts: 1},
+	}
+
+	resultCh := make(chan Result, 1)
+	go func() {
+		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-lost", step, ksaga.RetryPolicy{}, nil)
+	}()
+
+	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
+	// Heartbeat goroutine registers its ticker; advancing one interval fires the
+	// (stale) heartbeat → ok=false → the executor must cancel the running step.
+	waitForOneTicker(t, fc)
+	fc.Advance(testtime.D5s)
+
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "lease-lost-result")
+	if result.Outcome != OutcomeLeaseLost {
+		t.Errorf("Outcome = %v, want OutcomeLeaseLost", result.Outcome)
+	}
+}
+
+// --- Execute renews the lease across the retry backoff window (C1/F5) ---
+//
+// A single heartbeat goroutine must span the whole Execute (run + backoff), so a
+// long backoff does not drop the lease. We park the executor in a long backoff
+// and assert a heartbeat fires while it waits.
+func TestExecute_LeaseRenewsDuringBackoff(t *testing.T) {
+	t.Parallel()
+	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(epoch)
+	hb := newFakeHeartbeater(true)
+	j := newDeterministicJitter(7, 11)
+	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
+		withJitterSource(j),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	step := ksaga.Step{
+		Name: "step-renew",
+		Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+			return nil, errors.New("transient")
+		},
+		// Backoff base far larger than the heartbeat interval so a heartbeat
+		// tick lands well inside the backoff window.
+		RetryPolicy: ksaga.RetryPolicy{MaxAttempts: 2, BaseInterval: testtime.D60s, MaxInterval: testtime.D60s},
+	}
+
+	resultCh := make(chan Result, 1)
+	go func() {
+		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-renew", step, ksaga.RetryPolicy{}, nil)
+	}()
+
+	// Attempt 1 fails instantly → executor enters the long backoff. The heartbeat
+	// goroutine (spanning the whole Execute) keeps its ticker registered.
+	waitForOnePendingTimer(t, fc) // backoff Sleep timer
+	waitForOneTicker(t, fc)       // heartbeat ticker still alive during backoff
+
+	// Advance one heartbeat interval (5s) — far short of the ~48-60s backoff, so
+	// only the heartbeat ticker fires, not the backoff timer.
+	fc.Advance(testtime.D5s)
+	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "heartbeat-during-backoff")
+
+	// Tear down: cancel parent so the backoff Sleep returns and Execute exits.
+	cancel()
+	testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "renew-teardown-result")
 }
 
 // --- Execute: Run panic → convert to error, then retry ---
@@ -452,9 +648,9 @@ func TestExecute_RunPanic_ConvertedToError(t *testing.T) {
 
 	// Wait for executor to register backoff Sleep timer, then advance past it.
 	waitForOnePendingTimer(t, fc)
-	fc.Advance(defaultBaseInterval + time.Millisecond)
+	fc.Advance(defaultBaseInterval + testtime.D1ms)
 
-	result := <-resultCh
+	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "panic-recover-result")
 	if result.Outcome != OutcomeSucceeded {
 		t.Errorf("Outcome = %v, want OutcomeSucceeded (panic recovered, second attempt succeeded)", result.Outcome)
 	}
@@ -471,8 +667,8 @@ func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
 	fc := clockmock.New(epoch)
 	hb := &alwaysOKHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()),
-		WithHeartbeatInterval(5*time.Second),
-		WithLeaseDuration(30*time.Second),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -481,8 +677,7 @@ func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
 	leaseID := idutil.SafeID("my-unique-lease-id")
 	step := ksaga.Step{
 		Name: "step-lease",
-		Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
-			// Trigger a heartbeat by blocking until tick.
+		Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
 			return []byte("ok"), nil
 		},
 	}
@@ -493,9 +688,8 @@ func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), leaseID, step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	<-resultCh
-	// Check that if any heartbeat was fired, the leaseID was passed correctly.
-	// (The step completes quickly so there may be 0 heartbeats — that's fine.)
+	testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "lease-id-result")
+	// The step completes quickly so there may be 0 heartbeats — that's fine.
 	// What we ensure is: no panic occurred and leaseID type was forwarded correctly.
 	// More thorough testing is done in TestHeartbeat_*.
 }
@@ -645,12 +839,12 @@ var (
 // verify ExponentialDelay is what we think it is (sanity).
 func TestExponentialDelay_SanityCheck(t *testing.T) {
 	t.Parallel()
-	got := koutbox.ExponentialDelay(100*time.Millisecond, 30*time.Second, 0)
-	if got != 100*time.Millisecond {
+	got := koutbox.ExponentialDelay(testtime.D100ms, testtime.D30s, 0)
+	if got != testtime.D100ms {
 		t.Errorf("ExponentialDelay(100ms, 30s, 0) = %v, want 100ms", got)
 	}
-	got = koutbox.ExponentialDelay(100*time.Millisecond, 30*time.Second, 1)
-	if got != 200*time.Millisecond {
+	got = koutbox.ExponentialDelay(testtime.D100ms, testtime.D30s, 1)
+	if got != testtime.D200ms {
 		t.Errorf("ExponentialDelay(100ms, 30s, 1) = %v, want 200ms", got)
 	}
 }

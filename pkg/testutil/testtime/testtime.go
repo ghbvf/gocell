@@ -104,6 +104,7 @@ const (
 	D200ms = 200 * time.Millisecond
 	D250ms = 250 * time.Millisecond
 	D300ms = 300 * time.Millisecond
+	D400ms = 400 * time.Millisecond
 	D500ms = 500 * time.Millisecond
 	D750ms = 750 * time.Millisecond
 )
