@@ -488,9 +488,9 @@ func missingKeys(declared, covered map[string]struct{}) []string {
 }
 
 // funcCallsSelector reports whether body contains a call whose function is a
-// selector with the given method name (e.g. kout.Transition).
-//
-//nolint:unparam // general helper; all callers currently pass "Transition"
+// selector with the given method name (e.g. kout.Transition). Used by the
+// reverse-self-check test on synthetic AST where types are unavailable; the
+// production guard uses the typed collectTypedTransitionCalls instead.
 func funcCallsSelector(body *ast.BlockStmt, sel string) bool {
 	found := false
 	EachInSubtree[ast.CallExpr](body, func(c *ast.CallExpr) {

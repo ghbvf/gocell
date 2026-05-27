@@ -308,9 +308,13 @@ type BaseSlice struct {
 // NewBaseSliceFromMeta constructs a BaseSlice from parsed slice.yaml metadata,
 // which is the single source of truth for slice identity and consistency level.
 //
-// Projects all SliceMeta fields (ID / BelongsToCell / ConsistencyLevel / Verify /
-// AllowedFiles) into BaseSlice. Verify.Unit/Contract/Waivers and AllowedFiles slices
-// are deep-copied so subsequent caller mutations of meta do not affect the BaseSlice.
+// Projects the runtime-consumed SliceMeta subset (ID / BelongsToCell /
+// ConsistencyLevel / Verify / AllowedFiles / AffectedJourneys) into BaseSlice.
+// SliceMeta.Lifecycle is intentionally NOT projected: it is a metadata-only
+// field consumed by governance/catalog via SliceMeta.Lifecycle directly, with no
+// runtime accessor (ADR 202605262100 §E52 — adding one would be dead code).
+// Verify.Unit/Contract/Waivers and AllowedFiles slices are deep-copied so
+// subsequent caller mutations of meta do not affect the BaseSlice.
 //
 // The metadata projection lives in `<slicePkg>/slice_gen.go` as `var sliceMeta`
 // rendered by `gocell generate cell`; cell composition roots call

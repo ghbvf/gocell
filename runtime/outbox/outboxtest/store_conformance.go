@@ -773,9 +773,10 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 			"expected the MINIMUM published_at (oldest row) — implementation may be returning MAX instead of MIN",
 			at, tFirstUpper)
 	}
-	// Sanity lower bound: result must not predate the test run.
-	if at.Before(now.Add(-2 * time.Minute)) {
-		t.Errorf("OldestEligibleAt: returned %v which is unreasonably old (before test start - 2min)", at)
+	// Sanity lower bound: result must not predate the test run. Entries are
+	// seconds-old, so a one-minute window is ample margin.
+	if at.Before(now.Add(-time.Minute)) {
+		t.Errorf("OldestEligibleAt: returned %v which is unreasonably old (before test start - 1min)", at)
 	}
 }
 
