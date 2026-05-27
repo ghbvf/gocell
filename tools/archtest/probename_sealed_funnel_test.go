@@ -56,13 +56,13 @@
 //     The 4 sanctioned callees take `name ProbeName` (not `string`) as their
 //     first parameter — RegisterReadiness / NewProbe / HealthToProbe /
 //     bootstrap.WithHealthChecker. Go's type system enforcement is partial:
-//       (a) typed-var path:  `var s string; Register(s, p)` IS a compile
-//           error (`string` and `ProbeName` are distinct named types; no
-//           implicit conversion across them in this direction).
-//       (b) untyped-literal path:  `Register("foo", p)` COMPILES — Go's
-//           untyped string constant "foo" is implicitly converted to
-//           ProbeName per Go spec. The type system alone does NOT reject
-//           bare string literals at typed-arg positions.
+//     (a) typed-var path:  `var s string; Register(s, p)` IS a compile
+//     error (`string` and `ProbeName` are distinct named types; no
+//     implicit conversion across them in this direction).
+//     (b) untyped-literal path:  `Register("foo", p)` COMPILES — Go's
+//     untyped string constant "foo" is implicitly converted to
+//     ProbeName per Go spec. The type system alone does NOT reject
+//     bare string literals at typed-arg positions.
 //     archtest A2 closes path (b): the callsite must resolve via info.Uses
 //     to a sanctioned `*types.Const`; BasicLit / BinaryExpr / Var / CallExpr
 //     fail closed. The combined gate is Hard downstream; neither gate alone
