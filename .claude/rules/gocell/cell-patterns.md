@@ -252,7 +252,7 @@ func sessionSubjectID(v *session.ValidateView) string {
 }
 ```
 
-`callerID` 由调用方在 handler 入口预校验非空（sessionlogout.Service.Logout 的 empty-callerUserID guard 返回 KindInvalid 是参考前置不变式）；funnel 本身也对空 callerID fail-closed 作为 defense-in-depth backstop。
+空 `callerID` 处理：funnel 自身对空 callerID fail-closed 返回 KindNotFound（IDOR 安全保证），无需调用方保证。调用方若希望对"空 callerID = 服务端 auth 配置漏洞"路径产生更清晰的 400 KindInvalid 而非 404 KindNotFound（UX/运维区分），可在 service entry 入口加 empty-callerID guard，sessionlogout.Service.Logout 即此做法——但这是 UX/语义选择，不是 IDOR 安全前提。
 
 archtest `SERVICEOWNED-HANDLER-OWNER-CHECK-01` 3 个 predicates 闭合该形态（B1/B2/B3）：callsite lock + funnel body lock + zero-tolerance ban；每个 predicate 通过 `types.Info` 包路径绑定 + AST 形态唯一性达成 Hard 范本目录中「typed function choice」+「typed marker funnel for unbounded ops」形态。完整 AI-robust 评级论据（包括 funnel 双向锁分析与盲区清单）见 `tools/archtest/serviceowned_handler_owner_check_test.go` 文件头 godoc——本节不复制评级表述以避免双源漂移。
 

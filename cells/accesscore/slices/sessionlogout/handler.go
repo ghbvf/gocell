@@ -2,6 +2,7 @@ package sessionlogout
 
 import (
 	"context"
+	"errors"
 
 	deletegen "github.com/ghbvf/gocell/generated/contracts/http/auth/session/delete/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
@@ -38,11 +39,25 @@ func (a DeleteAdapter) Delete(ctx context.Context, req *deletegen.Request) (dele
 		// route were misconfigured as public. Either way, sessionlogout is
 		// user-owned; fail closed rather than leak a revoke op to a
 		// non-user caller.
-		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")
+		return deletegen.Delete401ErrorResponse{Body: *errcode.New(
+			errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject")}, nil
 	}
 	callerUserID := p.Subject
 
 	if err := a.S.Logout(ctx, req.ID, callerUserID); err != nil {
+		// Map declared business errors (400/404) to generated typed responses
+		// per cell-patterns.md §typed response envelope adapter. Undeclared
+		// kinds (503 KindUnavailable from infra Wrap, or genuine framework
+		// 500) flow through `return nil, err` for httputil.WriteError fallback.
+		var ec *errcode.Error
+		if errors.As(err, &ec) {
+			switch ec.Kind {
+			case errcode.KindInvalid:
+				return deletegen.Delete400ErrorResponse{Body: *ec}, nil
+			case errcode.KindNotFound:
+				return deletegen.Delete404ErrorResponse{Body: *ec}, nil
+			}
+		}
 		return nil, err
 	}
 	return deletegen.Delete204NoContentResponse{}, nil

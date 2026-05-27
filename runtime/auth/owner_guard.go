@@ -11,6 +11,28 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // invoked it.
 const checkOwnerMsg = "not found"
 
+// ownershipMismatch is the single source of truth for "what constitutes an
+// owner-check failure" in the CheckOwner funnel. Factoring this predicate
+// out of CheckOwner's IF condition (a) makes the SERVICEOWNED-HANDLER-
+// OWNER-CHECK-01 archtest's B2 condition-lock a one-line callsite check
+// (typed function choice Hard form), and (b) localizes future evolution
+// of mismatch semantics to this one helper without changing CheckOwner's
+// IF shape or archtest predicates.
+//
+// Returns true when the caller's claim should NOT pass — either the
+// callerID is empty (fail-closed defense-in-depth: an upstream auth bug
+// that lets an empty subject reach the service layer cannot accidentally
+// match a default-zero owner field) OR the ownerID accessor disagrees
+// with the callerID.
+//
+// INVARIANT: SERVICEOWNED-HANDLER-OWNER-CHECK-01 (Hard, B2b)
+// CheckOwner's IF.Cond MUST be exactly `ownershipMismatch(...)` and this
+// function body MUST be the canonical `callerID == "" || ownerID(resource)
+// != callerID` form. Both are archtest-locked.
+func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {
+	return callerID == "" || ownerID(resource) != callerID
+}
+
 // CheckOwner verifies that callerID matches the owner of resource as
 // determined by the ownerID accessor. It returns KindNotFound on mismatch
 // or on empty callerID — never PermissionDenied — to avoid leaking
@@ -55,7 +77,7 @@ func CheckOwner[T any](
 	callerID string,
 	code errcode.Code,
 ) error {
-	if callerID == "" || ownerID(resource) != callerID {
+	if ownershipMismatch(resource, ownerID, callerID) {
 		return errcode.New(errcode.KindNotFound, code, checkOwnerMsg)
 	}
 	return nil

@@ -1,14 +1,17 @@
 // Package red_funnel_body_extra_new is a RED fixture for
-// SERVICEOWNED-HANDLER-OWNER-CHECK-01 predicate B2 (funnel body lock):
-// the CheckOwner body contains TWO errcode.New(KindNotFound, ...) calls.
-// B2 requires exactly one — multiple exits obscure the single sanctioned
-// funnel form.
+// SERVICEOWNED-HANDLER-OWNER-CHECK-01 predicate B2 (count uniqueness):
+// the CheckOwner body contains two errcode.New(KindNotFound, ...) calls.
+// ownershipMismatch helper is canonical (B2b silent), but the count check
+// fires because notFoundCalls != 1.
 package red_funnel_body_extra_new
 
 import "github.com/ghbvf/gocell/pkg/errcode"
 
-// CheckOwner mimics the runtime/auth.CheckOwner signature but constructs
-// the KindNotFound envelope twice. B2 must report count != 1.
+func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {
+	return callerID == "" || ownerID(resource) != callerID
+}
+
+// CheckOwner has two exits, obscuring the single sanctioned funnel form.
 func CheckOwner[T any](
 	resource T,
 	ownerID func(T) string,
@@ -16,10 +19,10 @@ func CheckOwner[T any](
 	code errcode.Code,
 ) error {
 	if callerID == "" {
-		// BUG: an extra exit obscures the sole funnel form (B2 violation)
+		// BUG: extra exit defeats single-form uniqueness
 		return errcode.New(errcode.KindNotFound, code, "not found")
 	}
-	if ownerID(resource) != callerID {
+	if ownershipMismatch(resource, ownerID, callerID) {
 		return errcode.New(errcode.KindNotFound, code, "not found")
 	}
 	return nil
