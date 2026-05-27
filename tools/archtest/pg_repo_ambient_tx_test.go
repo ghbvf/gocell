@@ -404,10 +404,12 @@ func scanR3ExecDirectInScope(fset *token.FileSet, body *ast.BlockStmt, rel strin
 				"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker in the same " +
 				"approval scope (FuncDecl/FuncLit body, not nested closure) to document the " +
 				"ADR-approved bypass of ambient tx; " +
-				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before the " +
-				"pgexec.ExecDirect call; see pkg/pgrepoapproved; " +
-				"example: pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in same func body before the call; only one production callsite exists at adapters/postgres/refresh_store.go::revokeSessionDetachedAt. " +
-				"ADR docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+				"add 'pgrepoapproved.ApprovedExecDirect(\"your-adr-reason\")' before " +
+				"the pgexec.ExecDirect call; see pkg/pgrepoapproved; example: " +
+				"pgrepoapproved.ApprovedExecDirect(\"revoke-session-cascade\") in " +
+				"same func body — only one production callsite at " +
+				"adapters/postgres/refresh_store.go::revokeSessionDetachedAt; ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
 	})
 	return diags

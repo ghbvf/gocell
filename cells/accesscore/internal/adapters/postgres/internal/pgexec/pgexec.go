@@ -30,20 +30,22 @@ import (
 
 // PGExecutor is the sealed read/write surface routed through the ambient
 // transaction (when ctx carries one) or directly against the pool. The
-// concrete implementation is unexported; the pool field is unreachable from
-// outside this package by Go visibility — type-asserting back to the concrete
-// type is impossible because the type name is unexported.
+// concrete implementation is unexported.
 //
-// ExecDirect is the explicit bypass path reserved for ADR-approved
-// compensation paths that must commit independently of the ambient tx. Each
-// callsite is form-checked by archtest R3(b): a sibling
-// pgrepoapproved.ApprovedExecDirect("<kebab-case-reason>") marker must
-// co-locate in the same approval scope.
+// ExecDirect is intentionally NOT a method on this interface — it is the
+// top-level function pgexec.ExecDirect(e PGExecutor, ctx, sql, args...). This
+// closes the subset-interface bypass vector (R3-Hard form, ai-robust.md §Hard
+// 范本 #2 typed marker funnel): a caller cannot declare a local interface
+// re-shape with the same method set and call ExecDirect through it.
+//
+// accesscore production code currently has no ExecDirect callsite; the
+// top-level function exists only for integration tests
+// (role_repo_integration_test.go) that need to manipulate DB state directly
+// for fixture setup / verification. Test files are outside R3's archtest scope.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -52,15 +54,12 @@ type pgExecutor struct {
 	pool *pgxpool.Pool
 }
 
-// New wraps a *pgxpool.Pool in the sealed PGExecutor funnel. This is the ONLY
-// sanctioned constructor; archtest R2 enforces that any New*-prefixed function
-// in any package receiving a *pgxpool.Pool parameter must call pgexec.New on
-// that parameter.
+// New wraps a *pgxpool.Pool in the sealed PGExecutor funnel.
 //
 // Passing a nil pool is permitted in unit tests that exercise logic firing
 // before any SQL method is called (e.g. ambient-tx guard tests in
-// cells/accesscore/internal/adapters/postgres/tx_assert_test.go). Any SQL
-// method invocation on a New(nil) instance will panic at the pool dereference.
+// tx_assert_test.go). Any SQL method invocation on a New(nil) instance will
+// panic at the pool dereference.
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
@@ -86,6 +85,20 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
-func (e *pgExecutor) ExecDirect(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return e.pool.Exec(ctx, sql, args...)
+// ExecDirect bypasses the ambient transaction. Sealed top-level function — see
+// adapters/postgres/internal/pgexec.ExecDirect for full design rationale.
+func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	impl, ok := e.(*pgExecutor)
+	if !ok {
+		return pgconn.CommandTag{}, errExecDirectOnNonSealedExecutor
+	}
+	return impl.pool.Exec(ctx, sql, args...)
+}
+
+var errExecDirectOnNonSealedExecutor = &execDirectMisuseError{}
+
+type execDirectMisuseError struct{}
+
+func (*execDirectMisuseError) Error() string {
+	return "pgexec.ExecDirect: PGExecutor must originate from pgexec.New (mock impls cannot bypass ambient-tx routing via this function)"
 }
