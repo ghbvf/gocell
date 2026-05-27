@@ -108,17 +108,17 @@ Every adapter that wraps a long-lived external connection or key provider must
 implement `kernel/lifecycle.ManagedResource`:
 
 The readiness-probe name is a typed ops contract: declare it as a
-`kernel/healthz.ReadyProbeName` const and reference that const at the
+`kernel/healthz.ProbeName` const and reference that const at the
 construction site. Bare string literals are rejected by archtest
-OPS-CONTRACT-STRING-FUNNEL-01 (see its package godoc + ADR
-`docs/architecture/202605241600-adr-ready-probe-name-typed-funnel.md` §8 for the
-three-step new-probe checklist: declare const → add package to
-`readyProbeSanctionedPkgs` → add to `goldenReadyProbeNames()`).
+PROBENAME-SEALED-FUNNEL-01 (see its package godoc + ADR
+`docs/architecture/202605271100-adr-probename-sealed-funnel.md` for the
+new-probe checklist: declare typed const → add package to
+`adapterSanctionedPkgs` → add to `goldenProbeNames()`).
 
 ```go
 // ProbeReady is the snake_case + _ready ops-contract name, funneled by
-// OPS-CONTRACT-STRING-FUNNEL-01.
-const ProbeReady healthz.ReadyProbeName = "my_adapter_ready"
+// PROBENAME-SEALED-FUNNEL-01.
+const ProbeReady healthz.ProbeName = "my_adapter_ready"
 
 func (p *MyAdapter) Checkers() map[string]func(context.Context) error {
     return map[string]func(context.Context) error{
