@@ -930,7 +930,7 @@ func TestAddJitter(t *testing.T) {
 			// Run multiple times to check range.
 			// ExponentialBackoffWithJitter(d, d, 0) == ExponentialDelay(d,d,0)=d, then addJitter.
 			for range 100 {
-				got := adapterutil.ExponentialBackoffWithJitter(tt.d, tt.d*2, 0)
+				got := adapterutil.ExponentialBackoffWithJitter(tt.d, tt.d+tt.d, 0)
 				minD := time.Duration(float64(tt.d) * 0.75)
 				maxD := time.Duration(float64(tt.d) * 1.25)
 				assert.GreaterOrEqual(t, got, minD)

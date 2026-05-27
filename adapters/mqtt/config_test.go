@@ -10,7 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// configNegTimeout is used in validation tests that assert negative ConnectTimeout
+// is rejected.
+const configNegTimeout = -1 * time.Second
 
 // validClientID returns a ClientID for use in tests.
 func mustClientID(t *testing.T) ClientID {
@@ -26,11 +31,11 @@ func validConfig(t *testing.T) Config {
 	return Config{
 		ClientID:       mustClientID(t),
 		Brokers:        []string{"tcp://localhost:1883"},
-		ConnectTimeout: 5 * time.Second,
-		KeepAlive:      30 * time.Second,
+		ConnectTimeout: testtime.D5s,
+		KeepAlive:      testtime.D30s,
 		Backoff: BackoffConfig{
-			BaseDelay: 500 * time.Millisecond,
-			MaxDelay:  30 * time.Second,
+			BaseDelay: testtime.D500ms,
+			MaxDelay:  testtime.D30s,
 		},
 	}
 }
@@ -174,7 +179,7 @@ func TestConfig_Validate_ZeroConnectTimeout(t *testing.T) {
 func TestConfig_Validate_NegativeConnectTimeout(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.ConnectTimeout = -1 * time.Second
+	cfg.ConnectTimeout = configNegTimeout
 	err := cfg.Validate()
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -210,8 +215,8 @@ func TestConfig_Validate_BackoffZeroBaseDelay(t *testing.T) {
 func TestConfig_Validate_BackoffMaxDelayLessThanBase(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.Backoff.BaseDelay = 5 * time.Second
-	cfg.Backoff.MaxDelay = 1 * time.Second // less than base
+	cfg.Backoff.BaseDelay = testtime.D5s
+	cfg.Backoff.MaxDelay = testtime.D1s // less than base
 	err := cfg.Validate()
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -223,8 +228,8 @@ func TestConfig_Validate_BackoffMaxDelayLessThanBase(t *testing.T) {
 func TestConfig_Validate_BackoffEqualBaseAndMax(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.Backoff.BaseDelay = 5 * time.Second
-	cfg.Backoff.MaxDelay = 5 * time.Second // equal is fine
+	cfg.Backoff.BaseDelay = testtime.D5s
+	cfg.Backoff.MaxDelay = testtime.D5s // equal is fine
 	require.NoError(t, cfg.Validate())
 }
 

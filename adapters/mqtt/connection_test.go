@@ -16,7 +16,12 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// connBackoffJitterFloor is the expected lower bound (0.75 × 100 ms base) for
+// the ExponentialBackoffWithJitter result at attempt 0.
+const connBackoffJitterFloor = 75 * time.Millisecond
 
 // newEmbeddedBroker starts an in-process mochi MQTT v2 broker on a random port
 // and returns the address and a stop function. The AllowHook permits all clients.
@@ -45,7 +50,7 @@ func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
 		_ = srv.Serve()
 	}()
 	// Give the broker a moment to start accepting connections.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(testtime.D10ms)
 
 	return addr, func() {
 		_ = srv.Close()
@@ -78,7 +83,7 @@ func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, stop func()) {
 	go func() {
 		_ = srv.Serve()
 	}()
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(testtime.D10ms)
 	return addr, func() { _ = srv.Close() }
 }
 
@@ -104,11 +109,11 @@ func newValidConfig(addr string) mqtt.Config {
 	return mqtt.Config{
 		ClientID:       id,
 		Brokers:        []string{fmt.Sprintf("tcp://%s", addr)},
-		ConnectTimeout: 5 * time.Second,
-		KeepAlive:      30 * time.Second,
+		ConnectTimeout: testtime.D5s,
+		KeepAlive:      testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
-			BaseDelay: 100 * time.Millisecond,
-			MaxDelay:  2 * time.Second,
+			BaseDelay: testtime.D100ms,
+			MaxDelay:  testtime.D2s,
 		},
 	}
 }
@@ -122,7 +127,7 @@ func TestConnection_HappyPath_HealthOk(t *testing.T) {
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
 	conn, err := mqtt.Open(ctx, clk, cfg)
@@ -143,7 +148,7 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
 	conn, err := mqtt.Open(ctx, clk, cfg)
@@ -169,15 +174,15 @@ func TestConnection_NeverConnected_TransientError(t *testing.T) {
 	cfg := mqtt.Config{
 		ClientID:       id,
 		Brokers:        []string{"tcp://127.0.0.1:19999"}, // dead port
-		ConnectTimeout: 500 * time.Millisecond,
-		KeepAlive:      30 * time.Second,
+		ConnectTimeout: testtime.D500ms,
+		KeepAlive:      testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
-			BaseDelay: 50 * time.Millisecond,
-			MaxDelay:  200 * time.Millisecond,
+			BaseDelay: testtime.D50ms,
+			MaxDelay:  testtime.D200ms,
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	_, err := mqtt.Open(ctx, clk, cfg)
@@ -188,14 +193,14 @@ func TestConnection_NeverConnected_TransientError(t *testing.T) {
 // ReconnectBackoff closure is wired with the config values. We test this by
 // calling ExponentialBackoffWithJitter directly.
 func TestConnection_BackoffClosure_Wired(t *testing.T) {
-	base := 100 * time.Millisecond
-	max := 2 * time.Second
+	base := testtime.D100ms
+	max := testtime.D2s
 
 	// attempt 0 should return in [0.75*base, 1.25*base]
 	for range 50 {
 		got := adapterutilExponentialBackoffWithJitter(base, max, 0)
-		assert.GreaterOrEqual(t, got, 75*time.Millisecond)
-		assert.LessOrEqual(t, got, 250*time.Millisecond)
+		assert.GreaterOrEqual(t, got, connBackoffJitterFloor)
+		assert.LessOrEqual(t, got, testtime.D250ms)
 	}
 	// High attempt should cap at max.
 	for range 50 {
@@ -222,11 +227,11 @@ func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
-	cfg.ConnectTimeout = 500 * time.Millisecond
-	cfg.Backoff.BaseDelay = 50 * time.Millisecond
-	cfg.Backoff.MaxDelay = 200 * time.Millisecond
+	cfg.ConnectTimeout = testtime.D500ms
+	cfg.Backoff.BaseDelay = testtime.D50ms
+	cfg.Backoff.MaxDelay = testtime.D200ms
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
 	defer cancel()
 
 	// Open should return a bootstrap-fatal or permanent error quickly since the
@@ -251,11 +256,11 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
-	cfg.ConnectTimeout = 300 * time.Millisecond
-	cfg.Backoff.BaseDelay = 30 * time.Millisecond
-	cfg.Backoff.MaxDelay = 100 * time.Millisecond
+	cfg.ConnectTimeout = testtime.D300ms
+	cfg.Backoff.BaseDelay = testtime.D30ms
+	cfg.Backoff.MaxDelay = testtime.D100ms
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer cancel()
 
 	conn, err := mqtt.Open(ctx, clk, cfg)
@@ -265,7 +270,7 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 	}
 	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer waitCancel()
 	_ = conn.WaitConnected(waitCtx)
 	// Should have returned either an error (permanent) or ctx.Err.
@@ -280,7 +285,7 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
 	collector := &fakeCollector{}
