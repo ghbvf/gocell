@@ -23,6 +23,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -44,19 +45,14 @@ type Outcome uint8
 const (
 	// OutcomeSucceeded means the step's Run returned a nil error.
 	OutcomeSucceeded Outcome = iota + 1
-	// OutcomeFailed means retry attempts were exhausted and there is no
-	// Compensate function (or it is intentionally nil).
+	// OutcomeFailed means retry attempts were exhausted with a non-nil error.
+	// This is an execution FACT only — the executor does NOT decide whether to
+	// compensate. The Coordinator chooses Compensating vs Failed from committed
+	// step history (kernel/saga/status.go).
 	OutcomeFailed
-	// OutcomeExpired means the step or parent context deadline was exceeded.
+	// OutcomeExpired means a deadline elapsed: either the per-step Step.Timeout
+	// or a parent (saga-level Definition.Timeout) deadline. Terminal.
 	OutcomeExpired
-	// OutcomeCompensationRequired means retries were exhausted and the step
-	// has a non-nil Compensate function. The Coordinator should call
-	// Executor.Compensate for this step.
-	//
-	// Deprecated (RED-stub, removed in GREEN): the executor must not pre-empt
-	// the Coordinator's Compensating-vs-Failed decision; kept only so the RED
-	// commit compiles while the new behavior tests fail.
-	OutcomeCompensationRequired
 	// OutcomeCanceled means the parent context was explicitly canceled
 	// (orchestrator shutdown/abort) — NOT a business expiry. The Coordinator
 	// should leave the instance for re-claim, not terminate it.
@@ -75,8 +71,6 @@ func (o Outcome) String() string {
 		return "Failed"
 	case OutcomeExpired:
 		return "Expired"
-	case OutcomeCompensationRequired:
-		return "CompensationRequired"
 	case OutcomeCanceled:
 		return "Canceled"
 	case OutcomeLeaseLost:
@@ -85,6 +79,27 @@ func (o Outcome) String() string {
 		return "Outcome(" + strconv.Itoa(int(o)) + ")"
 	}
 }
+
+// Executor default lease parameters and the internal cancel-cause sentinels.
+const (
+	// DefaultHeartbeatInterval is the lease renewal cadence when
+	// WithHeartbeatInterval is unset.
+	DefaultHeartbeatInterval = 10 * time.Second
+	// DefaultLeaseDuration is the lease TTL passed to Heartbeat when
+	// WithLeaseDuration is unset.
+	DefaultLeaseDuration = 30 * time.Second
+	// heartbeatLeaseSafetyFactor guarantees at least one heartbeat lands before
+	// the lease expires: heartbeatInterval * heartbeatLeaseSafetyFactor < leaseDuration.
+	heartbeatLeaseSafetyFactor = 2
+)
+
+// Internal cancel-cause sentinels distinguish why the run context ended. They
+// are unexported (callers switch on Outcome, not on these errors); see
+// classifyCanceled for the cause→Outcome mapping.
+var (
+	errLeaseLost   = errors.New("saga executor: lease lost")
+	errStepTimeout = errors.New("saga executor: step timeout elapsed")
+)
 
 // Result is the value returned by Execute.
 type Result struct {
@@ -128,8 +143,8 @@ func NewExecutor(hb Heartbeater, clk clock.Clock, opts ...Option) (*Executor, er
 	e := &Executor{
 		heartbeater:       hb,
 		clk:               clk,
-		heartbeatInterval: 10 * time.Second,
-		leaseDuration:     30 * time.Second,
+		heartbeatInterval: DefaultHeartbeatInterval,
+		leaseDuration:     DefaultLeaseDuration,
 		jitter:            newDefaultJitter(clk),
 		logger:            slog.Default(),
 	}
@@ -156,7 +171,7 @@ func (e *Executor) validateIntervals() error {
 			"runtime/saga/executor: leaseDuration must be > 0",
 		)
 	}
-	if e.heartbeatInterval*2 >= e.leaseDuration {
+	if e.heartbeatInterval*heartbeatLeaseSafetyFactor >= e.leaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga/executor: heartbeatInterval*2 must be < leaseDuration",
 		)
@@ -167,8 +182,17 @@ func (e *Executor) validateIntervals() error {
 // Execute runs the given step against inst, retrying according to the effective
 // retry policy (step.RetryPolicy → defPolicy → package defaults). Each attempt
 // is guarded by per-step timeout (step.Timeout > 0) or the inherited ctx
-// deadline (step.Timeout == 0). A heartbeat goroutine renews the lease while
-// the step runs.
+// deadline (step.Timeout == 0).
+//
+// A single heartbeat goroutine spans the WHOLE Execute call — the step run AND
+// every retry backoff — so the lease cannot be dropped during a long backoff
+// (C1/F5). If a heartbeat observes a stale lease (ok=false), it cancels runCtx
+// with errLeaseLost, which both unblocks the running step / backoff and routes
+// the result to OutcomeLeaseLost (C1/F4).
+//
+// runCtx is cancelable-with-cause so the terminal Outcome distinguishes the four
+// end reasons (see classifyCanceled): lease lost, parent shutdown cancel, parent
+// (saga-level) deadline, and per-step timeout.
 //
 // leaseID is the fence token that identifies the current coordinator's claim;
 // it is forwarded to every Heartbeat call.
@@ -185,74 +209,131 @@ func (e *Executor) Execute(
 ) Result {
 	policy := resolvePolicy(step.RetryPolicy, defPolicy)
 
+	// runCtx governs both the step run and the backoff waits, for the whole call.
+	runCtx, cancelCause := context.WithCancelCause(ctx)
+	defer cancelCause(nil)
+
+	// hbCtx is the heartbeat-only lifetime. Stopping it on normal completion is
+	// NOT a lease-lost signal — only onStale sets a cause on runCtx, so
+	// classification never confuses "heartbeat goroutine exited" with "stale".
+	hbCtx, stopHB := context.WithCancel(runCtx)
+	var hbWG sync.WaitGroup
+	hbWG.Add(1)
+	// onStale cancels runCtx with errLeaseLost. cancelCause is first-cause-wins
+	// idempotent, and the heartbeat goroutine returns after the first ok=false,
+	// so no sync.Once is needed.
+	onStale := func() { cancelCause(errLeaseLost) }
+	go func() {
+		defer hbWG.Done()
+		runHeartbeat(hbCtx, e.clk, e.heartbeater,
+			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger, onStale)
+	}()
+	stopAndJoin := func() { stopHB(); hbWG.Wait() }
+
 	for attempt := 1; ; attempt++ {
-		result, done := e.runAttempt(ctx, inst, leaseID, step, policy, prevState, attempt)
+		result, done := e.runAttempt(runCtx, inst, step, policy, prevState, attempt)
 		if done {
+			stopAndJoin()
 			return result
 		}
-		// Attempt failed and retry is allowed — compute and wait for backoff.
+		// Attempt failed and retry is allowed — wait for backoff while the
+		// heartbeat keeps renewing the lease. A runCtx cancellation (parent
+		// shutdown/deadline or lease lost) unblocks the Sleep immediately.
 		delay := policy.Backoff(attempt-1, e.jitter)
-		if sleepErr := e.clk.Sleep(ctx, e.clk.Now().Add(delay)); sleepErr != nil {
-			return Result{Outcome: OutcomeExpired, Err: sleepErr, Attempts: attempt}
+		if sleepErr := e.clk.Sleep(runCtx, e.clk.Now().Add(delay)); sleepErr != nil {
+			stopAndJoin()
+			return e.classifyCanceled(runCtx, sleepErr, attempt)
 		}
 	}
 }
 
 // runAttempt executes a single attempt of the step. Returns (result, true) when
-// the loop should terminate (success, expiry, or retries exhausted); returns
-// (zero, false) when the loop should retry.
+// the loop should terminate (success, expiry, cancel, lease lost, or retries
+// exhausted); returns (zero, false) when the loop should retry.
+//
+// Cause precedence is a correctness invariant: stepCtx is a child of runCtx, so
+// a parent/lease cancellation propagates down and fires stepCtx too. We MUST
+// check context.Cause(runCtx) BEFORE the per-step timeout, otherwise a lease
+// loss or parent cancel could be misreported as a step-timeout Expired.
 func (e *Executor) runAttempt(
-	ctx context.Context,
+	runCtx context.Context,
 	inst *ksaga.Instance,
-	leaseID idutil.SafeID,
 	step ksaga.Step,
 	policy resolvedPolicy,
 	prevState []byte,
 	attempt int,
 ) (Result, bool) {
-	runCtx, cancelRun := e.buildRunCtx(ctx, step)
-	defer cancelRun()
+	stepCtx, cancelStep := e.buildStepCtx(runCtx, step)
+	defer cancelStep(nil)
 
-	// Start heartbeat goroutine.
-	hbCtx, stopHB := context.WithCancel(runCtx)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		runHeartbeat(hbCtx, e.clk, e.heartbeater,
-			inst.ID, leaseID, e.heartbeatInterval, e.leaseDuration, e.logger, func() {})
-	}()
+	newState, runErr := safeRun(stepCtx, step.Run, inst, prevState)
 
-	newState, runErr := safeRun(runCtx, step.Run, inst, prevState)
-
-	// Always stop heartbeat and wait for it to exit before returning.
-	stopHB()
-	wg.Wait()
-
-	if runCtx.Err() != nil {
-		return Result{Outcome: OutcomeExpired, Err: runCtx.Err(), Attempts: attempt}, true
+	// 1) Parent shutdown/deadline or lease lost wins over everything.
+	if cause := context.Cause(runCtx); cause != nil {
+		return e.classifyCanceled(runCtx, cause, attempt), true
 	}
+	// 2) Per-step timeout (clock-driven via buildStepCtx's AfterFunc).
+	if context.Cause(stepCtx) == errStepTimeout {
+		return Result{Outcome: OutcomeExpired, Err: errStepTimeout, Attempts: attempt}, true
+	}
+	// 3) Success.
 	if runErr == nil {
 		return Result{Outcome: OutcomeSucceeded, NewState: newState, Attempts: attempt}, true
 	}
+	// 4) Retries exhausted — report the FACT only (the Coordinator decides
+	//    Compensating vs Failed from committed history; the executor must not
+	//    inspect step.Compensate here).
 	if !policy.ShouldRetry(attempt) {
-		outcome := OutcomeFailed
-		if step.Compensate != nil {
-			outcome = OutcomeCompensationRequired
-		}
-		return Result{Outcome: outcome, Err: runErr, Attempts: attempt}, true
+		e.logger.WarnContext(runCtx, "saga executor: retry budget exhausted",
+			slog.String("instance_id", string(inst.ID)),
+			slog.String("step_name", string(step.Name)),
+			slog.Int("attempts", attempt),
+			slog.String("outcome", OutcomeFailed.String()),
+			slog.Any("error", runErr),
+		)
+		return Result{Outcome: OutcomeFailed, Err: runErr, Attempts: attempt}, true
 	}
 	return Result{}, false
 }
 
-// buildRunCtx derives the context for a single run attempt.
-// If step.Timeout > 0, applies an absolute deadline; otherwise inherits ctx.
-func (e *Executor) buildRunCtx(ctx context.Context, step ksaga.Step) (context.Context, context.CancelFunc) {
-	if step.Timeout > 0 {
-		deadline := e.clk.Now().Add(step.Timeout)
-		return context.WithDeadline(ctx, deadline)
+// classifyCanceled maps a runCtx cancellation cause to the terminal Outcome.
+// The four causes are mutually exclusive at any given cancellation:
+//   - errLeaseLost           → OutcomeLeaseLost (another coordinator owns the lease)
+//   - context.DeadlineExceeded → OutcomeExpired  (saga-level Definition.Timeout)
+//   - context.Canceled (default) → OutcomeCanceled (explicit shutdown/abort)
+//
+// observedErr is the error actually seen by the caller (ctx.Err() / Sleep err);
+// it is carried in Result.Err for logging.
+func (e *Executor) classifyCanceled(runCtx context.Context, observedErr error, attempt int) Result {
+	switch context.Cause(runCtx) {
+	case errLeaseLost:
+		return Result{Outcome: OutcomeLeaseLost, Err: errLeaseLost, Attempts: attempt}
+	case context.DeadlineExceeded:
+		return Result{Outcome: OutcomeExpired, Err: observedErr, Attempts: attempt}
+	default:
+		return Result{Outcome: OutcomeCanceled, Err: observedErr, Attempts: attempt}
 	}
-	return context.WithCancel(ctx)
+}
+
+// buildStepCtx derives the per-attempt context. When step.Timeout > 0, a
+// clock-driven AfterFunc cancels the context with errStepTimeout — this is what
+// makes a FakeClock.Advance deterministically trigger the timeout (no real
+// wall-clock dependency, fixing F3). When step.Timeout == 0, the step inherits
+// runCtx directly. The returned cancel func stops the timer (avoiding a pending
+// timer leak) and is safe to call with nil for deferred cleanup, since the first
+// cause set wins.
+func (e *Executor) buildStepCtx(runCtx context.Context, step ksaga.Step) (context.Context, context.CancelCauseFunc) {
+	if step.Timeout <= 0 {
+		return context.WithCancelCause(runCtx)
+	}
+	stepCtx, cancel := context.WithCancelCause(runCtx)
+	timer := e.clk.AfterFunc(e.clk.Now().Add(step.Timeout), func() {
+		cancel(errStepTimeout)
+	})
+	return stepCtx, func(cause error) {
+		timer.Stop()
+		cancel(cause)
+	}
 }
 
 // Compensate runs step.Compensate once (no retries, no step.Timeout).

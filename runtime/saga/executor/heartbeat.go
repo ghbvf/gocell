@@ -29,8 +29,13 @@ type Heartbeater interface {
 
 // runHeartbeat runs in its own goroutine and beats the lease at each ticker
 // interval until:
-//   - ctx is canceled (clean shutdown), or
+//   - ctx is canceled (clean shutdown — Execute called stopHB), or
 //   - Heartbeat returns ok=false (stale lease — another coordinator took over).
+//
+// On a stale lease it invokes onStale (which the executor wires to cancel the
+// running step's context with errLeaseLost) before returning, so the orphaned
+// step stops executing rather than racing to commit under a lost lease. The
+// lease-lost log is Warn (degraded operation per observability.md), not Info.
 //
 // Infrastructure errors from Heartbeat are logged as Warn and the goroutine
 // continues to the next tick (fail-open for transient infra issues).
@@ -46,7 +51,6 @@ func runHeartbeat(
 	logger *slog.Logger,
 	onStale func(),
 ) {
-	_ = onStale // RED stub: wired to cancel the running step in GREEN.
 	ticker := clk.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -65,10 +69,11 @@ func runHeartbeat(
 				continue
 			}
 			if !ok {
-				logger.InfoContext(ctx, "saga executor: lease lost (stale); stopping heartbeat",
+				logger.WarnContext(ctx, "saga executor: lease lost (stale); canceling step",
 					slog.String("instance_id", string(instanceID)),
 					slog.String("lease_id", string(leaseID)),
 				)
+				onStale()
 				return
 			}
 		}

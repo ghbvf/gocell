@@ -1,6 +1,7 @@
 package executor
 
 import (
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto saga backoff jitter; injected seeded source, gosec G404 silenced at usage
 	"math/rand/v2"
 	"time"
 
@@ -110,13 +111,13 @@ func (p resolvedPolicy) ShouldRetry(attempt int) bool {
 // Uses Temporal-style bounded jitter: [0.8d, d] where d = ExponentialDelay.
 // This avoids the thundering-herd of full-jitter [0, d) while still spreading load.
 //
-// Formula: lower = d - d/5; result = lower + Int64N(d/5 + 1).
+// Formula: lower = d - d/jitterDivisor; result = lower + Int64N(d/jitterDivisor + 1).
 // The +1 ensures Int64N never panics on a zero argument.
 func (p resolvedPolicy) Backoff(attempt int, j jitterSource) time.Duration {
 	d := koutbox.ExponentialDelay(p.base, p.max, attempt)
 	if d <= 0 {
 		return 0
 	}
-	lower := d - d/5
-	return lower + time.Duration(j.Int64N(int64(d/5)+1))
+	lower := d - d/jitterDivisor
+	return lower + time.Duration(j.Int64N(int64(d/jitterDivisor)+1))
 }
