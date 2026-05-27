@@ -371,10 +371,12 @@ cell := accesscore.New(
 
 **Funnel 双向锁评级（ai-robust.md §Funnel 双向锁评级）**：
 
-- **下游 Hard**：R1/R2 通过 `*types.Info` form-uniqueness 拦截；违反形态无灰色地带，不经 archtest 即无法绕过 R1/R2 约束。
-- **上游 Medium**：intra-package compile Hard 不可达 — `adapters/postgres` 包内所有文件共享相同的包可见性；Go 编译器无法阻止同包 sibling file 直接访问 `pgExecutor.pool` 或新增自己的字段。上限是 archtest-bound form-uniqueness，与 `PANIC-REGISTERED-01` / `panic(panicregister.Approved)` 同级（ai-robust.md §Hard 范本 #2 caveat）。升级路径：seal `pgExecutor` 为 exported interface + 私有化构造函数，让包外绕过不可表达。详见 backlog `PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`（`docs/backlog/cap-14-tooling.md`）。
+- **下游 Hard**：R1/R2/R3 通过 `*types.Info` form-uniqueness 拦截；违反形态无灰色地带，不经 archtest 即无法绕过约束。
+- **上游 Hard**（amended 2026-05-27，closes gh #738 / #916）：`pgExecutor` struct + `*pgxpool.Pool` 字段已迁移到 `<adapter-pkg>/internal/pgexec/` sub-package；parent-pkg 包外无法引用 unexported `pgExecutor` 类型，无法 type-assert，无 .pool 访问路径——sealed construction (ai-robust.md §Hard 范本 #6) 在 Go 类型系统层达到上游 Hard，与 HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 (`SlogDependencyEntry`) 同款形态。详见 ADR `docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md` §Amendment 2026-05-27。
 
-**RED/GREEN fixture 权威集**：`tools/archtest/internal/pgrepoambienttxfixture/fixture.go` 是 RED/GREEN fixture 的权威单一来源；`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
+> **历史脉络（2026-05-18 落地版本）**：原 Medium 上限来自"`pgExecutor` 是 `adapters/postgres` 包内 unexported struct，同包 sibling file 可直接访问 .pool"，与 `PANIC-REGISTERED-01` 同款 caveat。2026-05-27 amendment 通过 sub-package 物理隔离消除此 caveat。
+
+**RED/GREEN fixture 权威集**（amended 2026-05-27）：`tools/archtest/internal/pgrepoambienttxfixture/` 是 RED/GREEN fixture 的权威单一来源，含 `fixture.go`（package doc）、`fixture_repo.go`（所有 RED + GREEN repo controls，文件后缀触发 archtest 扫描）、`internal/pgexec/pgexec.go`（sub-package 镜像 production 形态）。`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
 
 **C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
 

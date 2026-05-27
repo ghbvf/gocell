@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (2026-05-24)
+Accepted (2026-05-24); **Amended 2026-05-27** — upstream Medium → Hard via
+sealed `internal/pgexec/` sub-package + cross-package wrap funnel. Closes
+gh #738 / #916. See §Amendment 2026-05-27 below.
 
 ## Context
 
@@ -113,30 +115,32 @@ unbounded ops"。允许 = "存在严格形态的 marker 在同 scope"，5-门串
 形态 archtest 即失败。BS-8 反向自检也升级为 scope-bounded，覆盖 spurious
 marker（marker 存在但同 scope 无 ExecDirect → audit-trail 退化）。
 
-## Funnel 双向锁评级表
+## Funnel 双向锁评级表（amended 2026-05-27）
 
-| 维度 | 升级前 | 升级后 | 形态 |
+| 维度 | 原始（2026-05-24） | Amended（2026-05-27） | 形态 |
 |------|--------|--------|------|
-| 上游（package discovery） | Soft（hand-maintained list） | **Medium** | archtest-bound type-aware：`Scope().Lookup("pgExecutor")` |
-| 下游 R1/R2（pool field / wrap funnel） | Hard | Hard | `*types.Info` 解析（不变） |
-| 下游 R3(a)（pool field access） | Hard | Hard | `*types.Info` 解析（不变） |
-| 下游 R3(b)（ExecDirect callsite） | Soft（hand-maintained map） | **Hard** | typed marker funnel：(callee, arg) form-uniqueness |
+| 上游（package discovery） | Medium（archtest type-aware：`Scope().Lookup("pgExecutor")`） | **Hard** | sealed `internal/pgexec/` sub-package：`pgExecutor` 结构体 + `*pgxpool.Pool` 字段在不可导出符号下；parent-pkg 包外无法引用类型，无法 type-assert，无 .pool 访问路径。Discovery 已删除（rules 改为全局谓词，按 `*_repo.go` / `*_store.go` 文件扩展名过滤层边界）|
+| 下游 R1（pool field in repo/store layer） | Hard（`*types.Info` 字段类型解析） | Hard | `*types.Info` 字段类型解析（不变）+ 全局 predicate（删除 hand-maintained list） |
+| 下游 R2（wrap funnel `New*` → `pgexec.New`） | Hard | Hard | `*types.Info` callee 解析至 `*types.Func`，要求 `Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"` |
+| 下游 R3(a)（pool field access） | Hard（archtest-bound） | **retired** | compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段；parent-pkg `.pool` 访问编译错误 |
+| 下游 R3(b)（ExecDirect callsite） | Hard（typed marker funnel） | Hard | typed marker funnel（不变）；receiver 类型解析从 same-pkg `pgExecutor` struct 改为 cross-pkg `pgexec.PGExecutor` interface |
 
-**上游为何不是 Hard**：同 PANIC-REGISTERED-01 / SPAN-SETATTR-REDACT-01 上游
-package-internal 形态评级 — `pgExecutor` 当前是 package-private struct（包内
-sibling 可见），Go 编译器无法在包内阻止"非 pgExecutor struct 持 *pgxpool.Pool
-字段"。Hard terminal state 需 seal `pgExecutor` behind exported interface +
-私有构造，使包外不可表达跳过；工作量大（4 个 pgExecutor 实现 + 调用方 + R3
-type-resolution 逻辑改造），不在本 PR 范围。
+**Amendment compensation column**（per ai-robust.md §"ADR amendment 落地必查"）：
 
-**跟踪 Hard terminal state**：同 PR 开 gh issue #916 (`PGEXECUTOR-SEAL-INTERFACE-01`)
-（依 ai-robust.md §"Funnel 双向锁评级"过渡形态要求），archtest godoc
-点名该 issue 号，让审查者能直接追到升级路径。
+- 上游 Medium → Hard：升级（无 ✅→⚠️ 回退），不需要补偿措施。
+- R3(a) retired：升级到 compile-time（不可表达性优于 archtest form-uniqueness）；BS-7（pool 局部赋值反向自检）一并删除——若 sub-pkg 内部新增 sibling 文件触发 .pool 局部赋值，单一 sub-pkg 文件内部小范围，code review 兜底，不再单独 archtest。
+
+**上游 Hard 实现机制**：
+- `internal/pgexec/pgexec.go` 是包外不可 import 的位置（Go `internal/` 可见性规则）。
+- `pgExecutor` struct 与 `*pgxpool.Pool` 字段在 sub-pkg 内 unexported；parent-pkg 包外无法引用类型名进行字段声明、类型断言、composite literal 构造。
+- 唯一获取 `pgexec.PGExecutor` 实例的路径是 `pgexec.New(*pgxpool.Pool)` 工厂；其返回的 interface 类型不暴露 `.pool` 字段。
+- 4 个 PG adapter package（adapters/postgres、adapters/postgres/saga、cells/accesscore/internal/adapters/postgres、examples/iotdevice/cells/devicecell/internal/adapters/postgres）各自有一份镜像 `internal/pgexec/` 子包（CLAUDE.md 分层规则 `cells/ ❌ adapters/` 阻止单一共享位置）。
+- archtest R1/R2 retained as defense-in-depth：global predicate over production module，scoped by `*_repo.go` / `*_store.go` file extension（基础设施层 `pool.go`/`tx_manager.go` 与 composition root pass-through helpers 通过文件后缀过滤排除）。
+
+**与同形态 funnel 的对照**：HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 的 `SlogDependencyEntry` unexported fields 是同款"sealed construction" Hard 形态（ai-robust.md §Hard 范本 #6 "sealed construction"）。
 
 ## Out of scope
 
-- **`pgExecutor` sealed interface 改造**：见上文 Hard terminal state，gh
-  issue 跟踪。
 - **configcore `Session`/`DBTX` funnel formalization**：configcore 用结构性
   不同的另一种 ambient-tx funnel（local `DBTX` interface + `*Session` 包装）。
   其 `Session` struct 持有 `*pgxpool.Pool`，与 `pgExecutor` 角色对等但命名
@@ -172,10 +176,49 @@ Repro: go test ./tools/archtest/... -run TestPGRepoAmbientTx
 Dependent contracts (governance scan): none
 ```
 
+## Amendment 2026-05-27 — upstream Medium → Hard via sealed sub-package
+
+**触发**：gh #738 (`PG-REPO-AMBIENT-TX-UPSTREAM-HARD-01`，触发型 backlog) +
+gh #916 (`PGEXECUTOR-SEAL-INTERFACE-01`)。Trigger (b)（"新增 cell adapter
+package 需要同等保护"）已结构性触发——4 个 PG adapter packages 各自镜像
+pgExecutor funnel。
+
+**Decision**：把每个 PG adapter package 内的 `pgExecutor` struct + `newPGExecutor`
+factory 整体迁移到 `<adapter-pkg>/internal/pgexec/` sub-package。Sub-package
+导出 `PGExecutor` interface（Exec/Query/QueryRow/ExecDirect，saga 多 AcquireTx）
++ exported `New(*pgxpool.Pool) PGExecutor` 工厂。parent-pkg repos/stores 持有
+`pgexec.PGExecutor`（interface 字段），构造点调 `pgexec.New(pool)`。
+
+**Implementation summary**：
+- 新增 4 个 sub-package（adapters/postgres/internal/pgexec/、adapters/postgres/saga/internal/pgexec/、cells/accesscore/internal/adapters/postgres/internal/pgexec/、examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec/）；
+- 删除 4 个旧 pg_executor.go（root + saga + accesscore 重命名为 tx_assert.go 保留 assertAmbientTx helper + devicecell）；
+- ~12 个 *_repo.go / *_store.go 把 `db pgExecutor` 字段改为 `db pgexec.PGExecutor`，`newPGExecutor(pool)` 改为 `pgexec.New(pool)`；
+- adapters/postgres/command_queue.go 额外清理 `pool *pgxpool.Pool` 直接字段绕过（refactor `q.pool.Query(...)` 为 `q.db.Query(...)`，pool 字段删除）；
+- saga `acquireTx` 方法重命名为 `AcquireTx`（导出，sub-pkg 外部调用）；
+- archtest `tools/archtest/pg_repo_ambient_tx_test.go` 重写：删除 discovery / `_DiscoveryCoverage` 测试 / `expectedPGAdapterPackageMin` 常量 / `r3PoolAccess`（R3(a)）；R1 简化（删除 struct-name check，repo/store 层禁持 pool）；R2 callee 改为跨包 `pgexec.New`；R3(b) receiver 改为 `pgexec.PGExecutor` interface；BS-7 删除（compile-impossible），BS-5 保留（cells/accesscore Bundle helper）；
+- RED fixture 重构为 `internal/pgexec/`（GREEN holder）+ `fixture_repo.go`（所有 RED + GREEN repo controls，文件后缀触发 archtest 扫描）+ `fixture.go`（仅 package godoc）；
+- ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1 cross-ref 添加 2026-05-27 amendment paragraph 指向本 amendment。
+
+**Compensation**：
+- R3(a) archtest retired（升级到 compile-time），BS-7（pool 局部赋值反向自检）一并删除；sub-pkg 内部新增文件触发 .pool 访问由 sub-pkg-internal code review 兜底——sub-pkg 文件极少（pgexec.go 一个），review 成本可接受。
+- 调试时若需 pool（如 ops 排查），从 composition root（cmd/）注入新 helper，不应通过 type assertion 反向访问。
+- 不引入 backwards-compat shim（CLAUDE.md "不考虑向后兼容"）；老的 `pgExecutor` package-private struct + `newPGExecutor` 全删，不留 alias。
+
+**Threat Model 重评**：
+- "Refactor 把 pgExecutor 改名 / 移出包 scope" 旧威胁 ❌：discovery 删除，无 `_DiscoveryCoverage` 集合断言；新威胁形态 = parent-pkg 重新引入 `*pgxpool.Pool` 字段（被 R1 全局谓词捕获）或 New* 构造函数绕过 `pgexec.New`（被 R2 全局谓词捕获）。原威胁矩阵中 "Refactor 改名" 行需删除（discovery 不再存在）；R1 / R2 自身 caller-side 捕获机制已包含。
+- 新威胁："parent-pkg 在非 _repo.go/_store.go 文件中 newPGExecutor-like 重新构造 *pgExecutor"：sub-pkg unexported 类型，parent-pkg 包外不可写出 `pgexec.pgExecutor{pool: ...}` composite literal（Go 编译错误）。✓
+- 新威胁："parent-pkg 通过 reflect 反向获取 .pool"：超出静态分析范围（与 BS-2 同款 accepted threat），accepted。
+
+**Out-of-scope 同 PR 变化**：
+- 删除 "pgExecutor sealed interface 改造" Out-of-scope 条目（已完成）。
+
 ## References
 
-- `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录" (#2 typed marker funnel for unbounded ops, #4 single sanctioned holder)
+- `.claude/rules/gocell/ai-robust.md` §"Hard 范本目录" (#2 typed marker funnel for unbounded ops, #4 single sanctioned holder, #6 sealed construction)
 - `.claude/rules/gocell/ai-robust.md` §"Funnel 双向锁评级"
+- `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"
 - `pkg/panicregister`（sibling typed marker funnel deployment）
 - ADR `docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md`（revokeSessionDetachedAt 的 ExecDirect bypass 起源）
-- ADR `docs/architecture/202605231400-002-required-dep-nil-guard-codegen-funnel.md`（最近一次 Soft → Hard 升级，同期参照）
+- ADR `docs/architecture/202605231400-002-required-dep-nil-guard-codegen-funnel.md`（Soft → Hard 升级形态参照）
+- ADR `docs/architecture/202605101200-adr-typed-go-heavy-protocol-primitives.md` §4.5.1（cross-ref，跟踪 PG-REPO-AMBIENT-TX-01 演化）
+- gh #738 / #916（本 amendment closes）

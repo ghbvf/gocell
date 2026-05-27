@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -43,7 +44,7 @@ func TestAssertAmbientTx_WithTx(t *testing.T) {
 // returns errcode.ErrInternal when called without an ambient transaction,
 // before any DB call is made (pool can be nil — guard fires first).
 func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
-	repo := &PGUserRepo{db: pgExecutor{pool: nil}}
+	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	_, err := repo.GetByIDForUpdate(context.Background(), "some-id")
 	require.Error(t, err, "GetByIDForUpdate must error without ambient tx")
@@ -59,7 +60,7 @@ func TestGetByIDForUpdate_NoAmbientTx(t *testing.T) {
 // PGUserRepo.GetByUsernameForUpdate returns errcode.ErrInternal when called
 // without an ambient transaction, before any DB call is made.
 func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
-	repo := &PGUserRepo{db: pgExecutor{pool: nil}}
+	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	_, err := repo.GetByUsernameForUpdate(context.Background(), "alice")
 	require.Error(t, err, "GetByUsernameForUpdate must error without ambient tx")
@@ -75,7 +76,7 @@ func TestGetByUsernameForUpdate_NoAmbientTx(t *testing.T) {
 // returns errcode.ErrInternal when called without an ambient transaction,
 // before any DB call is made (pool can be nil — guard fires first).
 func TestBumpAuthzEpoch_NoAmbientTx(t *testing.T) {
-	repo := &PGUserRepo{db: pgExecutor{pool: nil}}
+	repo := &PGUserRepo{db: pgexec.New(nil)}
 
 	_, err := repo.BumpAuthzEpoch(context.Background(), "usr-test-001", credentialfence.Mint())
 	require.Error(t, err, "BumpAuthzEpoch must error without ambient tx")
