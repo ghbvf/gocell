@@ -94,9 +94,11 @@ type connErrProvider struct{ err error }
 func (p *connErrProvider) CounterVec(_ metrics.CounterOpts) (metrics.CounterVec, error) {
 	return nil, p.err
 }
+
 func (p *connErrProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	return nil, p.err
 }
+
 func (p *connErrProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return nil, p.err
 }
