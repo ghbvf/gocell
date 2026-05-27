@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -44,7 +45,7 @@ var _ ports.UserRepository = (*PGUserRepo)(nil)
 // Rotate) need an explicit boundary. PGUserRepo's pattern is the
 // "single-statement repo" variant of the same dual-signal contract.
 type PGUserRepo struct {
-	db pgExecutor
+	db pgexec.PGExecutor
 	// txRunner is retained at construction time as policy declaration only —
 	// see the type godoc above. Repo methods read tx from ctx, not this field.
 	txRunner persistence.TxRunner
@@ -70,7 +71,7 @@ func NewPGUserRepo(
 			"accesscore.NewPGUserRepo: clock must not be nil")
 	}
 	return &PGUserRepo{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil

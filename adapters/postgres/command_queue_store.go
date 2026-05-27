@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -44,8 +45,7 @@ var (
 // ref: adapters/postgres/outbox_store.go (FOR UPDATE SKIP LOCKED pattern)
 // ref: adapters/postgres/tx_manager.go (savepoint / nested RunInTx)
 type PGCommandQueue struct {
-	db       pgExecutor // routes SQL through ambient tx when present
-	pool     *pgxpool.Pool
+	db       pgexec.PGExecutor // routes SQL through ambient tx when present
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }
@@ -66,8 +66,7 @@ func NewCommandQueue(pool *pgxpool.Pool, txRunner persistence.TxRunner, clk cloc
 			"postgres.NewCommandQueue: clock must not be nil")
 	}
 	return &PGCommandQueue{
-		db:       newPGExecutor(pool),
-		pool:     pool,
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil
@@ -443,14 +442,7 @@ func (q *PGCommandQueue) ScanActive(ctx context.Context, filter command.ScanFilt
 
 	deviceID := filter.DeviceID
 
-	// Use ambient tx when available; fall back to pool for read-only path.
-	var rows pgx.Rows
-	var err error
-	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
-		rows, err = tx.Query(ctx, scanActiveSQL, deviceID)
-	} else {
-		rows, err = q.pool.Query(ctx, scanActiveSQL, deviceID)
-	}
+	rows, err := q.db.Query(ctx, scanActiveSQL, deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("command_queue: scan active: %w", err)
 	}

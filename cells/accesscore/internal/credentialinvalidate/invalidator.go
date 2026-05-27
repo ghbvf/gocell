@@ -41,6 +41,24 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
 
+// Applier is the credential-invalidation funnel surface used by callers that
+// need substitutability for testing (e.g. sessionrefresh injects a spy in
+// unit tests). The sole production implementation is *Invalidator.
+//
+// AI-robust archtest dependency: this interface MUST live in the
+// credentialinvalidate package — not in any caller package — so
+// info.Selections resolves Apply via this package, making call-sites
+// detectable by CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01. A caller-package
+// local interface (the pre-#1196 sessionrefresh.invalidatorApplier form)
+// would resolve Apply via the caller package, hiding the callsite from the
+// callsite-level scan and creating a Soft channel. Keep the interface here.
+type Applier interface {
+	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
+}
+
+// Compile-time check: *Invalidator implements Applier.
+var _ Applier = (*Invalidator)(nil)
+
 // Invalidator is the single entry point for the credential-revocation trifecta:
 // bump user authz_epoch + revoke sessions + revoke refresh chain.
 // All callers must go through Apply; direct calls to the underlying stores

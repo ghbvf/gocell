@@ -38,7 +38,7 @@
 // # PASS-FUNNEL-RESOLVE-01 (enforcement)
 //
 // The meta-archtest PASS-FUNNEL-RESOLVE-01 in pass_funnel_test.go bans
-// business *_test.go files from calling the eight typeseval helpers or
+// business *_test.go files from calling the nine typeseval helpers or
 // scanner.ImportBan directly. Files in passFunnelPermanentExempt (3 framework
 // files) are permanently exempt; LegacyAllowlist deleted in Stage 4.
 package archtest
@@ -84,6 +84,30 @@ func ResolvePackageRef(info *types.Info, expr ast.Expr) (pkgPath, name string, o
 // info must come from the same packages.Load result that produced sel.
 func ResolveMethodCall(info *types.Info, sel *ast.SelectorExpr) (*types.Func, bool) {
 	return typeseval.ResolveMethodCall(info, sel)
+}
+
+// ResolveEnclosingFunc returns the OUTERMOST top-level *ast.FuncDecl enclosing
+// node in file, mapped to its *types.Func identity (use fn.FullName() to obtain
+// the canonical caller-side identity, e.g. "pkg.Func" or "(*pkg.Recv).Method").
+//
+// Thin delegation to [typeseval.ResolveEnclosingFunc]. Returns (nil, false) for
+// package-level var / const init, import blocks, or any other location outside
+// a FuncDecl body — callers funneling callsite-level allowlists treat that as
+// an automatic violation.
+//
+// Nested *ast.FuncLit inherits the outer FuncDecl identity by design (FuncLit
+// author = FuncDecl author; allowlisting the outer FuncDecl implicitly trusts
+// any FuncLit inside it).
+//
+// The signature is asymmetric to [ResolveMethodCall] / [ResolvePackageRef]
+// (which take only info + expression): the lookup iterates `file.Decls` for
+// *ast.FuncDecl, because typesInfo.Defs has no file-scope index from which to
+// recover the enclosing FuncDecl by position alone. Pass the same *ast.File
+// from `pass.Files` that produced node.
+//
+// info must come from the same packages.Load result that produced file.
+func ResolveEnclosingFunc(info *types.Info, file *ast.File, node ast.Node) (*types.Func, bool) {
+	return typeseval.ResolveEnclosingFunc(info, file, node)
 }
 
 // EvaluateConstString returns the compile-time string constant value of expr,

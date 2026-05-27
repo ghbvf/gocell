@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	kerrors "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/adapters/postgres/saga/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
@@ -31,7 +32,7 @@ import (
 // invariant). When no ambient tx is present, acquireTx opens a fresh one and
 // the caller takes ownership of Commit / Rollback.
 type PGJournal struct {
-	db    pgExecutor
+	db    pgexec.PGExecutor
 	clock clock.Clock
 }
 
@@ -47,7 +48,7 @@ func NewJournal(pool *pgxpool.Pool, clk clock.Clock) (*PGJournal, error) {
 			"saga journal: NewJournal requires non-nil pool")
 	}
 	clock.MustHaveClock(clk, "saga journal: NewJournal requires non-nil Clock")
-	return &PGJournal{db: newPGExecutor(pool), clock: clk}, nil
+	return &PGJournal{db: pgexec.New(pool), clock: clk}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +214,7 @@ func (s *PGJournal) Enqueue(ctx context.Context, instance saga.Instance) error {
 // instance returns ErrSagaNotFound (not ErrValidationFailed). Conformance
 // suite locks this with Append_UnknownInstanceWithBadPayload_PrefersNotFound.
 func (s *PGJournal) Append(ctx context.Context, instanceID, leaseID idutil.SafeID, event journal.Event) (int64, error) {
-	tx, owned, err := s.db.acquireTx(ctx)
+	tx, owned, err := s.db.AcquireTx(ctx)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
 			"saga journal: Append acquireTx", err)
@@ -449,7 +450,7 @@ func (s *PGJournal) Heartbeat(ctx context.Context, instanceID, leaseID idutil.Sa
 // lease / missing instance; KindInvalid on a non-terminal finalStatus or
 // illegal transition.
 func (s *PGJournal) MarkTerminal(ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus saga.Status) (bool, error) {
-	tx, owned, err := s.db.acquireTx(ctx)
+	tx, owned, err := s.db.AcquireTx(ctx)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, kerrors.ErrAdapterPGConnect,
 			"saga journal: MarkTerminal acquireTx", err)

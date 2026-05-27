@@ -51,24 +51,22 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 	}
 }
 
-// invalidatorApplier is the minimal interface sessionrefresh needs from the
-// credential-invalidation funnel. Using an interface (rather than a concrete
-// *credentialinvalidate.Invalidator field) keeps the slice unit-testable with a
-// spy and decouples it from the concrete invalidator package at the type level.
-// Production code injects *credentialinvalidate.Invalidator which satisfies
-// this interface by method set.
-type invalidatorApplier interface {
-	Apply(ctx context.Context, subjectID string, event session.CredentialEvent) error
-}
-
 // WithInvalidator injects the credential-invalidation funnel used to
 // cascade epoch bump + session revoke + refresh chain revoke on refresh-token
 // reuse detection. Required — NewService fails fast when nil.
 // Nil is silently ignored to keep the option idempotent; final nil
 // enforcement is in NewService.
-func WithInvalidator(inv *credentialinvalidate.Invalidator) Option {
+//
+// Type rationale: the parameter is credentialinvalidate.Applier (the exported
+// funnel interface), not *credentialinvalidate.Invalidator. The interface
+// must live in credentialinvalidate so the callsite-level archtest
+// (CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01) can resolve s.invalidator.Apply
+// via info.Selections to a *types.Func with Pkg=credentialinvalidate.
+// Production wiring still passes a *Invalidator (which satisfies Applier);
+// unit tests inject a spy.
+func WithInvalidator(inv credentialinvalidate.Applier) Option {
 	return func(s *Service) {
-		if inv != nil {
+		if !validation.IsNilInterface(inv) {
 			s.invalidator = inv
 		}
 	}
@@ -85,8 +83,8 @@ type Service struct {
 	// fails fast when nil. On refresh-token reuse detection, Apply is called
 	// inside the outer transaction to atomically bump authz_epoch, revoke all
 	// sessions, and revoke all refresh chains for the subject.
-	invalidator invalidatorApplier `gocell:"required" gocellErr:"sessionrefresh: Invalidator required; use WithInvalidator"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	issuer      *auth.JWTIssuer    `gocell:"required"`
+	invalidator credentialinvalidate.Applier `gocell:"required" gocellErr:"sessionrefresh: Invalidator required; use WithInvalidator"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	issuer      *auth.JWTIssuer              `gocell:"required"`
 	logger      *slog.Logger
 	clock       clock.Clock
 }

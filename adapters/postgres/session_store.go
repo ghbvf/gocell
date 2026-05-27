@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
@@ -76,7 +77,7 @@ WHERE subject_id = $2::uuid
 // ref: dexidp/dex storage/sql/sql.go — session row model
 // ref: ory/hydra persistence/sql/persister_oauth2.go — ambient-tx pattern
 type PGSessionStore struct {
-	db       pgExecutor
+	db       pgexec.PGExecutor
 	txRunner persistence.TxRunner
 	protocol *session.Protocol
 	clock    clock.Clock
@@ -113,7 +114,7 @@ func NewSessionStore(
 			"postgres.NewSessionStore: clock must not be nil")
 	}
 	return &PGSessionStore{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		protocol: protocol,
 		clock:    clk,
