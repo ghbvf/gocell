@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 	"github.com/ghbvf/gocell/runtime/saga"
+	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // noopEmitter is a koutbox.Emitter that discards entries — leader-elect tests
@@ -33,13 +34,26 @@ func (noopEmitter) Emit(context.Context, koutbox.Entry) error { return nil }
 
 // leaderPGCfg is the coordinator config for the two-process PG test: fast poll
 // (clock-driven), small batch, long lease (no expiry within the test).
+// Heartbeat lives on the Executor now (#1181) — see newLeaderPGExecutor.
 func leaderPGCfg() saga.Config {
 	return saga.Config{
-		PollInterval:      testtime.D10ms,
-		ClaimBatchSize:    4,
-		LeaseDuration:     testtime.D60s,
-		HeartbeatInterval: testtime.D20s,
+		PollInterval:   testtime.D10ms,
+		ClaimBatchSize: 4,
+		LeaseDuration:  testtime.D60s,
 	}
+}
+
+// newLeaderPGExecutor constructs the Executor injected into every leader-elect
+// Coordinator in this suite. The heartbeat interval (20s, = LeaseDuration/3)
+// mirrors the pre-#1181 leaderPGCfg.HeartbeatInterval default.
+func newLeaderPGExecutor(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) *executor.Executor {
+	t.Helper()
+	exec, err := executor.NewExecutor(j, clk,
+		executor.WithHeartbeatInterval(testtime.D20s),
+		executor.WithLeaseDuration(testtime.D60s),
+	)
+	require.NoError(t, err)
+	return exec
 }
 
 // newPGStore clones one fresh migrated DB and returns a PGJournal + a TxManager
@@ -68,7 +82,9 @@ func startLeaderCoord(
 ) {
 	t.Helper()
 	c, err := saga.NewCoordinator(j, tx, noopEmitter{}, reg, clk,
-		saga.WithConfig(leaderPGCfg()), saga.WithLeaderElect(locker))
+		saga.WithConfig(leaderPGCfg()),
+		saga.WithExecutor(newLeaderPGExecutor(t, j, clk)),
+		saga.WithLeaderElect(locker))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
