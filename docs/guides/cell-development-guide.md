@@ -64,6 +64,7 @@ var cellMeta = &metadata.CellMeta{
     ID:               "mycell",
     Type:             "core",
     ConsistencyLevel: "L1",
+    Lifecycle:        "experimental",
     Owner:            metadata.OwnerMeta{Team: "my-team", Role: "mycell-owner"},
     Schema:           metadata.SchemaMeta{Primary: "my_table"},
     Verify:           metadata.CellVerifyMeta{Smoke: []string{"mycell/smoke"}},

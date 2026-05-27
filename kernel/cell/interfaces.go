@@ -135,11 +135,18 @@ type Cell interface {
 // slice-level metadata. `gocell generate cell` emits slice_gen.go containing a
 // `var sliceMeta` literal and `SliceMetadata() *metadata.SliceMeta` accessor.
 // Cell composition roots call `cell.MustNewBaseSliceFromMeta(<slicePkg>.SliceMetadata())`
-// — the typed funnel that projects all metadata fields into BaseSlice. Direct
-// `cell.NewBaseSlice` literals and `metadata.SliceMeta{...}` hand-written literals
-// are forbidden in non-gen production code (BASESLICE-CTOR-FUNNEL-01 archtest).
-// The `Init` lifecycle method is generated in cell_gen.go; business-specific
-// initialisation lives in the hand-written `initInternal(ctx, reg)` hook (K#04 convention).
+// — the typed funnel that projects the runtime-consumed metadata subset into
+// BaseSlice (id / cellID / consistencyLevel / Verify / AllowedFiles /
+// AffectedJourneys). SliceMeta.Lifecycle is intentionally NOT projected into
+// BaseSlice and is NOT exposed on this interface: it is a metadata-only field
+// consumed by governance/catalog via SliceMeta.Lifecycle directly. The
+// asymmetry with Cell.Lifecycle() is principled — Cell has a runtime aggregator
+// consumer (runtime/lifecycle), Slice does not; adding an accessor here would be
+// dead code (ADR 202605262100 §E52). Direct `cell.NewBaseSlice` literals and
+// `metadata.SliceMeta{...}` hand-written literals are forbidden in non-gen
+// production code (BASESLICE-CTOR-FUNNEL-01 archtest). The `Init` lifecycle
+// method is generated in cell_gen.go; business-specific initialisation lives in
+// the hand-written `initInternal(ctx, reg)` hook (K#04 convention).
 type Slice interface {
 	// ID returns the slice's stable identifier (matches slice.yaml id).
 	ID() string
