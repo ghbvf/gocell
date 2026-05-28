@@ -533,7 +533,7 @@ func TestRunWithHeartbeat_BlockingObserver_DoesNotStall(t *testing.T) {
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
 		WithObserver(obs),
-		WithObserverCallDeadline(20*time.Millisecond),
+		WithObserverCallDeadline(testtime.D20ms),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -554,7 +554,7 @@ func TestRunWithHeartbeat_BlockingObserver_DoesNotStall(t *testing.T) {
 
 	// Advance past the bounded deadline; the timer fires, callObserverBounded
 	// logs Warn and returns, and the preflight branch returns errLeaseLost.
-	fc.Advance(21 * time.Millisecond)
+	fc.Advance(testtime.D50ms)
 
 	got := testwait.Deterministic(t, errCh, testtime.EventuallyShort,
 		"RunWithHeartbeat must return despite blocked observer")
