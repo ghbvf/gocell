@@ -1317,15 +1317,16 @@ func _(file *ast.File, other []ast.Decl) {
 //	  is required by the typed signature — a forgotten return is itself a
 //	  compile error.
 //	上游 Medium (= Go ceiling, terminal): archtest form-ban (allowlist 0) +
-//	  BS1-BS5 reverse self-tests.
+//	  BS1-BS3 reverse self-tests + BS4/BS5 handled by main detector (see below).
 //	  Cannot sealed-interface around "a user declares a bool"; EachInChildren
 //	  and EachInSubtree must stay callable for pure iteration. Highest grade
-//	  reachable in Go for this rule shape (structurally identical to
-//	  PANIC-REGISTERED-01's honest caveat in .claude/rules/gocell/ai-robust.md:
-//	  "the enforcement is archtest-bound, not compile-time ... the highest
-//	  grade reachable in Go for this rule shape"). No upstream-Hard path
-//	  reachable on EITHER depth axis (the Go-ceiling reasoning is depth-
-//	  independent); no gh tracking issue is opened (terminal evaluation).
+//	  reachable in Go for this rule shape — same form-uniqueness ceiling as
+//	  PANIC-REGISTERED-01 (typed marker funnel + archtest-bound enforcement,
+//	  no compile-time gate possible without sealing the underlying APIs that
+//	  must remain callable for pure iteration). No upstream-Hard path
+//	  reachable on EITHER depth axis (the Go-ceiling reasoning is
+//	  depth-independent); the terminal "won't-do" upgrade evaluation is
+//	  tracked at gh #1256 per ai-robust.md §"Funnel 双向锁评级" requirement.
 //	Fixture-live anti-drift (Hard, 040 Stage 1.8): both
 //	  TestScannerFrameworkUsage02 (live) and TestScannerFrameworkUsage02_Fixture
 //	  (typed fixtures under tools/archtest/internal/usage02fixtures/) load
@@ -1337,11 +1338,13 @@ func _(file *ast.File, other []ast.Decl) {
 //
 // Tool blind spots (godoc-declared scope of the chosen AST tooling —
 // scanner.EachInSubtree[ast.CallExpr/IfStmt/AssignStmt/Ident] + typed
-// callee resolution). Each has a reverse self-test in
-// TestScannerFrameworkUsage02_BlindSpotReverse asserting it does NOT occur
-// in production AST. BS1/BS2/BS3 were declared for the EachInChildren axis
-// and remain true for EachInSubtree (the shapes are depth-agnostic); BS4/BS5
-// are added with the subtree-axis extension:
+// callee resolution). BS1/BS2/BS3 are true blind spots of the MAIN detector
+// (forbiddenClosureDoneSentinel) and are covered by the BS reverse detector
+// (closureDoneSentinelBlindSpots) plus
+// TestScannerFrameworkUsage02_BlindSpotReverse asserting they do NOT occur
+// in production AST. BS1/BS2/BS3 shapes are depth-agnostic — the same
+// detector and reverse self-test apply uniformly to both EachInChildren
+// and EachInSubtree axes:
 //
 //	BS1: sentinel set via a non-`true`-literal RHS that is still a boolean
 //	     (`done = ok`, `done = x == 1`) while used as `if done { return }`.
@@ -1361,20 +1364,29 @@ func _(file *ast.File, other []ast.Decl) {
 //	     in production; TestScannerFrameworkUsage02_BlindSpotForwardFixtures
 //	     documents that the MAIN detector (forbiddenClosureDoneSentinel) by
 //	     design returns 0 hits for the BS3 shape.
+//
+// Handled forms — caught by the MAIN detector itself, NOT blind spots
+// (listed here for completeness; no separate reverse self-test required
+// because the main detector covers them at TestScannerFrameworkUsage02
+// allowlist=0):
+//
 //	BS4: nested-walker form — outer EachInSubtree's callback contains an
 //	     inner monitored walker call whose own callback carries the sentinel.
 //	     Handled naturally by the top-level CallExpr walk in the main
-//	     detector: every monitored CallExpr in the file is examined, including
-//	     those lexically nested inside another walker's callback. The reverse
-//	     self-test asserts no nested-sentinel pattern remains after migration.
+//	     detector: every monitored CallExpr in the file is examined,
+//	     including those lexically nested inside another walker's callback.
+//	     The BS4 fixture (bs4_scanner_eachinsubtree_nested_inner_sentinel.go)
+//	     anchors the dual-hit semantics (outer + inner both reported).
 //	BS5: helper-func-value form — the second argument is a named function
 //	     value (Ident or SelectorExpr resolving to a func), not an inline
 //	     FuncLit, so the sentinel (if any) lives in a separately-declared
-//	     function body and the depth-1 FindFirstChild[FuncLit] lookup that
-//	     extracts the callback returns nil. The main detector reports this
-//	     as a hard violation (allowlist 0): the form is incompatible with
-//	     the in-place sentinel detection mechanism and is a blind-spot
-//	     evasion vector. Production count today is 0; the ban is preventive.
+//	     function body that the depth-1 FindFirstChild[FuncLit] lookup
+//	     cannot reach. The main detector reports this as a hard violation
+//	     regardless of whether the helper body contains a sentinel — the
+//	     form is form-banned (allowlist 0) because it is structurally
+//	     incompatible with in-place sentinel detection and constitutes a
+//	     blind-spot evasion vector. Production count today is 0; the ban
+//	     is preventive.
 func TestScannerFrameworkUsage02(t *testing.T) {
 	var diags []scanner.Diagnostic
 	// Tests:true required — _test.go files are the scan target of USAGE-02.
@@ -1519,7 +1531,11 @@ func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *a
 					"`func(...) { ... }` so SCANNER-FRAMEWORK-USAGE-02 can " +
 					"detect any in-callback sentinel, or migrate to FindFirstChild / " +
 					"FindFirstInSubtree which carries the find-first contract in " +
-					"the API name",
+					"the API name. NOTE: this ban applies regardless of whether " +
+					"the helper currently contains a sentinel — the named-function " +
+					"form is preventively banned (allowlist=0) to close the " +
+					"blind-spot evasion vector at the call shape level, not the " +
+					"helper body content level",
 			})
 			return
 		}
@@ -1807,7 +1823,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 								Message: "BS3 blind-spot shape (guard ident \"" + name + "\" is used " +
 									"as if-return guard inside callback but `= true` is outside " +
 									"the callback — non-functional find-first, scoping limitation) " +
-									"in scanner/archtest.EachInChildren callback",
+									"in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 							})
 						}
 					})
@@ -1826,7 +1842,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 							out = append(out, scanner.Diagnostic{
 								Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 								Message: "BS2 blind-spot shape (else-branch return " +
-									"guard on a false-init sentinel) in scanner/archtest.EachInChildren callback",
+									"guard on a false-init sentinel) in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 							})
 						}
 					}
@@ -1843,7 +1859,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 					out = append(out, scanner.Diagnostic{
 						Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 						Message: "BS1 blind-spot shape (false-init sentinel set via " +
-							"non-true-literal RHS) in scanner/archtest.EachInChildren callback",
+							"non-true-literal RHS) in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 					})
 				}
 			}
