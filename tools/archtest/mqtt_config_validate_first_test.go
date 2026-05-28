@@ -129,29 +129,28 @@ func TestMQTTConfigValidateFirst01(t *testing.T) {
 // IfStmt-init (`if err := cfg.Validate(); ...`) and bare ExprStmt
 // (`cfg.Validate()`) are accepted.
 func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
+	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed subtree walk replaces raw
+	// ast.Inspect (Path A banned symbol). Early-stop via `found` sentinel
+	// preserved since EachInSubtree has no implicit break.
 	found := false
-	ast.Inspect(stmt, func(n ast.Node) bool {
+	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
 		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return true
+			return
 		}
 		if sel.Sel.Name != "Validate" {
-			return true
+			return
 		}
 		fn, ok := ResolveMethodCall(info, sel)
 		if !ok {
-			return true
+			return
 		}
 		recv := fn.Type().(*types.Signature).Recv()
 		if recv == nil {
-			return true
+			return
 		}
 		recvType := recv.Type()
 		// Strip pointer.
@@ -160,15 +159,13 @@ func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
 		}
 		named, isNamed := recvType.(*types.Named)
 		if !isNamed {
-			return true
+			return
 		}
 		if named.Obj().Pkg() != nil &&
 			named.Obj().Pkg().Path() == mqttPkgPath &&
 			named.Obj().Name() == "Config" {
 			found = true
-			return false
 		}
-		return true
 	})
 	return found
 }
@@ -176,27 +173,23 @@ func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
 // callsAutopahoNewConnection reports whether stmt contains a call to
 // autopaho.NewConnection (any package alias). Resolution via ResolvePackageRef.
 func callsAutopahoNewConnection(stmt ast.Stmt, info *types.Info) bool {
+	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed subtree walk replaces raw
+	// ast.Inspect (Path A banned symbol).
 	found := false
-	ast.Inspect(stmt, func(n ast.Node) bool {
+	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
 		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+			return
 		}
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 		if !ok {
-			return true
+			return
 		}
 		if name != "NewConnection" {
-			return true
+			return
 		}
 		if pkgPath == "github.com/eclipse/paho.golang/autopaho" {
 			found = true
-			return false
 		}
-		return true
 	})
 	return found
 }

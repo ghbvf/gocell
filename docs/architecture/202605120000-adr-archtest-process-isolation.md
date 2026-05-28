@@ -281,3 +281,77 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 - **L3 概念模型**：archtest 是开发者主动触发的合规体检，不是隐式 push gate；正确语义是 explicit `make verify` / `bash hack/verify-archtest.sh`（开发者承担 CPU/RSS 代价）+ nightly 兜底（≤24h，无开发者代价）
 
 裁决：同 PR 内撤回 pre-push archtest 调用 + `archtest_governance_changed` 触发探测 + 头部 deviation 4 / Tier 4 标号；`hack/verify-archtest.sh` "Execution modes" 与并行 fan-out 能力保留（为 `make verify` 与显式调用提供选择）。未来若 CPU/RSS 代价显著下降（更小 archtest 集 / cross-shard cache）再评估接回 pre-push 的可能性。
+
+## Amendment 2026-05-28: K=16 → K=24 + SLOWGATE_THRESHOLD 20s → 25s
+
+### 触发
+
+2026-05-24 至 2026-05-27 连续 4 天 `archtest-nightly` workflow 失败，混合两类信号：
+
+1. **真实 slowgate breach（持续问题）**
+   - 2026-05-25 shard 7: `TestPGRepoAmbientTx_SelfCheck 23.66s > 20s`
+   - 2026-05-27 shard 10: `TestSagaJournalConformanceEnrollment 21.77s > 20s`
+   - 共性：均为 type-graph-load 类（`packages.Load` 全模块 type-aware walk），单 test wall-time 直接超 20s budget；与 SHARD_COUNT / SharedResolver cache 摊销无关。
+   - `archtest-nightly.yml` line 63-65 工作流 godoc 第一性原理已预留 revisit 触发：
+     > "20s threshold inherited from `_build-lint.yml`; calibrated on macOS local Phase 0 (18-core Apple Silicon). GHA ubuntu nightly has no baseline data yet — revisit after ~30 consecutive nightly runs."
+   - 当前 archtest-nightly 自 §Amendment 2026-05-23-pr-time-to-nightly 起累计 ~5 个 schedule run，已观察到稳定超标，触发预定 revisit。
+
+2. **SIGTERM 143（双假说，无 ex-ante 决断能力）**
+   - 2026-05-24 shards 3/0/7/9/15、2026-05-25 shards 1/2/10/15、2026-05-26 shards 8/9、2026-05-27 shards 1/3 均有 `##[error]The runner has received a shutdown signal`。`fail-fast: false` 已排除 sibling-fail-fast 级联；workflow 无 `concurrency:` 块排除 cancel-in-progress；step `timeout-minutes: 3` 与 job `timeout-minutes: 10` 未触发。
+   - **OOM 假说**（§11 lineage）：多 shards 重复出现（shard 1/3/7 在多日复现，非完全随机分布）；shard 1 SIGTERM at 75 秒对齐 `packages.Load` 峰值时间窗口。
+   - **Spot preempt 假说**（§3 lineage）：workflow godoc line 7-10 已记录 `"GHA runner spot preemption ('runner has received a shutdown signal') with 16× amplification across the shard matrix"`。
+   - 无 runner-side `dmesg` / RSS 实测数据，ex-ante 不可区分。Phase A 诊断 step（同 PR `archtest-nightly.yml` `Pre-step memory snapshot` + `Post-step memory + dmesg`）捕获 `/proc/meminfo` + `ps --sort -rss` + `dmesg` 后下一轮 nightly 失败时可 ex-post 收敛。
+
+### 决策
+
+#### D1. K=16 → K=24
+
+- 保持 §Phase 0 "K 是 OOM 阈值的设计 knob" 论点；K=24 是 K=16 → 更细方向延伸（per-shard tests 数从 ~47 降到 ~32，shard 内同时 hold 的 `*types.Info` 子集减少，per-shard RSS 必然 ≤ K=16）。
+- `SharedResolver` baseline cache（~3-4 GB macOS，packages.Load 全模块常驻部分）与 K 无关，是 RSS 主导项；K=16→24 增量降低集中在 t.Run subtests 持有的 typed objects 上（增量约 20-30%），并非根治 RSS（runner tier 升级才是激进降 RSS 路径，本 amendment 不采纳）。
+- GHA Linux baseline 缺失（§Phase 0 是 macOS 测量），K=24 baseline 待 amendment 2026-06-?? Phase A 诊断收据后回填实测值。
+
+#### D2. SLOWGATE_THRESHOLD 20s → 25s
+
+- workflow godoc line 63-65 明文预留 "revisit after ~30 consecutive nightly runs" 触发点，当前已观察到 2 个不同 type-graph-load 测试稳定超标，符合 revisit 信号。
+- 25s 仍能捕获回归（100ms sleep drift 到 25.1s+ 仍触发 slowgate）— slowgate 的根本意图（catch regression）不变质。
+- 不采纳"单测试 allowlist"路径（添加 `TestSagaJournalConformanceEnrollment` 等单条 entry）：5/25 已暴露第 2 个测试超标，单点 allowlist 仅治标，下次 nightly 别的 type-graph-load 测试还会超阈。抬阈值是根因修复。
+
+#### D3. Phase A 诊断 step（同 PR）
+
+`archtest-nightly.yml` 加 pre/post-shard 诊断 step（`always()` 守卫）：
+- Pre: `cat /proc/meminfo` 关键字段（MemTotal/MemFree/MemAvailable/Buffers/Cached/SwapTotal/SwapFree）
+- Post: `cat /proc/meminfo` + `ps -eo pid,rss,vsz,cmd --sort -rss | head -10` + `sudo dmesg | tail -100` (fallback path 若无权限)
+
+下一轮 143 复现时，artifact 与 step log 中的 RSS 峰值 + kernel OOM 证据可 ex-post 区分 OOM vs spot preempt 假说，回填本 amendment 决断证据。
+
+### 同 PR 同步载体
+
+K=16 ADR-mandated invariant 锚定 3 处，**必须同 PR 内一致更新**：
+
+| 载体 | 更新内容 |
+|---|---|
+| `.github/workflows/archtest-nightly.yml` | `matrix.shard: [0..15]` → `[0..23]`；`SHARD_COUNT: 16` → `24`；`SLOWGATE_THRESHOLD: 20s` → `25s`；新增 `Pre-step memory snapshot` + `Post-step memory + dmesg` 诊断 step |
+| `tools/archtest/archtest_ci_shard_count_test.go` | `validateVerifyArchtestExplicitShardCount` 期望值 `"16"` → `"24"`（通过新增 `expectedShardCount` const）；同步 5 处 yaml fixture |
+| `docs/architecture/202605120000-adr-archtest-process-isolation.md` | 本 §Amendment 2026-05-28（本节） |
+
+### 不变（§Phase 0 论点保持）
+
+- "K 是 OOM 阈值的设计 knob"
+- "K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度" — K=24 是更宽松方向延伸，论点延伸成立（不是反驳）
+- "本地默认 K=1" 行为不变（`hack/verify-archtest.sh` 默认值不动）
+- §Amendment 2026-05-23-pr-time-to-nightly：PR-time 不跑完整 archtest 不变；nightly 是 sole authoritative CI gate 不变
+
+### §Phase 0 覆盖表更新
+
+| §Phase 0 表行 | Amendment 2026-05-28 状态 |
+|---|---|
+| K=16 macOS RSS 4.22 GB | ⚠️ macOS 测量；K=24 GHA Linux baseline 待 Phase A 诊断 step 补 |
+| K=4 macOS RSS 43 GB sweet spot | ✅ 论点不变（macOS workstation 场景） |
+| K=8 留余量不足 | ✅ 论点不变（K=8 < K=16 < K=24，论点延伸成立） |
+| K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度 | ✅ 论点不变；K=24 更宽松，是该论点的方向性延伸 |
+
+### 范围外（不在本 amendment）
+
+- **runner tier 升级 `ubuntu-latest` → `ubuntu-latest-4-cores`**：16GB runner 是激进降 RSS 路径（vs K 增量调整），但引入 GHA plan/cost 维度 + 不确定 large runner 可用性。Phase A 诊断后若证明 K=24 不足，再评估单独 amendment。
+- **143 step retry 机制**：第三方 action 引入，独立 ADR 权衡（retry 缓解 vs 显式失败信号）。
+- **`TestSagaJournalConformanceEnrollment` / `TestPGRepoAmbientTx_SelfCheck` 测试优化**：均为 type-aware whole-module `packages.Load`，设计本身无低成本优化；Hard 升级路径 = codegen funnel + golden（gh issue #1003 SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01）。

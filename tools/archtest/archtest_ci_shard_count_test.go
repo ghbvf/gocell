@@ -16,25 +16,34 @@ import (
 // verifyArchtestScriptMarker is the substring that identifies a step actually
 // invoking the verify-archtest script. GitHub Actions step env (`steps[*].env`)
 // only applies during that specific step's process. The validator MUST bind
-// the SHARD_COUNT=16 assertion to the SAME step that runs this script — a
-// dummy/setup step with SHARD_COUNT=16 in env cannot satisfy the contract
+// the SHARD_COUNT=24 assertion to the SAME step that runs this script — a
+// dummy/setup step with SHARD_COUNT=24 in env cannot satisfy the contract
 // because its env never reaches the actual `bash hack/verify-archtest.sh`
 // execution. ref: GitHub Docs jobs.<job_id>.steps[*].env.
 const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 
+// expectedShardCount is the ADR-mandated SHARD_COUNT for the CI matrix.
+// Raised from 16 to 24 per ADR 202605120000 §Amendment 2026-05-28: 4 days of
+// nightly failures (2026-05-24..27) mixed slowgate breach + SIGTERM 143 with
+// repeating-shard distribution suggesting OOM (ADR §11 lineage) under-budgeted
+// K=16 baseline. K=24 stays in the direction of §Phase 0's "more shards =
+// lower per-shard RSS" argument (K=16 baseline is macOS measurement, GHA Linux
+// baseline pending Phase A diagnostic step capture).
+const expectedShardCount = "24"
+
 // TestVerifyArchtestCIExplicitShardCount asserts that the verify-archtest
-// CI job in .github/workflows/archtest-nightly.yml sets SHARD_COUNT=16
+// CI job in .github/workflows/archtest-nightly.yml sets SHARD_COUNT=24
 // explicitly in step env, rather than relying on the script default.
 //
 // Background: hack/verify-archtest.sh default SHARD_COUNT is 1 (local-friendly:
 // single process, ~300 Test* share *types.Info cache, lowest CPU). CI must set
-// SHARD_COUNT=16 explicitly — GHA 2-core 7 GB shard runner cannot survive a
+// SHARD_COUNT=24 explicitly — GHA 2-core 7 GB shard runner cannot survive a
 // single-process run that accumulates 20+ GB peak RSS (PR #445 OOM SIGTERM).
 // If CI yaml drops the explicit value, the script falls through to K=1 and
 // the next CI run blows up.
 //
 // AI-robust: Medium runtime guard. The constraint "CI yaml verify-archtest
-// must explicit SHARD_COUNT=16" cannot be bypassed without modifying this
+// must explicit SHARD_COUNT=24" cannot be bypassed without modifying this
 // archtest in the same PR. Violation is reviewer-visible diff.
 //
 // The guard targets .github/workflows/archtest-nightly.yml — the sole
@@ -43,7 +52,8 @@ const verifyArchtestScriptMarker = "hack/verify-archtest.sh"
 // is hack/githooks/pre-push (K=4 parallel fan-out).
 //
 // ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
-// §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly.
+// §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly
+// + §Amendment 2026-05-28 (K=16→24).
 func TestVerifyArchtestCIExplicitShardCount(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "archtest-nightly.yml")))
@@ -68,16 +78,18 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMissingEnv(t *testing.T) {
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsWrongValue covers the value
-// drift case: env present but value != 16 (e.g. mistakenly set to 1, 8, or
-// any non-CI value). Validator must reject any value other than 16 since
-// K=16 is the only K that fits under the GHA 7 GB shard budget.
+// drift case: env present but value != 24 (e.g. mistakenly set to 1, 8, the
+// former K=16 value, or any other non-CI value). Validator must reject any
+// value other than 24 since K=24 is the ADR-mandated value (§Amendment
+// 2026-05-28). Fixture uses the former K=16 to exercise the realistic drift
+// path: stale yaml carrying the pre-amendment K value must be caught.
 func TestVerifyArchtestCIExplicitShardCountRejectsWrongValue(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     steps:
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
-          SHARD_COUNT: 8
+          SHARD_COUNT: 16
           SHARD_TARGET: ${{ matrix.shard }}
         run: bash hack/verify-archtest.sh
 `)
@@ -98,7 +110,7 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMissingJob(t *testing.T) {
 }
 
 // TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape is the GREEN
-// fixture: minimum-required shape (job exists, step env has SHARD_COUNT=16).
+// fixture: minimum-required shape (job exists, step env has SHARD_COUNT=24).
 // Documents the contract the real yaml must satisfy.
 func TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape(t *testing.T) {
 	body := []byte(`jobs:
@@ -106,7 +118,7 @@ func TestVerifyArchtestCIExplicitShardCountAcceptsCorrectShape(t *testing.T) {
     steps:
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
-          SHARD_COUNT: 16
+          SHARD_COUNT: 24
           SHARD_TARGET: ${{ matrix.shard }}
         run: bash hack/verify-archtest.sh
 `)
@@ -126,7 +138,7 @@ func TestVerifyArchtestCIExplicitShardCountRejectsSiblingStepEnvShadow(t *testin
     steps:
       - name: Build slowgate
         env:
-          SHARD_COUNT: 16
+          SHARD_COUNT: 24
         run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
@@ -147,11 +159,11 @@ func TestVerifyArchtestCIExplicitShardCountRejectsNoInvocationStep(t *testing.T)
     steps:
       - name: Build slowgate
         env:
-          SHARD_COUNT: 16
+          SHARD_COUNT: 24
         run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
       - name: Echo only
         env:
-          SHARD_COUNT: 16
+          SHARD_COUNT: 24
         run: echo "no script invocation"
 `)
 	require.Error(t, validateVerifyArchtestExplicitShardCount(body))
@@ -177,10 +189,10 @@ type archtestWorkflowStep struct {
 
 // validateVerifyArchtestExplicitShardCount enforces ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01:
 // every step in jobs.verify-archtest that invokes `hack/verify-archtest.sh` must
-// set `SHARD_COUNT=16` in **its own** `env:` block.
+// set `SHARD_COUNT=<expectedShardCount>` in **its own** `env:` block.
 //
 // Why bound to the running step, not any step: GitHub Actions step env applies
-// only during that step's process. A dummy/setup step with `SHARD_COUNT: 16`
+// only during that step's process. A dummy/setup step with `SHARD_COUNT: 24`
 // in env never reaches the verify-archtest.sh execution context — relying on
 // "any step has env" would let the real run step silently fall back to the
 // script default (K=1 → 20 GB peak RSS → GHA OOM).
@@ -207,15 +219,15 @@ func validateVerifyArchtestExplicitShardCount(body []byte) error {
 		v, has := step.Env["SHARD_COUNT"]
 		if !has {
 			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s but its env "+
-				"is missing SHARD_COUNT; CI must explicit set SHARD_COUNT=16 on the same step "+
+				"is missing SHARD_COUNT; CI must explicit set SHARD_COUNT=%s on the same step "+
 				"(script default is 1 local-friendly; GHA step env is step-scoped — sibling step env does NOT apply). "+
-				"See ADR 202605120000 §Amendment 2026-05-23.",
-				step.Name, verifyArchtestScriptMarker)
+				"See ADR 202605120000 §Amendment 2026-05-23 + §Amendment 2026-05-28.",
+				step.Name, verifyArchtestScriptMarker, expectedShardCount)
 		}
-		if v != "16" {
+		if v != expectedShardCount {
 			return fmt.Errorf("ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01: step %q runs %s with SHARD_COUNT=%q; "+
-				"CI must set SHARD_COUNT=16 (GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-23)",
-				step.Name, verifyArchtestScriptMarker, v)
+				"CI must set SHARD_COUNT=%s (GHA 7 GB shard RSS budget; see ADR 202605120000 §Amendment 2026-05-28)",
+				step.Name, verifyArchtestScriptMarker, v, expectedShardCount)
 		}
 	}
 	if invocations == 0 {

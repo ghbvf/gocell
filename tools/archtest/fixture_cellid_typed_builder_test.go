@@ -749,13 +749,11 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 				if gd.Tok != token.VAR {
 					return
 				}
-				for _, spec := range gd.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
+				// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 typed
+				// walk of gd.Specs *ast.ValueSpec entries.
+				EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 					collected.specs = append(collected.specs, vs)
-				}
+				})
 			})
 		}
 		return nil

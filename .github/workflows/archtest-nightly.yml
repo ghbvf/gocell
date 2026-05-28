@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -48,24 +48,46 @@ jobs:
       - name: Build slowgate
         run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
 
+      - name: Pre-step memory snapshot
+        if: always()
+        run: |
+          echo "=== /proc/meminfo (pre-shard) ==="
+          grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree):' /proc/meminfo
+
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
-          # CI must set SHARD_COUNT=16 explicitly on THIS step (GHA step env
+          # CI must set SHARD_COUNT=24 explicitly on THIS step (GHA step env
           # is step-scoped — sibling step env does NOT propagate to this
           # step's process). GHA 2-core 7 GB shard RSS budget; script
           # default is 1 (local-friendly, pre-push). Guarded by
           # ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01 archtest (step-scoped
-          # match-all). See ADR 202605120000 §Amendment 2026-05-23.
-          SHARD_COUNT: 16
+          # match-all). See ADR 202605120000 §Amendment 2026-05-28
+          # (K=16→24 + SLOWGATE_THRESHOLD 20→25s).
+          SHARD_COUNT: 24
           SHARD_TARGET: ${{ matrix.shard }}
           TIMEOUT: 5m
           SLOWGATE_BIN: ${{ runner.temp }}/slowgate
-          # 20s threshold inherited from _build-lint.yml; calibrated on macOS
-          # local Phase 0 (18-core Apple Silicon). GHA ubuntu nightly has no
-          # baseline data yet — revisit after ~30 consecutive nightly runs.
-          SLOWGATE_THRESHOLD: 20s
+          # 25s threshold revisit (ADR 202605120000 §Amendment 2026-05-28):
+          # 20s budget calibrated on macOS 18-core Apple Silicon underestimates
+          # GHA ubuntu-latest 2-core 7GB type-graph-load archtest cost.
+          # 2026-05-25 shard 7 (TestPGRepoAmbientTx_SelfCheck 23.66s) +
+          # 2026-05-27 shard 10 (TestSagaJournalConformanceEnrollment 21.77s)
+          # demonstrated chronic overshoot in the 20-25s band. 25s still
+          # catches regressions (a 100ms sleep drifting to 25.1s+ fires)
+          # without per-test allowlist churn.
+          SLOWGATE_THRESHOLD: 25s
           SLOWGATE_ALLOWLIST: tools/slowgate/allowlist.txt
         run: bash hack/verify-archtest.sh
+
+      - name: Post-step memory + dmesg
+        if: always()
+        run: |
+          echo "=== /proc/meminfo (post-shard) ==="
+          grep -E '^(MemTotal|MemFree|MemAvailable|Cached):' /proc/meminfo
+          echo "=== top RSS processes ==="
+          ps -eo pid,rss,vsz,cmd --sort -rss | head -10
+          echo "=== kernel ring buffer (OOM evidence — fallback paths if dmesg restricted) ==="
+          sudo dmesg | tail -100 2>/dev/null || dmesg | tail -100 2>/dev/null || echo "(dmesg not available without privileges)"
 
       - name: Upload archtest-json artifact (failure only)
         if: failure()
