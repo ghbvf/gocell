@@ -33,7 +33,7 @@ PR-00 ADR + skeleton ─┬─> PR-01 Coordinator + mem store ────> PR-0
 | `kernel/projection/doc.go` + 包 godoc | `kernel/projection/` | ~80 |
 | `kernel/projection/types.go`（Apply / CheckpointStore / Coordinator interface 声明，**无实现**） | `kernel/projection/` | ~120 |
 | `kernel/projection/cell_marker.go`（sealed CellCheckpointStore marker，对齐 outbox.CellPublisher 范式） | `kernel/projection/` | ~60 |
-| `kernel/projection/phase.go`（rebuild state machine **4 相**枚举（Stop / Reset / Replay / Catchup，对标 Axon）+ frozen reflect 测试 placeholder） | `kernel/projection/` | ~90 |
+| `kernel/projection/phase.go`（**5 成员** Phase enum：PhaseLive + rebuild **4 相** Stop/Reset/Replay/Catchup，对标 Axon）+ PROJECTION-STATE-PHASE-FROZEN-01 AST const-set 锁（PR-00 即 green） | `kernel/projection/` | ~90 |
 | spec / plan 文档 | `docs/plans/` | 已落 |
 | backlog 登记 (#1100 评论) | gh | — |
 | **预算总计** | | ~700 行 + ADR |
@@ -43,7 +43,7 @@ PR-00 ADR + skeleton ─┬─> PR-01 Coordinator + mem store ────> PR-0
 逐项**列出选项 + 论证 + 预填决议 + 风险 + 回滚条件 + 对标框架引用**：
 
 - Q1 → A（caller-provided tx + harness 内部 SaveOffset，与 outbox.Writer 同范式；`ref:` Axon JdbcTokenStore §同 tx 提交模型）
-- Q2 → A（`apply(ctx, event, txHandle) error` —— tx handle minimum dep；`ref:` Marten Async `IDocumentOperations` 形态；明确否决 eventhorizon `Project(ctx, evt, entity) (entity, error)` 形态）
+- Q2 → A（`apply(ctx, event) error` —— **ambient tx 经 ctx，无显式 tx handle 参数**（`persistence.TxHandle` 不存在、与 `PG-REPO-AMBIENT-TX-01` 冲突，见 ADR §3 Q2 Correction）；`ref:` Marten Async `IDocumentOperations` 形态；明确否决 eventhorizon `Project(ctx, evt, entity) (entity, error)` 形态）
 - Q3 → A（单 slice 单 projection，v1 scope）
 - Q4 → A（snapshot 不入 v1；触发条件：winmdm Stage 1 rebuild 全量实测 ≥ 30min；`ref:` Axon snapshot 设计动机 vs GoCell 单 cell event 流量级差异）
 - **Q5 → A**（v1 单 pod 模式；schema 预留 `owner TEXT` 列；多 pod 并发安全由上层 leader election 保证；`ref:` Axon `token_entry.owner` 字段，v1.1 在此列上实现 pessimistic claim）
@@ -73,7 +73,7 @@ Dependent contracts (governance scan): kind:projection contract.yaml schema (PR-
 
 - [ ] ADR 文件评 owner approval（review by architect agent）
 - [ ] `go build ./...` 通过
-- [ ] meta-archtest `PROJECTION-STATE-PHASE-FROZEN-01` 预先登记 placeholder 测试（fail-pending → 等 PR-03 实现 phase struct 后转 green）
+- [ ] meta-archtest `PROJECTION-STATE-PHASE-FROZEN-01`（AST const-set + String-arm 锁，5 成员 enum）—— PR-00 即 **green**（仓库无 fail-pending 约定；enum 已在本 PR 声明，无需等 PR-03）
 - [ ] backlog #1100 评论同步 ADR 文件路径
 
 ### 风险
@@ -101,19 +101,23 @@ Dependent contracts (governance scan): kind:projection contract.yaml schema (PR-
 
 ### 关键设计点（落 ADR §决议）
 
+> **以 ADR `202605261620` §3 为权威。** 本节早期草稿写的 `persistence.TxHandle`
+> 显式参数已被 PR-00 ADR Q1/Q2 收敛为 **ambient-tx**（该类型不存在，且与
+> `PG-REPO-AMBIENT-TX-01` 冲突）。下面是已对齐 PR-00 冻结签名的形态。
+
 ```go
-// kernel/projection/types.go (declared in PR-00, implemented in PR-01)
-type Apply func(ctx context.Context, event outbox.Entry, tx persistence.TxHandle) error
+// kernel/projection/types.go (declared in PR-00, Coordinator implemented in PR-01)
+type Apply func(ctx context.Context, event outbox.Entry) error
 
 type CheckpointStore interface {
-    LoadOffset(ctx context.Context, projectionID string) (int64, error)
-    SaveOffset(ctx context.Context, tx persistence.TxHandle, projectionID string, offset int64) error
+    LoadOffset(ctx context.Context, cellID, projectionID string) (int64, error)
+    SaveOffset(ctx context.Context, cellID, projectionID string, offset int64) error
 }
 
-// Sealed marker (cells/* 持有，composition root wrap)
+// Sealed marker (cells/* 持有，composition root wrap) — mirrors outbox.CellPublisher
 type CellCheckpointStore interface {
-    checkpointStoreOK()  // sealed marker method
     CheckpointStore
+    sealedCellCheckpointStore()  // sealed marker method
 }
 
 // Coordinator entry point (called by cellgen-derived wiring, NOT business code)
@@ -126,23 +130,23 @@ func (c *Coordinator) Subscribe(
 ) error
 ```
 
-**内部消费 handler 实现**（CellTx 包裹 apply + SaveOffset 同源 commit）：
+**内部消费 handler 实现**（CellTx 包裹 apply + SaveOffset 同源 commit；tx 为 ambient）：
 
 ```go
-// 伪码
-func (c *Coordinator) buildHandler(projectionID string, apply Apply) outbox.EntryHandler {
+// 伪码 — tx 不作显式参数，apply/SaveOffset 经 ctx 内 persistence.TxFromContext 取
+func (c *Coordinator) buildHandler(cellID, projectionID string, apply Apply) outbox.EntryHandler {
     return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
         err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-            tx := persistence.TxFromContext(txCtx)
-            current, err := c.store.LoadOffset(txCtx, projectionID)
+            current, err := c.store.LoadOffset(txCtx, cellID, projectionID)
             if err != nil { return err }
-            if entry.Seq <= current {
+            pos := c.cursor.Position(entry)   // 由 PR-01 replay 源提供（outbox.Entry 无 Seq 字段）
+            if pos <= current {
                 return nil  // exactly-once: 已应用过，skip
             }
-            if err := apply(txCtx, entry, tx); err != nil { return err }
-            return c.store.SaveOffset(txCtx, tx, projectionID, entry.Seq)
+            if err := apply(txCtx, entry); err != nil { return err }
+            return c.store.SaveOffset(txCtx, cellID, projectionID, pos)
         })
-        // 错误分类 → Disposition
+        // 错误分类 → Disposition（permanent error 经 outbox.NewPermanentError 包裹）
         if err == nil { return outbox.Ack() }
         if isPermanent(err) { return outbox.Reject(err) }
         return outbox.Requeue(err)
@@ -155,8 +159,8 @@ func (c *Coordinator) buildHandler(projectionID string, apply Apply) outbox.Entr
 | ID | 评级 | 范式 |
 |----|------|------|
 | PROJECTION-APPLY-HOOK-FUNNEL-01 | Hard 下游 / Medium 上游 | `Coordinator.Subscribe` 仅允许在 generated 文件 + `kernel/projection/coordinator.go` 自身 + `_test.go` 调用；business 包内的手写 callsite fail（与 `HEALTHZ-WRITE-01` 同范式） |
-| PROJECTION-CHECKPOINT-TX-BOUND-01 | Medium | `CheckpointStore.SaveOffset` 必接 `persistence.TxHandle` typed 参数；any raw `*sql.Tx` / `db.Exec` 形态 fail |
-| PROJECTION-STATE-PHASE-FROZEN-01 | Hard | reflect 锁 `Phase` enum 字段集（与 `SUBSCRIBERS-DERIVED-FIELD-FROZEN-01` 同范式）—— v1 仅 `{cold, replay, catchup}`，新增需 PR 加 const + 更新 golden |
+| PROJECTION-CHECKPOINT-TX-BOUND-01 | Medium | `CheckpointStore.SaveOffset` 实现必须经 `persistence.TxFromContext(ctx)` 取 ambient tx；裸 `*sql.Tx` 参数 / `db.Exec` 形态 fail（与 outbox.Writer 同范式） |
+| PROJECTION-STATE-PHASE-FROZEN-01 | Medium | AST 锁 `Phase` enum const 集 + String arms —— v1 为 5 成员 `{PhaseLive, PhaseStopped, PhaseReset, PhaseReplay, PhaseCatchup}`，新增需 PR 加 const + 更新 golden（PR-00 已 green） |
 
 ### Done definition
 
@@ -253,7 +257,7 @@ Invariant inventory (DROP COLUMN 不适用)
 | `runtime/projection/rebuild_handler.go`（internal HTTP endpoint `POST /internal/v1/<cell>/projection/<name>/rebuild`） | `runtime/projection/` | ~150 |
 | `runtime/projection/rebuild_handler_test.go` | `runtime/projection/` | ~200 |
 | `contracts/http/projection/rebuild/v1/`（contract.yaml + payload schema） | `contracts/` | ~80 |
-| metrics 字段冻结 archtest（PROJECTION-STATE-PHASE-FROZEN-01 转 green） | `tools/archtest/` | ~100 |
+| PROJECTION-STATE-PHASE-FROZEN-01 保持 green（PR-00 已锁 5 成员 enum；PR-03 加 rebuild transition table 不改 enum 集，无新 archtest） | `tools/archtest/` | ~0 |
 | metrics label 入 `kernel/observability/metrics.MustValidateLabels` 注册 | `kernel/observability/...` | ~50 |
 | ops doc 更新 `docs/ops/`（projection_event_replay_lag_seconds alert example） | `docs/ops/` | ~80 |
 | **预算总计** | | ~1800 行 |
@@ -261,22 +265,30 @@ Invariant inventory (DROP COLUMN 不适用)
 ### Metric 命名（registered 一次，多 projection 共享）
 
 ```
-projection_event_replay_lag_seconds{cell, projection}    gauge
+projection_event_replay_lag_seconds{cell, projection}    gauge   # 时间维度：read-model 落后多久
 projection_rebuild_duration_seconds{cell, projection}     histogram
-projection_event_log_length{cell, projection}             gauge
+projection_pending_events{cell, projection}              gauge   # 记录维度：未应用事件数（source head − applied checkpoint）
 ```
+
+> `projection_pending_events` 语义 = **未处理事件数 = replay 源 head 位置 − 已提交
+> checkpoint**（积压深度，record 维度，replay_lag_seconds 的记录数版本）。原名
+> `projection_event_log_length`（"日志长度"）易误读为日志总量，已按 Scenario F
+> 「确认积压来源」语义 rename。
 
 `cell` label 直接对齐 [observability.md HTTP Metrics cell Label 段](.claude/rules/gocell/observability.md) 既有约定。
 
-### ReadyProbeName typed funnel
+### Readyz probe name typed funnel
+
+> 经 `kernel/healthz.NewProbeName(...)` 构造，**无 `ReadyProbeName` 类型、无裸
+> `healthz.ProbeName(string)` cast**（裸 cast 绕过 `PROBENAME-SEALED-FUNNEL-01`）。
+> 名 `<cell>_projection_<name>_ready`，长度预算 `len(cellID)+len(projectionID) ≤ 46`
+> （cap 64 − 固定段 18）。详见 ADR §5「Readyz probe name」。
 
 ```go
 // kernel/projection/probe.go
-const probeReadySuffix healthz.ReadyProbeName = "_projection_ready"
-
-func ProbeName(cellID, projectionID string) healthz.ReadyProbeName {
-    // typed funnel — 与 postgres.ProbeReady 同范式
-    return healthz.ReadyProbeName(cellID + "_projection_" + projectionID + "_ready")
+func ProjectionReadyProbeName(cellID, projectionID string) (healthz.ProbeName, error) {
+    // typed funnel — 唯一构造入口 healthz.NewProbeName（含长度/字符校验，fail-fast）
+    return healthz.NewProbeName(cellID + "_projection_" + projectionID + "_ready")
 }
 ```
 
@@ -287,7 +299,7 @@ func ProbeName(cellID, projectionID string) healthz.ReadyProbeName {
 - [ ] `POST /internal/v1/<cell>/projection/<name>/rebuild` contract test
 - [ ] metrics 三件套 fired in 集成测试
 - [ ] readyz probe 在 lag > threshold 时返回 unhealthy
-- [ ] PROJECTION-STATE-PHASE-FROZEN-01 archtest 转 green（reflect 锁 4 相 enum）
+- [ ] PROJECTION-STATE-PHASE-FROZEN-01 保持 green（PR-00 已 AST 锁 5 成员 enum；PR-03 加 rebuild transition table 不改 enum 集）
 - [ ] **rebuild 期 business read 不阻塞**——对标 Axon / Marten / Commanded 业界共识；harness 仅暴露 `Phase()` 让业务自定决策（默认不返回 503），契约文档明示
 - [ ] Stop 相 graceful 退出验证：consumer 循环退出 + checkpoint claim 释放 + 新 event Requeue 至下一启动周期
 
@@ -334,7 +346,7 @@ func (s *Service) Subscribe(ctx context.Context, coord *projection.Coordinator) 
 }
 
 // hand-written hook in service.go:
-//   func (s *Service) applyOrderCreated(ctx context.Context, evt outbox.Entry, tx persistence.TxHandle) error { ... }
+//   func (s *Service) applyOrderCreated(ctx context.Context, evt outbox.Entry) error { ... }  // tx ambient via ctx
 ```
 
 ### contractUsages slice.yaml 新字段
@@ -479,8 +491,8 @@ Dependent contracts (governance scan): 全部 kind:projection contract.yaml (ord
 | ID | PR | 评级 | 形态 |
 |----|----|------|------|
 | PROJECTION-APPLY-HOOK-FUNNEL-01 | PR-01 stub / PR-04 green | Hard 下游 + Medium 上游 | callsite 唯一性 |
-| PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | typed-param 形态 |
-| PROJECTION-STATE-PHASE-FROZEN-01 | PR-00 stub / PR-03 green | Hard | reflect 字段冻结（4 相 enum） |
+| PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | ambient-tx 形态（SaveOffset 经 TxFromContext，禁裸 db.Exec） |
+| PROJECTION-STATE-PHASE-FROZEN-01 | **PR-00 green** | **Medium** | AST const-set + String-arm 锁（5 成员 enum；Go enum 不可 reflect 成集，AST/golden 锁是天花板） |
 | PROJECTION-CONSISTENCY-PARSE-TIME-01 | PR-05 | Hard 下游 | parser callsite identity |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | **PR-02** | **Medium** | **SQL 字面量扫 reject owner 写入**（v1 范围；v1.1 启用 claim 时同 PR 删除） |
 

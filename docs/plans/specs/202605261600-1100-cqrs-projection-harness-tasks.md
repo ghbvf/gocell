@@ -38,7 +38,7 @@
 - **验收**：
   - [ ] `go build ./kernel/projection/...` 通过
   - [ ] 包 godoc 引用 ADR 文件路径
-  - [ ] PROJECTION-STATE-PHASE-FROZEN-01 archtest stub 登记（pending，等 PR-03 phase struct 实现）
+  - [ ] PROJECTION-STATE-PHASE-FROZEN-01 archtest 登记并 **green**（AST const-set + String-arm 锁，5 成员 Phase enum；enum 在本 PR 声明，PR-00 即 green，非 pending）
 - **行数**：~340
 - **关键命令**：`make verify` 跑 archtest 全集（pending test 跳过）
 
@@ -127,14 +127,14 @@
 - **依赖**：PR-01 merged
 - **验收**：
   - [ ] **4 相 + 10+ transitions** 完整测试（含错误回退 / Stop 阶段 graceful 退出 / claim 释放）
-  - [ ] PROJECTION-STATE-PHASE-FROZEN-01 archtest 转 green（reflect 锁 4 相 phase enum 字段集）
+  - [ ] PROJECTION-STATE-PHASE-FROZEN-01 保持 green（PR-00 已 AST 锁 5 成员 Phase enum const 集；PR-03 加 rebuild transition table 不改 enum 集）
   - [ ] **harness 默认不阻塞 business read**（对标 Axon / Marten 业界共识）；暴露 `Phase() Phase` 方法供业务自选 503
   - [ ] `OnReset` hook 签名通过 ADR §对标 Axon `@ResetHandler` 论证
 - **行数**：~720
 
 ### T-03-2 Metrics 三件套
 
-- **what**：`metrics.go` 注册 `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_event_log_length`
+- **what**：`metrics.go` 注册 `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_pending_events`
 - **ship**：L2
 - **依赖**：T-03-1
 - **验收**：
@@ -255,7 +255,7 @@
 - **依赖**：T-06-1
 - **验收**：
   - [ ] crash recovery：杀进程 → 重启 → 第一个 tx 即从 checkpoint 恢复
-  - [ ] rebuild：POST /internal endpoint 触发 → 业务 read 503 → catch-up 完成后恢复
+  - [ ] rebuild：POST /internal endpoint 触发 → 业务 read **不阻塞**（harness 不强制 503，对标 Axon / Marten；业务可自查 `Phase()` 自行返回 503）→ catch-up 完成后继续消费（见 ADR §5）
 - **行数**：~400
 
 ### T-06-3 closeout + backlog 关闭
