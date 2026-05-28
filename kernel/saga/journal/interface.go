@@ -36,6 +36,21 @@ type ClaimedInstance struct {
 // exact same contract and the same conformance suite (see
 // kernel/saga/sagajournaltest).
 //
+// # Interface split: JournalCore + Heartbeater (#1209)
+//
+// Journal is the union of two narrower interfaces:
+//
+//   - [JournalCore] — enrollment, the append-only log, claim/projection, and
+//     terminal commit: everything a coordinator needs EXCEPT lease renewal.
+//   - [Heartbeater] — the single Heartbeat lease-renewal method.
+//
+// runtime/saga.Coordinator holds only JournalCore, so a centralized heartbeat
+// loop becomes a compile error — the persisted field cannot express Heartbeat.
+// Per-step lease renewal is funneled through runtime/saga/executor, which
+// receives the full Journal value transiently at construction (NewExecutor). See
+// archtests SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 and SAGA-JOURNAL-HOLDER-SEAL-01.
+// PG and in-memory implementations satisfy the full Journal, hence both halves.
+//
 // # Time
 //
 // Unlike the pure saga state machine (saga.AdvanceSaga takes an explicit now),
@@ -58,12 +73,27 @@ type ClaimedInstance struct {
 //
 // # Single sanctioned holder
 //
-// Only runtime/saga.Coordinator is intended to hold a Journal field (the
-// SAGA-JOURNAL-HOLDER-SEAL-01 archtest in PR-08 enforces this once the
-// Coordinator exists; tracked in gh issue #956). Enqueue is the producer-facing
-// entry point; the possibility of splitting a narrower producer interface is
-// deferred until the Coordinator and a real producer exist (PR-03).
+// Only runtime/saga.Coordinator is intended to hold a JournalCore field; no
+// struct in runtime/saga may persist the Heartbeat-bearing full Journal (or a
+// bare Heartbeater) as a field. Both rules are enforced by the
+// SAGA-JOURNAL-HOLDER-SEAL-01 archtest. Enqueue is the producer-facing entry
+// point; a narrower producer interface may be split out if a real producer ever
+// needs less than JournalCore.
 type Journal interface {
+	JournalCore
+	Heartbeater
+}
+
+// JournalCore is the Heartbeat-free core of [Journal]: enrollment, the
+// append-only event log, claim/projection, and terminal commit. It is the
+// interface runtime/saga.Coordinator persists — deliberately WITHOUT Heartbeat,
+// so a centralized heartbeat loop cannot be built on a stored JournalCore field
+// (the call would not type-check). See the "Interface split" section on
+// [Journal] and archtest SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01.
+//
+// Only runtime/saga.Coordinator may hold a JournalCore field, enforced by the
+// SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
+type JournalCore interface {
 	// Enqueue enrolls a new saga instance for orchestration. The instance MUST
 	// pass saga.Instance.ValidateNew (Pending, CurrentStep 0, no timestamps
 	// beyond StartedAt). Enqueue is lease-free: it writes the projection with
@@ -142,14 +172,6 @@ type Journal interface {
 	// directly while still folding Load for the exact step cursor.
 	ClaimPending(ctx context.Context, batchSize int, leaseDuration time.Duration) (claimed []ClaimedInstance, leaseID idutil.SafeID, err error)
 
-	// Heartbeat extends the lease on a single claimed instance to
-	// now+leaseDuration. leaseDuration MUST be > 0; a non-positive value returns a
-	// KindInvalid error. It is lease-fenced: ok is false (with a nil error) when
-	// leaseID no longer owns the instance, signaling the holder to stop driving
-	// it. A never-enqueued instance also returns ok=false (nil error); callers
-	// cannot distinguish it from a stale lease.
-	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
-
 	// MarkTerminal transitions the instance projection to finalStatus and appends
 	// the matching terminal event atomically, so the log alone replays which
 	// terminal state was reached. Terminal event kinds per finalStatus:
@@ -176,4 +198,23 @@ type Journal interface {
 	// Coordinator cell that holds the Journal (PR-03); a Journal implementation
 	// only provides the RepoProber method and does not self-register.
 	RepoReady(ctx context.Context) error
+}
+
+// Heartbeater is the single lease-renewal method split out of [Journal] (#1209).
+//
+// runtime/saga/executor owns the only sanctioned Heartbeat caller (the per-step
+// heartbeat goroutine) and declares its OWN structurally-identical Heartbeater
+// interface rather than importing this one: kernel/ cannot depend on runtime/,
+// and the executor must never import kernel/saga/journal
+// (SAGA-JOURNAL-HOLDER-SEAL-01). This kernel-side Heartbeater exists solely to
+// compose the full [Journal] so that the PG / in-memory implementations satisfy
+// it via interface embedding.
+type Heartbeater interface {
+	// Heartbeat extends the lease on a single claimed instance to
+	// now+leaseDuration. leaseDuration MUST be > 0; a non-positive value returns a
+	// KindInvalid error. It is lease-fenced: ok is false (with a nil error) when
+	// leaseID no longer owns the instance, signaling the holder to stop driving
+	// it. A never-enqueued instance also returns ok=false (nil error); callers
+	// cannot distinguish it from a stale lease.
+	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 }

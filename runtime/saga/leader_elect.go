@@ -2,10 +2,11 @@ package saga
 
 // leader_elect.go — distlock-based leader election for the Coordinator (PR-05,
 // #964). The gate is injected into the existing tick loop (tickOnce) rather
-// than a wrapper struct: SAGA-JOURNAL-HOLDER-SEAL-01 forbids any struct other
-// than Coordinator from holding a journal.Journal, and journal access must stay
-// inside Coordinator. The only new state is an optional distlock.Locker field;
-// all gate logic lives here.
+// than a wrapper struct: post-#1209 SAGA-JOURNAL-HOLDER-SEAL-01 lets only the
+// Coordinator hold the journal.JournalCore field and bans the Heartbeat-bearing
+// journal.Journal / journal.Heartbeater as a field anywhere in runtime/saga, so
+// journal access must stay inside Coordinator. The only new state is an optional
+// distlock.Locker field; all gate logic lives here.
 
 import (
 	"context"
