@@ -90,9 +90,12 @@ const (
 	// DefaultLeaseDuration is the lease TTL passed to Heartbeat when
 	// WithLeaseDuration is unset.
 	DefaultLeaseDuration = 30 * time.Second
-	// heartbeatLeaseSafetyFactor guarantees at least one heartbeat lands before
-	// the lease expires: heartbeatInterval * heartbeatLeaseSafetyFactor < leaseDuration.
-	heartbeatLeaseSafetyFactor = 2
+	// HeartbeatLeaseSafetyFactor is the minimum factor by which LeaseDuration
+	// must exceed HeartbeatInterval so at least one heartbeat fires before
+	// lease expiry: heartbeatInterval * HeartbeatLeaseSafetyFactor < leaseDuration.
+	// Exported so the Coordinator can reference the same constant without
+	// duplicating the value (cross-package single source of truth, #1210 C9).
+	HeartbeatLeaseSafetyFactor = 2
 )
 
 // Internal cancel-cause sentinels distinguish why the run context ended. They
@@ -229,7 +232,7 @@ func (e *Executor) validateIntervals() error {
 			"runtime/saga/executor: leaseDuration must be > 0",
 		)
 	}
-	if e.heartbeatInterval*heartbeatLeaseSafetyFactor >= e.leaseDuration {
+	if e.heartbeatInterval*HeartbeatLeaseSafetyFactor >= e.leaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"runtime/saga/executor: heartbeatInterval*2 must be < leaseDuration",
 		)

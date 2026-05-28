@@ -55,20 +55,10 @@ const (
 // ---------------------------------------------------------------------------
 
 const (
-	defaultCoordPollInterval      = 200 * time.Millisecond
-	defaultCoordClaimBatchSize    = 16
-	defaultCoordLeaseDuration     = 30 * time.Second
-	defaultCoordHeartbeatInterval = 10 * time.Second // = LeaseDuration / 3
+	defaultCoordPollInterval   = 200 * time.Millisecond
+	defaultCoordClaimBatchSize = 16
+	defaultCoordLeaseDuration  = 30 * time.Second
 )
-
-// minLeaseToHeartbeatRatio is the minimum factor by which LeaseDuration must
-// exceed HeartbeatInterval (LeaseDuration > HeartbeatInterval * ratio) so at
-// least one heartbeat fires before lease expiry. Mirrors the Executor's
-// internal heartbeatLeaseSafetyFactor and is checked here so the Coordinator's
-// Config validation fails fast at construction (#1181 F5: Executor is
-// constructed internally with the Coordinator's journal — caller cannot
-// inject mismatched intervals).
-const minLeaseToHeartbeatRatio = 2
 
 // Config holds tunable parameters for the Coordinator engine. Zero values are
 // replaced by DefaultConfig() inside NewCoordinator. HeartbeatInterval +
@@ -87,8 +77,9 @@ type Config struct {
 	// forwarded to the internal Executor for heartbeat lease renewal.
 	LeaseDuration time.Duration
 	// HeartbeatInterval is how often the internal Executor's per-step
-	// heartbeat goroutine renews the lease. Default 10s (= LeaseDuration/3).
-	// Must satisfy HeartbeatInterval * minLeaseToHeartbeatRatio < LeaseDuration
+	// heartbeat goroutine renews the lease. Default executor.DefaultHeartbeatInterval
+	// (= 10s = LeaseDuration/3). Must satisfy
+	// HeartbeatInterval * executor.HeartbeatLeaseSafetyFactor < LeaseDuration
 	// so at least one heartbeat lands before expiry.
 	HeartbeatInterval time.Duration
 }
@@ -99,7 +90,7 @@ func DefaultConfig() Config {
 		PollInterval:      defaultCoordPollInterval,
 		ClaimBatchSize:    defaultCoordClaimBatchSize,
 		LeaseDuration:     defaultCoordLeaseDuration,
-		HeartbeatInterval: defaultCoordHeartbeatInterval,
+		HeartbeatInterval: executor.DefaultHeartbeatInterval,
 	}
 }
 
@@ -122,7 +113,7 @@ func (c Config) Validate() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval must be positive")
 	}
-	if c.HeartbeatInterval*minLeaseToHeartbeatRatio >= c.LeaseDuration {
+	if c.HeartbeatInterval*executor.HeartbeatLeaseSafetyFactor >= c.LeaseDuration {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"saga coordinator: Config.HeartbeatInterval*2 must be < LeaseDuration")
 	}
