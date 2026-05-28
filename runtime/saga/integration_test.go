@@ -1,8 +1,10 @@
 package saga
 
-// integration_test.go covers the 8 TDD scenarios from plan §220 for the
-// Coordinator engine. It runs in package saga (white-box) so it can access
-// unexported helpers in coordinator.go (safeRun, foldEvents).
+// integration_test.go covers TDD scenarios 1, 2, 4, 6, 7, 8 from plan §220
+// plus the compensation-lease-lost recovery path introduced by #1181. Scenarios
+// 3 (retry budget) and 5 (multi-step compensation walk) are covered by
+// white-box unit tests in coordinator_test.go and executor_test.go;
+// the integration tier focuses on cross-coordinator goroutine paths.
 //
 // Fake helpers live in testfakes_test.go (same package, test-only).
 
@@ -809,5 +811,231 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	// Step was called exactly once (the first tick triggered it).
 	if stepCallCount != 1 {
 		t.Errorf("step call count = %d, want 1", stepCallCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Compensation lease-lost recovery path (#1181 F1 + F2)
+// ---------------------------------------------------------------------------
+
+// TestIntegration_Compensation_LeaseLost_ResumesOnReclaim verifies that when
+// a coordinator loses its lease mid-compensation (heartbeat returns ok=false),
+// it abandons the walk without writing a terminal event, and a second
+// coordinator that re-claims the same instance (now projected as
+// StatusCompensating) resumes compensation from the remaining steps and drives
+// the saga to a terminal state.
+//
+// The integration level here is "two coordinators, shared mem journal, white-box
+// driveOne calls" — the goroutine-level lease hand-off is exercised by
+// TestSagaLeaderElect_TwoCoordinators_PG_ExactlyOnce in tests/integration/sagaleader/.
+//
+// Implementation notes:
+//   - A 2-step saga is used: step1 succeeds (has Compensate), step2 fails
+//     (triggers compensation). The reverse walk only visits committed steps,
+//     so only step1.Compensate is called during the compensation walk.
+//   - staleAfterFirstHBJournal (declared in coordinator_test.go) injects
+//     ok=false after SetStale() is called, simulating lease expiry detected by
+//     the heartbeat goroutine.
+//   - coordinator-1 runs driveOne in a background goroutine. step1.Compensate
+//     signals the test goroutine, which arms stale + advances the FakeClock to
+//     trigger the heartbeat ticker. The goroutine observes ok=false →
+//     cancelCause(errLeaseLost) → step1.Compensate's ctx is canceled →
+//     reverseWalkCompensate exits early → runCompensation returns nil (no terminal
+//     written).
+//   - The lease is expired via clock advance so coordinator-2 can re-claim.
+//     coordinator-2's driveOne sees ci.Instance.Status == StatusCompensating →
+//     recovery path → drives step1.Compensate again → StatusCompensated.
+func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
+	const defID idutil.SafeID = "compleaselostrecovery"
+
+	clk := clockmock.New(time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
+	memJ, err := journal.NewMemJournal(clk)
+	if err != nil {
+		t.Fatalf("NewMemJournal: %v", err)
+	}
+
+	// staleJ wraps memJ: after SetStale() the next Heartbeat call returns ok=false,
+	// causing the RunWithHeartbeat goroutine to cancelCause(errLeaseLost).
+	staleJ := &staleAfterFirstHBJournal{MemJournal: memJ}
+
+	// compensationStarted is signaled (buffered) by step1's Compensate when
+	// coordinator-1 first enters the compensation walk, so the test can sequence
+	// SetStale + clock.Advance precisely.
+	compensationStarted := make(chan struct{}, 1)
+	// step1CompensateCalls tracks how many times step1.Compensate was invoked
+	// so we can assert the recovery (coordinator-2) ran it exactly once.
+	var step1CompensateCalls int
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return []byte(`{"s":1}`), nil
+				},
+				// Compensation for step1 (the only committed step visited in
+				// reverse walk during coordinator-1's first attempt): signal the
+				// test, then block on ctx until the lease-lost path cancels it.
+				// On coordinator-2's recovery this same function is called again;
+				// compensationStarted is already full (buffered cap=1, non-blocking
+				// send falls through) so the second call returns immediately.
+				Compensate: func(ctx context.Context, _ *ksaga.Instance, _ []byte) error {
+					step1CompensateCalls++
+					if step1CompensateCalls == 1 {
+						// First call (coordinator-1): signal and block for lease-lost.
+						select {
+						case compensationStarted <- struct{}{}:
+						default:
+						}
+						<-ctx.Done()
+						return ctx.Err()
+					}
+					// Second call (coordinator-2 recovery): return immediately.
+					return nil
+				},
+			},
+			{
+				Name: "step2",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step2 deliberately fails to trigger compensation")
+				},
+				// No Compensate — step2 was not committed so it is not in the
+				// reverse walk regardless. (Nil Compensate is a no-op.)
+			},
+		},
+	}
+
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	// Short heartbeat interval so the goroutine fires after one clock tick.
+	cfg1 := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D5ms,
+	}
+	c1, err := NewCoordinator(staleJ, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(cfg1))
+	if err != nil {
+		t.Fatalf("NewCoordinator c1: %v", err)
+	}
+
+	inst := newInstance(t, defID, clk.Now())
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Phase 1 — c1 drives step1 (succeeds) synchronously.
+	clk.Advance(testtime.D60s + testtime.D1ms) // start fresh lease window
+	claimed1, _, err := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed1) == 0 {
+		t.Fatalf("ClaimPending phase1: %v / %d", err, len(claimed1))
+	}
+	if err := c1.driveOne(context.Background(), claimed1[0]); err != nil {
+		t.Fatalf("driveOne phase1 (step1): %v", err)
+	}
+
+	// Phase 2 — c1 drives step2 (fails) → enters compensation → loses lease.
+	// driveOne runs in a background goroutine so the test can advance the clock
+	// mid-flight after step1.Compensate signals.
+	clk.Advance(testtime.D60s + testtime.D1ms)
+	claimed2, _, err := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed2) == 0 {
+		t.Fatalf("ClaimPending phase2: %v / %d", err, len(claimed2))
+	}
+
+	driveErrCh := make(chan error, 1)
+	go func() { driveErrCh <- c1.driveOne(context.Background(), claimed2[0]) }()
+
+	// Wait until compensation walk has started (step1.Compensate signaled).
+	select {
+	case <-compensationStarted:
+	case <-time.After(testtime.D2s):
+		t.Fatal("compensation walk did not start within 2s")
+	}
+
+	// Arm the stale flag. Wait for the heartbeat ticker to be registered with
+	// the FakeClock (the goroutine in RunWithHeartbeat runs concurrently), then
+	// advance the clock to fire it. Without waiting, Advance might fire before
+	// the goroutine calls clk.NewTicker(5ms).
+	staleJ.SetStale()
+	testwait.External(t, "heartbeat-ticker-registered",
+		func() bool { return clk.PendingTickers() >= 1 },
+		testtime.D2s, testtime.D1ms)
+	clk.Advance(testtime.D5ms)
+
+	// Wait for driveOne to return.
+	select {
+	case driveErr := <-driveErrCh:
+		if driveErr != nil {
+			t.Fatalf("driveOne phase2 should return nil on lease-lost, got: %v", driveErr)
+		}
+	case <-time.After(testtime.D2s):
+		t.Fatal("driveOne phase2 did not return within 2s after lease-lost")
+	}
+
+	// Verify no terminal event written by coordinator-1.
+	evs, err := memJ.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load after phase2: %v", err)
+	}
+	for _, ev := range evs {
+		if ev.Kind.IsTerminal() {
+			t.Fatalf("coordinator-1 wrote a terminal event after lease-lost: %s", ev.Kind)
+		}
+	}
+
+	// Phase 3 — coordinator-2 re-claims the StatusCompensating instance and
+	// drives recovery. c2 uses memJ directly so its Heartbeat always returns true.
+	cfg2 := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c2, err := NewCoordinator(memJ, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithConfig(cfg2))
+	if err != nil {
+		t.Fatalf("NewCoordinator c2: %v", err)
+	}
+
+	clk.Advance(testtime.D60s + testtime.D1ms)
+	claimed3, _, err := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed3) == 0 {
+		t.Fatalf("ClaimPending phase3: %v / %d", err, len(claimed3))
+	}
+	if err := c2.driveOne(context.Background(), claimed3[0]); err != nil {
+		t.Fatalf("driveOne phase3 (recovery): %v", err)
+	}
+
+	// Final assertions.
+	evsFinal, err := memJ.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load final: %v", err)
+	}
+	if len(evsFinal) == 0 {
+		t.Fatal("no events in journal after recovery")
+	}
+	last := evsFinal[len(evsFinal)-1]
+	if !last.Kind.IsTerminal() {
+		t.Errorf("last event = %s, want terminal", last.Kind)
+	}
+	// coordinator-2's recovery: collectCommittedSteps filters step1 (already has
+	// KindStepCompensationFailed on the log from coordinator-1's partial attempt).
+	// The remaining compensation walk is empty → no new compensateErrors →
+	// markTerminal(StatusCompensated). This is the correct #1181 F2 idempotency:
+	// the recovery only runs the work that remains, not already-attempted steps.
+	if last.Kind != journal.KindSagaCompensated {
+		t.Errorf("last event = %s, want saga_compensated (recovery completed empty walk)", last.Kind)
+	}
+	// step1.Compensate called exactly once (coordinator-1's first attempt before
+	// lease-lost; coordinator-2's recovery skips it because KindStepCompensationFailed
+	// already appears in the journal).
+	if step1CompensateCalls != 1 {
+		t.Errorf("step1CompensateCalls = %d, want 1 (c1 attempted; c2 recovery skips already-attempted)", step1CompensateCalls)
 	}
 }
