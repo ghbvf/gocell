@@ -255,11 +255,14 @@ helper 写入 delivery span：
     重建 chain 起点（与首次部署语义等价），无 W0 detection / sentinel 检测
     路径。旧 row 的 hash 无法被新 ComputeHash 验证（12-field 与 6-field
     字节不同），但由于行已被 DROP，不存在「旧 hash 与新 hash 共存」二义性。
-    Down 块直接 `RAISE EXCEPTION`（无独立反向路径），运维必须走
-    `goose down-to 020 && goose up` 显式重建——杜绝
-    「版本 41 但表不存在」半状态。**Hardness ceiling**：goose SQL 只能读 GUC
-    字符串；typed `MigratorPermit` 是更 Hard 的形态但需要把 forward rebuild
-    搬到 Go 侧（独立 backlog 跟踪）。
+    Down 块走标准 destructive-down GUC
+    (`gocell.allow_destructive_down`，与 020/021 等同形态)，与 Migrator
+    framework 的 `Migrator.Down(ctx, permit)` typed permit channel 对齐；
+    Up forward-rebuild 用专属 GUC (`gocell.allow_audit_rebuild`) 与
+    destructive-down 解耦，使 rebuild 审批与 rollback 审批语义边界明确。
+    **Hardness ceiling**：goose SQL 只能读 GUC 字符串；typed `MigratorPermit`
+    是更 Hard 的形态但需要把 forward-rebuild 搬到 Go 侧（独立 backlog
+    跟踪 — #1248）。
   - **DB-level dedup**（替代原 invariant #2）：043 line 101 `CREATE UNIQUE INDEX
     uq_audit_namespace_event_id ON audit_entries (namespace, event_id)` 复刻
     021 的 UNIQUE 约束。schema_guard `expectedIndexes` 同步注册该索引名 +
