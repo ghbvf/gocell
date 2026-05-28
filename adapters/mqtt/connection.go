@@ -378,13 +378,44 @@ func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 		slog.Int("reason_code", int(d.ReasonCode)))
 }
 
-// R4 round-2: Client() raw accessor removed entirely from PR-1. PR-2
-// (Publisher) and PR-3 (Subscriber) will add typed Publish / Subscribe
-// methods on *Connection that route topic arguments through
-// TopicNamespace.PublishOK / SubscribeOK before calling cm.Publish /
-// cm.Subscribe, and the callsite funnel archtest (gh #1225) will lock the
-// routing. Internal callers reach the manager via c.cm directly within the
-// package; no external access is needed.
+// publishOpts captures per-Publish options that are not part of the
+// (ns, topic, payload) triple. Future MQTT v5 PUBLISH fields (MessageExpiry,
+// UserProperties, ContentType, etc.) should be added here without breaking
+// Connection.Publish's signature.
+type publishOpts struct {
+	QoS    byte
+	Retain bool
+}
+
+// Publish sends a single MQTT PUBLISH packet via the underlying autopaho
+// ConnectionManager. The publishableTopic argument carries a topic that has
+// already been validated against the caller's TopicNamespace (constructor:
+// TopicNamespace.Mint). Internally this method calls c.cm.Publish — the
+// MQTT-PUBLISH-CALLSITE-FUNNEL-01 archtest locks this as the only callsite of
+// (*autopaho.ConnectionManager).Publish in the adapters/mqtt package.
+//
+// Returns:
+//   - (*paho.PublishResponse, nil) on broker Ack (QoS 1).
+//   - (nil, ErrAdapterMQTTClosed) if Close has been called.
+//   - (nil, errcode-wrapped error) on transport-level failure from autopaho.
+//
+// The caller is responsible for setting any per-publish timeout via the ctx
+// (the Publisher derives a child ctx from Config.PublishTimeout).
+func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []byte, opts publishOpts) (*paho.PublishResponse, error) {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+			"mqtt: connection is closed")
+	}
+	return c.cm.Publish(ctx, &paho.Publish{
+		Topic:   t.topic,
+		QoS:     opts.QoS,
+		Retain:  opts.Retain,
+		Payload: payload,
+	})
+}
 
 // Health returns the current readiness of the connection:
 //   - nil         — phaseConnected and no permanent error
