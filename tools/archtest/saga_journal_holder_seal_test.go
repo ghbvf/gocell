@@ -2,39 +2,76 @@
 //
 // INVARIANT: SAGA-JOURNAL-HOLDER-SEAL-01
 //
-// Only runtime/saga.Coordinator may hold a kernel/saga/journal.Journal field.
-// Any other struct in runtime/saga declaring a field of that interface type is
-// a violation.
+// Two field-shape rules over runtime/saga production structs:
 //
-// # Why this lives in PR-03 (not PR-08 per plan)
+//  1. No struct may hold a Heartbeat-bearing journal interface as a persisted
+//     field — i.e. neither kernel/saga/journal.Journal (the full interface) nor
+//     kernel/saga/journal.Heartbeater. A persisted Heartbeat-capable field is
+//     exactly what a centralized heartbeat loop needs (the #1181 anti-pattern);
+//     it is forbidden everywhere, Coordinator included.
+//  2. kernel/saga/journal.JournalCore (the Heartbeat-free core) may be held only
+//     by runtime/saga.Coordinator. Any other holder is a violation.
 //
-// As soon as the type exists, the invariant is statically lockable. Earlier
-// locking catches PR-04/05/06 regressions immediately. AI-robust evaluation:
-// upstream Medium (archtest A1 typed-aware scan locks holder-struct identity
-// within package), downstream N/A (field-shape invariant, not a callsite
-// invariant — no caller allowlist needed). Upstream Hard upgrade path (seal
-// journal.Journal so non-Coordinator struct field is compile-time
-// inexpressible) tracked in gh issue #981.
+// The full journal.Journal still exists transiently as the NewCoordinator
+// parameter handed straight to executor.NewExecutor (the sanctioned per-step
+// heartbeat funnel); that is a parameter, not a field, so it never trips rule 1.
 //
-// # Blind-spot reverse self-test
+// # Relationship to the JournalCore split (#1209)
 //
-//   - B1: production code MUST NOT introduce a `type X = journal.Journal` alias
-//     in runtime/saga (would let a new struct hold `X` while still being the
-//     same interface — A1 would miss it because the AST alias TypeSpec has an
-//     Assign token and the alias RHS selector is the escape path).
+// Before #1209 this seal tracked the flat journal.Journal interface, and
+// Coordinator held journal.Journal directly. #1209 split journal.Journal into
+// JournalCore (6 methods) + Heartbeater (Heartbeat) and narrowed
+// Coordinator.journal to JournalCore so c.journal.Heartbeat(...) is a compile
+// error — that is what upgrades SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01's upstream
+// to Hard (see that archtest). This seal is the field-shape complement: it keeps
+// the narrow type single-held and bans any re-introduction of a Heartbeat-bearing
+// field.
 //
-// # Coverage notes (blind spots of A1 + B1)
+// # AI-robust rating
 //
-//   - A1 detects fields whose resolved type is the named interface
-//     kernel/saga/journal.Journal. A type alias `type J = journal.Journal` in a
-//     *different* package (outside runtime/saga) that is then imported and used
-//     as a field type in runtime/saga is not covered by B1 (B1 only scans
-//     runtime/saga itself). This is an accepted residual blind spot: cross-package
-//     aliases in Go are rare and the types resolution in A1 chases through aliases
-//     at the types.Type level (Named.Obj().Pkg() and Name() are canonical after
-//     type-checking, even through aliases in other packages).
-//   - B1 only scans non-test files in runtime/saga; test files may alias the
-//     type freely.
+// Upstream Medium: a typed-aware go/types scan locks holder-struct identity
+// within the package; a new non-Coordinator JournalCore field (or any
+// Heartbeat-bearing field) is rejected at archtest time, not by the compiler.
+// Downstream N/A: this is a field-shape invariant, not a callsite invariant —
+// there is no caller allowlist.
+//
+// The JournalCore split does NOT make THIS seal Hard: a non-Coordinator struct
+// declaring a JournalCore field is still source-expressible (the archtest, not
+// the type system, rejects it). The upstream-Hard path for the holder seal
+// (envelope / sealed-construction so a non-Coordinator field is compile-time
+// inexpressible) is tracked in gh issue #982; post-#1209 #982 tracks JournalCore
+// rather than the full Journal. (Historic note: this godoc previously cited
+// #981, which is an unrelated rule — SAGA-STEP-COMPENSATE-PURE-01.)
+//
+// # Blind-spot self-test (AI-robust §"工具选定后强制盲区自检")
+//
+// A1 uses go/types field-type resolution; B1 is an AST-only alias-declaration
+// scan. Forms outside those tools' reach:
+//
+//   - B1 (reverse self-test): a `type X = journal.{Journal,JournalCore,Heartbeater}`
+//     alias in runtime/saga would let a struct hold `X` evading a pure-AST name
+//     match. A1's go/types resolution already chases through aliases, but B1
+//     catches the alias declaration itself before any struct uses it. Covered.
+//   - Embedded (anonymous) field `struct { journal.Heartbeater }`: ast.StructType
+//     Fields.List includes embedded fields (Names empty, Type set), so A1
+//     classifies it. Covered.
+//   - Pointer field `*journal.JournalCore`: classifyResolvedJournalType unwraps
+//     one pointer level. Covered. Double pointer `**journal.JournalCore` is a
+//     degenerate, non-idiomatic form — accepted residual blind spot.
+//   - Cross-package alias `type J = journal.JournalCore` declared OUTSIDE
+//     runtime/saga then imported and used as a field type inside runtime/saga:
+//     A1 still classifies it correctly (Named.Obj().Pkg()/Name() are canonical
+//     after type-checking), but B1 (which only scans runtime/saga) does not flag
+//     the foreign declaration. Accepted residual blind spot — cross-package
+//     interface aliases are rare and A1 resolves the field type regardless.
+//   - Local interface that re-declares the Heartbeat shape, e.g.
+//     `type beat interface { Heartbeat(...) }` held as a field: a new named type,
+//     NOT journal.*, so this seal does not classify it. Accepted residual —
+//     composed with SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01, whose A1 callsite scan
+//     is signature-shape (not name) based and flags any actual .Heartbeat(...)
+//     call in runtime/saga regardless of the holder type. Holding without calling
+//     is inert; calling is caught there.
+//   - B1 only scans non-test files in runtime/saga; test files may alias freely.
 package archtest
 
 import (
@@ -47,78 +84,127 @@ import (
 )
 
 // journalInterfacePkgPath is the canonical import path of the package that
-// declares the Journal interface. Hardcoded rather than derived from go.mod
-// because it is load-bearing: a rename of this package path would be a
-// contract break requiring a deliberate update here.
+// declares the Journal / JournalCore / Heartbeater interfaces. Hardcoded rather
+// than derived from go.mod because it is load-bearing: a rename of this package
+// path would be a contract break requiring a deliberate update here.
 const journalInterfacePkgPath = "github.com/ghbvf/gocell/kernel/saga/journal"
 
-// journalInterfaceTypeName is the type name of the interface within the package.
-const journalInterfaceTypeName = "Journal"
+// journalInterfaceTypeName / heartbeaterInterfaceTypeName name the two
+// Heartbeat-bearing interfaces that may not be persisted as a field anywhere in
+// runtime/saga production code (rule 1).
+const (
+	journalInterfaceTypeName     = "Journal"
+	heartbeaterInterfaceTypeName = "Heartbeater"
+)
+
+// journalCoreInterfaceTypeName names the Heartbeat-free core interface that only
+// the Coordinator may hold as a field (rule 2).
+const journalCoreInterfaceTypeName = "JournalCore"
 
 // allowedSagaJournalHolder is the single struct in runtime/saga permitted to
-// hold a journal.Journal field.
+// hold a journal.JournalCore field.
 const allowedSagaJournalHolder = "Coordinator"
 
 // sagaJournalHolderSealRule is the rule ID prefixed to every diagnostic message.
 const sagaJournalHolderSealRule = "SAGA-JOURNAL-HOLDER-SEAL-01"
 
-// fieldTypeIsJournal reports whether the field's resolved type (via go/types)
-// is kernel/saga/journal.Journal. It handles:
-//   - direct field type `journal.Journal` (SelectorExpr in AST)
-//   - pointer to interface `*journal.Journal` (unusual but possible)
-//   - type aliases that resolve to journal.Journal (types resolve through aliases
-//     at the types.Type level, so Named.Obj().Pkg().Path() is canonical)
-//
-// Returns false if TypesInfo is nil or the expression cannot be resolved.
-func fieldTypeIsJournal(info *types.Info, expr ast.Expr) bool {
+// journalFieldKind classifies a struct field's resolved type against the three
+// journal-package interfaces this seal cares about.
+type journalFieldKind int
+
+const (
+	journalFieldNone        journalFieldKind = iota // not a journal-package interface
+	journalFieldFull                                // journal.Journal (Heartbeat-bearing)
+	journalFieldHeartbeater                         // journal.Heartbeater (Heartbeat-bearing)
+	journalFieldCore                                // journal.JournalCore (Heartbeat-free)
+)
+
+// classifyJournalFieldType resolves the field expression via go/types and
+// classifies it. Returns journalFieldNone when TypesInfo is nil or the type is
+// not one of the three journal-package interfaces.
+func classifyJournalFieldType(info *types.Info, expr ast.Expr) journalFieldKind {
 	if info == nil {
-		return false
+		return journalFieldNone
 	}
 	tv, ok := info.Types[expr]
 	if !ok {
-		return false
+		return journalFieldNone
 	}
-	return resolvedTypeIsJournal(tv.Type)
+	return classifyResolvedJournalType(tv.Type)
 }
 
-// resolvedTypeIsJournal checks whether t (possibly wrapped in a pointer or
-// alias) resolves to the kernel/saga/journal.Journal named interface.
-func resolvedTypeIsJournal(t types.Type) bool {
+// classifyResolvedJournalType checks whether t (possibly wrapped in one pointer
+// or resolved through an alias) is journal.Journal, journal.Heartbeater, or
+// journal.JournalCore. Aliases resolve at the types.Type level, so
+// Named.Obj().Pkg().Path() and Name() are canonical after type-checking.
+func classifyResolvedJournalType(t types.Type) journalFieldKind {
 	if t == nil {
-		return false
+		return journalFieldNone
 	}
-	// Unwrap a pointer: *journal.Journal is not idiomatic but we cover it.
+	// Unwrap a pointer: *journal.JournalCore is not idiomatic but we cover it.
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
 	}
-	// After un-aliasing at the types level, we expect a *types.Named.
-	// types.Unalias is available in Go 1.22+; fallback: walk through Named.
 	named, ok := t.(*types.Named)
 	if !ok {
-		return false
+		return journalFieldNone
 	}
 	obj := named.Obj()
-	if obj == nil {
-		return false
+	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != journalInterfacePkgPath {
+		return journalFieldNone
 	}
-	if obj.Name() != journalInterfaceTypeName {
-		return false
+	switch obj.Name() {
+	case journalInterfaceTypeName:
+		return journalFieldFull
+	case heartbeaterInterfaceTypeName:
+		return journalFieldHeartbeater
+	case journalCoreInterfaceTypeName:
+		return journalFieldCore
 	}
-	pkg := obj.Pkg()
-	if pkg == nil {
-		return false
-	}
-	return pkg.Path() == journalInterfacePkgPath
+	return journalFieldNone
 }
 
-// TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal scans the
-// runtime/saga production source for any struct declaring a field whose
-// resolved type is kernel/saga/journal.Journal. Asserts that the owning
-// TypeSpec.Name == "Coordinator".
+// journalFieldSealDiag applies the two seal rules to a single struct field and
+// returns a diagnostic when violated.
+func journalFieldSealDiag(p *Pass, rel, holderName string, field *ast.Field) (Diagnostic, bool) {
+	kind := classifyJournalFieldType(p.TypesInfo, field.Type)
+	if kind == journalFieldNone {
+		return Diagnostic{}, false
+	}
+	// Rule 2: JournalCore is allowed, but only on the Coordinator.
+	if kind == journalFieldCore && holderName == allowedSagaJournalHolder {
+		return Diagnostic{}, false
+	}
+	pos := p.Fset.Position(field.Pos())
+	return Diagnostic{Rel: rel, Line: pos.Line, Message: journalFieldSealMessage(kind, holderName)}, true
+}
+
+// journalFieldSealMessage renders the diagnostic text for a violating field.
+func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
+	if kind == journalFieldCore {
+		return fmt.Sprintf(
+			"%s: struct %q holds a journal.JournalCore field; only %q may hold it",
+			sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder)
+	}
+	// journalFieldFull / journalFieldHeartbeater — a Heartbeat-bearing field.
+	return fmt.Sprintf(
+		"%s: struct %q holds a Heartbeat-bearing journal interface field "+
+			"(journal.Journal or journal.Heartbeater); no struct in runtime/saga may "+
+			"persist a Heartbeat-capable field — hold journal.JournalCore instead. The "+
+			"full Journal exists transiently only as the NewCoordinator parameter handed "+
+			"to executor.NewExecutor (the sanctioned per-step heartbeat funnel).",
+		sagaJournalHolderSealRule, holderName)
+}
+
+// TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal scans runtime/saga
+// production source for struct fields whose resolved type is a journal-package
+// interface, applying both seal rules (see package godoc):
+//   - journal.Journal / journal.Heartbeater field anywhere → violation
+//   - journal.JournalCore field outside Coordinator → violation
 //
-// Uses RunTyped (not Run) so that go/types can resolve field types across
-// package boundaries — a pure AST scan cannot distinguish `journal.Journal`
-// from any other selector expression named "Journal" without type information.
+// Uses RunTyped (not Run) so go/types can resolve field types across package
+// boundaries — a pure AST scan cannot distinguish `journal.JournalCore` from any
+// other selector named "JournalCore" without type information.
 func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	t.Parallel()
 
@@ -143,20 +229,9 @@ func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 				}
 				holderName := ts.Name.Name
 				for _, field := range st.Fields.List {
-					if !fieldTypeIsJournal(p.TypesInfo, field.Type) {
-						continue
+					if d, ok := journalFieldSealDiag(p, rel, holderName, field); ok {
+						out = append(out, d)
 					}
-					if holderName == allowedSagaJournalHolder {
-						continue
-					}
-					pos := p.Fset.Position(field.Pos())
-					out = append(out, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"%s: struct %q holds a journal.Journal field; only %q may hold this interface type",
-							sagaJournalHolderSealRule, holderName, allowedSagaJournalHolder),
-					})
 				}
 			})
 		}
@@ -166,19 +241,41 @@ func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	Report(t, sagaJournalHolderSealRule+"-A1", diags)
 }
 
-// TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga ensures that
-// production non-test files in runtime/saga do not introduce a type alias of
-// the form `type X = journal.Journal`. Such an alias would let a new struct
-// declare a field of type X — which is structurally identical to journal.Journal
-// — while evading A1's exact-name check (if A1 were implemented as a pure AST
-// string match rather than a types-resolved check). Although A1 uses go/types
-// resolution (which chases through aliases), B1 is retained as defense-in-depth:
+// journalInterfaceAliasName reports the journal interface name aliased by ts if
+// ts is `type X = journal.{Journal,JournalCore,Heartbeater}`, else ("", false).
+func journalInterfaceAliasName(ts *ast.TypeSpec) (string, bool) {
+	// An alias has a valid Assign token.
+	if !ts.Assign.IsValid() {
+		return "", false
+	}
+	sel, ok := ts.Type.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != "journal" {
+		return "", false
+	}
+	switch sel.Sel.Name {
+	case journalInterfaceTypeName, journalCoreInterfaceTypeName, heartbeaterInterfaceTypeName:
+		return sel.Sel.Name, true
+	}
+	return "", false
+}
+
+// TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga ensures production
+// non-test files in runtime/saga do not introduce a type alias of the form
+// `type X = journal.Journal` / `journal.JournalCore` / `journal.Heartbeater`.
+// Such an alias would let a new struct declare a field of type X — structurally
+// identical to the aliased interface — while evading A1's exact-name check (if A1
+// were a pure AST string match rather than a types-resolved check). A1 uses
+// go/types resolution (which chases through aliases), so B1 is defense-in-depth:
 // it catches the alias declaration itself before any struct can use it.
 //
-// B1 uses Run (AST-only) because detecting `type X = journal.Journal` is a
-// pure syntactic check: an alias TypeSpec has a valid ts.Assign token, and the
-// RHS is a SelectorExpr whose X.Name == "journal" and Sel.Name == "Journal".
-// No cross-package resolution is needed for the alias declaration site itself.
+// B1 uses Run (AST-only) because detecting the alias is a pure syntactic check:
+// an alias TypeSpec has a valid ts.Assign token and the RHS is a SelectorExpr
+// whose X.Name == "journal". No cross-package resolution is needed at the alias
+// declaration site itself.
 func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 
@@ -197,21 +294,8 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 			}
 
 			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-				// An alias has a valid Assign token.
-				if !ts.Assign.IsValid() {
-					return
-				}
-				// Check whether the aliased type is journal.Journal via the
-				// selector expression `journal.Journal`.
-				sel, ok := ts.Type.(*ast.SelectorExpr)
+				aliased, ok := journalInterfaceAliasName(ts)
 				if !ok {
-					return
-				}
-				id, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return
-				}
-				if id.Name != "journal" || sel.Sel.Name != journalInterfaceTypeName {
 					return
 				}
 				pos := p.Fset.Position(ts.Pos())
@@ -219,10 +303,10 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 					Rel:  rel,
 					Line: pos.Line,
 					Message: fmt.Sprintf(
-						"%s-B1: type alias %q = journal.Journal in runtime/saga; "+
-							"remove the alias and reference journal.Journal directly — "+
-							"aliases create an evasion path for the single-holder invariant",
-						sagaJournalHolderSealRule, ts.Name.Name),
+						"%s-B1: type alias %q = journal.%s in runtime/saga; remove the alias "+
+							"and reference the journal interface directly — aliases create an "+
+							"evasion path for the holder-seal invariant",
+						sagaJournalHolderSealRule, ts.Name.Name, aliased),
 				})
 			})
 		}

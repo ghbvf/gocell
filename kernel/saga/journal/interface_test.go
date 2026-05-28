@@ -14,10 +14,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 )
 
-// Compile-time assertions: MemJournal must satisfy both Journal and
-// healthz.RepoProber. These lines cause a compile error until MemJournal
-// exists — that is the intended RED state.
+// Compile-time assertions: MemJournal must satisfy the full Journal (hence both
+// halves of the JournalCore + Heartbeater split, #1209) and healthz.RepoProber.
+// These lines cause a compile error until MemJournal exists — that is the
+// intended RED state.
 var (
-	_ journal.Journal    = (*journal.MemJournal)(nil)
-	_ healthz.RepoProber = (*journal.MemJournal)(nil)
+	_ journal.Journal     = (*journal.MemJournal)(nil)
+	_ journal.JournalCore = (*journal.MemJournal)(nil)
+	_ journal.Heartbeater = (*journal.MemJournal)(nil)
+	_ healthz.RepoProber  = (*journal.MemJournal)(nil)
 )

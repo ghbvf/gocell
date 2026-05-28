@@ -36,8 +36,13 @@ type PGJournal struct {
 	clock clock.Clock
 }
 
-// Compile-time assertion.
-var _ journal.Journal = (*PGJournal)(nil)
+// Compile-time assertions: PGJournal satisfies the full Journal and, hence,
+// both halves of the JournalCore + Heartbeater split (#1209).
+var (
+	_ journal.Journal     = (*PGJournal)(nil)
+	_ journal.JournalCore = (*PGJournal)(nil)
+	_ journal.Heartbeater = (*PGJournal)(nil)
+)
 
 // NewJournal constructs a PGJournal backed by pool. clk is required; a nil or
 // typed-nil Clock panics via clock.MustHaveClock (programmer error, matching

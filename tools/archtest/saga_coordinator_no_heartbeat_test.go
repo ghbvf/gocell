@@ -23,25 +23,14 @@
 //
 // # Funnel shape (AI-robust §funnel 双向锁)
 //
-// Downstream (callsite ban — this archtest): Medium. AST + typed analysis
-// locates every method call to journal.Journal.Heartbeat in
-// runtime/saga (the Coordinator's package — recursive scope intentionally
-// includes only `./runtime/saga/.` not `.../...`, because the executor
-// subpackage is the sanctioned caller). The check is "set must be empty"
-// — any new call site fails CI.
-//
-// Upstream (type-system seal): MEDIUM (gh issue tracked). The
-// kernel/saga/journal.Journal interface still declares Heartbeat as a
-// method. As long as the Coordinator's `journal` field carries this
-// interface type, the type system permits a Heartbeat call at the source
-// level (it would be caught here, not at compile time). Hard upgrade
-// path = split Journal into JournalCore + Heartbeater so the Coordinator
-// field type lacks Heartbeat entirely — requires changing 22 conformance
-// case + multi-impl signatures, out of scope for #1181.
-//
-// Follow-up issue: gh issue #1209 (split Journal interface into
-// JournalCore + Heartbeater so the Coordinator field type lacks Heartbeat
-// entirely, upgrading this archtest's upstream from Medium to Hard).
+// Upstream HARD + downstream Medium (full rating in the "Funnel 双向锁评级"
+// section below). In short: #1209 split journal.Journal into JournalCore +
+// Heartbeater and narrowed Coordinator.journal to journal.JournalCore, which has
+// no Heartbeat method — so a centralized heartbeat loop (a long-lived
+// Heartbeat-bearing field re-Heartbeat-ing leases) is compile-time
+// inexpressible. A1 (this archtest) is retained to ban any .Heartbeat callsite
+// over the one transient full-Journal value: the NewCoordinator parameter handed
+// to the executor funnel.
 //
 // # Blind-spot self-test
 //
@@ -60,47 +49,47 @@
 //     here (it's a function call, not a SelectorExpr) — but it is
 //     unreachable without the method-value selector, which IS caught.
 //
-// Blind spot B1: a type alias `type X = journal.Journal` in runtime/saga
-// would let the package reference `journal.Journal.Heartbeat` indirectly
-// as `X.Heartbeat`. Mitigated by inheriting the alias ban from
-// SAGA-JOURNAL-HOLDER-SEAL-01's B1 reverse self-test, which forbids
-// `type X = journal.Journal` in runtime/saga.
+// Blind spot B1: a type alias `type X = journal.Journal` (or
+// `journal.Heartbeater`) in runtime/saga would let the package reference
+// `.Heartbeat` indirectly as `X.Heartbeat`. Mitigated by inheriting the alias
+// ban from SAGA-JOURNAL-HOLDER-SEAL-01's B1 reverse self-test, which forbids
+// `type X = journal.{Journal,JournalCore,Heartbeater}` in runtime/saga.
 //
 // # Funnel 双向锁评级
 //
-// Downstream (Medium): A1 archtest locks the set of runtime/saga (main package,
-// not executor subpackage) .Heartbeat callsites to the empty set. The scan
-// uses go/types structural signature matching so typed aliases and local
-// interface duplicates are covered. Scope boundary — excluding
-// runtime/saga/executor/ — is the B1 reverse self-check's purpose (below).
+// Upstream (type-system seal): HARD (landed in #1209). Coordinator.journal is
+// journal.JournalCore, which declares no Heartbeat method, so the centralized
+// heartbeat loop this invariant forbids — a long-lived Heartbeat-bearing field
+// re-Heartbeat-ing leases in a goroutine — cannot be expressed: c.journal.Heartbeat
+// is a compile error. SAGA-JOURNAL-HOLDER-SEAL-01 complements the seal by
+// forbidding any runtime/saga struct from persisting the full journal.Journal or
+// a bare journal.Heartbeater as a field. The loop is therefore compile-time
+// unbuildable, not merely archtest-banned.
 //
-// Upstream (Medium): journal.Journal still declares Heartbeat as a method.
-// The Coordinator's journal field carries that interface type, so the type
-// system permits a .Heartbeat call at the source level — it is caught by A1
-// at archtest time, not at compile time. Hard upstream requires splitting
-// journal.Journal into JournalCore + Heartbeater so the Coordinator field
-// type physically lacks Heartbeat. That change touches 22+ conformance cases
-// and multiple PG/mem implementations — out of scope for #1181.
+// Downstream (callsite ban — this archtest, A1): retained, honestly Medium. The
+// field seal closes the LOOP, but one transient Heartbeat-bearing value remains:
+// the NewCoordinator(j journal.Journal, ...) parameter, which must carry Heartbeat
+// to construct the executor (executor.NewExecutor(j, ...); the executor is the
+// sanctioned per-step heartbeat funnel and owns the only Heartbeat caller). That
+// parameter is irreducible — the Coordinator must own executor construction
+// (#1181 F5: claim and heartbeat same-source), so SOME runtime/saga value holds
+// Heartbeat at construction time. A1 bans any actual .Heartbeat() callsite over
+// that window via go/types structural signature matching (typed aliases and local
+// shape-duplicates are covered too; scope excludes runtime/saga/executor/, the
+// sanctioned caller — see B1 below). Handing j to the executor constructor is a
+// value pass, not a .Heartbeat selector, and stays green.
 //
-// Current rating: Medium downstream + Medium upstream.
+// Current rating: Hard upstream (loop compile-time inexpressible) + Medium
+// downstream (A1 guards the irreducible constructor pass-through window).
 //
-// This combination is NOT within the "Medium upstream + Hard downstream"
-// transition form that ai-robust.md §"Funnel 双向锁评级" explicitly permits.
-// It is the Go type-system ceiling for the current interface shape:
-//
-//   - Downstream Hard is not reachable without upstream Hard first: as long as
-//     Coordinator.journal exposes .Heartbeat, any archtest that only bans the
-//     call has an inherent bypass (rewrite, rename, extract) that the type
-//     system does not reject. A1's typed-signature match raises the bar from
-//     Soft to Medium; it cannot reach Hard without a compile-time gate.
-//
-//   - Upstream Hard (= Coordinator field type lacks Heartbeat) is tracked in
-//     gh issue #1209 ("split journal.Journal into JournalCore + Heartbeater").
-//     Once #1209 lands, a .Heartbeat call in runtime/saga becomes a compile
-//     error, upgrading both upstream and downstream to Hard simultaneously.
-//
-// This archtest is intentionally retained at Medium + Medium until #1209 lands.
-// The two-Medium rating is the correct honest assessment, not a Soft carryover.
+// This is NOT a blanket double-Hard, and the earlier godoc framing that "#1209
+// upgrades BOTH upstream and downstream to Hard" was aspirational. The
+// constructor parameter cannot be compile-sealed without forcing callers to pass
+// the journal twice (a worse API for zero real gain — a centralized loop needs a
+// PERSISTED Heartbeat field, which is now impossible). A1 therefore remains the
+// honest mechanism for that narrow, low-risk residual. Per ai-robust.md §"Funnel
+// 双向锁评级", a Hard-upstream funnel needs no gh-tracked upgrade path; the Medium
+// downstream here is a deliberate residual, not a Soft carryover.
 package archtest
 
 import (

@@ -153,11 +153,16 @@ func (c Config) Validate() error {
 //
 // # Single sanctioned journal holder
 //
-// Coordinator is the only struct in this package that holds a journal.Journal
-// field. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 archtest (PR-08).
+// Coordinator is the only struct in this package that holds a
+// journal.JournalCore field — the Heartbeat-free core of journal.Journal. The
+// narrow type makes a centralized heartbeat loop a compile error
+// (c.journal.Heartbeat is undefined); per-step lease renewal is funneled through
+// the internal executor. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 (only Coordinator
+// may hold JournalCore; no struct may persist the Heartbeat-bearing full Journal)
+// and SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 (#1209).
 type Coordinator struct {
 	// required deps — set by NewCoordinator, validated non-nil before opts loop
-	journal    journal.Journal
+	journal    journal.JournalCore
 	txRunner   persistence.TxRunner
 	outboxEmit koutbox.Emitter
 	registry   ksaga.Resolver
@@ -172,7 +177,8 @@ type Coordinator struct {
 	// optional leader election (PR-05). nil locker → single-process unsafe
 	// mode. leaderElectNil records a nil locker passed to WithLeaderElect so
 	// NewCoordinator can fail-fast (strong-dependency wiring option). Held here
-	// (NOT a journal.Journal field) so SAGA-JOURNAL-HOLDER-SEAL-01 is unaffected.
+	// (NOT a journal.JournalCore / journal.Journal field) so
+	// SAGA-JOURNAL-HOLDER-SEAL-01 is unaffected.
 	locker         distlock.Locker
 	leaderElectNil bool
 
@@ -181,9 +187,11 @@ type Coordinator struct {
 	// #1181 F5: previously injected via WithExecutor — that path allowed a
 	// caller to inject an Executor with a different journal / lease config,
 	// breaking the "claim and heartbeat are same-source" invariant. The
-	// invariant is now enforced by construction (Executor's Heartbeater = the
-	// Coordinator's journal). observer / tracer are caller-configurable via
-	// WithObserver / WithTracer and forwarded into the internal Executor.
+	// invariant is now enforced by construction: NewCoordinator passes the full
+	// journal.Journal value it receives to executor.NewExecutor (it satisfies
+	// executor.Heartbeater), then stores only the JournalCore facet in c.journal.
+	// observer / tracer are caller-configurable via WithObserver / WithTracer and
+	// forwarded into the internal Executor.
 	executor *executor.Executor
 	observer executor.Observer // default NopObserver{}, fan-out via WithObserver
 
