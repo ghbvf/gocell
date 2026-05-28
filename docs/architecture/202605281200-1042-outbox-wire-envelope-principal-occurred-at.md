@@ -15,12 +15,23 @@ hard deadline (PR #1218 retraction):
   11-field canonical-JSON HMAC + archtest `AUDIT-HASH-INPUT-FROZEN-01`.
   Lands all Decision points that touch `runtime/audit/ledger/*`,
   `adapters/postgres/audit_ledger*`, and `41_audit_entries_v2.sql`.
-- **PR-A2** (follow-up, issue TBD): outbox-side Principal sealed construction
-  (`kernel/outbox/principal.go`), wire envelope, `kernel/wrapper` Principal
-  span attrs, `pkg/ctxkeys` typed key pairs, `cells/auditcore` appender
-  wiring, and archtest `PRINCIPAL-SEALED-FIELD-FROZEN-01`. Lands all
-  Decision points that touch `kernel/outbox/*`, `kernel/wrapper/*`,
-  `pkg/ctxkeys/*`, and outbox-side `cells/auditcore` derivation.
+- **PR-A2** (follow-up, issue #1229): outbox-side `Entry` / `PrincipalMetadata`
+  sealed construction (kernel/outbox/* with unexported fields + `NewEntry`
+  constructor + 241 callsite literal rewrites), migration 042 outbox_entries
+  rebuild, `kernel/wrapper` Principal span attrs, `pkg/ctxkeys` typed key
+  pairs, `cells/auditcore` appender wiring to consume `outbox.Entry.Principal`,
+  and auditquery output policy tightening (C3 decision in #1229). #1229
+  upgrades the funnel from Medium upstream (archtest caller allowlist) to
+  Hard upstream (type-system unexported gate), so `PRINCIPAL-SEALED-FIELD-FROZEN-01`
+  archtest from the original PR #1218 plan may be retired in favor of the
+  compile-time gate. Lands all Decision points that touch `kernel/outbox/*`,
+  `kernel/wrapper/*`, `pkg/ctxkeys/*`, and outbox-side `cells/auditcore`
+  derivation.
+- **#1219** (auditquery API exposure): separate follow-up to extend the
+  auditquery contract.yaml + handler to surface the 5 new audit_entries
+  columns to API consumers. Sequenced after PR-A2 / #1229 because #1229 §4
+  may rewrite the output policy (e.g. remove `SessionID` from the wire DTO
+  to align with `pkg/redaction` sensitive-key set).
 
 Per-Decision PR assignment is recorded inline below; the §"Implementation
 matrix" table summarises the cross-PR layout.
@@ -349,7 +360,8 @@ Invariant inventory (DROP COLUMN 041_audit_entries_v2.sql):
 
 - 实施：PR-A1（issue #1228 — 撤回 PR #1218 重做：audit_entries v2 + HMAC canonical rewrite）
 - 撤回：PR #1218（14 类 review finding 触发 ADR amendment）
-- 后续：PR-A2（outbox-side Principal sealed construction + outbox_entries 表 + appender 接入 + Principal span attrs）
+- 后续：PR-A2（issue #1229 — outbox Entry sealed construction + 241 字面量重写 + migration 042 + appender 接入 + auditquery 出口收紧）
+- 关联：issue #1219（auditquery API 暴露 5 新列；sequenced after #1229 因为 §4 可能重写 wire DTO）
 - Foundation: `kernel/outbox/observability.go` (Correlation 族范本)
 - Sealed construction template: `pkg/errcode/details.go` (PR #1035) + `errcode_invariants_test.go::TestDetailsSealedFieldFrozen01` 参考形态
 - Hard 范本: `.claude/rules/gocell/ai-robust.md` §Hard 范本目录 "sealed construction" + "typed function choice"

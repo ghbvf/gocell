@@ -38,15 +38,21 @@ type Entry struct {
 	// NOT NULL with no DEFAULT in the DB schema (041_audit_entries_v2.sql);
 	// callers (PG Store INSERT) supply the zero value explicitly so the chain
 	// reflects the producer's lack of injection rather than a sentinel DEFAULT.
+	//
+	// Output policy at the auditquery API boundary (DTO exposure / redaction /
+	// admin-gated filtering) is decided by issue #1229 §4 (PR-A2 sealed
+	// construction); issue #1219 tracks the contract.yaml DTO extension.
 	SubjectID string
 
 	// TenantID is the tenant boundary identifier for multi-tenant deployments.
-	// Empty string when not available. NOT NULL no-DEFAULT in DB.
+	// Empty string when not available. NOT NULL no-DEFAULT in DB. See SubjectID
+	// for the auditquery output policy reference.
 	TenantID string
 
 	// SessionID is the session identifier of the triggering request (server-
 	// side session binding). Empty string when not available. NOT NULL
-	// no-DEFAULT in DB.
+	// no-DEFAULT in DB. SessionID matches `pkg/redaction` sensitive-key set;
+	// issue #1229 §4 may strip it from the auditquery DTO entirely.
 	SessionID string
 
 	// CorrelationID carries the cross-cell correlation identifier from the
