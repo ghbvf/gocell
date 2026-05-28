@@ -31,14 +31,22 @@ import (
 //
 // Returns an error on PEM parse failure, cert/key mismatch, or nil clientCAs.
 // Callers should usually feed the result to bootstrap.WithListenerTLS.
+//
+// CALLERS MUST NOT MUTATE the returned *tls.Config's MinVersion, ClientAuth,
+// or ClientCAs fields. The builder pins these to fail-closed defaults; mutating
+// them post-return downgrades the security posture without compiler/runtime
+// signal. If you need different values, re-call this builder with the desired
+// inputs; do not edit the returned config in place. (This is a Go ecosystem
+// limitation — crypto/tls.Server accepts only *tls.Config, so a sealed
+// opaque wrapper is not feasible here.)
 func NewServerMTLSConfig(certPEMBlock, keyPEMBlock []byte, clientCAs *x509.CertPool) (*tls.Config, error) {
 	if len(certPEMBlock) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"tlsutil: certPEMBlock is empty")
+			"tlsutil: certPEMBlock is empty; pass the PEM-encoded server certificate (see os.ReadFile)")
 	}
 	if len(keyPEMBlock) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"tlsutil: keyPEMBlock is empty")
+			"tlsutil: keyPEMBlock is empty; pass the PEM-encoded server private key (see os.ReadFile)")
 	}
 	if clientCAs == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,

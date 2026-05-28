@@ -76,11 +76,13 @@ WM-32 trade-off 明文：**大规模 mTLS 卸载在 K8s/Service Mesh 解决，�
 | 错误信息不含裸 `"mtls"` 小写字面量 | 既有 AUTH-PLAN-01 archtest | Hard |
 | `MTLS()` 函数与 kernel/auth 包零交互 | 函数签名零 auth 类型参 + body 只依赖 stdlib+pkg/* | Hard (type-system) |
 | `runtime/http/tlsutil/` 只接 PEM bytes | 函数签名 `[]byte` 类型 | Hard (type-system) |
-| `NewServerMTLSConfig` 出厂 TLS1.3 + RequireAndVerify | builder body 硬编字段写入 | Hard (type-system) |
+| `NewServerMTLSConfig` 出厂 TLS1.3 + RequireAndVerify | builder body 硬编字段写入；返回 stdlib `*tls.Config` 可变结构 | Soft (godoc 约定) — 升 Hard 不可行（`crypto/tls.Server` 接 `*tls.Config`，无 opaque wrapper 通道） |
 | PeerIdentity 字段集 curated（不含 `Raw *x509.Certificate`） | pkg/ctxkeys 包边界 = single sanctioned holder | 结构上 Hard |
 | `applyListenerAuthChain` `case AuthMTLS:` 唯一 caller | sealed `ListenerAuth` interface + type-switch | Hard (type-system) |
 
-无 Soft enforcement 立项，符合 ai-robust §"Soft 严禁立项"。
+> Row 5 Soft 的天花板限制：Go 生态约束。`crypto/tls.Server`/`http.ServeTLS` 强制接收 `*tls.Config` 标准类型；自定义 opaque wrapper 无法注入握手层。godoc 警告（见 `server.go::NewServerMTLSConfig`）是该 surface 唯一可行 enforcement。
+
+Row 5 Soft 属 Go 生态技术上限（`crypto/tls.Server` 接受 `*tls.Config` 标准类型，无 opaque wrapper 通道），物理不可行升 Hard，符合 ai-robust §"Soft 严禁立项"之豁免条件。其余行均为 Hard。
 
 ref: spiffe/go-spiffe v2/spiffetls/tlsconfig — MTLSServerConfig（curated 字段）
 ref: kubernetes/apiserver pkg/server/secure_serving.go — server cert plumbing

@@ -16,6 +16,14 @@ const peerIdentity ctxKey = "peer_identity"
 // that callers parse with their own helper). Raw *x509.Certificate is
 // deliberately not exposed, so handlers do not depend on the x509 internal
 // representation. Adding a field requires a focused review of this file.
+//
+// SECURITY NOTE: Subject is the stdlib pkix.Name. Beyond CN/O/OU it carries
+// Names []pkix.AttributeTypeAndValue and ExtraNames []pkix.AttributeTypeAndValue
+// which can hold arbitrary OID-value pairs (e.g. emailAddress, serialNumber).
+// Callers that serialize Subject wholesale into slog or access logs may leak
+// PII. Read only the named fields you need (Subject.CommonName,
+// Subject.Organization, etc.) and never marshal Subject directly into wire
+// or log payloads.
 type PeerIdentity struct {
 	Subject  pkix.Name
 	DNSNames []string
@@ -30,6 +38,13 @@ func WithPeerIdentity(ctx context.Context, id PeerIdentity) context.Context {
 
 // PeerIdentityFrom extracts the peer identity from ctx. The boolean reports
 // whether the key was present; absent → zero-value PeerIdentity{} + false.
+//
+// CALLERS MUST CHECK ok BEFORE USING THE IDENTITY. Absent means the request
+// did not pass through runtime/http/middleware.MTLS (e.g. mTLS not on this
+// listener, or the request hit a non-mTLS auth chain). Using the zero-value
+// PeerIdentity{} as if it were a real identity is a silent bug — it has an
+// empty CN, nil DNSNames, and nil URIs that would compare equal to other
+// zero values.
 func PeerIdentityFrom(ctx context.Context) (PeerIdentity, bool) {
 	v, ok := ctx.Value(peerIdentity).(PeerIdentity)
 	return v, ok
