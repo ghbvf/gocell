@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -340,9 +341,12 @@ func (r *PGUserRepo) getForUpdateBy(
 	)
 	switch kind {
 	case lookupByID:
+		// id is a UUID — no whitespace / quoting ambiguity, %s is enough.
 		sql = selectUserByIDForUpdateSQL
 		attrPart = fmt.Sprintf("id=%s", value)
 	case lookupByUsername:
+		// username is arbitrary user-supplied text — %q quotes the value so
+		// embedded whitespace / special chars stay parseable in slog Internal.
 		sql = selectUserByUsernameForUpdateSQL
 		attrPart = fmt.Sprintf("username=%q", value)
 	}
@@ -366,9 +370,13 @@ func (r *PGUserRepo) getForUpdateBy(
 	case lookupByUsername:
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
 	}
-	// Unreachable per kind enum closure, but Go's exhaustiveness analyzer
-	// cannot prove it; emit a generic wrap as defensive fallback.
-	return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-for-update", err)
+	// Unreachable: userLookupKind enum is closed at 2 const values, both
+	// covered above. Adding a new const without extending this switch is a
+	// programmer error — panic-registered A class per PANIC-REGISTERED-01
+	// surfaces it immediately at runtime instead of silently routing through
+	// a generic wrap.
+	panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
+		errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
 }
 
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row

@@ -45,14 +45,14 @@ jobs:
         timeout-minutes: 3
         run: go mod download -x
 
-      - name: Build slowgate
-        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
-
-      - name: Pre-step memory snapshot
+      - name: Pre-shard memory baseline (before Build + Verify)
         if: always()
         run: |
-          echo "=== /proc/meminfo (pre-shard) ==="
+          echo "=== /proc/meminfo (pre-shard, before Build slowgate) ==="
           grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree):' /proc/meminfo
+
+      - name: Build slowgate
+        run: go build -o "$RUNNER_TEMP/slowgate" ./tools/slowgate
 
       - name: Verify archtest shard ${{ matrix.shard }}
         env:

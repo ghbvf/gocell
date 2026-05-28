@@ -26,17 +26,17 @@ Phase 0 本地实测（macOS local，BSD `/usr/bin/time -l` maximum resident set
 | K=8 modulo shards (max shard) | 13.47s | **6.30 GB** |
 | K=16 modulo shards (max shard) | 12.10s | **4.22 GB** |
 
-K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度。K=8 留余量不足（Linux RSS 通常高于 macOS RSS）。
+> 表格是 macOS Apple Silicon 历史 baseline，标定了"per-shard RSS 单调随 K 增加而降低"的方向性论点。原始结论 "K=16 是首个稳定低于 GHA 7GB OOM 阈值的分片粒度" 是该方向性论点的 **macOS-本地** 论证；K=8 macOS 6.30 GB 留余量不足是 macOS 实测，Linux RSS 通常高于 macOS RSS。**当前 CI 值是 K=24**（§Amendment 2026-05-28），是同一方向性论点向更细分片的延伸（per-shard tests 数从 47 降到 32，per-shard RSS 必然 ≤ K=16）。K=24 GHA Linux baseline 未在表中——待 §Amendment 2026-05-28 §D3 Phase A 诊断 step 收集 `/proc/meminfo` + `dmesg` 后回填。本节描述以"方向性论点"为权威，**不以表中 K=16 行**为当前 CI 值的真值源。
 
 ## Decisions
 
-### D1. CI 入口改为 process-isolated 16-shard 矩阵（CI 显式 K=16 / 本地默认 K=1）
+### D1. CI 入口改为 process-isolated 24-shard 矩阵（CI 显式 K=24 / 本地默认 K=1）
 
-`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 16 explicit；本地默认: 1**，见 §Amendment 2026-05-23），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。三种 execution mode 由 env shape 派生（见 §Amendment 2026-05-23-pr-time-to-nightly §决策 3）：`SHARD_TARGET` 设 → 单 shard（GHA matrix）；`SHARD_COUNT=1` 无 `SHARD_TARGET` → 单进程流式（本地 `make verify` 默认）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out（background `&` + wait barrier）。旧 K=N 串行 for-loop 已删（每 shard 重 packages.Load 比 K=1 慢）。
+`hack/verify-archtest.sh` 整体重写：discovery via `go test -list '^Test' ./tools/archtest`，按字母序 modulo `SHARD_COUNT` 分片（**CI: 24 explicit；本地默认: 1**，见 §Amendment 2026-05-23 + §Amendment 2026-05-28），每 shard 独立 `go test -run '^(name1|name2|...)$'` 调用。三种 execution mode 由 env shape 派生（见 §Amendment 2026-05-23-pr-time-to-nightly §决策 3）：`SHARD_TARGET` 设 → 单 shard（GHA matrix）；`SHARD_COUNT=1` 无 `SHARD_TARGET` → 单进程流式（本地 `make verify` 默认）；`SHARD_COUNT>1` 无 `SHARD_TARGET` → 并行 fan-out（background `&` + wait barrier）。旧 K=N 串行 for-loop 已删（每 shard 重 packages.Load 比 K=1 慢）。
 
-`.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..15]` + 显式 `env: SHARD_COUNT: 16`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=16` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment）。
+`.github/workflows/archtest-nightly.yml` 单一 `verify-archtest` job：`matrix.shard: [0..23]` + 显式 `env: SHARD_COUNT: 24`（GHA 7 GB shard RSS 约束）；每 shard 独立 ubuntu-latest runner。`fail-fast: false` 对齐 K8s `hack/make-rules/verify.sh` continue-on-failure 范式。CI explicit `SHARD_COUNT=24` 由 `ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01` archtest 守卫（见 §Amendment 2026-05-28）。
 
-> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job"。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
+> 历史：本节原文为 "无 SHARD_TARGET 时串行跑 SHARD_COUNT 个 shard" + "`.github/workflows/_build-lint.yml` 新增 `verify-archtest` job" + `K=16 / matrix.shard: [0..15]`。§Amendment 2026-05-23-pr-time-to-nightly §决策 3 删 K=N 串行 for-loop 并新增 "Execution modes" 三档，§决策 1 把 verify-archtest job 整段从 `_build-lint.yml` 迁到 `archtest-nightly.yml`。§Amendment 2026-05-28 把 K=16 提升为 K=24（per-shard RSS 方向性延伸 + slowgate threshold 20s → 25s）。本节同 PR 重写（per ai-robust.md §"ADR amendment 落地必查"）。
 
 ### D2. tools shard 不再 enumerate archtest，pkgs 运行时计算
 
@@ -298,9 +298,10 @@ K=4 全胜：18-core 给 4 process 各 ~4.5 core，`go test` 内 `t.Parallel` �
 
 2. **SIGTERM 143（双假说，无 ex-ante 决断能力）**
    - 2026-05-24 shards 3/0/7/9/15、2026-05-25 shards 1/2/10/15、2026-05-26 shards 8/9、2026-05-27 shards 1/3 均有 `##[error]The runner has received a shutdown signal`。`fail-fast: false` 已排除 sibling-fail-fast 级联；workflow 无 `concurrency:` 块排除 cancel-in-progress；step `timeout-minutes: 3` 与 job `timeout-minutes: 10` 未触发。
-   - **OOM 假说**（§11 lineage）：多 shards 重复出现（shard 1/3/7 在多日复现，非完全随机分布）；shard 1 SIGTERM at 75 秒对齐 `packages.Load` 峰值时间窗口。
-   - **Spot preempt 假说**（§3 lineage）：workflow godoc line 7-10 已记录 `"GHA runner spot preemption ('runner has received a shutdown signal') with 16× amplification across the shard matrix"`。
+   - **OOM 假说**（§11 lineage）：多 shards 重复出现（shard 1/3/7 在多日复现，非完全随机分布）；shard 1 SIGTERM at 75 秒对齐 `packages.Load` 峰值时间窗口（**注意**：75 秒是 type-aware 测试 packages.Load 的典型时间窗口本身，spot preempt 也可能在该窗口触发，此条不构成 OOM 排他证据）。
+   - **Spot preempt 假说**（§3 lineage）：workflow godoc line 7-10 已记录 `"GHA runner spot preemption ('runner has received a shutdown signal') with 16× amplification across the shard matrix"`；GHA spot 抢占可集中于某个 runner pool / availability zone，故"多 shards 重复出现"亦非完全反对 spot 的证据。
    - 无 runner-side `dmesg` / RSS 实测数据，ex-ante 不可区分。Phase A 诊断 step（同 PR `archtest-nightly.yml` `Pre-step memory snapshot` + `Post-step memory + dmesg`）捕获 `/proc/meminfo` + `ps --sort -rss` + `dmesg` 后下一轮 nightly 失败时可 ex-post 收敛。
+   - **本 amendment K=24 对两类假说均有缓解**：OOM 路径下，per-shard tests 数从 47 降到 32，per-shard RSS 必然 ≤ K=16；Spot preempt 路径下，单 shard wall-time 缩短降低了暴露窗口面（虽不消除概率）。Phase A 诊断收据后若证伪 OOM 假说、锁定 spot preempt，单独 amendment 评估 runner tier 升级（`ubuntu-latest` → `ubuntu-latest-4-cores`）或 step retry 机制。
 
 ### 决策
 

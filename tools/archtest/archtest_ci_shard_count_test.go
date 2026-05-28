@@ -48,8 +48,9 @@ const expectedShardCount = "24"
 //
 // The guard targets .github/workflows/archtest-nightly.yml — the sole
 // authoritative CI gate for the archtest matrix (ADR 202605120000
-// §Amendment 2026-05-23-pr-time-to-nightly). Local PR-time fast-feedback
-// is hack/githooks/pre-push (K=4 parallel fan-out).
+// §Amendment 2026-05-23-pr-time-to-nightly). Local full-matrix feedback:
+// `make verify` or `bash hack/verify-archtest.sh` (explicit trigger; pre-push
+// archtest was retracted in PR #887 round-2, see ADR §"pre-push archtest 撤回").
 //
 // ref: ADR docs/architecture/202605120000-adr-archtest-process-isolation.md
 // §Amendment 2026-05-23 + §Amendment 2026-05-23-pr-time-to-nightly
@@ -78,18 +79,18 @@ func TestVerifyArchtestCIExplicitShardCountRejectsMissingEnv(t *testing.T) {
 }
 
 // TestVerifyArchtestCIExplicitShardCountRejectsWrongValue covers the value
-// drift case: env present but value != 24 (e.g. mistakenly set to 1, 8, the
-// former K=16 value, or any other non-CI value). Validator must reject any
-// value other than 24 since K=24 is the ADR-mandated value (§Amendment
-// 2026-05-28). Fixture uses the former K=16 to exercise the realistic drift
-// path: stale yaml carrying the pre-amendment K value must be caught.
+// drift case: env present but value != expectedShardCount. Fixture uses
+// SHARD_COUNT=8, a value never used in production (K=6/K=8 are macOS Phase 0
+// historical measurements only) — this keeps the drift fixture decoupled
+// from any past or future K value, so future K-upgrade PRs only need to bump
+// expectedShardCount without touching this fixture.
 func TestVerifyArchtestCIExplicitShardCountRejectsWrongValue(t *testing.T) {
 	body := []byte(`jobs:
   verify-archtest:
     steps:
       - name: Verify archtest shard ${{ matrix.shard }}
         env:
-          SHARD_COUNT: 16
+          SHARD_COUNT: 8
           SHARD_TARGET: ${{ matrix.shard }}
         run: bash hack/verify-archtest.sh
 `)

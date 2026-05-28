@@ -761,31 +761,27 @@ func ifBodyReturnsCanonicalNotFound(pass *Pass, body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
-	found := false
-	EachInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) {
-		if found {
-			return
-		}
-		// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 walk of ret's
-		// direct child Expr nodes that are CallExpr. Original `for _, expr :=
-		// range ret.Results { expr.(*ast.CallExpr) }` form is the Path B
-		// violation (equivalent to bare ast.Inspect).
-		EachInChildren[ast.CallExpr](ret, func(call *ast.CallExpr) {
-			if found {
-				return
-			}
+	// SCANNER-FRAMEWORK-USAGE-01 Path B + USAGE-02 compliance:
+	//   - Outer: FindFirstInSubtree[ast.ReturnStmt] replaces "EachInSubtree +
+	//     found sentinel" idiom (USAGE-02 forbids the sentinel form on
+	//     EachInChildren; the typed FindFirst* funnels are mandated for
+	//     find-first semantics on either depth).
+	//   - Inner: FindFirstChild[ast.CallExpr] over ret's direct children
+	//     replaces "for _, expr := range ret.Results { expr.(*ast.CallExpr) }"
+	//     (Path B violation form).
+	_, match := FindFirstInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) bool {
+		_, hit := FindFirstChild[ast.CallExpr](ret, func(call *ast.CallExpr) bool {
 			if !isErrCodeNewCall(pass.TypesInfo, call) {
-				return
+				return false
 			}
 			if len(call.Args) == 0 {
-				return
+				return false
 			}
-			if isKindNotFoundArg(pass, call.Args[0]) {
-				found = true
-			}
+			return isKindNotFoundArg(pass, call.Args[0])
 		})
+		return hit
 	})
-	return found
+	return match
 }
 
 // isOwnershipMismatchCall reports whether cond is a CallExpr whose callee
@@ -1026,7 +1022,9 @@ func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnost
 		})
 
 		// (3) Total-count reconciliation — direct-child Results that are
-		//     neither nil-ident nor CallExpr (e.g., bare variable, BasicLit).
+		//     neither nil-ident nor CallExpr (e.g., bare variable, BasicLit,
+		//     ParenExpr like `return (errcode.New(...))`, UnaryExpr like
+		//     `return &someStruct{}` — all non-canonical forms).
 		//     Emits a single diagnostic per offending ret since precise per-
 		//     expr line would require re-walking the slice, which Path B
 		//     forbids. CheckOwner conventionally returns single-line, so

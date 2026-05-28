@@ -21,10 +21,11 @@ jobs:
     # panic-registered) are PR-time gates via hack/verify-archtest-invariants.sh
     # (~33s, PR #898 measured; single shared-resolver go test invocation).
     # The complete archtest suite (628+ tests) is delegated to
-    # .github/workflows/archtest-nightly.yml (matrix of 16 shards on a daily
+    # .github/workflows/archtest-nightly.yml (matrix of 24 shards on a daily
     # schedule + workflow_dispatch, process-isolated per ADR 202605120000
-    # §Amendment 2026-05-23-pr-time-to-nightly) — that job is the **single
-    # authoritative owner** of full archtest enforcement on CI.
+    # §Amendment 2026-05-23-pr-time-to-nightly + §Amendment 2026-05-28) —
+    # that job is the **single authoritative owner** of full archtest
+    # enforcement on CI.
     # hack/githooks/pre-push omits archtest after PR #887 review round-2
     # (CPU/RSS budget — ~3min wall + 43 GB RSS + 18-core 100% violates the
     # hook's sub-10s deterministic contract; see ADR §"pre-push archtest 撤回").
