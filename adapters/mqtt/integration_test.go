@@ -5,13 +5,17 @@ package mqtt
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -30,13 +34,13 @@ func newTestConfig(t *testing.T, role string) Config {
 	return Config{
 		ClientID:       cid,
 		Brokers:        []string{brokerURL},
-		ConnectTimeout: 5 * time.Second,
-		KeepAlive:      10 * time.Second,
+		ConnectTimeout: testtime.D5s,
+		KeepAlive:      testtime.D10s,
 		Backoff: BackoffConfig{
-			BaseDelay: 100 * time.Millisecond,
-			MaxDelay:  2 * time.Second,
+			BaseDelay: testtime.D100ms,
+			MaxDelay:  testtime.D2s,
 		},
-		PublishTimeout: 5 * time.Second,
+		PublishTimeout: testtime.D5s,
 	}
 }
 
@@ -44,7 +48,7 @@ func newTestConfig(t *testing.T, role string) Config {
 // Mosquitto broker: open connection, construct Publisher, publish a small
 // payload to a valid topic, assert no error returned (broker PUBACK 0x00).
 func TestIntegration_PublisherQoS1(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D20s)
 	defer cancel()
 
 	cfg := newTestConfig(t, "publish-qos1")
@@ -53,7 +57,7 @@ func TestIntegration_PublisherQoS1(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = conn.Close(cleanupCtx)
 	})
@@ -67,7 +71,7 @@ func TestIntegration_PublisherQoS1(t *testing.T) {
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = pub.Close(cleanupCtx)
 	})
@@ -84,18 +88,18 @@ func TestIntegration_PublisherQoS1(t *testing.T) {
 // the keep-alive ping path — the test confirms the connection survives the
 // heartbeat exchange transparently.
 func TestIntegration_PublisherReconnect(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
 	defer cancel()
 
 	cfg := newTestConfig(t, "publish-reconnect")
-	cfg.KeepAlive = 2 * time.Second // tighter keep-alive for quick failure detection
+	cfg.KeepAlive = testtime.D2s // tighter keep-alive for quick failure detection
 
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = conn.Close(cleanupCtx)
 	})
@@ -109,7 +113,7 @@ func TestIntegration_PublisherReconnect(t *testing.T) {
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = pub.Close(cleanupCtx)
 	})
@@ -120,7 +124,9 @@ func TestIntegration_PublisherReconnect(t *testing.T) {
 	}
 
 	// Sleep > KeepAlive interval — exercises keep-alive ping path.
-	time.Sleep(3 * time.Second)
+	// Wall-clock time must pass so the KeepAlive timer fires and exercises
+	// the broker heartbeat path; polling does not accelerate KeepAlive.
+	time.Sleep(testtime.D3s) //archtest:allow:test-sleep keep-alive-heartbeat-traversal: wall-clock must elapse for KeepAlive timer to fire
 
 	if err := pub.Publish(ctx, topic, []byte(`{"seq":2}`)); err != nil {
 		t.Fatalf("Publish seq=2 (post keep-alive): %v", err)
@@ -133,7 +139,7 @@ func TestIntegration_PublisherReconnect(t *testing.T) {
 // expect the context deadline to fire immediately, surfacing as
 // ErrAdapterMQTTPubAckTimeout per publisher.go's wrapPublishErr.
 func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 	defer cancel()
 
 	cfg := newTestConfig(t, "publish-timeout")
@@ -144,7 +150,7 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = conn.Close(cleanupCtx)
 	})
@@ -158,7 +164,7 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 		t.Fatalf("NewPublisher: %v", err)
 	}
 	t.Cleanup(func() {
-		cleanupCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
 		defer c()
 		_ = pub.Close(cleanupCtx)
 	})
@@ -177,4 +183,134 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 	if ec.Code != ErrAdapterMQTTPubAckTimeout {
 		t.Fatalf("Publish err code = %v, want %v", ec.Code, ErrAdapterMQTTPubAckTimeout)
 	}
+}
+
+// TestIntegration_PublisherTrueReconnect verifies that the autopaho connection
+// fully reconnects after a broker restart: it publishes, stops the broker
+// container, waits for WaitConnected to return after the container restarts,
+// then publishes again successfully.
+func TestIntegration_PublisherTrueReconnect(t *testing.T) {
+	testutil.RequireDocker(t)
+
+	// Bring up a dedicated broker — NOT the shared one — so we can stop/start it.
+	dedicatedURL, container, err := startDedicatedMosquittoContainer(t)
+	if err != nil {
+		t.Fatalf("start dedicated broker: %v", err)
+	}
+	t.Cleanup(func() {
+		termCtx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+		defer cancel()
+		_ = container.Terminate(termCtx)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D60s)
+	defer cancel()
+
+	cid, err := ParseEphemeralClientID("itest", "true-reconnect")
+	if err != nil {
+		t.Fatalf("ParseEphemeralClientID: %v", err)
+	}
+	cfg := Config{
+		ClientID: cid,
+		Brokers:  []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+		ConnectTimeout: testtime.D5s,
+		KeepAlive:      testtime.D10s,
+		Backoff: BackoffConfig{
+			BaseDelay: testtime.D100ms,
+			MaxDelay:  testtime.D2s,
+		},
+		PublishTimeout: testtime.D5s,
+	}
+
+	conn, err := Open(ctx, clock.Real(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
+		defer c()
+		_ = conn.Close(cleanupCtx)
+	})
+
+	ns, err := ParseTopicNamespace("itest")
+	if err != nil {
+		t.Fatalf("ParseTopicNamespace: %v", err)
+	}
+	pub, err := NewPublisher(clock.Real(), conn, ns)
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
+		defer c()
+		_ = pub.Close(cleanupCtx)
+	})
+
+	topic := "itest/true-reconnect/" + uuid.NewString()
+
+	// seq=1: initial publish — must succeed with broker up.
+	if err := pub.Publish(ctx, topic, []byte(`{"seq":1}`)); err != nil {
+		t.Fatalf("Publish seq=1: %v", err)
+	}
+
+	// Stop the broker — triggers disconnection.
+	stopTimeout := testtime.D10s
+	if err := container.Stop(ctx, &stopTimeout); err != nil {
+		t.Fatalf("container.Stop: %v", err)
+	}
+
+	// Restart the broker container.
+	if err := container.Start(ctx); err != nil {
+		t.Fatalf("container.Start: %v", err)
+	}
+
+	// Wait for autopaho to reconnect.
+	reconnectCtx, reconnectCancel := context.WithTimeout(ctx, testtime.D30s)
+	defer reconnectCancel()
+	if err := conn.WaitConnected(reconnectCtx); err != nil {
+		t.Fatalf("WaitConnected after restart: %v", err)
+	}
+
+	// seq=2: publish after full reconnect — must succeed.
+	if err := pub.Publish(ctx, topic, []byte(`{"seq":2}`)); err != nil {
+		t.Fatalf("Publish seq=2 (post restart): %v", err)
+	}
+}
+
+// startDedicatedMosquittoContainer starts an eclipse-mosquitto container for
+// exclusive use by TestIntegration_PublisherTrueReconnect (stop/start lifecycle).
+func startDedicatedMosquittoContainer(t *testing.T) (string, testcontainers.Container, error) {
+	t.Helper()
+	ctx := context.Background()
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        testutil.MosquittoImage,
+			ExposedPorts: []string{"1883/tcp"},
+			Files: []testcontainers.ContainerFile{
+				{
+					Reader:            strings.NewReader(mosquittoConf),
+					ContainerFilePath: "/mosquitto/config/mosquitto.conf",
+					FileMode:          0o644,
+				},
+			},
+			WaitingFor: wait.ForListeningPort("1883/tcp").
+				WithStartupTimeout(testtime.D30s),
+		},
+		Started: true,
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	host, err := container.Host(ctx)
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return "", nil, err
+	}
+	port, err := container.MappedPort(ctx, "1883/tcp")
+	if err != nil {
+		_ = container.Terminate(ctx)
+		return "", nil, err
+	}
+	url := "tcp://" + host + ":" + port.Port()
+	return url, container, nil
 }

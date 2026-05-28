@@ -438,7 +438,7 @@ func TestConfig_Validate_MaximumPacketSize_Accepted(t *testing.T) {
 func TestConfig_Validate_PublishTimeout_Negative(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.PublishTimeout = -1 * time.Second
+	cfg.PublishTimeout = testtime.DNeg1s
 	err := cfg.Validate()
 	require.Error(t, err)
 	var ec *errcode.Error
@@ -461,6 +461,6 @@ func TestConfig_Validate_PublishTimeout_Zero(t *testing.T) {
 func TestConfig_Validate_PublishTimeout_Positive(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.PublishTimeout = 5 * time.Second
+	cfg.PublishTimeout = testtime.D5s
 	require.NoError(t, cfg.Validate())
 }

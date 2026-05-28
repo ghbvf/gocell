@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -68,7 +68,7 @@ func startMosquittoContainer() (string, func(), error) {
 				},
 			},
 			WaitingFor: wait.ForListeningPort("1883/tcp").
-				WithStartupTimeout(30 * time.Second),
+				WithStartupTimeout(testtime.D30s),
 		},
 		Started: true,
 	})
@@ -87,7 +87,7 @@ func startMosquittoContainer() (string, func(), error) {
 	}
 	url := fmt.Sprintf("tcp://%s:%s", host, port.Port())
 	shutdown := func() {
-		termCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		termCtx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
 		defer cancel()
 		_ = container.Terminate(termCtx)
 	}

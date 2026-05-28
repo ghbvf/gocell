@@ -75,9 +75,7 @@ func TestNewPublisher_ZeroNamespace(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublisher_Publish_Success(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker has a TOCTOU port-reuse window
-	// (ln.Close() then re-bind) that causes flaky port conflicts under parallel
-	// test execution. Deferred until broker helper is fixed.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -215,7 +213,7 @@ func TestPublisher_Publish_AfterClose(t *testing.T) {
 }
 
 func TestPublisher_Publish_ContextCanceled(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -276,7 +274,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 }
 
 func TestPublisher_Close_DoesNotCloseConnection(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -302,9 +300,7 @@ func TestPublisher_Close_DoesNotCloseConnection(t *testing.T) {
 }
 
 func TestPublisher_Close_DrainsInFlight(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker has a TOCTOU port-reuse window
-	// (ln.Close() then re-bind) that causes flaky port conflicts under parallel
-	// test execution. Deferred until broker helper is fixed.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -324,9 +320,10 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 	require.NoError(t, err)
 
 	// Fire a publish in the background with a channel barrier to signal when
-	// the goroutine is about to enter Publish, replacing the previous pure-sleep
-	// synchronization. A small additional sleep gives the goroutine time to
-	// reach the Publish mutex lock before Close marks the publisher closed.
+	// the goroutine is about to enter Publish. The channel barrier guarantees
+	// the goroutine has started; any in-flight work will have entered Publish
+	// (or will have exited via the closed-path check) by the time Close runs.
+	// Both outcomes are valid drain semantics.
 	started := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -336,9 +333,8 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 		_ = pub.Publish(ctx, "test/drain", make([]byte, 5))
 	}()
 	<-started
-	time.Sleep(time.Millisecond) // let goroutine reach Publish mutex
 
-	// Close should drain the in-flight publish before returning.
+	// Close should drain any in-flight publish before returning.
 	closeErr := pub.Close(ctx)
 	assert.NoError(t, closeErr, "Close should succeed after draining in-flight publishes")
 
@@ -350,7 +346,7 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublisher_Publish_ConcurrentSafe(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -475,7 +471,7 @@ func startBrokerWithNoSubscribersHook(t *testing.T) (addr string, stop func()) {
 // (NoMatchingSubscribers) is treated as success: Publisher.Publish returns nil,
 // RecordPublishSuccess is called once, and RecordPublishFailure is not called.
 func TestPublisher_Publish_NoMatchingSubscribers_Success(t *testing.T) {
-	// t.Parallel disabled: startBrokerWithNoSubscribersHook has TOCTOU port-reuse.
+	t.Parallel()
 	addr, stop := startBrokerWithNoSubscribersHook(t)
 	defer stop()
 
@@ -513,7 +509,7 @@ func TestPublisher_Publish_NoMatchingSubscribers_Success(t *testing.T) {
 // len(nil) == 0, so the MaximumPacketSize guard passes and the broker accepts
 // an empty payload.
 func TestPublisher_Publish_NilPayload(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -543,7 +539,7 @@ func TestPublisher_Publish_NilPayload(t *testing.T) {
 // deadline is honored as-is. The test publishes with a generous ctx deadline and
 // confirms the call succeeds (demonstrating no internal timeout was imposed).
 func TestPublisher_Publish_NoAdapterTimeout(t *testing.T) {
-	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 

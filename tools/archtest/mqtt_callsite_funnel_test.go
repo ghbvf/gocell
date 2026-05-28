@@ -39,9 +39,9 @@
 //     Mint body + zero-value error return. publishableTopic field-shape reflect lock.
 //     Permanent Go-language ceiling (same as SPAN-SETATTR-REDACT-01 /
 //     PROBENAME-SEALED-FUNNEL-01 package-internal side).
-//     Tracked for potential Hard upgrade — open follow-up gh issue per
-//     ai-robust.md §Funnel 双向锁评级 ("必须同步开 gh issue 跟踪显式 Hard
-//     化任务"). Sibling: SPAN-SETATTR-REDACT-01 tracks gh #851 for the same
+//     Tracked for potential Hard upgrade — gh #1247 per ai-robust.md §Funnel
+//     双向锁评级 ("必须同步开 gh issue 跟踪显式 Hard 化任务").
+//     Sibling: SPAN-SETATTR-REDACT-01 tracks gh #851 for the same
 //     package-internal seal-upgrade question.
 //
 // # Sub-rules

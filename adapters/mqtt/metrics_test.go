@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestNewProviderConnectionCollector_RejectsNilProvider verifies nil provider is
@@ -225,7 +225,7 @@ func TestProviderPublisherCollector_RecordPublishSuccess(t *testing.T) {
 	col, err := NewProviderPublisherCollector(spy, "testcell")
 	require.NoError(t, err)
 
-	col.RecordPublishSuccess(context.Background(), 25*time.Millisecond)
+	col.RecordPublishSuccess(context.Background(), testtime.D25ms)
 
 	ops := spy.ops()
 	// Expect: one Inc on publish_total and one Observe on ack_duration
@@ -288,7 +288,7 @@ func TestNoopPublisherCollector_Methods(t *testing.T) {
 	t.Parallel()
 	col := NoopPublisherCollector{}
 	assert.NotPanics(t, func() {
-		col.RecordPublishSuccess(context.Background(), 10*time.Millisecond)
+		col.RecordPublishSuccess(context.Background(), testtime.D10ms)
 		col.RecordPublishFailure(context.Background(), PublishFailureClosed)
 	})
 }

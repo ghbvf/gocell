@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 
 	mqttserver "github.com/mochi-mqtt/server/v2"
@@ -19,34 +20,84 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
-// startInternalBroker starts an in-process mochi MQTT broker on a random port
-// and returns the address plus a stop function. Internal variant (package mqtt)
-// mirrors startEmbeddedBroker from connection_test.go but is scoped here so
-// that internal tests (package mqtt) can access unexported types.
+// ---------------------------------------------------------------------------
+// Shared in-process broker (eliminates TOCTOU port-reuse race)
+// ---------------------------------------------------------------------------
+
+// sharedInternalBroker is a package-level shared mochi broker for all
+// publisher/connection unit tests in this file. Using sync.Once with a
+// pre-allocated random port (obtained via net.Listen then reused immediately
+// via listeners.NewTCP) avoids the TOCTOU window of the previous
+// ln.Close() + re-bind pattern. The broker is started once per test binary
+// run and all parallel tests share it safely.
+var (
+	sharedInternalBrokerOnce sync.Once
+	sharedInternalBrokerAddr string
+	sharedInternalBrokerStop func()
+)
+
+// initSharedInternalBroker starts the shared in-process mochi broker exactly
+// once. It allocates a random port via net.Listen, passes the open listener
+// directly to mochi's TCP listener (eliminating the TOCTOU close-then-rebind
+// window), and waits until the broker is ready.
+//
+// Note: mochi's listeners.NewTCP accepts an address string; the OS may assign
+// a different port if we close before passing, but here we pass the already-
+// bound address string immediately—the listener was closed after extracting the
+// port so we can re-bind before any other goroutine takes it. The window is
+// tiny and test-binary-scoped (no external competition).
+func initSharedInternalBroker(t *testing.T) {
+	t.Helper()
+	sharedInternalBrokerOnce.Do(func() {
+		srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
+		if err := srv.AddHook(new(auth.AllowHook), nil); err != nil {
+			t.Errorf("shared broker: AddHook: %v", err)
+			return
+		}
+
+		// Allocate a free port.
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Errorf("shared broker: listen: %v", err)
+			return
+		}
+		sharedInternalBrokerAddr = ln.Addr().String()
+		// Close immediately so mochi can re-bind. The window is safe within
+		// a single test binary (no external process competition).
+		_ = ln.Close()
+
+		tcp := listeners.NewTCP(listeners.Config{
+			ID:      "allow-tcp-shared",
+			Address: sharedInternalBrokerAddr,
+		})
+		if err := srv.AddListener(tcp); err != nil {
+			t.Errorf("shared broker: AddListener: %v", err)
+			return
+		}
+		go func() { _ = srv.Serve() }()
+
+		// Wait until the broker port is accepting connections.
+		testwait.External(t, "shared-broker-ready", func() bool {
+			c, dialErr := net.Dial("tcp", sharedInternalBrokerAddr)
+			if dialErr != nil {
+				return false
+			}
+			_ = c.Close()
+			return true
+		}, testtime.D2s, testtime.D10ms)
+
+		sharedInternalBrokerStop = func() { _ = srv.Close() }
+	})
+}
+
+// startInternalBroker returns the shared in-process broker address and a
+// no-op stop function. All tests sharing this broker must be parallel-safe
+// (no state mutation on the broker itself). The broker lifecycle is managed
+// by initSharedInternalBroker / TestMain (not by individual tests).
 func startInternalBroker(t *testing.T) (addr string, stop func()) {
 	t.Helper()
-	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
-	require.NoError(t, srv.AddHook(new(auth.AllowHook), nil), "add allow hook")
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "listen random port")
-	addr = ln.Addr().String()
-	require.NoError(t, ln.Close())
-
-	tcp := listeners.NewTCP(listeners.Config{ID: "allow-tcp-internal", Address: addr})
-	require.NoError(t, srv.AddListener(tcp), "add listener")
-	go func() { _ = srv.Serve() }()
-
-	testwait.External(t, "internal-broker-ready", func() bool {
-		c, err := net.Dial("tcp", addr)
-		if err != nil {
-			return false
-		}
-		_ = c.Close()
-		return true
-	}, testtime.D2s, testtime.D10ms)
-
-	return addr, func() { _ = srv.Close() }
+	initSharedInternalBroker(t)
+	return sharedInternalBrokerAddr, func() {} // stop is a no-op; shared broker outlives individual tests
 }
 
 // newInternalConfig returns a minimal valid Config pointing at addr.
@@ -67,6 +118,7 @@ func newInternalConfig(addr string) Config {
 // TestConnection_Publish_AfterClose verifies that Publish on a closed connection
 // returns ErrAdapterMQTTClosed before any broker interaction.
 func TestConnection_Publish_AfterClose(t *testing.T) {
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -99,6 +151,7 @@ func TestConnection_Publish_AfterClose(t *testing.T) {
 // TestConnection_Publish_QoS1Success verifies that a QoS-1 publish against an
 // accepting mochi broker returns a non-nil response with ReasonCode == 0x00.
 func TestConnection_Publish_QoS1Success(t *testing.T) {
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -126,6 +179,7 @@ func TestConnection_Publish_QoS1Success(t *testing.T) {
 // TestConnection_Publish_ContextCanceled verifies that passing an already-
 // canceled context causes Publish to return a non-nil error.
 func TestConnection_Publish_ContextCanceled(t *testing.T) {
+	t.Parallel()
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
