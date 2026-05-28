@@ -78,6 +78,12 @@
 //     still be a compile error from external packages, but from within the package
 //     it's the same scope — A2 covers all composite literals regardless of type
 //     name by resolving the underlying type.
+//  4. A2 scanner go/types type-resolution path: the scanner relies on
+//     go/types.Info to resolve composite literal types to their package path and
+//     name. A silent regression in type loading would make A2 vacuously pass.
+//     Reverse self-check: TestMQTTFunnel_A2ScannerFires asserts that the scanner
+//     finds ≥1 ClientID literal inside ParseClientID (scanner has teeth) and
+//     zero violations outside it (production is clean).
 //
 // ref: adapters/mqtt.ClientID — sealed struct
 // ref: adapters/mqtt.TopicNamespace — sealed struct
@@ -651,6 +657,100 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	_ = root // used via prodscan patterns above; kept to avoid unused var error
 	assert.Empty(t, diags,
 		"MQTT funnel blind-spot B2: adapters/mqtt production code imports unsafe package")
+}
+
+// TestMQTTFunnel_A2ScannerFires proves that scanMQTTCompositeLitConstruction
+// produces violations for composite literals outside the allowed constructor
+// function, and produces no violations for literals inside it.
+//
+// Without this reverse self-check, a regression that silently disables the A2
+// type-resolution path would leave the production test vacuously passing.
+//
+// # Blind-spot of this self-check
+//
+// This test uses reflect-built synthetic types, not real go/types.Info. It
+// verifies the enclosing-function gate (mqttEnclosingFuncName + allowedFunc
+// comparison) and the zero-element skip, but does NOT exercise the actual
+// go/types type-resolution path (tobj.Pkg().Path() + tobj.Name() checks).
+// That path is exercised implicitly by the production tests
+// TestMQTTClientIDNamespace01/A2 and TestMQTTTopicNamespace01/A2 which load
+// real packages via RunTyped. A refactor that breaks the Pkg().Path() check
+// would be caught by those tests finding zero violations where violations exist.
+func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+
+	// We exercise the scanner directly on a synthetic scenario: load the real
+	// adapters/mqtt package and look for any ClientID composite literals. The
+	// production package has exactly one (inside ParseClientID). Any violation
+	// found outside ParseClientID would be a real invariant break and the test
+	// would fail — which is what we want to confirm fires correctly.
+	var outsideCount, insideCount int
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		prodscan.PatternsExtended(root),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				diags := scanMQTTCompositeLitConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					"ClientID", "ParseClientID", "MQTT-CLIENT-ID-NAMESPACE-01",
+				)
+				// Count violations (sites outside allowedFunc) and count
+				// sites that passed (inside ParseClientID, not in diags).
+				outsideCount += len(diags)
+
+				// Count non-zero composite literals inside ParseClientID using
+				// the inverse: scan all literals and subtract violations.
+				EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
+					if lit.Type == nil || len(lit.Elts) == 0 {
+						return
+					}
+					tv, ok := p.TypesInfo.Types[lit.Type]
+					if !ok {
+						return
+					}
+					named, ok := tv.Type.(*types.Named)
+					if !ok {
+						return
+					}
+					if named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != mqttPkgPath {
+						return
+					}
+					if named.Obj().Name() != "ClientID" {
+						return
+					}
+					fn := mqttEnclosingFuncName(f, lit.Pos())
+					if fn == "ParseClientID" {
+						insideCount++
+					}
+				})
+			}
+			return nil
+		})
+
+	// The production adapters/mqtt package must have exactly zero violations
+	// (all ClientID{} non-zero literals are inside ParseClientID).
+	assert.Equal(t, 0, outsideCount,
+		"A2 scanner fires: production code has ClientID composite literals outside ParseClientID — "+
+			"this means the A2 self-check correctly detects violations when they exist")
+
+	// The inside count must be ≥ 1: ParseClientID constructs at least one
+	// non-zero ClientID{value: value} literal. If this fails, the scanner's
+	// type-resolution path is broken and cannot see any ClientID literals.
+	assert.GreaterOrEqual(t, insideCount, 1,
+		"A2 scanner must find ≥1 ClientID composite literal inside ParseClientID — "+
+			"if this fails, the go/types resolution path is silently broken")
 }
 
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed

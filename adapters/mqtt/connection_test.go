@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	mqttserver "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
@@ -19,10 +19,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
-
-// connBackoffJitterFloor is the expected lower bound (0.75 × 100 ms base) for
-// the ExponentialBackoffWithJitter result at attempt 0.
-const connBackoffJitterFloor = 75 * time.Millisecond
 
 // startEmbeddedBroker starts an in-process mochi broker with the given hook on
 // a random port, waits until it accepts connections, and returns addr + stop.
@@ -184,36 +180,6 @@ func TestConnection_NeverConnected_TransientError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestConnection_BackoffClosure_Wired is a white-box test that verifies the
-// ReconnectBackoff closure is wired with the config values. We test this by
-// calling ExponentialBackoffWithJitter directly.
-func TestConnection_BackoffClosure_Wired(t *testing.T) {
-	base := testtime.D100ms
-	max := testtime.D2s
-
-	// attempt 0 should return in [0.75*base, 1.25*base]
-	for range 50 {
-		got := adapterutilExponentialBackoffWithJitter(base, max, 0)
-		assert.GreaterOrEqual(t, got, connBackoffJitterFloor)
-		assert.LessOrEqual(t, got, testtime.D250ms)
-	}
-	// High attempt should cap at max.
-	for range 50 {
-		got := adapterutilExponentialBackoffWithJitter(base, max, 100)
-		assert.LessOrEqual(t, got, max)
-	}
-}
-
-// TestConnection_PermanentError_SurfacedViaHealth verifies that when
-// onConnectError receives a 0x87 CONNACK error the permanentErr is set and
-// Health returns a non-transient error while the manager keeps trying.
-//
-// White-box approach: call the exported callback-invoking helper that
-// the implementation must expose, or verify via broker deny.
-func TestConnection_PermanentError_SurfacedViaHealth(t *testing.T) {
-	t.Skip("whitebox callback test — see TestConnection_DenyBroker_PermanentErrViaHealth")
-}
-
 // TestConnection_DenyBroker_PermanentErrViaHealth tests that a deny-all broker
 // (0x87 NotAuthorized from mochi) sets permanentErr and Health is non-transient.
 func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
@@ -272,15 +238,21 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 }
 
 // TestConnection_ReconnectMetric_Counted verifies that RecordReconnect is
-// called when a second connection event fires (first up does NOT count).
+// called when a second connection event fires (first up does NOT count), and
+// increments to ≥1 after a reconnection.
+//
+// Strategy: start a restartable broker on a fixed random port, connect, stop
+// the broker (triggers autopaho reconnect loop), restart on the same port, and
+// poll until the collector count reaches ≥1.
 func TestConnection_ReconnectMetric_Counted(t *testing.T) {
-	addr, stop := newEmbeddedBroker(t)
-	defer stop()
+	addr, srv := startRestartableBroker(t)
 
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
+	cfg.Backoff.BaseDelay = testtime.D50ms
+	cfg.Backoff.MaxDelay = testtime.D500ms
 
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer cancel()
 
 	collector := &fakeCollector{}
@@ -288,27 +260,81 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
-	// Initial connection does not count as a reconnect.
-	assert.Equal(t, 0, collector.count, "first connection must not increment reconnect counter")
+	// Initial connection must not count as a reconnect.
+	assert.Equal(t, int64(0), collector.count.Load(),
+		"first connection must not increment reconnect counter")
+
+	// Stop the broker to trigger a disconnect in autopaho.
+	require.NoError(t, srv.Close(), "broker close")
+
+	// Wait until autopaho detects the TCP close and enters the reconnect loop.
+	// We poll until onConnectionDown has fired (conn.Health returns non-nil).
+	testwait.External(t, "autopaho-detects-disconnect", func() bool {
+		return conn.Health(context.Background()) != nil
+	}, testtime.D5s, testtime.D20ms)
+
+	// Restart the broker on the same address so autopaho can reconnect.
+	srv2 := mqttserver.New(&mqttserver.Options{InlineClient: false})
+	require.NoError(t, srv2.AddHook(new(auth.AllowHook), nil))
+	tcp2 := listeners.NewTCP(listeners.Config{ID: "allow-tcp-restart", Address: addr})
+	require.NoError(t, srv2.AddListener(tcp2))
+	go func() { _ = srv2.Serve() }()
+	t.Cleanup(func() { _ = srv2.Close() })
+
+	// Wait until the restarted broker accepts TCP connections.
+	testwait.External(t, "mqtt-broker-restarted", func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}, testtime.D5s, testtime.D50ms)
+
+	// Poll until RecordReconnect is called (count >= 1) or timeout.
+	testwait.External(t, "reconnect-metric-fires", func() bool {
+		return collector.count.Load() >= 1
+	}, testtime.D10s, testtime.D100ms)
+
+	assert.GreaterOrEqual(t, collector.count.Load(), int64(1),
+		"reconnect counter must increment after reconnection")
+}
+
+// startRestartableBroker starts a mochi broker on a random port and returns
+// the address and the server handle so it can be stopped and restarted in tests.
+// The caller is responsible for closing the returned server; no t.Cleanup is
+// registered so the caller can explicitly stop and restart without double-close.
+func startRestartableBroker(t *testing.T) (addr string, srv *mqttserver.Server) {
+	t.Helper()
+	srv = mqttserver.New(&mqttserver.Options{InlineClient: false})
+	require.NoError(t, srv.AddHook(new(auth.AllowHook), nil))
+
+	// Bind a random port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr = ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	tcp := listeners.NewTCP(listeners.Config{ID: "allow-tcp-restartable", Address: addr})
+	require.NoError(t, srv.AddListener(tcp))
+	go func() { _ = srv.Serve() }()
+
+	testwait.External(t, "mqtt-broker-accepts-connections", func() bool {
+		c, derr := net.Dial("tcp", addr)
+		if derr != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}, testtime.D2s, testtime.D10ms)
+
+	return addr, srv
 }
 
 // fakeCollector is a ConnectionCollector that counts RecordReconnect calls.
+// count is an atomic int64 for race-safe access from the reconnect goroutine.
 type fakeCollector struct {
-	count int
+	count atomic.Int64
 }
 
-func (f *fakeCollector) RecordReconnect(_ context.Context) { f.count++ }
-
-// adapterutilExponentialBackoffWithJitter is a local proxy to test the wiring
-// without importing adapterutil (cross-package white-box).
-func adapterutilExponentialBackoffWithJitter(base, max time.Duration, attempt int) time.Duration {
-	// Test via the wired config: since we can't call adapterutil directly here,
-	// we replicate the expected range bounds to check closure correctness.
-	// In practice connection.go injects adapterutil.ExponentialBackoffWithJitter.
-	_ = base
-	_ = max
-	_ = attempt
-	// The actual test is in adapterutil_test which directly exercises the helper.
-	// Here we just confirm the bounds are reasonable (always return something).
-	return base
-}
+func (f *fakeCollector) RecordReconnect(_ context.Context) { f.count.Add(1) }
