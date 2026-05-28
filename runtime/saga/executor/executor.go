@@ -561,11 +561,11 @@ func (e *Executor) buildStepCtx(runCtx context.Context, step ksaga.Step) (contex
 // Returns nil when step.Compensate is nil (the step has nothing to undo).
 // Panics inside the compensate function are recovered and returned as errors.
 //
-// Note: Compensate is not bounded by step.Timeout (deliberate, mirrors
-// Temporal's lack of CompensateTimeout). The only bound is the saga-level ctx
-// (parent deadline) plus the heartbeat goroutine's lease-loss cancel
-// (~heartbeatInterval granularity). Authors needing a per-step compensation
-// timeout should wrap with context.WithTimeout inside their CompensateFunc.
+// Note: Authors needing a per-step compensation timeout should wrap with
+// context.WithTimeout inside their CompensateFunc. Compensate is not bounded
+// by step.Timeout (deliberate, mirrors Temporal's lack of CompensateTimeout).
+// The only bound is the saga-level ctx (parent deadline) plus the heartbeat
+// goroutine's lease-loss cancel (~heartbeatInterval granularity).
 func (e *Executor) Compensate(
 	ctx context.Context,
 	inst *ksaga.Instance,
@@ -616,7 +616,7 @@ func safeRun(
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"runtime/saga/executor: step Run panicked",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", redaction.RedactAny(r)))),
 			)
 		}
 	}()
@@ -635,7 +635,7 @@ func safeRunCompensate(
 		if r := recover(); r != nil {
 			err = errcode.New(errcode.KindInternal, errcode.ErrInternal,
 				"runtime/saga/executor: step Compensate panicked",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", r))),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("panic: %v", redaction.RedactAny(r)))),
 			)
 		}
 	}()

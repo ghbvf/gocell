@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -843,6 +844,53 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 	case <-done:
 	default:
 		t.Error("Compensate func not reached")
+	}
+}
+
+// TestSafeRun_PanicValueRedactedInInternalAttr asserts that a panic value
+// containing a sensitive substring is scrubbed before being stored in the
+// errcode InternalAttr. This closes the R1 security finding: without
+// redaction, a step that panics with a value like "password=hunter2" would
+// expose the raw payload via the errcode internal detail.
+func TestSafeRun_PanicValueRedactedInInternalAttr(t *testing.T) {
+	t.Parallel()
+	sensitive := "password=hunter2"
+	panicFn := func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+		panic(sensitive)
+	}
+	inst := newTestInstance()
+	_, err := safeRun(context.Background(), panicFn, inst, nil)
+	if err == nil {
+		t.Fatal("safeRun with panicking fn must return non-nil error")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "<REDACTED>") {
+		t.Errorf("safeRun error must contain <REDACTED>; got: %s", errStr)
+	}
+	if strings.Contains(errStr, "hunter2") {
+		t.Errorf("safeRun error must NOT contain raw sensitive value 'hunter2'; got: %s", errStr)
+	}
+}
+
+// TestSafeRunCompensate_PanicValueRedactedInInternalAttr mirrors
+// TestSafeRun_PanicValueRedactedInInternalAttr for the Compensate path.
+func TestSafeRunCompensate_PanicValueRedactedInInternalAttr(t *testing.T) {
+	t.Parallel()
+	sensitive := "password=hunter2"
+	panicFn := func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+		panic(sensitive)
+	}
+	inst := newTestInstance()
+	err := safeRunCompensate(context.Background(), panicFn, inst, nil)
+	if err == nil {
+		t.Fatal("safeRunCompensate with panicking fn must return non-nil error")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "<REDACTED>") {
+		t.Errorf("safeRunCompensate error must contain <REDACTED>; got: %s", errStr)
+	}
+	if strings.Contains(errStr, "hunter2") {
+		t.Errorf("safeRunCompensate error must NOT contain raw sensitive value 'hunter2'; got: %s", errStr)
 	}
 }
 
