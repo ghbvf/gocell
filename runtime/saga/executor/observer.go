@@ -3,10 +3,14 @@ package executor
 import "context"
 
 // Observer receives best-effort events from Executor for observability sinks
-// (metrics counters, tracing, audit). All methods MUST be non-blocking, must
-// not panic, and must tolerate canceled contexts — they are called on hot
-// paths (every Execute outcome / every retry attempt / every failed heartbeat
-// tick) and must never affect Executor correctness.
+// (metrics counters, tracing, audit). All methods MUST be non-blocking and
+// must tolerate canceled contexts — they are called on hot paths (every
+// Execute outcome / every retry attempt / every failed heartbeat tick) and
+// must never affect Executor correctness.
+//
+// SHOULD NOT panic; the Executor wraps each Observer call in a defer/recover
+// guard so a misbehaving observer logs Warn and execution continues —
+// observability is best-effort and never affects step correctness.
 //
 // ref: temporalio/sdk-go internal_task_handlers.go — server-emitted activity
 // metric envelope (best-effort, non-blocking sink).

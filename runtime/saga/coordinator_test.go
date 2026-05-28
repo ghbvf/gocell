@@ -841,7 +841,7 @@ func TestStop_DrainsInflight(t *testing.T) {
 	// Unblock the step so it can complete.
 	close(stepBlockCh)
 
-	// Stop should return after the step finishes (drain detects activeLeases==0).
+	// Stop should return after the step finishes (drain detects inflightLocks empty).
 	select {
 	case stopErr := <-stopDone:
 		if stopErr != nil && !errors.Is(stopErr, context.Canceled) {

@@ -882,6 +882,12 @@ func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]com
 // Returns the compensation error if the compensate function fails (nil on success
 // or when step.Compensate is nil). Journal append errors are logged but not
 // returned — best-effort journaling keeps the reverse walk from aborting.
+//
+// Note: Compensate is not bounded by step.Timeout (deliberate, mirrors
+// Temporal's lack of CompensateTimeout). The only bound is the saga-level ctx
+// (parent deadline) plus the heartbeat goroutine's lease-loss cancel
+// (~heartbeatInterval granularity). Authors needing a per-step compensation
+// timeout should wrap with context.WithTimeout inside their CompensateFunc.
 func (c *Coordinator) compensateOneStep(
 	ctx context.Context,
 	ci journal.ClaimedInstance,

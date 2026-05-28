@@ -560,6 +560,12 @@ func (e *Executor) buildStepCtx(runCtx context.Context, step ksaga.Step) (contex
 // Compensate runs step.Compensate once (no retries, no step.Timeout).
 // Returns nil when step.Compensate is nil (the step has nothing to undo).
 // Panics inside the compensate function are recovered and returned as errors.
+//
+// Note: Compensate is not bounded by step.Timeout (deliberate, mirrors
+// Temporal's lack of CompensateTimeout). The only bound is the saga-level ctx
+// (parent deadline) plus the heartbeat goroutine's lease-loss cancel
+// (~heartbeatInterval granularity). Authors needing a per-step compensation
+// timeout should wrap with context.WithTimeout inside their CompensateFunc.
 func (e *Executor) Compensate(
 	ctx context.Context,
 	inst *ksaga.Instance,

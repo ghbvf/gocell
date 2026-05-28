@@ -32,9 +32,26 @@
 // PR-03; it becomes reachable via `/readyz` only after PR-09 wires it through
 // cellgen's `RegisterReadiness`.
 //
+// # Observer (PR-#1181)
+//
+// The Executor accepts an executor.Observer (set via executor.WithObserver) for
+// best-effort observability hooks. Three callbacks:
+//   - ObserveOutcome: called once per Execute/Compensate call at the terminal Result.
+//   - ObserveRetry: called between step attempts (attempt N > 1).
+//   - ObserveHeartbeatFailure: called on infra-error or stale-lease ticks.
+//
+// executor.NopObserver is the zero-cost default. executor.WithObserver(nil) is
+// silently ignored (builder-noop option); the Executor keeps NopObserver.
+// The Coordinator passes the WithObserver option through to the internal Executor
+// via NewCoordinator's options — see options.go for WithObserver.
+//
+// During runCompensation, the heartbeat goroutine is maintained via
+// executor.RunWithHeartbeat. If the heartbeat reports a stale lease, the
+// compensation context is canceled (errLeaseLost) and the walk stops; the
+// instance will be re-claimed by another coordinator on its next tick.
+//
 // # PR-03 deferred scope
 //
-//   - Retry policy (per-step backoff): deferred to PR-06.
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.

@@ -23,20 +23,18 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithHeartbeatInterval is a direct-assign option. Category: measure-then-validate.
-// Sets the interval between lease heartbeat calls. Zero or negative values
-// are stored and rejected by NewExecutor's post-option validation
-// (heartbeatInterval must be > 0 and heartbeatInterval*2 < leaseDuration).
+// WithHeartbeatInterval is a direct-assign option.
+// Zero or negative values are stored and rejected by NewExecutor's post-option
+// validation (direct-assign, no nil guard).
 func WithHeartbeatInterval(d time.Duration) Option {
 	return func(e *Executor) {
 		e.heartbeatInterval = d
 	}
 }
 
-// WithLeaseDuration is a direct-assign option. Category: measure-then-validate.
-// Sets the lease duration passed to each Heartbeat call. Zero or negative
-// values are stored and rejected by NewExecutor's post-option validation
-// (leaseDuration must be > 0 and heartbeatInterval*2 < leaseDuration).
+// WithLeaseDuration is a direct-assign option.
+// Zero or negative values are stored and rejected by NewExecutor's post-option
+// validation (direct-assign, no nil guard).
 func WithLeaseDuration(d time.Duration) Option {
 	return func(e *Executor) {
 		e.leaseDuration = d
