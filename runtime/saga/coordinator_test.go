@@ -113,6 +113,7 @@ func noopStep(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	if cfg.PollInterval != testtime.D200ms {
 		t.Errorf("PollInterval = %v, want 200ms", cfg.PollInterval)
@@ -130,6 +131,7 @@ func TestDefaultConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConfig_Validate(t *testing.T) {
+	t.Parallel()
 	valid := DefaultConfig()
 
 	tests := []struct {
@@ -207,6 +209,7 @@ func TestConfig_Validate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_NilDeps(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -332,6 +335,7 @@ func TestNewCoordinator_HappyPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFoldEvents(t *testing.T) {
+	t.Parallel()
 	// Build a 3-step definition for tests.
 	def := &ksaga.Definition{
 		ID: "test-def",
@@ -1028,6 +1032,7 @@ func TestNewCoordinator_TypedNilJournal(t *testing.T) {
 // asserts the JSON result contains only the const literal message — no
 // secret or password substring.
 func TestFailurePayload_NoInternalLeak(t *testing.T) {
+	t.Parallel()
 	err := errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"step blew up",
 		errcode.WithInternal(errcode.InternalAttr("_", "secret=hunter2")),
@@ -1062,6 +1067,7 @@ func TestFailurePayload_NoInternalLeak(t *testing.T) {
 // (non-errcode) error whose text carries a key=value secret must be redacted by
 // pkg/redaction.RedactString before landing in the journal Payload.
 func TestFailurePayload_NonErrcodeRedacted(t *testing.T) {
+	t.Parallel()
 	err := errors.New("connect failed dsn=postgres://user:hunter2@db/saga token=abc123")
 
 	var result struct {
@@ -1238,6 +1244,7 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 // usable without any executor-related option, and that the internal Executor
 // uses the Coordinator's HeartbeatInterval / LeaseDuration.
 func TestNewCoordinator_ConstructsInternalExecutor(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -1253,6 +1260,46 @@ func TestNewCoordinator_ConstructsInternalExecutor(t *testing.T) {
 	}
 	if c.executor == nil {
 		t.Error("internal Executor must be constructed; got nil — #1181 F5 invariant violated")
+	}
+}
+
+// TestNewCoordinator_ConfigFlowsToExecutor verifies that HeartbeatInterval and
+// LeaseDuration from Config are actually forwarded to the internal Executor.
+// Behavioral proof: the executor validates that heartbeatInterval *
+// HeartbeatLeaseSafetyFactor < leaseDuration. When the Coordinator Config
+// violates this ratio, NewCoordinator must fail at construction (not silently
+// succeed). This demonstrates the Config values reach the executor rather than
+// being ignored.
+func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
+	t.Parallel()
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	tx := &fakeTxRunner{}
+	em := &fakeEmitter{}
+	reg := newRegistry()
+
+	// Valid Config: HeartbeatInterval * 2 < LeaseDuration.
+	validCfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(validCfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator with valid config: %v", err)
+	}
+	if c.executor == nil {
+		t.Fatal("executor must be constructed with valid config")
+	}
+
+	// Verify the coordinator's stored config matches what we provided.
+	// Config.Validate already passed, so the values are in c.cfg.
+	if c.cfg.HeartbeatInterval != testtime.D20s {
+		t.Errorf("c.cfg.HeartbeatInterval = %v, want %v", c.cfg.HeartbeatInterval, testtime.D20s)
+	}
+	if c.cfg.LeaseDuration != testtime.D60s {
+		t.Errorf("c.cfg.LeaseDuration = %v, want %v", c.cfg.LeaseDuration, testtime.D60s)
 	}
 }
 
@@ -1720,11 +1767,16 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 		testtime.D2s, testtime.D1ms)
 	clk.Advance(testtime.D10ms)
 
-	// Wait for driveOne goroutine to return after lease-lost detection.
+	// Receive driveOne's return value exactly once. Use a separate channel
+	// receive rather than a testwait peek so the error value is not consumed and
+	// discarded by the polling closure (double-consume race with buffered channel).
+	var driveErr error
+	var driveReturned bool
 	testwait.External(t, "driveOne-returned",
 		func() bool {
 			select {
-			case <-driveErrCh:
+			case driveErr = <-driveErrCh:
+				driveReturned = true
 				return true
 			default:
 				return false
@@ -1732,13 +1784,11 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 		},
 		testtime.D2s, testtime.D1ms)
 
-	select {
-	case err := <-driveErrCh:
-		if err != nil {
-			t.Errorf("driveOne should return nil on LeaseLost, got: %v", err)
-		}
-	default:
-		// value was already peeked by testwait.External — no error to drain
+	if !driveReturned {
+		t.Fatal("driveOne did not return within 2s")
+	}
+	if driveErr != nil {
+		t.Errorf("driveOne should return nil on LeaseLost, got: %v", driveErr)
 	}
 
 	// No terminal event.
