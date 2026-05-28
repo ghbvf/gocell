@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -24,7 +25,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-useronboarding",
 				Goal:      "new user onboarding",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"accesscore"},
+				Cells:     []string{metadatatest.CellIDAccessCore},
 				Contracts: []string{"event.user.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "user record created", Mode: "auto"},
@@ -34,7 +35,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-ssologin",
 				Goal:      "SSO login with session",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"accesscore", "auditcore", "configcore"},
+				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "OIDC redirect done", Mode: "auto"},
@@ -45,7 +46,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-auditlogintrail",
 				Goal:      "login events propagate to audit hash chain",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"accesscore", "auditcore"},
+				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Contracts: []string{"event.session.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "event consumed by auditcore", Mode: "auto"},
@@ -327,7 +328,7 @@ func TestCrossCellJourneys(t *testing.T) {
 				Journeys: map[string]*metadata.JourneyMeta{
 					"J-solo": {
 						ID:    "J-solo",
-						Cells: []string{"only-one"},
+						Cells: []string{metadatatest.NewCellID("onlyone")}, // legacy "only-one" (kebab → compliant)
 					},
 				},
 			},
@@ -360,7 +361,7 @@ func TestCount(t *testing.T) {
 			name: "single journey",
 			project: &metadata.ProjectMeta{
 				Journeys: map[string]*metadata.JourneyMeta{
-					"J-one": {ID: "J-one", Cells: []string{"a"}},
+					"J-one": {ID: "J-one", Cells: []string{metadatatest.CellIDAA}}, // legacy "a" (single-char → CellIDAA="aa")
 				},
 			},
 			want: 1,

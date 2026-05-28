@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -85,16 +86,18 @@ func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L0"})))
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "core", ConsistencyLevel: "L0"})))
+	c1 := &metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core", ConsistencyLevel: "L0"}
+	c2 := &metadata.CellMeta{ID: metadatatest.NewCellID("c2"), Type: "core", ConsistencyLevel: "L0"}
+	require.NoError(t, a.Register(cell.MustNewBaseCell(c1)))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(c2)))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 
 	snaps := a.Snapshots()
 	require.NotNil(t, snaps, "Snapshots() must be non-nil after Start")
 	assert.Len(t, snaps, 2, "one snapshot per registered cell")
-	_, hasC1 := snaps["c1"]
-	_, hasC2 := snaps["c2"]
+	_, hasC1 := snaps[metadatatest.NewCellID("c1")]
+	_, hasC2 := snaps[metadatatest.NewCellID("c2")]
 	assert.True(t, hasC1, "snapshot for c1 must exist")
 	assert.True(t, hasC2, "snapshot for c2 must exist")
 }
@@ -110,7 +113,8 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L0"})))
+	c1 := &metadata.CellMeta{ID: metadatatest.NewCellID("c1"), Type: "core", ConsistencyLevel: "L0"}
+	require.NoError(t, a.Register(cell.MustNewBaseCell(c1)))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 
@@ -118,11 +122,11 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	require.NotNil(t, snaps)
 
 	// Mutate the returned copy — must not affect a second call.
-	delete(snaps, "c1")
+	delete(snaps, metadatatest.NewCellID("c1"))
 
 	snaps2 := a.Snapshots()
 	require.NotNil(t, snaps2)
-	_, hasC1 := snaps2["c1"]
+	_, hasC1 := snaps2[metadatatest.NewCellID("c1")]
 	assert.True(t, hasC1, "deleting from first copy must not affect internal state")
 }
 

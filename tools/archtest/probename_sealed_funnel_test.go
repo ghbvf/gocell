@@ -28,28 +28,63 @@
 // in the same PR, or explain why the new const does not need funnel coverage
 // in an ADR.
 //
+// # Sub-rule index
+//
+//   - A1: declaration sanction + value shape (archtest, Medium upstream — Go ceiling)
+//   - A2: callsite resolves to declared const, 4 sanctioned callees (archtest + type system, Hard downstream)
+//   - A3: Aggregator.Register allowlist (archtest + type system, Hard downstream)
+//   - A4: NewProbeName caller allowlist (archtest, Medium upstream)
+//   - A4b: MustProbeName caller allowlist (archtest, Medium upstream)
+//   - A5: EmitterFailOpenProbeName composed-name BinaryExpr (archtest, Medium upstream)
+//   - A6: Probe interface sealed marker `isHealthzProbe()` — Go compiler gate;
+//     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls
+//   - B1: reflect.MethodByName("RegisterReadiness") blind-spot
+//   - B3: ProbeName(callExpr) cast blind-spot
+//   - B5: in-package new isHealthzProbe() implementer blind-spot
+//
 // # AI-robust grading (per .claude/rules/gocell/ai-robust.md §Funnel 双向锁评级)
 //
 //   - A1 upstream (declaration sanction + value shape):
-//     Hard archtest-bound — the only Go form possible; const visibility is
-//     package-scoped so a seal at the type-system level is inexpressible.
+//     Medium archtest-bound — permanent Go-language ceiling. Const visibility
+//     is package-scoped; Go has no const-seal syntax preventing external
+//     packages from declaring `const X ProbeName = "..."`. archtest
+//     sanctionedPkgs + value-shape regex + adapter-suffix overlay is the
+//     highest achievable form on Go. No follow-up issue (won't-do, lang
+//     ceiling).
 //   - A2 downstream (callsite resolves to declared const):
-//     Hard downstream — NewProbe(name ProbeName, ...) / RegisterReadiness(name
-//     ProbeName, ...) / HealthToProbe(name ProbeName, ...) make passing a raw
-//     string a compile error; archtest additionally bans ProbeName(expr) casts
-//     where expr is not a sanctioned const (string-conversion bypass). Type
-//     system closes the form gap.
+//     Hard downstream via **two complementary gates**, not type system alone.
+//     The 4 sanctioned callees take `name ProbeName` (not `string`) as their
+//     first parameter — RegisterReadiness / NewProbe / HealthToProbe /
+//     bootstrap.WithHealthChecker. Go's type system enforcement is partial:
+//     (a) typed-var path:  `var s string; Register(s, p)` IS a compile
+//     error (`string` and `ProbeName` are distinct named types; no
+//     implicit conversion across them in this direction).
+//     (b) untyped-literal path:  `Register("foo", p)` COMPILES — Go's
+//     untyped string constant "foo" is implicitly converted to
+//     ProbeName per Go spec. The type system alone does NOT reject
+//     bare string literals at typed-arg positions.
+//     archtest A2 closes path (b): the callsite must resolve via info.Uses
+//     to a sanctioned `*types.Const`; BasicLit / BinaryExpr / Var / CallExpr
+//     fail closed. The combined gate is Hard downstream; neither gate alone
+//     would be.
 //   - A3 downstream (Aggregator.Register allowlist):
 //     Hard downstream via type system (Registrar.Healthz() removed — any
 //     attempt is a compile error). Archtest enforces the residual direct-
 //     Aggregator.Register callsite set (Medium upstream archtest caller-identity
 //     backstop; see HEALTHZ-WRITE-01/A3 for holder allowlist).
 //   - A4 upstream (NewProbeName caller allowlist):
-//     Medium archtest — open gh issue to track Hard upgrade (won't-do: there is
-//     no sealed-construction path for a function with arbitrary string arg).
+//     Medium archtest — Go-language ceiling (no sealed-construction path
+//     for a function with arbitrary string arg).
 //   - A5 upstream (EmitterFailOpenProbeName sole composed-name constructor):
 //     Medium archtest — BinaryExpr string concat `"outbox_failopen_rate_" + x`
 //     outside kernel/healthz is rejected.
+//   - A6 upstream (Probe interface implementation set):
+//     Hard upstream via type system — Probe interface carries an unexported
+//     `isHealthzProbe()` marker method; external packages cannot implement
+//     Probe (compile error). Only `kernel/healthz.funcProbe` (returned by
+//     NewProbe) and `kernel/healthz.ctxSafeProbe` (returned by WrapCtxSafe)
+//     can satisfy. No archtest rule needed — Go compiler is the gate.
+//     Cross-checked by B5 (in-package new implementer blind-spot).
 //
 // # Blind-spot assertions (B class)
 //
@@ -65,6 +100,11 @@
 //     panics on invalid input. Covered by A4b scanner (caller allowlist).
 //     Post-F1A/F1B, zero production callers outside kernel/healthz/probename.go
 //   - healthztest/conformance.go.
+//   - B5 (in-package new isHealthzProbe() implementer): a new struct inside
+//     kernel/healthz implementing the sealed marker method beyond the two
+//     sanctioned types (funcProbe, ctxSafeProbe) — expected absent.
+//     The A6 type-system gate only covers external packages; B5 closes the
+//     in-package gap via archtest AST scan.
 //
 // ref: kernel/healthz.ProbeName — typed concept type
 // ref: kernel/healthz.NewProbeName — sole validated entry point
@@ -107,6 +147,12 @@ const (
 	// adapterutilPkgPath is the import path of the adapterutil package,
 	// which provides HealthToProbe (consumes ProbeName as first arg).
 	adapterutilPkgPath = "github.com/ghbvf/gocell/adapters/adapterutil"
+
+	// bootstrapPkgPath is the import path of the runtime/bootstrap package,
+	// which provides WithHealthChecker (4th sanctioned ProbeName funnel
+	// ingress — composition-root option pattern; consumes ProbeName as
+	// first arg).
+	bootstrapPkgPath = "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 // probeNameSanctionedPkgs is the closed set of packages allowed to declare
@@ -319,6 +365,16 @@ func isHealthToProbeCall(call *ast.CallExpr, info *types.Info) bool {
 	return ok && pkgPath == adapterutilPkgPath && name == "HealthToProbe"
 }
 
+// isWithHealthCheckerCall reports whether call is bootstrap.WithHealthChecker.
+// This is the 4th sanctioned ProbeName funnel ingress (composition-root option
+// pattern). Without scanning this callee, an author writing
+// `WithHealthChecker("raw_literal", fn)` would compile via untyped-const →
+// ProbeName implicit conversion and bypass the funnel.
+func isWithHealthCheckerCall(call *ast.CallExpr, info *types.Info) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == bootstrapPkgPath && name == "WithHealthChecker"
+}
+
 // firstArgResolvesToConst reports whether the first argument of call resolves,
 // via info.Uses, to a declared *types.Const of type ProbeName.
 func firstArgResolvesToConst(call *ast.CallExpr, info *types.Info) bool {
@@ -387,7 +443,15 @@ func scanA1DeclarationSanction(
 
 	EachInSubtree[ast.GenDecl](file, func(gd *ast.GenDecl) {
 		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
-			for _, name := range vs.Names {
+			for i, name := range vs.Names {
+				// Multi-const ValueSpec (e.g. `const ( a, b ProbeName = x, y )`)
+				// pairs Names[i] with Values[i] — taking Values[0] for every
+				// name lets the 2nd+ const's value-shape and adapter-suffix
+				// checks slip through silently. Same indexing as the golden
+				// inventory collector (collectProbeNameConsts) downstream.
+				if len(vs.Values) <= i {
+					continue
+				}
 				obj, ok := info.Defs[name]
 				if !ok {
 					continue
@@ -408,7 +472,7 @@ func scanA1DeclarationSanction(
 				// `continue` for the package-sanction violation does not skip
 				// it; value-shape and package-sanction are independent axes
 				// and both must surface when both fail.
-				if val, ok := EvaluateConstString(info, vs.Values[0]); ok {
+				if val, ok := EvaluateConstString(info, vs.Values[i]); ok {
 					if _, err := healthz.NewProbeName(val); err != nil {
 						pos := fset.Position(name.Pos())
 						out = append(out, Diagnostic{
@@ -456,7 +520,7 @@ func scanA1DeclarationSanction(
 
 				// Adapter / runtime packages require _ready suffix.
 				if adapterSanctionedPkgs[pkgPath] {
-					val, ok := EvaluateConstString(info, vs.Values[0])
+					val, ok := EvaluateConstString(info, vs.Values[i])
 					if ok && !strings.HasSuffix(val, "_ready") {
 						pos := fset.Position(name.Pos())
 						out = append(out, Diagnostic{
@@ -530,6 +594,27 @@ func scanA2CallsiteResolves(
 					Line: pos.Line,
 					Message: fmt.Sprintf(
 						"PROBENAME-SEALED-FUNNEL-01/A2: RegisterReadiness name arg at %s:%d "+
+							"does not resolve to a declared ProbeName const "+
+							"(bare string, var, or dynamic expr prohibited)",
+						rel, pos.Line,
+					),
+				})
+			}
+			return
+		}
+
+		// Case 1.5: bootstrap.WithHealthChecker(name, fn) — name must
+		// resolve to sanctioned const. WithHealthChecker is the 4th
+		// ProbeName funnel ingress (composition-root option path; phase4
+		// drains into RegistryRecorder). Funnel-internal files exempt.
+		if isWithHealthCheckerCall(call, info) {
+			if !funnelInternal && !firstArgResolvesToConst(call, info) {
+				pos := fset.Position(call.Pos())
+				out = append(out, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"PROBENAME-SEALED-FUNNEL-01/A2: WithHealthChecker name arg at %s:%d "+
 							"does not resolve to a declared ProbeName const "+
 							"(bare string, var, or dynamic expr prohibited)",
 						rel, pos.Line,
@@ -849,7 +934,7 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 // ─── Main production scan ─────────────────────────────────────────────────────
 
-// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A5)
+// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A6)
 // across the production tree.
 //
 // Sub-tests:
@@ -965,17 +1050,23 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "probename_sealed_funnel_fixtures")
 
 	type subDir struct {
-		name string
-		want string // which Ax/Bx rule must fire
+		name     string
+		want     string // which Ax/Bx rule must fire
+		contains string // optional substring required in diag.Message (branch assertion)
 	}
 	cases := []subDir{
 		{name: "bare_literal_arg_red", want: "A2"},
-		{name: "decl_bypass_red", want: "A1"},
-		{name: "invalid_value_red", want: "A1"},
+		{name: "phases_with_health_checker_red", want: "A2", contains: "WithHealthChecker name arg"},
+		{name: "decl_bypass_red", want: "A1", contains: "non-sanctioned package"},
+		{name: "invalid_value_red", want: "A1", contains: "fails healthz.NewProbeName validator"},
+		{name: "value_shape_multi_const_red", want: "A1", contains: "fails healthz.NewProbeName validator"},
+		{name: "value_shape_uppercase_red", want: "A1", contains: "fails healthz.NewProbeName validator"},
+		{name: "value_shape_double_underscore_red", want: "A1", contains: "fails healthz.NewProbeName validator"},
 		{name: "non_funnel_register_red", want: "A3"},
 		{name: "newprobename_dynamic_red", want: "A4"},
 		{name: "string_cast_bypass_red", want: "B3"},
 		{name: "reflect_bypass_red", want: "B1"},
+		{name: "reflect_bypass_const_red", want: "B1"},
 		// helper_wrapper_red (B2) is a *non-bypass*: the type system already
 		// enforces healthz.ProbeName at the wrapper's signature, so a wrapper
 		// inheriting the typed signature provides no escape from the typed
@@ -1015,6 +1106,10 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 						b3 = append(b3, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
 
 						// B1 reflect bypass — scan for reflect.MethodByName("RegisterReadiness").
+						// EvaluateConstString resolves BasicLit / named const /
+						// const concat / SelectorExpr to the underlying string,
+						// so `const M = "Register" + "Readiness"; v.MethodByName(M)`
+						// is caught the same as `v.MethodByName("RegisterReadiness")`.
 						EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 							sel, ok := call.Fun.(*ast.SelectorExpr)
 							if !ok || sel.Sel.Name != "MethodByName" {
@@ -1023,11 +1118,11 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 							if len(call.Args) != 1 {
 								return
 							}
-							lit, ok := call.Args[0].(*ast.BasicLit)
+							val, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
 							if !ok {
 								return
 							}
-							if strings.Contains(lit.Value, "RegisterReadiness") {
+							if strings.Contains(val, "RegisterReadiness") {
 								pos := p.Fset.Position(call.Pos())
 								b1b2 = append(b1b2, Diagnostic{
 									Rel:  rel,
@@ -1044,21 +1139,50 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 					return nil
 				})
 
+			var bucket []Diagnostic
 			switch tc.want {
 			case "A1":
 				require.NotEmpty(t, a1, "fixture %q: expected A1 to fire on declaration bypass", tc.name)
+				bucket = a1
 			case "A2":
 				require.NotEmpty(t, a2, "fixture %q: expected A2 to fire on non-const name arg", tc.name)
+				bucket = a2
 			case "A3":
 				require.NotEmpty(t, a3, "fixture %q: expected A3 to fire on direct Aggregator.Register", tc.name)
+				bucket = a3
 			case "A4":
 				require.NotEmpty(t, a4, "fixture %q: expected A4 to fire on NewProbeName outside allowlist", tc.name)
+				bucket = a4
 			case "B1":
 				require.NotEmpty(t, b1b2, "fixture %q: expected B1 reflect bypass to be detected", tc.name)
+				bucket = b1b2
 			case "B2":
 				require.NotEmpty(t, b1b2, "fixture %q: expected B2 helper-wrapper to be detected via A3 or b1b2", tc.name)
+				bucket = b1b2
 			case "B3":
 				require.NotEmpty(t, b3, "fixture %q: expected B3 string-cast bypass to be detected by A2", tc.name)
+				bucket = b3
+			}
+
+			// Branch assertion: when fixture targets a specific sub-branch
+			// (e.g. A1 value-shape vs package-sanction, or A2 WithHealthChecker
+			// vs RegisterReadiness), require an explicit substring match on
+			// the diag message to prevent accidental matches via the wrong
+			// sub-rule. Without this, a fixture meant to verify "A2 fires on
+			// WithHealthChecker bare literal" could pass by accidentally
+			// firing A2 RegisterReadiness logic instead, masking a real gap.
+			if tc.contains != "" {
+				matched := false
+				for _, d := range bucket {
+					if strings.Contains(d.Message, tc.contains) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					t.Fatalf("fixture %q (want=%s): expected diag containing %q, got %d diags: %#v",
+						tc.name, tc.want, tc.contains, len(bucket), bucket)
+				}
 			}
 		})
 	}
@@ -1097,11 +1221,13 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoReflectBypass(t *testing.T) {
 					if len(call.Args) != 1 {
 						return
 					}
-					lit, ok := call.Args[0].(*ast.BasicLit)
+					// EvaluateConstString covers BasicLit + named const + const
+					// concat — see scanner pair in TestProbenameSealedFunnel_ReverseFixtures.
+					val, ok := EvaluateConstString(p.TypesInfo, call.Args[0])
 					if !ok {
 						return
 					}
-					if strings.Contains(lit.Value, "RegisterReadiness") {
+					if strings.Contains(val, "RegisterReadiness") {
 						pos := p.Fset.Position(call.Pos())
 						diags = append(diags, Diagnostic{
 							Rel:  rel,
@@ -1248,4 +1374,54 @@ func TestProbenameSealedFunnel_ReverseBlindSpot_NoHelperWrapper(t *testing.T) {
 
 	assert.Empty(t, diags, "PROBENAME-SEALED-FUNNEL-01/B2 blind-spot self-check failed — "+
 		"unsanctioned RegisterReadiness wrapper found in production code")
+}
+
+// TestProbenameSealedFunnel_ReverseBlindSpot_NoNewProbeImpl (B5) asserts no
+// new struct inside kernel/healthz package implements isHealthzProbe() beyond
+// the two sanctioned types (funcProbe, ctxSafeProbe). The Probe sealed marker
+// is a type-system Hard gate against external packages but not against
+// new in-package implementations — this reverse self-check closes that gap.
+func TestProbenameSealedFunnel_ReverseBlindSpot_NoNewProbeImpl(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	sanctioned := map[string]bool{"funcProbe": true, "ctxSafeProbe": true}
+	var found []string
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"github.com/ghbvf/gocell/kernel/healthz/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/healthz" {
+				return nil
+			}
+			// Scan all FuncDecl: method named "isHealthzProbe" on a receiver type.
+			for _, f := range p.Files {
+				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+					if fd.Recv == nil || len(fd.Recv.List) != 1 {
+						return
+					}
+					if fd.Name.Name != "isHealthzProbe" {
+						return
+					}
+					recvType := fd.Recv.List[0].Type
+					if star, ok := recvType.(*ast.StarExpr); ok {
+						recvType = star.X
+					}
+					ident, ok := recvType.(*ast.Ident)
+					if !ok {
+						return
+					}
+					if !sanctioned[ident.Name] {
+						found = append(found, ident.Name)
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Empty(t, found, "PROBENAME-SEALED-FUNNEL-01/B5 blind-spot detected — "+
+		"new type(s) implementing isHealthzProbe() inside kernel/healthz beyond "+
+		"{funcProbe, ctxSafeProbe}: %v", found)
 }

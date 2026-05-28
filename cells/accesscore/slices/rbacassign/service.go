@@ -2,7 +2,6 @@ package rbacassign
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -110,33 +109,20 @@ func NewService(
 	return s, nil
 }
 
-// writeOutboxEntry writes a role-change outbox entry. Called inside a transaction.
-func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dto.RoleChangedEvent) error {
-	payload, err := json.Marshal(evt)
-	if err != nil {
-		return fmt.Errorf("rbac-assign: marshal role-changed event: %w", err)
-	}
-	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: eventType,
-		Payload:   payload,
-	}
-	if err := s.emitter.Emit(ctx, entry); err != nil {
-		return fmt.Errorf("rbac-assign: emit role-changed event: %w", err)
-	}
-	return nil
-}
-
 // persistChange wraps a role mutation in the configured transaction runner.
 // When callFunnel is true, the credentialinvalidate funnel is called inside the
 // same transaction to atomically revoke all credentials for the subject.
 // writeFn returns whether the repository actually mutated state, so no-op calls
 // never emit false role-change facts or trigger spurious credential revocations.
+//
+// emitFn carries the per-caller emit logic with a const topic; pushing the
+// topic out of this function lets EMIT-DECL-COVER-01's literal-site scan see
+// each caller's const, rather than an opaque `topic string` parameter.
 func (s *Service) persistChange(
 	ctx context.Context,
 	writeFn func(ctx context.Context) (changed bool, err error),
 	evt dto.RoleChangedEvent,
-	topic string,
+	emitFn func(ctx context.Context, evt dto.RoleChangedEvent) error,
 	callFunnel bool,
 ) (changed bool, err error) {
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
@@ -153,7 +139,7 @@ func (s *Service) persistChange(
 				return fmt.Errorf("rbac-assign: invalidate credentials: %w", err)
 			}
 		}
-		return s.writeOutboxEntry(txCtx, topic, evt)
+		return emitFn(txCtx, evt)
 	})
 	return changed, err
 }
@@ -180,7 +166,10 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return changed, nil
 	}
 
-	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleAssigned, false)
+	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
+		return outbox.Emit(txCtx, s.emitter, dto.TopicRoleAssigned, evt)
+	}
+	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, false)
 	if err != nil {
 		return err
 	}
@@ -217,7 +206,10 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 		return changed, nil
 	}
 
-	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleRevoked, true)
+	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
+		return outbox.Emit(txCtx, s.emitter, dto.TopicRoleRevoked, evt)
+	}
+	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, true)
 	if err != nil {
 		return err
 	}

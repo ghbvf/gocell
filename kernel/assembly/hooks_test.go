@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,8 +29,10 @@ type hookOrderCell struct {
 }
 
 func newHookOrderCell(id string, calls *[]string, failOn string) *hookOrderCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &hookOrderCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		calls:    calls,
 		failOn:   failOn,
 	}
@@ -84,8 +87,10 @@ type panicHookCell struct {
 }
 
 func newPanicHookCell(id string, calls *[]string, panicOn string) *panicHookCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &panicHookCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		calls:    calls,
 		panicOn:  panicOn,
 	}
@@ -153,8 +158,10 @@ type onlyBeforeStartCell struct {
 }
 
 func newOnlyBeforeStartCell(id string, calls *[]string) *onlyBeforeStartCell {
+	m := &metadata.CellMeta{Type: "core"}
+	m.ID = id
 	return &onlyBeforeStartCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(m),
 		calls:    calls,
 	}
 }
@@ -174,24 +181,24 @@ func TestAssemblyHooks_HappyPath(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-happy", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	a1 := newHookOrderCell("A", &calls, "")
-	a2 := newHookOrderCell("B", &calls, "")
+	a1 := newHookOrderCell("aa", &calls, "")
+	a2 := newHookOrderCell("bb", &calls, "")
 	require.NoError(t, a.Register(a1))
 	require.NoError(t, a.Register(a2))
 
 	// Start: FIFO with hooks.
 	require.NoError(t, a.Start(context.Background()))
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", "B.Start", "B.AfterStart",
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", "bb.Start", "bb.AfterStart",
 	}, calls)
 
 	// Stop: LIFO with hooks.
 	calls = nil
 	require.NoError(t, a.Stop(context.Background()))
 	assert.Equal(t, []string{
-		"B.BeforeStop", "B.Stop", "B.AfterStop",
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"bb.BeforeStop", "bb.Stop", "bb.AfterStop",
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -199,9 +206,9 @@ func TestAssemblyHooks_BeforeStartFailure(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-bs-fail", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	bad := newHookOrderCell("B", &calls, "BeforeStart")
-	untouched := newHookOrderCell("C", &calls, "")
+	good := newHookOrderCell("aa", &calls, "")
+	bad := newHookOrderCell("bb", &calls, "BeforeStart")
+	untouched := newHookOrderCell("cc", &calls, "")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(bad))
@@ -209,15 +216,15 @@ func TestAssemblyHooks_BeforeStartFailure(t *testing.T) {
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 	assert.Contains(t, err.Error(), "BeforeStart")
 
 	// A got full start cycle, B only got BeforeStart (failed), C untouched.
 	// Then rollback: A gets full stop cycle.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart",                         // failed here
-		"A.BeforeStop", "A.Stop", "A.AfterStop", // rollback
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart",                           // failed here
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop", // rollback
 	}, calls)
 }
 
@@ -225,24 +232,24 @@ func TestAssemblyHooks_AfterStartFailure_RollbackIncludesFailedCell(t *testing.T
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-as-fail", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	bad := newHookOrderCell("B", &calls, "AfterStart")
+	good := newHookOrderCell("aa", &calls, "")
+	bad := newHookOrderCell("bb", &calls, "AfterStart")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(bad))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 	assert.Contains(t, err.Error(), "AfterStart")
 
 	// A full start, B: BeforeStart + Start + AfterStart(failed).
 	// Rollback: B gets stop (Start succeeded!), then A gets stop.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", "B.Start", "B.AfterStart", // AfterStart failed
-		"B.BeforeStop", "B.Stop", "B.AfterStop", // B itself rolled back
-		"A.BeforeStop", "A.Stop", "A.AfterStop", // A rolled back
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", "bb.Start", "bb.AfterStart", // AfterStart failed
+		"bb.BeforeStop", "bb.Stop", "bb.AfterStop", // B itself rolled back
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop", // A rolled back
 	}, calls)
 }
 
@@ -250,8 +257,8 @@ func TestAssemblyHooks_BeforeStopError_ContinuesAnyway(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-bstop-err", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	bad := newHookOrderCell("B", &calls, "BeforeStop")
+	good := newHookOrderCell("aa", &calls, "")
+	bad := newHookOrderCell("bb", &calls, "BeforeStop")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(bad))
@@ -260,15 +267,15 @@ func TestAssemblyHooks_BeforeStopError_ContinuesAnyway(t *testing.T) {
 	calls = nil
 	err := a.Stop(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 	assert.Contains(t, err.Error(), "BeforeStop")
 
 	// Despite B.BeforeStop error, B.Stop and B.AfterStop still called.
 	// A also fully stopped.
 	assert.Equal(t, []string{
-		"B.BeforeStop", // error here, but continues
-		"B.Stop", "B.AfterStop",
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"bb.BeforeStop", // error here, but continues
+		"bb.Stop", "bb.AfterStop",
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -276,8 +283,8 @@ func TestAssemblyHooks_AfterStopError_ContinuesAnyway(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-astop-err", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	bad := newHookOrderCell("B", &calls, "AfterStop")
+	good := newHookOrderCell("aa", &calls, "")
+	bad := newHookOrderCell("bb", &calls, "AfterStop")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(bad))
@@ -286,13 +293,13 @@ func TestAssemblyHooks_AfterStopError_ContinuesAnyway(t *testing.T) {
 	calls = nil
 	err := a.Stop(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 	assert.Contains(t, err.Error(), "AfterStop")
 
 	// All hooks called for both cells despite B.AfterStop error.
 	assert.Equal(t, []string{
-		"B.BeforeStop", "B.Stop", "B.AfterStop", // error here, but continues
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"bb.BeforeStop", "bb.Stop", "bb.AfterStop", // error here, but continues
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -300,9 +307,9 @@ func TestAssemblyHooks_MixedCells(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-mixed", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	hooked1 := newHookOrderCell("H1", &calls, "")
-	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "P", Type: "core"})
-	hooked2 := newHookOrderCell("H2", &calls, "")
+	hooked1 := newHookOrderCell("h1", &calls, "")
+	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: metadatatest.NewCellID("pp"), Type: "core"})
+	hooked2 := newHookOrderCell("h2", &calls, "")
 
 	require.NoError(t, a.Register(hooked1))
 	require.NoError(t, a.Register(plain))
@@ -313,17 +320,17 @@ func TestAssemblyHooks_MixedCells(t *testing.T) {
 	// H1 has all hooks, P has none (only Start via assembly), H2 has all hooks.
 	// Plain cell's Start/Stop are not recorded in our calls slice.
 	assert.Equal(t, []string{
-		"H1.BeforeStart", "H1.Start", "H1.AfterStart",
+		"h1.BeforeStart", "h1.Start", "h1.AfterStart",
 		// P: Start called by assembly but not recorded in calls
-		"H2.BeforeStart", "H2.Start", "H2.AfterStart",
+		"h2.BeforeStart", "h2.Start", "h2.AfterStart",
 	}, calls)
 
 	calls = nil
 	require.NoError(t, a.Stop(context.Background()))
 	assert.Equal(t, []string{
-		"H2.BeforeStop", "H2.Stop", "H2.AfterStop",
+		"h2.BeforeStop", "h2.Stop", "h2.AfterStop",
 		// P: Stop called by assembly but not recorded
-		"H1.BeforeStop", "H1.Stop", "H1.AfterStop",
+		"h1.BeforeStop", "h1.Stop", "h1.AfterStop",
 	}, calls)
 }
 
@@ -331,12 +338,12 @@ func TestAssemblyHooks_PartialImplementation(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-partial", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	partial := newOnlyBeforeStartCell("P", &calls)
+	partial := newOnlyBeforeStartCell("pp", &calls)
 	require.NoError(t, a.Register(partial))
 
 	require.NoError(t, a.Start(context.Background()))
 	// Only BeforeStart called, no AfterStart.
-	assert.Equal(t, []string{"P.BeforeStart"}, calls)
+	assert.Equal(t, []string{"pp.BeforeStart"}, calls)
 
 	calls = nil
 	require.NoError(t, a.Stop(context.Background()))
@@ -348,20 +355,20 @@ func TestAssemblyHooks_StartWithConfig(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-cfg", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	h := newHookOrderCell("A", &calls, "")
+	h := newHookOrderCell("aa", &calls, "")
 	require.NoError(t, a.Register(h))
 
 	cfgMap := map[string]any{"key": "value"}
 	require.NoError(t, a.StartWithConfig(context.Background(), cfgMap))
 
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
 	}, calls)
 
 	calls = nil
 	require.NoError(t, a.Stop(context.Background()))
 	assert.Equal(t, []string{
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -370,23 +377,23 @@ func TestAssemblyHooks_RollbackHooksBestEffort(t *testing.T) {
 	var calls []string
 
 	// A has BeforeStop that fails — during rollback this should not abort.
-	badStop := newHookOrderCell("A", &calls, "BeforeStop")
-	failStart := newHookOrderCell("B", &calls, "Start")
+	badStop := newHookOrderCell("aa", &calls, "BeforeStop")
+	failStart := newHookOrderCell("bb", &calls, "Start")
 
 	require.NoError(t, a.Register(badStop))
 	require.NoError(t, a.Register(failStart))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 
 	// A got full start cycle, B failed on Start.
 	// Rollback: A.BeforeStop fails, but A.Stop and A.AfterStop still called.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", "B.Start", // failed here
-		"A.BeforeStop", // error here, but rollback continues
-		"A.Stop", "A.AfterStop",
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", "bb.Start", // failed here
+		"aa.BeforeStop", // error here, but rollback continues
+		"aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -395,22 +402,22 @@ func TestAssemblyHooks_StartFailure_RollbackUsesHooks(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-start-fail", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	bad := newHookOrderCell("B", &calls, "Start")
+	good := newHookOrderCell("aa", &calls, "")
+	bad := newHookOrderCell("bb", &calls, "Start")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(bad))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 
 	// A: full start cycle. B: BeforeStart + Start (failed), AfterStart NOT called.
 	// Rollback: A gets full stop-with-hooks.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", "B.Start", // B.Start failed — no AfterStart
-		"A.BeforeStop", "A.Stop", "A.AfterStop", // A rollback with hooks
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", "bb.Start", // B.Start failed — no AfterStart
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop", // A rollback with hooks
 	}, calls)
 }
 
@@ -420,7 +427,7 @@ func TestAssemblyHooks_ContextCancellation(t *testing.T) {
 	var calls []string
 
 	// Cell whose BeforeStart checks context.
-	ctxCell := newHookOrderCell("A", &calls, "")
+	ctxCell := newHookOrderCell("aa", &calls, "")
 
 	require.NoError(t, a.Register(ctxCell))
 
@@ -432,13 +439,13 @@ func TestAssemblyHooks_ContextCancellation(t *testing.T) {
 	// This verifies the assembly doesn't crash on canceled context.
 	require.NoError(t, a.Start(ctx))
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
 	}, calls)
 
 	calls = nil
 	require.NoError(t, a.Stop(ctx))
 	assert.Equal(t, []string{
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -447,8 +454,8 @@ func TestAssemblyHooks_PanicRecovery_BeforeStart(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-panic-bs", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	panicker := newPanicHookCell("B", &calls, "BeforeStart")
+	good := newHookOrderCell("aa", &calls, "")
+	panicker := newPanicHookCell("bb", &calls, "BeforeStart")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(panicker))
@@ -456,13 +463,13 @@ func TestAssemblyHooks_PanicRecovery_BeforeStart(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "panicked")
-	assert.Contains(t, err.Error(), "B")
+	assert.Contains(t, err.Error(), "bb")
 
 	// A fully started, B panicked in BeforeStart → rollback A.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", // panicked here
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", // panicked here
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -470,8 +477,8 @@ func TestAssemblyHooks_PanicRecovery_AfterStart(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-panic-as", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	panicker := newPanicHookCell("B", &calls, "AfterStart")
+	good := newHookOrderCell("aa", &calls, "")
+	panicker := newPanicHookCell("bb", &calls, "AfterStart")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(panicker))
@@ -482,10 +489,10 @@ func TestAssemblyHooks_PanicRecovery_AfterStart(t *testing.T) {
 
 	// B.Start succeeded, B.AfterStart panicked → B gets stopped, then A rolled back.
 	assert.Equal(t, []string{
-		"A.BeforeStart", "A.Start", "A.AfterStart",
-		"B.BeforeStart", "B.Start", "B.AfterStart", // panicked
-		"B.BeforeStop", "B.Stop", "B.AfterStop", // B itself stopped
-		"A.BeforeStop", "A.Stop", "A.AfterStop", // A rolled back
+		"aa.BeforeStart", "aa.Start", "aa.AfterStart",
+		"bb.BeforeStart", "bb.Start", "bb.AfterStart", // panicked
+		"bb.BeforeStop", "bb.Stop", "bb.AfterStop", // B itself stopped
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop", // A rolled back
 	}, calls)
 }
 
@@ -493,8 +500,8 @@ func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-panic-bstop", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	panicker := newPanicHookCell("B", &calls, "BeforeStop")
+	good := newHookOrderCell("aa", &calls, "")
+	panicker := newPanicHookCell("bb", &calls, "BeforeStop")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(panicker))
@@ -507,9 +514,9 @@ func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
 
 	// B.BeforeStop panicked but Stop/AfterStop still called. A fully stopped.
 	assert.Equal(t, []string{
-		"B.BeforeStop", // panicked, recovered
-		"B.Stop", "B.AfterStop",
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"bb.BeforeStop", // panicked, recovered
+		"bb.Stop", "bb.AfterStop",
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }
 
@@ -517,8 +524,8 @@ func TestAssemblyHooks_PanicRecovery_AfterStop(t *testing.T) {
 	a := newTestAssembly(t, clock.Real(), Config{ID: "hooks-panic-astop", DurabilityMode: outbox.DurabilityDemo})
 	var calls []string
 
-	good := newHookOrderCell("A", &calls, "")
-	panicker := newPanicHookCell("B", &calls, "AfterStop")
+	good := newHookOrderCell("aa", &calls, "")
+	panicker := newPanicHookCell("bb", &calls, "AfterStop")
 
 	require.NoError(t, a.Register(good))
 	require.NoError(t, a.Register(panicker))
@@ -532,7 +539,7 @@ func TestAssemblyHooks_PanicRecovery_AfterStop(t *testing.T) {
 	// B: BeforeStop + Stop execute normally, AfterStop panics (recovered).
 	// A: fully stopped.
 	assert.Equal(t, []string{
-		"B.BeforeStop", "B.Stop", "B.AfterStop", // AfterStop panicked, recovered
-		"A.BeforeStop", "A.Stop", "A.AfterStop",
+		"bb.BeforeStop", "bb.Stop", "bb.AfterStop", // AfterStop panicked, recovered
+		"aa.BeforeStop", "aa.Stop", "aa.AfterStop",
 	}, calls)
 }

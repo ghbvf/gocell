@@ -1,28 +1,32 @@
-package metadata
+package metadata_test
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
-// buildAssemblyProject constructs a minimal *ProjectMeta with the given cells
-// and one assembly referencing them. Used to drive applyAssemblyDerivations
+// buildAssemblyProject constructs a minimal *metadata.ProjectMeta with the given cells
+// and one assembly referencing them. Used to drive ExportedApplyAssemblyDerivations
 // without touching the filesystem.
-func buildAssemblyProject(cellLevels map[string]string, asmCells []string, asm *AssemblyMeta) *ProjectMeta {
-	pm := &ProjectMeta{
-		Cells:      make(map[string]*CellMeta),
-		Slices:     make(map[string]*SliceMeta),
-		Contracts:  make(map[string]*ContractMeta),
-		Journeys:   make(map[string]*JourneyMeta),
-		Assemblies: make(map[string]*AssemblyMeta),
-		fileNodes:  nil,
+func buildAssemblyProject(cellLevels map[string]string, asmCells []string, asm *metadata.AssemblyMeta) *metadata.ProjectMeta {
+	pm := &metadata.ProjectMeta{
+		Cells:      make(map[string]*metadata.CellMeta),
+		Slices:     make(map[string]*metadata.SliceMeta),
+		Contracts:  make(map[string]*metadata.ContractMeta),
+		Journeys:   make(map[string]*metadata.JourneyMeta),
+		Assemblies: make(map[string]*metadata.AssemblyMeta),
 	}
+	// F8 (R3): re-validate every cell-id through the typed builder so a
+	// bare-literal call site fails fast in the helper, closing the
+	// AssignStmt blind spot (A1 only scans CompositeLit positions).
 	for id, lvl := range cellLevels {
-		pm.Cells[id] = &CellMeta{
-			ID:               id,
-			ConsistencyLevel: lvl,
-		}
+		c := &metadata.CellMeta{ConsistencyLevel: lvl}
+		c.ID = metadatatest.NewCellID(id)
+		pm.Cells[c.ID] = c
 	}
 	asm.Cells = asmCells
 	pm.Assemblies[asm.ID] = asm
@@ -30,13 +34,14 @@ func buildAssemblyProject(cellLevels map[string]string, asmCells []string, asm *
 }
 
 func TestApplyAssemblyDerivations_BuildAllOmitted(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "testbundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"mycelll1": "L1"}, []string{"mycelll1"}, asm)
+	mycelll1 := metadatatest.NewCellID("mycelll1")
+	pm := buildAssemblyProject(map[string]string{mycelll1: "L1"}, []string{mycelll1}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	assert.Equal(t, "cmd/testbundle/main.go", asm.Build.Entrypoint)
 	assert.Equal(t, "testbundle", asm.Build.Binary)
@@ -45,14 +50,15 @@ func TestApplyAssemblyDerivations_BuildAllOmitted(t *testing.T) {
 }
 
 func TestApplyAssemblyDerivations_PartialBuildOverride(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "custombundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
-		Build: BuildMeta{Binary: "custom-bin"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Build: metadata.BuildMeta{Binary: "custom-bin"},
 	}
-	pm := buildAssemblyProject(map[string]string{"somecell": "L2"}, []string{"somecell"}, asm)
+	somecell := metadatatest.NewCellID("somecell")
+	pm := buildAssemblyProject(map[string]string{somecell: "L2"}, []string{somecell}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	// Binary must not be overridden
 	assert.Equal(t, "custom-bin", asm.Build.Binary)
@@ -63,33 +69,34 @@ func TestApplyAssemblyDerivations_PartialBuildOverride(t *testing.T) {
 }
 
 func TestApplyAssemblyDerivations_MaxConsistencyMultipleCells(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "multibundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
 	pm := buildAssemblyProject(
 		map[string]string{
-			"cell-a": "L0",
-			"cell-b": "L2",
-			"cell-c": "L4",
+			metadatatest.CellIDCellA: "L0",
+			metadatatest.CellIDCellB: "L2",
+			metadatatest.CellIDCellC: "L4",
 		},
-		[]string{"cell-a", "cell-b", "cell-c"},
+		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB, metadatatest.CellIDCellC},
 		asm,
 	)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	assert.Equal(t, "L4", asm.MaxConsistencyLevel)
 }
 
 func TestApplyAssemblyDerivations_MaxConsistencyAllL0(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "l0bundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"purecalc": "L0"}, []string{"purecalc"}, asm)
+	purecalc := metadatatest.NewCellID("purecalc")
+	pm := buildAssemblyProject(map[string]string{purecalc: "L0"}, []string{purecalc}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	assert.Equal(t, "L0", asm.MaxConsistencyLevel)
 }
@@ -100,13 +107,13 @@ func TestApplyAssemblyDerivations_MaxConsistencyAllL0(t *testing.T) {
 // REF-* / TOPO-09 can report the issue without being shadowed by a
 // parser-level error.
 func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "badbundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{}, []string{"nonexistent"}, asm)
+	pm := buildAssemblyProject(map[string]string{}, []string{metadatatest.NewCellID("nonexistent")}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	// Build defaults are still applied even when cells are unresolvable.
 	assert.Equal(t, "cmd/badbundle/main.go", asm.Build.Entrypoint)
@@ -121,19 +128,19 @@ func TestApplyAssemblyDerivations_MissingCellRefSkipsMaxLevel(t *testing.T) {
 // prefix — used by the generator, governance REF-16, and generate commands.
 func TestApplyAssemblyDerivations_ExamplesEntrypoint(t *testing.T) {
 	t.Parallel()
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "todoorder",
 		File:  "examples/todoorder/assembly.yaml",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"ordercell": "L2"}, []string{"ordercell"}, asm)
+	pm := buildAssemblyProject(map[string]string{metadatatest.CellIDOrderCell: "L2"}, []string{metadatatest.CellIDOrderCell}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	if asm.Build.Entrypoint != "examples/todoorder/main.go" {
 		t.Errorf("entrypoint: want %q, got %q", "examples/todoorder/main.go", asm.Build.Entrypoint)
 	}
-	if got := AssemblyGeneratedDir(asm); got != "examples/todoorder/generated" {
+	if got := metadata.AssemblyGeneratedDir(asm); got != "examples/todoorder/generated" {
 		t.Errorf("generated dir: want %q, got %q", "examples/todoorder/generated", got)
 	}
 }
@@ -171,8 +178,8 @@ func TestAssemblyGeneratedDir(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			asm := &AssemblyMeta{ID: tc.asmID, File: tc.file}
-			got := AssemblyGeneratedDir(asm)
+			asm := &metadata.AssemblyMeta{ID: tc.asmID, File: tc.file}
+			got := metadata.AssemblyGeneratedDir(asm)
 			if got != tc.wantPath {
 				t.Errorf("AssemblyGeneratedDir(%q): want %q, got %q", tc.file, tc.wantPath, got)
 			}
@@ -181,13 +188,14 @@ func TestAssemblyGeneratedDir(t *testing.T) {
 }
 
 func TestApplyAssemblyDerivations_InvalidLevelSkipsMaxLevel(t *testing.T) {
-	asm := &AssemblyMeta{
+	asm := &metadata.AssemblyMeta{
 		ID:    "badlvlbundle",
-		Owner: OwnerMeta{Team: "platform", Role: "cell-owner"},
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 	}
-	pm := buildAssemblyProject(map[string]string{"bad-level-cell": "L9"}, []string{"bad-level-cell"}, asm)
+	badlevelcell := metadatatest.NewCellID("badlevelcell")
+	pm := buildAssemblyProject(map[string]string{badlevelcell: "L9"}, []string{badlevelcell}, asm)
 
-	applyAssemblyDerivations(pm)
+	metadata.ExportedApplyAssemblyDerivations(pm)
 
 	// Same layering rationale — invalid level is FMT-03 territory.
 	assert.Empty(t, asm.MaxConsistencyLevel)

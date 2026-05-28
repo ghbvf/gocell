@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 )
 
@@ -786,7 +787,7 @@ func TestGenerate_PropagatesBuildSpecError_C5(t *testing.T) {
 				Kind:    "http",
 				Codegen: true,
 				Endpoints: metadata.EndpointsMeta{
-					Server: "testcell",
+					Server: metadatatest.CellIDTestCell,
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",
 						Path:          "/api/v1/test",

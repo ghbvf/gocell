@@ -64,6 +64,13 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // the fsm transition table), saga→clock (journal lease timing), saga→healthz
 // (sagajournaltest RepoReady conformance prober — a non-test .go file, so the
 // edge is counted). None of fsm/clock/healthz import saga back (no cycle).
+//
+// PR #1187 round-3 review F6 added healthz→clock: ctxsafe.go (Probe interface
+// sealed marker + WrapCtxSafe ctx-racing wrapper) was sunk from
+// runtime/observability/healthz to kernel/healthz so the sealed marker
+// (`isHealthzProbe()` unexported) can be implemented by ctxSafeProbe. The
+// ctx-racing logic needs clock.Clock for the late-outcome watcher; clock is
+// a leaf so no cycle.
 var allowedKernelEdges = map[string][]string{
 	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
 	"auth":          {"cell"},
@@ -77,7 +84,7 @@ var allowedKernelEdges = map[string][]string{
 	"depgraph":      nil,
 	"fsm":           nil,
 	"governance":    {"cellvocab", "clock", "metadata", "registry", "verify"},
-	"healthz":       nil,
+	"healthz":       {"clock"},
 	"idempotency":   {"clock"},
 	"journey":       {"metadata"},
 	"lifecycle":     {"healthz", "worker"},

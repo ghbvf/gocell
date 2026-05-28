@@ -1,4 +1,4 @@
-package metadata
+package metadata_test
 
 import (
 	"errors"
@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -39,7 +41,7 @@ deliverySemantics: at-least-once
 	fsys := fstest.MapFS{
 		"contracts/event/test/created/v1/contract.yaml": &fstest.MapFile{Data: []byte(contractYAML)},
 	}
-	p := NewParser("")
+	p := metadata.NewParser("")
 	_, err := p.ParseFS(fsys)
 	require.Error(t, err, "contract.yaml with literal 'subscribers:' must be rejected by KnownFields")
 	var ecErr *errcode.Error
@@ -68,7 +70,7 @@ deliverySemantics: at-least-once
 	fsys := fstest.MapFS{
 		"contracts/event/test/created/v1/contract.yaml": &fstest.MapFile{Data: []byte(contractYAML)},
 	}
-	p := NewParser("")
+	p := metadata.NewParser("")
 	pm, err := p.ParseFS(fsys)
 	require.NoError(t, err, "contract.yaml with actorSubscribers must be accepted")
 
@@ -85,19 +87,19 @@ deliverySemantics: at-least-once
 // but with actorSubscribers pre-set. Subscribers must equal ActorSubscribers.
 func TestDeriveEventSubscribers_ActorOnly(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{},
-		map[string]*ContractMeta{
+		map[string]*metadata.SliceMeta{},
+		map[string]*metadata.ContractMeta{
 			"event.audit.appended.v1": {
 				ID:   "event.audit.appended.v1",
 				Kind: "event",
-				Endpoints: EndpointsMeta{
-					Publisher:        "auditcore",
+				Endpoints: metadata.EndpointsMeta{
+					Publisher:        metadatatest.CellIDAuditCore,
 					ActorSubscribers: []string{"external-audit-sink"},
 				},
 			},
 		},
 	)
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 	subs := pm.Contracts["event.audit.appended.v1"].Endpoints.Subscribers
 	assert.Equal(t, []string{"external-audit-sink"}, subs,
 		"actor-only contract: Subscribers must equal ActorSubscribers")
@@ -108,29 +110,29 @@ func TestDeriveEventSubscribers_ActorOnly(t *testing.T) {
 // union, deduped and sorted alphabetically.
 func TestDeriveEventSubscribers_ActorPlusCells(t *testing.T) {
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"ordercell/orderingest": {
 				ID:            "orderingest",
-				BelongsToCell: "ordercell",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.NewCellID("ordercell"),
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.order-created.v1", Role: "subscribe", Handler: "HandleEvent"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.order-created.v1": {
 				ID:   "event.order-created.v1",
 				Kind: "event",
-				Endpoints: EndpointsMeta{
-					Publisher:        "ordercell",
+				Endpoints: metadata.EndpointsMeta{
+					Publisher:        metadatatest.NewCellID("ordercell"),
 					ActorSubscribers: []string{"example-order-platform"},
 				},
 			},
 		},
 	)
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 	subs := pm.Contracts["event.order-created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"example-order-platform", "ordercell"}, subs,
+	assert.Equal(t, []string{"example-order-platform", metadatatest.NewCellID("ordercell")}, subs,
 		"actor+cell contract: Subscribers must be sorted union of both")
 }
 
@@ -142,38 +144,38 @@ func TestDeriveEventSubscribers_ActorContractEnumeratedAlways(t *testing.T) {
 	// There are two event contracts; only one has actor subscribers.
 	// The other has a cell slice subscriber. Both must be populated correctly.
 	pm := buildSubscribeProject(
-		map[string]*SliceMeta{
+		map[string]*metadata.SliceMeta{
 			"auditcore/auditingest": {
 				ID:            "auditingest",
-				BelongsToCell: "auditcore",
-				ContractUsages: []ContractUsage{
+				BelongsToCell: metadatatest.CellIDAuditCore,
+				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "Handle"},
 				},
 			},
 		},
-		map[string]*ContractMeta{
+		map[string]*metadata.ContractMeta{
 			"event.audit.appended.v1": {
 				ID:   "event.audit.appended.v1",
 				Kind: "event",
-				Endpoints: EndpointsMeta{
-					Publisher:        "auditcore",
+				Endpoints: metadata.EndpointsMeta{
+					Publisher:        metadatatest.CellIDAuditCore,
 					ActorSubscribers: []string{"external-audit-sink"},
 				},
 			},
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
-				Endpoints: EndpointsMeta{Publisher: "accesscore"},
+				Endpoints: metadata.EndpointsMeta{Publisher: metadatatest.CellIDAccessCore},
 			},
 		},
 	)
-	deriveEventSubscribers(pm)
+	metadata.ExportedDeriveEventSubscribers(pm)
 
 	auditSubs := pm.Contracts["event.audit.appended.v1"].Endpoints.Subscribers
 	assert.Equal(t, []string{"external-audit-sink"}, auditSubs,
 		"audit contract with only actor subscriber must have Subscribers populated")
 
 	sessionSubs := pm.Contracts["event.session.created.v1"].Endpoints.Subscribers
-	assert.Equal(t, []string{"auditcore"}, sessionSubs,
+	assert.Equal(t, []string{metadatatest.CellIDAuditCore}, sessionSubs,
 		"session contract with only cell subscriber must have Subscribers derived from slices")
 }

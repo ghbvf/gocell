@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // TestValidateLifecyclePhase covers CELL-LIFECYCLE-01: cell/slice `lifecycle`
@@ -46,11 +47,11 @@ func TestValidateLifecyclePhase(t *testing.T) {
 			t.Parallel()
 			project := &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"testcell": {ID: "testcell", ConsistencyLevel: "L2", Lifecycle: tt.cellPhase},
+					metadatatest.CellIDTestCell: {ID: metadatatest.CellIDTestCell, ConsistencyLevel: "L2", Lifecycle: tt.cellPhase},
 				},
 				Slices: map[string]*metadata.SliceMeta{
-					"testcell/testslice": {
-						ID: "testslice", BelongsToCell: "testcell",
+					metadatatest.CellIDTestCell + "/testslice": {
+						ID: "testslice", BelongsToCell: metadatatest.CellIDTestCell,
 						ConsistencyLevel: "L1", Lifecycle: tt.slicePhase,
 					},
 				},
@@ -82,7 +83,7 @@ func TestValidateLifecyclePhase_MissingParentCell(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 		Slices: map[string]*metadata.SliceMeta{
-			"ghost/orphan": {ID: "orphan", BelongsToCell: "ghost", ConsistencyLevel: "L1", Lifecycle: "asset"},
+			"ghost/orphan": {ID: "orphan", BelongsToCell: metadatatest.NewCellID("ghost"), ConsistencyLevel: "L1", Lifecycle: "asset"},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
 		Journeys:   map[string]*metadata.JourneyMeta{},
@@ -103,7 +104,7 @@ func TestValidateLifecyclePhase_OrphanSliceInvalidLifecycle(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 		Slices: map[string]*metadata.SliceMeta{
-			"ghost/orphan": {ID: "orphan", BelongsToCell: "ghost", ConsistencyLevel: "L1", Lifecycle: "bogus"},
+			"ghost/orphan": {ID: "orphan", BelongsToCell: metadatatest.NewCellID("ghost"), ConsistencyLevel: "L1", Lifecycle: "bogus"},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
 		Journeys:   map[string]*metadata.JourneyMeta{},

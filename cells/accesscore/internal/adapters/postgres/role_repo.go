@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -28,7 +29,7 @@ var _ ports.RoleRepository = (*PGRoleRepo)(nil)
 // PGRoleRepo is the cell-private PostgreSQL implementation of ports.RoleRepository.
 // It reads/writes the `roles` and `role_assignments` tables (migration 019).
 type PGRoleRepo struct {
-	db       pgExecutor
+	db       pgexec.PGExecutor
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }
@@ -52,7 +53,7 @@ func NewPGRoleRepo(
 			"accesscore.NewPGRoleRepo: clock must not be nil")
 	}
 	return &PGRoleRepo{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -18,16 +19,16 @@ import (
 func buildModulesTestProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:           "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:           metadatatest.CellIDAccessCore,
 				GoStructName: metadata.MustNewGoIdentifier("AccessCore"),
 			},
-			"auditcore": {
-				ID:           "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:           metadatatest.CellIDAuditCore,
 				GoStructName: metadata.MustNewGoIdentifier("AuditCore"),
 			},
-			"configcore": {
-				ID:           "configcore",
+			metadatatest.CellIDConfigCore: {
+				ID:           metadatatest.CellIDConfigCore,
 				GoStructName: metadata.MustNewGoIdentifier("ConfigCore"),
 			},
 		},
@@ -37,7 +38,7 @@ func buildModulesTestProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{"accesscore", "auditcore", "configcore"},
+				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDConfigCore},
 			},
 		},
 	}
@@ -183,8 +184,8 @@ func TestGenerateModulesGen_AssemblyNotFound(t *testing.T) {
 func TestGenerateModulesGen_CellMissingGoStructName(t *testing.T) {
 	project := buildModulesTestProject()
 	// Override accesscore to have empty GoStructName
-	project.Cells["accesscore"] = &metadata.CellMeta{
-		ID: "accesscore",
+	project.Cells[metadatatest.CellIDAccessCore] = &metadata.CellMeta{
+		ID: metadatatest.CellIDAccessCore,
 		// GoStructName left at zero value to trigger the missing-name error.
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
@@ -209,7 +210,7 @@ func TestGenerateModulesGen_UnknownCellRef(t *testing.T) {
 	// Add assembly with an unregistered cell ID.
 	project.Assemblies["ghostbundle"] = &metadata.AssemblyMeta{
 		ID:    "ghostbundle",
-		Cells: []string{"accesscore", "ghost-cell-not-registered"},
+		Cells: []string{metadatatest.CellIDAccessCore, metadatatest.NewCellID("ghostcellnotregistered")},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
@@ -227,13 +228,13 @@ func TestGenerateModulesGen_UnknownCellRef(t *testing.T) {
 
 func TestGenerateModulesGen_PreservesCellsOrder(t *testing.T) {
 	project := buildModulesTestProject()
-	// Declare assembly with cells in b, a, c order
-	project.Cells["b"] = &metadata.CellMeta{ID: "b", GoStructName: metadata.MustNewGoIdentifier("B")}
-	project.Cells["a"] = &metadata.CellMeta{ID: "a", GoStructName: metadata.MustNewGoIdentifier("A")}
-	project.Cells["c"] = &metadata.CellMeta{ID: "c", GoStructName: metadata.MustNewGoIdentifier("C")}
+	// Declare assembly with cells in bb, aa, cc order
+	project.Cells[metadatatest.CellIDBB] = &metadata.CellMeta{ID: metadatatest.CellIDBB, GoStructName: metadata.MustNewGoIdentifier("B")}
+	project.Cells[metadatatest.CellIDAA] = &metadata.CellMeta{ID: metadatatest.CellIDAA, GoStructName: metadata.MustNewGoIdentifier("A")}
+	project.Cells[metadatatest.CellIDCC] = &metadata.CellMeta{ID: metadatatest.CellIDCC, GoStructName: metadata.MustNewGoIdentifier("C")}
 	project.Assemblies["ordered"] = &metadata.AssemblyMeta{
 		ID:    "ordered",
-		Cells: []string{"b", "a", "c"},
+		Cells: []string{metadatatest.CellIDBB, metadatatest.CellIDAA, metadatatest.CellIDCC},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 

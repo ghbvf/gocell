@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -32,14 +33,14 @@ func fixtureProject(cell *metadata.CellMeta, slices []*metadata.SliceMeta, contr
 func TestBuildCellSpec_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{
-		ID:           "demo",
+		ID:           metadatatest.CellIDDemo,
 		Dir:          "demo",
 		File:         "cells/demo/cell.yaml",
 		GoStructName: metadata.MustNewGoIdentifier("Demo"),
 	}
 	slc := &metadata.SliceMeta{
 		ID:            "alpha",
-		BelongsToCell: "demo",
+		BelongsToCell: metadatatest.CellIDDemo,
 		Dir:           "alpha",
 		File:          "cells/demo/slices/alpha/slice.yaml",
 	}
@@ -78,9 +79,12 @@ func TestBuildCellSpec_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 
 func TestBuildCellSpec_GroupsTwoSlicesUnderSameSubPath(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slcA := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
-	slcB := &metadata.SliceMeta{ID: "beta", BelongsToCell: "demo", Dir: "beta", File: "cells/demo/slices/beta/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slcA := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	slcB := &metadata.SliceMeta{ID: "beta", BelongsToCell: metadatatest.CellIDDemo, Dir: "beta", File: "cells/demo/slices/beta/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slcA, slcB}, nil)
 	bundle := markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
@@ -106,8 +110,11 @@ func TestBuildCellSpec_GroupsTwoSlicesUnderSameSubPath(t *testing.T) {
 
 func TestBuildCellSpec_TwoListenersDeterministicOrder(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 	bundle := markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{
@@ -137,8 +144,11 @@ func TestBuildCellSpec_TwoListenersDeterministicOrder(t *testing.T) {
 
 func TestBuildCellSpec_EmptySubPathMountsDirectlyOnPrefix(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 	bundle := markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.InternalListener", Prefix: "/internal/v1/admin"}},
@@ -172,7 +182,7 @@ func TestBuildCellSpec_UnknownCellFails(t *testing.T) {
 
 func TestBuildCellSpec_MissingGoStructNameFails(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml"}
+	cell := &metadata.CellMeta{ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml"}
 	p := fixtureProject(cell, nil, nil)
 	_, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "goStructName") {
@@ -182,7 +192,10 @@ func TestBuildCellSpec_MissingGoStructNameFails(t *testing.T) {
 
 func TestBuildCellSpec_DuplicateListenerFails(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	p := fixtureProject(cell, nil, nil)
 	bundle := markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{
@@ -198,8 +211,11 @@ func TestBuildCellSpec_DuplicateListenerFails(t *testing.T) {
 
 func TestBuildCellSpec_RouteMountUndeclaredListenerFails(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 	bundle := markergen.WireBundle{
 		// No listeners declared — route references undeclared listener.
@@ -217,9 +233,12 @@ func TestBuildCellSpec_RouteMountUndeclaredListenerFails(t *testing.T) {
 // referencing an unknown contract is rejected.
 func TestBuildCellSpec_UnknownContractFails(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	slc := &metadata.SliceMeta{
-		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ID: "subs", BelongsToCell: metadatatest.CellIDDemo, Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: "ghost.event.v1", Role: "subscribe", Handler: "HandleGhost"},
 		},
@@ -236,9 +255,12 @@ func TestBuildCellSpec_UnknownContractFails(t *testing.T) {
 // targeting a non-event contract kind is rejected.
 func TestBuildCellSpec_NonEventContractRejected(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	slc := &metadata.SliceMeta{
-		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ID: "subs", BelongsToCell: metadatatest.CellIDDemo, Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: "http.users.v1", Role: "subscribe", Handler: "HandleHTTP"},
 		},
@@ -253,8 +275,11 @@ func TestBuildCellSpec_NonEventContractRejected(t *testing.T) {
 
 func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 	// Bundle has a route but no listener declared.
 	bundle := markergen.WireBundle{
@@ -275,10 +300,13 @@ func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
 // conditionally by slice.tmpl when Handlers is non-empty.
 func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	slc := &metadata.SliceMeta{
 		ID:               "alpha",
-		BelongsToCell:    "demo",
+		BelongsToCell:    metadatatest.CellIDDemo,
 		ConsistencyLevel: "L0",
 		Dir:              "alpha",
 		File:             "cells/demo/slices/alpha/slice.yaml",
@@ -321,9 +349,12 @@ func TestBuildSliceSpec_NoSubscribesStillEmitsMeta(t *testing.T) {
 // ContractUsages[role=subscribe].Handler entries.
 func TestBuildSliceSpec_SubscribesProduceHandlerInterface(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	slc := &metadata.SliceMeta{
-		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ID: "subs", BelongsToCell: metadatatest.CellIDDemo, Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: "event.b.v1", Role: "subscribe", Handler: "HandleB"},
 			{Contract: "event.a.v1", Role: "subscribe", Handler: "HandleA"},
@@ -367,7 +398,10 @@ func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
 		"cell.",                 // empty identifier
 	}
 	for _, ref := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+		cell := &metadata.CellMeta{
+			ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+			GoStructName: metadata.MustNewGoIdentifier("Demo"),
+		}
 		p := fixtureProject(cell, nil, nil)
 		bundle := markergen.WireBundle{
 			Listeners: []markergen.ListenerSpec{{Ref: ref, Prefix: "/api/v1"}},
@@ -384,9 +418,12 @@ func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
 // a transport field; AMQP is the only supported transport in GoCell for now).
 func TestBuildCellSpec_TransportAlwaysAMQP(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
 	slc := &metadata.SliceMeta{
-		ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
+		ID: "subs", BelongsToCell: metadatatest.CellIDDemo, Dir: "subs", File: "cells/demo/slices/subs/slice.yaml",
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: "event.foo.created.v1", Role: "subscribe", Handler: "HandleFooCreated"},
 			{Contract: "event.bar.updated.v1", Role: "subscribe", Handler: "HandleBarUpdated"},
@@ -426,8 +463,11 @@ func TestBuildCellSpec_RouteMethodInvalidIdentRejected(t *testing.T) {
 		" BadMethod",     // leading space
 	}
 	for _, method := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+		cell := &metadata.CellMeta{
+			ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+			GoStructName: metadata.MustNewGoIdentifier("Demo"),
+		}
+		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 		bundle := markergen.WireBundle{
 			Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
@@ -446,8 +486,11 @@ func TestBuildCellSpec_RouteMethodInvalidIdentRejected(t *testing.T) {
 // is valid (defaults to RegisterRoutes) and must not cause a validation error.
 func TestBuildCellSpec_RouteMethodEmptyAccepted(t *testing.T) {
 	t.Parallel()
-	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	cell := &metadata.CellMeta{
+		ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 	bundle := markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
@@ -472,8 +515,11 @@ func TestBuildCellSpec_RouteHandlerFieldInvalidRejected(t *testing.T) {
 		"",            // empty
 	}
 	for _, field := range cases {
-		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: metadata.MustNewGoIdentifier("Demo")}
-		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+		cell := &metadata.CellMeta{
+			ID: metadatatest.CellIDDemo, Dir: "demo", File: "cells/demo/cell.yaml",
+			GoStructName: metadata.MustNewGoIdentifier("Demo"),
+		}
+		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: metadatatest.CellIDDemo, Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
 		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
 		bundle := markergen.WireBundle{
 			Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
@@ -498,7 +544,7 @@ func TestBuildCellSpec_RouteHandlerFieldInvalidRejected(t *testing.T) {
 func TestBuildCellSpec_RenderedMetaLiteralPopulated(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{
-		ID:               "demo",
+		ID:               metadatatest.CellIDDemo,
 		Type:             "core",
 		ConsistencyLevel: "L1",
 		Dir:              "demo",
@@ -507,7 +553,7 @@ func TestBuildCellSpec_RenderedMetaLiteralPopulated(t *testing.T) {
 	}
 	p := fixtureProject(cell, nil, nil)
 
-	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, nil)
+	spec, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, nil)
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}

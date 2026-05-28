@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // targetsProject returns a ProjectMeta for impact-analysis tests.
@@ -13,14 +14,14 @@ import (
 func targetsProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 			},
-			"auditcore": {
-				ID:               "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -29,7 +30,7 @@ func targetsProject() *metadata.ProjectMeta {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
@@ -37,14 +38,14 @@ func targetsProject() *metadata.ProjectMeta {
 			},
 			"accesscore/session-refresh": {
 				ID:            "session-refresh",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "call"},
 				},
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "auditcore",
+				BelongsToCell: metadatatest.CellIDAuditCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe"},
 				},
@@ -54,13 +55,13 @@ func targetsProject() *metadata.ProjectMeta {
 			"http.auth.login.v1": {
 				ID:        "http.auth.login.v1",
 				Kind:      "http",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Lifecycle: "active",
 			},
 			"event.session.created.v1": {
 				ID:        "event.session.created.v1",
 				Kind:      "event",
-				OwnerCell: "accesscore",
+				OwnerCell: metadatatest.CellIDAccessCore,
 				Lifecycle: "active",
 			},
 		},
@@ -68,19 +69,19 @@ func targetsProject() *metadata.ProjectMeta {
 			"J-ssologin": {
 				ID:        "J-ssologin",
 				Goal:      "SSO login flow",
-				Cells:     []string{"accesscore", "auditcore"},
+				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
 			},
 			"J-audit-trail": {
 				ID:    "J-audit-trail",
 				Goal:  "Audit trail for login",
-				Cells: []string{"auditcore"},
+				Cells: []string{metadatatest.CellIDAuditCore},
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:    "corebundle",
-				Cells: []string{"accesscore", "auditcore"},
+				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Build: metadata.BuildMeta{
 					Entrypoint: "cmd/corebundle/main.go",
 					Binary:     "corebundle",
@@ -334,38 +335,38 @@ func TestSelectFromFiles_NonexistentJourney(t *testing.T) {
 func l0Project() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				Type:             "support",
 				ConsistencyLevel: "L0",
 			},
-			"sharedvalidate": {
-				ID:               "sharedvalidate",
+			metadatatest.CellIDSharedValidate: {
+				ID:               metadatatest.CellIDSharedValidate,
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				// L0 cell with NO slices — tests propagation for slice-less cells.
 			},
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
-					{Cell: "sharedvalidate", Reason: "input validation"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedValidate, Reason: "input validation"},
 				},
 			},
-			"auditcore": {
-				ID:               "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				// no L0 dependencies
 			},
-			"billingcore": {
-				ID:               "billingcore",
+			metadatatest.CellIDBillingCore: {
+				ID:               metadatatest.CellIDBillingCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "signature"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "signature"},
 				},
 				// NOT referenced by J-l0-test journey — used to test
 				// that journey changes don't trigger L0 propagation.
@@ -374,23 +375,23 @@ func l0Project() *metadata.ProjectMeta {
 		Slices: map[string]*metadata.SliceMeta{
 			"sharedcrypto/hasher": {
 				ID:            "hasher",
-				BelongsToCell: "sharedcrypto",
+				BelongsToCell: metadatatest.CellIDSharedCrypto,
 			},
 			// sharedvalidate has NO slices (intentional).
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "auditcore",
+				BelongsToCell: metadatatest.CellIDAuditCore,
 			},
 			"billingcore/payment": {
 				ID:            "payment",
-				BelongsToCell: "billingcore",
+				BelongsToCell: metadatatest.CellIDBillingCore,
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -402,7 +403,7 @@ func l0Project() *metadata.ProjectMeta {
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-l0-test": {
 				ID:    "J-l0-test",
-				Cells: []string{"sharedcrypto", "accesscore"},
+				Cells: []string{metadatatest.CellIDSharedCrypto, metadatatest.CellIDAccessCore},
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
@@ -472,8 +473,8 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"ordercell": {
-				ID:               "ordercell",
+			metadatatest.CellIDOrderCell: {
+				ID:               metadatatest.CellIDOrderCell,
 				ConsistencyLevel: "L2",
 				File:             "examples/todoorder/cells/ordercell/cell.yaml",
 			},
@@ -481,7 +482,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{
 			"ordercell/ordercreate": {
 				ID:            "ordercreate",
-				BelongsToCell: "ordercell",
+				BelongsToCell: metadatatest.CellIDOrderCell,
 				File:          "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.order.create.v1", Role: "serve"},
@@ -489,7 +490,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 			},
 			"ordercell/orderquery": {
 				ID:            "orderquery",
-				BelongsToCell: "ordercell",
+				BelongsToCell: metadatatest.CellIDOrderCell,
 				File:          "examples/todoorder/cells/ordercell/slices/orderquery/slice.yaml",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.order.list.v1", Role: "serve"},
@@ -500,7 +501,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 			"http.order.create.v1": {
 				ID:        "http.order.create.v1",
 				Kind:      "http",
-				OwnerCell: "ordercell",
+				OwnerCell: metadatatest.CellIDOrderCell,
 				Dir:       "examples/todoorder/contracts/http/order/create/v1",
 				File:      "examples/todoorder/contracts/http/order/create/v1/contract.yaml",
 				Endpoints: metadata.EndpointsMeta{
@@ -514,7 +515,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 			"http.order.list.v1": {
 				ID:        "http.order.list.v1",
 				Kind:      "http",
-				OwnerCell: "ordercell",
+				OwnerCell: metadatatest.CellIDOrderCell,
 				Dir:       "examples/todoorder/contracts/http/order/list/v1",
 				File:      "examples/todoorder/contracts/http/order/list/v1/contract.yaml",
 				Endpoints: metadata.EndpointsMeta{
@@ -529,7 +530,7 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-ordercreate": {
 				ID:        "J-ordercreate",
-				Cells:     []string{"ordercell"},
+				Cells:     []string{metadatatest.CellIDOrderCell},
 				Contracts: []string{"http.order.create.v1"},
 				File:      "examples/todoorder/journeys/J-ordercreate.yaml",
 			},
@@ -569,23 +570,23 @@ func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
 func TestSelectFromFiles_ExampleAssemblyPath(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"ordercell": {
-				ID:               "ordercell",
+			metadatatest.CellIDOrderCell: {
+				ID:               metadatatest.CellIDOrderCell,
 				ConsistencyLevel: "L2",
 			},
-			"auditcell": {
-				ID:               "auditcell",
+			metadatatest.NewCellID("auditcell"): {
+				ID:               metadatatest.NewCellID("auditcell"),
 				ConsistencyLevel: "L2",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"ordercell/ordercreate": {
 				ID:            "ordercreate",
-				BelongsToCell: "ordercell",
+				BelongsToCell: metadatatest.CellIDOrderCell,
 			},
 			"auditcell/auditwrite": {
 				ID:            "auditwrite",
-				BelongsToCell: "auditcell",
+				BelongsToCell: metadatatest.NewCellID("auditcell"),
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -593,7 +594,7 @@ func TestSelectFromFiles_ExampleAssemblyPath(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"todoorder": {
 				ID:    "todoorder",
-				Cells: []string{"ordercell", "auditcell"},
+				Cells: []string{metadatatest.CellIDOrderCell, metadatatest.NewCellID("auditcell")},
 				File:  "examples/todoorder/assembly.yaml",
 			},
 		},

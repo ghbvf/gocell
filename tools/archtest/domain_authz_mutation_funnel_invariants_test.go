@@ -18,12 +18,37 @@ package archtest
 //
 //   Downstream Hard (AUTHZ-MUTATION-APPLY-FUNNEL-01, Rule a — SetStatus /
 //   SetPasswordResetRequired caller set):
-//     "Form uniqueness" = "call resolves to this exact *types.Func identity via
-//     typeseval.ResolveMethodCall". Any call site outside the narrowed file-level
-//     allowlist fails archtest in CI with no gray zone. Honest caveat: Go does
-//     not prevent the calls at compile time (the methods are exported); enforcement
-//     is archtest-bound. This is the highest Hard grade reachable in Go for
-//     exported-method caller restriction.
+//     "Form uniqueness" requires three axes, all type-resolved (no string
+//     anchors, no file paths, no package prefixes):
+//       1. callee identity via typeseval.ResolveMethodCall → exact *types.Func
+//       2. caller identity via typeseval.ResolveEnclosingFunc → exact *types.Func
+//          for the enclosing FuncDecl
+//       3. form completeness — EachInSubtree[ast.SelectorExpr] visits EVERY
+//          selector resolving to the banned method (direct call AND
+//          function-value capture: `fn := u.SetStatus`, `return u.SetStatus`,
+//          `pass(u.SetStatus)`). info.Selections records a MethodVal
+//          selection even when the method value is not immediately invoked.
+//     Any reference whose enclosing FuncDecl is outside the narrow callsite
+//     allowlist fails archtest in CI with no gray zone. Honest caveat: Go
+//     does not prevent the calls at compile time (the methods are exported);
+//     enforcement is archtest-bound. This is the highest Hard grade
+//     reachable in Go for exported-method caller restriction.
+//
+//     Issue #732 hardening (this file, 2026-05-27): the prior file-level
+//     allowlist (setMutatorAllowlist []string) admitted any new function in
+//     adminprovision/provisioner.go or identitymanage/service.go to call the
+//     setters silently. callsite-level keying eliminates this "same file /
+//     different function" slip path. PR #1196 round-2 upgrade: scanner walks
+//     all SelectorExpr (not only CallExpr.Fun), closing the previously
+//     expressible "method-value capture" bypass that round-1 had documented
+//     as a blind spot — now caught directly by form-complete resolution
+//     (mirrors credential_invalidate sibling scanners).
+//
+//     Defensive package-prefix carve-outs for authzmutate/ and domain/
+//     removed: production AST has zero references to these setters in those
+//     packages today; if a new helper needs the setter, the author must add
+//     a callsite entry (explicit acknowledgement, not silent reuse of a
+//     stale package allowance).
 //
 //   Upstream Medium-by-necessity (caller-set upper-bound):
 //     The upstream guarantee — that all live-aggregate authz mutations MUST go
@@ -33,17 +58,19 @@ package archtest
 //     routing through authzmutate would be semantically wrong.
 //     (b) sealed interfaces or codegen cannot express "creation-time-only" as a
 //     compile-time invariant without redesigning the domain model.
-//     The Medium ceiling is an accepted architectural trade-off; the file-level
-//     allowlist (not package-level) is the tightest achievable restriction:
-//     only the exact files that contain creation-time calls are allowlisted.
+//     The Medium ceiling is an accepted architectural trade-off independent of
+//     the archtest allowlist granularity; callsite-level keying within Rule (a)
+//     is orthogonal — it tightens the archtest tier without changing the
+//     architectural ceiling.
 //
 // Relationship to CREDENTIAL-INVALIDATE-UPSTREAM-CALLER-01 (Rule b):
 //   The Hard closure of the P1.2 / P1-#1 regression class is Rule (a) above —
 //   field privatization + SetStatus/SetPasswordResetRequired funnel. Narrowing
 //   the credentialinvalidate.Invalidator.Apply caller set (Rule b) is a
-//   secondary tightening implemented in-file by modifying upstreamCallerAllowlistPrefixes
-//   in credential_invalidate_funnel_invariants_test.go (setup/ and adminprovision/
-//   removed — they do not call Apply in production code).
+//   secondary tightening implemented in-file by modifying
+//   upstreamCallerCallsiteAllowlist in
+//   credential_invalidate_funnel_invariants_test.go (also upgraded to
+//   callsite-level in this PR).
 //
 //   The ADR §A10 idealization "{authzmutate, sessionrefresh}" is NOT achievable:
 //   Delete and changePasswordInTx in identitymanage need Invalidator.Apply co-tx
@@ -54,55 +81,65 @@ package archtest
 //   Wave 3 ADR author: the P1 regression class is closed at Rule (a), not at
 //   Rule (b). §A10 should be updated to reflect the actual caller set.
 //
-// Allowlist precision (D1 RC-D hardening):
-//   The allowlist was narrowed from package-level prefixes to file-level paths
-//   for the two creation-time call sites (identitymanage/service.go and
-//   adminprovision/provisioner.go). Any new file in those packages that adds a
-//   direct setter call will fail the archtest immediately, without requiring a
-//   separate allowlist entry. This is the tightest achievable restriction given
-//   the Medium upstream ceiling.
-//
-// Scanning tool: typeseval.SharedResolver + typeseval.ResolveMethodCall +
-// scanner.EachInSubtree[ast.CallExpr] for Rule (a);
-// go/types struct field and method set inspection for DOMAIN-AUTHZ-FIELD-PRIVATE-01.
+// Scanning tool: typeseval.SharedResolver + archtest.ResolveMethodCall (callee
+// type-resolved) + archtest.ResolveEnclosingFunc (caller type-resolved) +
+// scanner.EachInSubtree[ast.SelectorExpr] (form-complete, walks every
+// SelectorExpr — not only CallExpr.Fun) for Rule (a); go/types struct field
+// and method set inspection for DOMAIN-AUTHZ-FIELD-PRIVATE-01.
 //
 // Blind-spot self-check (ai-robust.md §"工具选定后强制盲区自检"):
 //
 // For AUTHZ-MUTATION-APPLY-FUNNEL-01 — ResolveMethodCall resolves via
-// info.Selections. AST forms NOT covered:
+// info.Selections; ResolveEnclosingFunc walks file.Decls for *ast.FuncDecl
+// containing the reference's position. AST forms NOT covered:
 //
-//  1. Method-value store + call: `fn := u.SetStatus; fn(domain.StatusLocked, t)`
-//     The second `fn(...)` CallExpr's Fun is *ast.Ident, not *ast.SelectorExpr,
-//     so info.Selections is not consulted. Captured by:
-//     TestDomainAuthzMutation_BlindSpot_MethodValueAssignment (asserts absence
-//     in production code — if this pattern appeared, the scanner would miss it).
-//
-//  2. Method expression (qualified): `(*domain.User).SetStatus(u, s, t)`
+//  1. Method expression (qualified): `(*domain.User).SetStatus(u, s, t)`
 //     Fun is *ast.SelectorExpr resolving via info.Selections as MethodExpr.
 //     ResolveMethodCall explicitly accepts types.MethodExpr — this IS covered.
 //     Documented for completeness; no self-check needed.
 //
-//  3. reflect.Value.MethodByName("SetStatus").Call(...): fully AST-invisible.
+//  2. reflect.Value.MethodByName("SetStatus").Call(...): fully AST-invisible.
 //     Captured by:
 //     TestDomainAuthzMutation_BlindSpot_ReflectMethodByName (asserts absence).
 //
-//  4. Dot-import: `import . "...domain"` followed by a bare call. SetStatus is
+//  3. Dot-import: `import . "...domain"` followed by a bare call. SetStatus is
 //     a method, not a package-level function, so dot-import does not affect
 //     method calls on a receiver. Not applicable; no self-check needed.
 //
-//  5. Embedded promotion: `type W struct { *domain.User }; w.SetStatus(...)`
+//  4. Embedded promotion: `type W struct { *domain.User }; w.SetStatus(...)`
 //     resolves via info.Selections to the same *types.Func (promoted method
 //     Obj() is the original). This IS covered. Documented for completeness.
+//
+//  5. Package-level var init / const init bypass: `var _ = func() {
+//     u.SetStatus(...); return 0 }()`. ResolveEnclosingFunc returns
+//     (nil, false) for any node outside a FuncDecl body. The scan loop treats
+//     (nil, false) as an AUTOMATIC violation — package-level init has no
+//     allowlistable identity. Captured (positively, i.e. confirming the rule
+//     fires) by: TestDomainAuthzMutation_BlindSpot_VarInitCall.
+//
+//  6. FuncLit-inside-FuncDecl semantic choice (NOT a blind spot):
+//     ResolveEnclosingFunc collapses a nested FuncLit's identity to its
+//     outermost FuncDecl. Rationale: FuncLit author = FuncDecl author;
+//     allowlisting the outer FuncDecl implicitly trusts any FuncLit inside.
+//     Documented for completeness; no reverse self-check needed.
+//
+// Function-value capture forms (`fn := u.SetStatus`, `return u.SetStatus`,
+// `pass(u.SetStatus)`) are COVERED — they are SelectorExpr nodes resolving
+// to the same *types.Func via info.Selections (MethodVal selection records
+// even when not immediately invoked). PR #1196 round-2 upgraded the scanner
+// to walk all SelectorExpr; the formerly separate
+// TestDomainAuthzMutation_BlindSpot_MethodValueAssignment self-check
+// retired (form-complete scan absorbs its assertion).
 //
 // For DOMAIN-AUTHZ-FIELD-PRIVATE-01 — go/types struct/method inspection.
 // AST forms NOT covered by the type definition check:
 //
-//  6. unsafe.Pointer offset write bypasses Go field visibility:
+//  7. unsafe.Pointer offset write bypasses Go field visibility:
 //     (*domain.UserStatus)(unsafe.Pointer(uintptr(unsafe.Pointer(u)) + offset))
 //     Captured by:
 //     TestDomainAuthzMutation_BlindSpot_UnsafePointerWrite (asserts absence).
 //
-//  7. reflect.ValueOf(u).Elem().FieldByName("status").Set(...):
+//  8. reflect.ValueOf(u).Elem().FieldByName("status").Set(...):
 //     Call-site reflection bypasses type checking. Captured by:
 //     TestDomainAuthzMutation_BlindSpot_ReflectFieldByName (asserts absence).
 
@@ -149,64 +186,37 @@ var sanctionedSetters = map[string]bool{
 // sanctionedSetters are flagged.
 var authzSetterPrefixes = []string{"Set", "Mark", "Clear", "Lock", "Unlock"}
 
-// setMutatorAllowlist lists the module-relative paths whose production code is
-// permitted to call domain.User.SetStatus or
-// domain.User.SetPasswordResetRequired directly.
+// setMutatorCallsiteAllowlist enumerates the exact production callsites that
+// may invoke domain.User.SetStatus or domain.User.SetPasswordResetRequired
+// directly. Keys are *types.Func.FullName() values (canonical Go reflection
+// form for the enclosing FuncDecl); values document the rationale per entry.
 //
-// Entries ending in "/" are package-level prefixes (all files in the package).
-// Entries ending in ".go" are exact file paths (only that file).
+// Adding an entry requires explicit reviewer acknowledgement: a new entry
+// means a function is bypassing authzmutate.Mutator.Apply, which is legitimate
+// only at creation time (no live sessions exist). Any other case must route
+// through Mutator.Apply.
 //
-// Allowlist rationale:
-//   - cells/accesscore/internal/authzmutate/ — the primary funnel (package
-//     prefix). All live-aggregate authz mutations route through Mutator.Apply
-//     which calls mutation.apply() → SetStatus / SetPasswordResetRequired.
-//     The entire package is allowlisted because any future mutation type
-//     added here is legitimate funnel code.
-//   - cells/accesscore/internal/adminprovision/provisioner.go — creation-time
-//     only (exact file). No live sessions exist for a brand-new user (epoch=1).
-//     SetPasswordResetRequired is called on a freshly constructed aggregate
-//     before any session exists. authzmutate.Apply is for mutating existing
-//     principals, not initial construction. Any NEW file in adminprovision/
-//     that adds a direct setter call MUST be reviewed and explicitly added here.
-//   - cells/accesscore/internal/domain/ — the methods' own package (package
-//     prefix). SetStatus and SetPasswordResetRequired are defined here.
-//   - cells/accesscore/slices/identitymanage/service.go — creation-time only
-//     (exact file). service.go calls SetPasswordResetRequired on a freshly
-//     constructed user aggregate (identitymanage create path). Any NEW file in
-//     identitymanage/ that adds a direct setter call MUST be reviewed and
-//     explicitly added here.
+// Removing the last code-level caller of an entry triggers
+// TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive (meta-invariant),
+// forcing the entry to be deleted in the same PR — no stale allowance.
 //
-// _test.go files are always allowed.
-var setMutatorAllowlist = []string{
-	"cells/accesscore/internal/authzmutate/",
-	"cells/accesscore/internal/adminprovision/provisioner.go",
-	"cells/accesscore/internal/domain/",
-	"cells/accesscore/slices/identitymanage/service.go",
-}
-
-// isSetMutatorAllowlisted reports whether a module-relative path is in the
-// set-mutator allowlist. Test files (*_test.go) always pass.
+// CI failure messages print the exact key to copy: look for
+// `direct call to domain.User.X from caller "<KEY>" not in setMutatorCallsiteAllowlist`.
+// Paste the quoted "<KEY>" verbatim into this map.
 //
-// Entries ending in "/" match any file under that directory prefix.
-// Entries ending in ".go" match only that exact file.
-func isSetMutatorAllowlisted(rel string) bool {
-	if strings.HasSuffix(rel, "_test.go") {
-		return true
-	}
-	for _, entry := range setMutatorAllowlist {
-		if strings.HasSuffix(entry, "/") {
-			// Package-level prefix: match any file under this directory.
-			if strings.HasPrefix(rel, entry) {
-				return true
-			}
-		} else {
-			// Exact file path.
-			if rel == entry {
-				return true
-			}
-		}
-	}
-	return false
+// Verified zero production CallExprs to these setters in authzmutate/ and
+// domain/ packages (PR #1196 issue #732 verification); package-level carve-outs
+// removed in this PR. The two creation-time entries are the only legitimate
+// callsites outside the authzmutate funnel.
+//
+// Test files (*_test.go) bypass this check unconditionally.
+var setMutatorCallsiteAllowlist = map[string]string{
+	"(*github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision.Provisioner).createAdminUser": "" +
+		"creation-time: brand-new user (epoch=1), no live sessions exist; " +
+		"authzmutate.Apply is for mutating existing principals",
+	"(*github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage.Service).Create": "" +
+		"creation-time: brand-new user (epoch=1), no live sessions exist; " +
+		"same rationale as adminprovision",
 }
 
 // ─── Rule 1: DOMAIN-AUTHZ-FIELD-PRIVATE-01 ─────────────────────────────
@@ -344,13 +354,12 @@ func verifyDomainFieldRedFixtureDetected(t *testing.T, root, fixturePattern, lab
 // TestAuthzMutationApplyFunnel_SetStatus_01 enforces Rule (a) of
 // AUTHZ-MUTATION-APPLY-FUNNEL-01: every call to domain.User.SetStatus or
 // domain.User.SetPasswordResetRequired in non-test production code must
-// originate from an entry in setMutatorAllowlist.
+// originate from an enclosing FuncDecl whose canonical identity
+// (types.Func.FullName) is listed in setMutatorCallsiteAllowlist.
 //
-// Allowlist (see setMutatorAllowlist for rationale):
-//   - cells/accesscore/internal/authzmutate/ — primary funnel (package prefix)
-//   - cells/accesscore/internal/adminprovision/provisioner.go — creation-time only (exact file)
-//   - cells/accesscore/internal/domain/ — methods' own package (package prefix)
-//   - cells/accesscore/slices/identitymanage/service.go — creation-time only (exact file)
+// callsite-level keying (issue #732): replaces the prior file-level allowlist.
+// Any new function in an already-allowed file is NOT silently permitted; the
+// reviewer must explicitly add a callsite entry.
 //
 // RED fixture: cells/accesscore/internal/domain/testdata/rbacassign_direct_setstatus_red
 // simulates an rbacassign caller invoking SetStatus directly — must detect ≥ 1.
@@ -367,7 +376,7 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 		}
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			if isSetMutatorAllowlisted(rel) {
+			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
 			violations = append(violations,
@@ -383,10 +392,10 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 		t.Log(v)
 	}
 	assert.Empty(t, violations,
-		"AUTHZ-MUTATION-APPLY-FUNNEL-01 (Rule a): domain.User.SetStatus and "+
-			"domain.User.SetPasswordResetRequired must only be called from the allowlisted "+
-			"packages (authzmutate/, adminprovision/, domain/, identitymanage/). "+
-			"Route new live-aggregate mutations through authzmutate.Mutator.Apply.")
+		"AUTHZ-MUTATION-APPLY-FUNNEL-01 (Rule a, callsite-level): domain.User.SetStatus "+
+			"and domain.User.SetPasswordResetRequired must only be called from enclosing "+
+			"functions explicitly listed in setMutatorCallsiteAllowlist. Route new "+
+			"live-aggregate mutations through authzmutate.Mutator.Apply.")
 
 	// RED fixture: rbacassign caller directly invoking SetStatus.
 	// LOCATION: cells/accesscore/internal/domain/testdata/ because domain is an
@@ -400,13 +409,20 @@ func TestAuthzMutationApplyFunnel_SetStatus_01(t *testing.T) {
 	)
 }
 
-// scanSetMutatorViolationsPass walks a single file's AST for CallExpr nodes where
-// the method receiver resolves to domain.User.SetStatus or
-// domain.User.SetPasswordResetRequired. It returns a slice of violation strings.
+// scanSetMutatorViolationsPass walks a single file's AST for EVERY SelectorExpr
+// resolving to (domainUserPkg, targetMethod) — direct call AND function-value
+// capture alike. Each violation is keyed by the enclosing FuncDecl's canonical
+// *types.Func.FullName(); references outside any FuncDecl (package-level var
+// init) are automatic violations.
 //
-// This reuses the same ResolveMethodCall + EachInSubtree[ast.CallExpr] pattern
-// as scanFunnelViolations in credential_invalidate_funnel_invariants_test.go,
-// but targets domain.User methods rather than store interface methods.
+// Form-completeness rationale: ResolveMethodCall via info.Selections resolves a
+// SelectorExpr to the same *types.Func regardless of whether it sits in
+// CallExpr.Fun (direct call) or elsewhere (`fn := u.SetStatus`,
+// `return u.SetStatus`, `someFunc(u.SetStatus)`). Walking only CallExpr.Fun
+// would leave method-value capture as an AST-expressible bypass — failing the
+// AI-robust §"Hard 范本目录" form-uniqueness requirement. Mirrors
+// scanFunnelViolationsPass / scanUpstreamCallerViolationsPass in
+// credential_invalidate_funnel_invariants_test.go.
 func scanSetMutatorViolationsPass(
 	p *Pass,
 	file *ast.File,
@@ -414,12 +430,8 @@ func scanSetMutatorViolationsPass(
 	targetMethod string,
 ) []string {
 	var out []string
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return
-		}
-		if sel.Sel.Name != targetMethod {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != targetMethod {
 			return
 		}
 		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
@@ -429,11 +441,25 @@ func scanSetMutatorViolationsPass(
 		if fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
 			return
 		}
-		line := p.Fset.Position(call.Pos()).Line
+		line := p.Fset.Position(sel.Pos()).Line
+		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
+		if !ok {
+			out = append(out, fmt.Sprintf(
+				"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
+					"outside any FuncDecl (package-level init or similar) — cannot be allowlisted",
+				rel, line, targetMethod,
+			))
+			return
+		}
+		callerID := caller.FullName()
+		if _, allowed := setMutatorCallsiteAllowlist[callerID]; allowed {
+			return
+		}
 		out = append(out, fmt.Sprintf(
-			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: direct call to domain.User.%s "+
-				"outside allowed funnel packages",
-			rel, line, targetMethod,
+			"%s:%d: AUTHZ-MUTATION-APPLY-FUNNEL-01: reference to domain.User.%s "+
+				"from caller %q not in setMutatorCallsiteAllowlist "+
+				"(direct call or function-value capture; copy the quoted key verbatim into the map to allow)",
+			rel, line, targetMethod, callerID,
 		))
 	})
 	return out
@@ -462,31 +488,28 @@ func verifySetMutatorRedFixtureDetected(
 		label)
 }
 
-// ─── Blind-spot self-check tests ─────────────────────────────────────────
+// ─── Rule 2 meta-invariant: stale-entry detection ──────────────────────
 
-// TestDomainAuthzMutation_BlindSpot_MethodValueAssignment asserts that the
-// method-value-assignment blind spot (e.g. `fn := u.SetStatus; fn(...)`) does
-// NOT appear in production code outside the allowlist. If it did, the scanner
-// would miss the second CallExpr because fn(...)  has Fun=*ast.Ident, not
-// *ast.SelectorExpr.
+// TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive enforces that every
+// entry in setMutatorCallsiteAllowlist corresponds to ≥ 1 actual production
+// callsite. Deleting the last caller of an allowlisted function makes the
+// entry stale; this test fails to force same-PR cleanup.
 //
-// Scanner: EachInSubtree[ast.AssignStmt] + right-hand-side SelectorExpr name
-// matching. AST-only (no type info), but the method names are distinct enough
-// to avoid false positives. Soft (name-only); typed-resolver upgrade tracked
-// in #1118 (method-value name-only detection across sites).
-func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
+// Mechanism: scan the same production tree as Rule (a), bucket each detected
+// callsite by its caller identity (types.Func.FullName), and assert every
+// allowlist key appears at least once.
+//
+// Test files are excluded — adding _test.go file caller of a setter does NOT
+// keep an allowlist entry alive. The allowlist is for production callers only.
+func TestAuthzMutationApplyFunnel_AllowlistEntriesAreLive(t *testing.T) {
 	t.Parallel()
 
-	bannedNames := map[string]bool{
-		domainSetStatusMethod:                true,
-		domainSetPasswordResetRequiredMethod: true,
-	}
-
-	var violations []string
+	hits := map[string]int{}
 	_ = RunTyped(t, TypedOpts{}, []string{
-		"./cells/accesscore/...", "./cmd/...",
+		"./cells/accesscore/...",
+		"./cmd/...",
 	}, func(p *Pass) []Diagnostic {
-		if p.Fset == nil {
+		if p.TypesInfo == nil {
 			return nil
 		}
 		for _, file := range p.Files {
@@ -494,34 +517,108 @@ func TestDomainAuthzMutation_BlindSpot_MethodValueAssignment(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			if isSetMutatorAllowlisted(rel) {
-				continue
-			}
-			EachInSubtree[ast.AssignStmt](file, func(assign *ast.AssignStmt) {
-				EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
-					if bannedNames[sel.Sel.Name] {
-						line := p.Fset.Position(assign.Pos()).Line
-						violations = append(violations, fmt.Sprintf(
-							"%s:%d: method-value assignment of %s blind spot detected — "+
-								"archtest would miss the second call site",
-							rel, line, sel.Sel.Name,
-						))
-					}
-				})
-			})
+			countAllowlistHits(p, file, domainSetStatusMethod, hits)
+			countAllowlistHits(p, file, domainSetPasswordResetRequiredMethod, hits)
 		}
 		return nil
 	})
 
-	sort.Strings(violations)
-	for _, v := range violations {
+	var stale []string
+	for callerID := range setMutatorCallsiteAllowlist {
+		if hits[callerID] == 0 {
+			stale = append(stale, callerID)
+		}
+	}
+	sort.Strings(stale)
+	for _, s := range stale {
+		t.Errorf("AUTHZ-MUTATION-APPLY-FUNNEL-01 meta: allowlist entry %q has 0 production "+
+			"callsites — last caller removed; delete the entry in the same PR", s)
+	}
+}
+
+// countAllowlistHits increments hits[callerID] for each production SelectorExpr
+// in file that resolves to a domain.User setter AND has a resolvable enclosing
+// FuncDecl matching the allowlist. Mirrors scanSetMutatorViolationsPass'
+// form-complete SelectorExpr walk (direct call + function-value capture both
+// count). References outside any FuncDecl, or inside non-allowlisted callers,
+// are ignored — this counter is only used by the meta-invariant to detect
+// stale entries.
+//
+// Note: hits[callerID] accumulates across all references within a single
+// FuncDecl — if `Service.Create` calls SetStatus twice, or captures it once
+// and calls it once, hits["…Service.Create"] is 2. The meta-invariant only
+// asserts ≥1, so an entry is considered stale only when ALL references in
+// its FuncDecl are removed. This is intentional: the allowlist tracks "this
+// function is a legitimate caller", not "exactly N references within this
+// function".
+func countAllowlistHits(p *Pass, file *ast.File, targetMethod string, hits map[string]int) {
+	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+		if sel.Sel == nil || sel.Sel.Name != targetMethod {
+			return
+		}
+		fn, ok := ResolveMethodCall(p.TypesInfo, sel)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != domainUserPkg {
+			return
+		}
+		caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
+		if !ok {
+			return
+		}
+		callerID := caller.FullName()
+		if _, allowed := setMutatorCallsiteAllowlist[callerID]; allowed {
+			hits[callerID]++
+		}
+	})
+}
+
+// ─── Form-completeness positive self-check ──────────────────────────────
+
+// TestDomainAuthzMutation_ValueCapture_Detected positively asserts that the
+// form-complete SelectorExpr scanner catches function-value capture of
+// domain.User.SetStatus / SetPasswordResetRequired — the bypass form a
+// CallExpr.Fun-only scanner would miss. Loads value_capture_setstatus_red,
+// which captures the methods as values (var/return/arg-pass) without an
+// immediate invocation; the scanner must emit ≥ 1 violation per form.
+//
+// This is the positive complement to TestAuthzMutationApplyFunnel_SetStatus_01
+// (which asserts NO violations in production code): a form-uniqueness
+// guarantee requires both "absent from production" AND "present in a fixture
+// that exercises every covered form" so the scan is provably form-complete,
+// not silently empty.
+func TestDomainAuthzMutation_ValueCapture_Detected(t *testing.T) {
+	t.Parallel()
+
+	var found []string
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/internal/domain/testdata/value_capture_setstatus_red",
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			found = append(found,
+				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+			found = append(found,
+				scanSetMutatorViolationsPass(p, file, rel, domainSetPasswordResetRequiredMethod)...)
+		}
+		return nil
+	})
+
+	sort.Strings(found)
+	for _, v := range found {
 		t.Log(v)
 	}
-	assert.Empty(t, violations,
-		"authz-mutation blind-spot: method-value assignment of SetStatus / "+
-			"SetPasswordResetRequired found in non-allowlisted production code — "+
-			"the archtest would miss the deferred call. Refactor to call authzmutate.Mutator.Apply.")
+	// Three banned references in the fixture: badValueCapture (SetStatus
+	// assigned to var), badReturnDirect (SetPasswordResetRequired returned),
+	// badArgPass (SetStatus passed as arg). Each must produce ≥ 1 violation.
+	assert.GreaterOrEqual(t, len(found), 3,
+		"form-completeness RED fixture must catch ≥ 3 value-capture references "+
+			"(badValueCapture / badReturnDirect / badArgPass) — a CallExpr.Fun-only "+
+			"scanner would miss all three. Got %d violation(s).", len(found))
 }
+
+// ─── Blind-spot self-check tests ─────────────────────────────────────────
 
 // TestDomainAuthzMutation_BlindSpot_ReflectMethodByName asserts that
 // reflect.Value.MethodByName("SetStatus") / ("SetPasswordResetRequired") does
@@ -671,4 +768,46 @@ func TestDomainAuthzMutation_BlindSpot_ReflectFieldByName(t *testing.T) {
 		"authz-mutation blind-spot: reflect.FieldByName of authz field names found "+
 			"in production code — the archtest cannot see reflect-based field writes. "+
 			"Refactor to use authzmutate.Mutator.Apply.")
+}
+
+// TestDomainAuthzMutation_BlindSpot_VarInitCall asserts (positively) that
+// scanSetMutatorViolationsPass fires when a setter call is inside a
+// package-level var-init expression (no enclosing FuncDecl).
+//
+// This is the §5 blind-spot entry in the package godoc. Implementation: load
+// the RED fixture `var_init_setstatus_red` whose package-level var init
+// invokes domain.User.SetStatus from outside any FuncDecl. The scanner must
+// emit a violation containing "outside any FuncDecl" — proving
+// ResolveEnclosingFunc → (nil, false) → automatic violation works end-to-end.
+func TestDomainAuthzMutation_BlindSpot_VarInitCall(t *testing.T) {
+	t.Parallel()
+
+	var found []string
+	_ = RunTyped(t, TypedOpts{}, []string{
+		"./cells/accesscore/internal/domain/testdata/var_init_setstatus_red",
+	}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			found = append(found,
+				scanSetMutatorViolationsPass(p, file, rel, domainSetStatusMethod)...)
+		}
+		return nil
+	})
+
+	var hasOutsideFuncDecl bool
+	for _, v := range found {
+		t.Log(v)
+		if strings.Contains(v, "outside any FuncDecl") {
+			hasOutsideFuncDecl = true
+		}
+	}
+	assert.True(t, hasOutsideFuncDecl,
+		"var-init blind-spot RED fixture must produce ≥ 1 violation containing "+
+			"'outside any FuncDecl' — proves the scanner treats package-level "+
+			"setter calls as automatic violations when ResolveEnclosingFunc "+
+			"returns (nil, false). Got %d violation(s) without the expected substring.",
+		len(found))
 }

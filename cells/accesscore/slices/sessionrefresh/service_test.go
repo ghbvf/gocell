@@ -166,13 +166,13 @@ type invalidatorServiceDeps struct {
 	refreshStore refresh.Store
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
-	inv          invalidatorApplier
+	inv          credentialinvalidate.Applier
 }
 
 // mustNewServiceWithInvalidator constructs a Service with an explicit spy
-// invalidator (for tests that exercise the reuse-cascade path). Since the
-// invalidatorApplier interface is unexported but tests are in the same package,
-// the spy is directly assigned to the service's invalidator field.
+// invalidator (for tests that exercise the reuse-cascade path). The spy
+// implements credentialinvalidate.Applier (exported) so the same field type
+// the archtest funnel resolves against is used here.
 func mustNewServiceWithInvalidator(
 	deps invalidatorServiceDeps,
 	opts ...Option,

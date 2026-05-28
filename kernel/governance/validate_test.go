@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
 
@@ -28,8 +29,8 @@ func validProject() *metadata.ProjectMeta {
 	replayable := true
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			metadatatest.CellIDAccessCore: {
+				ID:               metadatatest.CellIDAccessCore,
 				Type:             "core",
 				ConsistencyLevel: "L3",
 				DurabilityMode:   "durable",
@@ -39,8 +40,8 @@ func validProject() *metadata.ProjectMeta {
 				Dir:              "accesscore",
 				File:             "cells/accesscore/cell.yaml",
 			},
-			"auditcore": {
-				ID:               "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:               metadatatest.CellIDAuditCore,
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				DurabilityMode:   "durable",
@@ -50,8 +51,8 @@ func validProject() *metadata.ProjectMeta {
 				Dir:              "auditcore",
 				File:             "cells/auditcore/cell.yaml",
 			},
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				DurabilityMode:   "demo",
@@ -60,8 +61,8 @@ func validProject() *metadata.ProjectMeta {
 				Dir:              "sharedcrypto",
 				File:             "cells/sharedcrypto/cell.yaml",
 			},
-			"configcore": {
-				ID:               "configcore",
+			metadatatest.CellIDConfigCore: {
+				ID:               metadatatest.CellIDConfigCore,
 				Type:             "core",
 				ConsistencyLevel: "L3",
 				DurabilityMode:   "durable",
@@ -75,7 +76,7 @@ func validProject() *metadata.ProjectMeta {
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:               "session-login",
-				BelongsToCell:    "accesscore",
+				BelongsToCell:    metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L2",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
@@ -100,7 +101,7 @@ func validProject() *metadata.ProjectMeta {
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "auditcore",
+				BelongsToCell: metadatatest.CellIDAuditCore,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe", Handler: "HandleSessionCreated"},
 				},
@@ -121,12 +122,12 @@ func validProject() *metadata.ProjectMeta {
 			"http.auth.login.v1": {
 				ID:               "http.auth.login.v1",
 				Kind:             "http",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
-					Clients: []string{"auditcore"},
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDAuditCore},
 					// FMT-13 now requires endpoints.http on all HTTP contracts.
 					// Use NoContent:true / 204 so no response schema file is needed,
 					// keeping validProject self-contained (no filesystem deps).
@@ -143,12 +144,12 @@ func validProject() *metadata.ProjectMeta {
 			"event.session.created.v1": {
 				ID:               "event.session.created.v1",
 				Kind:             "event",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "accesscore",
-					Subscribers: []string{"auditcore"},
+					Publisher:   metadatatest.CellIDAccessCore,
+					Subscribers: []string{metadatatest.CellIDAuditCore},
 				},
 				Replayable:        &replayable,
 				IdempotencyKey:    "session-id",
@@ -159,12 +160,12 @@ func validProject() *metadata.ProjectMeta {
 			"projection.session.active.v1": {
 				ID:               "projection.session.active.v1",
 				Kind:             "projection",
-				OwnerCell:        "accesscore",
+				OwnerCell:        metadatatest.CellIDAccessCore,
 				ConsistencyLevel: "L3",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Provider: "accesscore",
-					Readers:  []string{"auditcore"},
+					Provider: metadatatest.CellIDAccessCore,
+					Readers:  []string{metadatatest.CellIDAuditCore},
 				},
 				Replayable: &replayable,
 				Dir:        "contracts/projection/session/active/v1",
@@ -177,7 +178,7 @@ func validProject() *metadata.ProjectMeta {
 				Goal:      "User completes SSO login",
 				Lifecycle: "active",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"accesscore", "auditcore"},
+				Cells:     []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				// All three active platform contracts (http + event + projection)
 				// must be journey-referenced to satisfy JOURNEY-CONTRACT-EXISTENCE-01
 				// (inverse direction of REF-07).
@@ -196,7 +197,7 @@ func validProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"corebundle": {
 				ID:                  "corebundle",
-				Cells:               []string{"accesscore", "auditcore", "sharedcrypto"},
+				Cells:               []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore, metadatatest.CellIDSharedCrypto},
 				MaxConsistencyLevel: "L3", // derived: max of L3, L2, L0
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Build: metadata.BuildMeta{
@@ -212,7 +213,7 @@ func validProject() *metadata.ProjectMeta {
 			{JourneyID: "J-ssologin", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
 		},
 		Actors: []metadata.ActorMeta{
-			{ID: "edge-bff", MaxConsistencyLevel: "L1"},
+			{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L1"},
 		},
 	}
 }
@@ -284,7 +285,7 @@ func TestREF01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["ghost/some-slice"] = &metadata.SliceMeta{
 					ID:            "some-slice",
-					BelongsToCell: "ghost",
+					BelongsToCell: metadatatest.NewCellID("ghost"),
 				}
 			},
 			wantCount: 1,
@@ -321,7 +322,7 @@ func TestREF02(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["accesscore/bad-slice"] = &metadata.SliceMeta{
 					ID:            "bad-slice",
-					BelongsToCell: "accesscore",
+					BelongsToCell: metadatatest.CellIDAccessCore,
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.nonexistent.v1", Role: "serve"},
 					},
@@ -355,14 +356,15 @@ func TestREF03(t *testing.T) {
 		{
 			name: "ownerCell is actor not cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.external.v1"] = &metadata.ContractMeta{
+				c := &metadata.ContractMeta{
 					ID:               "http.external.v1",
 					Kind:             "http",
-					OwnerCell:        "edge-bff", // actor, not a cell
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "edge-bff"},
+					Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDEdgeBFF},
 				}
+				c.OwnerCell = metadatatest.CellIDEdgeBFF // actor, not a cell — non-compliant ID used to trigger REF rule
+				pm.Contracts["http.external.v1"] = c
 			},
 			wantCount: 1,
 		},
@@ -394,12 +396,13 @@ func TestREF04(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				// Dir captures the walked filesystem name; a disagreement
 				// between Dir and ID is exactly what REF-04 must flag.
-				pm.Cells["actual-id"] = &metadata.CellMeta{
-					ID:               "actual-id",
+				cell := &metadata.CellMeta{
 					Type:             "core",
 					ConsistencyLevel: "L1",
 					Dir:              "wrong-dir",
 				}
+				cell.ID = "actual-id"
+				pm.Cells["actual-id"] = cell
 			},
 			wantCount: 1,
 		},
@@ -431,7 +434,7 @@ func TestREF05(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["accesscore/actual-name"] = &metadata.SliceMeta{
 					ID:            "actual-name",
-					BelongsToCell: "accesscore",
+					BelongsToCell: metadatatest.CellIDAccessCore,
 					Dir:           "wrong-dir",
 					CellDir:       "accesscore",
 				}
@@ -555,7 +558,7 @@ func TestREF09(t *testing.T) {
 			name: "valid l0 dependency",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				}
 			},
 			wantCount: 0,
@@ -564,7 +567,7 @@ func TestREF09(t *testing.T) {
 			name: "missing l0 dependency target",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "nonexistent", Reason: "missing"},
+					{Cell: metadatatest.NewCellID("nonexistent"), Reason: "missing"},
 				}
 			},
 			wantCount: 1,
@@ -599,7 +602,7 @@ func TestTOPO01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["accesscore/bad-role"] = &metadata.SliceMeta{
 					ID:            "bad-role",
-					BelongsToCell: "accesscore",
+					BelongsToCell: metadatatest.CellIDAccessCore,
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.auth.login.v1", Role: "publish"}, // publish is event role
 					},
@@ -635,7 +638,7 @@ func TestTOPO02(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["auditcore/wrong-provider"] = &metadata.SliceMeta{
 					ID:            "wrong-provider",
-					BelongsToCell: "auditcore",
+					BelongsToCell: metadatatest.CellIDAuditCore,
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.auth.login.v1", Role: "serve"}, // server is accesscore
 					},
@@ -675,7 +678,7 @@ func TestTOPO03(t *testing.T) {
 				// accesscore is not in the subscribers list for event.session.created.v1
 				pm.Slices["accesscore/wrong-consumer"] = &metadata.SliceMeta{
 					ID:            "wrong-consumer",
-					BelongsToCell: "accesscore",
+					BelongsToCell: metadatatest.CellIDAccessCore,
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "event.session.created.v1", Role: "subscribe"}, // accesscore is publisher, not subscriber
 					},
@@ -726,18 +729,18 @@ func TestTOPO04(t *testing.T) {
 			name: "contract level within external actor max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", MaxConsistencyLevel: "L3"},
+					{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: "L3"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",
-					OwnerCell:        "ext-gateway",
+					OwnerCell:        metadatatest.CellIDExtGateway,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "ext-gateway",
-						Clients: []string{"accesscore"},
+						Server:  metadatatest.CellIDExtGateway,
+						Clients: []string{metadatatest.CellIDAccessCore},
 					},
 				}
 			},
@@ -747,18 +750,18 @@ func TestTOPO04(t *testing.T) {
 			name: "contract level exceeds external actor max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", MaxConsistencyLevel: "L1"},
+					{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: "L1"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",
-					OwnerCell:        "ext-gateway",
+					OwnerCell:        metadatatest.CellIDExtGateway,
 					ConsistencyLevel: "L3",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "ext-gateway",
-						Clients: []string{"accesscore"},
+						Server:  metadatatest.CellIDExtGateway,
+						Clients: []string{metadatatest.CellIDAccessCore},
 					},
 				}
 			},
@@ -768,18 +771,18 @@ func TestTOPO04(t *testing.T) {
 			name: "external actor with malformed maxConsistencyLevel reports error",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", MaxConsistencyLevel: "INVALID"},
+					{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: "INVALID"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",
-					OwnerCell:        "ext-gateway",
+					OwnerCell:        metadatatest.CellIDExtGateway,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "ext-gateway",
-						Clients: []string{"accesscore"},
+						Server:  metadatatest.CellIDExtGateway,
+						Clients: []string{metadatatest.CellIDAccessCore},
 					},
 				}
 			},
@@ -800,15 +803,15 @@ func TestTOPO04(t *testing.T) {
 func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "ext-gateway", MaxConsistencyLevel: ""},
+		{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: ""},
 	}
 	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 		ID:               "http.ext.gw.v1",
 		Kind:             "http",
-		OwnerCell:        "ext-gateway",
+		OwnerCell:        metadatatest.CellIDExtGateway,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
+		Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDExtGateway, Clients: []string{metadatatest.CellIDAccessCore}},
 	}
 
 	val := NewValidator(pm, "", clock.Real())
@@ -819,15 +822,15 @@ func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 func TestTOPO04_MalformedMessage(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "ext-gateway", MaxConsistencyLevel: "INVALID"},
+		{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: "INVALID"},
 	}
 	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 		ID:               "http.ext.gw.v1",
 		Kind:             "http",
-		OwnerCell:        "ext-gateway",
+		OwnerCell:        metadatatest.CellIDExtGateway,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
+		Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDExtGateway, Clients: []string{metadatatest.CellIDAccessCore}},
 	}
 
 	val := NewValidator(pm, "", clock.Real())
@@ -854,12 +857,12 @@ func TestTOPO05(t *testing.T) {
 				pm.Contracts["http.crypto.v1"] = &metadata.ContractMeta{
 					ID:               "http.crypto.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L0",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "sharedcrypto", // L0 cell
-						Clients: []string{"accesscore"},
+						Server:  metadatatest.CellIDSharedCrypto, // L0 cell
+						Clients: []string{metadatatest.CellIDAccessCore},
 					},
 				}
 			},
@@ -871,12 +874,12 @@ func TestTOPO05(t *testing.T) {
 				pm.Contracts["http.crypto.v1"] = &metadata.ContractMeta{
 					ID:               "http.crypto.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L0",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "accesscore",
-						Clients: []string{"sharedcrypto"}, // L0 cell
+						Server:  metadatatest.CellIDAccessCore,
+						Clients: []string{metadatatest.CellIDSharedCrypto}, // L0 cell
 					},
 				}
 			},
@@ -910,7 +913,7 @@ func TestTOPO06(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 					ID:    "edge-bundle",
-					Cells: []string{"accesscore"}, // also in corebundle
+					Cells: []string{metadatatest.CellIDAccessCore}, // also in corebundle
 					Build: metadata.BuildMeta{
 						Entrypoint:     "cmd/edge-bundle/main.go",
 						Binary:         "edge-bundle",
@@ -1172,7 +1175,7 @@ func TestVERIFY03(t *testing.T) {
 			name: "l0 dependency targets L0 cell",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				}
 			},
 			wantCount: 0,
@@ -1181,7 +1184,7 @@ func TestVERIFY03(t *testing.T) {
 			name: "l0 dependency targets non-L0 cell",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "auditcore", Reason: "wrong"}, // auditcore is L2
+					{Cell: metadatatest.CellIDAuditCore, Reason: "wrong"}, // auditcore is L2
 				}
 			},
 			wantCount: 1,
@@ -1246,17 +1249,17 @@ func TestVERIFY04(t *testing.T) {
 			name: "active contract with external actor provider is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", MaxConsistencyLevel: "L3"},
+					{ID: metadatatest.CellIDExtGateway, MaxConsistencyLevel: "L3"},
 				}
 				pm.Contracts["http.ext.gateway.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gateway.v1",
 					Kind:             "http",
-					OwnerCell:        "ext-gateway",
+					OwnerCell:        metadatatest.CellIDExtGateway,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "ext-gateway", // actor, not a cell
-						Clients: []string{"accesscore"},
+						Server:  metadatatest.CellIDExtGateway, // actor, not a cell
+						Clients: []string{metadatatest.CellIDAccessCore},
 					},
 				}
 			},
@@ -1738,7 +1741,7 @@ func TestFMT05(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["accesscore/bad-role"] = &metadata.SliceMeta{
 					ID:            "bad-role",
-					BelongsToCell: "accesscore",
+					BelongsToCell: metadatatest.CellIDAccessCore,
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.auth.login.v1", Role: "consume"}, // not a valid role
 					},
@@ -1777,10 +1780,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["grpc.test.v1"] = &metadata.ContractMeta{
 					ID:               "grpc.test.v1",
 					Kind:             "grpc",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount: 1,
@@ -1791,7 +1794,7 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["empty.kind.v1"] = &metadata.ContractMeta{
 					ID:               "empty.kind.v1",
 					Kind:             "",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{},
@@ -1805,10 +1808,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
 					ID:               "command.test.v1",
 					Kind:             "command",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Handler: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Handler: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount: 0,
@@ -1819,10 +1822,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
 					ID:               "projection.test.v1",
 					Kind:             "projection",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Provider: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Provider: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount: 0,
@@ -1901,28 +1904,31 @@ func TestContractProviderAndConsumers(t *testing.T) {
 		wantConsumers []string
 	}{
 		{
-			kind:          "http",
-			endpoints:     metadata.EndpointsMeta{Server: "svc-a", Clients: []string{"svc-b", "svc-c"}},
-			wantProvider:  "svc-a",
-			wantConsumers: []string{"svc-b", "svc-c"},
+			kind: "http",
+			endpoints: metadata.EndpointsMeta{
+				Server:  metadatatest.CellIDSvcA,
+				Clients: []string{metadatatest.CellIDSvcB, metadatatest.NewCellID("svcc")},
+			},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: []string{metadatatest.CellIDSvcB, metadatatest.NewCellID("svcc")},
 		},
 		{
 			kind:          "event",
-			endpoints:     metadata.EndpointsMeta{Publisher: "svc-a", Subscribers: []string{"svc-b"}},
-			wantProvider:  "svc-a",
-			wantConsumers: []string{"svc-b"},
+			endpoints:     metadata.EndpointsMeta{Publisher: metadatatest.CellIDSvcA, Subscribers: []string{metadatatest.CellIDSvcB}},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: []string{metadatatest.CellIDSvcB},
 		},
 		{
 			kind:          "command",
-			endpoints:     metadata.EndpointsMeta{Handler: "svc-a", Invokers: []string{"svc-b"}},
-			wantProvider:  "svc-a",
-			wantConsumers: []string{"svc-b"},
+			endpoints:     metadata.EndpointsMeta{Handler: metadatatest.CellIDSvcA, Invokers: []string{metadatatest.CellIDSvcB}},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: []string{metadatatest.CellIDSvcB},
 		},
 		{
 			kind:          "projection",
-			endpoints:     metadata.EndpointsMeta{Provider: "svc-a", Readers: []string{"svc-b"}},
-			wantProvider:  "svc-a",
-			wantConsumers: []string{"svc-b"},
+			endpoints:     metadata.EndpointsMeta{Provider: metadatatest.CellIDSvcA, Readers: []string{metadatatest.CellIDSvcB}},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: []string{metadatatest.CellIDSvcB},
 		},
 		{
 			kind:          "unknown",
@@ -1969,7 +1975,7 @@ func TestValidate_AggregatesAllRules(t *testing.T) {
 	// Introduce multiple issues across rule groups:
 	// REF-01: bad belongsToCell
 	pm.Slices["ghost/bad"] = &metadata.SliceMeta{
-		ID: "bad", BelongsToCell: "ghost",
+		ID: "bad", BelongsToCell: metadatatest.NewCellID("ghost"),
 	}
 	// FMT-01: bad lifecycle
 	pm.Contracts["http.auth.login.v1"].Lifecycle = "unknown"
@@ -2080,10 +2086,10 @@ func TestFMT07(t *testing.T) {
 				pm.Contracts["cmd.test.v1"] = &metadata.ContractMeta{
 					ID:               "cmd.test.v1",
 					Kind:             "command",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Handler: ""},
+					Endpoints:        metadata.EndpointsMeta{},
 				}
 			},
 			wantCount: 1,
@@ -2094,10 +2100,10 @@ func TestFMT07(t *testing.T) {
 				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
 					ID:               "projection.test.v1",
 					Kind:             "projection",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Provider: ""},
+					Endpoints:        metadata.EndpointsMeta{},
 				}
 			},
 			wantCount: 1,
@@ -2146,10 +2152,10 @@ func TestFMT08(t *testing.T) {
 				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
 					ID:               "command.test.v1",
 					Kind:             "command",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Handler: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Handler: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount: 0,
@@ -2160,10 +2166,10 @@ func TestFMT08(t *testing.T) {
 				pm.Contracts["nodot"] = &metadata.ContractMeta{
 					ID:               "nodot",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount:     1,
@@ -2446,10 +2452,10 @@ func TestREF13(t *testing.T) {
 				pm.Contracts["http.ext.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "edge-bff"},
+					Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDEdgeBFF},
 				}
 			},
 			wantCount: 0,
@@ -2457,14 +2463,15 @@ func TestREF13(t *testing.T) {
 		{
 			name: "provider is unknown",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.unknown.v1"] = &metadata.ContractMeta{
+				c := &metadata.ContractMeta{
 					ID:               "http.unknown.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "nonexistent-service"},
 				}
+				c.Endpoints.Server = "nonexistent-service"
+				pm.Contracts["http.unknown.v1"] = c
 			},
 			wantCount: 1,
 		},
@@ -2474,10 +2481,10 @@ func TestREF13(t *testing.T) {
 				pm.Contracts["http.noprov.v1"] = &metadata.ContractMeta{
 					ID:               "http.noprov.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: ""},
+					Endpoints:        metadata.EndpointsMeta{},
 				}
 			},
 			wantCount: 0, // FMT-07 handles empty provider
@@ -2528,7 +2535,7 @@ func TestREF14(t *testing.T) {
 		{
 			name: "consumer is known actor",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2576,7 +2583,7 @@ func TestREF17(t *testing.T) {
 		{
 			name: "public path with external client still passes",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2608,7 +2615,7 @@ func TestREF17(t *testing.T) {
 			name: "internal path with single external client errors",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 1,
 		},
@@ -2619,7 +2626,7 @@ func TestREF17(t *testing.T) {
 				pm.Actors = append(pm.Actors, metadata.ActorMeta{
 					ID: "second-bff", MaxConsistencyLevel: "L2",
 				})
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "second-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF, "second-bff"}
 			},
 			wantCount: 2,
 		},
@@ -2627,7 +2634,7 @@ func TestREF17(t *testing.T) {
 			name: "internal path mixing external and cell clients reports only external",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"auditcore", "edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"auditcore", metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 1,
 		},
@@ -2636,7 +2643,7 @@ func TestREF17(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				// Event contract has no HTTP; REF-17 must not touch it even if
 				// subscribers/clients shape happens to include external actors.
-				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"edge-bff"}
+				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2644,7 +2651,7 @@ func TestREF17(t *testing.T) {
 			name: "http contract without HTTP transport is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = nil
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2663,7 +2670,7 @@ func TestREF17(t *testing.T) {
 			name: "internal path with wildcard and external client errors on both",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*", "edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*", metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 2, // both fail-closed: wildcard + external actor
 		},
@@ -2674,7 +2681,7 @@ func TestREF17(t *testing.T) {
 				// runtime — REF-17 must align with the runtime SoR and not
 				// flag such paths as internal.
 				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/foo"
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2688,7 +2695,7 @@ func TestREF17(t *testing.T) {
 				// declaration could ship an external actor as a client and
 				// silently bypass the audience check.
 				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/v1"
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 1,
 		},
@@ -2699,7 +2706,7 @@ func TestREF17(t *testing.T) {
 				// paths like /internal/v10/...; mirrors FMT-31's substring
 				// trap test so the predicate semantics are double-anchored.
 				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/v10/foo"
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -2739,7 +2746,7 @@ func TestREF15(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["wrong-key"] = &metadata.AssemblyMeta{
 					ID:    "actual-id",
-					Cells: []string{"accesscore"},
+					Cells: []string{metadatatest.CellIDAccessCore},
 					Build: metadata.BuildMeta{Entrypoint: "cmd/main.go"},
 				}
 			},
@@ -2878,11 +2885,11 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["event.dead.nosubscribers.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nosubscribers.v1",
 					Kind:             "event",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Publisher:   "accesscore",
+						Publisher:   metadatatest.CellIDAccessCore,
 						Subscribers: []string{},
 					},
 				}
@@ -2896,11 +2903,11 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["event.dead.nilsubs.v1"] = &metadata.ContractMeta{
 					ID:               "event.dead.nilsubs.v1",
 					Kind:             "event",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Publisher:   "accesscore",
+						Publisher:   metadatatest.CellIDAccessCore,
 						Subscribers: nil,
 					},
 				}
@@ -2921,11 +2928,11 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["event.old.deprecated.v1"] = &metadata.ContractMeta{
 					ID:               "event.old.deprecated.v1",
 					Kind:             "event",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "deprecated",
 					Endpoints: metadata.EndpointsMeta{
-						Publisher:   "accesscore",
+						Publisher:   metadatatest.CellIDAccessCore,
 						Subscribers: []string{},
 					},
 				}
@@ -2938,11 +2945,11 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["http.some.endpoint.v1"] = &metadata.ContractMeta{
 					ID:               "http.some.endpoint.v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server: "accesscore",
+						Server: metadatatest.CellIDAccessCore,
 					},
 				}
 			},
@@ -2954,11 +2961,11 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["event.draft.nosubscribers.v1"] = &metadata.ContractMeta{
 					ID:               "event.draft.nosubscribers.v1",
 					Kind:             "event",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "draft",
 					Endpoints: metadata.EndpointsMeta{
-						Publisher:   "accesscore",
+						Publisher:   metadatatest.CellIDAccessCore,
 						Subscribers: []string{},
 					},
 				}
@@ -2971,12 +2978,12 @@ func TestADV05(t *testing.T) {
 				pm.Contracts["event.draft.withsubs.v1"] = &metadata.ContractMeta{
 					ID:               "event.draft.withsubs.v1",
 					Kind:             "event",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L2",
 					Lifecycle:        "draft",
 					Endpoints: metadata.EndpointsMeta{
-						Publisher:   "accesscore",
-						Subscribers: []string{"auditcore"},
+						Publisher:   metadatatest.CellIDAccessCore,
+						Subscribers: []string{metadatatest.CellIDAuditCore},
 					},
 				}
 			},
@@ -3020,9 +3027,9 @@ func TestADV05_ExitCode_Regression(t *testing.T) {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Contracts: map[string]*metadata.ContractMeta{
 			"event.dead.regression.v1": {
-				ID:               "event.dead.regression.v1",
-				Kind:             "event",
-				OwnerCell:        "",
+				ID:   "event.dead.regression.v1",
+				Kind: "event",
+				// OwnerCell omitted (zero value "") — intentionally invalid for ADV-05 test.
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
@@ -3107,7 +3114,7 @@ func TestActorExists(t *testing.T) {
 	val := NewValidator(pm, "", clock.Real())
 
 	assert.True(t, val.actorExists("accesscore"), "cell should be a known actor")
-	assert.True(t, val.actorExists("edge-bff"), "external actor should be known")
+	assert.True(t, val.actorExists(metadatatest.CellIDEdgeBFF), "external actor should be known")
 	assert.False(t, val.actorExists("nonexistent"), "unknown ID should not exist")
 }
 
@@ -3229,14 +3236,15 @@ func TestFMT10(t *testing.T) {
 		{
 			name: "cell with banned ID cellId",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["cellId"] = &metadata.CellMeta{
-					ID:               "cellId",
+				c := &metadata.CellMeta{
 					Type:             "core",
 					ConsistencyLevel: "L1",
 					Owner:            metadata.OwnerMeta{Team: "t", Role: "r"},
 					Schema:           metadata.SchemaMeta{Primary: "s"},
 					Verify:           metadata.CellVerifyMeta{Smoke: []string{"s"}},
 				}
+				c.ID = "cellId" // non-compliant ID used to trigger FMT-10 detection
+				pm.Cells["cellId"] = c
 			},
 			wantCount: 1,
 		},
@@ -3246,10 +3254,10 @@ func TestFMT10(t *testing.T) {
 				pm.Contracts["http/auth/login/v1"] = &metadata.ContractMeta{
 					ID:               "http/auth/login/v1",
 					Kind:             "http",
-					OwnerCell:        "accesscore",
+					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+					Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 				}
 			},
 			wantCount: 1,
@@ -3819,10 +3827,10 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor within max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "L2"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L2"},
 				}
 				// http.auth.login.v1 is L1, edge-bff max is L2: OK
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -3830,10 +3838,10 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor exceeds max level — IssueMismatch on contract file",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L0"},
 				}
 				// http.auth.login.v1 is L1, edge-bff max is L0: violation
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount:     1,
 			wantIssueType: IssueMismatch,
@@ -3843,9 +3851,9 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor with no max level (unconstrained)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: ""},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: ""},
 				}
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 0,
 		},
@@ -3853,9 +3861,9 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor with malformed max level — IssueInvalid on actors.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "INVALID"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "INVALID"},
 				}
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount:     1,
 			wantIssueType: IssueInvalid,
@@ -3873,7 +3881,7 @@ func TestTOPO07(t *testing.T) {
 			name: "wildcard consumer is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L0"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*"}
 			},
@@ -3883,10 +3891,10 @@ func TestTOPO07(t *testing.T) {
 			name: "event contract consumer actor exceeds max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "L1"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L1"},
 				}
 				// event.session.created.v1 is L2, edge-bff max is L1: violation
-				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"edge-bff"}
+				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{metadatatest.CellIDEdgeBFF}
 			},
 			wantCount: 1,
 		},
@@ -3894,10 +3902,10 @@ func TestTOPO07(t *testing.T) {
 			name: "multiple consumer actors, one exceeds",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
+					{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L0"},
 					{ID: "ext-monitor", MaxConsistencyLevel: "L4"},
 				}
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "ext-monitor"}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF, "ext-monitor"}
 			},
 			wantCount: 1, // only edge-bff exceeds
 		},
@@ -3935,14 +3943,14 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 		{
 			name: "http uses clients",
 			kind: "http", wantField: "endpoints.clients[0]",
-			setup: func(c *metadata.ContractMeta) { c.Endpoints.Clients = []string{"edge-bff"} },
+			setup: func(c *metadata.ContractMeta) { c.Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF} },
 		},
 		{
 			name: "event uses subscribers",
 			kind: "event", wantField: "endpoints.subscribers[0]",
 			setup: func(c *metadata.ContractMeta) {
 				r := true
-				c.Endpoints.Subscribers = []string{"edge-bff"}
+				c.Endpoints.Subscribers = []string{metadatatest.CellIDEdgeBFF}
 				c.Replayable = &r
 				c.IdempotencyKey = "eventId"
 				c.DeliverySemantics = "at-least-once"
@@ -3951,14 +3959,14 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 		{
 			name: "command uses invokers",
 			kind: "command", wantField: "endpoints.invokers[0]",
-			setup: func(c *metadata.ContractMeta) { c.Endpoints.Invokers = []string{"edge-bff"} },
+			setup: func(c *metadata.ContractMeta) { c.Endpoints.Invokers = []string{metadatatest.CellIDEdgeBFF} },
 		},
 		{
 			name: "projection uses readers",
 			kind: "projection", wantField: "endpoints.readers[0]",
 			setup: func(c *metadata.ContractMeta) {
 				r := true
-				c.Endpoints.Readers = []string{"edge-bff"}
+				c.Endpoints.Readers = []string{metadatatest.CellIDEdgeBFF}
 				c.Replayable = &r
 			},
 		},
@@ -3967,13 +3975,18 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			pm.Actors = []metadata.ActorMeta{
-				{ID: "edge-bff", MaxConsistencyLevel: "L0"},
+				{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "L0"},
 			}
 			c := &metadata.ContractMeta{
 				ID: tt.kind + ".test.v1", Kind: tt.kind,
-				OwnerCell: "accesscore", ConsistencyLevel: "L2",
+				OwnerCell: metadatatest.CellIDAccessCore, ConsistencyLevel: "L2",
 				Lifecycle: "active",
-				Endpoints: metadata.EndpointsMeta{Server: "accesscore", Publisher: "accesscore", Handler: "accesscore", Provider: "accesscore"},
+				Endpoints: metadata.EndpointsMeta{
+					Server:    metadatatest.CellIDAccessCore,
+					Publisher: metadatatest.CellIDAccessCore,
+					Handler:   metadatatest.CellIDAccessCore,
+					Provider:  metadatatest.CellIDAccessCore,
+				},
 			}
 			tt.setup(c)
 			pm.Contracts[c.ID] = c
@@ -3989,9 +4002,9 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 func TestTOPO07_MalformedMessage(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "edge-bff", MaxConsistencyLevel: "INVALID"},
+		{ID: metadatatest.CellIDEdgeBFF, MaxConsistencyLevel: "INVALID"},
 	}
-	pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+	pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{metadatatest.CellIDEdgeBFF}
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateTOPO07(), "TOPO-07")
@@ -4135,7 +4148,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["../../etc"] = &metadata.AssemblyMeta{
 			ID:    "../../etc",
-			Cells: []string{"accesscore"},
+			Cells: []string{metadatatest.CellIDAccessCore},
 			Build: metadata.BuildMeta{
 				Entrypoint: "cmd/evil/main.go",
 				Binary:     "evil",
@@ -4164,7 +4177,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 			ID:    "edge-bundle",
-			Cells: []string{"accesscore"},
+			Cells: []string{metadatatest.CellIDAccessCore},
 			Build: metadata.BuildMeta{
 				Entrypoint:     "cmd/edge-bundle/main.go",
 				Binary:         "edge-bundle",
@@ -4231,12 +4244,12 @@ func TestFMT14(t *testing.T) {
 func TestFMT14_ExamplePathSuggestion(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"ordercell": {ID: "ordercell"},
+			metadatatest.CellIDOrderCell: {ID: metadatatest.CellIDOrderCell},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"ordercell/ordercreate": {
+			metadatatest.CellIDOrderCell + "/ordercreate": {
 				ID:            "ordercreate",
-				BelongsToCell: "ordercell",
+				BelongsToCell: metadatatest.CellIDOrderCell,
 				File:          "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml",
 			},
 		},
@@ -4461,7 +4474,8 @@ func TestFMT15(t *testing.T) {
 		// The schema resolver canonicalizes the fake root through filepath.Abs,
 		// which preserves the current drive on Windows.
 		expected, err := filepath.Abs(filepath.Join(
-			string([]byte{'/'}), "project", "contracts", "http", "auth", "login", "v1", "response.schema.json"))
+			string([]byte{'/'}), "project", "contracts", "http", "auth", "login", "v1", "response.schema.json",
+		))
 		require.NoError(t, err)
 		assert.Equal(t, expected, capturedPath)
 	})
@@ -4514,14 +4528,14 @@ func TestOUTGUARD01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
-				pm.Cells["l1-cell"] = &metadata.CellMeta{
-					ID:               "l1-cell",
+				pm.Cells[metadatatest.CellIDL1Cell] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDL1Cell,
 					Type:             "core",
 					ConsistencyLevel: "L1",
 					// No DurabilityMode — L0/L1 allowed to omit (advisory only).
 					Owner:  metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
 					Schema: metadata.SchemaMeta{Primary: "cell_l1"},
-					Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+					Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.l1cell.startup"}},
 				}
 			},
 			wantCount: 0,
@@ -4531,14 +4545,14 @@ func TestOUTGUARD01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["accesscore"].DurabilityMode = "durable"
 				pm.Cells["auditcore"].DurabilityMode = "durable"
-				pm.Cells["l1-cell"] = &metadata.CellMeta{
-					ID:               "l1-cell",
+				pm.Cells[metadatatest.CellIDL1Cell] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDL1Cell,
 					Type:             "core",
 					ConsistencyLevel: "L1",
 					DurabilityMode:   "demo",
 					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
 					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
-					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1cell.startup"}},
 				}
 			},
 			wantCount: 0,
@@ -4565,20 +4579,22 @@ func TestOUTGUARD01_L3_L4_Error(t *testing.T) {
 	pm.Cells["accesscore"].DurabilityMode = "durable"
 	pm.Cells["auditcore"].DurabilityMode = "durable"
 	// Add L3 and L4 cells without durabilityMode.
-	pm.Cells["l3-cell"] = &metadata.CellMeta{
-		ID:               "l3-cell",
+	l3cell := &metadata.CellMeta{
 		Type:             "core",
 		ConsistencyLevel: "L3",
 		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
-		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l3-cell.startup"}},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l3cell.startup"}},
 	}
-	pm.Cells["l4-cell"] = &metadata.CellMeta{
-		ID:               "l4-cell",
+	l3cell.ID = "l3cell"
+	pm.Cells["l3cell"] = l3cell
+	l4cell := &metadata.CellMeta{
 		Type:             "core",
 		ConsistencyLevel: "L4",
 		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
-		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l4-cell.startup"}},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l4cell.startup"}},
 	}
+	l4cell.ID = "l4cell"
+	pm.Cells["l4cell"] = l4cell
 
 	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
@@ -4630,14 +4646,14 @@ func TestOUTGUARD01_InvalidDurabilityMode_L0L1(t *testing.T) {
 		{
 			name: "L1 cell with invalid durabilityMode",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["l1-cell"] = &metadata.CellMeta{
-					ID:               "l1-cell",
+				pm.Cells[metadatatest.CellIDL1Cell] = &metadata.CellMeta{
+					ID:               metadatatest.CellIDL1Cell,
 					Type:             "core",
 					ConsistencyLevel: "L1",
 					DurabilityMode:   "banana", // L1, invalid
 					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
 					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
-					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1cell.startup"}},
 				}
 			},
 		},

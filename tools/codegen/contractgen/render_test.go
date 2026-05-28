@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
@@ -1240,7 +1241,7 @@ func TestBuildHTTPEndpointSpec_ClientsOnlyRequiresInternalPathAndClients(t *test
 			Kind:    "http",
 			Codegen: true,
 			Endpoints: metadata.EndpointsMeta{
-				Server:  "testcell",
+				Server:  metadatatest.CellIDTestCell,
 				Clients: clients,
 				HTTP: &metadata.HTTPTransportMeta{
 					Method:        "GET",

@@ -259,3 +259,14 @@ github.com/ghbvf/gocell/tools/archtest	TestEventuallyFunnel_NoIndirectReferences
 # hardening. Same SLOW-flake class as the entries above (cumulative trigger
 # evidence for ARCHTEST-SHAREDRESOLVER-AMORTIZATION-01).
 github.com/ghbvf/gocell/tools/archtest	TestCredentialInvalidateFunnel_ApplyUpstreamCaller_01
+
+# type-graph-load: FIXTURE-CELLID-TYPED-BUILDER-01 A1 typed-info funnel —
+# two RunTyped passes (FlatNonDefaultTags + default) over ./kernel/...
+# with Tests:true; on cold-cache nightly shards without the cached
+# SharedResolver the combined cost is ~30–60s. Same type-graph-load /
+# 16-shard resolver-cache-loss class as the entries above.
+github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder
+# Note: FIXTURE-CELLID-TYPED-BUILDER-01 A2/A3/A4/A5 and METADATATEST-IMPORT-
+# SCOPE-01 have per-test Elapsed under 1s after R3 scope-narrowing (A2 single
+# package, A5 single package, A4 file I/O only, A3 single fixture pkg, import
+# scope AST-only Run); they do not need slowgate allowlist entries.

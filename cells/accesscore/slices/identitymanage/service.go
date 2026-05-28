@@ -4,7 +4,6 @@ package identitymanage
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/authzmutate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credential"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
@@ -305,7 +305,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
-		if err := s.publish(txCtx, TopicUserCreated, eventPayload); err != nil {
+		if err := outbox.Emit(txCtx, s.emitter, TopicUserCreated, eventPayload); err != nil {
 			return err
 		}
 		return nil
@@ -489,7 +489,7 @@ func (s *Service) applyUserUpdateTx(
 		}
 		u = refetched
 	}
-	if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
+	if err := outbox.Emit(txCtx, s.emitter, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
 		return nil, err
 	}
 	return u, nil
@@ -612,7 +612,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
-		if err := s.publish(txCtx, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
+		if err := outbox.Emit(txCtx, s.emitter, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
 		}
 		return nil
@@ -685,7 +685,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.LockUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		return s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.emitter, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
 	})
 }
 
@@ -751,7 +751,7 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.ActivateUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		return s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.emitter, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
 	}); err != nil {
 		return err
 	}
@@ -773,10 +773,13 @@ type ChangePasswordInput struct {
 // Validation order (P1-9 fix: cheap checks before bcrypt to avoid wasted CPU):
 //  1. Required-field check (empty userID / oldPassword / newPassword).
 //  2. Cheap string equality check (new == old rejected before bcrypt cost).
-//  3. bcrypt.CompareHashAndPassword (old password verification).
-//  4. Hash new password.
-//  5. Persist updated user.
-//  6. Issue new TokenPair via tokenIssuer.
+//  3. Inactive-account gate (credentialauthority.Assert, #1017) — runs first
+//     inside the tx, before bcrypt/UpdatePassword, so a suspended/locked
+//     account's credential is never rewritten (see changePasswordInTx).
+//  4. bcrypt.CompareHashAndPassword (old password verification).
+//  5. Hash new password.
+//  6. Persist updated user.
+//  7. Issue new TokenPair via tokenIssuer.
 //
 // Consistency level: L1 (single-cell local transaction, no outbox event).
 // The token pair is issued synchronously so the client can replace stale tokens
@@ -813,10 +816,22 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// (F18: new session must not be caught by the RevokeForSubject sweep inside the
 	// tx, and signing failure should not roll back a committed password change).
 	//
+	// Two-layer active guard (#1017): the read-time credentialauthority.Assert
+	// below gives the fast 403 for an account already inactive at read time (no
+	// wasted bcrypt). The write-time backstop is UpdatePassword's
+	// `WHERE ... AND status = 'active'` predicate (#1017 F1): if a concurrent
+	// Lock/Suspend commits between this non-locking GetByID and the write, the
+	// UPDATE matches 0 rows and UpdatePassword returns ErrAuthUserNotActive — the
+	// now-frozen account's credential is NOT rewritten. The write predicate, not a
+	// row lock, closes the concurrent-freeze window, so concurrent ChangePassword
+	// requests keep their CAS-conflict semantics (below) rather than serializing.
+	//
 	// CAS guard (S6 CHANGEPASSWORD-CONCURRENT-SEMANTICS-01): GetByID inside the tx
 	// snapshots user.PasswordVersion; UpdatePassword's WHERE password_version=$expected
-	// clause rejects the write if a concurrent change raced us to the commit.
+	// clause rejects the write if a concurrent ChangePassword raced us to the commit.
 	// The caller receives ErrVersionConflict (HTTP 409) and should reload + retry.
+	// Status guard and version guard are orthogonal predicates on the same UPDATE:
+	// a 0-row result is disambiguated (inactive → 403; version mismatch → 409).
 	//
 	// bcrypt inside the tx (B-class decision): ChangePassword is low-frequency;
 	// the ~100ms bcrypt cost is acceptable inside a short-lived tx, and keeping
@@ -827,8 +842,8 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// UpdatePassword each acquire store.mu independently (per-call), so bcrypt
 	// runs between the two locks rather than under a held lock. Cross-method
 	// atomicity is only guaranteed by the mem Store's own TxRunner (live lease)
-	// and by PG; the CAS version check still guards correctness on the mem path
-	// (ADR 202605171846).
+	// and by PG; the CAS version check + status predicate still guard correctness
+	// on the mem path (ADR 202605171846).
 	var userID string
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		id, txErr := s.changePasswordInTx(txCtx, input)
@@ -862,6 +877,30 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}
 
+	// Inactive-account gate BEFORE any credential mutation (issue #1017).
+	// A suspended/locked account must never have its password rewritten, so the
+	// active check fails-closed here — before the bcrypt verify, the CAS write,
+	// and the session sweep — rather than post-commit inside IssueForUser. The
+	// IssueForUser Assert is retained as belt-and-braces for the narrow window
+	// where an admin freezes the account between this commit and the token issue.
+	//
+	// GetByID returns a non-nil user or an error (handled above), so the only
+	// reachable Assert failure here is the baseline CanAuthenticate check — the
+	// nil-user / nil-Check arms of Assert are unreachable on this path. Mapping
+	// every Assert error to ErrAuthUserNotActive is therefore correct and mirrors
+	// sessionlogin.IssueForUser's (Assert-gate → 403) shape, so both paths return
+	// an identical wire envelope. Timing note: this gate returns before the
+	// ~100ms bcrypt, so an inactive account is rejected faster than an active
+	// wrong-password — an accepted trade-off on this authenticated endpoint
+	// (the caller already proved account existence via its token; see ADR §A17).
+	if err := credentialauthority.Assert(user); err != nil {
+		s.logger.Warn("change-password: inactive account gate rejected",
+			slog.String("user_id", user.ID))
+		return "", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+			"account is not active",
+			errcode.WithInternal(errcode.InternalAttr("_", "identity-manage: change-password baseline assert failed")))
+	}
+
 	// Step 3: Verify old password (expensive — inside tx by design, see ChangePassword godoc).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthOldPasswordIncorrect, "old password incorrect")
@@ -889,20 +928,4 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	}
 
 	return user.ID, nil
-}
-
-func (s *Service) publish(ctx context.Context, topic string, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
-	}
-	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: topic,
-		Payload:   data,
-	}
-	if err := s.emitter.Emit(ctx, entry); err != nil {
-		return fmt.Errorf("identity-manage: emit event: %w", err)
-	}
-	return nil
 }

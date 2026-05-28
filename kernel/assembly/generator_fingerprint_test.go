@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // fingerprintProject builds a richer ProjectMeta than buildTestProject so that
@@ -28,10 +29,10 @@ func fingerprintProject() *metadata.ProjectMeta {
 	httpC := &metadata.ContractMeta{
 		ID:        "http.auth.login.v1",
 		Kind:      "http",
-		OwnerCell: "accesscore",
+		OwnerCell: metadatatest.CellIDAccessCore,
 		Endpoints: metadata.EndpointsMeta{
-			Server:  "accesscore",
-			Clients: []string{"edge-bff"},
+			Server:  metadatatest.CellIDAccessCore,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "POST",
 				Path:          "/api/v1/auth/login",
@@ -52,13 +53,13 @@ func fingerprintProject() *metadata.ProjectMeta {
 	eventC := &metadata.ContractMeta{
 		ID:                "event.session.created.v1",
 		Kind:              "event",
-		OwnerCell:         "accesscore",
+		OwnerCell:         metadatatest.CellIDAccessCore,
 		IdempotencyKey:    "session_id",
 		DeliverySemantics: "at-least-once",
 		Replayable:        &tBool,
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:   "accesscore",
-			Subscribers: []string{"auditcore", "external-siem"},
+			Publisher:   metadatatest.CellIDAccessCore,
+			Subscribers: []string{metadatatest.CellIDAuditCore, "external-siem"},
 		},
 	}
 	cs(eventC)
@@ -66,10 +67,10 @@ func fingerprintProject() *metadata.ProjectMeta {
 	commandC := &metadata.ContractMeta{
 		ID:        "command.session.revoke.v1",
 		Kind:      "command",
-		OwnerCell: "accesscore",
+		OwnerCell: metadatatest.CellIDAccessCore,
 		Endpoints: metadata.EndpointsMeta{
-			Handler:  "accesscore",
-			Invokers: []string{"edge-bff"},
+			Handler:  metadatatest.CellIDAccessCore,
+			Invokers: []string{metadatatest.CellIDEdgeBFF},
 		},
 	}
 	cs(commandC)
@@ -77,24 +78,24 @@ func fingerprintProject() *metadata.ProjectMeta {
 	projectionC := &metadata.ContractMeta{
 		ID:        "projection.audit.summary.v1",
 		Kind:      "projection",
-		OwnerCell: "auditcore",
+		OwnerCell: metadatatest.CellIDAuditCore,
 		Endpoints: metadata.EndpointsMeta{
-			Provider: "auditcore",
-			Readers:  []string{"edge-bff"},
+			Provider: metadatatest.CellIDAuditCore,
+			Readers:  []string{metadatatest.CellIDEdgeBFF},
 		},
 	}
 	cs(projectionC)
 
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID: "accesscore", Type: "core", ConsistencyLevel: "L1",
+			metadatatest.CellIDAccessCore: {
+				ID: metadatatest.CellIDAccessCore, Type: "core", ConsistencyLevel: "L1",
 				Owner:  metadata.OwnerMeta{Team: "identity", Role: "maintainer"},
 				Schema: metadata.SchemaMeta{Primary: "users"},
 				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore"}},
 			},
-			"auditcore": {
-				ID: "auditcore", Type: "core", ConsistencyLevel: "L2",
+			metadatatest.CellIDAuditCore: {
+				ID: metadatatest.CellIDAuditCore, Type: "core", ConsistencyLevel: "L2",
 				Owner:  metadata.OwnerMeta{Team: "compliance", Role: "maintainer"},
 				Schema: metadata.SchemaMeta{Primary: "audit_logs"},
 				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore"}},
@@ -111,7 +112,7 @@ func fingerprintProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ssobff": {
 				ID:    "ssobff",
-				Cells: []string{"accesscore", "auditcore"},
+				Cells: []string{metadatatest.CellIDAccessCore, metadatatest.CellIDAuditCore},
 				Build: metadata.BuildMeta{
 					Entrypoint: "cmd/ssobff/main.go",
 					Binary:     "ssobff",

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/session"
 )
@@ -104,43 +105,72 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 	}
 
 	// Wrap the owner-scoped revoke + refresh cascade + outbox write in a transaction for L2 atomicity.
-	revokeAndPublish := func(txCtx context.Context) error {
-		sess, err := s.sessionStore.Get(txCtx, sessionID)
-		if err != nil {
-			if errcode.IsInfraError(err) {
-				// Infra failures (PG outage, connection error) must surface as
-				// 503 so clients retry instead of silently treating the session
-				// as gone — squashing every Get error into not-found would
-				// leak revocation status guarantees and mask real outages.
-				s.logger.Error("session-logout: session lookup infra error",
-					slog.Any("error", err), slog.String("session_id", sessionID))
-				return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthLogoutUnavailable,
-					"session lookup unavailable", err)
-			}
-			// Domain not-found: unify with owner-mismatch into the same error
-			// code to prevent cross-user session enumeration (IDOR).
-			return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found")
-		}
-		if sess.SubjectID != callerUserID {
-			return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found")
-		}
-		if err := s.sessionStore.Revoke(txCtx, sessionID); err != nil {
-			return err
-		}
-		if err := s.refreshStore.RevokeSession(txCtx, sessionID); err != nil {
-			return fmt.Errorf("session-logout: revoke refresh chain: %w", err)
-		}
-		return outbox.Emit(txCtx, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
-			SessionID: sessionID,
-			UserID:    callerUserID,
-		})
-	}
-
-	if err := s.persistRevoke(ctx, revokeAndPublish); err != nil {
+	if err := s.persistRevoke(ctx, func(txCtx context.Context) error {
+		return s.revokeAndPublish(txCtx, sessionID, callerUserID)
+	}); err != nil {
 		return err
 	}
 
 	s.logger.Info("session revoked",
 		slog.String("session_id", sessionID), slog.String("user_id", callerUserID))
 	return nil
+}
+
+// sessionSubjectID is the nil-safe ownerID accessor used by auth.CheckOwner.
+// Returning "" for nil sess collapses lookup-failure into the same KindNotFound
+// envelope as owner-mismatch (IDOR-safe 404 collapse).
+func sessionSubjectID(v *session.ValidateView) string {
+	if v == nil {
+		return ""
+	}
+	return v.SubjectID
+}
+
+// revokeAndPublish runs the L2 owner-scoped revoke + refresh cascade + outbox
+// write inside a transaction. Split from Logout to keep Logout under the
+// cognitive complexity budget and to give the transactional body a name in
+// stack traces.
+func (s *Service) revokeAndPublish(txCtx context.Context, sessionID, callerUserID string) error {
+	sess, err := s.sessionStore.Get(txCtx, sessionID)
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			// Infra failures (PG outage, connection error) must surface as
+			// 503 so clients retry instead of silently treating the session
+			// as gone — squashing every Get error into not-found would
+			// leak revocation status guarantees and mask real outages.
+			s.logger.Error("session-logout: session lookup infra error",
+				slog.Any("error", err), slog.String("session_id", sessionID))
+			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthLogoutUnavailable,
+				"session lookup unavailable", err)
+		}
+		// Domain error (typically KindNotFound from store implementations).
+		// Defensively null sess regardless of what the Store returned: the
+		// Store.Get contract is (nil, err) on failure, but explicit nilling
+		// guarantees CheckOwner's nil-safe accessor path is taken even if
+		// a future implementation deviates. Any new non-infra domain error
+		// class is funneled into KindNotFound here — currently safe because
+		// only KindNotFound is expected; revisit if Store.Get adds other
+		// domain error classes.
+		sess = nil
+	}
+	// Domain not-found and owner mismatch are unified into the same envelope
+	// via auth.CheckOwner (IDOR-safe 404 collapse): for not-found, sess is
+	// nil and sessionSubjectID returns "", which fails != against the
+	// non-empty callerUserID (pre-validated at the empty-callerUserID guard
+	// at the top of Logout, raising KindInvalid; CheckOwner also fail-closes
+	// on empty callerID as defense-in-depth).
+	if err := auth.CheckOwner(sess, sessionSubjectID, callerUserID,
+		errcode.ErrSessionNotFound); err != nil {
+		return err
+	}
+	if err := s.sessionStore.Revoke(txCtx, sessionID); err != nil {
+		return err
+	}
+	if err := s.refreshStore.RevokeSession(txCtx, sessionID); err != nil {
+		return fmt.Errorf("session-logout: revoke refresh chain: %w", err)
+	}
+	return outbox.Emit(txCtx, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
+		SessionID: sessionID,
+		UserID:    callerUserID,
+	})
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // ---------------------------------------------------------------------------
@@ -205,8 +206,12 @@ func TestUnit(t *testing.T) {}
 `), 0o644))
 
 	proj := &metadata.ProjectMeta{
-		Cells:    map[string]*metadata.CellMeta{"accesscore": {ID: "accesscore"}},
-		Slices:   map[string]*metadata.SliceMeta{"accesscore/session-create": {ID: "session-create", BelongsToCell: "accesscore"}},
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"accesscore/session-create": {ID: "session-create", BelongsToCell: metadatatest.CellIDAccessCore},
+		},
 		Journeys: map[string]*metadata.JourneyMeta{},
 	}
 
@@ -225,7 +230,7 @@ func TestVerifySlice_WithMetadataRefs(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
 
-	sliceDir := filepath.Join(dir, "cells", "c", "slices", "s")
+	sliceDir := filepath.Join(dir, "cells", "cc", "slices", "s")
 	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "svc_test.go"), []byte(`package s
 import "testing"
@@ -234,10 +239,10 @@ func TestHandler(t *testing.T) {}
 `), 0o644))
 
 	proj := &metadata.ProjectMeta{
-		Cells: map[string]*metadata.CellMeta{"c": {ID: "c"}},
+		Cells: map[string]*metadata.CellMeta{metadatatest.CellIDCC: {ID: metadatatest.CellIDCC}},
 		Slices: map[string]*metadata.SliceMeta{
-			"c/s": {
-				ID: "s", BelongsToCell: "c",
+			"cc/s": {
+				ID: "s", BelongsToCell: metadatatest.CellIDCC,
 				Verify: metadata.SliceVerifyMeta{
 					Unit: []string{"unit.s.service"},
 				},
@@ -247,7 +252,7 @@ func TestHandler(t *testing.T) {}
 	}
 
 	r := NewRunner(proj, dir)
-	res, err := r.VerifySlice(context.Background(), "c/s")
+	res, err := r.VerifySlice(context.Background(), "cc/s")
 	require.NoError(t, err)
 	assert.True(t, res.Passed)
 	require.Len(t, res.Results, 1)
@@ -271,8 +276,8 @@ func TestWrite(t *testing.T) {}
 
 	proj := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"auditcore": {
-				ID:     "auditcore",
+			metadatatest.CellIDAuditCore: {
+				ID:     metadatatest.CellIDAuditCore,
 				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.write"}},
 			},
 		},
@@ -281,7 +286,7 @@ func TestWrite(t *testing.T) {}
 	}
 
 	r := NewRunner(proj, dir)
-	res, err := r.VerifyCell(context.Background(), "auditcore")
+	res, err := r.VerifyCell(context.Background(), metadatatest.CellIDAuditCore)
 	require.NoError(t, err)
 	assert.True(t, res.Passed)
 	require.Len(t, res.Results, 1)
@@ -291,11 +296,11 @@ func TestWrite(t *testing.T) {}
 func TestVerifyCell_InvalidSmokeRef(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"c": {ID: "c", Verify: metadata.CellVerifyMeta{Smoke: []string{"totally-invalid"}}},
+			metadatatest.CellIDCC: {ID: metadatatest.CellIDCC, Verify: metadata.CellVerifyMeta{Smoke: []string{"totally-invalid"}}},
 		},
 	}, t.TempDir())
 
-	res, err := r.VerifyCell(context.Background(), "c")
+	res, err := r.VerifyCell(context.Background(), metadatatest.CellIDCC)
 	require.NoError(t, err)
 	assert.False(t, res.Passed, "non-legacy invalid ref should fail")
 	require.Len(t, res.Errors, 1)

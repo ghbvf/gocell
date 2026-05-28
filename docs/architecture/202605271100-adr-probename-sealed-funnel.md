@@ -14,7 +14,7 @@ archtest 双向锁守卫。然而，仅覆盖了一个维度：**adapter 侧**�
 升级后 probe 注册通路存在三条独立路径，形成 funnel 三向碎片：
 
 1. **Adapter 侧**（`OPS-CONTRACT-STRING-FUNNEL-01`）：`ReadyProbeName` typed const +
-   `adapterutil.HealthToCheckers(name ReadyProbeName, ...)` 已升 Hard。
+   `adapterutil.HealthToProbe(name ReadyProbeName, ...)` 已升 Hard。
 2. **Framework probe 侧**（`READYZ-PROBE-NAMING-01`）：`config_watcher` /
    `config_drift` / `outbox_failopen_rate_<cellID>` 仍用 `NewProbe` /
    `WithHealthChecker` 的**裸 string**，仅由 hyphen-check archtest（Soft）守卫。
@@ -87,8 +87,11 @@ func NewProbeName(s string) (ProbeName, error)
 ```
 
 regex：`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`（snake_case，禁连字符 / 大写 / 前导数字），
-长度 ≤ 48。`_ready` 后缀不在 regex 层强制，由 archtest A1 在 sanctioned 包级分流。
-**不引入 `MustProbeName`**（优雅简洁自检原则）。
+长度 ≤ 64（**实施时调整为 64，与 K8s DNS-1123 label cap 63 + 1-char margin 对齐；
+composed EmitterFailOpenProbeName 21-prefix + 32-max-cellID = 53 worst-case fits；
+ADR 草稿原写 ≤ 48，实施前已扩到 64，见 `kernel/healthz/probename.go::probeNameMaxLen`
+budget chain godoc**）。`_ready` 后缀不在 regex 层强制，由 archtest A1 在
+sanctioned 包级分流。**不引入 `MustProbeName`**（优雅简洁自检原则）。
 
 ### D5 — cellgen 模板重命名 `RegisterReadiness`
 
@@ -117,8 +120,8 @@ accesscore}/healthz_gen.go`、`examples/{iotdevice,todoorder}` 对应文件）�
 
 | 层 | 内容 | 评级 |
 |----|------|------|
-| A1 上游声明 sanction + value 形状 | sanctioned 包集合覆盖 `kernel/healthz` + 8 adapter + `runtime/{websocket,saga}` + cells/<cell>（`healthz_gen.go` + cellgen marker）；每个 `*types.Const of type ProbeName` 值过 regex；adapter-suffix overlay 要求 adapter 包 ProbeName 以 `_ready` 结尾 | Hard 上游（archtest-bound，Go 无 const 可见性 seal） |
-| A2 下游 callsite resolves to 声明集 | scan `RegisterReadiness(<expr>, ...)` / `NewProbe(<expr>, ...)` / `HealthToCheckers(<expr>, ...)`；`<expr>` 经 `info.Uses` 解析到 sanctioned `*types.Const`；BasicLit / BinaryExpr / Var / CallExpr fail-closed | Hard 下游（type system）— `NewProbe(name ProbeName, ...)` 让裸 string 编译错；archtest 额外封 `ProbeName("foo")` cast |
+| A1 上游声明 sanction + value 形状 | sanctioned 包集合覆盖 `kernel/healthz` + 8 adapter + `runtime/{websocket,saga}` + cells/<cell>（`healthz_gen.go` + cellgen marker）；每个 `*types.Const of type ProbeName` 值过 regex；adapter-suffix overlay 要求 adapter 包 ProbeName 以 `_ready` 结尾 | Medium 上游（archtest-bound，Go 无 const 可见性 seal，永久天花板 won't-do） |
+| A2 下游 callsite resolves to 声明集 | scan `RegisterReadiness(<expr>, ...)` / `NewProbe(<expr>, ...)` / `HealthToProbe(<expr>, ...)`；`<expr>` 经 `info.Uses` 解析到 sanctioned `*types.Const`；BasicLit / BinaryExpr / Var / CallExpr fail-closed | Hard 下游（type system + archtest）— `NewProbe(name ProbeName, ...)` 让 `var s string` 形态编译错；untyped string literal 经 Go 隐式转换通过编译，archtest A2 在源码层拒绝（callsite 必须解析到声明集 const）|
 | A3 上游 RegisterReadiness 是唯一 write 入口 | scan 全 repo `Aggregator.Register(...)` callsite；allowlist 限于实现文件 + `*_test.go` | Hard 下游（type system）— `reg.Healthz()` 已删，`reg.Healthz()` 是编译错；archtest 兜残余 Aggregator 直 Register |
 | A4 NewProbeName const-literal 入参 | `NewProbeName(<expr>)` 必须是 BasicLit 或 string-literal + ident（composed-name 唯一允许形态）；caller allowlist：`kernel/healthz/probename.go` + `*_test.go` | Medium 上游 archtest |
 | A5 framework composed-name helper allowlist | golden inventory `EmitterFailOpenProbeName=outbox_failopen_rate_`；scan `"outbox_failopen_rate_" + <x>` BinaryExpr 出现在 `kernel/healthz/probename.go` 外即 fail | Medium 上游 archtest |
@@ -134,8 +137,13 @@ bypass / B4 NewProbeName 动态参 / B5 cellgen marker bypass）+ 7 个 RED fixt
 
 ### Positive
 
-- `reg.Healthz()` 是编译错误。新的 probe 注册路径：写 `reg.RegisterReadiness(name, p)`
-  — type system 拒绝裸 `string` 入参，编译期 Hard gate，无需 archtest 守此出口。
+- `reg.Healthz()` 是编译错误（方法已删，type-system Hard gate，无需 archtest 守此出口）。
+  新的 probe 注册路径：写 `reg.RegisterReadiness(name, p)`。type system 拒绝
+  **typed-var string 入参**（`var s string; reg.RegisterReadiness(s, p)` 编译错）；
+  **untyped string literal**（`reg.RegisterReadiness("foo", p)`）经 Go untyped-const
+  隐式转换通过编译，由 archtest A2 在源码层拒绝（callsite 必须解析到声明集 const）。
+  type system 关闭 typed-var 形态、archtest 关闭 untyped-literal 形态，二者闭合
+  Hard 下游 funnel。
 - 三条散落 archtest 合一（archtest 总量 3 → 1 for this domain），覆盖面更完整。
 - Framework probe（`config_watcher` / `config_drift` / `outbox_failopen_rate_<cell>`）
   接入 typed funnel，消除最后的 bare-string probe 注册路径。
@@ -259,9 +267,9 @@ Dependent contracts:
 
 | 轴 | 形态 | 评级 |
 |----|------|------|
-| A1 下游 type system | `NewProbe(name ProbeName, ...)` 让裸 string 编译错；`reg.Healthz()` 编译错 | **Hard 下游** |
+| A1 下游 type system | `NewProbe(name ProbeName, ...)` 让 typed-var string 编译错（untyped literal 通过 Go 隐式 const 转换编译通过，由 A2 archtest 拒）；`reg.Healthz()` 已删 = 编译错 | **Hard 下游**（type system + archtest 闭合） |
 | A2 下游 archtest | A2/A3 scan `RegisterReadiness` / `Aggregator.Register` callsite identity | **Hard 下游**（archtest-bound 补充） |
-| A1 上游 archtest | sanctioned 包 + value regex + adapter-suffix overlay | **Hard 上游**（archtest-bound，Go const-seal 上限） |
+| A1 上游 archtest | sanctioned 包 + value regex + adapter-suffix overlay | **Medium 上游**（archtest-bound；Go 包级可见性无 const-seal 表达 → 永久天花板，won't-do） |
 | A4/A5 上游 archtest | `NewProbeName` const-literal 入参 + composed-name helper allowlist | **Medium 上游**（同 PR 开 backlog 跟踪 Hard 升级方向，判断多半 won't-do） |
 
 backlog issue：`PROBENAME-NEWPROBENAME-CALLER-SEAL-01`（A4 Medium 上游 Hard 升级评估）
@@ -324,10 +332,25 @@ Round-2 review (gh issue #1187 review F1) 指出 PR 落地后仍存在一条 bar
    `Probes() []healthz.Probe`（typed slice 替换 map）。`kernel/lifecycle` 可 import
    `kernel/healthz`（同 kernel/ 内单向依赖，无循环）；裸 string ingress 在 type
    system 层消除。
-2. `adapters/adapterutil.HealthToCheckers(name, fn, timeout) map[string]func` →
-   `HealthToProbe(name, fn, timeout) healthz.Probe`。
-3. `runtime/outbox` 新增 typed const `ProbePoll / ProbeReclaim / ProbeCleanup`
-   （values 不变：`outbox_relay_poll` 等，运维 dashboard / alert 零迁移）。
+2. `adapters/adapterutil.HealthToProbe(name, fn, timeout) healthz.Probe`（signature upgrade from `map[string]func` to typed return）。
+3. `runtime/outbox` 新增 typed const `ProbePoll / ProbeReclaim / ProbeCleanup`。
+   **Wire-level breaking rename**：旧实现走 `bootstrap.WithHealthChecker(
+   "outbox-relay-poll", ...)`，wire key 含 hyphen；amendment 的 typed const
+   值必须通过 `probeNamePattern = ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`（hyphen
+   禁），故强制 rename：
+
+   | 旧 wire key（PR #1187 前） | 新 wire key（PR #1187 起） |
+   |---------------------------|---------------------------|
+   | `outbox-relay-poll`       | `outbox_relay_poll`       |
+   | `outbox-relay-reclaim`    | `outbox_relay_reclaim`    |
+   | `outbox-relay-cleanup`    | `outbox_relay_cleanup`    |
+
+   **Migration impact**：仓内零 dashboard / alert / ops 文档硬编码引用旧
+   key（`grep -r 'outbox-relay-' --include='*.yaml' --include='*.json'
+   --include='*.md' docs/` 验证空），但下游消费方（外部运维监控配置 / 报警
+   规则 / 启动校验脚本）若硬编码 hyphen 形态需同步更新。Release notes 必须
+   显式列出 3 条 readyz JSON `dependencies[].name` 字段值变更。本 amendment
+   原 wording "values 不变 / 零迁移"由 round-3 review F2 撤回；以本表为准。
 4. `runtime/bootstrap/managed_resource.go::expandManagedResources` 删
    `healthz.NewProbeName` 转换分支，直接迭代 `r.Probes()` 并 register。
 5. archtest `PROBENAME-SEALED-FUNNEL-01`：
@@ -349,13 +372,21 @@ Round-2 review (gh issue #1187 review F1) 指出 PR 落地后仍存在一条 bar
   本身上移到 ManagedResource interface）。
 - 新增 invariant "每个 ManagedResource 派生 probe 必须在 goldenProbeNames inventory"
   由 archtest A1 sub-rule + golden lock 双向锁；runtime/outbox 3 个 typed const 全部入表。
+- ⚠️ "/readyz wire shape 无破坏性变更" 收紧：verbose schema 字段集（含
+  `HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01` 锁的 `dependencies[].{name,status,durationMs}`
+  field set）**仍 hold**——本 amendment 不删字段不加字段；但 3 条 outbox
+  relay probe 的 `name` 字段值经历 hyphen→underscore string rename（见上 §3
+  表）。该 rename 是 typed funnel regex 收紧（拒 hyphen）的必要后果，无法保
+  留 hyphen 别名。
 
-AI-robust 评级（升级）：
+AI-robust 评级（升级 + round-3 review 修订）：
 
 | 轴 | 形态（amendment 后） | 评级 |
 |----|---------------------|------|
-| ManagedResource 上游 type system | `Probes() []healthz.Probe` 让 `map[string]func` 编译错 | **Hard 上游** |
-| 下游 const 声明 + golden inventory | `runtime/outbox` typed const + sanctionedPkgs + golden | **Hard 下游** |
+| ManagedResource 接口 | `Probes() []healthz.Probe` 让 `map[string]func` 编译错 | **Hard 上游** (type system) |
+| A1 const 声明（sanctioned pkg + value-shape + adapter-suffix + golden） | archtest 锁；Go 包级可见性无 const-seal 表达，永久 Go 天花板 | **Medium 上游** (Go ceiling, won't-do) |
+| A2 callsite typed args | `RegisterReadiness` / `NewProbe` / `HealthToProbe` / `bootstrap.WithHealthChecker` 首参皆 `ProbeName`，`var s string` 形态编译错；untyped string literal 经 Go 隐式转换通过编译，archtest A2 在源码层拒绝；archtest 锁 4 个 callee form-uniqueness + 拒 `ProbeName(callExpr)` 动态 cast | **Hard 下游** (type system + archtest) |
+| A6 Probe interface 实现集 | sealed marker `isHealthzProbe()` unexported；包外实现 compile error；唯二实现 `kernel/healthz.funcProbe`（NewProbe 返回）+ `kernel/healthz.ctxSafeProbe`（WrapCtxSafe 返回） | **Hard 上游** (type system) |
 
 PR 调用接口形态变更：`bootstrap.WithManagedResource(r)` caller 一个 option 不变；只是
 resource 实现侧把 `Checkers() map` 改为 `Probes() []healthz.Probe`。生产 cellID 都不含

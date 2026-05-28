@@ -16,7 +16,9 @@
 // All probe names are typed as kernel/healthz.ProbeName (a typed string).
 // The sole construction entry point is NewProbeName(s string) (ProbeName, error),
 // which validates snake_case format (regex ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$,
-// length ≤ 48). Typed constants are declared in each owning package:
+// length ≤ 64 (aligns with K8s DNS-1123 label cap 63 + 1-char margin;
+// composed EmitterFailOpenProbeName worst-case 21+32=53; see probename.go
+// probeNameMaxLen budget chain)). Typed constants are declared in each owning package:
 //
 //   - Adapter probes: each adapter declares const ProbeReady ProbeName = "<name>_ready".
 //   - Framework probes: ConfigWatcherProbeName / ConfigDriftProbeName typed const
@@ -29,9 +31,20 @@
 // and HEALTHZ-TYPED-REGISTER-01 (the latter two retired because Registrar.Healthz()
 // no longer exists — calling it is a compile error).
 //
+// # Dependencies (kernel/ layer)
+//
+//   - kernel/clock — clock.Clock injected into WrapCtxSafe / watchLateOutcome
+//     for ctx-racing watcher cancellation lag observation (added by PR #1187
+//     round-3 ctxsafe.go sink; ctxSafeProbe.Check uses the clock to measure
+//     how long the inner probe ran after the outer deadline fired)
+//   - pkg/redaction — RedactAny / RedactString masking for panic payloads
+//     in ctxSafeProbe.Check recover path (prevents raw error strings with
+//     sensitive substrings from reaching slog / trace on pathological probes)
+//
 // # Layering invariants
 //
-//   - kernel/healthz has zero runtime/ or adapters/ dependencies (stdlib + pkg/errcode).
+//   - kernel/healthz depends on kernel/clock and pkg/redaction in addition to
+//     stdlib + pkg/errcode (see §Dependencies above).
 //   - Implementations are registered through Aggregator.Register only — no
 //     parallel back-channel maps. See HEALTHZ-WRITE-01.
 //

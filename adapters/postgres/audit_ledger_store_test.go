@@ -529,7 +529,7 @@ var errRollbackSentinel = errors.New("intentional rollback")
 // TestAuditLedgerStore_ReadWithinAmbientTx makes the LedgerStore godoc caveat
 // ("when called within a caller's ambient transaction, the result reflects
 // that transaction's uncommitted chain state") falsifiable. Tail/GetBySeq/
-// Verify all route through pgExecutor, so an Append performed inside an outer
+// Verify all route through pgexec.PGExecutor, so an Append performed inside an outer
 // RunInTx must be visible to those reads in the SAME txCtx before commit, and
 // invisible after a rollback. A committed control proves the in-tx read is not
 // an artifact and the persisted path still works.
@@ -571,7 +571,7 @@ func TestAuditLedgerStore_ReadWithinAmbientTx(t *testing.T) {
 	})
 	require.ErrorIs(t, rbErr, errRollbackSentinel, "RunInTx must surface the rollback sentinel")
 
-	// Fresh context (no ambient tx) → pgExecutor falls back to the pool, which
+	// Fresh context (no ambient tx) → pgexec.PGExecutor falls back to the pool, which
 	// only sees committed state. The rolled-back append must be gone.
 	tail, err := store.Tail(ctx)
 	require.NoError(t, err)

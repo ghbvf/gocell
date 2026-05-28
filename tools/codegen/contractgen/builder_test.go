@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- Naming helper tests ---
@@ -654,8 +655,8 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 		Lifecycle:        "active",
 		Codegen:          trueCodegen,
 		Endpoints: metadata.EndpointsMeta{
-			Server:  "accesscore",
-			Clients: []string{"edge-bff"},
+			Server:  metadatatest.CellIDAccessCore,
+			Clients: []string{metadatatest.CellIDEdgeBFF},
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "POST",
 				Path:          "/api/v1/access/setup/admin",
@@ -698,7 +699,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedAllowsPasswordResetExempt(t *testing.
 		ID:   "http.auth.session.delete.v1",
 		Kind: "http",
 		Endpoints: metadata.EndpointsMeta{
-			Server: "accesscore",
+			Server: metadatatest.CellIDAccessCore,
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "DELETE",
 				Path:          "/api/v1/access/sessions/{id}",
@@ -754,7 +755,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
 			name:    "clientsOnly",
 			auth:    metadata.HTTPAuthMeta{ServiceOwned: true, ClientsOnly: true},
 			path:    "/internal/v1/service-owned/clients-only",
-			clients: []string{"edge-bff"},
+			clients: []string{metadatatest.CellIDEdgeBFF},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -764,7 +765,7 @@ func TestBuildHTTPEndpointSpec_ServiceOwnedRejectsExclusiveModes(t *testing.T) {
 				ID:   "http.auth.bad.serviceowned." + tc.name + ".v1",
 				Kind: "http",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
+					Server:  metadatatest.CellIDAccessCore,
 					Clients: tc.clients,
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",
@@ -813,7 +814,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *tes
 		Kind:    "http",
 		Codegen: true,
 		Endpoints: metadata.EndpointsMeta{
-			Server: "accesscore",
+			Server: metadatatest.CellIDAccessCore,
 			HTTP:   httpMeta,
 		},
 		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
@@ -1392,7 +1393,7 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 			name:    "clients_only_on_internal_path_ok",
 			auth:    metadata.HTTPAuthMeta{ClientsOnly: true},
 			path:    "/internal/v1/foo",
-			clients: []string{"edge-bff"},
+			clients: []string{metadatatest.CellIDEdgeBFF},
 			wantErr: false,
 		},
 		{
@@ -1417,7 +1418,7 @@ func TestBuildHTTPEndpointSpec_RejectsPublicBypassOnInternalPath(t *testing.T) {
 				ID:   "http.fmt34." + tc.name + ".v1",
 				Kind: "http",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "accesscore",
+					Server:  metadatatest.CellIDAccessCore,
 					Clients: tc.clients,
 					HTTP: &metadata.HTTPTransportMeta{
 						Method:        "GET",

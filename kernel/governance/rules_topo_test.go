@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // --- TOPO-09: assembly.MaxConsistencyLevel matches cells max ---
@@ -17,16 +18,21 @@ import (
 func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel string) *metadata.ProjectMeta {
 	cells := make(map[string]*metadata.CellMeta, len(cellIDs))
 	for i, id := range cellIDs {
-		cells[id] = &metadata.CellMeta{
-			ID:               id,
+		// F8 (R3): re-validate every cell-id through the typed builder so a
+		// bare-literal call site fails fast in the helper, closing the
+		// AssignStmt blind spot (A1 only scans CompositeLit positions).
+		validated := metadatatest.NewCellID(id)
+		cm := &metadata.CellMeta{
 			Type:             "core",
 			ConsistencyLevel: cellLevels[i],
 			Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "cell_" + id},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + id + ".startup"}},
-			Dir:              id,
-			File:             "cells/" + id + "/cell.yaml",
+			Schema:           metadata.SchemaMeta{Primary: "cell_" + validated},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke." + validated + ".startup"}},
+			Dir:              validated,
+			File:             "cells/" + validated + "/cell.yaml",
 		}
+		cm.ID = validated
+		cells[validated] = cm
 	}
 	return &metadata.ProjectMeta{
 		Cells:     cells,
@@ -51,7 +57,7 @@ func buildTOPO09Project(cellIDs []string, cellLevels []string, asmMaxLevel strin
 func TestTOPO09_AssemblyMaxConsistencyMatchesCells(t *testing.T) {
 	// cells: L1 + L4 → expected max = L4
 	pm := buildTOPO09Project(
-		[]string{"cellA", "cellB"},
+		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB},
 		[]string{"L1", "L4"},
 		"L4", // correct derived value
 	)
@@ -64,7 +70,7 @@ func TestTOPO09_AssemblyMaxConsistencyMatchesCells(t *testing.T) {
 // manually set to "L1" but cells contain an L4 cell → 1 finding, severity Error.
 func TestTOPO09_AssemblyMaxConsistencyDriftedFromCells(t *testing.T) {
 	pm := buildTOPO09Project(
-		[]string{"cellA", "cellB"},
+		[]string{metadatatest.CellIDCellA, metadatatest.CellIDCellB},
 		[]string{"L1", "L4"},
 		"L1", // wrong: cells max is L4
 	)
@@ -108,8 +114,8 @@ func TestTOPO09_AssemblyEmptyCells(t *testing.T) {
 func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"badlevelcell": {
-				ID:               "badlevelcell",
+			metadatatest.NewCellID("badlevelcell"): {
+				ID:               metadatatest.NewCellID("badlevelcell"),
 				ConsistencyLevel: "L9", // invalid — FMT-03 covers this
 				Type:             "core",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
@@ -123,7 +129,7 @@ func TestTOPO09_InvalidCellLevelSkips(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"badasm": {
 				ID:                  "badasm",
-				Cells:               []string{"badlevelcell"},
+				Cells:               []string{metadatatest.NewCellID("badlevelcell")},
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "badasm",
@@ -147,7 +153,7 @@ func TestTOPO09_AssemblyUnknownCellRef(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"ghostasm": {
 				ID:                  "ghostasm",
-				Cells:               []string{"unknown-cell"},
+				Cells:               []string{metadatatest.NewCellID("unknowncell")}, // legacy "unknown-cell" (kebab → compliant)
 				MaxConsistencyLevel: "L2",
 				Owner:               metadata.OwnerMeta{Team: "platform", Role: "assembly-owner"},
 				Dir:                 "ghostasm",

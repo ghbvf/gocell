@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -499,7 +500,7 @@ func TestLastAdminTrigger_RawDelete(t *testing.T) {
 	// Issue a raw DELETE directly through the explicit bypass executor —
 	// bypasses the application-level last-admin guard. The DB trigger must
 	// intercept this and raise P0001.
-	_, rawErr := roleRepo.db.ExecDirect(ctx,
+	_, rawErr := pgexec.ExecDirect(roleRepo.db, ctx,
 		"DELETE FROM role_assignments WHERE user_id = $1 AND role_id = 'admin'",
 		soloUser.ID,
 	)
@@ -534,7 +535,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count, "test setup: exactly one admin assignment required")
 
-	_, rawErr := roleRepo.db.ExecDirect(ctx,
+	_, rawErr := pgexec.ExecDirect(roleRepo.db, ctx,
 		"UPDATE users SET status = 'locked' WHERE id = $1", soloAdmin.ID)
 	require.Error(t, rawErr, "DB trigger must reject status demotion of sole effective admin")
 
@@ -565,7 +566,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 	_, err = roleRepo.AssignToUser(ctx, peer.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
-	_, rawErr := roleRepo.db.ExecDirect(ctx,
+	_, rawErr := pgexec.ExecDirect(roleRepo.db, ctx,
 		"UPDATE users SET status = 'locked' WHERE id = $1", target.ID)
 	require.NoError(t, rawErr, "DB trigger must allow status demotion when a peer effective admin remains")
 
@@ -595,7 +596,7 @@ func TestCountEffectiveAdmins_LockedAdminExcluded_PG(t *testing.T) {
 
 	// Demote the second admin to locked via a peer-allowed update.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		_, err := roleRepo.db.ExecDirect(txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedAdmin.ID)
+		_, err := pgexec.ExecDirect(roleRepo.db, txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedAdmin.ID)
 		return err
 	}))
 
@@ -639,7 +640,7 @@ func TestRemoveFromUserIfNotLast_LockedPeerDoesNotCount_PG(t *testing.T) {
 
 	// Demote the peer to locked via a peer-allowed update.
 	require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-		_, err := roleRepo.db.ExecDirect(txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedPeer.ID)
+		_, err := pgexec.ExecDirect(roleRepo.db, txCtx, "UPDATE users SET status = 'locked' WHERE id = $1", lockedPeer.ID)
 		return err
 	}))
 
@@ -700,7 +701,7 @@ func TestPGRoleRepo_EffectiveAdminExists_PG(t *testing.T) {
 		// Demote the new admin via tx (allowed since the original peer
 		// stays active).
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			_, err := roleRepo.db.ExecDirect(txCtx,
+			_, err := pgexec.ExecDirect(roleRepo.db, txCtx,
 				"UPDATE users SET status = 'locked' WHERE id = $1", extra.ID)
 			return err
 		}))
@@ -778,7 +779,7 @@ func TestLastAdminTrigger_ConcurrentCascadeDelete_Serialized(t *testing.T) {
 	for _, userID := range []string{u1.ID, u2.ID} {
 		userID := userID
 		go func() {
-			_, execErr := roleRepo.db.ExecDirect(ctx, "DELETE FROM users WHERE id = $1", userID)
+			_, execErr := pgexec.ExecDirect(roleRepo.db, ctx, "DELETE FROM users WHERE id = $1", userID)
 			results <- execErr
 		}()
 	}

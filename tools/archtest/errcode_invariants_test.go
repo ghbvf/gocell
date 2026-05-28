@@ -1883,31 +1883,29 @@ func mustParseGoFile(t *testing.T, path string) *ast.File {
 
 func collectPublicValueImplementers(file *ast.File) []string {
 	seen := map[string]struct{}{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil || fn.Name.Name != "publicValue" || len(fn.Recv.List) == 0 {
-			continue
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Recv == nil || fn.Name.Name != "publicValue" || len(fn.Recv.List) == 0 {
+			return
 		}
 		if name := detailReceiverTypeName(fn.Recv.List[0].Type); name != "" {
 			seen[name] = struct{}{}
 		}
-	}
+	})
 	return sortedSetKeys(seen)
 }
 
 func collectPublicDetailConstructors(file *ast.File) []string {
 	seen := map[string]struct{}{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
-			continue
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Recv != nil || !fn.Name.IsExported() || fn.Type.Results == nil {
+			return
 		}
 		for _, result := range fn.Type.Results.List {
 			if ident, ok := result.Type.(*ast.Ident); ok && ident.Name == "PublicDetail" {
 				seen[fn.Name.Name] = struct{}{}
 			}
 		}
-	}
+	})
 	return sortedSetKeys(seen)
 }
 

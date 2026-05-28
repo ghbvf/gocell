@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -44,7 +45,7 @@ var _ ports.UserRepository = (*PGUserRepo)(nil)
 // Rotate) need an explicit boundary. PGUserRepo's pattern is the
 // "single-statement repo" variant of the same dual-signal contract.
 type PGUserRepo struct {
-	db pgExecutor
+	db pgexec.PGExecutor
 	// txRunner is retained at construction time as policy declaration only —
 	// see the type godoc above. Repo methods read tx from ctx, not this field.
 	txRunner persistence.TxRunner
@@ -70,7 +71,7 @@ func NewPGUserRepo(
 			"accesscore.NewPGUserRepo: clock must not be nil")
 	}
 	return &PGUserRepo{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil
@@ -204,8 +205,12 @@ WHERE id = $1`
 	// updatePasswordSQL is the CAS-guarded password write. WHERE id=$4 AND
 	// password_version=$5 ensures that a stale view (from a concurrent change)
 	// results in 0 RowsAffected, which CheckVersionMatch translates to
-	// ErrVersionConflict (HTTP 409). RETURNING password_version gives the
-	// caller the new monotonic version without a second round-trip.
+	// ErrVersionConflict (HTTP 409). The AND status='active' predicate (#1017 F1)
+	// is the write-time backstop for a concurrent Lock/Suspend: a now-frozen
+	// account yields 0 rows and UpdatePassword re-reads to report
+	// ErrAuthUserNotActive (HTTP 403) instead of rewriting the credential.
+	// RETURNING password_version gives the caller the new monotonic version
+	// without a second round-trip.
 	//nolint:gosec // G101: SQL constant containing "password" column name, not a credential value
 	updatePasswordSQL = `
 UPDATE users
@@ -213,7 +218,7 @@ SET password_hash = $1,
     password_reset_required = $2,
     password_version = password_version + 1,
     updated_at = $3
-WHERE id = $4 AND password_version = $5
+WHERE id = $4 AND password_version = $5 AND status = 'active'
 RETURNING password_version`
 )
 
@@ -633,11 +638,21 @@ func (r *PGUserRepo) UpdatePassword(
 	).Scan(&newPV)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Distinguish "user does not exist" from "version mismatch".
-			if _, gerr := r.GetByID(ctx, userID); gerr != nil {
-				return 0, gerr
+			// 0 rows: re-read to disambiguate absent / inactive / version mismatch
+			// (the WHERE clause guards id, status='active', and password_version).
+			cur, gerr := r.GetByID(ctx, userID)
+			if gerr != nil {
+				return 0, gerr // user does not exist
 			}
-			// Row exists but version didn't match — CAS conflict.
+			// Inactive before version (#1017 F1): a concurrent freeze is a 403,
+			// even if the version also advanced.
+			if cur.Status() != domain.StatusActive {
+				return 0, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserNotActive,
+					"account is not active",
+					errcode.WithCategory(errcode.CategoryDomain),
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", userID))))
+			}
+			// Row active but version didn't match — CAS conflict.
 			return 0, cas.CheckVersionMatch(0, "user", userID)
 		}
 		return 0, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: update password", err)

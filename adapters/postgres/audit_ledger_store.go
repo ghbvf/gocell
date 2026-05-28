@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -114,7 +115,7 @@ LIMIT 1`
 // ref: google/trillian storage/log_storage.go ReadWriteTransaction pattern.
 // ref: adapters/postgres/refresh_store.go — advisory lock + ambient tx model.
 type LedgerStore struct {
-	db       pgExecutor
+	db       pgexec.PGExecutor
 	txRunner persistence.TxRunner
 	protocol *ledger.Protocol
 	clock    clock.Clock
@@ -154,7 +155,7 @@ func NewLedgerStore(
 			"postgres.NewLedgerStore: clock must not be nil")
 	}
 	return &LedgerStore{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		protocol: protocol,
 		clock:    clk,

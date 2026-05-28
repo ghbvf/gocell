@@ -188,8 +188,11 @@ func checkPassForVisibilityViolations(pass *Pass, ifaceSet *contractServiceIface
 	var out []httpVisibilityViolation
 	for _, file := range pass.Files {
 		rel := pass.Rel(file)
-		// Skip test files and generated files.
-		if strings.HasSuffix(rel, "_test.go") || pass.IsGenerated(file) {
+		// Skip test files. Generated packages were already filtered at
+		// function entry by the pkgPath check above
+		// (strings.Contains(pkgPath, "/generated/") → return nil),
+		// so the per-file IsGenerated check is dead code.
+		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
 

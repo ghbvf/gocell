@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
 )
 
 // depCheck runs all PhaseDep rules (DEP-01, DEP-02, DEP-03) in order and
@@ -52,12 +53,12 @@ func TestDEP01(t *testing.T) {
 			name: "belongsToCell matches key cellID — no error",
 			project: &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+					metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, ConsistencyLevel: "L1"},
 				},
 				Slices: map[string]*metadata.SliceMeta{
 					"accesscore/session-login": {
 						ID:            "session-login",
-						BelongsToCell: "accesscore",
+						BelongsToCell: metadatatest.CellIDAccessCore,
 					},
 				},
 				Contracts:  map[string]*metadata.ContractMeta{},
@@ -69,13 +70,13 @@ func TestDEP01(t *testing.T) {
 			name: "belongsToCell mismatches key cellID — error",
 			project: &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
-					"auditcore":  {ID: "auditcore", ConsistencyLevel: "L1"},
+					metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, ConsistencyLevel: "L1"},
+					metadatatest.CellIDAuditCore:  {ID: metadatatest.CellIDAuditCore, ConsistencyLevel: "L1"},
 				},
 				Slices: map[string]*metadata.SliceMeta{
 					"accesscore/session-login": {
 						ID:            "session-login",
-						BelongsToCell: "auditcore", // mismatch!
+						BelongsToCell: metadatatest.CellIDAuditCore, // mismatch!
 					},
 				},
 				Contracts:  map[string]*metadata.ContractMeta{},
@@ -109,20 +110,20 @@ func TestDEP02_CycleDetected(t *testing.T) {
 	// cell-b has slice with provider role on contract-ba, consumer is cell-a
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {ID: "cell-a", ConsistencyLevel: "L2"},
-			"cell-b": {ID: "cell-b", ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellA: {ID: metadatatest.CellIDCellA, ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellB: {ID: metadatatest.CellIDCellB, ConsistencyLevel: "L2"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-a": {
+			"cella/slice-a": {
 				ID:            "slice-a",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.a-to-b.v1", Role: "serve"},
 				},
 			},
-			"cell-b/slice-b": {
+			"cellb/slice-b": {
 				ID:            "slice-b",
-				BelongsToCell: "cell-b",
+				BelongsToCell: metadatatest.CellIDCellB,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.b-to-a.v1", Role: "serve"},
 				},
@@ -132,19 +133,19 @@ func TestDEP02_CycleDetected(t *testing.T) {
 			"http.a-to-b.v1": {
 				ID:        "http.a-to-b.v1",
 				Kind:      "http",
-				OwnerCell: "cell-a",
+				OwnerCell: metadatatest.CellIDCellA,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-a",
-					Clients: []string{"cell-b"},
+					Server:  metadatatest.CellIDCellA,
+					Clients: []string{metadatatest.CellIDCellB},
 				},
 			},
 			"http.b-to-a.v1": {
 				ID:        "http.b-to-a.v1",
 				Kind:      "http",
-				OwnerCell: "cell-b",
+				OwnerCell: metadatatest.CellIDCellB,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-b",
-					Clients: []string{"cell-a"},
+					Server:  metadatatest.CellIDCellB,
+					Clients: []string{metadatatest.CellIDCellA},
 				},
 			},
 		},
@@ -163,13 +164,13 @@ func TestDEP02_NoCycle(t *testing.T) {
 	// A→B (no cycle): cell-a provides, cell-b consumes
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {ID: "cell-a", ConsistencyLevel: "L2"},
-			"cell-b": {ID: "cell-b", ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellA: {ID: metadatatest.CellIDCellA, ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellB: {ID: metadatatest.CellIDCellB, ConsistencyLevel: "L2"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-a": {
+			"cella/slice-a": {
 				ID:            "slice-a",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.a-to-b.v1", Role: "serve"},
 				},
@@ -179,10 +180,10 @@ func TestDEP02_NoCycle(t *testing.T) {
 			"http.a-to-b.v1": {
 				ID:        "http.a-to-b.v1",
 				Kind:      "http",
-				OwnerCell: "cell-a",
+				OwnerCell: metadatatest.CellIDCellA,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-a",
-					Clients: []string{"cell-b"},
+					Server:  metadatatest.CellIDCellA,
+					Clients: []string{metadatatest.CellIDCellB},
 				},
 			},
 		},
@@ -198,12 +199,12 @@ func TestDEP02_NoCycle(t *testing.T) {
 func TestDEP02_SingleCellNoExternalDeps(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"lonely": {ID: "lonely", ConsistencyLevel: "L1"},
+			metadatatest.NewCellID("lonely"): {ID: metadatatest.NewCellID("lonely"), ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"lonely/only-slice": {
 				ID:            "only-slice",
-				BelongsToCell: "lonely",
+				BelongsToCell: metadatatest.NewCellID("lonely"),
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -219,13 +220,13 @@ func TestDEP02_SingleCellNoExternalDeps(t *testing.T) {
 func TestDEP02_UnknownKindWarning(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {ID: "cell-a", ConsistencyLevel: "L2"},
-			"cell-b": {ID: "cell-b", ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellA: {ID: metadatatest.CellIDCellA, ConsistencyLevel: "L2"},
+			metadatatest.CellIDCellB: {ID: metadatatest.CellIDCellB, ConsistencyLevel: "L2"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-x": {
+			"cella/slice-x": {
 				ID:            "slice-x",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "bad.kind.v1", Role: "serve"},
 				},
@@ -236,7 +237,7 @@ func TestDEP02_UnknownKindWarning(t *testing.T) {
 				ID:   "bad.kind.v1",
 				Kind: "grpc", // unknown kind
 				Endpoints: metadata.EndpointsMeta{
-					Server: "cell-a",
+					Server: metadatatest.CellIDCellA,
 				},
 			},
 		},
@@ -258,15 +259,15 @@ func TestDEP02_UnknownKindWarning(t *testing.T) {
 func TestDEP03_SameAssembly(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"app-core": {
-				ID:               "app-core",
+			metadatatest.CellIDAppCore: {
+				ID:               metadatatest.CellIDAppCore,
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				},
 			},
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -275,7 +276,7 @@ func TestDEP03_SameAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"main-bundle": {
 				ID:    "main-bundle",
-				Cells: []string{"app-core", "sharedcrypto"},
+				Cells: []string{metadatatest.CellIDAppCore, metadatatest.CellIDSharedCrypto},
 			},
 		},
 	}
@@ -289,15 +290,15 @@ func TestDEP03_SameAssembly(t *testing.T) {
 func TestDEP03_DifferentAssembly(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"app-core": {
-				ID:               "app-core",
+			metadatatest.CellIDAppCore: {
+				ID:               metadatatest.CellIDAppCore,
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				},
 			},
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -306,11 +307,11 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bundle-a": {
 				ID:    "bundle-a",
-				Cells: []string{"app-core"},
+				Cells: []string{metadatatest.CellIDAppCore},
 			},
 			"bundle-b": {
 				ID:    "bundle-b",
-				Cells: []string{"sharedcrypto"},
+				Cells: []string{metadatatest.CellIDSharedCrypto},
 			},
 		},
 	}
@@ -326,15 +327,15 @@ func TestDEP03_DifferentAssembly(t *testing.T) {
 func TestDEP03_NoAssemblies(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"app-core": {
-				ID:               "app-core",
+			metadatatest.CellIDAppCore: {
+				ID:               metadatatest.CellIDAppCore,
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				},
 			},
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -358,13 +359,13 @@ func TestCheckFailFast_StopsOnFirstError(t *testing.T) {
 	// from running far enough to produce its own error.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
-			"auditcore":  {ID: "auditcore", ConsistencyLevel: "L1"},
+			metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, ConsistencyLevel: "L1"},
+			metadatatest.CellIDAuditCore:  {ID: metadatatest.CellIDAuditCore, ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "auditcore", // mismatch triggers DEP-01 error
+				BelongsToCell: metadatatest.CellIDAuditCore, // mismatch triggers DEP-01 error
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -386,12 +387,12 @@ func TestCheckFailFast_StopsOnFirstError(t *testing.T) {
 func TestCheckFailFast_PassesWhenNoErrors(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+			metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "accesscore",
+				BelongsToCell: metadatatest.CellIDAccessCore,
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -408,15 +409,15 @@ func TestCheckFailFast_PassesWhenNoErrors(t *testing.T) {
 func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"app-core": {
-				ID:               "app-core",
+			metadatatest.CellIDAppCore: {
+				ID:               metadatatest.CellIDAppCore,
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
-					{Cell: "sharedcrypto", Reason: "hashing"},
+					{Cell: metadatatest.CellIDSharedCrypto, Reason: "hashing"},
 				},
 			},
-			"sharedcrypto": {
-				ID:               "sharedcrypto",
+			metadatatest.CellIDSharedCrypto: {
+				ID:               metadatatest.CellIDSharedCrypto,
 				ConsistencyLevel: "L0",
 			},
 		},
@@ -425,7 +426,7 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"bundle-a": {
 				ID:    "bundle-a",
-				Cells: []string{"sharedcrypto"}, // app-core not in any assembly
+				Cells: []string{metadatatest.CellIDSharedCrypto}, // app-core not in any assembly
 			},
 		},
 	}
@@ -459,27 +460,27 @@ func TestValidatorGraph_Acyclic(t *testing.T) {
 	// cell-a → cell-b (cell-a depends on cell-b as L0)
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {
-				ID:               "cell-a",
+			metadatatest.CellIDCellA: {
+				ID:               metadatatest.CellIDCellA,
 				ConsistencyLevel: "L2",
 				L0Dependencies:   nil,
 			},
-			"cell-b": {
-				ID:               "cell-b",
+			metadatatest.CellIDCellB: {
+				ID:               metadatatest.CellIDCellB,
 				ConsistencyLevel: "L0",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-a": {
+			"cella/slice-a": {
 				ID:            "slice-a",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.a-calls-b.v1", Role: "call"},
 				},
 			},
-			"cell-b/slice-b": {
+			"cellb/slice-b": {
 				ID:            "slice-b",
-				BelongsToCell: "cell-b",
+				BelongsToCell: metadatatest.CellIDCellB,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.a-calls-b.v1", Role: "serve"},
 				},
@@ -489,10 +490,10 @@ func TestValidatorGraph_Acyclic(t *testing.T) {
 			"http.a-calls-b.v1": {
 				ID:        "http.a-calls-b.v1",
 				Kind:      "http",
-				OwnerCell: "cell-b",
+				OwnerCell: metadatatest.CellIDCellB,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-b",
-					Clients: []string{"cell-a"},
+					Server:  metadatatest.CellIDCellB,
+					Clients: []string{metadatatest.CellIDCellA},
 				},
 			},
 		},
@@ -504,13 +505,13 @@ func TestValidatorGraph_Acyclic(t *testing.T) {
 
 	// Nodes sorted
 	assert.True(t, sort.StringsAreSorted(g.Nodes), "Nodes must be sorted")
-	assert.Contains(t, g.Nodes, "cell-a")
-	assert.Contains(t, g.Nodes, "cell-b")
+	assert.Contains(t, g.Nodes, metadatatest.CellIDCellA)
+	assert.Contains(t, g.Nodes, metadatatest.CellIDCellB)
 
 	// Should have at least one edge (cell-a → cell-b)
 	found := false
 	for _, e := range g.Edges {
-		if e.From == "cell-a" && e.To == "cell-b" {
+		if e.From == metadatatest.CellIDCellA && e.To == metadatatest.CellIDCellB {
 			found = true
 		}
 	}
@@ -520,7 +521,7 @@ func TestValidatorGraph_Acyclic(t *testing.T) {
 func TestValidatorGraph_IsolatedCells(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"alone": {ID: "alone", ConsistencyLevel: "L1"},
+			metadatatest.NewCellID("alone"): {ID: metadatatest.NewCellID("alone"), ConsistencyLevel: "L1"},
 		},
 		Slices:     map[string]*metadata.SliceMeta{},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -529,27 +530,27 @@ func TestValidatorGraph_IsolatedCells(t *testing.T) {
 	dc := NewValidator(project, "", clock.Real())
 	g, errs := dc.Graph()
 	assert.Empty(t, errs)
-	assert.Contains(t, g.Nodes, "alone", "isolated cell must appear in Nodes")
+	assert.Contains(t, g.Nodes, metadatatest.NewCellID("alone"), "isolated cell must appear in Nodes")
 }
 
 func TestValidatorGraph_DeterministicOrder(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {ID: "cell-a", ConsistencyLevel: "L1"},
-			"cell-b": {ID: "cell-b", ConsistencyLevel: "L1"},
-			"cell-c": {ID: "cell-c", ConsistencyLevel: "L1"},
+			metadatatest.CellIDCellA: {ID: metadatatest.CellIDCellA, ConsistencyLevel: "L1"},
+			metadatatest.CellIDCellB: {ID: metadatatest.CellIDCellB, ConsistencyLevel: "L1"},
+			metadatatest.CellIDCellC: {ID: metadatatest.CellIDCellC, ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-a": {
+			"cella/slice-a": {
 				ID:            "slice-a",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.a-to-b.v1", Role: "serve"},
 				},
 			},
-			"cell-b/slice-b": {
+			"cellb/slice-b": {
 				ID:            "slice-b",
-				BelongsToCell: "cell-b",
+				BelongsToCell: metadatatest.CellIDCellB,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.b-to-c.v1", Role: "serve"},
 				},
@@ -560,16 +561,16 @@ func TestValidatorGraph_DeterministicOrder(t *testing.T) {
 				ID:   "http.a-to-b.v1",
 				Kind: "http",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-a",
-					Clients: []string{"cell-b"},
+					Server:  metadatatest.CellIDCellA,
+					Clients: []string{metadatatest.CellIDCellB},
 				},
 			},
 			"http.b-to-c.v1": {
 				ID:   "http.b-to-c.v1",
 				Kind: "http",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-b",
-					Clients: []string{"cell-c"},
+					Server:  metadatatest.CellIDCellB,
+					Clients: []string{metadatatest.CellIDCellC},
 				},
 			},
 		},
@@ -598,12 +599,12 @@ func TestValidatorGraph_PropagatesValidationErrors(t *testing.T) {
 	// (cannot resolve consumers for unknown contract kind).
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-x": {ID: "cell-x", ConsistencyLevel: "L2"},
+			metadatatest.NewCellID("cellx"): {ID: metadatatest.NewCellID("cellx"), ConsistencyLevel: "L2"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-x/slice-x": {
+			"cellx/slice-x": {
 				ID:            "slice-x",
-				BelongsToCell: "cell-x",
+				BelongsToCell: metadatatest.NewCellID("cellx"),
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "grpc.unknown.v1", Role: "serve"},
 				},
@@ -614,7 +615,7 @@ func TestValidatorGraph_PropagatesValidationErrors(t *testing.T) {
 				ID:   "grpc.unknown.v1",
 				Kind: "grpc", // unknown kind → consumers resolution fails
 				Endpoints: metadata.EndpointsMeta{
-					Server: "cell-x",
+					Server: metadatatest.NewCellID("cellx"),
 				},
 			},
 		},
@@ -656,12 +657,12 @@ func TestGraph_ActorNodesFiltered(t *testing.T) {
 	// Without the filter, "webclient" would be added as a consumerCell node.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"cell-a": {ID: "cell-a", ConsistencyLevel: "L1"},
+			metadatatest.CellIDCellA: {ID: metadatatest.CellIDCellA, ConsistencyLevel: "L1"},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"cell-a/slice-a": {
+			"cella/slice-a": {
 				ID:            "slice-a",
-				BelongsToCell: "cell-a",
+				BelongsToCell: metadatatest.CellIDCellA,
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.api.v1", Role: "serve"},
 				},
@@ -671,10 +672,10 @@ func TestGraph_ActorNodesFiltered(t *testing.T) {
 			"http.api.v1": {
 				ID:        "http.api.v1",
 				Kind:      "http",
-				OwnerCell: "cell-a",
+				OwnerCell: metadatatest.CellIDCellA,
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "cell-a",
-					Clients: []string{"webclient"}, // actor, not a cell
+					Server:  metadatatest.CellIDCellA,
+					Clients: []string{metadatatest.NewCellID("webclient")}, // actor, not a cell
 				},
 			},
 		},

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -37,7 +38,7 @@ import (
 // Write paths (Create) extract any ambient pgx.Tx from ctx via
 // kernel/persistence.TxCtxKey. When no tx is present the pool is used directly.
 type PGDeviceRepository struct {
-	db       pgExecutor
+	db       pgexec.PGExecutor
 	txRunner persistence.TxRunner
 	clock    clock.Clock
 }
@@ -60,7 +61,7 @@ func NewPGDeviceRepository(pool *pgxpool.Pool, txRunner persistence.TxRunner, cl
 			"devicecell.NewPGDeviceRepository: clock must not be nil")
 	}
 	return &PGDeviceRepository{
-		db:       newPGExecutor(pool),
+		db:       pgexec.New(pool),
 		txRunner: txRunner,
 		clock:    clk,
 	}, nil
@@ -305,7 +306,7 @@ func (r *PGDeviceRepository) RepoReady(ctx context.Context) error {
 	err := r.db.QueryRow(ctx, `SELECT 1 FROM devices LIMIT 1`).Scan(&dummy)
 	// pgx.ErrNoRows means the table exists but is empty — that is healthy.
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("device_repo: readiness probe: %w", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "device_repo: readiness probe", err)
 	}
 	return nil
 }
