@@ -29,27 +29,41 @@ type Heartbeater interface {
 
 // runHeartbeat runs in its own goroutine and beats the lease at each ticker
 // interval until:
-//   - ctx is canceled (clean shutdown — Execute called stopHB), or
+//   - ctx is canceled (clean shutdown — caller called stopHB), or
 //   - Heartbeat returns ok=false (stale lease — another coordinator took over).
 //
-// On a stale lease it invokes onStale (which the executor wires to cancel the
-// running step's context with errLeaseLost) before returning, so the orphaned
-// step stops executing rather than racing to commit under a lost lease. The
-// lease-lost log is Warn (degraded operation per observability.md), not Info.
+// On a stale lease it invokes onStale (which the caller wires to cancel the
+// running step's / fn's context with errLeaseLost) before returning, so the
+// orphaned work stops executing rather than racing to commit under a lost
+// lease. The lease-lost log is Info (expected handoff in multi-coordinator
+// deployments, per issue #1181 §6), not Warn. Infrastructure errors remain
+// Warn (degraded operation per observability.md).
 //
 // Infrastructure errors from Heartbeat are logged as Warn and the goroutine
-// continues to the next tick (fail-open for transient infra issues).
+// continues to the next tick (fail-open for transient infra issues, matching
+// Temporal's heartbeat semantics — see ref note).
+//
+// onHBFailure is invoked synchronously on every tick that fails or observes a
+// stale lease, with the reason classified. It is best-effort: it MUST NOT
+// block (observers must be non-blocking — see Observer godoc); a slow observer
+// would delay the next heartbeat tick and risk dropping the lease.
 //
 // The ticker is stopped before the function returns; callers using
-// clockmock.FakeClock can assert PendingTickers()==0 after joining this goroutine.
+// clockmock.FakeClock can assert PendingTickers()==0 after joining this
+// goroutine.
+//
+// ref: temporalio/sdk-go internal_task_handlers.go — transient heartbeat
+// failures are logged and retried on the next interval; only server-side
+// CancelRequested (≈ ok=false) cancels the activity ctx.
 func runHeartbeat(
 	ctx context.Context,
 	clk clock.Clock,
 	hb Heartbeater,
-	instanceID, leaseID idutil.SafeID,
+	instanceID, leaseID, definitionID idutil.SafeID,
 	interval, leaseDuration time.Duration,
 	logger *slog.Logger,
 	onStale func(),
+	onHBFailure func(reason HeartbeatFailureReason),
 ) {
 	ticker := clk.NewTicker(interval)
 	defer ticker.Stop()
@@ -61,19 +75,36 @@ func runHeartbeat(
 		case <-ticker.C():
 			ok, err := hb.Heartbeat(ctx, instanceID, leaseID, leaseDuration)
 			if err != nil {
+				// #1181 F12: include reason + definition_id so per-definition
+				// dashboards can group heartbeat failures without parsing the
+				// observer counter labels separately.
 				logger.WarnContext(ctx, "saga executor: heartbeat failed",
 					slog.String("instance_id", string(instanceID)),
+					slog.String("definition_id", string(definitionID)),
 					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureInfraError)),
 					slog.Any("error", err),
 				)
+				onHBFailure(HeartbeatFailureInfraError)
 				continue
 			}
 			if !ok {
-				logger.WarnContext(ctx, "saga executor: lease lost (stale); canceling step",
+				logger.InfoContext(ctx, "saga executor: lease lost (stale); canceling step",
 					slog.String("instance_id", string(instanceID)),
+					slog.String("definition_id", string(definitionID)),
 					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureStaleLease)),
 				)
+				// #1210 round-N F2: onStale FIRST — cancel the worker ctx so
+				// the in-flight step can bail immediately. onHBFailure is
+				// synchronous and potentially slow (observer implementations
+				// must be non-blocking per Observer godoc, but recover() guards
+				// the Executor goroutine only, not runHeartbeat's caller stack).
+				// Canceling the worker first ensures step authors selecting on
+				// ctx.Done() observe the cancellation without waiting for the
+				// observer call to complete.
 				onStale()
+				onHBFailure(HeartbeatFailureStaleLease)
 				return
 			}
 		}

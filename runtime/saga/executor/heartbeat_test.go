@@ -18,6 +18,11 @@ import (
 // the lease-lost cancellation path.
 func noStale() {}
 
+// noHBFailure is a no-op onHBFailure callback for heartbeat tests that don't
+// assert observer fan-out. Tests that DO want to assert reason classification
+// pass a closure recording reasons; see observer_test.go.
+func noHBFailure(HeartbeatFailureReason) {}
+
 // fakeHeartbeater is a test double that records Heartbeat calls. Each call also
 // pulses beat (buffered) so tests can synchronize via testwait.Deterministic
 // instead of polling — the channel send is the happens-before sync point after
@@ -90,7 +95,7 @@ func TestHeartbeat_TickerFiresOnAdvance(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, instID, leaseID, interval, leaseDur, noopLogger(), noStale)
+		runHeartbeat(ctx, fc, hb, instID, leaseID, "def-x", interval, leaseDur, noopLogger(), noStale, noHBFailure)
 	}()
 
 	// Wait for the goroutine to register its ticker.
@@ -134,7 +139,7 @@ func TestHeartbeat_NoLeakOnCancel(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, instID, leaseID, testtime.D5s, testtime.D30s, noopLogger(), noStale)
+		runHeartbeat(ctx, fc, hb, instID, leaseID, "def-x", testtime.D5s, testtime.D30s, noopLogger(), noStale, noHBFailure)
 	}()
 
 	// Wait for ticker registration then cancel.
@@ -162,7 +167,7 @@ func TestHeartbeat_StaleLease(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, instID, leaseID, interval, testtime.D30s, noopLogger(), noStale)
+		runHeartbeat(ctx, fc, hb, instID, leaseID, "def-x", interval, testtime.D30s, noopLogger(), noStale, noHBFailure)
 	}()
 
 	// Wait for ticker to be registered.
@@ -213,7 +218,7 @@ func TestHeartbeat_StaleLease_InvokesOnStale(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, instID, leaseID, interval, testtime.D30s, noopLogger(), onStale)
+		runHeartbeat(ctx, fc, hb, instID, leaseID, "def-x", interval, testtime.D30s, noopLogger(), onStale, noHBFailure)
 	}()
 
 	waitForOneTicker(t, fc)
@@ -239,7 +244,7 @@ func TestHeartbeat_TransientError(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, instID, leaseID, interval, testtime.D30s, noopLogger(), noStale)
+		runHeartbeat(ctx, fc, hb, instID, leaseID, "def-x", interval, testtime.D30s, noopLogger(), noStale, noHBFailure)
 	}()
 
 	// Wait for ticker registration.

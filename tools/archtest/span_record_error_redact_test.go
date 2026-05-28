@@ -104,6 +104,8 @@ const spanCoverageViolMsg = "production file calls span.RecordError(...) but its
 var spanRecordErrorScanDirs = []string{
 	"kernel/wrapper",
 	"runtime/http/middleware",
+	"runtime/saga",
+	"runtime/saga/executor",
 }
 
 // redactionLocalName returns the local identifier used in file to refer to

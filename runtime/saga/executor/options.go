@@ -3,6 +3,9 @@ package executor
 import (
 	"log/slog"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Option is a functional option for Executor construction.
@@ -20,23 +23,75 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithHeartbeatInterval is a direct-assign option. Category: measure-then-validate.
-// Sets the interval between lease heartbeat calls. Zero or negative values
-// are stored and rejected by NewExecutor's post-option validation
-// (heartbeatInterval must be > 0 and heartbeatInterval*2 < leaseDuration).
+// WithHeartbeatInterval is a direct-assign option.
+// Zero or negative values are stored and rejected by NewExecutor's post-option
+// validation (direct-assign, no nil guard).
 func WithHeartbeatInterval(d time.Duration) Option {
 	return func(e *Executor) {
 		e.heartbeatInterval = d
 	}
 }
 
-// WithLeaseDuration is a direct-assign option. Category: measure-then-validate.
-// Sets the lease duration passed to each Heartbeat call. Zero or negative
-// values are stored and rejected by NewExecutor's post-option validation
-// (leaseDuration must be > 0 and heartbeatInterval*2 < leaseDuration).
+// WithLeaseDuration is a direct-assign option.
+// Zero or negative values are stored and rejected by NewExecutor's post-option
+// validation (direct-assign, no nil guard).
 func WithLeaseDuration(d time.Duration) Option {
 	return func(e *Executor) {
 		e.leaseDuration = d
+	}
+}
+
+// WithObserverCallDeadline overrides the per-Observer-call bounded wait
+// (default DefaultObserverCallDeadline = 5s). Non-positive values are silently
+// ignored — the constructor default is kept. Primarily a test seam: package
+// tests use a short deadline so a deliberately blocking observer surfaces the
+// timeout in milliseconds rather than seconds. Production callers should rely
+// on the default; the only reason to extend it is an observer with a
+// known-bounded but slow remote dependency (rare). #1210 round-3 F2.
+func WithObserverCallDeadline(d time.Duration) Option {
+	return func(e *Executor) {
+		if d > 0 {
+			e.observerCallDeadline = d
+		}
+	}
+}
+
+// WithTracer is a cumulative builder option. Category: builder-noop.
+// Sets the Tracer used for per-step Execute / Compensate spans
+// (`saga.executor.step.run` / `saga.executor.step.compensate`). A nil tracer
+// is silently ignored; the constructor default (wrapper.NoopTracer{}) is
+// kept. Safe to call multiple times; last non-nil value wins.
+//
+// Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md):
+// Tracer is an optional adapter wiring, not a fail-fast requirement —
+// NoopTracer is a correct zero-allocation default for tests and dev mode.
+// Typed-nil (e.g. (*adapters/otel.Tracer)(nil)) is rejected via
+// validation.IsNilInterface (#1181 F9) so a downstream tracer.Start call
+// never dereferences a nil receiver.
+func WithTracer(t wrapper.Tracer) Option {
+	return func(e *Executor) {
+		if !validation.IsNilInterface(t) {
+			e.tracer = t
+		}
+	}
+}
+
+// WithObserver is a cumulative builder option. Category: builder-noop.
+// Sets the Observer that receives outcome / retry / heartbeat-failure events.
+// A nil observer is silently ignored; the constructor's default (NopObserver)
+// is kept. Safe to call multiple times; last non-nil value wins.
+//
+// Builder-noop choice rationale (.claude/rules/gocell/runtime-api.md): Observer
+// is an optional best-effort sink, not a wiring-required dependency. NopObserver
+// is a correct zero-value default. New composition roots may attach a metrics
+// collector without forcing every test to inject one. Typed-nil (e.g. a nil
+// *SagaStepCollector) is rejected via validation.IsNilInterface (#1181 F8)
+// so a downstream method call never dereferences a nil receiver.
+func WithObserver(o Observer) Option {
+	return func(e *Executor) {
+		if !validation.IsNilInterface(o) {
+			e.observer = o
+		}
 	}
 }
 

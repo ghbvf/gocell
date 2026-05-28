@@ -480,7 +480,7 @@ go run ./cmd/gocell validate  # 0 error
 | R4 | PR-08 archtest `SAGA-STEP-COMPENSATE-PURE-01` 误伤合法用例 | 中（30%） | 假阳性 | 反向 self-test 覆盖 happy + 边缘；evaluation 走 typed `*types.Info.Selections` 而非字符串锚点 |
 | R5 | 单 saga instance 单 leader 在生产 N 进程下产生瓶颈 | 低（10%） | 性能问题 | 第一版 leader 颗粒度到 instance（不是 definition），并行度自然 = active instance 数；如需更高并行再做 step-level sharding（不属本 PR 链）|
 | R6 | AfterCommit hook 被滥用做 stateful 副作用 | 高（60%）| 反模式扩散 | PR-00 同 PR 落 archtest `AFTERCOMMIT-HOOK-PURE-TRANSIENT-01` Hard 拦截 |
-| R7 | Compensate 失败的二级补偿 | 中（35%） | 长尾失败 | journal.MarkStepCompensateFailed → 写 dead-letter saga 表 + ops 手工介入 runbook（PR-10）；不在框架内做 retry of compensate |
+| R7 | Compensate 失败的二级补偿 | 中（35%） | 长尾失败 | 已由 #1210 C6 落地 StatusCompensationFailed 独立终态闭环；dead-letter saga 表方案废弃。CompensateFunc 失败时写 KindStepCompensationFailed + 终态 StatusCompensationFailed，ops 通过 journal 查询定位，手工介入 runbook 待补（参见 docs/ops/alerting-rules.md §Saga）。 |
 
 ---
 

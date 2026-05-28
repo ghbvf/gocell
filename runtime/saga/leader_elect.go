@@ -31,7 +31,7 @@ const LeaderElectModeLabel = "leader_elect"
 // by another process are skipped this tick (no-lock → skip), and the lock is
 // released after the drive. The lock TTL is Config.LeaseDuration; distlock is
 // auto-renewed by distlock's shared manager goroutine and the journal lease is
-// renewed independently by heartbeatLoop, both during the hold.
+// renewed by the Executor's per-step heartbeat goroutine, both during the hold.
 //
 // distlock here is an efficiency lock, NOT the correctness boundary: it shrinks
 // the window in which two coordinators concurrently run a Step.Run body, but if

@@ -427,6 +427,51 @@ The runtime no longer imposes a hard-coded time budget on probes —
 `CheckCtxRespected`'s budget is caller-supplied and only affects the
 developer test, not production behaviour.
 
+## Saga probes
+
+### saga_coordinator_ready (deferred to saga-as-cell migration)
+
+The `saga_coordinator_ready` ProbeName is declared in `runtime/saga` (PR #1210 C7) but is
+**not yet registered** with any cell — cell-side `RegisterReadiness` wiring lands after the
+saga-as-cell migration tracked in #978. Until that migration ships, this probe does **not**
+appear in `/readyz?verbose` output. After migration it will report journal backend availability
+for the saga coordinator (same semantics as the `*_repo_ready` cell probes).
+
+#### Saga instance lifecycle and readyz semantics
+
+A saga instance progresses through the following status values (iota+1 constants in
+`kernel/saga`):
+
+| Status | Value | Phase | Terminal? |
+|---|---|---|---|
+| `Pending` | 1 | Not yet started | No |
+| `Running` | 2 | Executing steps forward | No |
+| `Compensating` | 3 | A step failed; rolling back in reverse | No |
+| `Succeeded` | 4 | All steps committed | Yes |
+| `Failed` | 5 | Forward failure, no rollback entered | Yes |
+| `Compensated` | 6 | Rollback completed cleanly | Yes |
+| `Expired` | 7 | Overall timeout elapsed | Yes |
+| `CompensationFailed` | 8 | Rollback itself encountered a step failure | Yes |
+
+`saga_coordinator_ready` is a **Coordinator daemon-level probe** — it reports whether the
+leader election is established and the heartbeat tick is healthy. It is **not** a per-instance
+probe. The probe does not distinguish between running instance statuses (`Pending` / `Running`
+/ `Compensating`); those are normal lifecycle states, not infrastructure faults.
+
+**`Compensating` and `CompensationFailed` do not affect readyz.** Both are business-lifecycle
+statuses:
+
+- `Compensating` is a transient non-terminal state; the Coordinator drives it to a terminal
+  status (`Compensated`, `CompensationFailed`, or `Expired`).
+- `CompensationFailed` (introduced by PR #1210, status=8) is a terminal state indicating the
+  rollback phase encountered at least one `CompensateFunc` error. It is structurally distinct
+  from `Failed` (forward failure, no rollback) — operators can distinguish the two root causes
+  by reading the terminal status alone. This is a business-level outcome, not a Coordinator
+  daemon fault.
+
+Ops diagnostics for `CompensationFailed` instances use the `saga_events` table
+(see `docs/ops/alerting-rules.md` §Saga runbook), not readyz.
+
 ## Concurrent probe storms
 
 Concurrent `/readyz` requests (kubelet + LB + manual curl) are
