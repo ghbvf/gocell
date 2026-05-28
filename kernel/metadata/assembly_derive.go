@@ -58,19 +58,27 @@ func applyAssemblyDerivations(pm *ProjectMeta) {
 
 func deriveAssembly(pm *ProjectMeta, asm *AssemblyMeta) {
 	if asm.Build.Entrypoint == "" {
-		// Assemblies under examples/ derive their entrypoint adjacent to
-		// the assembly.yaml file ({assembly_dir}/main.go) — preserves the
-		// "identity by location" principle without re-naming the
-		// "examples" path literal outside the Locator funnel
-		// (LOCATOR-DISCOVERY-FUNNEL-01). IsExamplePath funnels the
-		// classification decision through locator.go. All other assemblies
-		// default to cmd/{id}/main.go.
+		// Entrypoint derivation follows "identity by location" for assemblies
+		// whose file lives outside the conventional assemblies/<id>/ directory
+		// (examples subtree, Manifest-mode custom layout). For those, the
+		// entrypoint is the main.go adjacent to the assembly.yaml.
+		//
+		// Conventional assemblies (assemblies/<id>/assembly.yaml) keep the
+		// historical cmd/<id>/main.go entrypoint so that the conventional
+		// starter layout is not silently broken — "cmd" is a conventional layout
+		// token and is allowlisted in LOCATOR-DISCOVERY-FUNNEL-01.A5 for this
+		// file only (see tools/archtest/locator_discovery_funnel_test.go godoc).
 		//
 		// ref: helm/helm pkg/chartutil/create.go, kustomize-sigs
 		// pkg/types/kustomization.go — identity by location.
-		if IsExamplePath(asm.File) {
+		if asm.File != "" && !IsConventionalAssemblyPath(asm.File) {
+			// Non-conventional layout (examples/, Manifest-mode custom path):
+			// use identity-by-location derivation.
 			asm.Build.Entrypoint = path.Join(path.Dir(filepath.ToSlash(asm.File)), "main.go")
 		} else {
+			// Conventional layout (assemblies/<id>/) or unset File: preserve
+			// the historical cmd/<id>/main.go entrypoint so the conventional
+			// starter layout is not silently broken.
 			asm.Build.Entrypoint = filepath.ToSlash(filepath.Join("cmd", asm.ID, "main.go"))
 		}
 		slog.Debug("metadata: assembly entrypoint derived",

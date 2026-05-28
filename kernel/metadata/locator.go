@@ -272,6 +272,19 @@ func IsExamplePath(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "examples/")
 }
 
+// IsConventionalAssemblyPath reports whether p is an assembly YAML file under
+// the conventional assemblies/<id>/ directory (e.g.
+// "assemblies/corebundle/assembly.yaml"). Exposed here so the "assemblies/"
+// path-prefix literal stays inside the Locator funnel —
+// see LOCATOR-DISCOVERY-FUNNEL-01.A2a.
+//
+// Returns false for examples/, Manifest-mode custom paths, and an empty
+// string. Callers (e.g. deriveAssembly) check for empty file before calling
+// and apply convention-default behavior for that case.
+func IsConventionalAssemblyPath(p string) bool {
+	return strings.HasPrefix(filepath.ToSlash(p), "assemblies/")
+}
+
 // resolveMode applies the requested mode (or auto-detection) and pre-loads
 // the manifest if Manifest mode is selected. Emits a structured slog.Info
 // once the mode is decided so CI logs make the active layout explicit (CI

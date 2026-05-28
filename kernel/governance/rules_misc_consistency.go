@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -364,7 +365,12 @@ func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[st
 	topics := map[string]struct{}{}
 	var results []ValidationResult
 
-	cellDir := filepath.Join(root, "cells", ref.cellID)
+	// Derive cellDir from the slice's directory (ref.dir is slash-separated,
+	// e.g. "cells/accesscore/slices/sessionlogin"). The cell directory is two
+	// levels up from the slice directory. Using path.Dir twice avoids
+	// hardcoding the "cells" layout token, satisfying
+	// LOCATOR-DISCOVERY-FUNNEL-01.A5.
+	cellDir := filepath.Join(root, filepath.FromSlash(path.Dir(path.Dir(ref.dir))))
 	pkgConsts, constResults := buildPkgConsts(cellDir, fileForError)
 	results = append(results, constResults...)
 	sliceDir := filepath.Join(root, filepath.FromSlash(ref.dir))

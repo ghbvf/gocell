@@ -327,15 +327,28 @@ func checkSliceCoverage(args []string) error {
 func sliceCoverageForCell(root string, project *metadata.ProjectMeta, cid string) []governance.ValidationResult {
 	var results []governance.ValidationResult
 
-	results = append(results, sliceDirCheck(root, cid)...)
+	cell := project.Cells[cid]
+	results = append(results, sliceDirCheck(root, cid, cell)...)
 	results = append(results, sliceMetaCheck(project, cid)...)
 	return results
 }
 
-// sliceDirCheck verifies every subdir under cells/<cid>/slices/ has a slice.yaml.
-func sliceDirCheck(root, cid string) []governance.ValidationResult {
+// sliceDirCheck verifies every subdir under <cellDir>/slices/ has a slice.yaml.
+// The slices directory is derived from cell.File (the path to cell.yaml relative
+// to the project root), which satisfies LOCATOR-DISCOVERY-FUNNEL-01.A5 by
+// avoiding the hardcoded "cells" layout token. cid is used only for human-readable
+// messages; cell must be non-nil.
+func sliceDirCheck(root, cid string, cell *metadata.CellMeta) []governance.ValidationResult {
+	// Derive the slices directory from the cell's file path:
+	//   cell.File = "cells/accesscore/cell.yaml"
+	//   cellDir   = "cells/accesscore"
+	//   slicesDir = "<root>/cells/accesscore/slices"
+	// This works uniformly for conventional and Manifest layouts.
+	cellDir := filepath.Dir(filepath.FromSlash(cell.File))
+	slicesRelDir := filepath.ToSlash(filepath.Join(cellDir, "slices"))
+	slicesDir := filepath.Join(root, cellDir, "slices")
+
 	var results []governance.ValidationResult
-	slicesDir := filepath.Join(root, "cells", cid, "slices")
 	entries, err := os.ReadDir(slicesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -345,9 +358,9 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 			Code:      governance.RuleCode("CHECK-SLICE-DIR-READ-ERROR"),
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueInvalid,
-			File:      filepath.ToSlash(filepath.Join("cells", cid, "slices")),
+			File:      slicesRelDir,
 			Message:   fmt.Sprintf("cannot read slices dir for cell %q: %v", cid, err),
-			Fix:       "ensure the cells/<cellID>/slices/ directory exists and is readable",
+			Fix:       "ensure the slices/ directory exists and is readable",
 		}}
 	}
 	for _, e := range entries {
@@ -362,8 +375,8 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
 				Message:   fmt.Sprintf("cell %q: slices/%s has no slice.yaml", cid, e.Name()),
-				Fix: fmt.Sprintf("add a slice.yaml to cells/%s/slices/%s/ declaring the slice id, "+
-					"belongsToCell, contractUsages, and verify fields", cid, e.Name()),
+				Fix: fmt.Sprintf("add a slice.yaml to %s/slices/%s/ declaring the slice id, "+
+					"belongsToCell, contractUsages, and verify fields", cellDir, e.Name()),
 			})
 		}
 	}
