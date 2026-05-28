@@ -44,8 +44,9 @@ type Parser struct {
 
 // NewParser creates a Parser that reads from the given filesystem root. The
 // root should point to the project root directory (containing go.mod). Pass
-// LocatorOption to override the auto-detected layout (e.g.,
-// WithLocatorMode(LocatorManifest) for CI override).
+// LocatorOption to override the auto-detected layout — e.g.,
+// WithLocatorMode(LocatorConventional) to lock CI against accidental manifest
+// detection, or WithLocatorMode(LocatorManifest) for an external-repo layout.
 func NewParser(root string, opts ...LocatorOption) *Parser {
 	return &Parser{root: root, locatorOpts: opts}
 }
