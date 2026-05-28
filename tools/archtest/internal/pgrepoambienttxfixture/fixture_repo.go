@@ -55,40 +55,50 @@ func NewGoodRepo(pool *pgxpool.Pool) pgexec.PGExecutor { //nolint:unused // GREE
 	return pgexec.New(pool)
 }
 
-// fixtureReasonConst is a const identifier (not a callsite string literal),
-// used to prove Approve(constIdent) is rejected by R3.
-const fixtureReasonConst = "kebab-from-const"
+// fixtureLocalReason is a locally-declared ApprovalReason constant in the
+// fixture package. Although its underlying type matches the catalog newtype,
+// archtest R3 must reject Approve(fixtureLocalReason) because the constant is
+// not declared in the sanctioned pkg/pgrepoapproved package — only catalog
+// constants minted there are reachable approvals.
+const fixtureLocalReason pgrepoapproved.ApprovalReason = "fixture-local-reason" //nolint:unused // RED fixture
 
-// badR3ConstIdentReason: Approve's arg is a const identifier, not a BasicLit.
-// R3 must flag the ExecDirect callsite.
-func (r goodRepo) badR3ConstIdentReason(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve(fixtureReasonConst), r.db, ctx, "SELECT 1")
+// badR3LocalConst: Approve's arg is a locally-declared ApprovalReason const
+// outside pkg/pgrepoapproved. R3 must flag the ExecDirect callsite — gate #5
+// checks the const's package path equals the canonical catalog path.
+func (r goodRepo) badR3LocalConst(ctx context.Context) { //nolint:unused // RED fixture
+	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve(fixtureLocalReason), r.db, ctx, "SELECT 1")
 }
 
-// badR3ConcatReason: Approve's arg is a "a"+"b" BinaryExpr, not a BasicLit.
-func (r goodRepo) badR3ConcatReason(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve("ab-"+"cd-concat"), r.db, ctx, "SELECT 1")
-}
-
-// badR3EmptyReason: empty-string reason fails the kebab-case regex.
-func (r goodRepo) badR3EmptyReason(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve(""), r.db, ctx, "SELECT 1")
-}
-
-// badR3PlaceholderReason: "todo" matches the placeholder reject regex.
-func (r goodRepo) badR3PlaceholderReason(ctx context.Context) { //nolint:unused // RED fixture
-	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve("todo"), r.db, ctx, "SELECT 1")
+// badR3TypeConversion: Approve's arg is a type conversion expression
+// (pgrepoapproved.ApprovalReason("…")) rather than a declared catalog const.
+// R3 must flag — gate #4 checks the arg resolves to *types.Const.
+func (r goodRepo) badR3TypeConversion(ctx context.Context) { //nolint:unused // RED fixture
+	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.ApprovalReason("type-conv-orphan")), r.db, ctx, "SELECT 1")
 }
 
 // badR3ReusedApproval: approval is pre-constructed into a variable and passed
 // as an *ast.Ident, not the sanctioned inline Approve(literal) CallExpr. R3
 // must flag (no sharing / reuse of approval tokens across callsites).
 func (r goodRepo) badR3ReusedApproval(ctx context.Context) { //nolint:unused // RED fixture
-	a := pgrepoapproved.Approve("reused-approval")
+	a := pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade)
 	_, _ = pgexec.ExecDirect(a, r.db, ctx, "SELECT 1")
 }
 
-// goodR3 is GREEN: inline Approve(kebab-literal) bound to the ExecDirect call.
+// goodR3 is GREEN: inline Approve(catalog-const) bound to the ExecDirect call.
 func (r goodRepo) goodR3(ctx context.Context) { //nolint:unused // GREEN fixture
-	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve("fixture-green-inline"), r.db, ctx, "SELECT 1")
+	_, _ = pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade), r.db, ctx, "SELECT 1")
+}
+
+// badR4OrphanDiscarded: orphan Approve callsite — return value goes to the
+// blank identifier, never reaches an ExecDirect. R4 must flag.
+func badR4OrphanDiscarded() { //nolint:unused // RED fixture
+	_ = pgrepoapproved.Approve(pgrepoapproved.IntegrationTestLockUser)
+}
+
+// badR4OrphanAssigned: orphan Approve callsite — assigned to a local variable
+// that is never passed to ExecDirect. R4 must flag (the Approve call itself
+// is the orphan, regardless of what happens to the resulting variable).
+func badR4OrphanAssigned() { //nolint:unused // RED fixture
+	a := pgrepoapproved.Approve(pgrepoapproved.IntegrationTestDeleteUser)
+	_ = a
 }

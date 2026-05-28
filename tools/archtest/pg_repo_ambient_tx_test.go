@@ -117,9 +117,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -139,19 +137,8 @@ const (
 	execDirectName           = "ExecDirect"
 	approvedMarkerImportPath = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
 	approveFuncName          = "Approve"
+	approvalReasonTypeName   = "ApprovalReason"
 )
-
-// pgrepoApprovedReasonFormat is the required format for the reason argument to
-// pgrepoapproved.Approve: kebab-case identifier (lowercase letters, digits,
-// hyphens; starting with lowercase letter; length ≥ 2). Aligned with
-// panicregister precedent (panic_invariants_test.go::panicRegisteredReasonFormat).
-var pgrepoApprovedReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
-
-// pgrepoApprovedReasonPlaceholder matches reason literals that are placeholder
-// identifiers (todo / fixme / tbd / xxx / placeholder / wip), optionally
-// followed by a hyphen and more text. Rejected because they carry no
-// descriptive information about the bypass site.
-var pgrepoApprovedReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
 
 // isRepoOrStoreFile reports whether rel's basename ends with _repo.go or
 // _store.go. This is the file-extension scope filter for R1 / R2 (PRE-EXISTING
@@ -199,11 +186,12 @@ func TestPGRepoAmbientTx(t *testing.T) {
 
 // pgRepoAmbientTxRule is the Rule function for PG-REPO-AMBIENT-TX-01.
 //
-// R3 (ExecDirect call-bound approval) runs GLOBALLY over every non-generated
-// file — ExecDirect is rare and identified by callee identity, so no file
-// scope is needed. R1/R2 (pool field / wrap funnel) remain *_repo.go /
-// *_store.go scoped (PRE-EXISTING Soft, #1206) and exempt the /internal/pgexec
-// sub-package, which owns the New factory and the raw pool.
+// R3 (ExecDirect call-bound approval) and R4 (orphan Approve reverse ban) run
+// GLOBALLY over every non-generated file — ExecDirect and Approve are both
+// rare and identified by callee identity, so no file scope is needed. R1/R2
+// (pool field / wrap funnel) remain *_repo.go / *_store.go scoped
+// (PRE-EXISTING Soft, #1206) and exempt the /internal/pgexec sub-package,
+// which owns the New factory and the raw pool.
 func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil || p.Fset == nil {
 		return nil
@@ -220,8 +208,9 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 			continue
 		}
 		rel := p.Rel(file)
-		// R3 is global: every file, any filename.
+		// R3 (forward) + R4 (reverse) are global: every file, any filename.
 		diags = append(diags, scanR3ExecDirect(p.Fset, file, rel, p.TypesInfo)...)
+		diags = append(diags, scanR4OrphanApprove(p.Fset, file, rel, p.TypesInfo)...)
 		// R1/R2 are file-extension scoped and exempt the sub-package.
 		if subpkg || !isRepoOrStoreFile(rel) {
 			continue
@@ -344,12 +333,16 @@ func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *typ
 			Rel:  rel,
 			Line: fset.Position(call.Pos()).Line,
 			Message: "R3: pgexec.ExecDirect callsite must pass an inline " +
-				"pgrepoapproved.Approve(<kebab-case-literal>) as its FIRST argument " +
-				"(call-bound authorization). Valid reason format: ^[a-z][a-z0-9-]+$ " +
-				"(min length 2, lowercase start, no placeholder todo/fixme/tbd/xxx/" +
-				"placeholder/wip). Rejected forms: missing approval, a " +
-				"reused/pre-constructed Approval variable, Approve with a const " +
-				"identifier / \"a\"+\"b\" concatenation / empty / placeholder reason. " +
+				"pgrepoapproved.Approve(<catalog-const>) as its FIRST argument " +
+				"(call-bound authorization). The Approve argument must resolve via " +
+				"*types.Info.Uses to a *types.Const declared in pkg/pgrepoapproved " +
+				"with type pgrepoapproved.ApprovalReason — i.e. one of the catalog " +
+				"constants minted there (RevokeSessionCascade, IntegrationTest*). " +
+				"Rejected forms: missing approval; a reused/pre-constructed Approval " +
+				"variable; Approve called with a type conversion (ApprovalReason(\"…\")), " +
+				"a locally-declared ApprovalReason const outside pkg/pgrepoapproved, a " +
+				"string literal, BinaryExpr concatenation, fmt.Sprintf, or any other " +
+				"runtime expression. " +
 				"Production reference: " +
 				"adapters/postgres/refresh_store.go::revokeSessionDetachedAt. ADR " +
 				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
@@ -372,15 +365,104 @@ func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
 	return strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix)
 }
 
+// isPgrepoapprovedApproveCall reports whether call's callee resolves to
+// pgrepoapproved.Approve (the typed-marker minter). Used by R4 reverse scan.
+func isPgrepoapprovedApproveCall(call *ast.CallExpr, info *types.Info) bool {
+	fn := resolveCalleeFunc(call.Fun, info)
+	if fn == nil || fn.Name() != approveFuncName {
+		return false
+	}
+	if fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == approvedMarkerImportPath
+}
+
+// scanR4OrphanApprove implements R4 (reverse direction of R3): every
+// pgrepoapproved.Approve callsite MUST appear as the first argument of a
+// pgexec.ExecDirect call. Orphan calls — `_ = Approve(reason)`, assignment to
+// a variable, return value, argument to a non-ExecDirect function, etc. —
+// leak the "approval without a call" form that ADR §轴B 2026-05-28 promises
+// is unrepresentable. The check is the symmetric backstop for R3: R3 ensures
+// every ExecDirect goes through Approve; R4 ensures every Approve goes
+// through ExecDirect.
+//
+// Implementation: two passes over the file using the same EachInSubtree walker
+// SCANNER-FRAMEWORK-USAGE-01 mandates. The first pass collects every Approve
+// CallExpr that is syntactically bound to an ExecDirect's Args[0]; the second
+// pass walks all Approve CallExprs and flags any not in that bound set. Both
+// passes are CallExpr-typed visits so no parent-tracking walker is needed —
+// the bound-set captures the only parent-direction information R4 cares
+// about (immediate-parent = ExecDirect AND occupies the Args[0] slot).
+func scanR4OrphanApprove(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	bound := make(map[*ast.CallExpr]struct{})
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPgexecExecDirectCall(call, info) {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		approveCall, ok := call.Args[0].(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		if !isPgrepoapprovedApproveCall(approveCall, info) {
+			return
+		}
+		bound[approveCall] = struct{}{}
+	})
+
+	var diags []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPgrepoapprovedApproveCall(call, info) {
+			return
+		}
+		if _, ok := bound[call]; ok {
+			return
+		}
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(call.Pos()).Line,
+			Message: "R4: pgrepoapproved.Approve callsite must be the first " +
+				"argument of a pgexec.ExecDirect call (reverse-direction Hard: " +
+				"every Approve goes through ExecDirect). Orphan Approve forms — " +
+				"`_ = Approve(reason)`, assignment to a variable not passed inline " +
+				"to ExecDirect, return value, argument to any non-ExecDirect " +
+				"function — leak the \"approval without a call\" form that the " +
+				"funnel forbids. If you need a fresh approval token for a new " +
+				"ExecDirect callsite, inline it: " +
+				"pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.<Reason>), " +
+				"db, ctx, sql, args...). ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+		})
+	})
+	return diags
+}
+
 // execDirectHasInlineApproval reports whether an ExecDirect call's first
 // argument is an inline CallExpr to pgrepoapproved.Approve whose own first
-// argument is a kebab-case, non-placeholder string literal. The 5-gate form-
-// uniqueness chain mirrors panicregister: callee identity (via *types.Info,
-// pinned to the pgrepoapproved package path) + arg is *ast.BasicLit +
-// token.STRING + kebab regex + non-placeholder. Any other shape (Ident /
-// const ident / BinaryExpr concat / fmt.Sprintf / empty / placeholder) fails.
+// argument is an identifier or selector resolving to a *types.Const declared
+// in the pgrepoapproved package with type pgrepoapproved.ApprovalReason.
+//
+// The 5-gate form-uniqueness chain (Hard 范本 #2 + #3 combined):
+//
+//  1. arg[0] of ExecDirect is *ast.CallExpr — rejects reused / pre-constructed
+//     Approval variables (those are *ast.Ident).
+//  2. that CallExpr's callee resolves (via *types.Info.Uses) to a *types.Func
+//     named "Approve" in package pgrepoapproved — rejects look-alike functions
+//     and Approve-as-function-value forms (callee resolves to *types.Var).
+//  3. that CallExpr has at least one argument.
+//  4. that argument resolves (via *types.Info.Uses) to a *types.Const —
+//     rejects type conversions like ApprovalReason("untyped-orphan"), runtime
+//     expressions, function calls, BasicLit string literals, BinaryExpr
+//     concatenations, fmt.Sprintf, and empty arguments.
+//  5. the *types.Const is declared in package pgrepoapproved AND has type
+//     ApprovalReason — rejects locally-declared ApprovalReason consts (a
+//     fixture / external package defining its own typed const) and consts of
+//     unrelated types that happen to be named identically.
 func execDirectHasInlineApproval(call *ast.CallExpr, info *types.Info) bool {
-	if len(call.Args) == 0 {
+	if info == nil || len(call.Args) == 0 {
 		return false
 	}
 	approveCall, ok := call.Args[0].(*ast.CallExpr)
@@ -397,15 +479,45 @@ func execDirectHasInlineApproval(call *ast.CallExpr, info *types.Info) bool {
 	if len(approveCall.Args) == 0 {
 		return false
 	}
-	lit, ok := approveCall.Args[0].(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
+	return isApprovedReasonConst(approveCall.Args[0], info)
+}
+
+// isApprovedReasonConst reports whether expr resolves (via *types.Info.Uses)
+// to a *types.Const declared in package pgrepoapproved with type
+// pgrepoapproved.ApprovalReason. Accepts *ast.Ident (unqualified in-package
+// reference) and *ast.SelectorExpr (qualified `pgrepoapproved.Name`); rejects
+// every other AST form (CallExpr for type conversion, BasicLit, BinaryExpr,
+// etc.).
+func isApprovedReasonConst(expr ast.Expr, info *types.Info) bool {
+	var ident *ast.Ident
+	switch e := expr.(type) {
+	case *ast.Ident:
+		ident = e
+	case *ast.SelectorExpr:
+		ident = e.Sel
+	default:
 		return false
 	}
-	val, err := strconv.Unquote(lit.Value)
-	if err != nil || !pgrepoApprovedReasonFormat.MatchString(val) {
+	obj, ok := info.Uses[ident]
+	if !ok {
 		return false
 	}
-	return !pgrepoApprovedReasonPlaceholder.MatchString(val)
+	c, ok := obj.(*types.Const)
+	if !ok {
+		return false
+	}
+	if c.Pkg() == nil || c.Pkg().Path() != approvedMarkerImportPath {
+		return false
+	}
+	named, ok := c.Type().(*types.Named)
+	if !ok {
+		return false
+	}
+	tn := named.Obj()
+	if tn == nil || tn.Pkg() == nil {
+		return false
+	}
+	return tn.Pkg().Path() == approvedMarkerImportPath && tn.Name() == approvalReasonTypeName
 }
 
 // collectPGPoolParams returns the names of fn's parameters whose type resolves
@@ -534,14 +646,19 @@ var expectedFixtureViolations = []fixtureViolation{
 	{"fixture_repo.go", "R2:", 44}, // badR2Unnamed (F1: unnamed non-New param)
 	{"fixture_repo.go", "R2:", 49}, // NewBadR2Unnamed (F1: unnamed New param, cannot wrap)
 	// R3 RED (fixture_repo.go) — pointer to pgexec.ExecDirect call pos.
-	// Call-bound approval: arg[0] must be inline Approve(<kebab-literal>).
-	{"fixture_repo.go", "R3:", 65}, // badR3ConstIdentReason (Approve arg is const ident)
-	{"fixture_repo.go", "R3:", 70}, // badR3ConcatReason (Approve arg is BinaryExpr)
-	{"fixture_repo.go", "R3:", 75}, // badR3EmptyReason (Approve arg "" fails kebab regex)
-	{"fixture_repo.go", "R3:", 80}, // badR3PlaceholderReason (Approve arg "todo")
-	{"fixture_repo.go", "R3:", 88}, // badR3ReusedApproval (arg[0] is *ast.Ident, not inline CallExpr)
+	// Call-bound approval: arg[0] must be inline Approve(<catalog const>).
+	{"fixture_repo.go", "R3:", 69}, // badR3LocalConst (locally-declared ApprovalReason const)
+	{"fixture_repo.go", "R3:", 76}, // badR3TypeConversion (ApprovalReason("...") type conversion)
+	{"fixture_repo.go", "R3:", 84}, // badR3ReusedApproval (arg[0] is *ast.Ident, not inline CallExpr)
 	// R3 RED (fixture_service.go) — NON-_repo.go file; proves R3 global scope.
 	{"fixture_service.go", "R3:", 21}, // serviceLayerBadExecDirect (reused approval, non-repo file)
+	// R4 RED (fixture_repo.go) — pointer to pgrepoapproved.Approve call pos.
+	// Orphan Approve: every Approve callsite must be Args[0] of ExecDirect.
+	{"fixture_repo.go", "R4:", 83},  // badR3ReusedApproval's Approve is not inline at ExecDirect
+	{"fixture_repo.go", "R4:", 95},  // badR4OrphanDiscarded (Approve assigned to blank)
+	{"fixture_repo.go", "R4:", 102}, // badR4OrphanAssigned (Approve assigned to local var)
+	// R4 RED (fixture_service.go) — non-_repo.go file proving R4 global scope.
+	{"fixture_service.go", "R4:", 20}, // serviceLayerBadExecDirect's Approve is not inline
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches every RED
@@ -577,6 +694,8 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 			prefix = "R2:"
 		case strings.HasPrefix(d.Message, "R3:"):
 			prefix = "R3:"
+		case strings.HasPrefix(d.Message, "R4:"):
+			prefix = "R4:"
 		default:
 			t.Errorf("unexpected diagnostic with unrecognized rulePrefix at %s:%d: %s",
 				d.Rel, d.Line, d.Message)
@@ -677,9 +796,13 @@ func TestPGRepoApprovedSealed(t *testing.T) {
 
 // assertSealedInterface asserts pkg's ifaceName interface has exactly one
 // unexported marker method (structural, not name-anchored — the seal makes the
-// interface unimplementable outside the package) and that *implName implements
-// it. Removing the marker (interface still compiles) or adding a second
-// unexported method both fail here.
+// interface unimplementable outside the package), that *implName implements
+// it, AND that implName is the ONLY in-package named type implementing it.
+// Removing the marker (interface still compiles), adding a second unexported
+// method, or declaring a sibling impl in the same package all fail here. The
+// uniqueness check closes the in-package drift hole that pure Go visibility
+// cannot prevent: external impls are blocked by the unexported marker, but a
+// package author could declare a parallel struct alongside *pgExecutor.
 func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName string) {
 	t.Helper()
 	path := pkg.Path()
@@ -721,6 +844,37 @@ func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName
 	if !typesutil.ImplementsInterface(implObj.Type(), iface) {
 		t.Errorf("%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
 			path, implName, ifaceName)
+	}
+
+	// Uniqueness: enumerate every named type in pkg.Scope() and reject any
+	// sibling implementation. This closes the in-package drift hole that the
+	// unexported marker alone cannot prevent — Go visibility blocks external
+	// impls (the marker method is unexported, so no parallel implementation can
+	// be declared outside this package) but a package author could declare a
+	// parallel struct alongside the sanctioned impl inside the same package.
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		if name == implName {
+			continue
+		}
+		obj := scope.Lookup(name)
+		typeName, ok := obj.(*types.TypeName)
+		if !ok {
+			continue
+		}
+		if typeName.IsAlias() {
+			continue
+		}
+		siblingType := typeName.Type()
+		if _, isInterface := siblingType.Underlying().(*types.Interface); isInterface {
+			continue
+		}
+		if typesutil.ImplementsInterface(siblingType, iface) {
+			t.Errorf("%s: %s implements sealed interface %s but is not the sanctioned impl %s — "+
+				"the seal contract is that ONLY %s satisfies %s; declare neither a parallel "+
+				"struct nor an alias in this package",
+				path, name, ifaceName, implName, implName, ifaceName)
+		}
 	}
 }
 

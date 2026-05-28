@@ -146,5 +146,5 @@ func TestExecDirect_PanicsOnNonSealedExecutor(t *testing.T) {
 	// The Approve token here only satisfies the compiler (ExecDirect's first
 	// param is Approval); this is a test-only mock path, not an ADR bypass —
 	// the !ok branch is unreachable in production (sealed interface).
-	_, _ = ExecDirect(pgrepoapproved.Approve("test-non-sealed"), mockExec{}, context.Background(), "SELECT 1")
+	_, _ = ExecDirect(pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade), mockExec{}, context.Background(), "SELECT 1")
 }

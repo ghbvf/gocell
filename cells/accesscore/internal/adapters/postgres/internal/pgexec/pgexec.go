@@ -16,6 +16,20 @@
 // and store the returned PGExecutor as an unexported field on your repo /
 // store struct. All SQL goes through that field; the raw pool stays sealed
 // in this sub-package.
+//
+// # ExecDirect surface — integration-build-only
+//
+// accesscore production code has zero ExecDirect callsites: the cell never
+// needs an ADR-approved ambient-tx bypass. To prevent the test-only ExecDirect
+// function from leaking onto the production API surface, it lives in a sibling
+// file gated by the `integration` build tag (exec_direct_integration.go).
+// Default (production) builds do not compile it; integration tests (which set
+// `-tags=integration`) get the full top-level function. This mirrors the
+// per-cell ExecDirect exposure policy used by saga and devicecell (neither
+// exposes ExecDirect at all). The adapters/postgres root package is the only
+// production location holding an ExecDirect callsite — refresh_store.go
+// revokeSessionDetachedAt — and its sub-package keeps ExecDirect compiled
+// unconditionally.
 package pgexec
 
 import (
@@ -26,9 +40,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
 // PGExecutor is the sealed read/write surface routed through the ambient
@@ -40,13 +51,6 @@ import (
 // parallel PGExecutor that holds its own raw pool. See
 // adapters/postgres/internal/pgexec.PGExecutor for full rationale. Regression-
 // guarded by archtest PG-REPO-AMBIENT-TX-01 InterfaceSealed.
-//
-// ExecDirect is intentionally NOT a method on this interface — it is the
-// top-level function pgexec.ExecDirect(approval, e, ctx, sql, args...) whose
-// first argument is a call-bound pgrepoapproved.Approval token. accesscore
-// production code currently has no ExecDirect callsite; the top-level function
-// exists only for integration tests (role_repo_integration_test.go) that
-// manipulate DB state directly for fixture setup / verification.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -91,20 +95,4 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 		return tx.QueryRow(ctx, sql, args...)
 	}
 	return e.pool.QueryRow(ctx, sql, args...)
-}
-
-// ExecDirect bypasses the ambient transaction. The first parameter is a
-// call-bound pgrepoapproved.Approval token (mint inline via
-// pgrepoapproved.Approve("<reason>")). Sealed top-level function — see
-// adapters/postgres/internal/pgexec.ExecDirect for full design rationale.
-func ExecDirect(_ pgrepoapproved.Approval, e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	impl, ok := e.(*pgExecutor)
-	if !ok {
-		// Unreachable in production: PGExecutor is sealed, so every value is
-		// *pgExecutor. A non-*pgExecutor here is an in-package-test-only
-		// programmer error — A-class assertion panic, not an error return.
-		panic(panicregister.Approved("pgexec-execdirect-non-sealed",
-			errcode.Assertion("pgexec.ExecDirect: PGExecutor must originate from pgexec.New")))
-	}
-	return impl.pool.Exec(ctx, sql, args...)
 }

@@ -602,7 +602,7 @@ func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID 
 	// ADR-approved ExecDirect bypass (PG-REPO-AMBIENT-TX-01 R3): the call-bound
 	// pgrepoapproved.Approve token documents this independent-commit cascade-revoke.
 	// See ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md.
-	_, err := pgexec.ExecDirect(pgrepoapproved.Approve("revoke-session-cascade"),
+	_, err := pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade),
 		s.db, cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
 	return err
 }

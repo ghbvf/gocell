@@ -17,6 +17,6 @@ import (
 // serviceLayerBadExecDirect passes a reused (non-inline) approval — R3 must
 // flag it here in a non-_repo.go file (global-scope proof).
 func serviceLayerBadExecDirect(db pgexec.PGExecutor, ctx context.Context) { //nolint:unused // RED fixture
-	a := pgrepoapproved.Approve("service-layer-reused")
+	a := pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade)
 	_, _ = pgexec.ExecDirect(a, db, ctx, "SELECT 1")
 }

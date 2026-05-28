@@ -73,10 +73,11 @@ Hard"原则，两处 Soft 必须同 PR 升级。
 - 唯一获取 `pgexec.PGExecutor` 实例的路径是 `pgexec.New(*pgxpool.Pool)` exported factory——其返回的 interface 不暴露 `.pool` 字段。
 - 与 `HEALTH-REDACTED-ERROR-MSG-FUNNEL-01`（`SlogDependencyEntry` unexported fields）同款形态。
 
-**Discovery 删除后的 archtest scope**：
+**Discovery 删除后的 archtest scope**（amended 2026-05-28：R3 移出 file-extension scope）：
 
-- R1（pool field）、R3（ExecDirect callsite）走全局谓词 + `*_repo.go` / `*_store.go` 文件后缀过滤——文件后缀是 **pre-existing Soft scope boundary**（PR #917 时就在），本 amendment 未触碰也未引入新 Soft；其升级路径见 §"已知 Soft scope" + backlog issue 跟踪。
+- R1（pool field）走全局谓词 + `*_repo.go` / `*_store.go` 文件后缀过滤——文件后缀是 **pre-existing Soft scope boundary**（PR #917 时就在），本 amendment 未触碰也未引入新 Soft；其升级路径见 §"已知 Soft scope" + backlog issue 跟踪。
 - R2（pool wrap funnel）走全局谓词 + 同 file extension 过滤——callee 解析到 `pgexec.New` cross-package typed function。
+- R3（ExecDirect callsite）**自 2026-05-28 amendment 起为 global**（无 file-extension scope）——call-bound approval + callee identity 使 file scope 不再必要，详见 §轴 B。
 - R3 callsite identity（amendment 之前是 `pgExecutor.ExecDirect` 方法 receiver type；amendment 之后是 `pgexec.ExecDirect` 函数 callee identity）—— **F2-Hard 闭合 subset-interface bypass 漏洞**。
 
 **配套 archtest 变化**：
@@ -228,8 +229,8 @@ Contract: PG-REPO-AMBIENT-TX-01 archtest（上游 Medium → Hard via sealed int
 Change (2026-05-27): 把 pgExecutor 移到 <adapter-pkg>/internal/pgexec sub-package；parent-pkg 持有 pgexec.PGExecutor interface；archtest 删除 discovery，R1/R2/R3 改为全局谓词
 Change (2026-05-28, #1194 C1-C4): R3 sibling marker → call-bound pgrepoapproved.Approve 首参 + R3 global scope；PGExecutor 接口 seal（sealPGExecutor marker）+ InterfaceSealed 回归守卫；R2 计入 unnamed pool param；ExecDirect !ok 分支改 A-class panic（删 error sentinel）
 Implementations: [x] adapters/postgres/internal/pgexec  [x] adapters/postgres/saga/internal/pgexec  [x] cells/accesscore/internal/adapters/postgres/internal/pgexec  [x] examples/iotdevice/cells/devicecell/internal/adapters/postgres/internal/pgexec
-Conformance test: tools/archtest.TestPGRepoAmbientTx + TestPGRepoAmbientTx_RedFixtureDetected + TestPGRepoAmbientTx_SelfCheck + TestPGRepoAmbientTx_InterfaceSealed
-Repro: go test ./tools/archtest/ -run 'TestPGRepoAmbientTx' -count=1
+Conformance test: tools/archtest.TestPGRepoAmbientTx + TestPGRepoAmbientTx_RedFixtureDetected + TestPGRepoAmbientTx_SelfCheck + TestPGRepoAmbientTx_InterfaceSealed + TestPGRepoApprovedSealed
+Repro: go test ./tools/archtest/ -run 'TestPGRepoAmbientTx|TestPGRepoApprovedSealed' -count=1
 Dependent contracts (governance scan): none
 ```
 
@@ -315,6 +316,58 @@ unnamed pool param。
 **Compensation / Threat Model 重评**：见上 §Threat Model 2026-05-28 重评 block——删「BS-8 spurious marker」「nested closure 走私」两行（call-bound 下 standalone marker 结构上不存在），新增「复用 Approval 变量」「包外自实现 PGExecutor」「ExecDirect 非 _repo.go 文件」三行覆盖。无 ✅→⚠️/❌ 回退。
 
 **Out-of-scope（不变）**：R1/R2 file-extension Soft scope 移除仍由 #1206 跟踪（需 seal Pool/TxManager/Bundle/configcore 4 种 holder）；本 amendment 只把 R3 移出该 scope。
+
+## Amendment 2026-05-29 — R4 orphan ban + typed ApprovalReason catalog + accesscore ExecDirect build-tag isolation
+
+**触发**：PR #1224 review 复盘（C1–C3 / F1–F8）暴露 2026-05-28 amendment 留下的盲区：
+
+- ADR §轴A 残留 R3 受 file-extension scope 描述（与 §轴B 双真理源；F1）
+- §Implementation matrix 漏列 `TestPGRepoApprovedSealed`（F4）
+- ADR `202605101200` §4.5.1 fixture oracle 描述仍是旧 exact-set 形态（F5）
+- `assertSealedInterface` 只验「marker 在场 + sanctioned impl」，未验「ONLY sanctioned impl」——包内 sibling impl 可漂入（F3）
+- `Approve(reason string)` 仅 kebab format check；reviewer 援 K8s ValidatingAdmissionPolicy 要求把 reason 升到典型审批 catalog（F2）
+- accesscore `role_repo_integration_test.go` 7 callsite 复用单一 `"integration-test-direct-write"` reason，per-callsite 语义退化（F6）
+- ADR §轴B 承诺「审批无调用 = 不可表达」与实际 gap：`_ = pgrepoapproved.Approve(<reason>)` 是 expression 可 dead-code 化，archtest 未守反向（F7）
+- accesscore `pgexec.ExecDirect` production 0 callsite 但仍在 production API 面（F8）
+
+**Decision**：
+
+1. **typed ApprovalReason catalog（F2/F6）**：把 `Approve(reason string)` 升级到 `Approve(reason ApprovalReason) Approval`，`ApprovalReason string` newtype + 4 个 catalog 常量（`RevokeSessionCascade` / `IntegrationTestDeleteRoleAssignment` / `IntegrationTestLockUser` / `IntegrationTestDeleteUser`）集中声明在 `pkg/pgrepoapproved`。archtest R3 gate #3-5 改为「arg 必须解析到 `*types.Const`，Pkg path == pgrepoapproved AND 类型为 ApprovalReason」（替换旧 BasicLit + kebab regex + placeholder check）。callsite 全部改为 typed const 引用——integration test 7 callsite 按 SQL 操作分配到 3 个 typed const（per-callsite 语义恢复）。这是 ai-robust.md §Hard 范本 #2（typed marker funnel）+ #3（string-typed concept funnel）的组合升级；sibling `panicregister.Approved` 暂保持范本 #2 形态（catalog 升级跨 funnel scope，由独立 backlog 跟踪）。
+2. **R4 orphan Approve 反向规则（F7）**：新增 `scanR4OrphanApprove`，walk-with-parent 扫所有 `pgrepoapproved.Approve` callsite，断言其 syntactic parent 是 `*ast.CallExpr` AND `parent.Args[0]` 是该 call AND parent callee resolves to `pgexec.ExecDirect`。orphan 形态（`_ = Approve(...)`、`a := Approve(...); ... (a 不传给 ExecDirect)`、传给其他函数）全部 flag。R4 与 R3 形成双向闭环：R3 = 每个 ExecDirect 都经过 Approve；R4 = 每个 Approve 都流入 ExecDirect。ADR §轴B 承诺「审批无调用 = 不可表达」现由 R4 静态守住。
+3. **assertSealedInterface 唯一 impl 检查（F3）**：扩展 helper 扫 `pkg.Scope()` 所有 named types，对每个实现 sealed iface 的 named type（且非 interface 自身、非 alias）断言 name == sanctioned impl name。覆盖 Go visibility 拦不住的 in-package sibling impl 漂入路径；同一 helper 兼容 `TestPGRepoApprovedSealed` (approval) 与 `TestPGRepoAmbientTx_InterfaceSealed` (pgExecutor) 双场景。
+4. **accesscore ExecDirect build-tag 隔离（F8）**：`cells/accesscore/internal/adapters/postgres/internal/pgexec/pgexec.go` 删除 `ExecDirect` 函数 + 相关 import（panicregister / errcode / pgrepoapproved）；新建 `exec_direct_integration.go` 带 `//go:build integration`，含 `ExecDirect` 完整实现（含 A-class panic 兜底）。对应 unit test (`TestExecDirect_PanicsOnNonSealedExecutor`) 挪到 `exec_direct_integration_test.go` 同 build-tag。默认 build 不编译 ExecDirect — production API 面零暴露；integration build 仍有完整功能。这与 saga / devicecell `pgexec` 包 `ExecDirect` 一律不暴露形成阶梯：「production 用 → 暴露；test 用 → build-tag；从不用 → 不声明」。
+5. **ADR 文档同步（F1/F4/F5）**：§轴A 重写 R3 不再受 file-extension scope；§Implementation matrix conformance test 列表补 `TestPGRepoApprovedSealed`，repro -run regex 同步；ADR `202605101200` line 379 fixture oracle 描述改为 "exact multiset assertion on (filename, rulePrefix, line)"（反映 2026-05-28 已落地形态）。
+
+**Implementation summary**：
+
+- `pkg/pgrepoapproved/pgrepoapproved.go`：加 `ApprovalReason string` + 4 catalog const；`Approve` 签名 `(ApprovalReason)`；godoc 描述「新增 reason 流程」。
+- `adapters/postgres/refresh_store.go`：callsite 改 `pgrepoapproved.Approve(pgrepoapproved.RevokeSessionCascade)`。
+- `cells/accesscore/internal/adapters/postgres/role_repo_integration_test.go`：7 callsite → 3 typed const（DELETE role_assignments / UPDATE users lock / DELETE users）。
+- `adapters/postgres/internal/pgexec/pgexec_test.go` + `cells/accesscore/internal/adapters/postgres/internal/pgexec/pgexec_test.go`：mock-panic test 内的 Approve 调用改用 catalog const。
+- `cells/accesscore/internal/adapters/postgres/internal/pgexec/`：拆出 `exec_direct_integration.go` + `exec_direct_integration_test.go`（`//go:build integration`），`pgexec.go` 删 ExecDirect + 关联 import；`pgexec_test.go` 同步 import 清理。
+- `tools/archtest/pg_repo_ambient_tx_test.go`：R3 gate 改 typed-const lookup（删 kebab regex / placeholder regex / strconv.Unquote / regexp import）；新增 `scanR4OrphanApprove` + `orphanApproveWalker` + `approveIsBoundToExecDirect` helper；rulePrefix 解析器加 R4；`assertSealedInterface` 加唯一 impl 扫描；`expectedFixtureViolations` 全集更新。
+- `tools/archtest/internal/pgrepoambienttxfixture/fixture_repo.go`：R3 RED cases 重组——`badR3LocalConst`（本地声明 ApprovalReason const）+ `badR3TypeConversion`（`ApprovalReason("...")` 类型转换）+ `badR3ReusedApproval`（变量复用）；新增 R4 RED `badR4OrphanDiscarded` / `badR4OrphanAssigned`。
+- `tools/archtest/internal/pgrepoambienttxfixture/fixture_service.go`：reused-approval callsite 用 catalog const（仍触发 R3+R4）。
+
+**Compensation / Threat Model 重评**：
+
+| 威胁形态 | 防线 | 状态 |
+|---------|------|------|
+| ExecDirect callsite 漏传 approval | `Approval` 类型首参 → 编译错误 | ✓（不变） |
+| ExecDirect 传 approval 但 reason 非 catalog（本地 const / 类型转换 / 字面量） | R3 typed-const lookup → flag | ✓（升级） |
+| 包外自实现 `PGExecutor` 持 raw pool | `sealPGExecutor` unexported marker + `assertSealedInterface` 唯一 impl 检查 | ✓（F3 升级） |
+| 包内漂入 sibling impl 持 raw pool | `assertSealedInterface` 唯一 impl 检查 | ✓（F3 新增） |
+| orphan Approve dead code（`_ = Approve(...)` / 变量赋值不传 ExecDirect） | R4 反向规则 → flag | ✓（F7 新增） |
+| `panicregister.Approved` 同款 orphan 盲区 | 暂留 — sibling funnel 升级跨 PR scope | ⚠️（backlog 跟踪） |
+| accesscore production ExecDirect 调用 | 不存在；ExecDirect 仅 integration build 编译 | ✓（F8 升级） |
+| sibling typed marker funnel（panicregister）catalog 升级 | 暂留 — 跨 codegen 模板 + 100+ callsite scope | ⚠️（backlog 跟踪） |
+
+无 ✅→⚠️/❌ 回退；新增 2 行 ⚠️ 由 backlog issue 跟踪。
+
+**Out-of-scope（不变）**：
+
+- R1/R2 file-extension Soft scope 移除（#1206，需 seal 4 种 holder）。
+- panicregister catalog 升级 + 反向规则（独立 backlog issue，跨 contractgen 模板 + 100+ callsite）。
 
 ## References
 
