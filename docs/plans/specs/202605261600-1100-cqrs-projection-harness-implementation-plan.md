@@ -265,10 +265,15 @@ Invariant inventory (DROP COLUMN 不适用)
 ### Metric 命名（registered 一次，多 projection 共享）
 
 ```
-projection_event_replay_lag_seconds{cell, projection}    gauge
+projection_event_replay_lag_seconds{cell, projection}    gauge   # 时间维度：read-model 落后多久
 projection_rebuild_duration_seconds{cell, projection}     histogram
-projection_event_log_length{cell, projection}             gauge
+projection_pending_events{cell, projection}              gauge   # 记录维度：未应用事件数（source head − applied checkpoint）
 ```
+
+> `projection_pending_events` 语义 = **未处理事件数 = replay 源 head 位置 − 已提交
+> checkpoint**（积压深度，record 维度，replay_lag_seconds 的记录数版本）。原名
+> `projection_event_log_length`（"日志长度"）易误读为日志总量，已按 Scenario F
+> 「确认积压来源」语义 rename。
 
 `cell` label 直接对齐 [observability.md HTTP Metrics cell Label 段](.claude/rules/gocell/observability.md) 既有约定。
 

@@ -54,7 +54,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 | replay 源 | 复用既有 outbox journal / event store，本 epic 定义 Cursor 读契约 |
 | **checkpoint / offset** | **新**：框架自有 offset 表，与业务 apply 走同一 `CellTx` 提交（exactly-once，不碰业务表 schema） |
 | **rebuild 编排** | **新**：harness 壳（reset → replay → catch-up state machine）+ business hook |
-| **可观测 metrics** | **新**：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_event_log_length`（covers #961） |
+| **可观测 metrics** | **新**：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_pending_events`（covers #961） |
 | **PROJECTION-CONSISTENCY-01 升 Hard** | **新**：parser load-time `jsonschema.Validate`（covers #960） |
 | **examples L3 reference** | orderprojection 改造为 harness 官方 reference（covers #834） |
 
@@ -131,7 +131,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 
 1. consumer 处理速度 < producer 速度，`projection_event_replay_lag_seconds` 持续升高
 2. operator dashboard 触发告警（lag > 5min for 10min）
-3. operator 查 `projection_event_log_length` 确认积压来源（vs broker 卡死）
+3. operator 查 `projection_pending_events` 确认积压来源（vs broker 卡死）
 
 ## 5. Acceptance Criteria
 
@@ -143,7 +143,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 - [ ] rebuild state machine **4 相**（Stop / Reset / Replay / Catchup，对标 Axon；见 ADR §3 Phase enum），状态对外可读（HTTP endpoint 返回 phase + lag）
 - [ ] cellgen 派生：`kind: projection` slice 自动生成 harness wiring（订阅 + Subscribe 调用 + apply 字段桥接），业务只填 apply 函数体
 - [ ] `PROJECTION-CONSISTENCY-01` 由 Medium 升 Hard：parser load-time `jsonschema.Validate` 拒绝 L0/L1/L2
-- [ ] 三个 metrics：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` (histogram) / `projection_event_log_length` (gauge)
+- [ ] 三个 metrics：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` (histogram) / `projection_pending_events` (gauge)
 - [ ] `<cell>_projection_<name>_ready` readyz probe：lag < threshold && state != reset/replay 时 ready
 - [ ] examples/todoorder/orderprojection 改造为 harness 形态，作为 L3 reference
 

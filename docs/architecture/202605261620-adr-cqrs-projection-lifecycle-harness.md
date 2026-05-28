@@ -36,7 +36,7 @@ Hard funnel; hand-writing it N times is what the AI-robust charter forbids.
 | replay source | reuse the existing outbox journal / event store; this epic defines the cursor read contract |
 | **checkpoint / offset** | **new** — framework-owned offset table, committed in the same `CellTx` as business apply (exactly-once; does not touch business schema) |
 | **rebuild orchestration** | **new** — harness shell (Stop → Reset → Replay → Catch-up state machine) + business hook |
-| **observability metrics** | **new** — `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_event_log_length` (covers #961) |
+| **observability metrics** | **new** — `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_pending_events` (covers #961) |
 | **PROJECTION-CONSISTENCY-01 → Hard** | **new** — parser load-time `jsonschema.Validate` (covers #960) |
 | **examples L3 reference** | orderprojection rewritten onto the harness (covers #834) |
 

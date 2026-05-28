@@ -134,7 +134,7 @@
 
 ### T-03-2 Metrics 三件套
 
-- **what**：`metrics.go` 注册 `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_event_log_length`
+- **what**：`metrics.go` 注册 `projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` / `projection_pending_events`
 - **ship**：L2
 - **依赖**：T-03-1
 - **验收**：
