@@ -29,8 +29,8 @@ func newTestLedgerProtocol(t *testing.T, ns ledger.NamespaceID) *ledger.Protocol
 		key[i] = byte(i + 1)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -248,7 +248,7 @@ func TestAuditLedgerStore_HashFormatConstraint(t *testing.T) {
 	// collisions across cases. Five Principal/Correlation/OccurredAt columns
 	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) are
 	// passed as empty strings + epoch — these are NOT NULL with no DEFAULT in
-	// 041_audit_entries_v2.sql, but the test exercises ck_audit_hash_format
+	// 043_audit_entries_v2.sql, but the test exercises ck_audit_hash_format
 	// in isolation so we supply zero values rather than business data.
 	insertRow := func(ns string, seq int64, prevHash, hash string) error {
 		// event_id is gen_random_uuid()::text so the 021 (namespace, event_id)

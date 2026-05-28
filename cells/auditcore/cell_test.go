@@ -53,8 +53,8 @@ func newTestProtocol(t testing.TB) *ledger.Protocol {
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(testHMACKey),
-		ledger.WithNamespace(ns),
+		ns,
+		testHMACKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

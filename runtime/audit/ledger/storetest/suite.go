@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,72 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// entryStoreAssignedFields enumerates Entry fields that Append/GetBySeq write
+// or compute, NOT the caller's source-of-truth. AssertEntryRoundTrip skips
+// these because they intentionally differ between the caller's literal and
+// the store's persisted view.
+var entryStoreAssignedFields = map[string]struct{}{
+	"SeqNo":    {},
+	"ID":       {},
+	"PrevHash": {},
+	"Hash":     {},
+}
+
+// AssertEntryRoundTrip verifies that all caller-supplied (non-store-assigned)
+// fields of src round-trip byte-for-byte through Append + GetBySeq, comparing
+// every exported field via reflect. When a new caller-supplied field is added
+// to ledger.Entry (the canonical HMAC input expands), this helper picks it up
+// automatically — no edit needed here.
+//
+// Store-assigned fields (SeqNo, ID, PrevHash, Hash) are skipped: Append writes
+// them, so the persisted view legitimately differs from the source literal.
+// Chain-level Hash parity is asserted separately by hash-parity helpers
+// (Protocol_HashParity, PrincipalFields_RoundTrip).
+//
+// Drift between the Entry field set and AUDIT-HASH-INPUT-FROZEN-01 A1 is caught
+// by that archtest first; this helper makes the runtime round-trip behavior
+// visible against the same surface, so an add-field-but-drop-from-store
+// regression fails here too.
+func AssertEntryRoundTrip(t *testing.T, src, got *ledger.Entry) {
+	t.Helper()
+	if src == nil || got == nil {
+		t.Fatalf("AssertEntryRoundTrip: nil entry (src=%v got=%v)", src, got)
+	}
+	rSrc := reflect.ValueOf(*src)
+	rGot := reflect.ValueOf(*got)
+	typ := rSrc.Type()
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if _, skip := entryStoreAssignedFields[f.Name]; skip {
+			continue
+		}
+		srcVal := rSrc.Field(i).Interface()
+		gotVal := rGot.Field(i).Interface()
+		if !entryFieldEqual(srcVal, gotVal) {
+			t.Errorf("AssertEntryRoundTrip: field %s mismatch: got %v, want %v",
+				f.Name, gotVal, srcVal)
+		}
+	}
+}
+
+// entryFieldEqual compares two Entry field values using type-appropriate
+// equality: time.Time via .Equal (ignores monotonic clock + UTC normalisation),
+// []byte via bytes.Equal, scalar types via reflect.DeepEqual.
+func entryFieldEqual(a, b any) bool {
+	switch va := a.(type) {
+	case time.Time:
+		vb, ok := b.(time.Time)
+		return ok && va.Equal(vb)
+	case []byte:
+		vb, ok := b.([]byte)
+		return ok && bytes.Equal(va, vb)
+	}
+	return reflect.DeepEqual(a, b)
+}
 
 // redeliveryAdvance is the clock advance used in at-least-once redelivery
 // simulation test cases (F-CR-2 idempotency regression guard).
@@ -97,8 +164,8 @@ func NewTestProtocol(t *testing.T) *ledger.Protocol {
 		t.Fatalf("storetest: ParseNamespaceID: %v", err)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -248,7 +315,10 @@ func runTailEmptyStore(t *testing.T, factory Factory) {
 }
 
 // runRestartRecovery: simulates restart by draining entries from storeA
-// into storeB; Tail must match.
+// into storeB; Tail snapshot AND every Entry field round-trip via
+// AssertEntryRoundTrip, plus the tail Hash must match byte-for-byte across
+// stores (proves all 12 canonical-HMAC fields participated in chain replay,
+// not just the originally-asserted SeqNo/EntryCount pair).
 func runRestartRecovery(t *testing.T, factory Factory) {
 	storeA, fc, cleanupA := factory(t)
 	defer cleanupA()
@@ -265,7 +335,9 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 		t.Fatalf("storeA Tail: %v", err)
 	}
 
-	// Replay into storeB using a second factory call.
+	// Replay into storeB using a second factory call. Replay copies the FULL
+	// Entry shape (every caller-supplied field) so the cross-store chain truly
+	// witnesses all 12 canonical-HMAC fields, not just the historical 5.
 	storeB, _, cleanupB := factory(t)
 	defer cleanupB()
 
@@ -275,15 +347,28 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 			t.Fatalf("storeA GetBySeq(%d): %v", seq, err)
 		}
 		replay := &ledger.Entry{
-			EventID:   src.EventID,
-			EventType: src.EventType,
-			ActorID:   src.ActorID,
-			Timestamp: src.Timestamp,
-			Payload:   src.Payload,
+			EventID:       src.EventID,
+			EventType:     src.EventType,
+			ActorID:       src.ActorID,
+			SubjectID:     src.SubjectID,
+			TenantID:      src.TenantID,
+			SessionID:     src.SessionID,
+			CorrelationID: src.CorrelationID,
+			OccurredAt:    src.OccurredAt,
+			Timestamp:     src.Timestamp,
+			Payload:       src.Payload,
 		}
 		if err := storeB.Append(context.Background(), replay); err != nil {
 			t.Fatalf("storeB Append seq %d: %v", seq, err)
 		}
+		// AssertEntryRoundTrip uses reflect to walk every exported, non-store-
+		// assigned Entry field — adding a new field anywhere on Entry picks up
+		// here automatically.
+		gotB, err := storeB.GetBySeq(context.Background(), seq)
+		if err != nil {
+			t.Fatalf("storeB GetBySeq(%d): %v", seq, err)
+		}
+		AssertEntryRoundTrip(t, src, gotB)
 	}
 	tailB, err := storeB.Tail(context.Background())
 	if err != nil {
@@ -294,6 +379,13 @@ func runRestartRecovery(t *testing.T, factory Factory) {
 	}
 	if tailA.EntryCount != tailB.EntryCount {
 		t.Errorf("restart EntryCount mismatch: A=%d B=%d", tailA.EntryCount, tailB.EntryCount)
+	}
+	// Tail hash parity proves the full 12-field HMAC chain reconstructed
+	// byte-for-byte across the two stores. A dropped field on the replay path
+	// would break this even when SeqNo / EntryCount still match.
+	if tailA.PrevHash != tailB.PrevHash {
+		t.Errorf("restart Tail hash mismatch: A=%s B=%s (a canonical-HMAC field was lost on replay)",
+			tailA.PrevHash, tailB.PrevHash)
 	}
 }
 
@@ -804,6 +896,7 @@ const principalOccurredAtSkew = -30 * time.Second
 // from the reference, (b) in archtest AUDIT-HASH-INPUT-FROZEN-01 A1 which
 // reflect-locks the production struct.
 type referenceHashInput struct {
+	Namespace          string `json:"namespace"`
 	PrevHash           string `json:"prev_hash"`
 	EventID            string `json:"event_id"`
 	EventType          string `json:"event_type"`
@@ -818,12 +911,13 @@ type referenceHashInput struct {
 }
 
 // referenceComputeHash recomputes the canonical HMAC for an Entry without
-// touching Protocol.ComputeHash. Callers supply the HMAC key (extracted from
-// the same Protocol via the dedicated test seam in storetest fixtures) and the
-// expected prev_hash; the function marshals the mirror struct and returns the
-// hex digest. Used by cross-store / cross-implementation parity tests.
-func referenceComputeHash(key []byte, prevHash string, e *ledger.Entry) string {
+// touching Protocol.ComputeHash. Callers supply the HMAC key, the namespace,
+// and the expected prev_hash; the function marshals the mirror struct and
+// returns the hex digest. The namespace is the first signed field, mirroring
+// the production cross-namespace HMAC domain separation (ADR-1042 §A).
+func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
 	in := referenceHashInput{
+		Namespace:          string(ns),
 		PrevHash:           prevHash,
 		EventID:            e.EventID,
 		EventType:          e.EventType,
@@ -843,7 +937,7 @@ func referenceComputeHash(key []byte, prevHash string, e *ledger.Entry) string {
 }
 
 // RunPrincipalFieldsRoundTrip asserts that the five canonical Principal /
-// Correlation / OccurredAt fields added in migration 041_audit_entries_v2 round
+// Correlation / OccurredAt fields added in migration 043_audit_entries_v2 round
 // trip through Append → GetBySeq with byte-equal values, and that the persisted
 // Hash matches protocol.ComputeHash on the populated entry. Combined with
 // Protocol_HashParity it forms the single-source HMAC parity contract: any
@@ -889,24 +983,13 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 		t.Fatalf("GetBySeq(1): %v", err)
 	}
 
-	// All 5 new canonical fields must round-trip byte-equal.
-	if got.SubjectID != entry.SubjectID {
-		t.Errorf("SubjectID round-trip: got %q, want %q", got.SubjectID, entry.SubjectID)
-	}
-	if got.TenantID != entry.TenantID {
-		t.Errorf("TenantID round-trip: got %q, want %q", got.TenantID, entry.TenantID)
-	}
-	if got.SessionID != entry.SessionID {
-		t.Errorf("SessionID round-trip: got %q, want %q", got.SessionID, entry.SessionID)
-	}
-	if got.CorrelationID != entry.CorrelationID {
-		t.Errorf("CorrelationID round-trip: got %q, want %q", got.CorrelationID, entry.CorrelationID)
-	}
-	// time.Time round-trip via PG uses TIMESTAMPTZ → time.Time; compare via
-	// .Equal so monotonic clock readings are ignored (UTC normalization).
-	if !got.OccurredAt.Equal(entry.OccurredAt) {
-		t.Errorf("OccurredAt round-trip: got %v, want %v", got.OccurredAt, entry.OccurredAt)
-	}
+	// AssertEntryRoundTrip walks every caller-supplied Entry field via reflect,
+	// so the 5 Principal/Correlation/OccurredAt fields plus any future
+	// expansion are checked without per-field maintenance here. Drift between
+	// Entry's field set and AUDIT-HASH-INPUT-FROZEN-01 A1 surfaces in that
+	// archtest first; this assertion surfaces it as a runtime parity failure
+	// against the same surface.
+	AssertEntryRoundTrip(t, entry, got)
 
 	// HMAC parity: store-persisted Hash must equal an INDEPENDENT canonical
 	// HMAC over the loaded entry — recomputed via referenceComputeHash, which
@@ -915,7 +998,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 	// ComputeHash (e.g. forgetting to wire SubjectID into auditHashInput)
 	// would still produce a self-consistent hash via protocol.ComputeHash;
 	// the independent reference catches it.
-	want := referenceComputeHash(TestHMACKey(), "", got)
+	want := referenceComputeHash(TestHMACKey(), protocol.Namespace(), "", got)
 	if got.Hash != want {
 		t.Errorf("Hash parity broken with populated Principal fields:\n  store=%s\n  ref  =%s",
 			got.Hash, want)

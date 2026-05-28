@@ -174,8 +174,8 @@ func buildAuditcoreLedgerOpts(t testing.TB, hmacKey []byte) ([]auditcore.Option,
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err, "audit namespace parse")
 	proto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

@@ -171,14 +171,14 @@ func buildAuditProtocol(adapterMode, envName, primary, devDefault string, ns led
 		return nil, err
 	}
 	// Belt-and-suspenders: zero the HMAC key on both success and error paths.
-	// WithChainHMAC makes a defensive copy and zeroes the caller's slice
-	// internally on success, but if NewProtocol returns an error before that
-	// option is applied the key bytes would otherwise remain live on the stack.
+	// NewProtocol makes a defensive copy and zeroes the caller's slice on the
+	// success path, but if validation fails before the copy is taken the bytes
+	// would otherwise remain live on the stack.
 	defer clear(hmacKey)
 
 	return ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

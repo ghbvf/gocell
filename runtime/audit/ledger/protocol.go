@@ -165,6 +165,11 @@ func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 // determinism is sufficient here because auditHashInput is a private,
 // append-only type with no external serialiser).
 type auditHashInput struct {
+	// Namespace anchors the chain to its owner cell. Cross-namespace HMAC
+	// replay (the same entry shape copied from chain A into chain B) is
+	// invalid because the namespace bytes participate in the digest.
+	// ref: google/trillian — TreeID participates in SignedEntryTimestamp.
+	Namespace          string `json:"namespace"`
 	PrevHash           string `json:"prev_hash"`
 	EventID            string `json:"event_id"`
 	EventType          string `json:"event_type"`
@@ -190,7 +195,7 @@ type auditHashInput struct {
 //
 // There is no protocol version byte and no legacy path: per CLAUDE.md
 // "Review 和重构时不考虑向后兼容——当前只有 gocell 自身", existing audit
-// rows in the pre-041 schema are discarded (DROP TABLE in 041_audit_entries_v2.sql)
+// rows in the pre-043 schema are discarded (DROP TABLE in 043_audit_entries_v2.sql)
 // and all hash fixture expectations are regenerated in the same PR.
 //
 // Payload is encoded as a base64 JSON string by encoding/json's []byte
@@ -206,6 +211,7 @@ type auditHashInput struct {
 // ref: tools/archtest/audit_hash_input_frozen_test.go.
 func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
 	input := auditHashInput{
+		Namespace:          string(p.namespace),
 		PrevHash:           prevHash,
 		EventID:            e.EventID,
 		EventType:          e.EventType,
@@ -240,68 +246,16 @@ func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
 
 // Option mutates a Protocol during NewProtocol. Options are applied in order;
 // each Option may return an error to short-circuit construction.
+//
+// The mandatory namespace + HMAC key pair is passed positionally to NewProtocol
+// — no Option can supply them, and no Option can override them. This forces
+// the namespace ↔ key binding to be expressed at the type-system layer, so a
+// caller cannot accidentally pair the wrong namespace with a stale or shared
+// key (which would let HMAC chains from different cells be substituted across
+// the wire). The compile error a caller gets when trying to construct a
+// Protocol without supplying both arguments is the funnel's upstream Hard
+// gate; archtest backs that up at the callsite layer.
 type Option func(*Protocol) error
-
-// WithChainHMAC declares the HMAC-SHA256 key used for hash chain computation.
-//
-// Nil and zero-length keys are rejected immediately (key must be ≥ 32 bytes
-// per RFC 2104 §3). NewProtocol short-circuits on the first error — a nil key
-// prevents subsequent options from running.
-//
-// F7: after the defensive copy is made, the caller's key slice is zeroed
-// (clear(key)) so that sensitive key material does not remain live in the
-// caller's memory. The Protocol retains its own internal copy.
-//
-// Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency wiring
-// option — runtime-api.md §Option 范式分层).
-func WithChainHMAC(key []byte) Option {
-	return func(p *Protocol) error {
-		if len(key) == 0 {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: HMAC key must not be nil or empty (use WithChainHMAC, key >= 32 bytes)")
-		}
-		if len(key) < minHMACKeyBytes {
-			// Reject short keys immediately; error mentions only byte counts,
-			// never the key material itself.
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: HMAC key too short (RFC 2104 §3, NIST SP 800-107)",
-				errcode.WithDetails(
-					errcode.PublicInt("minimumBytes", minHMACKeyBytes),
-					errcode.PublicInt("actualBytes", len(key)),
-				))
-		}
-		dst := make([]byte, len(key))
-		copy(dst, key)
-		// Zero the caller's slice immediately after the defensive copy so that
-		// HMAC key material does not remain accessible in the caller's allocation.
-		// The Protocol retains the only live copy.
-		clear(key)
-		p.hmacKey = dst
-		return nil
-	}
-}
-
-// WithNamespace declares the NamespaceID that prefixes all store keys for
-// this ledger instance.
-//
-// Empty (zero-value) and invalid NamespaceID values are rejected immediately.
-// NewProtocol short-circuits on the first error — an empty namespace prevents
-// subsequent options from running.
-// Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency
-// wiring option — runtime-api.md §Option 范式分层).
-func WithNamespace(ns NamespaceID) Option {
-	return func(p *Protocol) error {
-		if ns == "" {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: namespace ID must not be empty")
-		}
-		if err := ns.Validate(); err != nil {
-			return err
-		}
-		p.namespace = ns
-		return nil
-	}
-}
 
 // WithRestartRecovery declares the restart recovery mode.
 //
@@ -337,12 +291,52 @@ func WithIdempotency(im IdempotencyMode) Option {
 	}
 }
 
-// NewProtocol assembles a Protocol from the supplied options and fail-fasts
-// on missing or invalid required fields. Options are applied in order; the
-// first error short-circuits and no subsequent options are applied.
-// The returned *Protocol is safe for concurrent read-only use.
-func NewProtocol(opts ...Option) (*Protocol, error) {
-	p := &Protocol{}
+// NewProtocol assembles a Protocol from the namespace + HMAC key (mandatory
+// positional arguments) and the supplied options. The positional form binds
+// `namespace` and `key` at the type-system layer — a caller physically cannot
+// pass just one, nor swap them, nor reuse a stale key against a fresh
+// namespace silently. After the defensive HMAC key copy is made, the caller's
+// `key` slice is zeroed (clear) so sensitive material is not retained in
+// caller memory (F7).
+//
+// Options are applied in order; the first error short-circuits and no
+// subsequent options are applied. The returned *Protocol is safe for
+// concurrent read-only use.
+//
+// INVARIANT: AUDIT-HASH-INPUT-FROZEN-01 (positional binding closes the
+// upstream "wrong namespace ↔ wrong key" attack vector at compile time;
+// downstream Hard is provided by Protocol.ComputeHash hmac.New callsite
+// uniqueness).
+func NewProtocol(namespace NamespaceID, key []byte, opts ...Option) (*Protocol, error) {
+	if namespace == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: namespace must not be empty")
+	}
+	if err := namespace.Validate(); err != nil {
+		return nil, err
+	}
+	if len(key) == 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: HMAC key must not be nil or empty (key >= 32 bytes)")
+	}
+	if len(key) < minHMACKeyBytes {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: HMAC key too short (RFC 2104 §3, NIST SP 800-107)",
+			errcode.WithDetails(
+				errcode.PublicInt("minimumBytes", minHMACKeyBytes),
+				errcode.PublicInt("actualBytes", len(key)),
+			))
+	}
+	dst := make([]byte, len(key))
+	copy(dst, key)
+	// Zero the caller's slice immediately after the defensive copy so that HMAC
+	// key material does not remain accessible in the caller's allocation. The
+	// Protocol retains the only live copy.
+	clear(key)
+	p := &Protocol{
+		hmacKey:   dst,
+		namespace: namespace,
+	}
 	for _, opt := range opts {
 		if opt == nil {
 			continue
@@ -350,15 +344,6 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 		if err := opt(p); err != nil {
 			return nil, err
 		}
-	}
-	// Zero-value defense: catch the case where no Option was passed at all.
-	if len(p.hmacKey) == 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger protocol: HMAC key required (use WithChainHMAC, key >= 32 bytes)")
-	}
-	if p.namespace == "" {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger protocol: namespace required (use WithNamespace)")
 	}
 	if validation.IsNilInterface(p.restartRecovery) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

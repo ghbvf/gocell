@@ -29,8 +29,8 @@ var testNow = time.Date(2026, 5, 19, 10, 30, 0, 0, time.UTC)
 func buildTestLedgerStore(t *testing.T) (*audit.BootstrapLedgerStore, ledger.Store, clock.Clock) {
 	t.Helper()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(append([]byte(nil), testHMACKey...)),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		append([]byte(nil), testHMACKey...),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

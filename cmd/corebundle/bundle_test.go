@@ -288,8 +288,8 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 func buildTestBootstrapLedgerStore(t *testing.T) *audit.BootstrapLedgerStore {
 	t.Helper()
 	proto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("test-bootstrap-hmac-key-32bytes!")),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("test-bootstrap-hmac-key-32bytes!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

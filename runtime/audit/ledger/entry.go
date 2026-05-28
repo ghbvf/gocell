@@ -35,7 +35,7 @@ type Entry struct {
 
 	// SubjectID is the OAuth subject-of-record (the end-user's stable
 	// identity, OAuth `sub`). Empty string when not available — the column is
-	// NOT NULL with no DEFAULT in the DB schema (041_audit_entries_v2.sql);
+	// NOT NULL with no DEFAULT in the DB schema (043_audit_entries_v2.sql);
 	// callers (PG Store INSERT) supply the zero value explicitly so the chain
 	// reflects the producer's lack of injection rather than a sentinel DEFAULT.
 	//

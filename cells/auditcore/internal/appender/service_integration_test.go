@@ -47,8 +47,8 @@ func newIntegProtocol(t *testing.T) *ledger.Protocol {
 		key[i] = byte(i + 1)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

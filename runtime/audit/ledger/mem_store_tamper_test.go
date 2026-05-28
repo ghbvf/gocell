@@ -72,8 +72,8 @@ func newTestProtocolForTamper(t *testing.T) *Protocol {
 		t.Fatalf("ParseNamespaceID: %v", err)
 	}
 	p, err := NewProtocol(
-		WithChainHMAC(key),
-		WithNamespace(ns),
+		ns,
+		key,
 		WithRestartRecovery(RestartRecoveryStrictTailVerify{}),
 		WithIdempotency(IdempotencyContentFingerprint{}),
 	)

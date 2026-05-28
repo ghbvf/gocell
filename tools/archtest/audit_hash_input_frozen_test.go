@@ -1,7 +1,7 @@
 // INVARIANT: AUDIT-HASH-INPUT-FROZEN-01
 //
-// Locks the canonical 11-field HMAC chain input for the audit ledger so the
-// hash-chain format introduced in 041_audit_entries_v2.sql cannot drift via
+// Locks the canonical 12-field HMAC chain input for the audit ledger so the
+// hash-chain format introduced in 043_audit_entries_v2.sql cannot drift via
 // either an upstream rewrite of the typed input struct or a downstream
 // alternative-callsite that constructs an HMAC over audit data outside the
 // single sanctioned Protocol.ComputeHash entry point.
@@ -15,36 +15,44 @@
 //     Inside the package, this archtest pins field set + order + Go type +
 //     JSON struct tag via AST, so a same-package rename or field reordering
 //     fails immediately. Combined with the JSON-source-order determinism of
-//     encoding/json, the canonical message bytes cannot drift.
+//     encoding/json, the canonical message bytes cannot drift. The first
+//     field is Namespace, anchoring each chain to its owner cell so cross-
+//     namespace HMAC replay is rejected by signature mismatch.
 //
 //   - A2 下游 Hard (typed function choice + AST callsite uniqueness with
-//     receiver-type lock): Within runtime/audit/ledger/*.go (production
-//     files), any call to hmac.New(...) must be located inside the body of
-//     the ComputeHash method on a *Protocol receiver. The receiver-type
-//     check rejects same-package re-shape attacks (a sibling struct adding
-//     `func (X) ComputeHash() string` would not satisfy the funnel and would
-//     be flagged). No helper, no test seam, no "tamper utility" gets to
-//     re-derive the HMAC outside the single sanctioned funnel; if it did,
-//     the message format could disagree with auditHashInput silently.
-//     Production callers of the funnel are enumerated as `(MemStore.Append,
-//     MemStore.Verify, LedgerStore.Append, LedgerStore.verifyRange)` via
-//     Protocol.ComputeHash; no other code path may construct an HMAC over
-//     audit data. Note: sha256.New called outside hmac (content fingerprint
-//     in mem_store.go) is intentionally NOT in scope — that path is a
-//     non-HMAC content-id digest, never the chain hash; it cannot drift
-//     the chain because the chain hash funnel routes only through hmac.New.
+//     receiver-type lock + typed-resolver alias-proof identification):
+//     Within runtime/audit/ledger/*.go (production files), any call to
+//     crypto/hmac.New(...) must be located inside the body of the
+//     ComputeHash method on a *Protocol receiver. The callee identification
+//     uses ResolvePackageRef against types.Info, so import aliases
+//     (`import h "crypto/hmac"; h.New(...)`) and dot-imports
+//     (`import . "crypto/hmac"; New(...)`) resolve to the same canonical
+//     (crypto/hmac, New) tuple as the qualified form — no AST-name bypass
+//     remains. The receiver-type check rejects same-package re-shape attacks:
+//     a sibling struct adding `func (X) ComputeHash() string` would not
+//     satisfy the funnel and would be flagged. Production callers of
+//     ComputeHash are MemStore.Append, MemStore.Verify, LedgerStore.Append,
+//     and LedgerStore.verifyRange; no other code path may construct an HMAC
+//     over audit data. Note: crypto/sha256.New called outside hmac
+//     (content-fingerprint in mem_store.go) is intentionally not in scope —
+//     that path is a non-HMAC content-id digest, never the chain hash; it
+//     cannot drift the chain because the chain-hash funnel routes only
+//     through hmac.New.
 //
 //   - A3 上游 Hard (field-order freeze backing JSON-source-order):
 //     encoding/json honors struct source-declaration order. Reordering
-//     the auditHashInput fields silently changes the canonical bytes
-//     written into the HMAC — same data, different hash. A1 reflects field
-//     index along with name, so reordering is caught here.
+//     auditHashInput fields silently changes the canonical bytes written
+//     into the HMAC — same data, different hash. A1 reflects field index
+//     along with name, so reordering is caught here.
 //
 //   - B 盲区反向自检 (reverse self-check):
-//     a synthetic source file containing a hmac.New call outside ComputeHash
-//     drives the A2 scanner under a temp directory; the scanner MUST produce
-//     a violation. The test fails if the reverse check silently passes,
-//     proving the scanner can distinguish allowed vs. forbidden callsites.
+//     three synthetic cases drive the scanner against type-checked source;
+//     each case MUST produce a violation. The cases cover:
+//     1. bare function (no receiver) outside ComputeHash
+//     2. method ComputeHash on a non-Protocol receiver
+//     3. import-alias hmac.New (proves typed-resolver alias-proofing)
+//     The test fails if any case silently passes, proving the scanner can
+//     distinguish allowed vs. forbidden callsites across all three vectors.
 //
 // Funnel cross-link:
 //   - Sibling: PRINCIPAL-SEALED-FIELD-FROZEN-01 (PR-A2, outbox.Entry
@@ -58,16 +66,20 @@
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 )
+
+const ruleAuditHashInputFrozen01 = "AUDIT-HASH-INPUT-FROZEN-01"
 
 // auditHashInputField captures the canonical (name, json tag, Go type) for one
 // field of runtime/audit/ledger.auditHashInput. Reordering the slice changes
@@ -79,11 +91,14 @@ type auditHashInputField struct {
 	GoType  string
 }
 
-// expectedAuditHashInputFields is the authoritative 11-field canonical input
-// for the audit ledger HMAC chain. Any change requires an ADR amendment
-// (ADR 202605281200-1042-...md §Decision 4) and migration of every stored
-// hash (which today means a DROP+CREATE of audit_entries, per #1228).
+// expectedAuditHashInputFields is the authoritative 12-field canonical input
+// for the audit ledger HMAC chain. Namespace is field 1 (cross-namespace
+// domain separation; ref: google/trillian TreeID participation in
+// SignedEntryTimestamp). Any change requires an ADR amendment (ADR
+// 202605281200-1042-...md §Decision 4) and migration of every stored hash
+// (which today means a DROP+CREATE of audit_entries, per #1228).
 var expectedAuditHashInputFields = []auditHashInputField{
+	{Name: "Namespace", JSONTag: "namespace", GoType: "string"},
 	{Name: "PrevHash", JSONTag: "prev_hash", GoType: "string"},
 	{Name: "EventID", JSONTag: "event_id", GoType: "string"},
 	{Name: "EventType", JSONTag: "event_type", GoType: "string"},
@@ -98,13 +113,12 @@ var expectedAuditHashInputFields = []auditHashInputField{
 }
 
 // TestAuditHashInputFrozen_A1_StructShape locks runtime/audit/ledger.auditHashInput
-// to the canonical 11 fields. Drift in any of {field set, order, name, JSON
+// to the canonical 12 fields. Drift in any of {field set, order, name, JSON
 // tag, Go type} surfaces as a test failure pointing at the specific field.
 func TestAuditHashInputFrozen_A1_StructShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	protocolPath := filepath.Join(root, "runtime", "audit", "ledger", "protocol.go")
-
 	got := collectAuditHashInputFields(t, protocolPath)
 	if !reflect.DeepEqual(got, expectedAuditHashInputFields) {
 		t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 A1: auditHashInput shape drifted.\n"+
@@ -113,207 +127,105 @@ func TestAuditHashInputFrozen_A1_StructShape(t *testing.T) {
 			"+ regenerate every persisted hash (chain format changed).",
 			got, expectedAuditHashInputFields)
 	}
-	if len(got) != 11 {
-		t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 A1: expected exactly 11 fields, got %d", len(got))
+	if len(got) != 12 {
+		t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 A1: expected exactly 12 fields, got %d", len(got))
 	}
 }
 
-// TestAuditHashInputFrozen_A2_HmacCallsite locks hmac.New calls within
+// TestAuditHashInputFrozen_A2_HmacCallsite locks crypto/hmac.New calls within
 // runtime/audit/ledger production source to the body of Protocol.ComputeHash.
-// Any other function (helper, test seam in production source, sibling method
-// that re-derives the HMAC) is rejected.
+// The callee identification uses go/types via ResolvePackageRef, so an import
+// alias cannot bypass the lock.
 func TestAuditHashInputFrozen_A2_HmacCallsite(t *testing.T) {
 	t.Parallel()
-	root := findModuleRoot(t)
-	ledgerDir := filepath.Join(root, "runtime", "audit", "ledger")
-
-	violations := scanHmacNewCallsitesOutsideComputeHash(t, ledgerDir)
-	if len(violations) > 0 {
-		t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 A2: hmac.New called outside Protocol.ComputeHash.\n"+
-			"  violations: %v\n"+
-			"All audit HMAC computation must flow through Protocol.ComputeHash "+
-			"with the same auditHashInput marshaling. If you need a new HMAC primitive "+
-			"(e.g. content fingerprint), introduce a typed funnel and extend "+
-			"this archtest's allowlist explicitly.",
-			violations)
-	}
+	diags := RunTyped(t, TypedOpts{}, []string{
+		"./runtime/audit/ledger/...",
+	}, runAuditHashInputA2Rule)
+	Report(t, ruleAuditHashInputFrozen01+"/A2", diags)
 }
 
-// TestAuditHashInputFrozen_B_ReverseSelfCheck proves that the A2 scanner
-// distinguishes allowed vs. forbidden hmac.New callsites:
-//   - bare function (no receiver) outside ComputeHash must fire
-//   - method ComputeHash on a non-Protocol receiver must fire (receiver-type lock)
+// runAuditHashInputA2Rule walks a typed Pass and emits diagnostics for any
+// hmac.New call outside the sanctioned Protocol.ComputeHash body.
 //
-// If either reverse case passes silently the scanner is broken.
-func TestAuditHashInputFrozen_B_ReverseSelfCheck(t *testing.T) {
-	t.Parallel()
-
-	t.Run("bare_function_outside_ComputeHash_fires", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		src := `package fakeledger
-
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-)
-
-func notComputeHash(key []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("synthetic"))
-	return mac.Sum(nil)
-}
-`
-		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o644); err != nil {
-			t.Fatalf("write synthetic source: %v", err)
-		}
-		if violations := scanHmacNewCallsitesOutsideComputeHash(t, dir); len(violations) == 0 {
-			t.Error("AUDIT-HASH-INPUT-FROZEN-01 B: bare-function reverse case did not fire")
-		}
-	})
-
-	t.Run("ComputeHash_on_wrong_receiver_fires", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		src := `package fakeledger
-
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-)
-
-// Imposter struct with method named ComputeHash but receiver != Protocol.
-// Receiver-type lock must reject this so a same-package re-shape cannot
-// bypass A2.
-type Imposter struct{}
-
-func (Imposter) ComputeHash(key []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("imposter"))
-	return mac.Sum(nil)
-}
-`
-		if err := os.WriteFile(filepath.Join(dir, "imposter.go"), []byte(src), 0o644); err != nil {
-			t.Fatalf("write synthetic source: %v", err)
-		}
-		if violations := scanHmacNewCallsitesOutsideComputeHash(t, dir); len(violations) == 0 {
-			t.Error("AUDIT-HASH-INPUT-FROZEN-01 B: wrong-receiver reverse case did not fire — receiver-type lock is missing")
-		}
-	})
-}
-
-// collectAuditHashInputFields parses protocolPath, locates the auditHashInput
-// struct typespec, and returns its fields in source-declaration order.
-func collectAuditHashInputFields(t *testing.T, protocolPath string) []auditHashInputField {
-	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, protocolPath, nil, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: parse %s: %v", protocolPath, err)
+// Scope: only the canonical package runtime/audit/ledger itself. The storetest
+// subpackage (runtime/audit/ledger/storetest) is intentionally excluded — its
+// referenceComputeHash is an INDEPENDENT mirror used by hash-parity tests to
+// detect drift in Protocol.ComputeHash. Forcing it through the same funnel
+// would devolve into production-versus-production circular verification.
+func runAuditHashInputA2Rule(p *Pass) []Diagnostic {
+	if !p.Typed() {
+		return nil
 	}
+	if p.Pkg != nil && p.Pkg.Path() != "github.com/ghbvf/gocell/runtime/audit/ledger" {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		diags = append(diags, scanFileForHmacViolations(p, file, rel)...)
+	}
+	return diags
+}
 
-	var fields []auditHashInputField
-	ast.Inspect(file, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "auditHashInput" {
+// scanFileForHmacViolations iterates top-level funcs in file; for each, checks
+// whether the func is the sanctioned ComputeHash method, then walks the body
+// for hmac.New calls.
+func scanFileForHmacViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
+	var diags []Diagnostic
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		sanctioned := isSanctionedComputeHash(fn)
+		diags = append(diags, scanFuncBodyForHmacViolations(p.TypesInfo, p.Fset, rel, fn, sanctioned)...)
+	}
+	return diags
+}
+
+// scanFuncBodyForHmacViolations walks fn.Body, emits a Diagnostic for each
+// hmac.New call; suppresses them when sanctioned.
+func scanFuncBodyForHmacViolations(info *types.Info, fset *token.FileSet, rel string, fn *ast.FuncDecl, sanctioned bool) []Diagnostic {
+	var diags []Diagnostic
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isHmacNewCall(info, call) || sanctioned {
 			return true
 		}
-		st, ok := ts.Type.(*ast.StructType)
-		if !ok || st.Fields == nil {
-			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput must be a struct type")
-		}
-		for _, f := range st.Fields.List {
-			if f.Tag == nil {
-				t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: field without JSON tag at %v", fset.Position(f.Pos()))
-			}
-			tag, err := strconv.Unquote(f.Tag.Value)
-			if err != nil {
-				t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: unquote tag %q: %v", f.Tag.Value, err)
-			}
-			jsonTag := reflect.StructTag(tag).Get("json")
-			goType := exprToString(f.Type)
-			for _, name := range f.Names {
-				fields = append(fields, auditHashInputField{
-					Name:    name.Name,
-					JSONTag: jsonTag,
-					GoType:  goType,
-				})
-			}
-		}
-		return false
+		pos := fset.Position(call.Pos())
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"hmac.New called outside Protocol.ComputeHash (inside %s) — "+
+					"all audit HMAC must flow through Protocol.ComputeHash with the canonical auditHashInput marshaling",
+				fn.Name.Name,
+			),
+		})
+		return true
 	})
-	if len(fields) == 0 {
-		t.Fatal("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput type not found in protocol.go")
-	}
-	return fields
+	return diags
 }
 
-// scanHmacNewCallsitesOutsideComputeHash walks dir, parses each *.go (skipping
-// _test.go), and returns "file:line" strings for hmac.New(...) calls that are
-// not inside a function declaration whose name is exactly "ComputeHash".
-func scanHmacNewCallsitesOutsideComputeHash(t *testing.T, dir string) []string {
-	t.Helper()
-	var violations []string
-	walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			// Don't recurse into subdirectories (storetest / etc. live under
-			// their own funnels; archtest scopes A2 to the canonical ledger
-			// package source).
-			if path == dir {
-				return nil
-			}
-			return filepath.SkipDir
-		}
-		name := info.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			return nil
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01 A2: parse %s: %v", path, err)
-		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			if fn.Body == nil {
-				continue
-			}
-			isComputeHash := fn.Name != nil && fn.Name.Name == "ComputeHash" && hasProtocolReceiver(fn)
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if !isHmacNewSelector(call.Fun) {
-					return true
-				}
-				if isComputeHash {
-					return true
-				}
-				violations = append(violations,
-					fset.Position(call.Pos()).Filename+":"+strconv.Itoa(fset.Position(call.Pos()).Line))
-				return true
-			})
-		}
-		return nil
-	})
-	if walkErr != nil {
-		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01 A2: walk %s: %v", dir, walkErr)
-	}
-	return violations
+// isHmacNewCall resolves call.Fun via go/types and reports whether the callee
+// is crypto/hmac.New. Alias-proof: handles `hmac.New`, `h.New` after
+// `import h "crypto/hmac"`, and `New` after `import . "crypto/hmac"`.
+func isHmacNewCall(info *types.Info, call *ast.CallExpr) bool {
+	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+	return ok && pkgPath == "crypto/hmac" && name == "New"
+}
+
+// isSanctionedComputeHash reports whether fn is `func (*Protocol) ComputeHash`
+// (value or pointer receiver). hasProtocolReceiver pins the receiver type.
+func isSanctionedComputeHash(fn *ast.FuncDecl) bool {
+	return fn.Name != nil && fn.Name.Name == "ComputeHash" && hasProtocolReceiver(fn)
 }
 
 // hasProtocolReceiver reports whether fn declares a value-or-pointer receiver
-// whose base type identifier is exactly "Protocol". This narrows A2's "function
-// named ComputeHash" check to the canonical method on *Protocol — a same-package
-// re-shape that adds a `func (X) ComputeHash() string` to bypass A2 is rejected
-// because X != Protocol.
+// whose base type identifier is exactly "Protocol".
 func hasProtocolReceiver(fn *ast.FuncDecl) bool {
 	if fn.Recv == nil || len(fn.Recv.List) == 0 {
 		return false
@@ -329,35 +241,178 @@ func hasProtocolReceiver(fn *ast.FuncDecl) bool {
 	return ident.Name == "Protocol"
 }
 
-// isHmacNewSelector reports whether expr is the selector hmac.New (with any
-// package alias resolved by its identifier name). We accept both the canonical
-// `hmac.New` and `hmac.New(...)` chain heads — only the selector identity
-// matters; argument shapes are policed by Go's type checker at compile time.
-func isHmacNewSelector(expr ast.Expr) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok {
-		return false
+// TestAuditHashInputFrozen_B_ReverseSelfCheck proves the A2 scanner
+// distinguishes allowed vs. forbidden hmac.New callsites across three vectors.
+// Each case feeds a synthetic source file through the type-checker (so
+// ResolvePackageRef resolves real crypto/hmac.New) and runs the same A2 rule.
+// If any case fails to produce a violation the scanner is broken (or the
+// alias-proof guarantee silently regressed).
+func TestAuditHashInputFrozen_B_ReverseSelfCheck(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "bare_function_outside_ComputeHash_fires",
+			src: `package fakeledger
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+)
+
+func notComputeHash(key []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("synthetic"))
+	return mac.Sum(nil)
+}
+`,
+		},
+		{
+			name: "ComputeHash_on_wrong_receiver_fires",
+			src: `package fakeledger
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+)
+
+type Imposter struct{}
+
+func (Imposter) ComputeHash(key []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("imposter"))
+	return mac.Sum(nil)
+}
+`,
+		},
+		{
+			name: "import_alias_hmac_fires",
+			src: `package fakeledger
+
+import (
+	h "crypto/hmac"
+	"crypto/sha256"
+)
+
+func aliasViolation(key []byte) []byte {
+	mac := h.New(sha256.New, key)
+	mac.Write([]byte("alias"))
+	return mac.Sum(nil)
+}
+`,
+		},
 	}
-	if sel.Sel == nil || sel.Sel.Name != "New" {
-		return false
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			diags := scanSyntheticSource(t, tc.src)
+			if len(diags) == 0 {
+				t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 B/%s: scanner did not fire", tc.name)
+			}
+		})
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return false
+}
+
+// scanSyntheticSource type-checks src against the real crypto/hmac stdlib
+// package and runs the A2 rule logic. Used by the reverse self-check to
+// validate that the alias-proof typed scanner detects violations in all
+// import shapes.
+func scanSyntheticSource(t *testing.T, src string) []Diagnostic {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "synthetic.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse synthetic source: %v", err)
 	}
-	return pkg.Name == "hmac"
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Implicits:  map[ast.Node]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	conf := types.Config{Importer: importer.Default()}
+	if _, err := conf.Check("synthetic", fset, []*ast.File{file}, info); err != nil {
+		t.Fatalf("type-check synthetic source: %v", err)
+	}
+	var diags []Diagnostic
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		sanctioned := isSanctionedComputeHash(fn)
+		diags = append(diags, scanFuncBodyForHmacViolations(info, fset, "synthetic.go", fn, sanctioned)...)
+	}
+	return diags
+}
+
+// collectAuditHashInputFields parses protocolPath, locates the auditHashInput
+// struct typespec, and returns its fields in source-declaration order.
+func collectAuditHashInputFields(t *testing.T, protocolPath string) []auditHashInputField {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, protocolPath, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: parse %s: %v", protocolPath, err)
+	}
+	var fields []auditHashInputField
+	ast.Inspect(file, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSpec)
+		if !ok || ts.Name == nil || ts.Name.Name != "auditHashInput" {
+			return true
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput must be a struct type")
+		}
+		fields = collectStructFields(t, fset, st)
+		return false
+	})
+	if len(fields) == 0 {
+		t.Fatal("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput type not found in protocol.go")
+	}
+	return fields
+}
+
+// collectStructFields walks struct fields and returns name/jsonTag/goType for
+// each. Helper split out of collectAuditHashInputFields to keep cognitive
+// complexity below the project ceiling.
+func collectStructFields(t *testing.T, fset *token.FileSet, st *ast.StructType) []auditHashInputField {
+	t.Helper()
+	var fields []auditHashInputField
+	for _, f := range st.Fields.List {
+		if f.Tag == nil {
+			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: field without JSON tag at %v", fset.Position(f.Pos()))
+		}
+		tag, err := strconv.Unquote(f.Tag.Value)
+		if err != nil {
+			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: unquote tag %q: %v", f.Tag.Value, err)
+		}
+		jsonTag := reflect.StructTag(tag).Get("json")
+		goType := exprToString(f.Type)
+		for _, name := range f.Names {
+			fields = append(fields, auditHashInputField{
+				Name:    name.Name,
+				JSONTag: jsonTag,
+				GoType:  goType,
+			})
+		}
+	}
+	return fields
 }
 
 // exprToString renders an ast.Expr as its canonical Go source form for the
-// limited shapes used by auditHashInput fields. Anything more exotic than
-// what the canonical struct uses is flagged by the test guard.
+// limited shapes used by auditHashInput fields.
 func exprToString(e ast.Expr) string {
 	switch v := e.(type) {
 	case *ast.Ident:
 		return v.Name
 	case *ast.ArrayType:
 		if v.Len != nil {
-			// Unexpected: auditHashInput fields are not fixed-length arrays.
 			return "<unexpected-fixed-array>"
 		}
 		return "[]" + exprToString(v.Elt)

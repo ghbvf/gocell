@@ -26,6 +26,7 @@ import (
 // (locked by archtest AUDIT-HASH-INPUT-FROZEN-01) and this reference surfaces
 // as a test failure as well as an archtest failure.
 type referenceHashInput struct {
+	Namespace          string `json:"namespace"`
 	PrevHash           string `json:"prev_hash"`
 	EventID            string `json:"event_id"`
 	EventType          string `json:"event_type"`
@@ -40,10 +41,12 @@ type referenceHashInput struct {
 }
 
 // referenceComputeHash recomputes the canonical HMAC for an Entry independently
-// of Protocol.ComputeHash. Used by tests that assert byte-for-byte equivalence
-// to the spec.
-func referenceComputeHash(key []byte, prevHash string, e *ledger.Entry) string {
+// of Protocol.ComputeHash. The namespace is supplied explicitly because
+// production embeds Protocol.Namespace() as the first signed field
+// (cross-namespace HMAC replay attack vector — see ADR-1042 §威胁矩阵 §A).
+func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
 	in := referenceHashInput{
+		Namespace:          string(ns),
 		PrevHash:           prevHash,
 		EventID:            e.EventID,
 		EventType:          e.EventType,
@@ -83,8 +86,8 @@ func newTestProtocol(t *testing.T) *ledger.Protocol {
 		t.Fatalf("ParseNamespaceID: %v", err)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(testHMACKey()),
-		ledger.WithNamespace(ns),
+		ns,
+		testHMACKey(),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -161,7 +164,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	expectedHash := referenceComputeHash(key, "", entry)
+	expectedHash := referenceComputeHash(key, ledger.NamespaceID("auditcore"), "", entry)
 
 	tail, err := store.Tail(context.Background())
 	if err != nil {
@@ -695,8 +698,8 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -720,7 +723,7 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		PrevHash:      "deadbeef",
 	}
 
-	expected := referenceComputeHash(keyCopy, e.PrevHash, e)
+	expected := referenceComputeHash(keyCopy, ns, e.PrevHash, e)
 	got := p.ComputeHash(e.PrevHash, e)
 	if got != expected {
 		t.Errorf("ComputeHash mismatch:\n  got  %s\n  want %s", got, expected)

@@ -14,7 +14,7 @@ hard deadline (PR #1218 retraction):
 - **PR-A1** (this PR, issue #1228): audit ledger DROP+CREATE rebuild +
   11-field canonical-JSON HMAC + archtest `AUDIT-HASH-INPUT-FROZEN-01`.
   Lands all Decision points that touch `runtime/audit/ledger/*`,
-  `adapters/postgres/audit_ledger*`, and `41_audit_entries_v2.sql`.
+  `adapters/postgres/audit_ledger*`, and `043_audit_entries_v2.sql`.
 - **PR-A2** (follow-up, issue #1229): outbox-side `Entry` / `PrincipalMetadata`
   sealed construction (kernel/outbox/* with unexported fields + `NewEntry`
   constructor + 241 callsite literal rewrites), migration 042 outbox_entries
@@ -109,13 +109,27 @@ Lamport / causation_id defer 到 W3 Command Bus —— causation 链需 command/
 OLD (pipe-separated, develop 020_audit_ledger):
     prevHash|eventID|eventType|actorID|UnixNano|payload                          (6 字段)
 
-NEW (canonical JSON, 041_audit_entries_v2):
+NEW (canonical JSON, 043_audit_entries_v2):
     json.Marshal(auditHashInput{
+        namespace,                                                                 ← cross-namespace domain separation
         prev_hash, event_id, event_type, actor_id,
         subject_id, tenant_id, session_id, correlation_id,
         occurred_at_unix_nano, timestamp_unix_nano, payload
-    })                                                                            (11 字段)
+    })                                                                            (12 字段)
 ```
+
+`namespace` 作为第 1 字段进入 HMAC：对标 google/trillian TreeID 参与
+`SignedEntryTimestamp` 的 domain separation 设计 —— 相同 `(prevHash, ..., payload)`
+在 namespace A 与 namespace B 下产生不同 HMAC，cross-namespace replay 被签名层
+拒绝。
+
+`NewProtocol(namespace, key, opts...)` 改为 **位置参数**：删除
+`WithChainHMAC` / `WithNamespace` Option（**type-system Hard 上游**），调用方
+无法漏传或交换 namespace 与 key。`AUDIT-HASH-INPUT-FROZEN-01.A1` reflect-lock
+固定 12 字段集 + 顺序；`A2` 用 `archtest.RunTyped` + `ResolvePackageRef` 在
+go/types 层解析 `crypto/hmac.New` 调用点（**alias-proof**，`import h
+"crypto/hmac"` 不可绕过）；`B` 反向自检覆盖 bare function / wrong receiver /
+import alias 三个 vector。
 
 `auditHashInput` 是 `runtime/audit/ledger` 包内 **unexported** typed struct
 （包外不可构造、不可作 unmarshal target、不可 alias re-shape）；11 字段，字段
@@ -128,15 +142,15 @@ F3+F6）：JSON quote/escape 处理使任何字段值都无法移动字段边界
 
 **无版本字节、无 legacy 路径、无 ALTER ADD 哨兵**：CLAUDE.md
 「Review 和重构时不考虑向后兼容——当前只有 gocell 自身」原则下，旧 audit
-chain 数据由 migration 041 一并 DROP TABLE 丢弃；hash chain 从新 seq=1
+chain 数据由 migration 043 一并 DROP TABLE 丢弃；hash chain 从新 seq=1
 重建。所有 hash 期望 fixture 在同 PR (PR-A1) 内 regen。
 
 PR #1218 原方案 `041_extend_audit_principal_correlation.sql` 用 `ALTER TABLE
 ADD COLUMN ... NOT NULL DEFAULT ''` / `DEFAULT '1970-01-01 00:00:00+00'`
 哨兵进 W0 transition；该方案在 review 中触发 14 类问题（详见 PR #1218 review
 notes），根因是 Soft "adoption incremental" 路径违反向后兼容原则，本 ADR
-amendment 2026-05-29 全面替代为 DROP+CREATE 一刀切（**migration 041 文件名
-随之改为 `041_audit_entries_v2.sql`**），并在 §"威胁矩阵" 中按
+amendment 2026-05-29 全面替代为 DROP+CREATE 一刀切（**migration 043 文件名
+随之改为 `043_audit_entries_v2.sql`**），并在 §"威胁矩阵" 中按
 `contract-fanout.md` DROP COLUMN 模板逐项做 invariant inventory + 替代证明。
 
 `cells/auditcore/internal/appender/service.go` 通过 `s.protocol.ComputeHash`
@@ -231,21 +245,26 @@ helper 写入 delivery span：
   2. **DB-level dedup**：`021_audit_entries_event_id_unique.sql` 引入的 `uq_audit_namespace_event_id` UNIQUE INDEX `(namespace, event_id)` 是 application-layer `selectFingerprintSQL` 的二线 dedup guard（`mem_store.go:308-309` 注释明示），防止两个并发 Append 在 fingerprint check 之间窗口插入同 EventID 的 row。
   3. **hash 格式 CHECK**：`ck_audit_hash_format` CHECK 约束在 DB 层强制 prev_hash / hash 是 64-char 小写 hex（seq_no-coupled，genesis row 例外），作为 wire-format 的最后一道防线。
 - **替代证明**：
-  - **chain SoR**（替代原 invariant #1）：migration 041_audit_entries_v2 在
-    +goose Up 阶段 DROP TABLE audit_entries（配合
-    `gocell.allow_destructive_down` GUC fail-closed guard：发现表已存在且
-    含 row 时拒绝迁移；以 `pg_class` 探测表存在以避免 `information_schema`
-    权限盲区），然后 CREATE TABLE 重建。DROP 之后表不存在 → `TailVerify`
-    SELECT 取不到任何旧 row（结果集为空）→ `RestartRecoveryStrictTailVerify`
-    自动从 `prevHash=""`, `seqNo=1` 重建 chain 起点（与首次部署语义等价），
-    无 W0 detection / sentinel 检测路径。旧 row 的 hash 无法被新 ComputeHash
-    验证（11-field 与 6-field 字节不同），但由于行已被 DROP，不存在
-    「旧 hash 与新 hash 共存」二义性。
-  - **DB-level dedup**（替代原 invariant #2）：041 line 101 `CREATE UNIQUE INDEX
+  - **chain SoR**（替代原 invariant #1）：migration 043_audit_entries_v2 在
+    +goose Up 阶段 DROP TABLE audit_entries（配合 **专属** GUC
+    `gocell.allow_audit_rebuild` fail-closed guard，与 destructive-down GUC
+    解耦以避免语义混用；发现表已存在且含 row 时拒绝迁移；以 `pg_class`
+    探测表存在以避免 `information_schema` 权限盲区），然后 CREATE TABLE
+    重建。DROP 之后表不存在 → `TailVerify` SELECT 取不到任何旧 row（结果集为
+    空）→ `RestartRecoveryStrictTailVerify` 自动从 `prevHash=""`, `seqNo=1`
+    重建 chain 起点（与首次部署语义等价），无 W0 detection / sentinel 检测
+    路径。旧 row 的 hash 无法被新 ComputeHash 验证（12-field 与 6-field
+    字节不同），但由于行已被 DROP，不存在「旧 hash 与新 hash 共存」二义性。
+    Down 块直接 `RAISE EXCEPTION`（无独立反向路径），运维必须走
+    `goose down-to 020 && goose up` 显式重建——杜绝
+    「版本 41 但表不存在」半状态。**Hardness ceiling**：goose SQL 只能读 GUC
+    字符串；typed `MigratorPermit` 是更 Hard 的形态但需要把 forward rebuild
+    搬到 Go 侧（独立 backlog 跟踪）。
+  - **DB-level dedup**（替代原 invariant #2）：043 line 101 `CREATE UNIQUE INDEX
     uq_audit_namespace_event_id ON audit_entries (namespace, event_id)` 复刻
     021 的 UNIQUE 约束。schema_guard `expectedIndexes` 同步注册该索引名 +
     `Unique: true` 标记，运行时 schema_guard 启动校验保证索引未漂移。
-  - **hash 格式 CHECK**（替代原 invariant #3）：041 CREATE TABLE 内联
+  - **hash 格式 CHECK**（替代原 invariant #3）：043 CREATE TABLE 内联
     `CONSTRAINT ck_audit_hash_format CHECK (...)` 子句，约束 regex 字面与 020
     一致；schema_guard `expectedChecks` 注册 `ck_audit_hash_format` 名持续守
     护其存在性。
@@ -253,9 +272,9 @@ helper 写入 delivery span：
     这是事实层面的运维真值，不在 §Consequences 重复作免责论述（CLAUDE.md
     「Review 和重构时不考虑向后兼容」明确该原则的应用前提，非个案豁免）。
   - 关联 archtest：schema_guard `expectedColumns` 15 行（10 旧 + 5 新 NotNull=true，
-    无 expectedDefault），`expectedVersion=41`；`expectedIndexes` 含 `uq_audit_namespace_event_id Unique=true`；
+    无 expectedDefault），`expectedVersion=43`；`expectedIndexes` 含 `uq_audit_namespace_event_id Unique=true`；
     `expectedChecks` 含 `ck_audit_hash_format`；`MIGRATION-PAIR-DEPLOY-01`
-    无新加 pair-deploy directive（041 自包含含 020 + 021 全部约束）。
+    无新加 pair-deploy directive（043 自包含含 020 + 021 全部约束）。
 
 #### C. ALTER ADD 5 列 + 哨兵 DEFAULT（PR #1218 旧方案 `041_extend_audit_principal_correlation.sql`）
 
@@ -320,8 +339,8 @@ Implementations:
   [x] (PR-A1) runtime/audit/ledger.Protocol.ComputeHash (canonical JSON, 11-field, auditHashInput unexported struct)
   [x] (PR-A1) runtime/audit/ledger.mem_store (字段透传 via *e 复制 + protocol.ComputeHash 单源)
   [x] (PR-A1) adapters/postgres/audit_ledger.store (15 列 INSERT/SELECT/scan)
-  [x] (PR-A1) adapters/postgres/migrations/041_audit_entries_v2.sql (DROP+CREATE, NOT NULL 无 DEFAULT)
-  [x] (PR-A1) adapters/postgres/schema_guard.go (15 列 + version 41 + inventory)
+  [x] (PR-A1) adapters/postgres/migrations/043_audit_entries_v2.sql (DROP+CREATE, NOT NULL 无 DEFAULT)
+  [x] (PR-A1) adapters/postgres/schema_guard.go (15 列 + version 43 + inventory)
   [x] (PR-A1) runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (5 字段 RoundTrip + HMAC parity)
   [x] (PR-A1) runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (11-field tamper sensitivity)
   [x] (PR-A1) tools/archtest/audit_hash_input_frozen_test.go (AUDIT-HASH-INPUT-FROZEN-01 A1/A2/A3/B)
@@ -350,7 +369,7 @@ Repro:
     go test ./kernel/outbox/... ./pkg/ctxkeys/... ./kernel/wrapper/...
     go test ./tools/archtest/ -run 'PRINCIPAL|SAFEID-WIREMESSAGE|SAFEID-UPSTREAM'
 Dependent contracts (governance scan): none — 三族字段集是 framework 横切，不进 contract.yaml payload.schema.json
-Invariant inventory (DROP COLUMN 041_audit_entries_v2.sql):
+Invariant inventory (DROP COLUMN 043_audit_entries_v2.sql):
   - 6-field hash chain → 11-field canonical JSON via auditHashInput unexported struct + AUDIT-HASH-INPUT-FROZEN-01 双向 Hard 锁
   - existing audit_entries rows → DROP TABLE + chain restart from seq=1; TailVerify 自然适配空表
   - W0 sentinel adoption (PR #1218 retracted) → 5 列 NOT NULL 无 DEFAULT 一刀切，appender 零值满足约束
@@ -362,6 +381,13 @@ Invariant inventory (DROP COLUMN 041_audit_entries_v2.sql):
 - 撤回：PR #1218（14 类 review finding 触发 ADR amendment）
 - 后续：PR-A2（issue #1229 — outbox Entry sealed construction + 241 字面量重写 + migration 042 + appender 接入 + auditquery 出口收紧）
 - 关联：issue #1219（auditquery API 暴露 5 新列；sequenced after #1229 因为 §4 可能重写 wire DTO）
+- 重构 backlog（PR #1239 round-3 派生）：
+  - #1245 SignedDomainContext 跨 audit/outbox/jwt 三层签名上下文统一化
+  - #1246 tools/archtest/internal/callresolver 通用 callsite 解析框架
+  - #1248 MigratorPermit typed channel — forward-rebuild 移到 Go 侧
+  - #1249 storetest property-based fuzzing — Entry 字段 / payload binary corpus
+  - #1241 RestartRecoveryStrictTailVerify sealed type 未触发实际 Verify
+  - won't-do: HMAC key GC finalizer（Go 语言约束，已知 docs-only 议题）
 - Foundation: `kernel/outbox/observability.go` (Correlation 族范本)
 - Sealed construction template: `pkg/errcode/details.go` (PR #1035) + `errcode_invariants_test.go::TestDetailsSealedFieldFrozen01` 参考形态
 - Hard 范本: `.claude/rules/gocell/ai-robust.md` §Hard 范本目录 "sealed construction" + "typed function choice"

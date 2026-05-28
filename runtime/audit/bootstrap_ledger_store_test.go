@@ -35,8 +35,8 @@ func TestNewBootstrapLedgerStore_RejectsNonBootstrapNamespace(t *testing.T) {
 	relayNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
-		ledger.WithNamespace(relayNS),
+		relayNS,
+		[]byte("bootstrap-test-hmac-32-bytes-ok!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -57,8 +57,8 @@ func TestNewBootstrapLedgerStore_RejectsNonBootstrapNamespace(t *testing.T) {
 func TestBootstrapLedgerStore_DelegatesAppend(t *testing.T) {
 	t.Parallel()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("bootstrap-test-hmac-32-bytes-ok!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -96,8 +96,8 @@ func TestBootstrapLedgerStore_DelegatesAppend(t *testing.T) {
 func TestVerifyBootstrapTailOnStartup_EmptyChain(t *testing.T) {
 	t.Parallel()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("bootstrap-test-hmac-32-bytes-ok!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -128,8 +128,8 @@ func TestVerifyBootstrapTailOnStartup_RejectsNilStore(t *testing.T) {
 func TestBootstrapLedgerStore_RepoReady_Conformance(t *testing.T) {
 	t.Parallel()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("bootstrap-test-hmac-32-bytes-ok!")),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("bootstrap-test-hmac-32-bytes-ok!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

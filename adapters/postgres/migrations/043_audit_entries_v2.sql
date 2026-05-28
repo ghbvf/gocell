@@ -57,19 +57,31 @@
 -- ref: tools/archtest/audit_hash_input_frozen_test.go AUDIT-HASH-INPUT-FROZEN-01
 
 -- +goose Up
+-- Forward-rebuild permit (decoupled from the destructive-down GUC). 041 is a
+-- forward DROP+CREATE rebuild, NOT a Migrator.Down rollback, so it must not
+-- share gocell.allow_destructive_down (which guards Down 020/021/etc). The
+-- dedicated gocell.allow_audit_rebuild GUC makes the semantic boundary explicit
+-- at the runbook + audit-log layer.
+--
 -- Up guard uses pg_class (not information_schema.tables) so the existence
 -- check works regardless of whether the migration role has SELECT on
 -- information_schema. Behavior matrix:
 --   - table missing             → DROP+CREATE runs unconditionally (fresh deploy)
 --   - table present, 0 rows     → DROP+CREATE runs unconditionally (idempotent dev re-run)
---   - table present, ≥1 row     → require GUC gocell.allow_destructive_down=true
+--   - table present, ≥1 row     → require GUC gocell.allow_audit_rebuild=true
+--
+-- Hardness ceiling: the GUC string is the strongest signal goose migration SQL
+-- can read; a typed MigratorPermit funnel (Hard) would require moving forward-
+-- rebuild orchestration out of the SQL file into Go-side Migrator.ForwardRebuild
+-- API. Tracked as a backlog framework upgrade — see ADR-1042 §Decision 4 and
+-- the follow-up issue cross-referenced there.
 -- +goose StatementBegin
 DO $$
 BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true'
+    IF current_setting('gocell.allow_audit_rebuild', true) IS DISTINCT FROM 'true'
        AND EXISTS (SELECT 1 FROM pg_class WHERE relname = 'audit_entries' AND relkind = 'r')
        AND EXISTS (SELECT 1 FROM audit_entries) THEN
-        RAISE EXCEPTION 'audit_entries v2 rebuild blocked: existing rows present and GUC gocell.allow_destructive_down not set';
+        RAISE EXCEPTION 'audit_entries v2 rebuild blocked: existing rows present and GUC gocell.allow_audit_rebuild not set';
     END IF;
 END $$;
 -- +goose StatementEnd
@@ -110,23 +122,28 @@ CREATE UNIQUE INDEX uq_audit_namespace_event_id     ON audit_entries (namespace,
 -- (table no longer empty after first deploy of 041).
 
 -- +goose Down
--- WARNING: This down migration drops audit_entries v2 and PERMANENTLY DELETES
--- all audit data. Rollback path requires re-running 020 + 021 to restore the
--- pre-041 schema (a no-Principal, 6-field HMAC chain). Production rollback MUST
--- back up the table first (e.g., `pg_dump -t audit_entries`).
+-- 041 has no isolated Down path. A goose Down 041 would leave the system at
+-- schema version 40 (the goose tracking table records the migration as
+-- reverted) but audit_entries would be missing — the binary's schema_guard
+-- expectedVersion=41 invariant would be violated and the application would
+-- refuse to start. There is no half-state to preserve.
 --
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down
--- is set. Mirrors 020's down-guard idiom.
+-- Forward-only rollback recipe (run by the operator, not goose Down 041):
+--   1. goose down-to 020    (rewinds the tracking table to before audit_entries
+--                            and DROPs the v2 table; safe because the v2 schema
+--                            has no rows the operator wants to keep — its data
+--                            was already discarded by the 041 Up rebuild)
+--   2. goose up             (replays 020 + 021 + ... to restore the pre-041
+--                            schema; the chain restarts from seq=1)
+--
+-- The Down block intentionally fail-fasts so any goose Down 041 invocation —
+-- automation, manual psql, or test harness — exits with a clear error pointing
+-- at the recipe above. This preserves forward-only canonical-rewrite semantics
+-- (CLAUDE.md「Review 和重构时不考虑向后兼容」) and prevents the half-state
+-- "version 40 / table missing" failure mode.
 -- +goose StatementBegin
 DO $$
 BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
+    RAISE EXCEPTION 'audit_entries v2 (041) has no isolated Down — use `goose down-to 020 && goose up` to restore the pre-041 schema (see migration header for the recipe)';
 END $$;
 -- +goose StatementEnd
-
-DROP INDEX IF EXISTS uq_audit_namespace_event_id;
-DROP INDEX IF EXISTS idx_audit_namespace_event_type;
-DROP INDEX IF EXISTS idx_audit_namespace_ts_id;
-DROP TABLE IF EXISTS audit_entries;
