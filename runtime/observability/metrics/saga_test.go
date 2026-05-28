@@ -216,6 +216,41 @@ func TestSagaStepCollector_NopObserver_DoesNotPanic(t *testing.T) {
 	c.ObserveHeartbeatFailure(context.Background(), executor.HeartbeatFailureInfraError)
 }
 
+// TestOutcomeLabel_UnknownVariant_Panics asserts that outcomeLabel panics when
+// passed an unknown Outcome value. This is an A-class programmer error: the
+// Outcome enum is exhaustive and any unrecognized value indicates a broken
+// caller.
+func TestOutcomeLabel_UnknownVariant_Panics(t *testing.T) {
+	p := newSagaSpyProvider()
+	c, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaStepCollector: %v", err)
+	}
+	// Outcome(99) is not declared in executor and must trigger a panic via
+	// the panicregister.Approved funnel (A-class unreachable state machine branch).
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ObserveOutcome with unknown Outcome must panic; got nil recover")
+		}
+	}()
+	c.ObserveOutcome(context.Background(), "def", "step", executor.Outcome(99), 1)
+}
+
+// TestNewSagaStepCollector_NoHistograms freezes the invariant that
+// SagaStepCollector registers only CounterVec metrics (no histograms).
+// Accidentally registering a histogram would change the cardinality discipline
+// and surprise dashboard / alert owners; this test guards against drift.
+func TestNewSagaStepCollector_NoHistograms(t *testing.T) {
+	p := newSagaSpyProvider()
+	_, err := obmetrics.NewSagaStepCollector(p, "auditcore")
+	if err != nil {
+		t.Fatalf("NewSagaStepCollector: %v", err)
+	}
+	if len(p.histogramNames) != 0 {
+		t.Errorf("SagaStepCollector must not register histograms, got %v", p.histogramNames)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // sagaSpyProvider — tracks counter registrations and emissions, including
 // declared label sets (for the LabelSet_* freeze tests).
@@ -230,15 +265,17 @@ type sagaSpyProvider struct {
 	counterNames  map[string]struct{}
 	counterLabels map[string][]string
 	gaugeNames    map[string]struct{}
+	histogramNames map[string]struct{}
 	counterOps    map[string][]sagaSpyRecord
 }
 
 func newSagaSpyProvider() *sagaSpyProvider {
 	return &sagaSpyProvider{
-		counterNames:  make(map[string]struct{}),
-		counterLabels: make(map[string][]string),
-		gaugeNames:    make(map[string]struct{}),
-		counterOps:    make(map[string][]sagaSpyRecord),
+		counterNames:   make(map[string]struct{}),
+		counterLabels:  make(map[string][]string),
+		gaugeNames:     make(map[string]struct{}),
+		histogramNames: make(map[string]struct{}),
+		counterOps:     make(map[string][]sagaSpyRecord),
 	}
 }
 
@@ -249,6 +286,7 @@ func (p *sagaSpyProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetr
 }
 
 func (p *sagaSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	p.histogramNames[opts.Name] = struct{}{}
 	return kernelmetrics.NopProvider{}.HistogramVec(opts)
 }
 

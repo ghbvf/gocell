@@ -29,8 +29,11 @@ import (
 var _ healthz.RepoProber = (*Coordinator)(nil)
 
 // ProbeCoordinatorReady is the healthz ProbeName for the saga coordinator
-// journal readiness probe. Cell-side registration (RegisterReadiness) is the
-// cell holder's responsibility (PR-09).
+// journal readiness probe. Cell-side registration (RegisterReadiness) is
+// tracked in the saga-as-cell migration follow-up; this PR lands the const
+// declaration so the PROBENAME-SEALED-FUNNEL-01 archtest golden inventory
+// can lock the declared form. Wiring is not performed here to avoid scope
+// creep — the coordinator is not yet a first-class Cell.
 const ProbeCoordinatorReady healthz.ProbeName = "saga_coordinator_ready"
 
 // UnsafeModeLabel is the slog field value emitted at Start() to alert operators

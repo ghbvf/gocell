@@ -322,7 +322,9 @@ func (e *Executor) executeInner(
 	if ok, err := e.heartbeater.Heartbeat(ctx, inst.ID, leaseID, e.leaseDuration); err == nil && !ok {
 		e.logger.InfoContext(ctx, "saga executor: preflight heartbeat reported stale lease",
 			slog.String("instance_id", string(inst.ID)),
+			slog.String("definition_id", string(inst.DefinitionID)),
 			slog.String("lease_id", string(leaseID)),
+			slog.String("reason", string(HeartbeatFailureStaleLease)),
 		)
 		e.safeObserveHeartbeatFailure(ctx, HeartbeatFailureStaleLease)
 		return Result{Outcome: OutcomeLeaseLost, Err: errLeaseLost, Attempts: 0}

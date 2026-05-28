@@ -6,6 +6,7 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
@@ -115,6 +116,8 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 		return nil, fmt.Errorf("runtime/observability/metrics: register saga_heartbeat_failed_total: %w", err)
 	}
 
+	// hbFail intentionally not appended to registered — it is the last
+	// registration; no subsequent rollback needed.
 	return &SagaStepCollector{
 		cellID:  cellID,
 		outcome: outcome,
@@ -162,6 +165,12 @@ func (c *SagaStepCollector) ObserveHeartbeatFailure(ctx context.Context, reason 
 // outcomeLabel maps an Outcome to its wire-stable lowercase label value.
 // Using fmt.Stringer would emit "Succeeded" (camel); metric labels follow
 // the snake_case convention shared with reason labels above.
+//
+// The default branch panics (A-class state-machine unreachable) because a
+// caller that passes an unrecognized Outcome is a programmer error: Outcome
+// is an enumeration whose members are all handled above. Silently returning
+// "unknown" would pollute metric series with invalid labels that mask genuine
+// bugs; fail-closed is the correct behavior here.
 func outcomeLabel(o executor.Outcome) string {
 	switch o {
 	case executor.OutcomeSucceeded:
@@ -175,6 +184,7 @@ func outcomeLabel(o executor.Outcome) string {
 	case executor.OutcomeLeaseLost:
 		return "lease_lost"
 	default:
-		return "unknown"
+		panic(panicregister.Approved("saga-outcome-unknown",
+			errcode.Assertion("saga metrics: unknown Outcome value %d", o)))
 	}
 }
