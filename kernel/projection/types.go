@@ -14,9 +14,11 @@ import (
 // delivery; the harness never calls Apply twice for the same offset).
 //
 // Apply MUST NOT open its own transaction or connection. A transient failure
-// returns a plain error (the Coordinator requeues); a permanent failure returns
-// an errcode permanent error (the Coordinator rejects to the DLX). Decided in
-// ADR §3 Q2 against the eventhorizon read-modify-write entity shape and the
+// returns a plain error (the Coordinator requeues). A permanent failure returns
+// an error wrapping outbox.NewPermanentError(err); the Coordinator classifies it
+// as DispositionReject and routes to the DLX — the same vocabulary as the
+// ConsumerBase handler convention (see .claude/rules/gocell/eventbus.md). Decided
+// in ADR §3 Q2 against the eventhorizon read-modify-write entity shape and the
 // explicit tx-handle parameter.
 //
 // ref: JasperFx/marten async-daemon IDocumentOperations apply shape.
@@ -26,11 +28,17 @@ type Apply func(ctx context.Context, event outbox.Entry) error
 // own offset table — it does NOT touch any business read-model schema (the
 // CellTx-offset design keeps the harness clear of the GAP-8 seal; ADR §4).
 //
+// The offset is an opaque, monotonically increasing cursor over the projection's
+// input stream. Its concrete mapping to a stream position is owned by the replay
+// source defined in PR-01 (the harness compares a replayed event's position
+// against the stored checkpoint to skip already-applied events) — it is NOT an
+// outbox.Entry field (Entry carries no sequence number today). LoadOffset returns
+// 0 for an unknown (cellID, projectionID) pair (cold start = offset 0).
+//
 // Both methods are ambient-tx: SaveOffset participates in the caller's
 // transaction via persistence.TxFromContext(ctx) (no raw db handle — enforced by
 // PROJECTION-CHECKPOINT-TX-BOUND-01), so the offset advance commits together
-// with the Apply mutation. LoadOffset returns 0 for an unknown
-// (cellID, projectionID) pair (cold start = offset 0).
+// with the Apply mutation.
 //
 // Implementations: mem (PR-01) + postgres (PR-02); both verified by the shared
 // projectiontest.RunCheckpointConformance template (PR-01). Decided in ADR §3
@@ -50,6 +58,9 @@ type CheckpointStore interface {
 // (e.g. starting offset, fail-open policy) are added alongside the Coordinator.
 // Declared here so the Subscribe API surface is fixed by the ADR rather than
 // drifting when the implementation lands.
+//
+// In v1 no option constructors exist yet — passing no opts (an empty or nil
+// slice) is valid and is the expected call form for the initial release.
 type Option func(*subscribeOptions)
 
 // subscribeOptions holds the resolved Subscribe configuration. It is the target

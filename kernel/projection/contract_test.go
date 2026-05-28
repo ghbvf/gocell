@@ -61,6 +61,11 @@ func TestCheckpointStoreImplementable(t *testing.T) {
 	t.Parallel()
 	var s CheckpointStore = newFakeCheckpointStore()
 	ctx := context.Background()
+	// Cold start: an unknown (cellID, projectionID) pair must load offset 0 with
+	// no error — the base case the harness relies on (ADR §6 threat row 1).
+	if got, err := s.LoadOffset(ctx, "ordercell", "never-seen"); err != nil || got != 0 {
+		t.Fatalf("cold-start LoadOffset = (%d, %v), want (0, nil)", got, err)
+	}
 	if err := s.SaveOffset(ctx, "ordercell", "ordersummary", 7); err != nil {
 		t.Fatalf("SaveOffset: %v", err)
 	}

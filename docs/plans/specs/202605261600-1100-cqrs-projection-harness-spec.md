@@ -78,10 +78,10 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 
 | Actor | 角色 |
 |-------|------|
-| **business cell（projection consumer）** | 实现 `apply(ctx, event, txHandle) error` hook，声明 `cell.yaml kind: projection` + slice contractUsages[subscribe] |
+| **business cell（projection consumer）** | 实现 `apply(ctx, event) error` hook（tx ambient，经 ctx；见 ADR §3 Q2），声明 `cell.yaml kind: projection` + slice contractUsages[subscribe] |
 | **harness（kernel/projection）** | 托管订阅循环 / checkpoint / rebuild 编排 / metrics |
 | **composition root (`cmd/*`)** | 通过 `WithProjectionCheckpointStore(...)` 注入 checkpoint adapter（mem / PG） |
-| **operator** | 通过 internal HTTP endpoint（`/internal/v1/.../projection/rebuild`）触发 rebuild；通过 readyz `<cell>_projection_ready` probe 监控 lag |
+| **operator** | 通过 internal HTTP endpoint（`/internal/v1/.../projection/rebuild`）触发 rebuild；通过 readyz `<cell>_projection_<name>_ready` probe 监控 lag |
 | **AI co-author** | 写 slice handler apply 函数体；其余生命周期 wiring 由 codegen 派生 |
 
 ## 4. User Scenarios（验收场景）
@@ -92,10 +92,10 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 2. cellgen 派生 harness wiring：订阅、checkpoint 读取、apply hook 调用
 3. 启动时 checkpoint 表无该 projection 行 → harness 视作 offset = 0
 4. 从 offset = 0 开始消费事件流，每条事件在一个 CellTx 内：
-   - 调用 business `apply(ctx, event, txHandle)`
-   - harness 更新 checkpoint 行 `offset = event.seq`
+   - 调用 business `apply(ctx, event)`（tx ambient，经 ctx）
+   - harness 更新 checkpoint 行（offset = replay-cursor 位置；outbox.Entry 无 seq 字段）
    - tx commit / rollback 决定 apply + checkpoint 是否同时生效
-5. 启动 60s 内 lag 收敛到 0，`<cell>_projection_ready` probe 转 ready
+5. 启动 60s 内 lag 收敛到 0，`<cell>_projection_<name>_ready` probe 转 ready
 
 ### Scenario B — Crash recovery
 
@@ -109,7 +109,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 2. operator 调用 `POST /internal/v1/<cell>/projection/<name>/rebuild`
 3. harness 执行 state machine（**对标 Axon 4 相**）：
    - **Stop**：停止消费循环，释放 checkpoint claim（防止并发写 checkpoint 表）
-   - **Reset**：调用 business `OnReset(ctx, txHandle)` hook（对标 Axon `@ResetHandler`；业务 TRUNCATE/DROP 自己的 read-model 表）+ harness 重置 checkpoint 行 offset = 0（同一 CellTx）
+   - **Reset**：调用 business `OnReset(ctx) error` hook（tx ambient，经 ctx；对标 Axon `@ResetHandler`；业务 TRUNCATE/DROP 自己的 read-model 表）+ harness 重置 checkpoint 行 offset = 0（同一 CellTx）
    - **Replay**：从 offset = 0 起遍历事件流，每条事件一个 CellTx（apply + checkpoint），可观测 `projection_rebuild_duration_seconds`
    - **Catch-up**：replay 追上"开始 rebuild 时的 head offset"后 transition 到 catch-up 模式，继续消费新事件
 4. **rebuild 期业务 read 不阻塞**（对标 Axon / Marten / Commanded 业界共识）—— stale read 是业务侧责任；业务可显式在 read 路径检查 `harness.Phase()` 返回 503 但 harness 不强加；
@@ -137,10 +137,10 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 
 ### 5.1 Functional
 
-- [ ] `kernel/projection.Coordinator` 提供 `Subscribe(ctx, spec, apply, opts...) error` API；apply 签名为 `func(ctx context.Context, event outbox.Entry, tx persistence.TxHandle) error`
+- [ ] `kernel/projection.Coordinator` 提供 `Subscribe(ctx, spec, projectionID, apply, opts...) error` API；apply 签名为 `func(ctx context.Context, event outbox.Entry) error`（tx ambient，经 ctx；见 ADR §3 Q1/Q2 —— 原 `persistence.TxHandle` 显式参数已被收敛，该类型不存在）
 - [ ] checkpoint store 抽象 `CheckpointStore` interface；提供 `mem` + `postgres` 两个 adapter
 - [ ] postgres adapter 的 `LoadOffset` / `SaveOffset` 在 caller-provided CellTx 内执行（exactly-once 与 business apply 同 commit）
-- [ ] rebuild state machine 三相（reset / replay / catch-up），状态对外可读（HTTP endpoint 返回 phase + lag）
+- [ ] rebuild state machine **4 相**（Stop / Reset / Replay / Catchup，对标 Axon；见 ADR §3 Phase enum），状态对外可读（HTTP endpoint 返回 phase + lag）
 - [ ] cellgen 派生：`kind: projection` slice 自动生成 harness wiring（订阅 + Subscribe 调用 + apply 字段桥接），业务只填 apply 函数体
 - [ ] `PROJECTION-CONSISTENCY-01` 由 Medium 升 Hard：parser load-time `jsonschema.Validate` 拒绝 L0/L1/L2
 - [ ] 三个 metrics：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` (histogram) / `projection_event_log_length` (gauge)
@@ -151,7 +151,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 
 - [ ] 单 cell 单 projection cold-start 60s 内 lag 收敛到 0（10k events / s 假设）
 - [ ] crash recovery 启动后第一个 tx 即从 checkpoint 恢复，无重放窗口
-- [ ] rebuild 期间业务 read endpoint 必须 503，不返回部分数据
+- [ ] rebuild 期间业务 read endpoint **不被 harness 强制 503**（非阻塞设计，业界共识；见 ADR §5）；业务可自查 `Phase()` 自行返回 503
 - [ ] kernel/projection ≥ 90% test coverage（kernel 层标准）
 
 ### 5.3 Governance / archtest
@@ -159,8 +159,8 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 - [ ] `PROJECTION-CONSISTENCY-01` 升 Hard 的 archtest 守卫（schema enum 在 parse 路径强制）
 - [ ] **新增 archtest funnel（≥ Medium，AI-robust 章程要求）**：
   - **PROJECTION-APPLY-HOOK-FUNNEL-01**：cellgen 派生的 harness wiring 是 business apply 函数唯一注册路径；手写 `Coordinator.Subscribe(..., apply, ...)` callsite 仅允许在 generated 文件
-  - **PROJECTION-CHECKPOINT-TX-BOUND-01**：`SaveOffset` 必须在 caller-provided `persistence.TxHandle` 内调用；裸 `db.Exec` 形态 fail
-  - **PROJECTION-STATE-PHASE-FROZEN-01**：rebuild state machine 三相枚举 reflect 字段冻结
+  - **PROJECTION-CHECKPOINT-TX-BOUND-01**：`SaveOffset` 实现必须经 `persistence.TxFromContext(ctx)` 取 ambient tx；裸 `*sql.Tx` 参数 / `db.Exec` 形态 fail（与 outbox.Writer 同范式）
+  - **PROJECTION-STATE-PHASE-FROZEN-01**：Phase enum const 集冻结（5 成员 PhaseLive/Stopped/Reset/Replay/Catchup，AST 锁；PR-00 已 green）
 - [ ] cellgen scaffold golden 更新（新增 `kind: projection` 派生模板）
 - [ ] L2-OUTBOX-ATOMICITY-COVERAGE-01 不变（projection 仍是 L3 consumer，与 L2 producer 测试体系正交）
 

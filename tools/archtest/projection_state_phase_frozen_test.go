@@ -30,11 +30,13 @@
 //   - The const-block locator keys on the member name "PhaseLive". Renaming
 //     PhaseLive itself surfaces as a "block not found" Fatal (visible), not a
 //     silent pass — asserted by the reverse self-check below.
-//   - The String-arm extractor only reads `case PhaseX: return "literal"` arms.
-//     A String() rewritten to compute the literal dynamically (e.g. via a map
-//     or fmt) would yield an empty arm map and fail the per-member assertion —
-//     visible, not silent. Documented blind spot: none in-tree (phase.go uses
-//     the switch form, mirroring kernel/outbox/state.go).
+//   - The String-arm extractor only reads `case PhaseX: return "literal"` arms
+//     (const-Ident cases). A String() rewritten to compute the literal
+//     dynamically (e.g. via a map or fmt) yields an empty arm map and fails the
+//     per-member assertion — visible, not silent; exercised by reverse
+//     self-check case (4). The `case 0: return "invalid"` arm is keyed by an
+//     integer literal (BasicLit), not a const Ident, so it is locked separately
+//     via phaseZeroLiteralArm (reverse self-check case (5)).
 //   - Pointer-receiver String(): the locator accepts both `Phase` and `*Phase`
 //     receivers; value receiver is the established convention.
 //
@@ -97,6 +99,14 @@ func TestProjectionStatePhaseFrozen01(t *testing.T) {
 		t.Errorf("PROJECTION-STATE-PHASE-FROZEN-01: Phase String() arms = %v, want %v "+
 			"(String() literals are the wire/log contract — update wantPhaseStrings if intentional)",
 			arms, wantPhaseStrings)
+	}
+
+	// The zero-value arm (`case 0: return "invalid"`) is also a wire/log
+	// contract value; lock it explicitly since it is a BasicLit case, not an
+	// Ident case (and thus excluded from the const-keyed arm map above).
+	if zero := phaseZeroLiteralArm(parseFileOrFatal(t, src)); zero != "invalid" {
+		t.Errorf("PROJECTION-STATE-PHASE-FROZEN-01: Phase String() `case 0:` returns %q, want %q",
+			zero, "invalid")
 	}
 }
 
@@ -167,6 +177,45 @@ func (p Phase) String() string { return "x" }
 `)
 	if _, _, err := parsePhaseEnum(noBlock); err == nil {
 		t.Error("reverse self-check: parser did not error when the PhaseLive const block is absent")
+	}
+
+	// (4) A map-based (dynamic) String() has no case arms, so the arm map comes
+	// back empty and the main per-member assertion fails visibly rather than
+	// passing silently — exercising the documented dynamic-String blind spot.
+	dynamicString := []byte(`package projection
+type Phase uint8
+const (
+	PhaseLive Phase = iota + 1
+	PhaseStopped
+	PhaseReset
+	PhaseReplay
+	PhaseCatchup
+)
+var names = map[Phase]string{PhaseLive: "live"}
+func (p Phase) String() string { return names[p] }
+`)
+	_, dynArms, err := parsePhaseEnum(dynamicString)
+	if err != nil {
+		t.Fatalf("reverse self-check (dynamic String): parse: %v", err)
+	}
+	if len(dynArms) != 0 {
+		t.Errorf("reverse self-check: parser found case arms in a map-based String(); got %v", dynArms)
+	}
+
+	// (5) The zero-value arm extractor finds `case 0:` and ignores a renamed
+	// literal — proving a change away from "invalid" is observable.
+	if got := phaseZeroLiteralArm(parseFileOrFatal(t, []byte(`package projection
+type Phase uint8
+const PhaseLive Phase = iota + 1
+func (p Phase) String() string {
+	switch p {
+	case 0:
+		return "unknown"
+	}
+	return "x"
+}
+`))); got != "unknown" {
+		t.Errorf("reverse self-check: phaseZeroLiteralArm = %q, want %q (must observe the real literal)", got, "unknown")
 	}
 }
 
@@ -251,6 +300,45 @@ func phaseStringArms(f *ast.File) map[string]string {
 		})
 	}
 	return arms
+}
+
+func parseFileOrFatal(t *testing.T, src []byte) *ast.File {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "phase.go", src, 0)
+	if err != nil {
+		t.Fatalf("PROJECTION-STATE-PHASE-FROZEN-01: parse: %v", err)
+	}
+	return f
+}
+
+// phaseZeroLiteralArm returns the string literal of the `case 0:` arm in
+// Phase.String(), or "" if absent. This is the only arm keyed by an integer
+// literal (BasicLit), so phaseStringArms (which keys on const Idents) excludes
+// it; it is locked separately because "invalid" is also a wire/log contract.
+func phaseZeroLiteralArm(f *ast.File) string {
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "String" || fn.Recv == nil || !isPhaseReceiver(fn.Recv) {
+			continue
+		}
+		var lit string
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			cc, ok := n.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, e := range cc.List {
+				if bl, ok := e.(*ast.BasicLit); ok && bl.Kind == token.INT && bl.Value == "0" {
+					lit = firstReturnedStringLit(cc.Body)
+				}
+			}
+			return true
+		})
+		if lit != "" {
+			return lit
+		}
+	}
+	return ""
 }
 
 func isPhaseReceiver(recv *ast.FieldList) bool {

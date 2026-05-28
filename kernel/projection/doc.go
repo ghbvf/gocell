@@ -44,6 +44,16 @@
 // checkpoint SaveOffset commit in one transaction (exactly-once). Decided in
 // ADR §3 Q1/Q2 against an explicit tx-handle parameter.
 //
+// # v1 operational boundaries
+//
+//   - Single-pod only. v1 has no distributed claim: running two pods that
+//     consume the same projection without external leader election is UNSAFE —
+//     both advance the same checkpoint and double-apply. Multi-pod safety is the
+//     upper layer's responsibility (cmd/* leader election). The PG checkpoint
+//     schema reserves an `owner` column (ref: Axon token_entry.owner) for a v1.1
+//     pessimistic claim, but v1 never reads or writes it. See ADR §3 Q5.
+//   - Full rebuild only — no snapshot / partial replay in v1 (ADR §3 Q4).
+//
 // # Governance (lands across the epic; see each archtest godoc for ratings)
 //
 //   - PROJECTION-STATE-PHASE-FROZEN-01 — freezes the Phase enum membership

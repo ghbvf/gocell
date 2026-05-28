@@ -181,7 +181,10 @@ Key takeaways driving the decisions:
 - **Decision.** A. cellgen derives the projection wiring from a single slice's
   `contractUsages[role=subscribe]` (PR-04).
 - **Risk.** A projection that genuinely needs to fan in from multiple event
-  streams must, in v1, route them through one slice's subscribe set. **Rollback
+  streams must, in v1, route them through one slice's subscribe set — a single
+  slice may list multiple `contractUsages[role=subscribe]` entries (the existing
+  cellgen Subscribe loop already handles N contracts per slice), so v1 fan-in is
+  expressible without the multi-slice node. **Rollback
   condition:** v1.1 adds a multi-slice projection metadata node; no v1 data
   migration needed (the checkpoint key is `(cell_id, projection_id)`, agnostic
   to slice count).
@@ -211,8 +214,12 @@ Key takeaways driving the decisions:
   or writes it. B: v1 built-in pessimistic claim (owner column + advisory lock).
 - **Argument.** A is the lowest-complexity safe v1. The PG checkpoint schema
   (PR-02) includes `owner TEXT NOT NULL DEFAULT ''` (ref: Axon
-  `token_entry.owner`), but v1 INSERT/UPDATE paths **must not touch it** (guarded
-  by `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01`, PR-02). Multi-pod
+  `token_entry.owner`), but v1 INSERT/UPDATE paths **must not touch it** — this
+  is **to be** statically guarded by `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01`,
+  landing in **PR-02 together with the PG adapter that introduces the column**.
+  Until PR-02 merges there is no checkpoint write path at all (this PR is the
+  skeleton), so the constraint has nothing to guard yet; the row-7 boundary rests
+  on the documented limitation + PR-02 review until the archtest exists. Multi-pod
   safety in v1 is the responsibility of upper-layer leader election. v1.1
   implements pessimistic claim on the existing `owner` column — zero migration
   cost.
@@ -269,10 +276,29 @@ rebuild is the business's responsibility. The harness follows this:
   and serving; any other phase ⇒ a rebuild is in progress. A business read path
   **may** consult `Phase()` and return 503 of its own accord, but the harness
   does not impose it.
+- `Phase()` is a **best-effort point-in-time snapshot, not a freshness lock**: a
+  read path that observes `PhaseLive` and then queries the read-model has no
+  atomic ordering against a rebuild that may begin between the two calls.
+  Business code requiring strict freshness must maintain its own read quiescence;
+  the harness deliberately does not provide a happens-before guarantee here.
 
 This supersedes spec §4 Scenario C "business read returns 503" and §5.2
 "rebuild 期间业务 read endpoint 必须 503": the contract is **non-blocking +
 `Phase()` opt-in**, recorded here as the single source of truth.
+
+### Readyz probe name (PR-03 forward contract)
+
+The projection readiness probe name is frozen here as the operational contract
+(it becomes a dashboard/alert dependency once PR-03 lands):
+`<cell>_projection_<name>_ready` (supersedes the spec §3 `<cell>_projection_ready`
+form, which omitted the projection name — a cell may host more than one
+projection). It is constructed via `kernel/healthz.NewProbeName(...)` — there is
+**no `ReadyProbeName` type** and **no bare `healthz.ProbeName(string)` cast**
+(that would bypass `PROBENAME-SEALED-FUNNEL-01`). **Length budget:**
+`NewProbeName` caps names at 64 chars; the fixed segments cost 18
+(`_projection_` = 12, `_ready` = 6), so `len(cellID) + len(projectionID) ≤ 46`.
+PR-03's constructor returns `(ProbeName, error)` and fails fast at construction
+when the budget is exceeded, rather than silently dropping the probe.
 
 ## 6. Threat matrix
 
@@ -283,10 +309,10 @@ verified by the listed PR).
 
 | # | Threat | v1 mechanism | Discharged by |
 |---|---|---|---|
-| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); offset ≤ checkpoint ⇒ skip apply | PR-01 Coordinator cold-start/out-of-order unit tests |
+| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each replayed event's stream position (from the PR-01 replay cursor — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 Coordinator cold-start/out-of-order unit tests |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
 | 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract |
-| 4 | **out-of-order replay** (broker redelivery during catch-up) | offset monotonic; offset ≤ checkpoint ⇒ apply NOT called (exactly-once delivery to apply) | PR-01 out-of-order unit test |
+| 4 | **out-of-order replay** (broker redelivery during catch-up) | checkpoint is monotonic; a redelivered event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer sits above the Coordinator as defense-in-depth | PR-01 out-of-order unit test |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
 | 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved but unread/unwritten; multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest; documented v1 limitation (Q5) |

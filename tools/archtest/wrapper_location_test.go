@@ -3,8 +3,8 @@
 //
 // CELL-RAW-INFRA-WRAPPER-LOCATION-01 — persistence.WrapForCell /
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell /
-// outbox.WrapEmitterForCell are the sole authorized paths for handing raw
-// infra types into a cell's With* Option. They MUST be called only from
+// outbox.WrapEmitterForCell / projection.WrapCheckpointStoreForCell are the
+// sole authorized paths for handing raw infra types into a cell's With* Option. They MUST be called only from
 // composition roots (cmd/* + examples/<demo>/main.go + examples/<demo>/app.go
 // + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
 // funnel kernel/outbox/mode_resolver.go (ResolveCellEmitter wraps the
@@ -43,10 +43,11 @@ import (
 // new wrapper requires updating this set AND wrapperLocationAllowlistDoc
 // (godoc above) so the rule's surface stays trivially auditable.
 var wrapperFunctionsCanonical = map[string]bool{
-	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":     true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell": true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":    true,
-	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":   true,
+	"github.com/ghbvf/gocell/kernel/persistence.WrapForCell":               true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapPublisherForCell":           true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapWriterForCell":              true,
+	"github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell":             true,
+	"github.com/ghbvf/gocell/kernel/projection.WrapCheckpointStoreForCell": true,
 }
 
 type wrapperViolation struct {
@@ -65,8 +66,8 @@ type wrapperViolation struct {
 //     examples/<demo>/run.go (composition root; run.go is the K#10-aligned
 //     hand-written runtime half when the example declares assembly.yaml and
 //     delegates main.go to the codegen entrypoint)
-//   - kernel/persistence/cell_marker.go and kernel/outbox/cell_marker.go
-//     (the wrapper definitions themselves)
+//   - kernel/persistence/cell_marker.go, kernel/outbox/cell_marker.go, and
+//     kernel/projection/cell_marker.go (the wrapper definitions themselves)
 //   - kernel/outbox/demo_tx_runner.go (DemoCellTxManager factory; the only
 //     kernel-internal helper that wraps a known noop fallback for cells —
 //     keeps cells/* free of any wrap call site)
@@ -96,6 +97,7 @@ func isWrapperCallerAllowed(rel string) bool {
 	switch rel {
 	case "kernel/persistence/cell_marker.go",
 		"kernel/outbox/cell_marker.go",
+		"kernel/projection/cell_marker.go",
 		"kernel/outbox/demo_tx_runner.go",
 		"kernel/outbox/mode_resolver.go",
 		"kernel/outbox/outboxtest/recorder.go",
@@ -181,7 +183,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // impossible.
 func allowlistDescription() string {
 	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
-		"kernel/{persistence,outbox}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
+		"kernel/{persistence,outbox,projection}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
 }

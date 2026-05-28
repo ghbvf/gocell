@@ -16,6 +16,11 @@ import "fmt"
 // it. PhaseLive means the read-model is fresh and serving; any other phase means
 // a rebuild is in progress. See ADR §5.
 //
+// Phase() is a best-effort point-in-time snapshot, not a freshness lock: a read
+// path that observes PhaseLive and then queries the read-model has no atomic
+// ordering against a rebuild starting between the two calls. Business code
+// requiring strict freshness must maintain its own read quiescence.
+//
 // # Frozen membership
 //
 // The const set is frozen by archtest PROJECTION-STATE-PHASE-FROZEN-01 (the
