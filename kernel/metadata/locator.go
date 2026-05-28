@@ -202,6 +202,9 @@ func NewLocator(root string, opts ...LocatorOption) (*Locator, error) {
 	for _, opt := range opts {
 		opt(l)
 	}
+	if err := validateManifestRelativePath(l.manifestPath); err != nil {
+		return nil, fmt.Errorf("metadata: NewLocator manifest path: %w", err)
+	}
 	if err := l.resolveMode(); err != nil {
 		return nil, err
 	}
@@ -222,10 +225,28 @@ func NewLocatorFS(fsys fs.FS, opts ...LocatorOption) (*Locator, error) {
 	for _, opt := range opts {
 		opt(l)
 	}
+	if err := validateManifestRelativePath(l.manifestPath); err != nil {
+		return nil, fmt.Errorf("metadata: NewLocatorFS manifest path: %w", err)
+	}
 	if err := l.resolveMode(); err != nil {
 		return nil, err
 	}
 	return l, nil
+}
+
+// validateManifestRelativePath rejects absolute paths and paths with ".."
+// segments. It uses the same rules as validateManifestModulePath in
+// locator_manifest.go so the two share the same security boundary.
+func validateManifestRelativePath(p string) error {
+	if filepath.IsAbs(p) {
+		return fmt.Errorf("absolute path not allowed: %s", p)
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
+			return fmt.Errorf("path escape not allowed: %s contains parent reference", p)
+		}
+	}
+	return nil
 }
 
 // Mode returns the resolved locator mode (after auto-detection).

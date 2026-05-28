@@ -102,7 +102,7 @@ func loadManifest(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateManifestSpec(manifestPath, spec); err != nil {
+	if err := validateManifestSpec(fsys, manifestPath, spec); err != nil {
 		return nil, err
 	}
 	return spec, nil
@@ -134,7 +134,7 @@ func readManifestSpec(fsys fs.FS, manifestPath string) (*ManifestSpec, error) {
 // validateManifestSpec applies the schema-version + module-path + singleton
 // invariants. Split out from loadManifest to keep cognitive complexity below
 // the kernel/-layer 15 budget.
-func validateManifestSpec(manifestPath string, spec *ManifestSpec) error {
+func validateManifestSpec(fsys fs.FS, manifestPath string, spec *ManifestSpec) error {
 	if spec.Version != manifestSchemaVersion {
 		return fmt.Errorf("manifest %s: unsupported version %q (want %q)",
 			manifestPath, spec.Version, manifestSchemaVersion)
@@ -145,11 +145,12 @@ func validateManifestSpec(manifestPath string, spec *ManifestSpec) error {
 	if len(spec.Modules) > maxManifestModules {
 		return fmt.Errorf(
 			"manifest %s: too many modules (count=%d limit=%d) — risk WalkDir amplification",
-			manifestPath, len(spec.Modules), maxManifestModules)
+			manifestPath, len(spec.Modules), maxManifestModules,
+		)
 	}
 	seenPaths := make(map[string]int)
 	for i, m := range spec.Modules {
-		if err := validateManifestModuleEntry(manifestPath, i, m, seenPaths); err != nil {
+		if err := validateManifestModuleEntry(fsys, manifestPath, i, m, seenPaths); err != nil {
 			return err
 		}
 	}
@@ -157,9 +158,9 @@ func validateManifestSpec(manifestPath string, spec *ManifestSpec) error {
 }
 
 // validateManifestModuleEntry applies all per-module invariants: path
-// safety (no absolute / no parent escape), duplicate detection, singleton
-// uniqueness, and exclude/include glob safety.
-func validateManifestModuleEntry(manifestPath string, i int, m ManifestModule, seenPaths map[string]int) error {
+// safety (no absolute / no parent escape), directory existence, duplicate
+// detection, singleton uniqueness, and exclude/include glob safety.
+func validateManifestModuleEntry(fsys fs.FS, manifestPath string, i int, m ManifestModule, seenPaths map[string]int) error {
 	if err := validateManifestModulePath(m.Path); err != nil {
 		return fmt.Errorf("manifest %s: modules[%d].path: %w", manifestPath, i, err)
 	}
@@ -169,10 +170,35 @@ func validateManifestModuleEntry(manifestPath string, i int, m ManifestModule, s
 			manifestPath, i, m.Path, dup)
 	}
 	seenPaths[normPath] = i
+	if err := validateManifestModuleDir(fsys, manifestPath, i, normPath); err != nil {
+		return err
+	}
 	if err := validateManifestSingleton(manifestPath, i, m); err != nil {
 		return err
 	}
 	return validateManifestGlobs(manifestPath, i, m)
+}
+
+// validateManifestModuleDir checks that the module path exists as a directory
+// in fsys. The special path "." (workspace root) is always considered valid
+// because fs.FS roots do not expose themselves as a nameable directory entry.
+func validateManifestModuleDir(fsys fs.FS, manifestPath string, i int, normPath string) error {
+	if normPath == "." {
+		return nil
+	}
+	info, err := fs.Stat(fsys, normPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("manifest %s: modules[%d].path %q does not exist (or is not a directory)",
+				manifestPath, i, normPath)
+		}
+		return fmt.Errorf("manifest %s: modules[%d].path %q stat: %w", manifestPath, i, normPath, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("manifest %s: modules[%d].path %q does not exist (or is not a directory)",
+			manifestPath, i, normPath)
+	}
+	return nil
 }
 
 // validateManifestGlobs rejects glob patterns in includes/excludes that
@@ -278,10 +304,15 @@ func (l *Locator) discoverManifest() ([]MetadataSource, error) {
 
 // manifestEmission groups one set of glob patterns by destination
 // SourceKind plus an optional cell-ID derivation strategy.
+//
+// userDeclared is true when the patterns came from the manifest's explicit
+// includes: field. When false (defaults apply), a zero-match is only a
+// slog.Warn; when true, a zero-match is a hard error (typo guard — F2).
 type manifestEmission struct {
-	patterns   []string
-	kind       SourceKind
-	deriveCell func(p string) string
+	patterns     []string
+	kind         SourceKind
+	deriveCell   func(p string) string
+	userDeclared bool // true when patterns came from explicit includes:
 }
 
 // manifestModulePlan packages the per-emission plan + the singleton paths +
@@ -317,39 +348,44 @@ func (l *Locator) discoverManifestModule(mod ManifestModule, allowSingletons boo
 // produces the per-emission plan executed by discoverManifestPlanEmissions /
 // discoverManifestPlanSingletons.
 //
-// When the module does not declare any excludes, the ADR-promised
-// "generated/**" exclude is applied so codegen output never silently
-// re-enters the metadata scan. Users who genuinely want generated/ in
-// scope must declare a non-empty Excludes list (the default does not fire).
+// "generated/**" is always appended to the effective exclude list (additive,
+// not replacing). This ensures codegen output never silently re-enters the
+// metadata scan regardless of whether the user declared explicit excludes.
+// Users who explicitly declare excludes: ["fixtures/**"] end up with an
+// effective set of {"fixtures/**", "generated/**"}.
 func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestModulePlan {
+	userHasIncludes := !manifestIncludesEmpty(mod.Includes)
 	includes := mod.Includes
-	if manifestIncludesEmpty(includes) {
+	if !userHasIncludes {
 		includes = defaultManifestIncludes()
 	}
 	base := path.Clean(mod.Path)
 	if base == "." {
 		base = ""
 	}
-	excludes := mod.Excludes
-	if len(excludes) == 0 {
-		excludes = []string{"generated/**"}
-	}
+	excludes := appendGeneratedExclude(mod.Excludes)
 	plan := manifestModulePlan{
 		base:            base,
 		excludes:        compileManifestExcludes(base, excludes),
 		allowSingletons: allowSingletons,
 		emissions: []manifestEmission{
-			{patterns: includes.Cells, kind: SourceCell, deriveCell: func(p string) string {
-				id, _ := matchCellPath(stripBase(p, base))
-				return id
-			}},
-			{patterns: includes.Slices, kind: SourceSlice, deriveCell: func(p string) string {
-				cellID, _ := matchSlicePath(stripBase(p, base))
-				return cellID
-			}},
-			{patterns: includes.Contracts, kind: SourceContract},
-			{patterns: includes.Journeys, kind: SourceJourney},
-			{patterns: includes.Assemblies, kind: SourceAssembly},
+			{
+				patterns: includes.Cells, kind: SourceCell, userDeclared: userHasIncludes,
+				deriveCell: func(p string) string {
+					id, _ := matchCellPath(stripBase(p, base))
+					return id
+				},
+			},
+			{
+				patterns: includes.Slices, kind: SourceSlice, userDeclared: userHasIncludes,
+				deriveCell: func(p string) string {
+					cellID, _ := matchSlicePath(stripBase(p, base))
+					return cellID
+				},
+			},
+			{patterns: includes.Contracts, kind: SourceContract, userDeclared: userHasIncludes},
+			{patterns: includes.Journeys, kind: SourceJourney, userDeclared: userHasIncludes},
+			{patterns: includes.Assemblies, kind: SourceAssembly, userDeclared: userHasIncludes},
 		},
 	}
 	if allowSingletons {
@@ -361,6 +397,22 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 		}
 	}
 	return plan
+}
+
+// appendGeneratedExclude returns a new slice with "generated/**" appended if
+// it is not already present. This is always additive — existing user-declared
+// excludes are preserved (F13).
+func appendGeneratedExclude(excludes []string) []string {
+	const genExclude = "generated/**"
+	for _, e := range excludes {
+		if e == genExclude {
+			return excludes
+		}
+	}
+	result := make([]string, len(excludes)+1)
+	copy(result, excludes)
+	result[len(excludes)] = genExclude
+	return result
 }
 
 // discoverManifestPlanEmissions runs each emission's glob expansion and
@@ -383,35 +435,60 @@ func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]Meta
 // applicable. Split out so discoverManifestPlanEmissions itself stays a
 // straight three-line walk under the kernel/-layer 15-complexity budget.
 //
-// A glob pattern that matches zero files emits a structured slog.Warn —
-// zero matches is almost always a manifest typo (e.g. `cell.yml` instead
-// of `cell.yaml`) and silent skipping would hide the misconfiguration
-// behind a "PASS, but 0 cells found" outcome.
+// For user-declared patterns (em.userDeclared == true): zero matches returns
+// a hard error — this is almost always a manifest typo (e.g. "cell.yml"
+// instead of "cell.yaml") and silent skipping would hide misconfiguration
+// behind a "PASS, but 0 cells found" outcome (F2 fail-closed).
+//
+// For default patterns (em.userDeclared == false): zero matches emits only
+// a structured slog.Warn for workspaces that legitimately omit certain source
+// kinds.
 func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
 	var out []MetadataSource
 	for _, g := range em.patterns {
-		matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g))
+		emitted, err := l.discoverEmissionPattern(base, g, excludes, em)
 		if err != nil {
-			return nil, fmt.Errorf("glob %s: %w", g, err)
+			return nil, err
 		}
-		emitted := 0
-		for _, m := range matches {
-			if excludes.match(m) {
-				continue
-			}
-			src := MetadataSource{Path: m, Kind: em.kind}
-			if em.deriveCell != nil {
-				src.CellID = em.deriveCell(m)
-			}
-			out = append(out, src)
-			emitted++
+		out = append(out, emitted...)
+	}
+	return out, nil
+}
+
+// discoverEmissionPattern handles a single glob pattern within an emission,
+// split from discoverEmission to keep cognitive complexity within budget.
+func (l *Locator) discoverEmissionPattern(
+	base, g string,
+	excludes *manifestExcludeSet,
+	em manifestEmission,
+) ([]MetadataSource, error) {
+	matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g))
+	if err != nil {
+		return nil, fmt.Errorf("glob %s: %w", g, err)
+	}
+	var out []MetadataSource
+	for _, m := range matches {
+		if excludes.match(m) {
+			continue
 		}
-		if emitted == 0 {
-			slog.Warn("metadata: locator manifest include pattern matched zero files",
-				slog.String("pattern", g),
-				slog.String("kind", em.kind.String()),
-				slog.String("module_base", base))
+		src := MetadataSource{Path: m, Kind: em.kind}
+		if em.deriveCell != nil {
+			src.CellID = em.deriveCell(m)
 		}
+		out = append(out, src)
+	}
+	if len(out) == 0 {
+		if em.userDeclared {
+			return nil, fmt.Errorf(
+				"manifest module %q include pattern %q (kind=%s) matched zero files"+
+					" — likely a typo (e.g. cell.yml vs cell.yaml)",
+				base, g, em.kind.String(),
+			)
+		}
+		slog.Warn("metadata: locator manifest include pattern matched zero files",
+			slog.String("pattern", g),
+			slog.String("kind", em.kind.String()),
+			slog.String("module_base", base))
 	}
 	return out, nil
 }
@@ -530,9 +607,26 @@ func (es *manifestExcludeSet) match(filePath string) bool {
 
 // matchManifestGlob expands a glob pattern against fsys via WalkDir. Returns
 // sorted matches.
+//
+// To avoid O(modules × total_files) WalkDir amplification, the walk is
+// started from the longest fixed prefix before the first wildcard segment
+// ("*" or "**"). For example, "cells/*/cell.yaml" starts from "cells/", so
+// only the cells/ subtree is scanned. Patterns that begin with a wildcard
+// (e.g. "**/cell.yaml" or "*/cell.yaml") fall back to walking from ".".
+// When the computed prefix does not exist in fsys, an empty match list is
+// returned without error.
 func matchManifestGlob(fsys fs.FS, pattern string) ([]string, error) {
+	root := manifestGlobFixedPrefix(pattern)
+	if root != "." {
+		if _, err := fs.Stat(fsys, root); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
 	var matches []string
-	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -549,6 +643,55 @@ func matchManifestGlob(fsys fs.FS, pattern string) ([]string, error) {
 	}
 	sort.Strings(matches)
 	return matches, nil
+}
+
+// manifestGlobFixedPrefix extracts the longest fixed (non-wildcard) path
+// prefix from a glob pattern. It returns "." when the pattern begins with
+// a wildcard segment or when there is no fixed directory prefix.
+//
+// Examples:
+//
+//	"cells/*/cell.yaml"          → "cells"
+//	"contracts/**/contract.yaml" → "contracts"
+//	"**/cell.yaml"               → "."
+//	"*/cell.yaml"                → "."
+//	"actors.yaml"                → "." (single-segment file at root, no dir prefix)
+//	"cells/foo/bar/cell.yaml"    → "cells/foo/bar"
+func manifestGlobFixedPrefix(pattern string) string {
+	segs := strings.Split(pattern, "/")
+	var fixed []string
+	for _, seg := range segs {
+		if strings.ContainsAny(seg, "*?[") {
+			break
+		}
+		fixed = append(fixed, seg)
+	}
+	// No fixed directory prefix (pattern starts with wildcard, or the only
+	// fixed segment is the final filename at the root like "actors.yaml").
+	// In the latter case, fixed equals all segments (no wildcard at all) —
+	// we must not use the last segment as a directory root because it is a
+	// file, not a directory. Drop the last segment if it looks like a file.
+	//
+	// Heuristic: if the last fixed segment contains "." it is likely a
+	// filename; drop it. The remaining prefix is what to walk from.
+	//
+	// When no wildcards: walk from the parent of the literal file path so we
+	// don't need a separate Stat-and-match path.
+	hasWild := false
+	for _, seg := range segs {
+		if strings.ContainsAny(seg, "*?[") {
+			hasWild = true
+			break
+		}
+	}
+	if !hasWild && len(fixed) > 0 {
+		// Literal path (no wildcards) — walk parent directory.
+		fixed = fixed[:len(fixed)-1]
+	}
+	if len(fixed) == 0 {
+		return "."
+	}
+	return strings.Join(fixed, "/")
 }
 
 // matchManifestPattern matches a glob with "*" (single-segment wildcard) and

@@ -177,6 +177,7 @@ func TestLocator_ManifestRejectsBadPaths(t *testing.T) {
 	cases := []struct {
 		name     string
 		manifest string
+		extraFS  fstest.MapFS // optional extra files beyond .gocell/manifest.yaml
 		wantSub  string
 	}{
 		{
@@ -195,15 +196,25 @@ func TestLocator_ManifestRejectsBadPaths(t *testing.T) {
 			wantSub:  "duplicates modules[0]",
 		},
 		{
+			// secondary singleton: "sub" dir must exist so dir-existence check
+			// (F1) passes and the singleton check fires as expected.
 			name: "secondary singleton actors",
 			manifest: "version: v1\nmodules:\n  - path: .\n  - path: sub\n" +
 				"    includes:\n      actors: actors.yaml\n",
+			extraFS: fstest.MapFS{
+				"sub/.keep": &fstest.MapFile{Data: []byte("")},
+			},
 			wantSub: "actors.yaml is a workspace-level singleton",
 		},
 		{
+			// secondary singleton: "sub" dir must exist so dir-existence check
+			// (F1) passes and the singleton check fires as expected.
 			name: "secondary singleton statusBoard",
 			manifest: "version: v1\nmodules:\n  - path: .\n  - path: sub\n" +
 				"    includes:\n      statusBoard: journeys/status-board.yaml\n",
+			extraFS: fstest.MapFS{
+				"sub/.keep": &fstest.MapFile{Data: []byte("")},
+			},
 			wantSub: "status-board.yaml is a workspace-level singleton",
 		},
 		{
@@ -244,6 +255,9 @@ func TestLocator_ManifestRejectsBadPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fsys := fstest.MapFS{
 				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(tc.manifest)},
+			}
+			for k, v := range tc.extraFS {
+				fsys[k] = v
 			}
 			_, err := NewLocatorFS(fsys, WithLocatorMode(LocatorManifest))
 			if err == nil {
@@ -287,9 +301,9 @@ modules:
 }
 
 // TestLocator_ManifestGlobNoMatch verifies that a custom include glob
-// that matches zero files is not an error and produces an empty result
-// (the slog.Warn surface is the operator-facing signal, not a hard
-// failure — gocell validate succeeds with zero discovered cells).
+// that explicitly declares a pattern but matches zero files returns an
+// error (F2: fail-closed for explicit patterns — typo guard).
+// Nil/empty patterns are not affected.
 func TestLocator_ManifestGlobNoMatch(t *testing.T) {
 	manifest := `version: v1
 modules:
@@ -306,12 +320,15 @@ modules:
 	if err != nil {
 		t.Fatalf("NewLocatorFS: %v", err)
 	}
-	sources, err := l.Discover()
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
+	_, err = l.Discover()
+	if err == nil {
+		t.Fatal("expected error for zero-match explicit pattern, got nil")
 	}
-	if len(sources) != 0 {
-		t.Errorf("Discover with non-matching glob produced %d sources, want 0", len(sources))
+	if !strings.Contains(err.Error(), "matched zero files") {
+		t.Errorf("error %q does not contain %q", err.Error(), "matched zero files")
+	}
+	if !strings.Contains(err.Error(), "cells/bar/cell.yaml") {
+		t.Errorf("error %q does not contain pattern %q", err.Error(), "cells/bar/cell.yaml")
 	}
 }
 
@@ -373,6 +390,209 @@ func TestParseLocatorMode(t *testing.T) {
 	}
 }
 
+// TestLocator_ManifestModulePathExistence verifies that a manifest module.path
+// that does not exist as a directory in fsys returns an error (F1: fail-closed
+// existence + IsDir check).
+func TestLocator_ManifestModulePathExistence(t *testing.T) {
+	cases := []struct {
+		name     string
+		manifest string
+		fsys     fstest.MapFS
+		wantSub  string
+	}{
+		{
+			name:     "module path does not exist",
+			manifest: "version: v1\nmodules:\n  - path: nonexistent\n",
+			fsys: fstest.MapFS{
+				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: nonexistent\n")},
+			},
+			wantSub: `does not exist (or is not a directory)`,
+		},
+		{
+			name:     "module path is a file not a directory",
+			manifest: "version: v1\nmodules:\n  - path: iam-a-file\n",
+			fsys: fstest.MapFS{
+				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: iam-a-file\n")},
+				"iam-a-file":            &fstest.MapFile{Data: []byte("not a dir\n")},
+			},
+			wantSub: `does not exist (or is not a directory)`,
+		},
+		{
+			name: "dot path (workspace root) always valid",
+			fsys: fstest.MapFS{
+				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: .\n")},
+			},
+			wantSub: "", // no error expected
+		},
+		{
+			name: "valid subdirectory path exists",
+			fsys: fstest.MapFS{
+				".gocell/manifest.yaml":  &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: modules/core\n")},
+				"modules/core/cell.yaml": &fstest.MapFile{Data: []byte("id: core\n")},
+			},
+			wantSub: "", // no error expected
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewLocatorFS(tc.fsys, WithLocatorMode(LocatorManifest))
+			if tc.wantSub == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestLocator_ManifestGlobWalkPrefix verifies that matchManifestGlob starts
+// the WalkDir from the fixed prefix before the first wildcard, not from root.
+// This is F3: ReadDir should not be called on "." or "other" when the
+// pattern prefix is "cells".
+func TestLocator_ManifestGlobWalkPrefix(t *testing.T) {
+	// Build a filesystem with files in two top-level dirs.
+	fsys := fstest.MapFS{
+		"cells/foo/cell.yaml": &fstest.MapFile{Data: []byte("id: foo\n")},
+		"other/bar/file.txt":  &fstest.MapFile{Data: []byte("other\n")},
+	}
+	var readDirCalls []string
+	traceFS := &walkTraceFS{MapFS: fsys, visited: &readDirCalls}
+
+	matches, err := matchManifestGlob(traceFS, "cells/*/cell.yaml")
+	if err != nil {
+		t.Fatalf("matchManifestGlob: %v", err)
+	}
+	if len(matches) != 1 || matches[0] != "cells/foo/cell.yaml" {
+		t.Errorf("matches = %v, want [cells/foo/cell.yaml]", matches)
+	}
+	// ReadDir should not be called on "other" or any path under "other/".
+	for _, dir := range readDirCalls {
+		if dir == "other" || strings.HasPrefix(dir, "other/") {
+			t.Errorf("ReadDir called on %q — should not scan outside prefix", dir)
+		}
+	}
+	// ReadDir should not be called on "." (the root) when prefix is "cells".
+	for _, dir := range readDirCalls {
+		if dir == "." {
+			t.Errorf("ReadDir called on root '.' — expected prefix-scoped walk starting from 'cells'")
+		}
+	}
+	// ReadDir should have been called on "cells" (the walk root).
+	found := false
+	for _, dir := range readDirCalls {
+		if dir == "cells" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ReadDir was never called on 'cells' — prefix walk did not start from expected root; got: %v", readDirCalls)
+	}
+}
+
+// TestLocator_ManifestGlobWalkPrefixDoubleStarFromRoot verifies that a pattern
+// starting with "**" still walks from root (no prefix optimization possible).
+func TestLocator_ManifestGlobWalkPrefixDoubleStarFromRoot(t *testing.T) {
+	fsys := fstest.MapFS{
+		"cells/foo/cell.yaml": &fstest.MapFile{Data: []byte("id: foo\n")},
+	}
+	var readDirCalls []string
+	traceFS := &walkTraceFS{MapFS: fsys, visited: &readDirCalls}
+	_, err := matchManifestGlob(traceFS, "**/cell.yaml")
+	if err != nil {
+		t.Fatalf("matchManifestGlob: %v", err)
+	}
+	// Root "." should be visited when pattern starts with **.
+	found := false
+	for _, dir := range readDirCalls {
+		if dir == "." {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ReadDir was never called on '.' for **-pattern; got: %v", readDirCalls)
+	}
+}
+
+// TestLocator_WithManifestPathRejectsUnsafe verifies that WithManifestPath
+// with an absolute path or parent-escape path is rejected at construction
+// (F12: fail-fast in NewLocatorFS/NewLocator).
+func TestLocator_WithManifestPathRejectsUnsafe(t *testing.T) {
+	cases := []struct {
+		name    string
+		path    string
+		wantSub string
+	}{
+		{
+			name:    "absolute path",
+			path:    "/etc/manifest.yaml",
+			wantSub: "absolute path not allowed",
+		},
+		{
+			name:    "parent escape",
+			path:    "../outside/manifest.yaml",
+			wantSub: "path escape not allowed",
+		},
+		{
+			name:    "double parent escape",
+			path:    "../../manifest.yaml",
+			wantSub: "path escape not allowed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: .\n")},
+			}
+			_, err := NewLocatorFS(fsys, WithManifestPath(tc.path), WithLocatorMode(LocatorConventional))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestLocator_GeneratedExcludeAdditive verifies that a manifest module with
+// explicit excludes still gets "generated/**" appended (F13: additive, not
+// replacing). The user-declared excludes must also be honored.
+func TestLocator_GeneratedExcludeAdditive(t *testing.T) {
+	manifest := `version: v1
+modules:
+  - path: .
+    excludes:
+      - "fixtures/**"
+`
+	fsys := fstest.MapFS{
+		".gocell/manifest.yaml":             &fstest.MapFile{Data: []byte(manifest)},
+		"cells/real/cell.yaml":              &fstest.MapFile{Data: []byte("id: real\n")},
+		"fixtures/cell.yaml":                &fstest.MapFile{Data: []byte("id: fixture\n")},
+		"generated/contracts/foo/cell.yaml": &fstest.MapFile{Data: []byte("id: gen\n")},
+		"generated/cells/bar/cell.yaml":     &fstest.MapFile{Data: []byte("id: gen2\n")},
+	}
+	l, err := NewLocatorFS(fsys)
+	if err != nil {
+		t.Fatalf("NewLocatorFS: %v", err)
+	}
+	sources, err := l.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	// Only "real" should appear; fixtures/** and generated/** both excluded.
+	want := []string{"cell:cells/real/cell.yaml:real"}
+	if got := summariseSources(sources); !reflect.DeepEqual(got, want) {
+		t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
 // TestLocator_AutoDetectStatErrorPropagates ensures probe failures other than
 // fs.ErrNotExist surface up rather than being mis-treated as "manifest absent".
 func TestLocator_AutoDetectStatErrorPropagates(t *testing.T) {
@@ -427,3 +647,27 @@ type errFS struct{ err error }
 
 func (e errFS) Open(name string) (fs.File, error)     { return nil, e.err }
 func (e errFS) Stat(name string) (fs.FileInfo, error) { return nil, e.err }
+
+// walkTraceFS wraps a MapFS and records every directory path for which ReadDir
+// is called by fs.WalkDir, so tests can assert which subtrees were scanned.
+// fstest.MapFS implements ReadDirFS, so fs.WalkDir uses ReadDir (not Open) for
+// directory listing. We intercept ReadDir to capture the walked roots.
+type walkTraceFS struct {
+	MapFS   fstest.MapFS
+	visited *[]string
+}
+
+func (w *walkTraceFS) Open(name string) (fs.File, error) {
+	return w.MapFS.Open(name)
+}
+
+// ReadDir is the primary interception point: fs.WalkDir calls ReadDir on each
+// directory it descends into (including the walk root itself).
+func (w *walkTraceFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	*w.visited = append(*w.visited, name)
+	return w.MapFS.ReadDir(name)
+}
+
+func (w *walkTraceFS) Stat(name string) (fs.FileInfo, error) {
+	return fs.Stat(w.MapFS, name)
+}
