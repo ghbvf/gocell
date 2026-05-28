@@ -41,7 +41,7 @@ func sharedBrokerURL(t *testing.T) string {
 	t.Helper()
 	testutil.RequireDocker(t)
 	sharedBrokerOnce.Do(func() {
-		sharedBrokerURLValue, sharedBrokerShutdown, sharedBrokerStartErr = startBrokerContainer()
+		sharedBrokerURLValue, sharedBrokerShutdown, sharedBrokerStartErr = startMosquittoContainer()
 	})
 	if sharedBrokerStartErr != nil {
 		t.Fatalf("mqtt: shared broker start: %v", sharedBrokerStartErr)
@@ -49,12 +49,12 @@ func sharedBrokerURL(t *testing.T) string {
 	return sharedBrokerURLValue
 }
 
-// startBrokerContainer brings up an eclipse-mosquitto v2.0 MQTT broker with
+// startMosquittoContainer brings up an eclipse-mosquitto v2.0 MQTT broker with
 // anonymous auth. The conf file is mounted in-memory via ContainerFile so no
 // host filesystem access is required.
 //
 // ref: adapters/otel/integration_test.go (GenericContainer + ContainerFile pattern)
-func startBrokerContainer() (string, func(), error) {
+func startMosquittoContainer() (string, func(), error) {
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -97,9 +97,16 @@ func startBrokerContainer() (string, func(), error) {
 // TestMain runs all tests in this package and then tears down the shared
 // broker. Mirrors adapters/rabbitmq/testmain_integration_test.go.
 func TestMain(m *testing.M) {
-	code := m.Run()
-	if sharedBrokerShutdown != nil {
-		sharedBrokerShutdown()
-	}
-	os.Exit(code)
+	os.Exit(runTestsWithShutdown(m))
+}
+
+// runTestsWithShutdown runs m.Run() and defers broker shutdown so the
+// container is torn down even if m.Run() panics before returning.
+func runTestsWithShutdown(m *testing.M) int {
+	defer func() {
+		if sharedBrokerShutdown != nil {
+			sharedBrokerShutdown()
+		}
+	}()
+	return m.Run()
 }

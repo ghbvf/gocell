@@ -4,13 +4,14 @@ package mqtt
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -167,11 +168,13 @@ func TestIntegration_PublisherPubAckTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Publish succeeded; expected ErrAdapterMQTTPubAckTimeout")
 	}
-	// wrapPublishErr maps context.DeadlineExceeded → ErrAdapterMQTTPubAckTimeout
-	// with message "mqtt: PUBACK timeout". Accept any timeout-related text to be
-	// resilient to minor message wording changes.
-	msg := err.Error()
-	if !strings.Contains(msg, "PUBACK") && !strings.Contains(msg, "puback") && !strings.Contains(msg, "timeout") {
-		t.Fatalf("Publish err = %v; want PUBACK timeout-related", err)
+	// wrapPublishErr maps context.DeadlineExceeded → ErrAdapterMQTTPubAckTimeout.
+	// Assert via typed errcode check rather than fragile string matching.
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("Publish err is not *errcode.Error: %v", err)
+	}
+	if ec.Code != ErrAdapterMQTTPubAckTimeout {
+		t.Fatalf("Publish err code = %v, want %v", ec.Code, ErrAdapterMQTTPubAckTimeout)
 	}
 }
