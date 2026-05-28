@@ -289,7 +289,9 @@ func scanHelpEntryNoLiteralName(p *Pass, f *ast.File, rel string) []Diagnostic {
 		case isHelpEntrySliceOrArray(cl.Type):
 			// `[]helpEntry{ {…}, {…} }` — inner elements carry an elided
 			// type (cl.Type == nil), so inspect each direct child.
-			EachInChildren[ast.CompositeLit](cl, flag)
+			EachInChildren[ast.CompositeLit](cl, func(inner *ast.CompositeLit) {
+				flag(inner)
+			})
 		}
 	})
 	return d

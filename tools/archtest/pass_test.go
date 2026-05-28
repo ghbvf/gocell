@@ -816,32 +816,24 @@ func TestFacadeDoesNotLeakLoaders(t *testing.T) {
 // need receiver coverage should additionally call [funcFieldListContainsPackagesSel]
 // with fn.Recv (the receiver lives on *ast.FuncDecl, not on *ast.FuncType).
 func funcTypeContainsPackagesSel(ft *ast.FuncType) bool {
-	found := false
-	checkField := func(fields *ast.FieldList) {
-		if fields == nil || found {
-			return
+	checkField := func(fields *ast.FieldList) bool {
+		if fields == nil {
+			return false
 		}
 		for _, field := range fields.List {
-			if found {
-				break
-			}
-			EachInSubtree[ast.SelectorExpr](field.Type, func(sel *ast.SelectorExpr) {
-				if found {
-					return
-				}
+			if _, ok := FindFirstInSubtree[ast.SelectorExpr](field.Type, func(sel *ast.SelectorExpr) bool {
 				xIdent, ok := sel.X.(*ast.Ident)
 				if !ok {
-					return
+					return false
 				}
-				if xIdent.Name == "packages" && sel.Sel != nil && sel.Sel.Name == "Package" {
-					found = true
-				}
-			})
+				return xIdent.Name == "packages" && sel.Sel != nil && sel.Sel.Name == "Package"
+			}); ok {
+				return true
+			}
 		}
+		return false
 	}
-	checkField(ft.Params)
-	checkField(ft.Results)
-	return found
+	return checkField(ft.Params) || checkField(ft.Results)
 }
 
 // funcFieldListContainsPackagesSel reports whether a FieldList (typically a
@@ -853,25 +845,18 @@ func funcFieldListContainsPackagesSel(fields *ast.FieldList) bool {
 	if fields == nil {
 		return false
 	}
-	found := false
 	for _, field := range fields.List {
-		if found {
-			break
-		}
-		EachInSubtree[ast.SelectorExpr](field.Type, func(sel *ast.SelectorExpr) {
-			if found {
-				return
-			}
+		if _, ok := FindFirstInSubtree[ast.SelectorExpr](field.Type, func(sel *ast.SelectorExpr) bool {
 			xIdent, ok := sel.X.(*ast.Ident)
 			if !ok {
-				return
+				return false
 			}
-			if xIdent.Name == "packages" && sel.Sel != nil && sel.Sel.Name == "Package" {
-				found = true
-			}
-		})
+			return xIdent.Name == "packages" && sel.Sel != nil && sel.Sel.Name == "Package"
+		}); ok {
+			return true
+		}
 	}
-	return found
+	return false
 }
 
 // TestPass_IsFileInScopeConstraintExpr verifies that IsFileInScope returns

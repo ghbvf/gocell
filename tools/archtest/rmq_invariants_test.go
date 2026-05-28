@@ -389,25 +389,27 @@ func TestRMQChannelMaxPerConn01_SetDefaultsPopulatesField(t *testing.T) {
 		}
 		// Found if MaxChannelsPerConn <= 0 — now verify body assigns default constant.
 		conditionIsLEQ = true
-		EachInSubtree[ast.AssignStmt](ifStmt.Body, func(assign *ast.AssignStmt) {
-			if assigns || len(assign.Lhs) != 1 {
-				return
-			}
-			sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
-				return
-			}
-			if len(assign.Rhs) != 1 {
-				return
-			}
-			ident, ok := assign.Rhs[0].(*ast.Ident)
-			if !ok {
-				return
-			}
-			if ident.Name == expectedDefaultMaxChannelsPerConnConst {
+		if !assigns {
+			if _, ok := FindFirstInSubtree[ast.AssignStmt](ifStmt.Body, func(assign *ast.AssignStmt) bool {
+				if len(assign.Lhs) != 1 {
+					return false
+				}
+				sel, ok := assign.Lhs[0].(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "MaxChannelsPerConn" {
+					return false
+				}
+				if len(assign.Rhs) != 1 {
+					return false
+				}
+				ident, ok := assign.Rhs[0].(*ast.Ident)
+				if !ok {
+					return false
+				}
+				return ident.Name == expectedDefaultMaxChannelsPerConnConst
+			}); ok {
 				assigns = true
 			}
-		})
+		}
 	})
 
 	if !conditionIsLEQ {
@@ -1018,17 +1020,12 @@ func TestRMQPublisherReleasesChannel01(t *testing.T) {
 		"ReleaseChannel":        true,
 	}
 
-	var hasRelease bool
-	EachInSubtree[ast.DeferStmt](publishMethod.Body, func(ds *ast.DeferStmt) {
-		if hasRelease {
-			return
-		}
+	_, hasRelease := FindFirstInSubtree[ast.DeferStmt](publishMethod.Body, func(ds *ast.DeferStmt) bool {
 		// Walk the entire defer statement subtree for the release selector.
-		EachInSubtree[ast.SelectorExpr](ds, func(sel *ast.SelectorExpr) {
-			if releaseSelectors[sel.Sel.Name] {
-				hasRelease = true
-			}
+		_, ok := FindFirstInSubtree[ast.SelectorExpr](ds, func(sel *ast.SelectorExpr) bool {
+			return releaseSelectors[sel.Sel.Name]
 		})
+		return ok
 	})
 
 	if !hasRelease {
@@ -1238,17 +1235,14 @@ func TestRMQStopIntakeInflightWait01_DrainUsesDetachedContext(t *testing.T) {
 		return found
 	}
 
-	var found bool
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if found || fd.Recv == nil || fd.Body == nil {
-			return
+	_, found := FindFirstInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) bool {
+		if fd.Recv == nil || fd.Body == nil {
+			return false
 		}
 		if fd.Name.Name != "drainRemaining" && fd.Name.Name != "consumeLoop" {
-			return
+			return false
 		}
-		if bodyHasWithoutCancel(fd.Body) {
-			found = true
-		}
+		return bodyHasWithoutCancel(fd.Body)
 	})
 
 	if !found {

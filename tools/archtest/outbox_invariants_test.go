@@ -346,33 +346,26 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	// comparison. Merely importing / shadowing the const is not enough — it
 	// must drive an actual size check, otherwise the cap is decorative
 	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
-	var compared bool
-	EachInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) {
-		if compared {
-			return
-		}
+	_, compared := FindFirstInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) bool {
 		if bin.Op != token.GTR && bin.Op != token.GEQ {
-			return
+			return false
 		}
 		// LHS must be `len(e.Payload)` (or `len(<recv>.Payload)`).
 		lenCall, ok := bin.X.(*ast.CallExpr)
 		if !ok || len(lenCall.Args) != 1 {
-			return
+			return false
 		}
 		lenIdent, ok := lenCall.Fun.(*ast.Ident)
 		if !ok || lenIdent.Name != "len" {
-			return
+			return false
 		}
 		sel, ok := lenCall.Args[0].(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Payload" {
-			return
+			return false
 		}
 		// RHS must reference MaxPayloadBytes by name.
 		rhs, ok := bin.Y.(*ast.Ident)
-		if !ok || rhs.Name != constName {
-			return
-		}
-		compared = true
+		return ok && rhs.Name == constName
 	})
 	if !compared {
 		t.Errorf(

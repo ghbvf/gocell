@@ -319,13 +319,10 @@ func bodyContainsHelperCallWithEpochArgs(body *ast.BlockStmt, helperName, rowFie
 // bodyContainsBinaryOp reports whether body contains any BinaryExpr with the
 // given operator token.
 func bodyContainsBinaryOp(body *ast.BlockStmt, op gotoken.Token) bool {
-	found := false
-	scanner.EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
-		if be.Op == op {
-			found = true
-		}
+	_, ok := scanner.FindFirstInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) bool {
+		return be.Op == op
 	})
-	return found
+	return ok
 }
 
 // bodyContainsEpochBinaryOp reports whether body contains a BinaryExpr with
@@ -335,11 +332,7 @@ func bodyContainsBinaryOp(body *ast.BlockStmt, op gotoken.Token) bool {
 func bodyContainsEpochBinaryOp(body *ast.BlockStmt, ops ...gotoken.Token) bool {
 	const epochParam1 = "rowEpoch"
 	const epochParam2 = "userEpoch"
-	found := false
-	scanner.EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
-		if found {
-			return
-		}
+	_, ok := scanner.FindFirstInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) bool {
 		hasOp := false
 		for _, op := range ops {
 			if be.Op == op {
@@ -348,18 +341,15 @@ func bodyContainsEpochBinaryOp(body *ast.BlockStmt, ops ...gotoken.Token) bool {
 			}
 		}
 		if !hasOp {
-			return
+			return false
 		}
 		// Only flag when an epoch param appears on either side.
-		hasEpoch := staleEpochExprContainsIdent(be.X, epochParam1) ||
+		return staleEpochExprContainsIdent(be.X, epochParam1) ||
 			staleEpochExprContainsIdent(be.X, epochParam2) ||
 			staleEpochExprContainsIdent(be.Y, epochParam1) ||
 			staleEpochExprContainsIdent(be.Y, epochParam2)
-		if hasEpoch {
-			found = true
-		}
 	})
-	return found
+	return ok
 }
 
 // staleEpochExprContainsIdent reports whether expr contains an Ident with the

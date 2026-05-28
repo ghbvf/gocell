@@ -366,14 +366,8 @@ func analyzeRefreshStructuralShape(p *Pass, fn *ast.FuncDecl, rel string) ([]Dia
 // the original intent ("closure does work involving s") without changing
 // production diagnostics — production still emits a non-empty hasReceiverCall.
 func closureCallsReceiverS(closure *ast.FuncLit) bool {
-	var hasReceiverCall bool
-	EachInSubtree[ast.CallExpr](closure.Body, func(call *ast.CallExpr) {
-		if hasReceiverCall {
-			return
-		}
-		if chainRootsAtIdent(call.Fun, "s") {
-			hasReceiverCall = true
-		}
+	_, hasReceiverCall := FindFirstInSubtree[ast.CallExpr](closure.Body, func(call *ast.CallExpr) bool {
+		return chainRootsAtIdent(call.Fun, "s")
 	})
 	return hasReceiverCall
 }

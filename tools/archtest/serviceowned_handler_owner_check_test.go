@@ -1209,11 +1209,8 @@ func fileCallsAuthCheckOwnerFromEntries(typesInfo *types.Info, file *ast.File, e
 		}
 		visited[fn.Name.Name] = true
 
-		found := false
+		authCheckFound := false
 		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
-			if found {
-				return
-			}
 			ref := unwrapCalleeForResolve(call.Fun)
 			if ref == nil {
 				return
@@ -1221,7 +1218,7 @@ func fileCallsAuthCheckOwnerFromEntries(typesInfo *types.Info, file *ast.File, e
 			// Check if this is auth.CheckOwner — terminal success
 			if pkgPath, name, ok := ResolvePackageRef(typesInfo, ref); ok {
 				if pkgPath == serviceOwnedAuthPkg && name == serviceOwnedCheckOwnerSym {
-					found = true
+					authCheckFound = true
 					return
 				}
 			}
@@ -1234,7 +1231,7 @@ func fileCallsAuthCheckOwnerFromEntries(typesInfo *types.Info, file *ast.File, e
 				queue = append(queue, next)
 			}
 		})
-		if found {
+		if authCheckFound {
 			return true
 		}
 	}

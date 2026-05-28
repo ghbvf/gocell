@@ -204,15 +204,16 @@ func findInterfaceInFile(t *testing.T, path, name string) (iface *ast.InterfaceT
 	if err != nil {
 		t.Fatalf("parse %s: %v", filepath.Base(path), err)
 	}
-	scanner.EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
-		if iface != nil || bail || ts.Name.Name != name {
-			return
+	scanner.FindFirstInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) bool {
+		if ts.Name.Name != name {
+			return false
 		}
 		if i, ok := ts.Type.(*ast.InterfaceType); ok {
 			iface = i
-			return
+		} else {
+			bail = true
 		}
-		bail = true
+		return true
 	})
 	return
 }

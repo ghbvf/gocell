@@ -1367,18 +1367,9 @@ func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 // are stop-descend: a deferred return inside a closure does not satisfy the
 // constructor's outer fail-fast contract.
 func hasNilGuard(body *ast.BlockStmt, paramName string, kind paramKind) bool {
-	found := false
-	EachInSubtree[ast.IfStmt](body, func(ifStmt *ast.IfStmt) {
-		if found {
-			return
-		}
-		if !condMatchesNilCheck(ifStmt.Cond, paramName, kind) {
-			return
-		}
-		if !thenReturnsOrAssigns(ifStmt.Body, paramName) {
-			return
-		}
-		found = true
+	_, found := FindFirstInSubtree[ast.IfStmt](body, func(ifStmt *ast.IfStmt) bool {
+		return condMatchesNilCheck(ifStmt.Cond, paramName, kind) &&
+			thenReturnsOrAssigns(ifStmt.Body, paramName)
 	})
 	return found
 }
@@ -1477,27 +1468,24 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 		return false
 	}
 
-	found := false
-	EachInSubtree[ast.ReturnStmt](body, func(s *ast.ReturnStmt) {
-		if !found && !inFuncLit(s.Pos()) {
-			found = true
-		}
+	_, foundReturn := FindFirstInSubtree[ast.ReturnStmt](body, func(s *ast.ReturnStmt) bool {
+		return !inFuncLit(s.Pos())
 	})
-	if found {
+	if foundReturn {
 		return true
 	}
-	EachInSubtree[ast.AssignStmt](body, func(s *ast.AssignStmt) {
-		if found || inFuncLit(s.Pos()) {
-			return
+	_, foundAssign := FindFirstInSubtree[ast.AssignStmt](body, func(s *ast.AssignStmt) bool {
+		if inFuncLit(s.Pos()) {
+			return false
 		}
 		for _, lhs := range s.Lhs {
 			if isIdentNamed(lhs, paramName) {
-				found = true
-				return
+				return true
 			}
 		}
+		return false
 	})
-	return found
+	return foundAssign
 }
 
 // scanTypedNilGuardsInFile returns Diagnostic violations for

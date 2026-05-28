@@ -174,6 +174,14 @@ func FindFirstChild[S any, N interface {
 // Hard 范本 #1 "typed function choice for walk depth", alongside EachInSubtree
 // vs EachInChildren and EachInSubtreeStopAt).
 //
+// The closure-sentinel idiom over [EachInSubtree] (the recursive walker) —
+// `found := false; EachInSubtree(...){ if found { return }; ... found = true }`
+// — is banned by archtest SCANNER-FRAMEWORK-USAGE-02 (allowlist = 0),
+// alongside its depth-1 sibling over [EachInChildren]. Use FindFirstInSubtree
+// instead: the early-return is implicit, no caller-held flag, and picking the
+// wrong N is a compile error via the same `interface{*S; ast.Node}` constraint
+// as [EachInSubtree].
+//
 // # Implementation
 //
 // Uses [ast.Inspect] whose visitor's bool return halts descent into the

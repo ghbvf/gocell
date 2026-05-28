@@ -104,8 +104,10 @@ func FindFirstChild[S any, N interface {
 // (mirrors [scanner.EachInSubtree] preorder semantics), contrasting
 // FindFirstChild which excludes root. This is the only allowed subtree-depth
 // early-return shape in archtest rules — the closure-sentinel idiom over
-// `EachInSubtree` will be banned by the SCANNER-FRAMEWORK-USAGE-02 subset
-// extension in `FINDFIRSTINSUBTREE-API-01` PR3.
+// `EachInSubtree` is banned by SCANNER-FRAMEWORK-USAGE-02 (allowlist 0),
+// alongside its depth-1 sibling over EachInChildren. The
+// FINDFIRSTINSUBTREE-API-01 work-stream label refers to the subtree-axis
+// migration that folded into this single rule; there is no separate rule ID.
 //
 // Wrapper around [scanner.FindFirstInSubtree] — the only call path to
 // scanner for archtest authors. Pure delegation, no behavior change.

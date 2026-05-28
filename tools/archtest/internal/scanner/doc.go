@@ -36,7 +36,8 @@
 //     "any IfStmt anywhere in fn.Body" style rules — and the find-first
 //     sibling when the rule needs existence/first-match with implicit
 //     early-stop (closure-sentinel idiom is forbidden by
-//     SCANNER-FRAMEWORK-USAGE-02 subset extension).
+//     SCANNER-FRAMEWORK-USAGE-02, allowlist 0, covering both EachInSubtree
+//     and the depth-1 EachInChildren axis).
 //   - [EachInChildren] / [FindFirstChild]: depth-1 only. For "container's
 //     direct elements" — KeyValueExpr of CompositeLit, CaseClause of
 //     SwitchStmt.Body, CommClause of SelectStmt.Body, top-level Decl of

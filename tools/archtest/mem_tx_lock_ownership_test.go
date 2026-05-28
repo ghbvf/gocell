@@ -261,24 +261,21 @@ func isCtxValueMemTxKeyCall(info *types.Info, e ast.Expr) bool {
 // source so the delegation cannot read a fabricated, freshly-Acquired, or
 // foreign-typed lease.
 func bindsLeaseFromCtx(info *types.Info, fd *ast.FuncDecl, leaseVar string) bool {
-	found := false
-	EachInSubtree[ast.AssignStmt](fd, func(as *ast.AssignStmt) {
-		if found || len(as.Lhs) == 0 || len(as.Rhs) != 1 {
-			return
+	_, ok := FindFirstInSubtree[ast.AssignStmt](fd, func(as *ast.AssignStmt) bool {
+		if len(as.Lhs) == 0 || len(as.Rhs) != 1 {
+			return false
 		}
 		id, ok := as.Lhs[0].(*ast.Ident)
 		if !ok || id.Name != leaseVar {
-			return
+			return false
 		}
 		ta, ok := as.Rhs[0].(*ast.TypeAssertExpr)
 		if !ok || ta.Type == nil || !isTxlockLeaseType(info, ta.Type) {
-			return
+			return false
 		}
-		if isCtxValueMemTxKeyCall(info, ta.X) {
-			found = true
-		}
+		return isCtxValueMemTxKeyCall(info, ta.X)
 	})
-	return found
+	return ok
 }
 
 // inLiveTxFormOK pins (*Store).inLiveTx to exactly `return l.Live(&s.mu)` where l

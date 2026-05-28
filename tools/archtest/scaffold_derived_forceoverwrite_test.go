@@ -222,45 +222,27 @@ func TestScaffoldDerivedForceOverwrite_NoIndirectReference(t *testing.T) {
 // isCallExprFun walks file looking for any CallExpr whose Fun field is sel.
 // Returns true iff sel appears as the Fun of some CallExpr in the file.
 func isCallExprFun(file *ast.File, sel *ast.SelectorExpr) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		if call.Fun == sel {
-			found = true
-		}
+	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
+		return call.Fun == sel
 	})
-	return found
+	return ok
 }
 
 // isIdentCallExprFun is the Ident analog of isCallExprFun: returns true iff
 // ident appears as the Fun of some CallExpr in the file (dot-import form).
 func isIdentCallExprFun(file *ast.File, ident *ast.Ident) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		if call.Fun == ident {
-			found = true
-		}
+	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
+		return call.Fun == ident
 	})
-	return found
+	return ok
 }
 
 // isInsideSelectorExpr returns true iff ident appears as the Sel of any
 // SelectorExpr in the file. SelectorExpr.Sel positions are already handled
 // by the SelectorExpr walker; skip them here to avoid double-reporting.
 func isInsideSelectorExpr(file *ast.File, ident *ast.Ident) bool {
-	found := false
-	EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-		if found {
-			return
-		}
-		if sel.Sel == ident {
-			found = true
-		}
+	_, ok := FindFirstInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) bool {
+		return sel.Sel == ident
 	})
-	return found
+	return ok
 }

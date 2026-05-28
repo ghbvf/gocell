@@ -646,18 +646,12 @@ func l2AssertBodyHasAssertion(t *testing.T, name string, fd *ast.FuncDecl, rel s
 	if fd.Body == nil {
 		return
 	}
-	hasAssertion := false
-	EachInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) {
-		if hasAssertion {
-			return
-		}
+	_, hasAssertion := FindFirstInSubtree[ast.SelectorExpr](fd.Body, func(sel *ast.SelectorExpr) bool {
 		pkg, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return
+			return false
 		}
-		if pkg.Name == "assert" || pkg.Name == "require" {
-			hasAssertion = true
-		}
+		return pkg.Name == "assert" || pkg.Name == "require"
 	})
 	// Check for rollback-specific vocabulary in BOTH identifiers and
 	// string-literal assertion messages. The rollback intent in these tests
@@ -674,17 +668,14 @@ func l2AssertBodyHasAssertion(t *testing.T, name string, fd *ast.FuncDecl, rel s
 			strings.Contains(s, "notexist") || strings.Contains(s, "notfound") ||
 			strings.Contains(s, "must not")
 	}
-	hasRollbackShape := false
-	EachInSubtree[ast.Ident](fd.Body, func(id *ast.Ident) {
-		if !hasRollbackShape && isRollbackToken(id.Name) {
-			hasRollbackShape = true
-		}
+	_, hasRollbackShape := FindFirstInSubtree[ast.Ident](fd.Body, func(id *ast.Ident) bool {
+		return isRollbackToken(id.Name)
 	})
-	EachInSubtree[ast.BasicLit](fd.Body, func(lit *ast.BasicLit) {
-		if !hasRollbackShape && lit.Kind == token.STRING && isRollbackToken(lit.Value) {
-			hasRollbackShape = true
-		}
-	})
+	if !hasRollbackShape {
+		_, hasRollbackShape = FindFirstInSubtree[ast.BasicLit](fd.Body, func(lit *ast.BasicLit) bool {
+			return lit.Kind == token.STRING && isRollbackToken(lit.Value)
+		})
+	}
 
 	if !hasAssertion {
 		t.Errorf("%s BodyAssertsRollback: %s:%s has no assert/require call (Medium — "+

@@ -231,7 +231,7 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
-	found := false
+	var found bool
 
 	scope := DirsScope(
 		root, []string{filepath.Dir(rel)},
@@ -242,34 +242,38 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 			if p.Rel(file) != rel {
 				continue
 			}
-			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-				if found || ts.Name.Name != "RouteGroup" {
-					return
-				}
-				found = true
-				st, ok := ts.Type.(*ast.StructType)
-				if !ok {
-					result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
-					return
-				}
-				for _, field := range st.Fields.List {
-					if len(field.Names) != 1 || field.Names[0].Name != "Register" {
-						continue
-					}
-					fn, ok := field.Type.(*ast.FuncType)
-					if !ok {
-						result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
-						return
-					}
-					if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
-						result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line,
-							"RouteGroup.Register must be func(mux RouteMux) error")}
-						return
-					}
-					return
-				}
-				result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+			ts, ok := FindFirstInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) bool {
+				return ts.Name.Name == "RouteGroup"
 			})
+			if !ok {
+				continue
+			}
+			found = true
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
+				continue
+			}
+			hasRegister := false
+			for _, field := range st.Fields.List {
+				if len(field.Names) != 1 || field.Names[0].Name != "Register" {
+					continue
+				}
+				hasRegister = true
+				fn, ok := field.Type.(*ast.FuncType)
+				if !ok {
+					result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
+					break
+				}
+				if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
+					result = []string{listenerDXViolation(root, path, p.Fset.Position(field.Pos()).Line,
+						"RouteGroup.Register must be func(mux RouteMux) error")}
+				}
+				break
+			}
+			if !hasRegister {
+				result = []string{listenerDXViolation(root, path, p.Fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+			}
 		}
 		return nil
 	})
@@ -285,7 +289,7 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
-	found := false
+	var found bool
 
 	scope := DirsScope(
 		root, []string{filepath.Dir(rel)},
@@ -296,20 +300,21 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 			if p.Rel(file) != rel {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				if found || fn.Name.Name != "Mount" {
-					return
-				}
-				found = true
-				if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
-					result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line,
-						"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
-					return
-				}
-				if !listenerDXFuncReturnsOnlyError(fn.Type) {
-					result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
-				}
+			fn, ok := FindFirstInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) bool {
+				return fn.Name.Name == "Mount"
 			})
+			if !ok {
+				continue
+			}
+			found = true
+			if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
+				result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line,
+					"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
+				continue
+			}
+			if !listenerDXFuncReturnsOnlyError(fn.Type) {
+				result = []string{listenerDXViolation(root, path, p.Fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
+			}
 		}
 		return nil
 	})

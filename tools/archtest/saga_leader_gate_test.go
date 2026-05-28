@@ -186,13 +186,9 @@ func checkLeaderGateA2(p *Pass, file *ast.File) []Diagnostic {
 		if fd.Name == nil || fd.Name.Name != tickOnceFuncName || fd.Body == nil {
 			return
 		}
-		found := false
-		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-			if callIsMethodNamed(call, acquireLeadMethodName) {
-				found = true
-			}
-		})
-		if found {
+		if _, ok := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
+			return callIsMethodNamed(call, acquireLeadMethodName)
+		}); ok {
 			return
 		}
 		pos := p.Fset.Position(fd.Pos())
@@ -277,35 +273,35 @@ func bodyCallsMethodNamed(body *ast.BlockStmt, name string) bool {
 // false when acquireLead is not assigned to a 2-element tuple or the lead slot
 // is blank (`_`) — a discarded verdict cannot gate the drive.
 func acquireLeadResultVar(body *ast.BlockStmt) (name string, ok bool) {
-	EachInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) {
-		if ok || len(as.Rhs) != 1 || len(as.Lhs) != 2 {
-			return
+	as, found := FindFirstInSubtree[ast.AssignStmt](body, func(as *ast.AssignStmt) bool {
+		if len(as.Rhs) != 1 || len(as.Lhs) != 2 {
+			return false
 		}
 		call, isCall := as.Rhs[0].(*ast.CallExpr)
 		if !isCall || !callIsMethodNamed(call, acquireLeadMethodName) {
-			return
+			return false
 		}
-		if id, isID := as.Lhs[1].(*ast.Ident); isID && id.Name != "_" {
-			name, ok = id.Name, true
-		}
+		id, isID := as.Lhs[1].(*ast.Ident)
+		return isID && id.Name != "_"
 	})
-	return name, ok
+	if !found {
+		return "", false
+	}
+	id := as.Lhs[1].(*ast.Ident)
+	return id.Name, true
 }
 
 // leadGatesDrive reports whether some IfStmt in body has a condition referencing
 // leadVar and a body that either early-exits (BranchStmt/ReturnStmt) or contains
 // a driveOne call — the two sanctioned gate shapes.
 func leadGatesDrive(body *ast.BlockStmt, leadVar string) bool {
-	gated := false
-	EachInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) {
-		if gated || ifs.Cond == nil || !condReferences(ifs.Cond, leadVar) {
-			return
+	_, ok := FindFirstInSubtree[ast.IfStmt](body, func(ifs *ast.IfStmt) bool {
+		if ifs.Cond == nil || !condReferences(ifs.Cond, leadVar) {
+			return false
 		}
-		if ifBodyEarlyExits(ifs.Body) || bodyCallsMethodNamed(ifs.Body, driveOneMethodName) {
-			gated = true
-		}
+		return ifBodyEarlyExits(ifs.Body) || bodyCallsMethodNamed(ifs.Body, driveOneMethodName)
 	})
-	return gated
+	return ok
 }
 
 // condReferences reports whether expr contains an identifier named want.

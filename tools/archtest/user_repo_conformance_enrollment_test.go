@@ -346,17 +346,11 @@ func hasConformanceCall(file *ast.File, info *types.Info) bool {
 	if info == nil {
 		return false
 	}
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		if ok && pkgPath == conformancePkg && name == conformanceFunc {
-			found = true
-		}
+	_, ok := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
+		pkgPath, name, resolved := ResolvePackageRef(info, call.Fun)
+		return resolved && pkgPath == conformancePkg && name == conformanceFunc
 	})
-	return found
+	return ok
 }
 
 // canonicalPkgPath strips the "_test" or ".test" suffix from a test-variant

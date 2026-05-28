@@ -327,15 +327,9 @@ func unconditionalSlots(stmt ast.Stmt) []ast.Node {
 // nodeContainsAssertCall reports whether n's subtree contains a CallExpr whose
 // callee type-resolves to credentialauthority.Assert.
 func nodeContainsAssertCall(info *types.Info, n ast.Node) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		if pkgPath, name, ok := ResolvePackageRef(info, call.Fun); ok &&
-			pkgPath == credAuthorityPkgPath && name == credAuthorityFnName {
-			found = true
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) bool {
+		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
+		return ok && pkgPath == credAuthorityPkgPath && name == credAuthorityFnName
 	})
 	return found
 }
@@ -344,15 +338,9 @@ func nodeContainsAssertCall(info *types.Info, n ast.Node) bool {
 // the UpdatePassword mutation anchor (selector-name match; see godoc). The
 // mutation itself may be nested — only the GATE must be unconditional.
 func stmtContainsMutationAnchor(stmt ast.Stmt) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil &&
-			sel.Sel.Name == cpgMutationMethod {
-			found = true
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) bool {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		return ok && sel.Sel != nil && sel.Sel.Name == cpgMutationMethod
 	})
 	return found
 }

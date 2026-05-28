@@ -510,20 +510,11 @@ func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 // negative-only scans would silently accept a stub that disables transient
 // classification.
 func scanHelperPositiveErrorsAs(p *Pass, file *ast.File, fd *ast.FuncDecl, funcName string) []Diagnostic {
-	found := false
-	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-		if found {
-			return
+	_, found := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
+		if !isErrorsAsCall(p.TypesInfo, call) || len(call.Args) < 2 {
+			return false
 		}
-		if !isErrorsAsCall(p.TypesInfo, call) {
-			return
-		}
-		if len(call.Args) < 2 {
-			return
-		}
-		if isAddressOfNetErrorIdent(p.TypesInfo, call.Args[1]) {
-			found = true
-		}
+		return isAddressOfNetErrorIdent(p.TypesInfo, call.Args[1])
 	})
 	if found {
 		return nil
