@@ -927,3 +927,160 @@ func TestEachInSubtreeStopAt_NilRootNoOp(t *testing.T) {
 		t.Errorf("EachInSubtreeStopAt nil root: got %d invocations, want 0", count)
 	}
 }
+
+// -----------------------------------------------------------------------
+// FindFirstInSubtreeStopAt — boundary-aware find-first (completes the typed
+// function choice matrix {EachIn*, FindFirst*} × {Children, Subtree,
+// SubtreeStopAt}). Pairs structurally with FindFirstInSubtree (no boundary)
+// and EachInSubtreeStopAt (boundary, full iteration).
+// -----------------------------------------------------------------------
+
+func TestFindFirstInSubtreeStopAt_SkipsNestedFuncLit(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// `bar` is inside nested FuncLit (boundary). Find-first with stopAt must
+	// pick the first CallExpr OUTSIDE any FuncLit — `foo` in preorder.
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](fn.Body, stopAtFuncLit, func(c *ast.CallExpr) bool {
+		return callExprIdent(c) == "bar" || callExprIdent(c) == "foo"
+	})
+	if !found {
+		t.Fatal("FindFirstInSubtreeStopAt: expected match")
+	}
+	if got == nil || callExprIdent(got) != "foo" {
+		t.Errorf("FindFirstInSubtreeStopAt: got %q, want foo (bar must be hidden by boundary)", callExprIdent(got))
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_BoundaryHidesOnlyMatch(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// Predicate matches ONLY `bar`, which lives inside the boundary FuncLit.
+	// With stopAt, the boundary hides `bar` → no match.
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](fn.Body, stopAtFuncLit, func(c *ast.CallExpr) bool {
+		return callExprIdent(c) == "bar"
+	})
+	if found || got != nil {
+		t.Errorf("FindFirstInSubtreeStopAt: bar lives behind boundary, expected (nil, false), got (%v, %v)", got, found)
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_NilStopAt_EquivalentToFindFirstInSubtree(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// Nil stopAt == "always false" == FindFirstInSubtree behavior. `bar` is
+	// visible inside the FuncLit and is the first preorder match (after foo,
+	// which doesn't match the predicate).
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](fn.Body, nil, func(c *ast.CallExpr) bool {
+		return callExprIdent(c) == "bar"
+	})
+	if !found || got == nil || callExprIdent(got) != "bar" {
+		t.Errorf("FindFirstInSubtreeStopAt with nil stopAt: got %q, want bar", callExprIdent(got))
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_RootAlwaysEntered(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, `package fake
+func _() {
+	_ = func() { inner() }
+}
+`)
+	// Use the nested FuncLit ITSELF as root. stopAt is "stop at *ast.FuncLit",
+	// which would also stop at root if root-exemption were missing. The
+	// contract mirrors EachInSubtreeStopAt: root is always entered regardless
+	// of stopAt.
+	funcLit, ok := firstNodeOfKind[ast.FuncLit](file)
+	if !ok {
+		t.Fatal("setup: FuncLit not found in fixture")
+	}
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](funcLit, stopAtFuncLit, func(*ast.CallExpr) bool {
+		return true
+	})
+	if !found || got == nil || callExprIdent(got) != "inner" {
+		t.Errorf("FindFirstInSubtreeStopAt root-exemption: got %q, want inner", callExprIdent(got))
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_StopsAfterFirstMatch(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// Two non-boundary matches (foo, baz). Predicate must be invoked exactly
+	// once because find-first halts at the first match (foo).
+	calls := 0
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](fn.Body, stopAtFuncLit, func(*ast.CallExpr) bool {
+		calls++
+		return true
+	})
+	if !found || got == nil {
+		t.Fatal("FindFirstInSubtreeStopAt: expected match")
+	}
+	if calls != 1 {
+		t.Errorf("predicate call count = %d, want 1 (must stop after first match)", calls)
+	}
+	if callExprIdent(got) != "foo" {
+		t.Errorf("FindFirstInSubtreeStopAt preorder: got %q, want foo", callExprIdent(got))
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_NoMatchReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](fn.Body, stopAtFuncLit, func(*ast.CallExpr) bool {
+		return false
+	})
+	if found || got != nil {
+		t.Errorf("FindFirstInSubtreeStopAt: predicate never matches, expected (nil, false), got (%v, %v)", got, found)
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_NilRootReturnsZeroFalse(t *testing.T) {
+	t.Parallel()
+	called := false
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.CallExpr](nil, stopAtFuncLit, func(*ast.CallExpr) bool {
+		called = true
+		return true
+	})
+	if called {
+		t.Error("FindFirstInSubtreeStopAt with nil root must not invoke predicate")
+	}
+	if found || got != nil {
+		t.Errorf("FindFirstInSubtreeStopAt(nil) = (%v, %v), want (nil, false)", got, found)
+	}
+}
+
+func TestFindFirstInSubtreeStopAt_BoundaryNotPassedAsCandidate(t *testing.T) {
+	t.Parallel()
+	file := parseSrc(t, nestedFuncLitSrc)
+	fn, ok := firstNodeOfKind[ast.FuncDecl](file)
+	if !ok {
+		t.Fatal("setup: FuncDecl not found in fixture")
+	}
+	// N = *ast.FuncLit, stopAt = isFuncLit. The nested FuncLit IS the boundary
+	// kind — boundary excluded → predicate must NOT see it.
+	got, found := scanner.FindFirstInSubtreeStopAt[ast.FuncLit](fn.Body, stopAtFuncLit, func(*ast.FuncLit) bool {
+		return true
+	})
+	if found || got != nil {
+		t.Errorf("FindFirstInSubtreeStopAt boundary exclusion: got (%v, %v), want (nil, false)", got, found)
+	}
+}

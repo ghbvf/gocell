@@ -117,3 +117,27 @@ func FindFirstInSubtree[S any, N interface {
 }](root ast.Node, predicate func(N) bool) (N, bool) {
 	return scanner.FindFirstInSubtree[S, N](root, predicate)
 }
+
+// FindFirstInSubtreeStopAt walks root's subtree like [FindFirstInSubtree] but
+// stops descending into any non-root node for which stopAt returns true —
+// the boundary-aware sibling of FindFirstInSubtree, completing the typed
+// function choice matrix {EachIn*, FindFirst*} × {Children, Subtree,
+// SubtreeStopAt}. Use this when the rule needs first-match semantics AND
+// must respect a closure / scope boundary (e.g. don't credit a match inside
+// a nested *ast.FuncLit because that lives in its own iteration scope).
+//
+// Picking FindFirstInSubtreeStopAt over the boundary-less FindFirstInSubtree
+// is a typed function name selection per ai-robust.md AI-robust Hard 范本 #1
+// "typed function choice for walk depth"; archtest authors must NOT fall
+// back to the manual `EachInSubtreeStopAt + closure-sentinel` idiom — that
+// shape is banned by SCANNER-FRAMEWORK-USAGE-02 (allowlist 0) on the same
+// grounds as the boundary-less variant.
+//
+// Wrapper around [scanner.FindFirstInSubtreeStopAt] — the only call path to
+// scanner for archtest authors. Pure delegation, no behavior change.
+func FindFirstInSubtreeStopAt[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, stopAt func(ast.Node) bool, predicate func(N) bool) (N, bool) {
+	return scanner.FindFirstInSubtreeStopAt[S, N](root, stopAt, predicate)
+}
