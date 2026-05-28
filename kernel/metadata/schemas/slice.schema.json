@@ -49,12 +49,14 @@
           },
           "field": {
             "type": "string",
-            "description": "Cell-struct field name holding the subscribe consumer; disambiguates slices that own more than one *sliceID.T field. Optional for role=subscribe (cellgen resolves by package convention when empty); forbidden for non-subscribe roles.",
+            "description": "Cell-struct field name holding the consumer; disambiguates slices that own more than one *sliceID.T field. Optional for role=subscribe, role=webhook-receive, role=webhook-dispatch (cellgen resolves by package convention when empty); forbidden for all other roles.",
             "pattern": "^[a-zA-Z_][A-Za-z0-9_]*$"
           },
           "sourceID": {
             "type": "string",
-            "description": "Secret-isolation key identifying the webhook source. REQUIRED for role=webhook-receive and role=webhook-dispatch; forbidden for all other roles."
+            "description": "Secret-isolation key identifying the webhook source. REQUIRED for role=webhook-receive and role=webhook-dispatch; forbidden for all other roles. Must match ^[a-z][a-z0-9_-]{0,63}$ (aligns with runtime kernel/webhook sourceIDPattern).",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "minLength": 1
           },
           "targetSelector": {
             "type": "string",
@@ -81,7 +83,6 @@
               "not": {
                 "anyOf": [
                   { "required": ["group"] },
-                  { "required": ["field"] },
                   { "required": ["targetSelector"] }
                 ]
               }
@@ -97,8 +98,7 @@
               "not": {
                 "anyOf": [
                   { "required": ["handler"] },
-                  { "required": ["group"] },
-                  { "required": ["field"] }
+                  { "required": ["group"] }
                 ]
               }
             }

@@ -58,6 +58,8 @@ func inboundWebhookContract(id, sourceID string) *metadata.ContractMeta {
 }
 
 // outboundWebhookContract builds a minimal webhook contract with direction=outbound.
+//
+//nolint:unparam // id is parameterised for future callers; current tests happen to share one contractID
 func outboundWebhookContract(id string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:   id,
@@ -283,6 +285,35 @@ func TestDeriveWebhookEndpoints_ReceiveSourceIDMismatch(t *testing.T) {
 	assert.Error(t, err, "webhook-receive sourceID mismatch with contract.inbound.sourceID must fail")
 }
 
+// TestDeriveWebhookEndpoints_DispatchMissingSourceID verifies that a
+// webhook-dispatch ContractUsage with a non-empty TargetSelector but empty
+// SourceID is rejected. Mirrors the receive-missing-sourceID case.
+func TestDeriveWebhookEndpoints_DispatchMissingSourceID(t *testing.T) {
+	contractID := "webhook.shopify.dispatch.v1"
+	pm := buildWebhookProject(
+		map[string]*metadata.SliceMeta{
+			"ordercore/webhookdispatch": {
+				ID:            "webhookdispatch",
+				BelongsToCell: metadatatest.NewCellID("ordercore"),
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:       contractID,
+						Role:           "webhook-dispatch",
+						TargetSelector: "ShopifyTarget",
+						// SourceID intentionally missing
+					},
+				},
+			},
+		},
+		map[string]*metadata.ContractMeta{
+			contractID: outboundWebhookContract(contractID),
+		},
+	)
+
+	err := metadata.ExportedDeriveWebhookEndpoints(pm)
+	assert.Error(t, err, "webhook-dispatch without sourceID must fail derivation")
+}
+
 // TestDeriveWebhookEndpoints_DirectionRoleMismatch_ReceiveOnOutbound verifies
 // that a webhook-receive CU on an outbound (no inbound block) contract is rejected.
 func TestDeriveWebhookEndpoints_DirectionRoleMismatch_ReceiveOnOutbound(t *testing.T) {
@@ -314,6 +345,37 @@ func TestDeriveWebhookEndpoints_DirectionRoleMismatch_ReceiveOnOutbound(t *testi
 // ---------------------------------------------------------------------------
 // ContractUsage SourceID / TargetSelector field unmarshal round-trip
 // ---------------------------------------------------------------------------
+
+// TestDeriveWebhookEndpoints_DispatchForbiddenHandler verifies that a
+// webhook-dispatch ContractUsage with a non-empty handler field is rejected.
+// slice.schema.json forbids handler on webhook-dispatch; the Go validator
+// enforces the same constraint so schema and runtime are in sync.
+func TestDeriveWebhookEndpoints_DispatchForbiddenHandler(t *testing.T) {
+	contractID := "webhook.shopify.dispatch.v1"
+	pm := buildWebhookProject(
+		map[string]*metadata.SliceMeta{
+			"ordercore/webhookdispatch": {
+				ID:            "webhookdispatch",
+				BelongsToCell: metadatatest.NewCellID("ordercore"),
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:       contractID,
+						Role:           "webhook-dispatch",
+						Handler:        "ForbiddenHandler", // forbidden on webhook-dispatch
+						TargetSelector: "ShopifyTarget",
+						SourceID:       "shopify",
+					},
+				},
+			},
+		},
+		map[string]*metadata.ContractMeta{
+			contractID: outboundWebhookContract(contractID),
+		},
+	)
+
+	err := metadata.ExportedDeriveWebhookEndpoints(pm)
+	assert.Error(t, err, "webhook-dispatch with handler set must fail derivation")
+}
 
 // TestContractUsage_WebhookReceiveFieldsUnmarshal verifies that the new
 // SourceID and TargetSelector fields on ContractUsage round-trip through YAML.

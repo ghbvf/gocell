@@ -115,6 +115,8 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 	// webhook: recognized, zero artifacts by design — registration uses
 	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
 	if spec.Kind == "webhook" {
+		slog.Debug("contractgen: webhook contract emits zero artifacts by design; wiring derives via cellgen from slice.yaml",
+			"contractID", contractID)
 		return nil
 	}
 
@@ -222,6 +224,8 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 	// webhook: recognized, zero artifacts by design — registration uses
 	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
 	if spec.Kind == "webhook" {
+		slog.Debug("contractgen: webhook contract emits zero artifacts by design; wiring derives via cellgen from slice.yaml",
+			"contractID", contractID)
 		return nil, nil
 	}
 

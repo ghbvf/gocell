@@ -70,12 +70,31 @@
       "description": "HMAC signature verification parameters for a webhook contract.",
       "additionalProperties": false,
       "properties": {
-        "algorithm": { "type": "string" },
-        "toleranceSeconds": { "type": "integer", "minimum": 0 },
-        "deliveryIDHeader": { "type": "string" },
-        "timestampHeader": { "type": "string" },
-        "signatureHeader": { "type": "string" },
-        "signedStringForm": { "type": "string" }
+        "algorithm": {
+          "type": "string",
+          "description": "HMAC algorithm used to verify the webhook signature (e.g. 'hmac-sha256')."
+        },
+        "toleranceSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bidirectional time window (seconds) for replay-attack prevention. Requests whose timestamp differs from server time by more than this value in either direction are rejected."
+        },
+        "deliveryIDHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the unique delivery ID (e.g. 'svix-id'). Used as part of the signed string to prevent cross-delivery replay."
+        },
+        "timestampHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the Unix timestamp of the delivery (e.g. 'svix-timestamp'). Must be within toleranceSeconds of server time."
+        },
+        "signatureHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the HMAC signature value (e.g. 'svix-signature')."
+        },
+        "signedStringForm": {
+          "type": "string",
+          "description": "Template for constructing the signed string from delivery fields. Variables: {deliveryID} (value of deliveryIDHeader), {timestamp} (value of timestampHeader), {body} (raw request body). Example: '{deliveryID}.{timestamp}.{body}'."
+        }
       }
     },
     "payload": {
@@ -470,7 +489,9 @@
                   },
                   "sourceID": {
                     "type": "string",
-                    "description": "Secret-isolation key identifying the webhook source."
+                    "description": "Secret-isolation key identifying the webhook source. Must match ^[a-z][a-z0-9_-]{0,63}$ (aligns with runtime kernel/webhook sourceIDPattern).",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1
                   }
                 }
               }

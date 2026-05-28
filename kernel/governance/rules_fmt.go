@@ -308,7 +308,11 @@ func (v *Validator) validateFMT07() []ValidationResult {
 			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
 			case cellvocab.ContractWebhook:
-				field = "endpoints.inbound"
+				// Webhook provider is the explicitly-declared ownerCell (see
+				// ContractMeta.ProviderEndpoint godoc). Receivers/Dispatchers are
+				// derived fields populated after parse time and cannot be the
+				// canonical provider field for FMT-07.
+				field = "ownerCell"
 			default:
 				field = "endpoints"
 			}
@@ -317,7 +321,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				contractFile(c),
 				field,
 				fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
-				"add the required endpoint (server/publisher/handler/provider)",
+				"add the required endpoint (server/publisher/handler/provider for http/event/command/projection; ownerCell for webhook)",
 			))
 		}
 	}

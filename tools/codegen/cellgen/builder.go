@@ -39,6 +39,12 @@ var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
 // still validated defensively to catch any unexpected input.
 var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
 
+// webhookSourceIDPattern matches valid webhook source IDs.
+// Mirrors kernel/webhook sourceIDPattern: lowercase start, lowercase alphanumeric
+// with hyphens/underscores, max 64 chars. Validated at codegen time so a malformed
+// sourceID fails fast rather than being silently baked into generated source.
+var webhookSourceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
 // msgUndeclaredListener is the errcode message for a route that references
 // a listener not declared via +cell:listener in cell.go.
 const msgUndeclaredListener = "cellgen build: route references undeclared listener" +
@@ -399,6 +405,8 @@ func resolveWebhookField(
 //
 // The cell struct field is resolved via fieldIndex.resolveSliceField.
 // HandlerExpr is rendered as `c.<fieldName>.<cu.Handler>`.
+//
+//nolint:dupl // symmetric to buildWebhookDispatchSpecFromCU; different role, fields, and return types
 func buildWebhookReceiverSpecFromCU(
 	p *metadata.ProjectMeta,
 	cellID, sliceID string,
@@ -413,6 +421,17 @@ func buildWebhookReceiverSpecFromCU(
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("handler", cu.Handler),
 				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+	if !webhookSourceIDPattern.MatchString(cu.SourceID) {
+		return WebhookReceiverGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook-receive SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
+			errcode.WithDetails(
+				errcode.PublicString("role", "webhook-receive"),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("sourceID", cu.SourceID),
+				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
 			))
 	}
 	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-receive", cu.Contract, cu.Field, fieldIndex)
@@ -463,6 +482,8 @@ func buildWebhookDispatchesFromSlices(
 //
 // The cell struct field is resolved via fieldIndex.resolveSliceField.
 // SelectorExpr is rendered as `c.<fieldName>.<cu.TargetSelector>`.
+//
+//nolint:dupl // symmetric to buildWebhookReceiverSpecFromCU; different role, fields, and return types
 func buildWebhookDispatchSpecFromCU(
 	p *metadata.ProjectMeta,
 	cellID, sliceID string,
@@ -477,6 +498,17 @@ func buildWebhookDispatchSpecFromCU(
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("targetSelector", cu.TargetSelector),
 				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+	if !webhookSourceIDPattern.MatchString(cu.SourceID) {
+		return WebhookDispatchGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook-dispatch SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
+			errcode.WithDetails(
+				errcode.PublicString("role", "webhook-dispatch"),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("sourceID", cu.SourceID),
+				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
 			))
 	}
 	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-dispatch", cu.Contract, cu.Field, fieldIndex)

@@ -200,6 +200,65 @@ func TestWebhookDispatchSliceCU_MissingTargetSelectorFails(t *testing.T) {
 		"webhook-dispatch contractUsage without targetSelector must fail schema validation")
 }
 
+// TestWebhookReceiveSliceCU_WithFieldPasses verifies that a webhook-receive
+// contractUsage WITH a field value passes slice schema validation. Field is
+// optional for webhook-receive (cellgen uses it for disambiguation).
+func TestWebhookReceiveSliceCU_WithFieldPasses(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhookingest",
+		"belongsToCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"contractUsages": [
+			{
+				"contract": "webhook.stripe.events.v1",
+				"role": "webhook-receive",
+				"handler": "HandleStripeEvent",
+				"sourceID": "stripe",
+				"field": "webhookIngest"
+			}
+		],
+		"verify": {
+			"unit": ["unit.webhookingest.handle"],
+			"contract": ["contract.webhook.stripe.events.v1.receive"]
+		}
+	}`), &doc))
+
+	assert.NoError(t, schema.Validate(doc),
+		"webhook-receive contractUsage with field must pass slice schema (field is optional for webhook-receive)")
+}
+
+// TestWebhookReceiveSliceCU_InvalidSourceIDFails verifies that a webhook-receive
+// contractUsage with an invalid sourceID (uppercase, spaces, etc.) is rejected
+// by the slice schema pattern constraint.
+func TestWebhookReceiveSliceCU_InvalidSourceIDFails(t *testing.T) {
+	schema := compileSliceSchema(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhookingest",
+		"belongsToCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"contractUsages": [
+			{
+				"contract": "webhook.stripe.events.v1",
+				"role": "webhook-receive",
+				"handler": "HandleStripeEvent",
+				"sourceID": "STRIPE_INVALID"
+			}
+		],
+		"verify": {
+			"unit": ["unit.webhookingest.handle"],
+			"contract": []
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"webhook-receive contractUsage with uppercase sourceID must fail schema validation (pattern ^[a-z][a-z0-9_-]{0,63}$)")
+}
+
 // TestNonWebhookRole_SourceIDForbidden verifies that a non-webhook role
 // carrying sourceID is rejected by the slice schema.
 func TestNonWebhookRole_SourceIDForbidden(t *testing.T) {

@@ -89,6 +89,11 @@ func (c *PaymentCoreCell) Init(ctx context.Context, reg cell.Registrar) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
+    // initInternal: hand-written init hook (permanent K#04 convention; implement in cell.go)
+    if err := c.initInternal(ctx, reg); err != nil {
+        return err
+    }
+
     if err := reg.RegisterWebhookReceiver(webhook.ReceiverSpec{
         ContractID: "webhook.stripe.payment-events.v1",
         SourceID:   "stripe",
@@ -111,6 +116,8 @@ PR-3/PR-5 落地。
 |-----------|------|------|
 | `CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01` | `EndpointsMeta.Receivers` / `Dispatchers` 必须 `yaml:"-"`（reflect 锁，派生不可手写） | Hard |
 | `WEBHOOK-MARKER-RETIRED-01` | markergen 只识别 `cell:`/`slice:` 前缀，`webhook:` marker 被**静默忽略**（不产生 wiring，也**不报错**）；AST backstop 扫 production cell.go 拦截残留 `// +webhook:*` marker，强制 slice.yaml 单源 | Medium（AST backstop scan；上游 markergen 结构上无法用 marker 驱动 wiring，但非编译期错误，无开发者反馈） |
+
+> **故障排查**：若 webhook 注册代码未生成，检查 slice.yaml contractUsages 是否含 `role: webhook-receive` 或 `role: webhook-dispatch`；`// +webhook:*` 注释不产生任何效果也不报错。
 
 ## 与现有 contract kind 的差异
 

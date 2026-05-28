@@ -310,6 +310,120 @@ func TestBuildWebhookReceivers_FieldIndexAmbiguity(t *testing.T) {
 	}
 }
 
+// TestBuildWebhookReceivers_InvalidSourceID verifies that a webhook-receive CU
+// with a malformed sourceID is rejected at codegen time (not silently baked into
+// generated source).
+func TestBuildWebhookReceivers_InvalidSourceID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		sourceID string
+	}{
+		{"uppercase", "Stripe"},
+		{"leading digit", "1stripe"},
+		{"contains colon", "stripe:v1"},
+		{"empty", ""},
+		{"contains slash", "str/ipe"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cell := &metadata.CellMeta{
+				ID:           metadatatest.CellIDDemo,
+				Dir:          "demo",
+				File:         "cells/demo/cell.yaml",
+				GoStructName: metadata.MustNewGoIdentifier("Demo"),
+			}
+			slc := &metadata.SliceMeta{
+				ID:            "webhooksvc",
+				BelongsToCell: metadatatest.CellIDDemo,
+				Dir:           "webhooksvc",
+				File:          "cells/demo/slices/webhooksvc/slice.yaml",
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract: "webhook.stripe.payment-events.v1",
+						Role:     "webhook-receive",
+						Handler:  "HandleStripeEvent",
+						SourceID: tc.sourceID,
+					},
+				},
+			}
+			contract := &metadata.ContractMeta{
+				ID:   "webhook.stripe.payment-events.v1",
+				Kind: "webhook",
+			}
+			p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+			fieldIndex := idxOf(map[string]string{"webhooksvc": "webhookSvc"})
+
+			_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+			if err == nil {
+				t.Fatalf("expected error for invalid sourceID %q, got nil", tc.sourceID)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "sourceid") &&
+				!strings.Contains(err.Error(), "source") {
+				t.Errorf("error should mention sourceID, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestBuildWebhookDispatches_InvalidSourceID verifies that a webhook-dispatch CU
+// with a malformed sourceID is rejected at codegen time.
+func TestBuildWebhookDispatches_InvalidSourceID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		sourceID string
+	}{
+		{"uppercase", "Shopify"},
+		{"leading digit", "9shopify"},
+		{"empty", ""},
+		{"contains dot", "shop.ify"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cell := &metadata.CellMeta{
+				ID:           metadatatest.CellIDDemo,
+				Dir:          "demo",
+				File:         "cells/demo/cell.yaml",
+				GoStructName: metadata.MustNewGoIdentifier("Demo"),
+			}
+			slc := &metadata.SliceMeta{
+				ID:            "shopifypush",
+				BelongsToCell: metadatatest.CellIDDemo,
+				Dir:           "shopifypush",
+				File:          "cells/demo/slices/shopifypush/slice.yaml",
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:       "webhook.shopify.orders.v1",
+						Role:           "webhook-dispatch",
+						TargetSelector: "ShopifyTarget",
+						SourceID:       tc.sourceID,
+					},
+				},
+			}
+			contract := &metadata.ContractMeta{
+				ID:   "webhook.shopify.orders.v1",
+				Kind: "webhook",
+			}
+			p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+			fieldIndex := idxOf(map[string]string{"shopifypush": "shopifySvc"})
+
+			_, err := BuildCellSpec(p, metadatatest.CellIDDemo, markergen.WireBundle{}, fieldIndex)
+			if err == nil {
+				t.Fatalf("expected error for invalid sourceID %q, got nil", tc.sourceID)
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), "sourceid") &&
+				!strings.Contains(err.Error(), "source") {
+				t.Errorf("error should mention sourceID, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestBuildWebhookDispatches_MissingContract verifies that a webhook-dispatch CU
 // referencing an unknown contract is rejected.
 func TestBuildWebhookDispatches_MissingContract(t *testing.T) {

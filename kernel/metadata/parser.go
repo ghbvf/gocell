@@ -548,9 +548,10 @@ func newWebhookCellIndex() *webhookCellIndex {
 // the owning cell in the index.
 func validateWebhookReceive(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webhookCellIndex) error {
 	const (
-		msgMissingHandler   = "webhook-receive contractUsage missing required handler"
-		msgMissingSourceID  = "webhook-receive contractUsage missing required sourceID"
-		msgNoInboundBlock   = "webhook-receive contractUsage on a contract with no inbound block (direction/role mismatch)"
+		msgMissingHandler  = "webhook-receive contractUsage missing required handler"
+		msgMissingSourceID = "webhook-receive contractUsage missing required sourceID"
+		msgNoInboundBlock  = "webhook-receive requires contract.endpoints.inbound;" +
+			" set direction=inbound or use role=webhook-dispatch for outbound"
 		msgSourceIDMismatch = "webhook-receive contractUsage sourceID does not match contract inbound.sourceID"
 	)
 	if cu.Handler == "" {
@@ -563,7 +564,11 @@ func validateWebhookReceive(cu ContractUsage, sl *SliceMeta, c *ContractMeta, id
 	}
 	if c.Endpoints.Inbound == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgNoInboundBlock,
-			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("direction", c.Direction),
+			))
 	}
 	if c.Endpoints.Inbound.SourceID != "" && cu.SourceID != c.Endpoints.Inbound.SourceID {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgSourceIDMismatch,
@@ -584,7 +589,13 @@ func validateWebhookDispatch(cu ContractUsage, sl *SliceMeta, idx *webhookCellIn
 	const (
 		msgMissingTargetSel = "webhook-dispatch contractUsage missing required targetSelector"
 		msgMissingSourceID  = "webhook-dispatch contractUsage missing required sourceID"
+		msgForbiddenHandler = "webhook-dispatch contractUsage must not set handler" +
+			" (handler is forbidden for role=webhook-dispatch; use targetSelector instead)"
 	)
+	if cu.Handler != "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgForbiddenHandler,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
 	if cu.TargetSelector == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingTargetSel,
 			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
@@ -623,8 +634,16 @@ func deriveWebhookEndpoints(pm *ProjectMeta) error {
 	}
 	for _, c := range pm.Contracts {
 		if c.Kind == "webhook" {
-			c.Endpoints.Receivers = dedupSorted(idx.receivers[c.ID])
-			c.Endpoints.Dispatchers = dedupSorted(idx.dispatchers[c.ID])
+			r := dedupSorted(idx.receivers[c.ID])
+			if r == nil {
+				r = []string{}
+			}
+			c.Endpoints.Receivers = r
+			d := dedupSorted(idx.dispatchers[c.ID])
+			if d == nil {
+				d = []string{}
+			}
+			c.Endpoints.Dispatchers = d
 		}
 	}
 	return nil

@@ -1168,6 +1168,22 @@ func TestDeadContractCover(t *testing.T) {
 						"(change lifecycle to draft/deprecated if unused)",
 				})
 			}
+		case "webhook":
+			// Webhook contracts declare their provider via the explicit ownerCell
+			// field. Receivers/Dispatchers are derived fields (yaml:"-") populated
+			// at parse time from slice contractUsages; this archtest checks the
+			// static contract.yaml declaration only. "Has impl" is satisfied when
+			// ownerCell is set (mirrors the contractProvider() / ProviderEndpoint()
+			// post-fix semantics). Currently vacuous (no active webhook contracts)
+			// but prevents a wrong-pass when PR-6 adds real webhook contracts.
+			if c.OwnerCell == "" {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: 1,
+					Message: "active webhook contract " + c.ID + " has no ownerCell declared " +
+						"(webhook provider must be the explicit ownerCell; change lifecycle to draft/deprecated if unused)",
+				})
+			}
 		default:
 			// command, projection, or any other kind: require ownerCell or server
 			ownerCell := c.OwnerCell

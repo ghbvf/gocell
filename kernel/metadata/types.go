@@ -178,16 +178,19 @@ type ContractUsage struct {
 	Role     string `yaml:"role"` // serve|call|publish|subscribe|handle|invoke|provide|read|webhook-receive|webhook-dispatch
 	// Handler is the consumer handler method name on the slice's service/consumer
 	// struct field; REQUIRED for role=subscribe and role=webhook-receive, forbidden
-	// otherwise. Single source for the reg.Subscribe handler expression that
-	// cellgen emits.
+	// otherwise (including role=webhook-dispatch). Single source for the
+	// reg.Subscribe / reg.RegisterWebhookReceiver handler expression that cellgen emits.
 	Handler string `yaml:"handler,omitempty"`
 	// Group is the broker consumer group for role=subscribe; optional, defaults to
-	// the owning cell ID when empty. Forbidden for non-subscribe roles.
+	// the owning cell ID when empty. Forbidden for non-subscribe roles (including
+	// webhook-receive and webhook-dispatch).
 	Group string `yaml:"group,omitempty"`
-	// Field optionally names the cell-struct field holding the subscribe slice's
-	// consumer, disambiguating slices that own more than one *sliceID.T field
-	// (e.g. a route Handler plus a subscribe Consumer). Optional for role=subscribe
-	// (cellgen resolves by package convention when empty); forbidden otherwise.
+	// Field optionally names the cell-struct field holding the consumer slice's
+	// service, disambiguating slices that own more than one *sliceID.T field
+	// (e.g. a route Handler plus a subscribe Consumer or a webhook receiver).
+	// Optional for role=subscribe, role=webhook-receive, and role=webhook-dispatch
+	// (cellgen resolves by package convention when empty); forbidden for all other
+	// roles.
 	Field string `yaml:"field,omitempty"`
 	// SourceID is the secret-isolation key identifying the webhook source (e.g.
 	// "stripe", "shopify"). REQUIRED for role=webhook-receive and
@@ -266,10 +269,15 @@ type ContractMeta struct {
 // ProviderEndpoint returns the provider cell/actor ID for this contract
 // based on its Kind. Returns "" if Kind is unknown or provider is unset.
 //
-// For kind=webhook: an inbound webhook (direction=inbound or endpoints.inbound
-// set) has the receiving cell as provider — returns the first Receiver; an
-// outbound webhook has the dispatching cell as provider — returns the first
-// Dispatcher. Returns "" when the derived list is empty.
+// For kind=webhook: returns the explicitly declared ownerCell. Webhook
+// contracts must declare ownerCell explicitly (see contracts/webhook/README.md).
+// Unlike other kinds, the webhook provider cannot be derived from
+// Endpoints.Receivers or Endpoints.Dispatchers at parse time because those
+// fields are populated by deriveWebhookEndpoints, which runs after parseContract
+// calls ProviderEndpoint for the G-7 ownerCell auto-derivation. When ownerCell
+// is set, the G-7 if-check in parseContract (if m.OwnerCell == "") is skipped
+// correctly; when ownerCell is empty, ProviderEndpoint returns "" and ownerCell
+// remains empty (governance rules will flag the omission).
 func (c *ContractMeta) ProviderEndpoint() string {
 	switch c.Kind {
 	case "http":
@@ -281,18 +289,10 @@ func (c *ContractMeta) ProviderEndpoint() string {
 	case "projection":
 		return c.Endpoints.Provider
 	case "webhook":
-		// Inbound: provider is the receiving cell.
-		if c.Endpoints.Inbound != nil || c.Direction == "inbound" {
-			if len(c.Endpoints.Receivers) > 0 {
-				return c.Endpoints.Receivers[0]
-			}
-			return ""
-		}
-		// Outbound: provider is the dispatching cell.
-		if len(c.Endpoints.Dispatchers) > 0 {
-			return c.Endpoints.Dispatchers[0]
-		}
-		return ""
+		// Webhook provider is the explicitly-declared ownerCell.
+		// Receivers/Dispatchers are derived fields populated after parse time
+		// and must not be consulted here.
+		return c.OwnerCell
 	default:
 		return ""
 	}
@@ -337,29 +337,59 @@ type EndpointsMeta struct {
 // WebhookSignatureMeta holds HMAC signature verification parameters for an
 // inbound webhook contract.
 type WebhookSignatureMeta struct {
-	Algorithm        string `yaml:"algorithm"`
-	ToleranceSeconds int    `yaml:"toleranceSeconds,omitempty"`
+	// Algorithm is the HMAC algorithm used to verify the webhook signature
+	// (e.g. "hmac-sha256").
+	Algorithm string `yaml:"algorithm"`
+	// ToleranceSeconds is the bidirectional time window (in seconds) for
+	// replay-attack prevention. Requests whose timestamp differs from server
+	// time by more than this value in either direction are rejected. A value
+	// of 0 disables time-window checking (not recommended for production).
+	ToleranceSeconds int `yaml:"toleranceSeconds,omitempty"`
+	// DeliveryIDHeader is the HTTP header carrying the unique delivery ID
+	// (e.g. "svix-id"). Used as part of the signed string to prevent
+	// cross-delivery replay attacks.
 	DeliveryIDHeader string `yaml:"deliveryIDHeader"`
-	TimestampHeader  string `yaml:"timestampHeader"`
-	SignatureHeader  string `yaml:"signatureHeader"`
+	// TimestampHeader is the HTTP header carrying the Unix timestamp of the
+	// delivery (e.g. "svix-timestamp"). Must be within ToleranceSeconds of
+	// server time.
+	TimestampHeader string `yaml:"timestampHeader"`
+	// SignatureHeader is the HTTP header carrying the HMAC signature value
+	// (e.g. "svix-signature").
+	SignatureHeader string `yaml:"signatureHeader"`
+	// SignedStringForm is a template for constructing the signed string from
+	// delivery fields. Template variables: {deliveryID} (value of
+	// DeliveryIDHeader), {timestamp} (value of TimestampHeader), {body}
+	// (raw request body). Example: "{deliveryID}.{timestamp}.{body}".
 	SignedStringForm string `yaml:"signedStringForm"`
 }
 
 // WebhookPayloadMeta holds payload constraints for a webhook contract.
 type WebhookPayloadMeta struct {
-	SchemaRef    string `yaml:"schemaRef,omitempty"`
-	ContentType  string `yaml:"contentType,omitempty"`
-	MaxBodyBytes int64  `yaml:"maxBodyBytes,omitempty"`
+	// SchemaRef is an optional path to a JSON Schema file (relative to the
+	// contract.yaml directory) that validates the webhook payload body.
+	SchemaRef string `yaml:"schemaRef,omitempty"`
+	// ContentType is the expected MIME type of the webhook payload
+	// (e.g. "application/json"). Runtime rejects requests with a mismatched
+	// Content-Type header.
+	ContentType string `yaml:"contentType,omitempty"`
+	// MaxBodyBytes is the maximum allowed size (in bytes) of the webhook
+	// request body. Runtime rejects requests exceeding this limit with 413.
+	// A value of 0 means no limit (not recommended for production).
+	MaxBodyBytes int64 `yaml:"maxBodyBytes,omitempty"`
 }
 
 // WebhookInboundMeta holds inbound-specific routing fields for a webhook
-// contract (direction=inbound). PathPattern is the HTTP path the platform
-// exposes for receiving webhook callbacks from the external source.
-// SourceID must match the SourceID declared in every webhook-receive
-// ContractUsage for this contract.
+// contract (direction=inbound).
 type WebhookInboundMeta struct {
+	// PathPattern is the HTTP path the platform exposes for receiving webhook
+	// callbacks from the external source (e.g. "/webhooks/stripe/events").
 	PathPattern string `yaml:"pathPattern"`
-	SourceID    string `yaml:"sourceID"`
+	// SourceID is the secret-isolation key identifying the webhook source
+	// (e.g. "stripe"). Must match the SourceID declared in every
+	// webhook-receive ContractUsage for this contract. Must satisfy
+	// ^[a-z][a-z0-9_-]{0,63}$ (aligns with runtime kernel/webhook
+	// sourceIDPattern, maxLen 64).
+	SourceID string `yaml:"sourceID"`
 }
 
 // JourneyMeta maps to journeys/J-*.yaml.

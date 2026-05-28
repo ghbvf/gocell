@@ -189,8 +189,8 @@ func scanWebhookMarker(rel string, data []byte) []string {
 //
 // Reverse self-check: see TestWebhookMarkerRetired01_ScannerFires below.
 //
-// AI-robust rating: Hard upstream (markergen knownMarkers closed set, Merge errors) +
-// Medium downstream (this AST backstop).
+// AI-robust rating: Medium (AST backstop scan; markergen silently ignores the webhook: prefix —
+// no generate-time error, so no Hard upstream gate).
 func TestWebhookMarkerRetired01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -296,6 +296,9 @@ type WebhookCell struct{}
 		return
 	}
 	// Verify the WireBundle for the cell is empty — no listeners, no routes.
+	// (WireBundle.Subscriptions was removed: subscriptions are single-sourced
+	// from slice.yaml, not markergen bundles. The markergen-level assertion
+	// that a +webhook: prefix produces no Routes covers the dispatch path too.)
 	bundle := bundles["webhooktest"]
 	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 {
 		t.Errorf("WEBHOOK-MARKER-RETIRED-01: +webhook:receive must not produce any wiring (Listeners=%v Routes=%v)",
