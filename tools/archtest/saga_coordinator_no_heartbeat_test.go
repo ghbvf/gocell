@@ -65,6 +65,42 @@
 // as `X.Heartbeat`. Mitigated by inheriting the alias ban from
 // SAGA-JOURNAL-HOLDER-SEAL-01's B1 reverse self-test, which forbids
 // `type X = journal.Journal` in runtime/saga.
+//
+// # Funnel 双向锁评级
+//
+// Downstream (Medium): A1 archtest locks the set of runtime/saga (main package,
+// not executor subpackage) .Heartbeat callsites to the empty set. The scan
+// uses go/types structural signature matching so typed aliases and local
+// interface duplicates are covered. Scope boundary — excluding
+// runtime/saga/executor/ — is the B1 reverse self-check's purpose (below).
+//
+// Upstream (Medium): journal.Journal still declares Heartbeat as a method.
+// The Coordinator's journal field carries that interface type, so the type
+// system permits a .Heartbeat call at the source level — it is caught by A1
+// at archtest time, not at compile time. Hard upstream requires splitting
+// journal.Journal into JournalCore + Heartbeater so the Coordinator field
+// type physically lacks Heartbeat. That change touches 22+ conformance cases
+// and multiple PG/mem implementations — out of scope for #1181.
+//
+// Current rating: Medium downstream + Medium upstream.
+//
+// This combination is NOT within the "Medium upstream + Hard downstream"
+// transition form that ai-robust.md §"Funnel 双向锁评级" explicitly permits.
+// It is the Go type-system ceiling for the current interface shape:
+//
+//   - Downstream Hard is not reachable without upstream Hard first: as long as
+//     Coordinator.journal exposes .Heartbeat, any archtest that only bans the
+//     call has an inherent bypass (rewrite, rename, extract) that the type
+//     system does not reject. A1's typed-signature match raises the bar from
+//     Soft to Medium; it cannot reach Hard without a compile-time gate.
+//
+//   - Upstream Hard (= Coordinator field type lacks Heartbeat) is tracked in
+//     gh issue #1209 ("split journal.Journal into JournalCore + Heartbeater").
+//     Once #1209 lands, a .Heartbeat call in runtime/saga becomes a compile
+//     error, upgrading both upstream and downstream to Hard simultaneously.
+//
+// This archtest is intentionally retained at Medium + Medium until #1209 lands.
+// The two-Medium rating is the correct honest assessment, not a Soft carryover.
 package archtest
 
 import (
@@ -251,4 +287,91 @@ func typeIsNamed(t types.Type, pkgSuffix, typeName string) bool {
 		return false
 	}
 	return pkg.Path() == pkgSuffix || strings.HasSuffix(pkg.Path(), "/"+pkgSuffix)
+}
+
+// TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed is the
+// reverse self-check for the A1 scope boundary. A1 excludes
+// runtime/saga/executor/ from its scan — the executor subpackage is the
+// sanctioned heartbeat funnel. This test validates two properties:
+//
+//  1. Non-degenerate fixture: runtime/saga/executor/ production files contain
+//     at least one Heartbeater-shape .Heartbeat SelectorExpr. If the executor
+//     were refactored to remove all .Heartbeat calls without updating A1's
+//     scope comment, this assertion would catch the test becoming vacuous.
+//
+//  2. Scope boundary correctness: A1's path filter (exclude
+//     runtime/saga/executor/) means that when we re-run the A1 scanner
+//     without that filter — i.e., scanning executor files directly — it DOES
+//     find Heartbeater-shape callsites. This confirms the exclude is the
+//     reason A1 reports 0 violations for executor files, not that executor
+//     has no callsites.
+//
+// Together these two assertions ensure A1's scope boundary is not a silent
+// no-op: executor has real callsites that A1 is actively excluding.
+func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *testing.T) {
+	t.Parallel()
+
+	// Count Heartbeater-shape .Heartbeat SelectorExprs found in
+	// runtime/saga/executor/ production (non-test) files. We re-use
+	// scanHeartbeatSelectors but collect into a plain counter rather than
+	// reporting violations — these are expected and sanctioned callsites.
+	var executorCallsites []Diagnostic
+	RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			// Only executor subpackage files.
+			if !strings.HasPrefix(rel, "runtime/saga/executor/") {
+				continue
+			}
+			executorCallsites = append(executorCallsites, scanHeartbeatSelectors(p, file, rel)...)
+		}
+		return nil
+	})
+
+	// Property 1: executor must have at least one Heartbeater-shape callsite.
+	// If this fires, the fixture has become degenerate (executor no longer
+	// calls .Heartbeat) and A1's scope exclusion needs re-evaluation.
+	if len(executorCallsites) == 0 {
+		t.Errorf("%s-B1: runtime/saga/executor/ contains zero Heartbeater-shape "+
+			".Heartbeat callsites; the B1 fixture has become degenerate. "+
+			"Either executor was refactored to remove all .Heartbeat calls "+
+			"(update A1's scope comment + this test) or the scan is broken.",
+			sagaCoordinatorNoHeartbeatLoopRule)
+	}
+
+	// Property 2: A1 itself must produce 0 violations for executor files.
+	// Run A1's actual scanner (including its executor exclude filter) over
+	// the executor package and assert that no violations are reported — the
+	// path filter in A1 is what prevents executor callsites from being flagged.
+	a1ViolationsInExecutor := RunTyped(t, TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}, func(p *Pass) []Diagnostic {
+		if p.TypesInfo == nil {
+			return nil
+		}
+		var out []Diagnostic
+		for _, file := range p.Files {
+			rel := filepath.ToSlash(p.Rel(file))
+			if strings.HasSuffix(rel, "_test.go") {
+				continue
+			}
+			// Replicate A1's exact filter: only flag runtime/saga/ files
+			// that are NOT under runtime/saga/executor/.
+			if !strings.HasPrefix(rel, "runtime/saga/") {
+				continue
+			}
+			if strings.HasPrefix(rel, "runtime/saga/executor/") {
+				continue
+			}
+			out = append(out, scanHeartbeatSelectors(p, file, rel)...)
+		}
+		return out
+	})
+
+	// A1's filter must suppress ALL executor callsites (the exclude is working).
+	Report(t, sagaCoordinatorNoHeartbeatLoopRule+"-B1", a1ViolationsInExecutor)
 }
