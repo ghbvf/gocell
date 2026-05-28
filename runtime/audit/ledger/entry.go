@@ -28,8 +28,44 @@ type Entry struct {
 	// EventType is the event type label (e.g. "user.login", "config.updated").
 	EventType string
 
-	// ActorID identifies the principal that triggered the event.
+	// ActorID identifies the principal that triggered the event (the
+	// impersonator in OAuth `act.sub` semantics; equals SubjectID for normal
+	// non-impersonated flows).
 	ActorID string
+
+	// SubjectID is the OAuth subject-of-record (the end-user's stable
+	// identity, OAuth `sub`). Empty string when not available — the column is
+	// NOT NULL with no DEFAULT in the DB schema (043_audit_entries_v2.sql);
+	// callers (PG Store INSERT) supply the zero value explicitly so the chain
+	// reflects the producer's lack of injection rather than a sentinel DEFAULT.
+	//
+	// Output policy at the auditquery API boundary (DTO exposure / redaction /
+	// admin-gated filtering) is decided by issue #1229 §4 (PR-A2 sealed
+	// construction); issue #1219 tracks the contract.yaml DTO extension.
+	SubjectID string
+
+	// TenantID is the tenant boundary identifier for multi-tenant deployments.
+	// Empty string when not available. NOT NULL no-DEFAULT in DB. See SubjectID
+	// for the auditquery output policy reference.
+	TenantID string
+
+	// SessionID is the session identifier of the triggering request (server-
+	// side session binding). Empty string when not available. NOT NULL
+	// no-DEFAULT in DB. SessionID matches `pkg/redaction` sensitive-key set;
+	// issue #1229 §4 may strip it from the auditquery DTO entirely.
+	SessionID string
+
+	// CorrelationID carries the cross-cell correlation identifier from the
+	// outbox observability envelope. Empty string when not available. NOT NULL
+	// no-DEFAULT in DB.
+	CorrelationID string
+
+	// OccurredAt is the producer-clock event time (distinct from Timestamp
+	// which is the ledger persistence / HMAC time). The audit chain pins both
+	// times so consumers can distinguish "when the business event happened"
+	// from "when the audit row was sealed". NOT NULL no-DEFAULT in DB; the
+	// Go zero (`time.Time{}`) marshals as epoch when no value is supplied.
+	OccurredAt time.Time
 
 	// Timestamp is the event wall-clock time in UTC. Used in the HMAC input
 	// as UnixNano so the hash is timestamp-sensitive.

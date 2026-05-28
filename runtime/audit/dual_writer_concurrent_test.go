@@ -35,15 +35,15 @@ func TestDualWriter_PhysicalIsolation_NoChainFork(t *testing.T) {
 	relayNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	relayProto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("relay-chain-hmac-key-32-bytes!!!")),
-		ledger.WithNamespace(relayNS),
+		relayNS,
+		[]byte("relay-chain-hmac-key-32-bytes!!!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	require.NoError(t, err)
 	bootstrapProto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("bootstrap-chain-hmac-key-32bytes!")),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("bootstrap-chain-hmac-key-32bytes!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

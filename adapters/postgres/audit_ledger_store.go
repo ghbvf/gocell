@@ -52,22 +52,34 @@ ORDER BY seq_no DESC
 LIMIT 1
 FOR UPDATE`
 
-	// insertEntrySQL inserts a new audit entry row.
+	// insertEntrySQL inserts a new audit entry row. 15 columns post-041:
+	// the original 10 columns plus subject_id / tenant_id / session_id /
+	// correlation_id / occurred_at (added in 043_audit_entries_v2.sql to seal
+	// the 12-field canonical-JSON HMAC chain). All five new columns are NOT
+	// NULL with no DEFAULT — callers must supply values explicitly.
 	insertEntrySQL = `
 INSERT INTO audit_entries
-    (id, namespace, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+    (id, namespace, seq_no, event_id, event_type, actor_id,
+     subject_id, tenant_id, session_id, correlation_id, occurred_at,
+     timestamp, payload, prev_hash, hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`
 
-	// selectBySeqSQL fetches a single entry by namespace + seq_no.
+	// selectBySeqSQL fetches a single entry by namespace + seq_no. 14 selected
+	// columns (id + 13 entry fields; seq_no replays the WHERE filter).
 	selectBySeqSQL = `
-SELECT id, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE namespace = $1
   AND seq_no    = $2`
 
-	// selectRangeSQL fetches a contiguous seq_no range for Verify in ascending order.
+	// selectRangeSQL fetches a contiguous seq_no range for Verify in ascending
+	// order. 13 columns (no id needed — Verify only checks chain linkage).
 	selectRangeSQL = `
-SELECT seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+SELECT seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE namespace = $1
   AND seq_no >= $2
@@ -232,8 +244,9 @@ func (s *LedgerStore) Append(ctx context.Context, e *ledger.Entry) error {
 		id := uuid.New()
 		if _, insertErr := s.db.Exec(txCtx, insertEntrySQL,
 			id.String(), ns, e.SeqNo,
-			e.EventID, e.EventType, e.ActorID, e.Timestamp,
-			e.Payload, e.PrevHash, e.Hash,
+			e.EventID, e.EventType, e.ActorID,
+			e.SubjectID, e.TenantID, e.SessionID, e.CorrelationID, e.OccurredAt,
+			e.Timestamp, e.Payload, e.PrevHash, e.Hash,
 		); insertErr != nil {
 			return ctxcancel.WrapOrInfra(insertErr, "insert", ns,
 				ErrAdapterPGQuery, "audit ledger: insert entry failed")
@@ -358,8 +371,9 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, seq int64) (*ledger.Entry, e
 	var e ledger.Entry
 	err := s.db.QueryRow(ctx, selectBySeqSQL, ns, seq).Scan(
 		&e.ID, &e.SeqNo,
-		&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-		&e.Payload, &e.PrevHash, &e.Hash,
+		&e.EventID, &e.EventType, &e.ActorID,
+		&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+		&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
@@ -391,7 +405,9 @@ func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, pa
 	}
 
 	b := pgquery.NewBuilder()
-	b.AppendParam(`SELECT id, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
+	b.AppendParam(`SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, occurred_at,
+       timestamp, payload, prev_hash, hash
 FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
@@ -465,8 +481,9 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 		var e ledger.Entry
 		if err := rows.Scan(
 			&e.ID, &e.SeqNo,
-			&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-			&e.Payload, &e.PrevHash, &e.Hash,
+			&e.EventID, &e.EventType, &e.ActorID,
+			&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); err != nil {
 			return nil, ctxcancel.WrapOrInfra(err, "scan", ns,
 				ErrAdapterPGQuery, "audit ledger: scan entry failed")
@@ -550,8 +567,9 @@ func (s *LedgerStore) verifyRange(ctx context.Context, ns string, fromSeq, toSeq
 		var e ledger.Entry
 		if scanErr := rows.Scan(
 			&e.SeqNo,
-			&e.EventID, &e.EventType, &e.ActorID, &e.Timestamp,
-			&e.Payload, &e.PrevHash, &e.Hash,
+			&e.EventID, &e.EventType, &e.ActorID,
+			&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.OccurredAt,
+			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); scanErr != nil {
 			return false, 0, ctxcancel.WrapOrInfra(scanErr, "verify_scan", ns,
 				ErrAdapterPGQuery, "audit ledger: verify scan failed")

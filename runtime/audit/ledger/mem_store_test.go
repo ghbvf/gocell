@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -18,6 +19,51 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// referenceHashInput mirrors the unexported auditHashInput struct in
+// protocol.go. Tests use this as an external, independent reference for the
+// canonical-JSON HMAC format so that any drift between the production struct
+// (locked by archtest AUDIT-HASH-INPUT-FROZEN-01) and this reference surfaces
+// as a test failure as well as an archtest failure.
+type referenceHashInput struct {
+	Namespace          string `json:"namespace"`
+	PrevHash           string `json:"prev_hash"`
+	EventID            string `json:"event_id"`
+	EventType          string `json:"event_type"`
+	ActorID            string `json:"actor_id"`
+	SubjectID          string `json:"subject_id"`
+	TenantID           string `json:"tenant_id"`
+	SessionID          string `json:"session_id"`
+	CorrelationID      string `json:"correlation_id"`
+	OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+	TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+	Payload            []byte `json:"payload"`
+}
+
+// referenceComputeHash recomputes the canonical HMAC for an Entry independently
+// of Protocol.ComputeHash. The namespace is supplied explicitly because
+// production embeds Protocol.Namespace() as the first signed field
+// (cross-namespace HMAC replay attack vector — see ADR-1042 §威胁矩阵 §A).
+func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
+	in := referenceHashInput{
+		Namespace:          string(ns),
+		PrevHash:           prevHash,
+		EventID:            e.EventID,
+		EventType:          e.EventType,
+		ActorID:            e.ActorID,
+		SubjectID:          e.SubjectID,
+		TenantID:           e.TenantID,
+		SessionID:          e.SessionID,
+		CorrelationID:      e.CorrelationID,
+		OccurredAtUnixNano: e.OccurredAt.UnixNano(),
+		TimestampUnixNano:  e.Timestamp.UnixNano(),
+		Payload:            e.Payload,
+	}
+	msgBytes, _ := json.Marshal(in)
+	mac := hmac.New(sha256.New, key)
+	mac.Write(msgBytes)
+	return hex.EncodeToString(mac.Sum(nil))
+}
 
 // redeliveryAdvance is the clock advance used in at-least-once redelivery
 // simulation tests (F-CR-2 idempotency regression guard).
@@ -40,8 +86,8 @@ func newTestProtocol(t *testing.T) *ledger.Protocol {
 		t.Fatalf("ParseNamespaceID: %v", err)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(testHMACKey()),
-		ledger.WithNamespace(ns),
+		ns,
+		testHMACKey(),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -89,11 +135,10 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 }
 
 // TestMemStore_Append_HashEquivalence verifies the HMAC-SHA256 computation
-// matches the algorithm in cells/auditcore/internal/domain/hashchain.go
-// byte-for-byte. The reference implementation uses:
-//
-//	msg = prevHash|eventID|eventType|actorID|UnixNano|payload
-//	hash = hex(HMAC-SHA256(key, msg))
+// matches the 12-field canonical-JSON reference (auditHashInput struct shape +
+// json.Marshal source-order). The reference is recomputed independently via
+// referenceComputeHash (above) so any drift between production and the spec
+// surfaces both here and in archtest AUDIT-HASH-INPUT-FROZEN-01.
 func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	t.Parallel()
 
@@ -119,19 +164,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	// Compute expected hash using the reference algorithm.
-	prevHash := ""
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
-		prevHash,
-		entry.EventID,
-		entry.EventType,
-		entry.ActorID,
-		fixedNow.UnixNano(),
-		string(payload),
-	)
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(msg))
-	expectedHash := hex.EncodeToString(mac.Sum(nil))
+	expectedHash := referenceComputeHash(key, ledger.NamespaceID("auditcore"), "", entry)
 
 	tail, err := store.Tail(context.Background())
 	if err != nil {
@@ -647,8 +680,13 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 	}
 }
 
-// TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the
-// reference algorithm from cells/auditcore/internal/domain/hashchain.go.
+// TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the 12-field
+// canonical-JSON reference. The reference is an external mirror of the
+// unexported auditHashInput struct; any drift in field set / order / JSON tags
+// surfaces both here and in archtest AUDIT-HASH-INPUT-FROZEN-01.
+//
+// All five Principal/Correlation/OccurredAt fields are populated with non-zero
+// values to exercise the full 12-field message.
 func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
 	key := testHMACKey()
@@ -660,8 +698,8 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -670,28 +708,22 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	}
 
 	fixedNow := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	occurredAt := time.Date(2025, 1, 1, 11, 59, 30, 0, time.UTC)
 	e := &ledger.Entry{
-		EventID:   "evt-abc",
-		EventType: "user.logout",
-		ActorID:   "user-99",
-		Timestamp: fixedNow,
-		Payload:   []byte(`{"reason":"timeout"}`),
-		PrevHash:  "deadbeef",
+		EventID:       "evt-abc",
+		EventType:     "user.logout",
+		ActorID:       "user-99",
+		SubjectID:     "subject-99",
+		TenantID:      "tenant-alpha",
+		SessionID:     "sess-7",
+		CorrelationID: "corr-abc-def",
+		OccurredAt:    occurredAt,
+		Timestamp:     fixedNow,
+		Payload:       []byte(`{"reason":"timeout"}`),
+		PrevHash:      "deadbeef",
 	}
 
-	// Reference computation (mirrors hashchain.go computeHash):
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
-		e.PrevHash,
-		e.EventID,
-		e.EventType,
-		e.ActorID,
-		fixedNow.UnixNano(),
-		string(e.Payload),
-	)
-	mac := hmac.New(sha256.New, keyCopy)
-	mac.Write([]byte(msg))
-	expected := hex.EncodeToString(mac.Sum(nil))
-
+	expected := referenceComputeHash(keyCopy, ns, e.PrevHash, e)
 	got := p.ComputeHash(e.PrevHash, e)
 	if got != expected {
 		t.Errorf("ComputeHash mismatch:\n  got  %s\n  want %s", got, expected)
@@ -757,6 +789,75 @@ func TestMemStore_Idempotency_DifferentTimestamp_SameEventID(t *testing.T) {
 	}
 	if tail.EntryCount != 1 {
 		t.Errorf("EntryCount: got %d, want 1 (duplicate must not be appended)", tail.EntryCount)
+	}
+}
+
+// TestProtocol_AllElevenFieldsAffectHash exercises tamper sensitivity for every
+// canonical-JSON HMAC field. Each subtest mutates exactly one field of a base
+// Entry (or prev_hash) and asserts that the recomputed ComputeHash differs.
+// This proves all 12 fields are covered by the chain and no field can be silently
+// rewritten after the fact without breaking Verify.
+//
+// Funnel cross-link: AUDIT-HASH-INPUT-FROZEN-01 A1 reflect-locks the struct
+// shape; this test exercises behavior against every locked field.
+func TestProtocol_AllElevenFieldsAffectHash(t *testing.T) {
+	t.Parallel()
+	p := newTestProtocol(t)
+
+	baseTs := time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)
+	baseOccurred := time.Date(2025, 3, 1, 9, 59, 30, 0, time.UTC)
+	base := &ledger.Entry{
+		EventID:       "base-evt",
+		EventType:     "user.login",
+		ActorID:       "actor-1",
+		SubjectID:     "subject-1",
+		TenantID:      "tenant-1",
+		SessionID:     "sess-1",
+		CorrelationID: "corr-1",
+		OccurredAt:    baseOccurred,
+		Timestamp:     baseTs,
+		Payload:       []byte(`{"a":1}`),
+	}
+	basePrev := "deadbeef"
+	baseHash := p.ComputeHash(basePrev, base)
+
+	// Table mutates each of the 12 fields one at a time.
+	cases := []struct {
+		field   string
+		prev    string              // overridden prev_hash for this mutation (nil = use basePrev)
+		applyTo func(*ledger.Entry) // mutates a copy of base
+	}{
+		{field: "prev_hash", prev: "feedface"},
+		{field: "event_id", applyTo: func(e *ledger.Entry) { e.EventID = "MUTATED" }},
+		{field: "event_type", applyTo: func(e *ledger.Entry) { e.EventType = "MUTATED" }},
+		{field: "actor_id", applyTo: func(e *ledger.Entry) { e.ActorID = "MUTATED" }},
+		{field: "subject_id", applyTo: func(e *ledger.Entry) { e.SubjectID = "MUTATED" }},
+		{field: "tenant_id", applyTo: func(e *ledger.Entry) { e.TenantID = "MUTATED" }},
+		{field: "session_id", applyTo: func(e *ledger.Entry) { e.SessionID = "MUTATED" }},
+		{field: "correlation_id", applyTo: func(e *ledger.Entry) { e.CorrelationID = "MUTATED" }},
+		{field: "occurred_at_unix_nano", applyTo: func(e *ledger.Entry) { e.OccurredAt = baseOccurred.Add(time.Second) }},
+		{field: "timestamp_unix_nano", applyTo: func(e *ledger.Entry) { e.Timestamp = baseTs.Add(time.Second) }},
+		{field: "payload", applyTo: func(e *ledger.Entry) { e.Payload = []byte(`{"a":2}`) }},
+	}
+	if want := 11; len(cases) != want {
+		t.Fatalf("test guard: cases must cover all %d canonical fields (got %d)", want, len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.field, func(t *testing.T) {
+			t.Parallel()
+			mut := *base
+			prev := basePrev
+			if tc.prev != "" {
+				prev = tc.prev
+			}
+			if tc.applyTo != nil {
+				tc.applyTo(&mut)
+			}
+			got := p.ComputeHash(prev, &mut)
+			if got == baseHash {
+				t.Errorf("ComputeHash unchanged after mutating %s — field is missing from canonical HMAC input", tc.field)
+			}
+		})
 	}
 }
 

@@ -45,8 +45,8 @@ func mustNamespace(t *testing.T, s string) ledger.NamespaceID {
 func buildMemStore(t *testing.T, ns ledger.NamespaceID, clk clock.Clock) *ledger.MemStore {
 	t.Helper()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("multi-store-test-hmac-32bytes!!!")),
-		ledger.WithNamespace(ns),
+		ns,
+		[]byte("multi-store-test-hmac-32bytes!!!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

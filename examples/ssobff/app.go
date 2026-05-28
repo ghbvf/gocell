@@ -343,8 +343,8 @@ func buildSSOBFFAuditCore(
 	}
 	// WARNING: demo keys only. Production deployments must inject from a secret manager.
 	relayProtocol, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("ssobff-dev-hmac-key-32-bytes!!!!")), // #nosec G101 -- demo fixture, never used in production
-		ledger.WithNamespace(auditNS),
+		auditNS,
+		[]byte("ssobff-dev-hmac-key-32-bytes!!!!"), // #nosec G101 -- demo fixture, never used in production
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -355,8 +355,8 @@ func buildSSOBFFAuditCore(
 	// device Salt) so compromise of one chain's key cannot forge entries in
 	// the other.
 	bootstrapProtocol, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("ssobff-bootstrap-hmac-key-32byte")), // #nosec G101 -- demo fixture, never used in production
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		[]byte("ssobff-bootstrap-hmac-key-32byte"), // #nosec G101 -- demo fixture, never used in production
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

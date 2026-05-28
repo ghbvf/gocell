@@ -4,10 +4,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -136,93 +137,125 @@ func (p *Protocol) RestartRecovery() RestartRecoveryMode { return p.restartRecov
 // Idempotency returns the configured idempotency mode.
 func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 
+// auditHashInput is the canonical typed input to the HMAC-SHA256 hash chain
+// computation. json.Marshal serializes struct fields in source-declaration
+// order (Go spec — reflect.Value.MapKeys does not apply to structs), producing
+// deterministic bytes across all Go versions and platforms.
+//
+// Using a typed struct with JSON encoding eliminates the field-boundary
+// collision risk that existed with the prior pipe-separated fmt.Sprintf format:
+// JSON's quote/escape handling makes it impossible for any field value to
+// shift the boundary between fields, regardless of the bytes a field contains
+// (PR #1218 F3+F6).
+//
+// Payload is []byte; encoding/json serializes []byte as a base64-encoded JSON
+// string (RFC 4648 §4), so Payload is self-encoding — no manual hex/base64
+// step is required.
+//
+// The type is unexported (package-private) so external packages cannot
+// construct, alias, or re-shape an equivalent struct. Combined with the
+// archtest funnel AUDIT-HASH-INPUT-FROZEN-01 (which locks the field set +
+// order + JSON tags by reflect and locks hmac.New callsites to ComputeHash by
+// AST), this struct is the single source of truth for the HMAC message and
+// cannot be bypassed.
+//
+// ref: google/trillian storage/leafdata.go — typed canonical input struct
+// pattern for log-leaf HMAC.
+// ref: RFC 8785 (JCS) — canonical JSON for deterministic signing (struct-order
+// determinism is sufficient here because auditHashInput is a private,
+// append-only type with no external serialiser).
+type auditHashInput struct {
+	// Namespace anchors the chain to its owner cell. Cross-namespace HMAC
+	// replay (the same entry shape copied from chain A into chain B) is
+	// invalid because the namespace bytes participate in the digest.
+	// ref: google/trillian — TreeID participates in SignedEntryTimestamp.
+	Namespace          string `json:"namespace"`
+	PrevHash           string `json:"prev_hash"`
+	EventID            string `json:"event_id"`
+	EventType          string `json:"event_type"`
+	ActorID            string `json:"actor_id"`
+	SubjectID          string `json:"subject_id"`
+	TenantID           string `json:"tenant_id"`
+	SessionID          string `json:"session_id"`
+	CorrelationID      string `json:"correlation_id"`
+	OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+	TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+	Payload            []byte `json:"payload"`
+}
+
 // ComputeHash produces the HMAC-SHA256 hex digest for an entry using the
-// configured HMAC key. The message format is byte-for-byte compatible with
-// cells/auditcore/internal/domain/hashchain.go computeHash:
+// configured HMAC key.
 //
-//	msg = prevHash|eventID|eventType|actorID|UnixNano|payload
+// The HMAC message is the canonical JSON encoding of an auditHashInput struct
+// (json.Marshal in source-declaration order). The 12-field canonical-JSON
+// format supersedes the prior pipe-separated fmt.Sprintf format introduced in
+// 020_audit_ledger.sql; both the field-boundary collision risk (any bytes in
+// a field could shift `|` semantics) and the lack of OAuth Principal /
+// CorrelationID / OccurredAt coverage are closed in one rewrite.
 //
-// ref: cells/auditcore/internal/domain/hashchain.go computeHash (must remain
-// byte-for-byte equivalent to preserve chain continuity when PG store lands).
+// There is no protocol version byte and no legacy path: per CLAUDE.md
+// "Review 和重构时不考虑向后兼容——当前只有 gocell 自身", existing audit
+// rows in the pre-043 schema are discarded (DROP TABLE in 043_audit_entries_v2.sql)
+// and all hash fixture expectations are regenerated in the same PR.
+//
+// Payload is encoded as a base64 JSON string by encoding/json's []byte
+// handling; no manual hex-encoding is needed.
+//
+// INVARIANT: AUDIT-HASH-INPUT-FROZEN-01 — the auditHashInput struct shape +
+// hmac.New callsite uniqueness are double-locked by archtest. ComputeHash is
+// the only place in the audit ledger package that may construct an HMAC over
+// audit data.
+//
+// ref: google/trillian storage/leafdata.go (canonical input struct).
+// ref: RFC 8785 JCS.
+// ref: tools/archtest/audit_hash_input_frozen_test.go.
 func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
+	input := auditHashInput{
+		Namespace:          string(p.namespace),
+		PrevHash:           prevHash,
+		EventID:            e.EventID,
+		EventType:          e.EventType,
+		ActorID:            e.ActorID,
+		SubjectID:          e.SubjectID,
+		TenantID:           e.TenantID,
+		SessionID:          e.SessionID,
+		CorrelationID:      e.CorrelationID,
+		OccurredAtUnixNano: e.OccurredAt.UnixNano(),
+		TimestampUnixNano:  e.Timestamp.UnixNano(),
+		Payload:            e.Payload,
+	}
+	// json.Marshal on a struct of string / int64 / []byte fields cannot
+	// return a non-nil error in practice: the only error paths are channel /
+	// function / cyclic-reference values, none of which auditHashInput
+	// contains (AUDIT-HASH-INPUT-FROZEN-01 A1 reflect-locks the field set).
+	// Treat any future regression as an unreachable-branch programmer error:
+	// panic via the registered funnel so the audit chain hash is never
+	// silently computed over an empty message.
+	msgBytes, err := json.Marshal(input)
+	if err != nil {
+		panic(panicregister.Approved(
+			"audit-hash-input-marshal-unreachable",
+			errcode.Assertion("audit ledger: auditHashInput json.Marshal returned error (unreachable per AUDIT-HASH-INPUT-FROZEN-01 A1)"),
+		))
+	}
 	mac := hmac.New(sha256.New, p.hmacKey)
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
-		prevHash,
-		e.EventID,
-		e.EventType,
-		e.ActorID,
-		e.Timestamp.UnixNano(),
-		string(e.Payload),
-	)
 	// crypto/hmac hash.Write always returns (len(b), nil) per io.Writer contract.
-	mac.Write([]byte(msg))
+	mac.Write(msgBytes)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // Option mutates a Protocol during NewProtocol. Options are applied in order;
 // each Option may return an error to short-circuit construction.
+//
+// The mandatory namespace + HMAC key pair is passed positionally to NewProtocol
+// — no Option can supply them, and no Option can override them. This forces
+// the namespace ↔ key binding to be expressed at the type-system layer, so a
+// caller cannot accidentally pair the wrong namespace with a stale or shared
+// key (which would let HMAC chains from different cells be substituted across
+// the wire). The compile error a caller gets when trying to construct a
+// Protocol without supplying both arguments is the funnel's upstream Hard
+// gate; archtest backs that up at the callsite layer.
 type Option func(*Protocol) error
-
-// WithChainHMAC declares the HMAC-SHA256 key used for hash chain computation.
-//
-// Nil and zero-length keys are rejected immediately (key must be ≥ 32 bytes
-// per RFC 2104 §3). NewProtocol short-circuits on the first error — a nil key
-// prevents subsequent options from running.
-//
-// F7: after the defensive copy is made, the caller's key slice is zeroed
-// (clear(key)) so that sensitive key material does not remain live in the
-// caller's memory. The Protocol retains its own internal copy.
-//
-// Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency wiring
-// option — runtime-api.md §Option 范式分层).
-func WithChainHMAC(key []byte) Option {
-	return func(p *Protocol) error {
-		if len(key) == 0 {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: HMAC key must not be nil or empty (use WithChainHMAC, key >= 32 bytes)")
-		}
-		if len(key) < minHMACKeyBytes {
-			// Reject short keys immediately; error mentions only byte counts,
-			// never the key material itself.
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: HMAC key too short (RFC 2104 §3, NIST SP 800-107)",
-				errcode.WithDetails(
-					errcode.PublicInt("minimumBytes", minHMACKeyBytes),
-					errcode.PublicInt("actualBytes", len(key)),
-				))
-		}
-		dst := make([]byte, len(key))
-		copy(dst, key)
-		// Zero the caller's slice immediately after the defensive copy so that
-		// HMAC key material does not remain accessible in the caller's allocation.
-		// The Protocol retains the only live copy.
-		clear(key)
-		p.hmacKey = dst
-		return nil
-	}
-}
-
-// WithNamespace declares the NamespaceID that prefixes all store keys for
-// this ledger instance.
-//
-// Empty (zero-value) and invalid NamespaceID values are rejected immediately.
-// NewProtocol short-circuits on the first error — an empty namespace prevents
-// subsequent options from running.
-// Pattern mirrors runtime/http/router.WithRateLimiter (strong-dependency
-// wiring option — runtime-api.md §Option 范式分层).
-func WithNamespace(ns NamespaceID) Option {
-	return func(p *Protocol) error {
-		if ns == "" {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: namespace ID must not be empty")
-		}
-		if err := ns.Validate(); err != nil {
-			return err
-		}
-		p.namespace = ns
-		return nil
-	}
-}
 
 // WithRestartRecovery declares the restart recovery mode.
 //
@@ -258,12 +291,52 @@ func WithIdempotency(im IdempotencyMode) Option {
 	}
 }
 
-// NewProtocol assembles a Protocol from the supplied options and fail-fasts
-// on missing or invalid required fields. Options are applied in order; the
-// first error short-circuits and no subsequent options are applied.
-// The returned *Protocol is safe for concurrent read-only use.
-func NewProtocol(opts ...Option) (*Protocol, error) {
-	p := &Protocol{}
+// NewProtocol assembles a Protocol from the namespace + HMAC key (mandatory
+// positional arguments) and the supplied options. The positional form binds
+// `namespace` and `key` at the type-system layer — a caller physically cannot
+// pass just one, nor swap them, nor reuse a stale key against a fresh
+// namespace silently. After the defensive HMAC key copy is made, the caller's
+// `key` slice is zeroed (clear) so sensitive material is not retained in
+// caller memory (F7).
+//
+// Options are applied in order; the first error short-circuits and no
+// subsequent options are applied. The returned *Protocol is safe for
+// concurrent read-only use.
+//
+// INVARIANT: AUDIT-HASH-INPUT-FROZEN-01 (positional binding closes the
+// upstream "wrong namespace ↔ wrong key" attack vector at compile time;
+// downstream Hard is provided by Protocol.ComputeHash hmac.New callsite
+// uniqueness).
+func NewProtocol(namespace NamespaceID, key []byte, opts ...Option) (*Protocol, error) {
+	if namespace == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: namespace must not be empty")
+	}
+	if err := namespace.Validate(); err != nil {
+		return nil, err
+	}
+	if len(key) == 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: HMAC key must not be nil or empty (key >= 32 bytes)")
+	}
+	if len(key) < minHMACKeyBytes {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger protocol: HMAC key too short (RFC 2104 §3, NIST SP 800-107)",
+			errcode.WithDetails(
+				errcode.PublicInt("minimumBytes", minHMACKeyBytes),
+				errcode.PublicInt("actualBytes", len(key)),
+			))
+	}
+	dst := make([]byte, len(key))
+	copy(dst, key)
+	// Zero the caller's slice immediately after the defensive copy so that HMAC
+	// key material does not remain accessible in the caller's allocation. The
+	// Protocol retains the only live copy.
+	clear(key)
+	p := &Protocol{
+		hmacKey:   dst,
+		namespace: namespace,
+	}
 	for _, opt := range opts {
 		if opt == nil {
 			continue
@@ -271,15 +344,6 @@ func NewProtocol(opts ...Option) (*Protocol, error) {
 		if err := opt(p); err != nil {
 			return nil, err
 		}
-	}
-	// Zero-value defense: catch the case where no Option was passed at all.
-	if len(p.hmacKey) == 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger protocol: HMAC key required (use WithChainHMAC, key >= 32 bytes)")
-	}
-	if p.namespace == "" {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger protocol: namespace required (use WithNamespace)")
 	}
 	if validation.IsNilInterface(p.restartRecovery) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

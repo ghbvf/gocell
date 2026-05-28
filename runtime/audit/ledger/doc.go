@@ -24,11 +24,27 @@
 //
 // Each entry's Hash is computed as:
 //
-//	HMAC-SHA256(key, prevHash|eventID|eventType|actorID|UnixNano|payload)
+//	HMAC-SHA256(key, json.Marshal(auditHashInput{
+//	    prev_hash, event_id, event_type, actor_id,
+//	    subject_id, tenant_id, session_id, correlation_id,
+//	    occurred_at_unix_nano, timestamp_unix_nano, payload,
+//	}))
 //
-// encoded as lowercase hex. The algorithm is byte-for-byte identical to
-// cells/auditcore/internal/domain/hashchain.go to preserve chain continuity
-// when the PG-backed store (S8+) replaces the legacy in-cell chain.
+// encoded as lowercase hex. The auditHashInput struct is unexported and JSON
+// fields are emitted in source-declaration order — deterministic bytes across
+// all Go versions / platforms.
+//
+// The 12-field canonical-JSON format supersedes the pre-043 pipe-separated
+// fmt.Sprintf format (`prevHash|eventID|eventType|actorID|UnixNano|payload`)
+// in a single canonical rewrite (PR #1218 W0-transition path retracted in
+// favor of the DROP+CREATE rebuild in 043_audit_entries_v2.sql, issue #1228).
+// JSON quote/escape handling eliminates the field-boundary collision risk of
+// the pipe-separator format (PR #1218 F3+F6).
+//
+// INVARIANT: AUDIT-HASH-INPUT-FROZEN-01 (see protocol.go and
+// tools/archtest/audit_hash_input_frozen_test.go) — the field set + JSON tag
+// set + field order are reflect-locked; the hmac.New callsite is AST-locked
+// to ComputeHash so no other code path can construct an HMAC over audit data.
 //
 // # Restart Recovery
 //

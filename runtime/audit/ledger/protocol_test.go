@@ -35,25 +35,12 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
-// TestNewProtocol_NoOptions_Error: NewProtocol with zero options must fail
-// because all 4 wiring options are required.
-func TestNewProtocol_NoOptions_Error(t *testing.T) {
-	t.Parallel()
-	p, err := ledger.NewProtocol()
-	if err == nil {
-		t.Fatalf("expected error for missing required options, got nil; protocol=%+v", p)
-	}
-	if p != nil {
-		t.Fatalf("expected nil protocol on error, got %+v", p)
-	}
-	var coded *errcode.Error
-	if !errors.As(err, &coded) {
-		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-	}
-	if coded.Code != errcode.ErrValidationFailed {
-		t.Errorf("expected ErrValidationFailed, got %s", coded.Code)
-	}
-}
+// Note: TestNewProtocol_NoOptions_Error was retired with the positional-
+// argument refactor. `ledger.NewProtocol()` with no arguments is a Go
+// compile-time error now (namespace + key are required positional params),
+// so the runtime-error contract this test asserted has been replaced by the
+// type system itself. See AUDIT-HASH-INPUT-FROZEN-01 godoc for the funnel
+// shape.
 
 // TestNewProtocol_AllOptions_OK: providing all 4 required options succeeds.
 func TestNewProtocol_AllOptions_OK(t *testing.T) {
@@ -67,8 +54,8 @@ func TestNewProtocol_AllOptions_OK(t *testing.T) {
 		t.Fatalf("ParseNamespaceID: %v", err)
 	}
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -87,8 +74,8 @@ func assertHMACKeyError(t *testing.T, ns ledger.NamespaceID, keyLen int, wantErr
 	t.Helper()
 	key := make([]byte, keyLen)
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -180,8 +167,8 @@ func TestNewProtocol_WithRestartRecoveryNil_Rejected(t *testing.T) {
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	var rr ledger.RestartRecoveryMode // typed nil
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(rr),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -200,8 +187,8 @@ func TestNewProtocol_WithIdempotencyNil_Rejected(t *testing.T) {
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	var im ledger.IdempotencyMode // typed nil
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(im),
 	)
@@ -218,8 +205,8 @@ func TestNewProtocol_WithHMACNil_Rejected(t *testing.T) {
 	t.Parallel()
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(nil),
-		ledger.WithNamespace(ns),
+		ns,
+		nil,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -228,17 +215,19 @@ func TestNewProtocol_WithHMACNil_Rejected(t *testing.T) {
 	}
 }
 
-// TestNewProtocol_WithNamespaceMissing_Rejected: missing namespace is rejected.
-func TestNewProtocol_WithNamespaceMissing_Rejected(t *testing.T) {
+// TestNewProtocol_EmptyNamespace_Rejected: zero-value namespace is rejected at
+// the positional-arg validation step.
+func TestNewProtocol_EmptyNamespace_Rejected(t *testing.T) {
 	t.Parallel()
 	hmacKey := make([]byte, 32)
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
+		"",
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
 	if err == nil {
-		t.Fatal("expected error for missing namespace")
+		t.Fatal("expected error for empty namespace")
 	}
 	if !strings.Contains(err.Error(), "namespace") {
 		t.Errorf("expected error to mention namespace, got %q", err.Error())
@@ -250,73 +239,13 @@ func TestNewProtocol_WithNamespaceMissing_Rejected(t *testing.T) {
 //
 // Each Option func returns a non-nil error on receiving an invalid input
 // (nil / empty / zero-value), causing NewProtocol to stop applying subsequent
-// options. The pattern below inserts an invalid option followed by a valid one
-// and asserts the immediate error wins — the second valid call cannot mask the
-// first invalid call.
+// options. Two former cases — WithChainHMAC(nil) and WithNamespace("") —
+// retired with the positional-arg refactor: the underlying Option funcs were
+// deleted because the values they used to wire are now mandatory positional
+// arguments, which makes "called with nil/empty" a runtime check against the
+// `key []byte` / `namespace NamespaceID` parameters themselves (covered by
+// TestNewProtocol_WithHMACNil_Rejected + TestNewProtocol_EmptyNamespace_Rejected).
 // ---------------------------------------------------------------------------
-
-// TestWithChainHMAC_NilReturnsError_Immediate verifies that WithChainHMAC(nil)
-// returns an error immediately so NewProtocol short-circuits and does not
-// execute subsequent options. The observable: passing WithChainHMAC(nil) then
-// WithChainHMAC(validKey) must still fail, and the error message must mention
-// "nil"/"empty" (immediate error from the Option func itself, not a deferred
-// "key required" message).
-func TestWithChainHMAC_NilReturnsError_Immediate(t *testing.T) {
-	t.Parallel()
-	ns, _ := ledger.ParseNamespaceID("auditcore")
-	validKey := make([]byte, 32)
-	for i := range validKey {
-		validKey[i] = byte(i + 1)
-	}
-
-	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(nil),
-		ledger.WithChainHMAC(validKey),
-		ledger.WithNamespace(ns),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err == nil {
-		t.Fatal("WithChainHMAC(nil) followed by valid key must still return error")
-	}
-	errStr := err.Error()
-	// Immediate error must mention "nil" or "empty" — not a deferred "key required" sentinel.
-	if !containsAny(errStr, "nil", "empty", "missing key") {
-		t.Errorf("WithChainHMAC(nil) should immediately return error "+
-			"mentioning 'nil' or 'empty', got %q", errStr)
-	}
-}
-
-// TestWithNamespace_EmptyReturnsError_Immediate verifies that WithNamespace("")
-// returns an error immediately so NewProtocol short-circuits and does not
-// apply the subsequent valid namespace.
-func TestWithNamespace_EmptyReturnsError_Immediate(t *testing.T) {
-	t.Parallel()
-	validKey := make([]byte, 32)
-	for i := range validKey {
-		validKey[i] = byte(i + 1)
-	}
-	validNS, _ := ledger.ParseNamespaceID("auditcore")
-
-	// Passing empty namespace then valid namespace: short-circuit semantics =
-	// valid NS option never runs because the first call returns an error.
-	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(validKey),
-		ledger.WithNamespace(""), // empty NamespaceID = typed zero value
-		ledger.WithNamespace(validNS),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	if err == nil {
-		t.Fatal("WithNamespace(\"\") followed by valid namespace must still return error")
-	}
-	errStr := err.Error()
-	// Immediate error must mention "empty" — not a deferred "namespace required" sentinel.
-	if !containsAny(errStr, "empty", "must not be empty", "namespace ID must not be empty") {
-		t.Errorf("WithNamespace(\"\") should immediately return error "+
-			"mentioning empty namespace, got %q", errStr)
-	}
-}
 
 // TestWithRestartRecovery_NilReturnsError_Immediate verifies that
 // WithRestartRecovery(nil) returns an error immediately so NewProtocol
@@ -332,8 +261,8 @@ func TestWithRestartRecovery_NilReturnsError_Immediate(t *testing.T) {
 
 	// nil then valid: short-circuit means the valid mode never runs.
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(validKey),
-		ledger.WithNamespace(ns),
+		ns,
+		validKey,
 		ledger.WithRestartRecovery(nilRR),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
@@ -363,8 +292,8 @@ func TestWithIdempotency_NilReturnsError_Immediate(t *testing.T) {
 
 	// nil then valid: short-circuit means the valid mode never runs.
 	_, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(validKey),
-		ledger.WithNamespace(ns),
+		ns,
+		validKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(nilIM),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
@@ -389,8 +318,8 @@ func TestNewProtocol_OK(t *testing.T) {
 	}
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -402,14 +331,10 @@ func TestNewProtocol_OK(t *testing.T) {
 	}
 }
 
-// TestNewProtocol_Error_OnMissingOptions: NewProtocol returns error on validation failure.
-func TestNewProtocol_Error_OnMissingOptions(t *testing.T) {
-	t.Parallel()
-	_, err := ledger.NewProtocol() // zero options → error
-	if err == nil {
-		t.Fatal("expected error from NewProtocol when options missing")
-	}
-}
+// Note: TestNewProtocol_Error_OnMissingOptions was retired with the positional-
+// argument refactor. `ledger.NewProtocol()` with no arguments is a Go compile-
+// time error now (namespace + key are required), so the runtime-error contract
+// this test exercised has been replaced by the type system.
 
 // TestWithChainHMAC_CallerSliceZeroedAfterCopy verifies the security invariant
 // that WithChainHMAC zeroes the caller's key slice via clear(key) after copy.
@@ -447,8 +372,8 @@ func TestWithChainHMAC_CallerSliceZeroedAfterCopy(t *testing.T) {
 				}
 			}
 			_, err := ledger.NewProtocol(
-				ledger.WithChainHMAC(key),
-				ledger.WithNamespace(ns),
+				ns,
+				key,
 				ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 				ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 			)
@@ -485,8 +410,8 @@ func TestProtocol_Getters(t *testing.T) {
 	key := make([]byte, 32)
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(key),
-		ledger.WithNamespace(ns),
+		ns,
+		key,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

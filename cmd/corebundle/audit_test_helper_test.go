@@ -21,8 +21,8 @@ func buildTestAuditProtocol(t testing.TB, hmacKey []byte) *ledger.Protocol {
 	ns, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err, "audit namespace parse")
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(ns),
+		ns,
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
@@ -61,8 +61,8 @@ func auditcoreLedgerOpts(t testing.TB, hmacKey []byte) []auditcore.Option {
 func buildTestBootstrapAuditChain(t testing.TB, hmacKey []byte) (ledger.Store, *audit.BootstrapLedgerStore) {
 	t.Helper()
 	p, err := ledger.NewProtocol(
-		ledger.WithChainHMAC(hmacKey),
-		ledger.WithNamespace(audit.BootstrapNamespace()),
+		audit.BootstrapNamespace(),
+		hmacKey,
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)

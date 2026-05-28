@@ -186,8 +186,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	callerCellAuditNS, err := ledger.ParseNamespaceID("auditcore")
 	require.NoError(t, err)
 	callerCellAuditProto, err := ledger.NewProtocol(
-		ledger.WithChainHMAC([]byte("callercell-hmac-key-32-bytes!!!!!")),
-		ledger.WithNamespace(callerCellAuditNS),
+		callerCellAuditNS,
+		[]byte("callercell-hmac-key-32-bytes!!!!!"),
 		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
 		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
 	)
