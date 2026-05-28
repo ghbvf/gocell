@@ -179,7 +179,7 @@ func NewTestProtocol(t *testing.T) *ledger.Protocol {
 // non-empty; other fields are set to reasonable defaults.
 //
 // All 5 Principal/Correlation/OccurredAt fields are populated with non-zero
-// fixture values so the default storetest suite exercises the full 11-field
+// fixture values so the default storetest suite exercises the full 12-field
 // HMAC chain rather than the empty-string degenerate case. Callers that want
 // to exercise the zero-value path explicitly (e.g. a PR-A1 transition test)
 // should construct the Entry literal directly instead of going through this

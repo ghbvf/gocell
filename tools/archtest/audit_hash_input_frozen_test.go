@@ -58,7 +58,7 @@
 //   - Sibling: PRINCIPAL-SEALED-FIELD-FROZEN-01 (PR-A2, outbox.Entry
 //     wire envelope) — outbox-side envelope freeze.
 //   - Conformance: storetest.RunPrincipalFieldsRoundTrip + the in-package
-//     11-field tamper test prove behavior against every locked field.
+//     12-field tamper test prove behavior against every locked field.
 //
 // ref ADR-1042 (docs/architecture/202605281200-1042-*.md) §Decision 4 audit
 // ledger HMAC msg rewrite + §Decision 6 archtest funnel.

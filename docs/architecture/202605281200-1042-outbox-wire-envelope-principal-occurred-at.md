@@ -12,7 +12,7 @@ outbox sides are independently reviewable and the audit-side rewrite has a
 hard deadline (PR #1218 retraction):
 
 - **PR-A1** (this PR, issue #1228): audit ledger DROP+CREATE rebuild +
-  11-field canonical-JSON HMAC + archtest `AUDIT-HASH-INPUT-FROZEN-01`.
+  12-field canonical-JSON HMAC + archtest `AUDIT-HASH-INPUT-FROZEN-01`.
   Lands all Decision points that touch `runtime/audit/ledger/*`,
   `adapters/postgres/audit_ledger*`, and `043_audit_entries_v2.sql`.
 - **PR-A2** (follow-up, issue #1229): outbox-side `Entry` / `PrincipalMetadata`
@@ -50,7 +50,7 @@ Idempotency、W3 Command Bus、`/correlate` 等下游缺口。
 | Correlation | ✅ 已 Hard sealed — `ObservabilityMetadata` typed + `wireMessage` unexported + 双 archtest（`SAFEID-WIREMESSAGE-USAGE-01` / `SAFEID-UPSTREAM-FUNNEL-HARD-01`） | 无改动 | — |
 | Principal | ❌ 缺失 | 加 4 字段 typed struct `PrincipalMetadata`（镜像 ObservabilityMetadata） | PR-A2 |
 | Time-Causality | 🟡 outbox `Entry.CreatedAt`（store INSERT 时间） | 加 `outbox.Entry.OccurredAt time.Time` + audit `ledger.Entry.OccurredAt time.Time`（producer-domain 事件时间） | PR-A2（outbox）/ PR-A1（audit） |
-| Audit chain | 🟡 6-field pipe HMAC，无 Principal 覆盖 | 11-field canonical JSON HMAC + audit_entries 表 DROP+CREATE 重建 + `AUDIT-HASH-INPUT-FROZEN-01` 双向 Hard 锁 | PR-A1 |
+| Audit chain | 🟡 6-field pipe HMAC，无 Principal 覆盖 | 12-field canonical JSON HMAC + audit_entries 表 DROP+CREATE 重建 + `AUDIT-HASH-INPUT-FROZEN-01` 双向 Hard 锁 | PR-A1 |
 
 ## Decision
 
@@ -90,7 +90,7 @@ claim）。
   - `outbox.Entry.CreatedAt` = outbox row INSERT 时间（store-clock）
   - `audit ledger.Entry.Timestamp` = ledger 持久化 / HMAC 时间
 
-audit-side（PR-A1）：`ledger.Entry.OccurredAt` 字段加进 11-field HMAC 输入；
+audit-side（PR-A1）：`ledger.Entry.OccurredAt` 字段加进 12-field HMAC 输入；
 表列 `occurred_at TIMESTAMPTZ NOT NULL`（无 DEFAULT），caller 必须供值（零
 值或真实值）。
 
@@ -132,7 +132,7 @@ go/types 层解析 `crypto/hmac.New` 调用点（**alias-proof**，`import h
 import alias 三个 vector。
 
 `auditHashInput` 是 `runtime/audit/ledger` 包内 **unexported** typed struct
-（包外不可构造、不可作 unmarshal target、不可 alias re-shape）；11 字段，字段
+（包外不可构造、不可作 unmarshal target、不可 alias re-shape）；12 字段，字段
 顺序与 JSON tag 固定。`json.Marshal` 按 struct source-declaration order 输出
 确定性字节序列。Payload 为 `[]byte`，由 `encoding/json` 编码为 base64 JSON
 string（无需手工 hex-encode）。
@@ -221,7 +221,7 @@ helper 写入 delivery span：
   2. **运维约定**：业务侧 payload 不含 `|` 字节（无强制 enforcement，依赖业务侧守约）。
   3. **类型路由**：`fmt.Sprintf("%s", []byte)` 隐式走 `string` 路径（payload 以原始字节直接落 HMAC msg），string vs []byte 的类型路由由 `fmt.Sprintf` 动词运行时分支决定。
 - **替代证明**：
-  - 11-field canonical JSON (`auditHashInput` unexported typed struct,
+  - 12-field canonical JSON (`auditHashInput` unexported typed struct,
     `json.Marshal` source-order) 包含全 5 新字段（subject_id / tenant_id /
     session_id / correlation_id / occurred_at_unix_nano）+ 旧 6 字段。
   - JSON quote/escape 消除字段边界 collision 风险（PR #1218 F3+F6）：任何字段
@@ -232,7 +232,7 @@ helper 写入 delivery span：
     硬编 `[]byte`，encoding/json 对 `[]byte` 的处理在标准库内唯一确定，
     旧 invariant #3 的隐式分支被 Go 类型系统消除。
   - 所有 hash 期望 fixture（`mem_store_test.go::TestMemStore_Append_HashEquivalence`，
-    `TestProtocol_ComputeHash_ByteForByte`）在 PR-A1 内 regen 为 11-field 形态。
+    `TestProtocol_ComputeHash_ByteForByte`）在 PR-A1 内 regen 为 12-field 形态。
   - **funnel 守卫**：`AUDIT-HASH-INPUT-FROZEN-01` 双向 Hard 锁（A1 字段集 + 顺序 + JSON
     tag + Go 类型 reflect/AST 锁；A2 `hmac.New` callsite ⊆
     `{Protocol.ComputeHash.Body}` 且 receiver 必须是 `*Protocol`）保证 caller
@@ -283,7 +283,7 @@ helper 写入 delivery span：
 
 - **原 invariant**：W0 transition 阶段，已有 row 由
   `NOT NULL DEFAULT ''` / `NOT NULL DEFAULT '1970-01-01 00:00:00+00'` 哨兵
-  backfill；新 row 由 producer (W1+) 注入真值；hash chain 含 11 字段且哨兵 row
+  backfill；新 row 由 producer (W1+) 注入真值；hash chain 含 12 字段且哨兵 row
   hash 仍能被 ComputeHash 验证；W0 → W1 期 dual-state 允许 producer 增量接入。
 - **替代证明**：
   - DROP+CREATE 不存在「旧 row 需要 backfill」语义 —— 旧 row 已随 DROP TABLE
@@ -305,7 +305,7 @@ helper 写入 delivery span：
   无法伪造（PR-A2 落地）。
 - consumer 自动 ctx 还原，handler 透明感知 Principal（PR-A2 落地）。
 - audit ledger hash chain 含 Principal 5 字段，tamper-detection 覆盖面从 6 字段
-  扩到 11 字段（PR-A1 落地）。
+  扩到 12 字段（PR-A1 落地）。
 - archtest funnel 双向锁 (`AUDIT-HASH-INPUT-FROZEN-01` Hard 双向，`PRINCIPAL-SEALED-FIELD-FROZEN-01`
   Hard 下游 + `SAFEID-UPSTREAM-FUNNEL-HARD-01` Hard 上游)，wire schema 不可漂移。
 - DROP+CREATE 一刀切清除 PR #1218 W0 哨兵 / 增量接入语义，无双状态运行时分支
@@ -339,13 +339,13 @@ Contract: kernel/outbox.Entry / kernel/outbox.wireMessage / runtime/audit/ledger
 Change: 三族字段集补齐（Principal 4 字段 + OccurredAt）+ audit HMAC msg canonical rewrite + audit_entries 表 DROP+CREATE
 Implementations:
   [x] (PR-A1) runtime/audit/ledger.Entry (+5 字段)
-  [x] (PR-A1) runtime/audit/ledger.Protocol.ComputeHash (canonical JSON, 11-field, auditHashInput unexported struct)
+  [x] (PR-A1) runtime/audit/ledger.Protocol.ComputeHash (canonical JSON, 12-field, auditHashInput unexported struct)
   [x] (PR-A1) runtime/audit/ledger.mem_store (字段透传 via *e 复制 + protocol.ComputeHash 单源)
   [x] (PR-A1) adapters/postgres/audit_ledger.store (15 列 INSERT/SELECT/scan)
   [x] (PR-A1) adapters/postgres/migrations/043_audit_entries_v2.sql (DROP+CREATE, NOT NULL 无 DEFAULT)
   [x] (PR-A1) adapters/postgres/schema_guard.go (15 列 + version 43 + inventory)
   [x] (PR-A1) runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (5 字段 RoundTrip + HMAC parity)
-  [x] (PR-A1) runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (11-field tamper sensitivity)
+  [x] (PR-A1) runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (12-field tamper sensitivity)
   [x] (PR-A1) tools/archtest/audit_hash_input_frozen_test.go (AUDIT-HASH-INPUT-FROZEN-01 A1/A2/A3/B)
   [ ] (PR-A2) kernel/outbox.PrincipalMetadata (typed + Validate + Context/Restore/Inject)
   [ ] (PR-A2) kernel/outbox.wireMessage (Principal + OccurredAt wire 字段)
@@ -362,7 +362,7 @@ Conformance test:
   - runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (PR-A1)
   - runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (PR-A1)
   - kernel/outbox/outboxtest.RunPrincipalRoundTripConformance (PR-A2)
-  - cells/auditcore/internal/appender 全套测试（hash 期望 regen 含 11-字段 HMAC）(PR-A1 zero / PR-A2 真值)
+  - cells/auditcore/internal/appender 全套测试（hash 期望 regen 含 12-字段 HMAC）(PR-A1 zero / PR-A2 真值)
 Repro:
   PR-A1 verify:
     go test ./runtime/audit/ledger/... ./adapters/postgres/... ./cells/auditcore/...
@@ -373,7 +373,7 @@ Repro:
     go test ./tools/archtest/ -run 'PRINCIPAL|SAFEID-WIREMESSAGE|SAFEID-UPSTREAM'
 Dependent contracts (governance scan): none — 三族字段集是 framework 横切，不进 contract.yaml payload.schema.json
 Invariant inventory (DROP COLUMN 043_audit_entries_v2.sql):
-  - 6-field hash chain → 11-field canonical JSON via auditHashInput unexported struct + AUDIT-HASH-INPUT-FROZEN-01 双向 Hard 锁
+  - 6-field hash chain → 12-field canonical JSON via auditHashInput unexported struct + AUDIT-HASH-INPUT-FROZEN-01 双向 Hard 锁
   - existing audit_entries rows → DROP TABLE + chain restart from seq=1; TailVerify 自然适配空表
   - W0 sentinel adoption (PR #1218 retracted) → 5 列 NOT NULL 无 DEFAULT 一刀切，appender 零值满足约束
 ```

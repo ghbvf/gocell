@@ -55,7 +55,7 @@ FOR UPDATE`
 	// insertEntrySQL inserts a new audit entry row. 15 columns post-041:
 	// the original 10 columns plus subject_id / tenant_id / session_id /
 	// correlation_id / occurred_at (added in 043_audit_entries_v2.sql to seal
-	// the 11-field canonical-JSON HMAC chain). All five new columns are NOT
+	// the 12-field canonical-JSON HMAC chain). All five new columns are NOT
 	// NULL with no DEFAULT — callers must supply values explicitly.
 	insertEntrySQL = `
 INSERT INTO audit_entries

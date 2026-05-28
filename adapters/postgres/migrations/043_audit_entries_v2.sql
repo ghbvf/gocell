@@ -1,12 +1,12 @@
--- Migration 041: rebuild audit_entries as canonical v2 with Principal +
--- Correlation + OccurredAt columns and the 11-field HMAC chain.
+-- Migration 043: rebuild audit_entries as canonical v2 with Principal +
+-- Correlation + OccurredAt columns and the 12-field HMAC chain.
 --
 -- This migration supersedes 020_audit_ledger.sql + 021_audit_entries_event_id_unique.sql
 -- by **dropping and recreating** the audit_entries table with the full v2 column
 -- set. No ALTER ADD. No sentinel DEFAULTs. New rows must supply explicit values
 -- for every column. The chain restarts from seq_no = 1; old rows in the 020/021
 -- schema cannot be hash-verified against the v2 HMAC format (auditHashInput JSON
--- canonical, 11 fields) and are intentionally discarded.
+-- canonical, 12 fields) and are intentionally discarded.
 --
 -- Rationale (per CLAUDE.md "Review 和重构时不考虑向后兼容——当前只有 gocell 自身"):
 --   - PR #1218 attempted W0 transition with NOT NULL DEFAULT '' sentinels for
@@ -14,7 +14,7 @@
 --     DEFAULT '1970-01-01 00:00:00+00' for occurred_at. The 14-finding review
 --     traced the root cause to that incremental-adoption shape. This migration
 --     replaces it with a one-shot canonical rewrite.
---   - The 11-field HMAC msg (auditHashInput typed struct, json.Marshal source-
+--   - The 12-field HMAC msg (auditHashInput typed struct, json.Marshal source-
 --     order) is the only chain format. There is no hash_version column, no
 --     sentinel hash backfill, no dual-write coexistence.
 --
@@ -57,7 +57,7 @@
 -- ref: tools/archtest/audit_hash_input_frozen_test.go AUDIT-HASH-INPUT-FROZEN-01
 
 -- +goose Up
--- Forward-rebuild permit (decoupled from the destructive-down GUC). 041 is a
+-- Forward-rebuild permit (decoupled from the destructive-down GUC). 043 is a
 -- forward DROP+CREATE rebuild, NOT a Migrator.Down rollback, so it must not
 -- share gocell.allow_destructive_down (which guards Down 020/021/etc). The
 -- dedicated gocell.allow_audit_rebuild GUC makes the semantic boundary explicit
@@ -123,9 +123,22 @@ CREATE UNIQUE INDEX uq_audit_namespace_event_id     ON audit_entries (namespace,
 
 -- +goose Down
 -- WARNING: This down migration drops audit_entries v2 and PERMANENTLY DELETES
--- all audit data. After Down, run `goose up` to replay 020/021 (chain restarts
--- from seq=1). Production rollback MUST back up the table first
+-- all audit data. Production rollback MUST back up the table first
 -- (e.g., `pg_dump -t audit_entries`).
+--
+-- What `goose up` after this Down actually does (verified against the goose
+-- state machine, not assumed): schema_migrations still has 020/021 marked as
+-- applied, so `goose up` does NOT re-run 020/021. The only unapplied entry is
+-- 043 itself — so `goose up` re-runs 043 Up and re-creates the v2 table empty
+-- (chain restarts from seq_no=1). The result is a fresh v2 schema, not a
+-- pre-043 v1 schema; that semantic matches the forward-only canonical-rewrite
+-- intent (CLAUDE.md「Review 和重构时不考虑向后兼容」).
+--
+-- If the operator genuinely wants the pre-043 v1 schema back, the correct
+-- recipe is `goose down-to 019` (rewind past 020/021 + 043) followed by
+-- `goose up` (replays 020 + 021 + 043 — i.e. back to v2 again because 043 is
+-- the latest declared schema). v1 is never reachable while 043 lives in the
+-- migrations directory.
 --
 -- Fail-closed: requires the standard destructive-down permit
 -- gocell.allow_destructive_down (shared with 020/021/etc). This matches the

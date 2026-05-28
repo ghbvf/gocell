@@ -37,7 +37,7 @@ import (
 //                                 + 043_audit_entries_v2 DROP+CREATE rebuild adding
 //                                   5 NOT NULL columns (subject_id / tenant_id /
 //                                   session_id / correlation_id / occurred_at) for
-//                                   the 11-field canonical-JSON HMAC chain.
+//                                   the 12-field canonical-JSON HMAC chain.
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
@@ -367,7 +367,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
 	// audit_entries (020_audit_ledger.sql + 043_audit_entries_v2.sql)
 	// 043 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
-	// the 11-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
+	// the 12-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
 	// must supply values.
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},

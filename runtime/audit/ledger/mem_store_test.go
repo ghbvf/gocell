@@ -135,7 +135,7 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 }
 
 // TestMemStore_Append_HashEquivalence verifies the HMAC-SHA256 computation
-// matches the 11-field canonical-JSON reference (auditHashInput struct shape +
+// matches the 12-field canonical-JSON reference (auditHashInput struct shape +
 // json.Marshal source-order). The reference is recomputed independently via
 // referenceComputeHash (above) so any drift between production and the spec
 // surfaces both here and in archtest AUDIT-HASH-INPUT-FROZEN-01.
@@ -680,13 +680,13 @@ func TestMemStore_ValidJSONPayload_Accepted(t *testing.T) {
 	}
 }
 
-// TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the 11-field
+// TestProtocol_ComputeHash_ByteForByte: ComputeHash output matches the 12-field
 // canonical-JSON reference. The reference is an external mirror of the
 // unexported auditHashInput struct; any drift in field set / order / JSON tags
 // surfaces both here and in archtest AUDIT-HASH-INPUT-FROZEN-01.
 //
 // All five Principal/Correlation/OccurredAt fields are populated with non-zero
-// values to exercise the full 11-field message.
+// values to exercise the full 12-field message.
 func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 	t.Parallel()
 	key := testHMACKey()
@@ -795,7 +795,7 @@ func TestMemStore_Idempotency_DifferentTimestamp_SameEventID(t *testing.T) {
 // TestProtocol_AllElevenFieldsAffectHash exercises tamper sensitivity for every
 // canonical-JSON HMAC field. Each subtest mutates exactly one field of a base
 // Entry (or prev_hash) and asserts that the recomputed ComputeHash differs.
-// This proves all 11 fields are covered by the chain and no field can be silently
+// This proves all 12 fields are covered by the chain and no field can be silently
 // rewritten after the fact without breaking Verify.
 //
 // Funnel cross-link: AUDIT-HASH-INPUT-FROZEN-01 A1 reflect-locks the struct
@@ -821,7 +821,7 @@ func TestProtocol_AllElevenFieldsAffectHash(t *testing.T) {
 	basePrev := "deadbeef"
 	baseHash := p.ComputeHash(basePrev, base)
 
-	// Table mutates each of the 11 fields one at a time.
+	// Table mutates each of the 12 fields one at a time.
 	cases := []struct {
 		field   string
 		prev    string              // overridden prev_hash for this mutation (nil = use basePrev)

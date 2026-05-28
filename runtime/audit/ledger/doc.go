@@ -34,7 +34,7 @@
 // fields are emitted in source-declaration order — deterministic bytes across
 // all Go versions / platforms.
 //
-// The 11-field canonical-JSON format supersedes the pre-043 pipe-separated
+// The 12-field canonical-JSON format supersedes the pre-043 pipe-separated
 // fmt.Sprintf format (`prevHash|eventID|eventType|actorID|UnixNano|payload`)
 // in a single canonical rewrite (PR #1218 W0-transition path retracted in
 // favor of the DROP+CREATE rebuild in 043_audit_entries_v2.sql, issue #1228).

@@ -187,7 +187,7 @@ type auditHashInput struct {
 // configured HMAC key.
 //
 // The HMAC message is the canonical JSON encoding of an auditHashInput struct
-// (json.Marshal in source-declaration order). The 11-field canonical-JSON
+// (json.Marshal in source-declaration order). The 12-field canonical-JSON
 // format supersedes the prior pipe-separated fmt.Sprintf format introduced in
 // 020_audit_ledger.sql; both the field-boundary collision risk (any bytes in
 // a field could shift `|` semantics) and the lack of OAuth Principal /
