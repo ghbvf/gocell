@@ -53,6 +53,7 @@ const (
 	msgConfigSessionExpiryBelowSecond = "mqtt: SessionExpiry > 0 must be >= 1s (uint32 seconds wire field truncates sub-second values to 0)"
 	msgConfigSessionExpiryRange       = "mqtt: SessionExpiry must be >= 0 and <= uint32 max seconds"
 	msgConfigBackoffInvalid           = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
+	msgConfigPublishTimeoutNegative   = "mqtt: PublishTimeout must be >= 0"
 
 	// PublicDetail key constants — extracted per go-standards.md
 	// "同义字符串重复 ≥ 3 次抽常量". keepAlive / sessionExpiry / broker
@@ -94,6 +95,11 @@ type Config struct {
 	MaximumPacketSize uint32        // 0 = broker default; non-zero is wired into the CONNECT packet
 	ConnectTimeout    time.Duration // per-attempt; must be > 0
 	KeepAlive         time.Duration // > 0, <= 65535s (uint16 wire field)
+	// PublishTimeout caps the wall-clock time for a single Publish call (per-
+	// publish; the publisher's WithTimeout child ctx fires after this duration).
+	// 0 = no adapter-imposed timeout — Publisher uses the caller-provided ctx's
+	// deadline as-is. < 0 rejected by Validate.
+	PublishTimeout time.Duration
 }
 
 // Validate checks all fields for internal consistency and returns the first
@@ -116,7 +122,10 @@ func (c Config) Validate() error {
 	if err := c.validateTimings(); err != nil {
 		return err
 	}
-	return c.validateBackoff()
+	if err := c.validateBackoff(); err != nil {
+		return err
+	}
+	return c.validatePublishTimeout()
 }
 
 // validateBrokers checks the Brokers slice and each individual broker URL.
@@ -213,6 +222,19 @@ func (c Config) validateBackoff() error {
 				errcode.PublicDuration("baseDelay", c.Backoff.BaseDelay),
 				errcode.PublicDuration("maxDelay", c.Backoff.MaxDelay),
 			))
+	}
+	return nil
+}
+
+// validatePublishTimeout checks that PublishTimeout is non-negative.
+// 0 is accepted — it means the Publisher uses the caller-provided ctx deadline
+// as-is with no additional adapter-imposed timeout. Negative values are always
+// rejected because they would immediately cancel any publish ctx.
+func (c Config) validatePublishTimeout() error {
+	if c.PublishTimeout < 0 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
+			msgConfigPublishTimeoutNegative,
+			errcode.WithDetails(errcode.PublicDuration("publishTimeout", c.PublishTimeout)))
 	}
 	return nil
 }

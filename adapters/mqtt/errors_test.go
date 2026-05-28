@@ -140,6 +140,11 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTClosed,
 		ErrAdapterMQTTPayloadTooLarge,
 		ErrAdapterMQTTInvalidSubscribeFilter,
+		// PR-2 additions
+		ErrAdapterMQTTPubAckTimeout,
+		ErrAdapterMQTTPublishNoSubscribers,
+		ErrAdapterMQTTPublishRejected,
+		ErrAdapterMQTTPublishRateLimited,
 	}
 	for _, c := range codes {
 		if c == "" {
@@ -148,5 +153,79 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		if string(c)[:len("ERR_ADAPTER_MQTT_")] != "ERR_ADAPTER_MQTT_" {
 			t.Errorf("code %q does not have ERR_ADAPTER_MQTT_ prefix", c)
 		}
+	}
+}
+
+func TestClassifyPubackReason(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		code     byte
+		wantCode errcode.Code
+		wantKind errcode.Kind
+	}{
+		// 0x00 Success — Ack path, empty sentinel + KindInternal (unused by caller)
+		{"success-0x00", 0x00, "", errcode.KindInternal},
+		// 0x10 No matching subscribers
+		{"no-matching-subscribers-0x10", 0x10, ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable},
+		// 0x80 Unspecified error
+		{"unspecified-error-0x80", 0x80, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		// 0x83 Implementation specific error
+		{"implementation-specific-0x83", 0x83, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		// 0x87 Not authorized
+		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		// 0x90 Topic Name invalid
+		{"topic-name-invalid-0x90", 0x90, ErrAdapterMQTTPublishRejected, errcode.KindInvalid},
+		// 0x97 Quota exceeded / rate limited
+		{"quota-exceeded-0x97", 0x97, ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable},
+		// 0x99 Payload format invalid — reuse ErrAdapterMQTTPayloadTooLarge
+		{"payload-format-invalid-0x99", 0x99, ErrAdapterMQTTPayloadTooLarge, errcode.KindInvalid},
+		// default — unknown code
+		{"unknown-code-0x7f", 0x7F, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotCode, gotKind := classifyPubackReason(tc.code)
+			if gotCode != tc.wantCode {
+				t.Errorf("classifyPubackReason(0x%02x) code = %q, want %q", tc.code, gotCode, tc.wantCode)
+			}
+			if gotKind != tc.wantKind {
+				t.Errorf("classifyPubackReason(0x%02x) kind = %v, want %v", tc.code, gotKind, tc.wantKind)
+			}
+		})
+	}
+}
+
+func TestPubackReasonName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		code byte
+		want string
+	}{
+		{0x00, "Success"},
+		{0x10, "NoMatchingSubscribers"},
+		{0x80, "UnspecifiedError"},
+		{0x83, "ImplementationSpecificError"},
+		{0x87, "NotAuthorized"},
+		{0x90, "TopicNameInvalid"},
+		{0x91, "PacketIdentifierInUse"},
+		{0x97, "QuotaExceeded"},
+		{0x99, "PayloadFormatInvalid"},
+		{0x7F, "Unknown"}, // unrecognized code
+		{0xFE, "Unknown"}, // another unrecognized code
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(fmt.Sprintf("0x%02x", tc.code), func(t *testing.T) {
+			t.Parallel()
+			got := pubackReasonName(tc.code)
+			if got != tc.want {
+				t.Errorf("pubackReasonName(0x%02x) = %q, want %q", tc.code, got, tc.want)
+			}
+		})
 	}
 }

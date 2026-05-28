@@ -432,3 +432,35 @@ func TestConfig_Validate_MaximumPacketSize_Accepted(t *testing.T) {
 	cfg.MaximumPacketSize = 1024 * 1024
 	require.NoError(t, cfg.Validate())
 }
+
+// TestConfig_Validate_PublishTimeout_Negative verifies that a negative
+// PublishTimeout is rejected by Validate.
+func TestConfig_Validate_PublishTimeout_Negative(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.PublishTimeout = -1 * time.Second
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+	assert.Contains(t, ec.Message, "PublishTimeout")
+}
+
+// TestConfig_Validate_PublishTimeout_Zero verifies that PublishTimeout == 0
+// is accepted (means no adapter-imposed timeout; caller ctx deadline applies).
+func TestConfig_Validate_PublishTimeout_Zero(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.PublishTimeout = 0
+	require.NoError(t, cfg.Validate())
+}
+
+// TestConfig_Validate_PublishTimeout_Positive verifies that a positive
+// PublishTimeout is accepted.
+func TestConfig_Validate_PublishTimeout_Positive(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.PublishTimeout = 5 * time.Second
+	require.NoError(t, cfg.Validate())
+}
