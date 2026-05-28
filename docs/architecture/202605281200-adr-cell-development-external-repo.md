@@ -165,9 +165,14 @@ pipeline，可 pin 到 gocell 版本标签（M7 提供）。
 type LocatorMode int
 
 const (
+    // LocatorAuto selects Conventional unless .gocell/manifest.yaml exists at
+    // root, in which case Manifest mode is used. This is the default when
+    // NewLocator/NewLocatorFS is called without WithLocatorMode.
+    LocatorAuto LocatorMode = iota
+
     // LocatorConventional 使用 GoCell monorepo 约定的 5 种路径模式，
     // 无需 manifest 文件。
-    LocatorConventional LocatorMode = iota
+    LocatorConventional
 
     // LocatorManifest 从 .gocell/manifest.yaml 读取 layout 配置，
     // 支持自定义路径模式与多模块 workspace。
@@ -177,17 +182,20 @@ const (
 
 ### 自动探测规则
 
-`Locator.Detect(root fs.FS)` 按以下顺序确定模式：
+`NewLocator(root, opts...)` / `NewLocatorFS(fsys, opts...)` 在 `LocatorAuto` 模式下按以下顺序确定模式：
 
 1. 若 `<root>/.gocell/manifest.yaml` 存在 → `LocatorManifest`
 2. 否则 → `LocatorConventional`
 
+`ParseLocatorMode(s string) (LocatorMode, error)` 将 CLI 字符串（`"auto"` / `"conventional"` / `"manifest"`）转换为 `LocatorMode`。
+
 ### CLI override hatch
 
-`gocell validate` 与 `gocell check` 命令首批接入 `--layout=conventional|manifest`
-flag，显式 override 自动探测结果。其余 12 个 CLI surface（scaffold / generate /
-verify 等）通过 `Locator.Detect` 自动工作，`--layout` flag 在后续 PR 跟
-backlog issue 补齐。
+`gocell validate` 与 `gocell check` 命令首批接入 `--layout=auto|conventional|manifest`
+flag（默认空字符串等价于 `auto`），通过 `WithLocatorMode(mode)` 传入 `NewLocator`。
+其余 CLI surface（scaffold / generate / verify 等）继承 `LocatorAuto` 行为——若
+`.gocell/manifest.yaml` 存在则切 manifest 模式，否则走 conventional，
+无需额外 `--layout` flag（`--layout` flag 在后续 PR 补齐）。
 
 ### manifest.yaml schema
 
@@ -228,51 +236,84 @@ module 条目均填写时，`Locator` 在解析阶段 fail-fast，返回
   不依赖 `filepath.Glob` 对 `**` 的未定义行为）
 - `excludes` 在 `WalkDir` 回调中逐路径 check，命中则 skip
 
-### Locator struct 主要 API
+### Locator struct 主要 API（落地形态）
 
 ```go
 // kernel/metadata/locator.go
 
-// Locator 发现元数据文件路径，屏蔽 conventional / manifest 两种 layout 差异。
-// 零值无效；通过 NewLocator 或 DetectLocator 构造。
-type Locator struct {
-    mode     LocatorMode
-    manifest *manifestConfig  // non-nil iff mode == LocatorManifest
-    root     fs.FS
+// MetadataSource is one YAML file discovered by Locator.
+// Path is forward-slash relative to the locator root.
+// Kind classifies the bucket (SourceCell / SourceSlice / SourceContract /
+//   SourceJourney / SourceAssembly / SourceActors / SourceStatusBoard).
+// CellID is populated for SourceCell / SourceSlice when the locator can derive
+//   it from layout. In manifest mode with non-conventional layout, CellID
+//   stays empty — parser requires slice.yaml to declare belongsToCell.
+type MetadataSource struct {
+    Path   string
+    Kind   SourceKind
+    CellID string
 }
 
-// DetectLocator 从 root 自动探测模式，可被 --layout flag override。
-// override 为空字符串时走自动探测。
-func DetectLocator(root fs.FS, override string) (*Locator, error)
+// SourceKind constants:
+//   SourceUnknown / SourceCell / SourceSlice / SourceContract /
+//   SourceJourney / SourceAssembly / SourceActors / SourceStatusBoard
 
-// Paths 返回指定类型的所有元数据文件相对路径列表。
-// kind 取值：KindCell / KindSlice / KindContract / KindJourney /
-//           KindAssembly / KindActors / KindStatusBoard
-func (l *Locator) Paths(kind MetadataKind) ([]string, error)
+// NewLocator 从 on-disk root 构造 Locator（auto-detect mode by default）。
+func NewLocator(root string, opts ...LocatorOption) (*Locator, error)
 
-// RootDir 返回用于将相对路径转换为绝对路径的根目录。
-func (l *Locator) RootDir() string
+// NewLocatorFS 从任意 fs.FS 构造 Locator（测试 / embed.FS 场景）。
+func NewLocatorFS(fsys fs.FS, opts ...LocatorOption) (*Locator, error)
+
+// Discover 遍历 locator root，返回所有 MetadataSource，按 Path 排序。
+func (l *Locator) Discover() ([]MetadataSource, error)
+
+// Mode 返回解析后的 LocatorMode（auto-detect 后）。
+func (l *Locator) Mode() LocatorMode
+
+// Root 返回绑定的 on-disk root（NewLocatorFS 构造时为空串）。
+func (l *Locator) Root() string
+
+// FS 返回底层 fs.FS，供 parser 共享同一文件句柄。
+func (l *Locator) FS() fs.FS
 ```
 
-`Paths` 的实现路径：
+`Discover` 的实现路径：
 
-- `LocatorConventional` → `l.discoverConventional(kind)` — 复用现有 5 种
-  路径模式（硬编码在 locator.go 内，parser.go 中的 path match 函数迁移至此）
-- `LocatorManifest` → `l.discoverManifest(kind)` — 按 manifest.yaml 中各
+- `LocatorConventional` → `l.discoverConventional()` — 5 种固定路径模式
+  （硬编码在 `locator_conventional.go`，原 parser.go 中的 path match 函数迁移至此）
+- `LocatorManifest` → `l.discoverManifest()` — 按 manifest.yaml 中各
   module 的 `includes`/`excludes` 走 `fs.WalkDir`
 
-### parser.go 迁移策略
+LocatorOption 函数：
 
-现有 `kernel/metadata/parser.go` 中的 `cellDirFromPath` /
-`sliceDirsFromPath` / `contractDirFromPath` / `journeyIDFromPath` /
-`matchAssemblyYAML` 五个函数**保留原签名不变**，由 `Locator.discoverConventional`
-内部复用（不删除，不暴露为 public API）。M1 PR 的变更范围：
+- `WithLocatorMode(m LocatorMode)` — 覆盖自动探测，CI 用 `WithLocatorMode(LocatorConventional)` 锁定。
+- `WithManifestPath(p string)` — 覆盖默认 manifest 路径（`.gocell/manifest.yaml`）。
 
-1. 新增 `kernel/metadata/locator.go`（Locator struct + DetectLocator）
-2. 新增 `kernel/metadata/manifest.go`（manifestConfig 解析）
-3. parser.go 顶层入口 `ParseDir` 接受可选 `*Locator` 参数：`nil` 时走
-   现有逻辑（向后兼容 monorepo 调用方），非 `nil` 时委托 `Locator.Paths`。
-4. CLI `validate` / `check` 命令接入 `--layout` flag 并构造 `Locator`。
+### parser.go 迁移策略（落地形态）
+
+`kernel/metadata.Parser` 是消费 Locator 的唯一入口：
+
+```go
+// NewParser 创建从给定根目录读取的 Parser。
+// 可传 LocatorOption 覆盖自动探测（如 WithLocatorMode(LocatorManifest)）。
+func NewParser(root string, opts ...LocatorOption) *Parser
+
+// Parse 通过 NewLocator 构造 Locator，再 Discover + 逐 MetadataSource 解析。
+func (p *Parser) Parse() (*ProjectMeta, error)
+
+// ParseFS 从 fs.FS 解析（测试 / fstest.MapFS 场景）。
+func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error)
+```
+
+Parser 内部调用 `loc.Discover()` 获得 `[]MetadataSource`，再按 `MetadataSource.Kind` dispatch 到对应的 `parseCell` / `parseSlice` / `parseContract` 等方法。Parser 不直接调用 `fs.WalkDir` / `filepath.Walk`（由 LOCATOR-DISCOVERY-FUNNEL-01 守）。
+
+M1 PR 的实际变更范围：
+
+1. 新增 `kernel/metadata/locator.go`（Locator struct + LocatorMode + SourceKind + MetadataSource）
+2. 新增 `kernel/metadata/locator_conventional.go`（discoverConventional）
+3. 新增 `kernel/metadata/locator_manifest.go`（ManifestSpec + discoverManifest）
+4. `kernel/metadata/parser.go` 重构为消费 `Locator.Discover()` 输出（不再直接走 fs）
+5. CLI `validate` / `check` 命令接入 `--layout` / `--manifest` flag。
 
 ---
 
@@ -319,38 +360,39 @@ M1-M4 无相互依赖，可并行推进。
 ## AI-robust 评级（locator funnel）
 
 locator funnel 的两个方向分别评级，对齐 `.claude/rules/gocell/ai-robust.md`
-§"Funnel 双向锁评级"。
+§"Funnel 双向锁评级"。落地 archtest 是 `LOCATOR-DISCOVERY-FUNNEL-01`
+（`tools/archtest/locator_discovery_funnel_test.go`），含 A1/A2a/A2b/A5 四条子规则；
+符号清单活在该 archtest 的 package godoc，不在本 ADR 复制。
 
-### 下游 Hard
+### ENTERING funnel（path-prefix 比较，A1/A2 轴）
 
-archtest `METADATA-LOCATOR-PATH-COMPARE-01`，扫描范围
-`kernel/metadata/**` + `kernel/governance/**`：
+| 方向 | 形态 | 评级 |
+|------|------|------|
+| 下游 Hard | A2a/A2b form-uniqueness：`strings.HasPrefix(_, "cells/")` 和 `x == "cells"` 等路径比较形态的 callsite 必须 ⊆ `kernel/metadata/locator*.go`，EvaluateConstString 解析 const 引用，盲区负向自检 | **Hard** |
+| 上游 Medium | A1 caller-allowlist：`fs.WalkDir` / `filepath.Walk` / `fs.ReadDir` 的调用方 ⊆ `{discoverConventional, discoverManifest}`（archtest allowlist 守，Go 类型系统无法封堵标准库 public function 调用） | **Medium（Go 结构性上限）** |
 
-- **A2 form-uniqueness**：`HasPrefix(path, "<literal>")` / `Split-then-index-compare`
-  / `path.Dir-compare` / `regex anchor` 等路径前缀比较形态的 callsite 必须
-  ⊆ `kernel/metadata/locator*.go`。其他文件出现等价的路径比较形态即 CI 红。
-- **盲区**：`strings.Contains` 形态未被 HasPrefix 形态锁覆盖 → 反向自检测试断言
-  `strings.Contains(path, "cells/")` 等形态在 `kernel/governance/targets.go`
-  不出现。
+**ENTERING 上游为何不开升级 issue**：上游 Hard 的唯一可行路径是 cross-package sealed
+interface + private constructor，在 Go 语言下对于"谁可以调用 `fs.WalkDir`"无法用类型系统
+表达——`fs.WalkDir` 是标准库 public function。这是与 `SPAN-SETATTR-HOLDER-SEAL-01`
+(#851) 同范式的 Go 结构性不可达情形，不满足 ai-robust.md §"Funnel 双向锁评级"
+"存在低成本 Hard 化路径"的开 issue 前提，故 **不开升级 issue**，Medium 是该形态的永久上限。
 
-### 上游 Medium
+### EXITING funnel（consumer-path 重建，A5 轴）
 
-archtest `METADATA-LOCATOR-PATH-COMPARE-01`，A1 caller-allowlist：
+| 方向 | 形态 | 评级 |
+|------|------|------|
+| 下游 Hard | A5 form-uniqueness：EvaluateConstString 解析 `filepath.Join` 每个 arg，命中 banned token ("cells", "cmd") 即 CI 红；consumer scope = kernel/governance + cmd/gocell + kernel/metadata（funnel 文件外） | **Hard** |
+| 上游 Medium | archtest caller-allowlist：Go 类型系统无法阻止包内代码任意调用 `filepath.Join`；A5 盲区负向自检补充 | **Medium（过渡形态）** |
 
-- `fs.WalkDir` / `filepath.Walk` / `fs.ReadDir` 的调用方 ⊆
-  `{Locator.discoverConventional, Locator.discoverManifest}`（kernel/metadata/
-  内部可见）。
+**EXITING 上游升级路径**：Locator sealed envelope（unexported result 类型 + 私有构造函数）/
+typed pathx 包 / 接受 Medium 上限（同 ENTERING）三条路径，
+由 **gh issue #1235** 跟踪显式 Hard 化任务。根据 ai-robust.md §"Funnel 双向锁评级"，
+Medium 上游 + Hard 下游是合法过渡形态；issue #1235 是该条款要求的必开跟踪 issue。
 
-**为何不开升级 issue**：上游 Hard 的唯一可行路径是 cross-package sealed interface
-+ private constructor，在 Go 语言下对于"谁可以调用 fs.WalkDir"这一问题无法表达——
-`fs.WalkDir` 是标准库 public function，任何包均可调用，不存在 Go 类型系统层面的封堵。
-这是与 `SPAN-SETATTR-HOLDER-SEAL-01` (#851) 同范式的 Go 结构性不可达情形。开升级
-issue 等于承诺 Go 不可能完成的任务，故不开（对比 ai-robust.md §Funnel 双向锁评级：
-"Medium 上游 + Hard 下游的过渡形态，**必须同步开 gh issue 跟踪显式 Hard 化任务**"
-的条件是存在低成本 Hard 化路径——此处不满足）。
-
-此（Medium 上游 + Hard 下游）是 ai-robust §"Funnel 双向锁评级" 明文允许的合法
-final 形态，不构成降级。
+**path 单一真值源**：A5 funnel 的语义边界是 `MetadataSource.Path`（`Locator.Discover()` 输出）——
+governance / CLI 代码必须从 `MetadataSource.Path` / `CellMeta.File` / `SliceMeta.File` 等
+Locator 输出派生路径，不得通过 `filepath.Join("cells", id)` 等形式重建。这是 funnel
+"EXITING 侧"的约束语义。
 
 ---
 
@@ -363,7 +405,7 @@ final 形态，不构成降级。
 | manifest 漏写 `excludes: ["generated/**"]` | `generated/` 下的 contract YAML 被重复解析，parser 报重复 ID | `excludes` 默认含 `generated/**`；用户显式写空时 warn |
 | symlink 跨 module 引入循环 | `fs.WalkDir` 死循环 | `Locator.discoverManifest` 走 `os.DirFS`，`fs.WalkDir` 不追踪 symlinked dir（标准库行为：`DirEntry.Type()&ModeSymlink != 0` 时 skip） |
 | Workspace 多模块 cell ID 冲突 | 同名 cell 被装配两次 | `parser.go` 现有 `duplicate cell ID` 校验保持不变，locator 不旁路此检查 |
-| manifest `modules[*].path` 指向不存在目录 | WalkDir 报 `*PathError` | `DetectLocator` 在构造阶段对每个 `path` 调用 `fs.Stat` fail-fast，而非推迟到 `Paths()` 调用时 |
+| manifest `modules[*].path` 指向不存在目录 | WalkDir 报 `*PathError` | `NewLocator` / `NewLocatorFS` 在构造阶段对每个 `path` 调用 `fs.Stat` fail-fast，而非推迟到 `Discover()` 调用时 |
 | go.work 中 use 的 module 不在 manifest modules 列表中 | manifest 遗漏子 module，相关 cell 不被扫描 | 本 ADR 不强制 go.work 与 manifest 对齐；M2 codegen module path 注入会在 codegen 阶段捕获不一致；long-term M11 指南补充手动校验步骤 |
 | Workspace 多模块均声明 `actors` 字段 | workspace-level singleton 重复声明 | `Locator` 解析 manifest 时 fail-fast，返回 `ErrDuplicateWorkspaceSingleton`，明确指出重复的模块路径 |
 
@@ -371,23 +413,27 @@ final 形态，不构成降级。
 
 ## 测试 / 验证
 
-**M1 PR 必须提供以下测试，缺失则 PR 阻塞：**
+**M1 PR 提供以下测试（落地状态）：**
 
 1. `kernel/metadata/locator_test.go`：`fstest.MapFS` 三组 fixture
-   - `TestLocatorConventional`：monorepo 标准 layout，`DetectLocator` 返回
-     `LocatorConventional`，`Paths(KindCell)` 与现有 parser 结果一致
+   - `TestLocatorConventional`：monorepo 标准 layout，`NewLocatorFS` 返回
+     `LocatorConventional`，`Discover()` 中 `SourceCell` 条目与现有 parser 结果一致
    - `TestLocatorManifestSingle`：单模块外部 repo（`.gocell/manifest.yaml`
-     存在），`Paths` 返回 manifest 配置路径下的文件
+     存在），`Discover()` 返回 manifest 配置路径下的 MetadataSource 列表
    - `TestLocatorManifestWorkspace`：两个 module path 的 workspace，
-     `Paths(KindCell)` 返回两个模块合并后的 cell 列表
+     `Discover()` 返回两个模块合并后的 SourceCell 列表
 
-2. `kernel/metadata/parser_manifest_test.go`：manifest 模式下 `ParseDir`
-   结果与同等 conventional layout 下结果等价（cell ID 集合相同）
+2. `kernel/metadata/locator_manifest_e2e_test.go`（Batch 4 补充）：os.TempDir
+   manifest 模式 E2E；`NewLocator(root, WithLocatorMode(LocatorManifest)).Discover()`
+   + `NewParser(root, WithLocatorMode(LocatorManifest)).Parse()` 整链验证
 
-3. `cmd/gocell/app/validate_test.go`：`--layout=conventional` flag 覆盖
+3. `cmd/gocell/app/helpers_test.go`（Batch 4 补充）：`buildLocatorOptions` 三种
+   入参组合（空值/conventional/manifest/auto/invalid）+ `addLocatorFlags` 默认值解析
+
+4. `cmd/gocell/app/validate_test.go`：`--layout=conventional` flag 覆盖
    manifest 自动探测的用例（fake fs 注入）
 
-4. **手测 e2e**（PR description 列出步骤）：在 `examples/ssobff` 根目录临时
+5. **手测 e2e**（PR description 列出步骤）：在 `examples/ssobff` 根目录临时
    写入 `.gocell/manifest.yaml`（单模块），跑 `gocell validate`，确认输出
    与不带 manifest 时等价。
 

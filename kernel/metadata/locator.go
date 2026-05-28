@@ -101,6 +101,14 @@ func (k SourceKind) String() string {
 // happen to follow conventional layout). When the locator cannot derive
 // CellID (manifest with non-conventional layout), CellID stays empty —
 // parser will then require slice.yaml to declare belongsToCell explicitly.
+//
+// To avoid empty CellID in manifest mode, callers have two options:
+//
+//	(a) Read the `id` field from the corresponding cell.yaml (already parsed
+//	    into ProjectMeta.Cells by Parser — use ProjectMeta.CellForSlice to
+//	    derive it after a full parse pass).
+//	(b) Declare `belongsToCell` explicitly in each slice.yaml; Parser will
+//	    propagate that value and governance rules will validate consistency.
 type MetadataSource struct {
 	Path   string
 	Kind   SourceKind
@@ -260,7 +268,7 @@ func (l *Locator) FS() fs.FS { return l.fsys }
 // when the locator was constructed via NewLocatorFS.
 func (l *Locator) Root() string { return l.root }
 
-// IsExamplePath reports whether p is a YAML / Go file under the GoCell
+// IsInExamplesSubtree reports whether p is a YAML / Go file under the GoCell
 // monorepo's examples/ subtree. This is a conventional-layout query
 // exposed here (rather than open-coded in governance rules) so that the
 // path-prefix literal "examples/" stays inside the Locator funnel —
@@ -268,7 +276,7 @@ func (l *Locator) Root() string { return l.root }
 // Manifest mode without an examples/ subtree get false uniformly,
 // which is the desired behavior for skip-style rules that key off the
 // gocell self-repo's examples/ scope.
-func IsExamplePath(p string) bool {
+func IsInExamplesSubtree(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "examples/")
 }
 

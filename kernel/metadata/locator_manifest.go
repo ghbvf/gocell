@@ -28,6 +28,16 @@ import (
 )
 
 // ManifestSpec is the parsed .gocell/manifest.yaml file.
+//
+// Corresponds to the top-level buf v2 buf.yaml modules: schema:
+//
+//	version: v1
+//	modules:
+//	  - path: .
+//	    includes: { cells: ["cells/*/cell.yaml"], ... }
+//	    excludes: ["generated/**", "vendor/**"]
+//
+// Version must be "v1". Modules must have at least one entry.
 type ManifestSpec struct {
 	Version string           `yaml:"version"`
 	Modules []ManifestModule `yaml:"modules"`
@@ -35,13 +45,21 @@ type ManifestSpec struct {
 
 // ManifestModule is a single module entry inside ManifestSpec.Modules.
 //
-// Path is required, must be relative, and must not escape outside the
-// manifest directory (no ".." segments, no absolute paths).
+// Path is required, must be a non-empty relative path, and must not escape
+// outside the manifest directory (no ".." segments, no absolute paths).
+// Use "." for the module that lives at the same level as manifest.yaml.
 //
-// Includes carries glob patterns per metadata source kind. Empty Includes
-// falls back to the conventional 5-pattern defaults.
+// Includes carries per-kind glob patterns. When empty, the conventional
+// 5-pattern defaults are used (cells/*/cell.yaml, cells/*/slices/*/slice.yaml,
+// contracts/**/contract.yaml, journeys/J-*.yaml, assemblies/*/assembly.yaml,
+// plus actors.yaml and journeys/status-board.yaml singletons). This lets
+// Operator-SDK modules omit includes: entirely and still get conventional
+// discovery.
 //
-// Excludes are applied across all source kinds within this module.
+// Excludes applies path-prefix filters across all source kinds in this module.
+// Defaults effectively include "generated/**" and "vendor/**". Specifying
+// an explicit excludes: list overrides the defaults; to keep the defaults
+// while adding more, repeat them explicitly.
 type ManifestModule struct {
 	Path     string           `yaml:"path"`
 	Includes ManifestIncludes `yaml:"includes"`
@@ -50,10 +68,16 @@ type ManifestModule struct {
 
 // ManifestIncludes maps each metadata source kind to one or more glob
 // patterns. Globs are resolved relative to the owning ManifestModule.Path.
-// Patterns support "*" (single segment) and "**" (any number of segments).
+// Patterns support "*" (single segment) and "**" (zero or more segments,
+// implemented via fs.WalkDir — not filepath.Glob which has undefined "**"
+// semantics). Ref: bufbuild/buf v2 buf.yaml includes field.
 //
-// Actors and StatusBoard are workspace-level singletons and may only be
-// declared on Modules[0] (validated by loadManifest).
+// Cells / Slices / Contracts / Journeys / Assemblies accept multiple patterns
+// (slice of strings); Actors and StatusBoard are singletons (single string).
+//
+// Actors and StatusBoard are workspace-level singletons: they may only appear
+// in Modules[0] (validated by loadManifest). Declaring them in more than one
+// module entry causes loadManifest to return ErrDuplicateWorkspaceSingleton.
 type ManifestIncludes struct {
 	Cells       []string `yaml:"cells"`
 	Slices      []string `yaml:"slices"`

@@ -74,7 +74,7 @@ func (v *Validator) validateJOURNEYCONTRACTEXISTENCE01() []ValidationResult {
 		if c.Lifecycle != "active" {
 			continue
 		}
-		if metadata.IsExamplePath(c.File) {
+		if metadata.IsInExamplesSubtree(c.File) {
 			continue
 		}
 		if referenced[c.ID] {

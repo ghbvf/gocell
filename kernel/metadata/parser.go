@@ -30,6 +30,13 @@ const (
 	internalIDPathQuotedFmt = "id=%q path=%s"
 )
 
+// ParserOption is an alias for LocatorOption. NewParser accepts ParserOption
+// values so call sites are semantically named without exposing Locator
+// internals. ParserOption and LocatorOption are interchangeable — you can
+// pass a LocatorOption directly or construct one via WithLocatorMode /
+// WithManifestPath.
+type ParserOption = LocatorOption
+
 // Parser loads and parses all YAML metadata from a project root via a Locator.
 //
 // The Locator funnel is the single source of truth for filesystem topology
@@ -43,9 +50,9 @@ type Parser struct {
 
 // NewParser creates a Parser that reads from the given filesystem root. The
 // root should point to the project root directory (containing go.mod). Pass
-// LocatorOption to override the auto-detected layout (e.g.,
-// WithLocatorMode(LocatorManifest) for CI override).
-func NewParser(root string, opts ...LocatorOption) *Parser {
+// ParserOption (alias for LocatorOption) to override the auto-detected layout
+// (e.g., WithLocatorMode(LocatorManifest) for CI override).
+func NewParser(root string, opts ...ParserOption) *Parser {
 	return &Parser{root: root, locatorOpts: opts}
 }
 

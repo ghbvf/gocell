@@ -1,6 +1,5 @@
 // invariants asserted in this file:
 //   - INVARIANT: LOCATOR-DISCOVERY-FUNNEL-01
-//   - INVARIANT: LOCATOR-DISCOVERY-FUNNEL-01.A5
 //
 // LOCATOR-DISCOVERY-FUNNEL-01 (M1 of #1082) keeps kernel/metadata.Locator the
 // sole place in the codebase that knows how the filesystem topology maps to
@@ -35,13 +34,14 @@
 //      output (MetadataSource.File / CellMeta.File / etc.).
 //      AI-robust grading: upstream Medium (archtest caller allowlist) +
 //      downstream Hard (form uniqueness via const-eval arg scanning).
-//      TODO(LOCATOR-FUNNEL-A5-UPSTREAM-HARD): gh issue #?? — Batch 4 will
-//      fill the upstream Hard tracking issue number once opened.
+//      Funnel EXITING upstream is Medium (archtest caller-allowlist + blind-spot
+//      self-check); upstream Hard 升级路径 (Locator sealed envelope /
+//      typed pathx package / accept Medium 上限) is tracked by gh issue #1235.
 //
 // AI-robust grading: Medium upstream + Hard downstream is a final form per
 // ai-robust §"Funnel 双向锁评级". No follow-up issue is opened for A1/A2; the
 // upstream ceiling is a Go-language limit, not a deferred TODO. See ADR
-// 202605281200. A5 upstream tracking: see TODO comment above.
+// 202605281200. A5 upstream Hard tracking: gh issue #1235.
 
 package archtest
 
@@ -609,10 +609,14 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 					if bin.Op != token.EQL && bin.Op != token.NEQ {
 						return
 					}
-					for _, operand := range []ast.Expr{bin.X, bin.Y} {
-						if _, isLit := operand.(*ast.BasicLit); isLit {
-							return // already covered by A2b
-						}
+					// Skip when either operand is a BasicLit — that form is
+					// already covered by A2b; this blind-spot catches Ident
+					// operands (cross-package const refs) specifically.
+					if _, isLit := bin.X.(*ast.BasicLit); isLit {
+						return
+					}
+					if _, isLit := bin.Y.(*ast.BasicLit); isLit {
+						return
 					}
 					var lit string
 					var ok bool
@@ -654,11 +658,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 // AI-robust grading:
 //   - Upstream: Medium (archtest caller allowlist; Go type system cannot
 //     prevent package-internal code from calling filepath.Join freely).
+//     Upstream Hard upgrade path tracked by gh issue #1235.
 //   - Downstream: Hard (form-uniqueness: EvaluateConstString resolves every
 //     filepath.Join argument; any arg that evaluates to a banned token fails).
-//
-// TODO(LOCATOR-FUNNEL-A5-UPSTREAM-HARD): gh issue #?? — Batch 4 will fill
-// the tracking issue number once opened.
 //
 // Blind spots enforced by TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots.
 //
@@ -810,20 +812,19 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 					if !locatorIsFilepathJoin(call) {
 						return
 					}
-					for _, arg := range call.Args {
-						bin, ok := arg.(*ast.BinaryExpr)
-						if !ok || bin.Op != token.ADD {
-							continue
+					EachInChildren[ast.BinaryExpr](call, func(bin *ast.BinaryExpr) {
+						if bin.Op != token.ADD {
+							return
 						}
 						// Only flag if both operands are basic literals (split literal concat).
 						_, lhsIsLit := bin.X.(*ast.BasicLit)
 						_, rhsIsLit := bin.Y.(*ast.BasicLit)
 						if !lhsIsLit || !rhsIsLit {
-							continue
+							return
 						}
-						lit, ok := EvaluateConstString(p.TypesInfo, arg)
+						lit, ok := EvaluateConstString(p.TypesInfo, bin)
 						if !ok {
-							continue
+							return
 						}
 						for _, banned := range locatorConsumerPathTokens {
 							if lit == banned {
@@ -837,7 +838,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
 								return
 							}
 						}
-					}
+					})
 				})
 			}
 			return d

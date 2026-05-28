@@ -55,7 +55,7 @@ func (v *Validator) validateADV01() []ValidationResult {
 	}
 
 	for _, j := range v.project.Journeys {
-		if metadata.IsExamplePath(journeyFile(j)) {
+		if metadata.IsInExamplesSubtree(journeyFile(j)) {
 			continue
 		}
 		if !sbJourneys[j.ID] {
