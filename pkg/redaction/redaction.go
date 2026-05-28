@@ -56,7 +56,11 @@ var connectionStringPattern = regexp.MustCompile(
 const sensitiveKeyPattern = `password|passwd|pwd|secret|` +
 	`access[_-]?token|refresh[_-]?token|id[_-]?token|token|` +
 	`authorization|connection[_ ]?string|api[_-]?key|bearer|` +
-	`private[_-]?key|signing[_-]?key|dsn`
+	`private[_-]?key|signing[_-]?key|dsn|` +
+	// Webhook signing surface (KERNEL-WEBHOOK-01): inbound/outbound HMAC
+	// secrets + signature headers in Svix/Stripe/GitHub naming variants.
+	`webhook[_-]?secret|x[_-]?signature|x[_-]?hub[_-]?signature|` +
+	`x[_-]?webhook[_-]?signature|svix[_-]?signature|hmac[_-]?key`
 
 // defaultPattern matches single-token `key=value` / `key: value` forms.
 //
