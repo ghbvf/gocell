@@ -110,8 +110,9 @@
 // fixture.
 //
 // CI gating: this archtest is **nightly-only** at present — it runs via
-// archtest-nightly.yml (16-shard) and locally via `make verify` /
-// `bash hack/verify-archtest.sh`, but is NOT in PR-time
+// archtest-nightly.yml (24-shard, ADR 202605120000 §Amendment 2026-05-28)
+// and locally via `make verify` / `bash hack/verify-archtest.sh`, but is
+// NOT in PR-time
 // `hack/verify-archtest-invariants.sh`. The PR-time set is frozen by ADR
 // `docs/architecture/202605120000` §Amendment 2026-05-23 §D8 to four
 // categories (clock / duration / testtime / panic) plus the
@@ -761,26 +762,27 @@ func ifBodyReturnsCanonicalNotFound(pass *Pass, body *ast.BlockStmt) bool {
 	if body == nil {
 		return false
 	}
-	found := false
-	EachInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) {
-		if found {
-			return
-		}
-		for _, expr := range ret.Results {
-			call, ok := expr.(*ast.CallExpr)
-			if !ok || !isErrCodeNewCall(pass.TypesInfo, call) {
-				continue
+	// SCANNER-FRAMEWORK-USAGE-01 Path B + USAGE-02 compliance:
+	//   - Outer: FindFirstInSubtree[ast.ReturnStmt] replaces "EachInSubtree +
+	//     found sentinel" idiom (USAGE-02 forbids the sentinel form on
+	//     EachInChildren; the typed FindFirst* funnels are mandated for
+	//     find-first semantics on either depth).
+	//   - Inner: FindFirstChild[ast.CallExpr] over ret's direct children
+	//     replaces "for _, expr := range ret.Results { expr.(*ast.CallExpr) }"
+	//     (Path B violation form).
+	_, match := FindFirstInSubtree[ast.ReturnStmt](body, func(ret *ast.ReturnStmt) bool {
+		_, hit := FindFirstChild[ast.CallExpr](ret, func(call *ast.CallExpr) bool {
+			if !isErrCodeNewCall(pass.TypesInfo, call) {
+				return false
 			}
 			if len(call.Args) == 0 {
-				continue
+				return false
 			}
-			if isKindNotFoundArg(pass, call.Args[0]) {
-				found = true
-				return
-			}
-		}
+			return isKindNotFoundArg(pass, call.Args[0])
+		})
+		return hit
 	})
-	return found
+	return match
 }
 
 // isOwnershipMismatchCall reports whether cond is a CallExpr whose callee
@@ -981,25 +983,25 @@ func flattenParamIdents(fl *ast.FieldList) []string {
 func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnostic {
 	var diags []Diagnostic
 	EachInSubtree[ast.ReturnStmt](fn.Body, func(ret *ast.ReturnStmt) {
-		for _, expr := range ret.Results {
-			if isNilLiteralExpr(expr) {
-				continue
+		// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: replace the original
+		// `for _, expr := range ret.Results { expr.(*ast.CallExpr) }` form
+		// with three depth-1 typed walks + total-count reconciliation.
+		nilCount := 0
+		callExprCount := 0
+
+		// (1) Count direct-child Idents whose name == "nil" — the bare nil
+		//     literal form in a return statement.
+		EachInChildren[ast.Ident](ret, func(id *ast.Ident) {
+			if id.Name == "nil" {
+				nilCount++
 			}
-			line := pass.Fset.Position(expr.Pos()).Line
-			call, ok := expr.(*ast.CallExpr)
-			if !ok {
-				diags = append(diags, Diagnostic{
-					Rel: rel, Line: line,
-					Message: fmt.Sprintf(
-						"%s CheckOwner has a non-nil return that is not a "+
-							"call expression — every non-nil exit must be "+
-							"the canonical errcode.New(errcode.KindNotFound, "+
-							"...) call (IDOR collapse uniqueness).",
-						rel,
-					),
-				})
-				continue
-			}
+		})
+
+		// (2) For each direct-child CallExpr, emit the original
+		//     "not errcode.New" branch when applicable.
+		EachInChildren[ast.CallExpr](ret, func(call *ast.CallExpr) {
+			callExprCount++
+			line := pass.Fset.Position(call.Pos()).Line
 			if !isErrCodeNewCall(pass.TypesInfo, call) {
 				diags = append(diags, Diagnostic{
 					Rel: rel, Line: line,
@@ -1011,22 +1013,39 @@ func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnost
 						rel,
 					),
 				})
-				continue
+				return
 			}
 			if len(call.Args) == 0 || !isKindNotFoundArg(pass, call.Args[0]) {
 				// already covered by the otherCalls (Kind drift) accumulator
 				// above with a more specific message; skip to avoid duplicate
-				continue
+				return
 			}
+		})
+
+		// (3) Total-count reconciliation — direct-child Results that are
+		//     neither nil-ident nor CallExpr (e.g., bare variable, BasicLit,
+		//     ParenExpr like `return (errcode.New(...))`, UnaryExpr like
+		//     `return &someStruct{}` — all non-canonical forms).
+		//     Emits a single diagnostic per offending ret since precise per-
+		//     expr line would require re-walking the slice, which Path B
+		//     forbids. CheckOwner conventionally returns single-line, so
+		//     ret.Pos() collapses to the offending expr line in practice.
+		otherCount := len(ret.Results) - nilCount - callExprCount
+		if otherCount > 0 {
+			line := pass.Fset.Position(ret.Pos()).Line
+			diags = append(diags, Diagnostic{
+				Rel: rel, Line: line,
+				Message: fmt.Sprintf(
+					"%s CheckOwner has %d non-nil return value(s) that are "+
+						"not call expressions — every non-nil exit must be "+
+						"the canonical errcode.New(errcode.KindNotFound, "+
+						"...) call (IDOR collapse uniqueness).",
+					rel, otherCount,
+				),
+			})
 		}
 	})
 	return diags
-}
-
-// isNilLiteralExpr reports whether expr is the bare identifier "nil".
-func isNilLiteralExpr(expr ast.Expr) bool {
-	id, ok := expr.(*ast.Ident)
-	return ok && id.Name == "nil"
 }
 
 // isErrCodeNewCall reports whether call resolves via go/types to

@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
@@ -311,6 +312,79 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 	return u, nil
 }
 
+// userLookupKind selects the lookup column for the GetByXxxForUpdate family.
+// Adding a new lookup dimension (e.g., email) requires (a) a new const here,
+// (b) a corresponding SQL constant, (c) two switch cases in getForUpdateBy
+// (SQL/attr part + errcode.Wrap message). The switch-based dispatch keeps each
+// errcode.Wrap callsite a const string literal at AST level, satisfying
+// MESSAGE-CONST-LITERAL-01 archtest without a //nolint:dupl carve-out.
+type userLookupKind int
+
+const (
+	lookupByID userLookupKind = iota
+	lookupByUsername
+)
+
+// getForUpdateBy is the shared body of GetByIDForUpdate / GetByUsernameForUpdate.
+// (S4d) Row lock via SELECT ... FOR UPDATE. Fail-fast on missing ambient tx;
+// the lock guarantee cannot silently degrade. Each errcode.Wrap/New callsite
+// receives a const string literal (MESSAGE-CONST-LITERAL-01 compliant).
+func (r *PGUserRepo) getForUpdateBy(
+	ctx context.Context, kind userLookupKind, value string,
+) (*domain.User, error) {
+	if err := assertAmbientTx(ctx); err != nil {
+		return nil, err
+	}
+	var (
+		sql      string
+		attrPart string
+	)
+	switch kind {
+	case lookupByID:
+		// id is a UUID — no whitespace / quoting ambiguity, %s is enough.
+		sql = selectUserByIDForUpdateSQL
+		attrPart = fmt.Sprintf("id=%s", value)
+	case lookupByUsername:
+		// username is arbitrary user-supplied text — %q quotes the value so
+		// embedded whitespace / special chars stay parseable in slog Internal.
+		sql = selectUserByUsernameForUpdateSQL
+		attrPart = fmt.Sprintf("username=%q", value)
+	default:
+		// Fail-fast before any DB roundtrip. Unknown kind is a programmer
+		// error (new const added without extending this switch); panic-
+		// registered A class per PANIC-REGISTERED-01 surfaces it immediately
+		// at runtime instead of routing an empty SQL string to the database.
+		panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
+			errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
+	}
+	row := r.db.QueryRow(ctx, sql, value)
+	u, err := scanUser(row)
+	if err == nil {
+		return u, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", attrPart)))
+	}
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+		return nil, err
+	}
+	switch kind {
+	case lookupByID:
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-for-update", err)
+	case lookupByUsername:
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
+	default:
+		// Symmetric defense to the first switch's default — already covered
+		// there, but Go's return-exhaustiveness analyzer requires a terminal
+		// statement here.
+		panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
+			errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
+	}
+}
+
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row
 // lock via SELECT ... FOR UPDATE.
 //
@@ -319,24 +393,7 @@ func (r *PGUserRepo) GetByUsername(ctx context.Context, username string) (*domai
 // PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
 // (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
 func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.User, error) {
-	if err := assertAmbientTx(ctx); err != nil {
-		return nil, err
-	}
-	row := r.db.QueryRow(ctx, selectUserByIDForUpdateSQL, id)
-	u, err := scanUser(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
-		}
-		var ec *errcode.Error
-		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
-			return nil, err
-		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-for-update", err)
-	}
-	return u, nil
+	return r.getForUpdateBy(ctx, lookupByID, id)
 }
 
 // GetByUsernameForUpdate (S4d) — see ports.UserRepository godoc.
@@ -346,24 +403,7 @@ func (r *PGUserRepo) GetByIDForUpdate(ctx context.Context, id string) (*domain.U
 // PG impl: fail-fasts on missing tx. Mem impl: serializes via store mutex
 // (no tx concept) — contract: PG fail-fasts, mem mutex-serialized.
 func (r *PGUserRepo) GetByUsernameForUpdate(ctx context.Context, username string) (*domain.User, error) {
-	if err := assertAmbientTx(ctx); err != nil {
-		return nil, err
-	}
-	row := r.db.QueryRow(ctx, selectUserByUsernameForUpdateSQL, username)
-	u, err := scanUser(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
-				errcode.WithCategory(errcode.CategoryDomain),
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("username=%q", username))))
-		}
-		var ec *errcode.Error
-		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
-			return nil, err
-		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
-	}
-	return u, nil
+	return r.getForUpdateBy(ctx, lookupByUsername, username)
 }
 
 // UpdateProfile writes username / email / updated_at. Nil name or email leaves

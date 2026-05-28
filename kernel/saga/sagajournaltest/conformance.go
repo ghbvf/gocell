@@ -112,7 +112,9 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"Append_KindStepFailed_PendingToRunning", conformAppendStepFailedPendingToRunning},
 		{"MarkTerminal_RunningToFailed", conformMarkTerminalRunningToFailed},
 		{"MarkTerminal_RunningToExpired", conformMarkTerminalRunningToExpired},
-		{"MarkTerminal_CompensatingToFailed", conformMarkTerminalCompensatingToFailed},
+		// C6 (#1210): Compensating → CompensationFailed replaces Compensating → Failed.
+		{"MarkTerminal_CompensatingToCompensationFailed", conformMarkTerminalCompensatingToFailed},
+		{"MarkTerminal_CompensatingToFailed_Rejected", conformMarkTerminalCompensatingToFailedRejected},
 		{"MarkTerminal_CompensatingToExpired", conformMarkTerminalCompensatingToExpired},
 		{"MarkTerminal_CompensatingToSucceeded_KindInvalid", conformMarkTerminalCompensatingToSucceededIllegal},
 		{"MarkTerminal_RunningToCompensated_KindInvalid", conformMarkTerminalRunningToCompensatedIllegal},
@@ -123,6 +125,10 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"LeaderHandoff_ReadsCompensatingPhase", conformLeaderHandoffReadsCompensatingPhase},
 		{"ClaimPending_NonPositiveLeaseDuration_KindInvalid", conformClaimPendingNonPositiveLeaseDuration},
 		{"Heartbeat_NonPositiveLeaseDuration_KindInvalid", conformHeartbeatNonPositiveLeaseDuration},
+		// F6 (#1210): KindStepCompensationFailed phase legality.
+		{"Append_StepCompensationFailedLegalDuringCompensating", conformStepCompensationFailedLegalDuringCompensating},
+		{"Append_StepCompensationFailedOutsideCompensating_Rejected", conformStepCompensationFailedOutsideCompensating},
+		{"MarkTerminal_CompensatingToCompensationFailed_TerminalEventAppended", conformSagaCompensationFailedTerminal},
 		// PR-04 review carry-over: lease exact-equality boundary (memjournal
 		// fenced uses !Before(now) → valid at ==; PG SQL must align).
 		{"Append_ExactlyAtLeaseExpiry_StillValid", conformAppendExactlyAtLeaseExpiryStillValid},
@@ -640,28 +646,40 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 	}
 }
 
-// conformAppendTerminalKindRejected asserts that Append with a terminal kind
-// (e.g. KindSagaSucceeded) is rejected — terminal events are written only via
-// MarkTerminal.
+// conformAppendTerminalKindRejected asserts that Append with any of the 5
+// terminal kinds is rejected — terminal events are written only via MarkTerminal.
 func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
 
-	inst := NewInstanceFixture(t, "inst-terminal-kind", clk.Now())
-	mustEnqueue(t, j, inst)
-	claimed, _ := mustClaimAll(t, j)
-	ci := findClaimed(t, claimed, inst.ID)
-
-	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
-		Kind: journal.KindSagaSucceeded,
-		// KindSagaSucceeded is a terminal kind; no StepName required.
-	})
-	if err == nil {
-		t.Fatal("Append with KindSagaSucceeded should return error, got nil")
+	terminalKinds := []journal.EventKind{
+		journal.KindSagaSucceeded,
+		journal.KindSagaFailed,
+		journal.KindSagaCompensated,
+		journal.KindSagaExpired,
+		journal.KindSagaCompensationFailed,
 	}
-	if !isKindInvalid(err) {
-		t.Errorf("Append with KindSagaSucceeded: want KindInvalid error, got %v", err)
+	for _, kind := range terminalKinds {
+		kind := kind
+		t.Run(kind.String(), func(t *testing.T) {
+			t.Helper()
+			j, clk, cleanup := factory(t)
+			defer cleanup()
+
+			inst := NewInstanceFixture(t, "inst-terminal-kind-"+kind.String(), clk.Now())
+			mustEnqueue(t, j, inst)
+			claimed, _ := mustClaimAll(t, j)
+			ci := findClaimed(t, claimed, inst.ID)
+
+			_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+				Kind: kind,
+			})
+			if err == nil {
+				t.Fatalf("Append with %s should return error, got nil", kind)
+			}
+			if !isKindInvalid(err) {
+				t.Errorf("Append with %s: want KindInvalid error, got %v", kind, err)
+			}
+		})
 	}
 }
 
@@ -1553,8 +1571,11 @@ func driveToCompensating(t *testing.T, j journal.Journal, clk *clockmock.FakeClo
 	return ci
 }
 
-// conformMarkTerminalCompensatingToFailed verifies Compensating → Failed is a valid terminal path.
-// Must reach Compensating first via StepStarted + CompensationStarted.
+// conformMarkTerminalCompensatingToFailed verifies Compensating → CompensationFailed is the valid
+// terminal path for a saga whose rollback itself encountered step errors.
+// StatusFailed is no longer reachable from StatusCompensating (#1210 C6 — the
+// two root causes are structurally distinct: CompensationFailed = rollback
+// failed; Failed = forward failed / no rollback).
 func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
@@ -1562,15 +1583,34 @@ func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 
 	ci := driveToCompensating(t, j, clk, "inst-compensating-failed")
 
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensationFailed)
 	if err != nil {
-		t.Fatalf("MarkTerminal(Compensating→Failed): %v", err)
+		t.Fatalf("MarkTerminal(Compensating→CompensationFailed): %v", err)
 	}
 	if !ok {
-		t.Fatal("MarkTerminal(Compensating→Failed): expected ok=true")
+		t.Fatal("MarkTerminal(Compensating→CompensationFailed): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensating→Failed) did not append a terminal event")
+		t.Error("MarkTerminal(Compensating→CompensationFailed) did not append a terminal event")
+	}
+}
+
+// conformMarkTerminalCompensatingToFailedRejected verifies that
+// Compensating → Failed is no longer a valid transition after C6 (#1210).
+// The correct terminal for a rollback failure is StatusCompensationFailed.
+func conformMarkTerminalCompensatingToFailedRejected(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := driveToCompensating(t, j, clk, "inst-compensating-to-failed-rejected")
+
+	_, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	if err == nil {
+		t.Fatal("MarkTerminal(Compensating→Failed) should return error after C6 split, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Compensating→Failed): want KindInvalid error, got %v", err)
 	}
 }
 
@@ -1948,6 +1988,120 @@ func conformAppendUnknownWithBadPayloadPrefersNotFound(t *testing.T, factory Fac
 		t.Errorf("want KindNotFound (precedence over payload validation), got %v", err)
 	}
 	requireCode(t, err, errcode.ErrSagaNotFound)
+}
+
+// ---------------------------------------------------------------------------
+// F6 (#1210): KindStepCompensationFailed phase legality
+// ---------------------------------------------------------------------------
+
+// conformStepCompensationFailedLegalDuringCompensating asserts that
+// KindStepCompensationFailed is accepted while the saga is in the Compensating
+// phase (status unchanged — same as KindStepCompensated).
+func conformStepCompensationFailedLegalDuringCompensating(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := driveToCompensating(t, j, clk, "inst-step-comp-failed-legal")
+
+	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepCompensationFailed,
+		StepName: stepOne,
+	})
+	if err != nil {
+		t.Fatalf("Append(KindStepCompensationFailed) while Compensating: want success, got %v", err)
+	}
+
+	// Status must still be Compensating (non-terminal, unchanged).
+	claimed, _, err := j.ClaimPending(context.Background(), 100, shortLease)
+	// After a successful Append the instance still has an active lease (ci.LeaseID),
+	// so it is not re-claimable; but we can verify via Load that no terminal event was written.
+	if err != nil {
+		t.Fatalf("ClaimPending after step-compensation-failed append: %v", err)
+	}
+	_ = claimed // may be empty — instance still holds its lease
+	if loadHasTerminal(t, j, ci.Instance.ID) {
+		t.Error("KindStepCompensationFailed must not write a terminal event; status should remain Compensating")
+	}
+}
+
+// conformStepCompensationFailedOutsideCompensating asserts that
+// KindStepCompensationFailed is rejected when the saga is NOT in the
+// Compensating phase (Pending or Running).
+func conformStepCompensationFailedOutsideCompensating(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	cases := []struct {
+		phase      string
+		instanceID string
+		advance    func(t *testing.T, ci journal.ClaimedInstance) // Pending → target phase; nil = stay Pending
+	}{
+		{phase: "Pending", instanceID: "inst-step-comp-failed-outside-pending", advance: nil},
+		{
+			phase:      "Running",
+			instanceID: "inst-step-comp-failed-outside-running",
+			advance: func(t *testing.T, ci journal.ClaimedInstance) {
+				appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)
+			},
+		},
+	}
+	for _, tc := range cases {
+		ci := claimOne(t, j, clk, tc.instanceID)
+		if tc.advance != nil {
+			tc.advance(t, ci)
+		}
+		_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+			Kind:     journal.KindStepCompensationFailed,
+			StepName: stepOne,
+		})
+		if err == nil {
+			t.Fatalf("Append(KindStepCompensationFailed) on a %s instance should be rejected, got nil", tc.phase)
+		}
+		if !isKindInvalid(err) {
+			t.Errorf("Append(KindStepCompensationFailed) on %s: want KindInvalid error, got %v", tc.phase, err)
+		}
+	}
+}
+
+// conformSagaCompensationFailedTerminal verifies the full
+// Compensating → StatusCompensationFailed terminal path:
+//  1. MarkTerminal writes KindSagaCompensationFailed to the log.
+//  2. The lease is released on success (instance not re-claimable by old lease).
+//  3. A subsequent Append with the old lease is rejected (terminal, no lease).
+func conformSagaCompensationFailedTerminal(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := driveToCompensating(t, j, clk, "inst-saga-comp-failed-terminal")
+
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensationFailed)
+	if err != nil {
+		t.Fatalf("MarkTerminal(Compensating→CompensationFailed): %v", err)
+	}
+	if !ok {
+		t.Fatal("MarkTerminal(Compensating→CompensationFailed): expected ok=true")
+	}
+
+	// Terminal event must be KindSagaCompensationFailed.
+	kind := loadTerminalKind(t, j, ci.Instance.ID)
+	if kind != journal.KindSagaCompensationFailed {
+		t.Errorf("terminal event: want KindSagaCompensationFailed, got %s", kind)
+	}
+
+	// Lease released: subsequent Append with the old lease must be rejected.
+	_, err = j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+		Kind:     journal.KindStepCompensated,
+		StepName: stepOne,
+	})
+	if err == nil {
+		t.Fatal("Append after MarkTerminal(CompensationFailed): want conflict error, got nil")
+	}
+	if !isKindConflict(err) {
+		t.Errorf("Append after terminal: want KindConflict error (stale/no lease), got %v", err)
+	}
 }
 
 // conformAppendPayloadOverMaxBytes asserts the MaxPayloadBytes contract is

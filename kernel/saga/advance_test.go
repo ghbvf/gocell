@@ -132,14 +132,25 @@ func TestAdvanceSaga_CompensateLifecycle(t *testing.T) {
 	require.NotNil(t, inst.CompletedAt)
 }
 
-func TestAdvanceSaga_CompensatingToFailed(t *testing.T) {
+func TestAdvanceSaga_CompensatingToCompensationFailed(t *testing.T) {
 	t.Parallel()
 	inst := NewInstance("inst-1", "def-1", testBase)
 	require.NoError(t, AdvanceSaga(&inst, StatusRunning, testBase.Add(testtime.D1s)))
 	require.NoError(t, AdvanceSaga(&inst, StatusCompensating, testBase.Add(testtime.D2s)))
-	require.NoError(t, AdvanceSaga(&inst, StatusFailed, testBase.Add(testtime.D3s)))
-	assert.Equal(t, StatusFailed, inst.Status)
+	require.NoError(t, AdvanceSaga(&inst, StatusCompensationFailed, testBase.Add(testtime.D3s)))
+	assert.Equal(t, StatusCompensationFailed, inst.Status)
 	require.NotNil(t, inst.CompletedAt)
+}
+
+func TestAdvanceSaga_CompensatingToFailed_Rejected(t *testing.T) {
+	t.Parallel()
+	inst := NewInstance("inst-1", "def-1", testBase)
+	require.NoError(t, AdvanceSaga(&inst, StatusRunning, testBase.Add(testtime.D1s)))
+	require.NoError(t, AdvanceSaga(&inst, StatusCompensating, testBase.Add(testtime.D2s)))
+	// Compensating → Failed is no longer a valid transition (#1210 C6).
+	// Use StatusCompensationFailed instead.
+	err := AdvanceSaga(&inst, StatusFailed, testBase.Add(testtime.D3s))
+	require.Error(t, err, "Compensating → Failed must be rejected after C6 split")
 }
 
 func TestAdvanceSaga_AllowsEqualTimestamp(t *testing.T) {

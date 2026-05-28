@@ -61,9 +61,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout);
 	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
 	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10);
+	// 041 extends saga_events.kind CHECK range from 1..9 to 1..10 (#1181 F3 — adds KindStepCompensationFailed);
+	// 042 extends saga_events.kind 1..11 and saga_instances.status 1..8
+	// (#1210 C6 — adds KindSagaCompensationFailed / StatusCompensationFailed);
 	// 043 rebuilds audit_entries (DROP+CREATE) with 5 new NOT NULL columns
 	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) for
-	// the 11-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition).
+	// the 12-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition).
 	assert.Equal(t, int64(43), v,
 		"expected version should be exactly 43 (current migration max — 043 audit_entries v2)")
 }

@@ -33,6 +33,8 @@ func (noopEmitter) Emit(context.Context, koutbox.Entry) error { return nil }
 
 // leaderPGCfg is the coordinator config for the two-process PG test: fast poll
 // (clock-driven), small batch, long lease (no expiry within the test).
+// HeartbeatInterval is set to LeaseDuration/3 = 20s; both flow into the
+// internally-constructed Executor via Config (#1181 F5).
 func leaderPGCfg() saga.Config {
 	return saga.Config{
 		PollInterval:      testtime.D10ms,
@@ -68,7 +70,8 @@ func startLeaderCoord(
 ) {
 	t.Helper()
 	c, err := saga.NewCoordinator(j, tx, noopEmitter{}, reg, clk,
-		saga.WithConfig(leaderPGCfg()), saga.WithLeaderElect(locker))
+		saga.WithConfig(leaderPGCfg()),
+		saga.WithLeaderElect(locker))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,9 +147,12 @@ func TestSagaLeaderElect_TwoCoordinators_PG_ExactlyOnce(t *testing.T) {
 	startLeaderCoord(t, j, tx, clk, reg, locker1)
 	startLeaderCoord(t, j, tx, clk, reg, locker2)
 
-	// Wait for both coordinators' tick+heartbeat tickers to register (4 total).
+	// Wait for both coordinators' tickLoop tickers to register (2 total).
+	// Each Coordinator registers exactly one ticker (the poll ticker); the
+	// heartbeat ticker is internal to the Executor and only created when a
+	// step is actively running. At startup there are no active steps.
 	testwait.External(t, "both-coordinator-tickers-registered",
-		func() bool { return clk.PendingTickers() >= 4 },
+		func() bool { return clk.PendingTickers() >= 2 },
 		testtime.D2s, testtime.D1ms)
 
 	// Drive: advance the clock on each poll until every instance is terminal.

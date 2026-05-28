@@ -22,14 +22,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 #   EMIT-DECL-COVER-01   (TestEmitDeclCover)
 #   DEAD-CONTRACT-01     (TestDeadContractCover)
 #   DEAD-CODE-01         (TestDeadCodeCover)
-# These run in archtest-nightly.yml (full 16-shard suite) and locally via
+# These run in archtest-nightly.yml (full 24-shard suite) and locally via
 # `make verify` / `bash hack/verify-archtest.sh`.
 
 # CLOCK-POSITIONAL-INJECTION-01 (TestClockPositionalInjection + …Fixtures) is
 # intentionally NOT in this PR-time set: it is a whole-prod-tree packages.Load
 # scan whose memory footprint, added to the ~5 existing whole-tree scans here,
 # exceeds the 2-CPU/7GB CI runner budget (SIGTERM/OOM at ~84s). It stays gated
-# nightly via archtest-nightly.yml (full 16-shard suite) + local `make verify`
+# nightly via archtest-nightly.yml (full 24-shard suite) + local `make verify`
 # (verify-archtest.sh full sweep). #1053 review F6 (add to PR-time) reverted for
 # CI stability — the heavy whole-module form-lock belongs with the nightly suite.
 go test ./tools/archtest \

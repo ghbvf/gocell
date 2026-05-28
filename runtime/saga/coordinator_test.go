@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,11 +29,12 @@ import (
 
 // File-local duration consts for values not present in testtime.
 const (
-	// testHeartbeatValid is a heartbeat interval that satisfies
-	// HeartbeatInterval*2 < LeaseDuration (9*2=18 < 30).
-	testHeartbeatValid = 9 * time.Second
 	// testNegativeDuration is used to test that negative PollInterval is rejected.
 	testNegativeDuration = -testtime.D1ms
+	// driveOneLeaseLostHB is the heartbeat interval used by the OutcomeLeaseLost
+	// driveOne test so the executor's heartbeat goroutine fires after the test's
+	// clk.Advance(testtime.D10ms) and observes the SetStale flag.
+	driveOneLeaseLostHB = 5 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -112,6 +117,7 @@ func noopStep(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	if cfg.PollInterval != testtime.D200ms {
 		t.Errorf("PollInterval = %v, want 200ms", cfg.PollInterval)
@@ -122,9 +128,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.LeaseDuration != testtime.D30s {
 		t.Errorf("LeaseDuration = %v, want 30s", cfg.LeaseDuration)
 	}
-	if cfg.HeartbeatInterval != testtime.D10s {
-		t.Errorf("HeartbeatInterval = %v, want 10s", cfg.HeartbeatInterval)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +135,7 @@ func TestDefaultConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConfig_Validate(t *testing.T) {
+	t.Parallel()
 	valid := DefaultConfig()
 
 	tests := []struct {
@@ -187,52 +191,11 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "zero LeaseDuration",
 			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     0,
-				HeartbeatInterval: testtime.D10s,
+				PollInterval:   testtime.D200ms,
+				ClaimBatchSize: 16,
+				LeaseDuration:  0,
 			},
 			wantErr: true,
-		},
-		{
-			name: "zero HeartbeatInterval",
-			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     testtime.D30s,
-				HeartbeatInterval: 0,
-			},
-			wantErr: true,
-		},
-		{
-			name: "HeartbeatInterval*2 == LeaseDuration",
-			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     testtime.D20s,
-				HeartbeatInterval: testtime.D10s, // 10*2 == 20 → invalid
-			},
-			wantErr: true,
-		},
-		{
-			name: "HeartbeatInterval*2 > LeaseDuration",
-			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     testtime.D15s,
-				HeartbeatInterval: testtime.D10s, // 10*2 > 15 → invalid
-			},
-			wantErr: true,
-		},
-		{
-			name: "HeartbeatInterval*2 < LeaseDuration OK",
-			cfg: Config{
-				PollInterval:      testtime.D200ms,
-				ClaimBatchSize:    16,
-				LeaseDuration:     testtime.D30s,
-				HeartbeatInterval: testHeartbeatValid, // 9*2 < 30 → valid
-			},
-			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -250,6 +213,7 @@ func TestConfig_Validate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_NilDeps(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -335,6 +299,7 @@ func assertNilDepFailure(t *testing.T, c *Coordinator, err error, wantMessage st
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_NilClock(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -355,6 +320,7 @@ func TestNewCoordinator_NilClock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_HappyPath(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -375,6 +341,7 @@ func TestNewCoordinator_HappyPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFoldEvents(t *testing.T) {
+	t.Parallel()
 	// Build a 3-step definition for tests.
 	def := &ksaga.Definition{
 		ID: "test-def",
@@ -629,7 +596,8 @@ func TestStart_Ready_Channel_Closes_After_State_Running(t *testing.T) {
 // when the Coordinator has never been started.
 func TestRepoReady_BeforeStart_NotRunning(t *testing.T) {
 	clk := newFakeClock()
-	j := &stubRepoProberJournal{MemJournal: newMemJournal(clk)}
+	memJ := newMemJournal(clk)
+	j := &stubRepoProberJournal{MemJournal: memJ}
 	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -648,8 +616,9 @@ func TestRepoReady_BeforeStart_NotRunning(t *testing.T) {
 // reaches coordRunning, the probe returns the journal's RepoReady result.
 func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 	clk := newFakeClock()
+	memJ := newMemJournal(clk)
 	j := &stubRepoProberJournal{
-		MemJournal: newMemJournal(clk),
+		MemJournal: memJ,
 		repoErr:    errors.New("repo down"),
 	}
 	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
@@ -843,17 +812,17 @@ func TestStop_DrainsInflight(t *testing.T) {
 
 	fakeclk := c.clock.(*clockmock.FakeClock)
 	testwait.External(t, "tickers-registered",
-		func() bool { return fakeclk.PendingTickers() >= 2 },
+		func() bool { return fakeclk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 
 	// Trigger a tick to claim the instance and start the blocking step.
 	fakeclk.Advance(testtime.D10ms)
 
-	// Wait for the step to have started (activeLeases non-empty).
+	// Wait for the step to have started (inflightLocks non-empty).
 	testwait.External(t, "step-inflight",
 		func() bool {
 			var n int
-			c.activeLeases.Range(func(_, _ any) bool { n++; return true })
+			c.inflightLocks.Range(func(_, _ any) bool { n++; return true })
 			return n > 0
 		},
 		testtime.D2s, testtime.D1ms)
@@ -882,7 +851,7 @@ func TestStop_DrainsInflight(t *testing.T) {
 	// Unblock the step so it can complete.
 	close(stepBlockCh)
 
-	// Stop should return after the step finishes (drain detects activeLeases==0).
+	// Stop should return after the step finishes (drain detects inflightLocks empty).
 	select {
 	case stopErr := <-stopDone:
 		if stopErr != nil && !errors.Is(stopErr, context.Canceled) {
@@ -970,7 +939,7 @@ func TestStop_DrainTimeout(t *testing.T) {
 
 	fakeclk := c.clock.(*clockmock.FakeClock)
 	testwait.External(t, "tickers-registered",
-		func() bool { return fakeclk.PendingTickers() >= 2 },
+		func() bool { return fakeclk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 
 	// Trigger a tick to claim the instance.
@@ -980,7 +949,7 @@ func TestStop_DrainTimeout(t *testing.T) {
 	testwait.External(t, "step-inflight",
 		func() bool {
 			var n int
-			c.activeLeases.Range(func(_, _ any) bool { n++; return true })
+			c.inflightLocks.Range(func(_, _ any) bool { n++; return true })
 			return n > 0
 		},
 		testtime.D2s, testtime.D1ms)
@@ -1069,6 +1038,7 @@ func TestNewCoordinator_TypedNilJournal(t *testing.T) {
 // asserts the JSON result contains only the const literal message — no
 // secret or password substring.
 func TestFailurePayload_NoInternalLeak(t *testing.T) {
+	t.Parallel()
 	err := errcode.New(errcode.KindInternal, errcode.ErrInternal,
 		"step blew up",
 		errcode.WithInternal(errcode.InternalAttr("_", "secret=hunter2")),
@@ -1103,6 +1073,7 @@ func TestFailurePayload_NoInternalLeak(t *testing.T) {
 // (non-errcode) error whose text carries a key=value secret must be redacted by
 // pkg/redaction.RedactString before landing in the journal Payload.
 func TestFailurePayload_NonErrcodeRedacted(t *testing.T) {
+	t.Parallel()
 	err := errors.New("connect failed dsn=postgres://user:hunter2@db/saga token=abc123")
 
 	var result struct {
@@ -1139,18 +1110,23 @@ func TestFailurePayload_NonErrcodeRedacted(t *testing.T) {
 func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	const defID idutil.SafeID = "stepdeadlineexceeded"
 
-	stepRunCount := 0
+	var stepRunCount atomic.Int32
+	stepStarted := make(chan struct{}, 1)
 	def := &ksaga.Definition{
 		ID: defID,
 		Steps: []ksaga.Step{
 			{
 				Name: "timeoutstep",
-				// step.Timeout = 50ms; since FakeClock time is far in the past,
-				// the derived context deadline fires immediately — the step sees
-				// ctx.Done() and returns ctx.Err().
+				// step.Timeout = 50ms; the executor's buildStepCtx registers an
+				// AfterFunc at clk.Now()+50ms. The step blocks on ctx.Done() until
+				// clk.Advance fires the timeout timer.
 				Timeout: testtime.D50ms,
 				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
-					stepRunCount++
+					stepRunCount.Add(1)
+					select {
+					case stepStarted <- struct{}{}:
+					default:
+					}
 					<-ctx.Done()
 					return nil, ctx.Err()
 				},
@@ -1193,18 +1169,25 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 		t.Fatal("coordinator not ready")
 	}
 
-	// Wait for tickers to register.
+	// Wait for tickLoop ticker to register.
 	fakeclk := c.clock.(*clockmock.FakeClock)
 	testwait.External(t, "tickers-registered",
-		func() bool { return fakeclk.PendingTickers() >= 2 },
+		func() bool { return fakeclk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 
-	// Trigger a tick to start the step.
+	// Trigger a tick to start the step (the step blocks until the AfterFunc fires).
 	fakeclk.Advance(testtime.D10ms)
 
+	// Wait for the step to start executing, then advance past the step timeout
+	// (50ms) so the executor's AfterFunc fires errStepTimeout.
+	select {
+	case <-stepStarted:
+	case <-time.After(testtime.D2s):
+		t.Fatal("step did not start within 2s")
+	}
+	fakeclk.Advance(testtime.D50ms + testtime.D1ms)
+
 	// Wait for the instance to become terminal (KindSagaExpired).
-	// The step deadline fires immediately (fake clock time is in the past),
-	// so the coordinator quickly marks the instance Expired.
 	testwait.External(t, "instance-expired",
 		func() bool {
 			evs, loadErr := j.Load(context.Background(), inst.ID)
@@ -1238,8 +1221,8 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	}
 
 	// Step was called once (then returned via ctx.Done()).
-	if stepRunCount != 1 {
-		t.Errorf("stepRunCount = %d, want 1", stepRunCount)
+	if n := stepRunCount.Load(); n != 1 {
+		t.Errorf("stepRunCount = %d, want 1", n)
 	}
 
 	// Stop coordinator.
@@ -1253,6 +1236,732 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	case <-startDone:
 	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestNewCoordinator_ConstructsInternalExecutor
+// ---------------------------------------------------------------------------
+
+// TestNewCoordinator_ConstructsInternalExecutor verifies that NewCoordinator
+// builds its own Executor from the same journal + Config (#1181 F5: WithExecutor
+// was deleted to guarantee claim-and-heartbeat share a journal by construction
+// rather than by caller convention). The test asserts the Coordinator becomes
+// usable without any executor-related option, and that the internal Executor
+// uses the Coordinator's HeartbeatInterval / LeaseDuration.
+func TestNewCoordinator_ConstructsInternalExecutor(t *testing.T) {
+	t.Parallel()
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	tx := &fakeTxRunner{}
+	em := &fakeEmitter{}
+	reg := newRegistry()
+
+	c, err := NewCoordinator(j, tx, em, reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator (no opts): %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil Coordinator")
+	}
+	if c.executor == nil {
+		t.Error("internal Executor must be constructed; got nil — #1181 F5 invariant violated")
+	}
+}
+
+// TestNewCoordinator_ConfigFlowsToExecutor verifies that HeartbeatInterval and
+// LeaseDuration from Config are actually forwarded to the internal Executor.
+// Behavioral proof: the executor validates that heartbeatInterval *
+// HeartbeatLeaseSafetyFactor < leaseDuration. When the Coordinator Config
+// violates this ratio, NewCoordinator must fail at construction (not silently
+// succeed). This demonstrates the Config values reach the executor rather than
+// being ignored.
+func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
+	t.Parallel()
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	tx := &fakeTxRunner{}
+	em := &fakeEmitter{}
+	reg := newRegistry()
+
+	// Valid Config: HeartbeatInterval * 2 < LeaseDuration.
+	validCfg := Config{
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    16,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
+	}
+	c, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(validCfg))
+	if err != nil {
+		t.Fatalf("NewCoordinator with valid config: %v", err)
+	}
+	if c.executor == nil {
+		t.Fatal("executor must be constructed with valid config")
+	}
+
+	// Verify the coordinator's stored config matches what we provided.
+	// Config.Validate already passed, so the values are in c.cfg.
+	if c.cfg.HeartbeatInterval != testtime.D20s {
+		t.Errorf("c.cfg.HeartbeatInterval = %v, want %v", c.cfg.HeartbeatInterval, testtime.D20s)
+	}
+	if c.cfg.LeaseDuration != testtime.D60s {
+		t.Errorf("c.cfg.LeaseDuration = %v, want %v", c.cfg.LeaseDuration, testtime.D60s)
+	}
+
+	// invalid_config: HeartbeatInterval * HeartbeatLeaseSafetyFactor (=2) >= LeaseDuration
+	// → Config.Validate rejects before reaching Executor construction, proving Config
+	// values flow through the validation pipeline rather than being silently ignored.
+	t.Run("invalid_config_HBI_too_large_rejected", func(t *testing.T) {
+		t.Parallel()
+		invalidCfg := Config{
+			PollInterval:   testtime.D10ms,
+			ClaimBatchSize: 4,
+			// HBI=30s, LeaseDuration=60s → HBI*2 = 60s, NOT < 60s → reject.
+			HeartbeatInterval: testtime.D30s,
+			LeaseDuration:     testtime.D60s,
+		}
+		_, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(invalidCfg))
+		if err == nil {
+			t.Fatal("NewCoordinator with HeartbeatInterval*2 >= LeaseDuration must fail")
+		}
+		// The error must mention "heartbeat" (from Config.Validate message),
+		// confirming the Config values reached the validation pipeline.
+		if !strings.Contains(err.Error(), "heartbeat") && !strings.Contains(err.Error(), "HeartbeatInterval") {
+			t.Errorf("error must mention 'heartbeat' or 'HeartbeatInterval' to confirm Config flows through; got: %v", err)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_DelegatesToExecutor_Success
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_DelegatesToExecutor_Success verifies the happy-path delegation:
+// executor.Execute returns OutcomeSucceeded → coordinator appends KindStepCompleted
+// and (for the last step) KindSagaSucceeded.
+func TestDriveOne_DelegatesToExecutor_Success(t *testing.T) {
+	const defID idutil.SafeID = "execdelegate"
+	stepPayload := []byte(`{"answer":42}`)
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return stepPayload, nil
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	em := newSafeFakeEmitter()
+	tx := newSafeFakeTxRunner()
+
+	c, err := NewCoordinator(j, tx, em, reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: err=%v, count=%d", claimErr, len(claimed))
+	}
+
+	if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+		t.Fatalf("driveOne: %v", err)
+	}
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("want 2 events (StepCompleted+SagaSucceeded), got %d: %v", len(evs), evs)
+	}
+	if evs[0].Kind != journal.KindStepCompleted {
+		t.Errorf("evs[0].Kind = %s, want step_completed", evs[0].Kind)
+	}
+	if evs[1].Kind != journal.KindSagaSucceeded {
+		t.Errorf("evs[1].Kind = %s, want saga_succeeded", evs[1].Kind)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_OutcomeFailed_NoCompensation_MarksFailed
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_OutcomeFailed_NoCompensation_MarksFailed verifies that when a
+// step fails (no Compensate functions on any step), the coordinator writes
+// KindStepFailed + KindSagaFailed and does NOT start compensation.
+func TestDriveOne_OutcomeFailed_NoCompensation_MarksFailed(t *testing.T) {
+	const defID idutil.SafeID = "failedncomp"
+	stepErr := errors.New("step deliberately failed")
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, stepErr
+				},
+				// No Compensate: shouldCompensate must return false.
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: %v / %d", claimErr, len(claimed))
+	}
+
+	if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+		t.Fatalf("driveOne: %v", err)
+	}
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("want 2 events, got %d: %v", len(evs), evs)
+	}
+	if evs[0].Kind != journal.KindStepFailed {
+		t.Errorf("evs[0].Kind = %s, want step_failed", evs[0].Kind)
+	}
+	if evs[1].Kind != journal.KindSagaFailed {
+		t.Errorf("evs[1].Kind = %s, want saga_failed", evs[1].Kind)
+	}
+	for _, ev := range evs {
+		if ev.Kind == journal.KindCompensationStarted {
+			t.Errorf("unexpected KindCompensationStarted — no compensate handlers defined")
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_OutcomeFailed_TriggersReverseCompensation
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_OutcomeFailed_TriggersReverseCompensation verifies that when a
+// 2-step saga fails at step2, compensation runs in reverse order
+// (step2-compensate, step1-compensate) and the instance reaches
+// StatusCompensated.
+func TestDriveOne_OutcomeFailed_TriggersReverseCompensation(t *testing.T) {
+	const defID idutil.SafeID = "reversecomp"
+
+	var compensated []string
+	var mu sync.Mutex
+	recordComp := func(name string) func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+		return func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+			mu.Lock()
+			compensated = append(compensated, name)
+			mu.Unlock()
+			return nil
+		}
+	}
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name:       "step1",
+				Run:        noopStep,
+				Compensate: recordComp("step1"),
+			},
+			{
+				Name: "step2",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step2 failed")
+				},
+				Compensate: recordComp("step2"),
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Drive step1 to completion first.
+	claimed1, _, err := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed1) != 1 {
+		t.Fatalf("ClaimPending (step1): %v / %d", err, len(claimed1))
+	}
+	if err := c.driveOne(context.Background(), claimed1[0]); err != nil {
+		t.Fatalf("driveOne step1: %v", err)
+	}
+
+	// After step1 completes, the lease is still active for 60s. Advance past it
+	// so the second ClaimPending can re-claim the instance for step2.
+	clk.Advance(testtime.D60s + testtime.D1ms)
+
+	// The first driveOne should have completed step1. Re-claim for step2.
+	claimed2, _, err := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed2) != 1 {
+		t.Fatalf("ClaimPending (step2): %v / %d", err, len(claimed2))
+	}
+	if err := c.driveOne(context.Background(), claimed2[0]); err != nil {
+		t.Fatalf("driveOne step2: %v", err)
+	}
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// All compensations in this test succeed (recordComp returns nil), so
+	// the saga must reach StatusCompensated — not StatusFailed (forward
+	// failure without rollback) and not StatusCompensationFailed (partial
+	// rollback failure).
+	lastEv := evs[len(evs)-1]
+	if lastEv.Kind != journal.KindSagaCompensated {
+		t.Errorf("last event = %s, want saga_compensated (all compensations succeed in this scenario)", lastEv.Kind)
+	}
+
+	// Verify compensation ran in reverse order: step1 completed, step2 failed → only
+	// step1 was committed and must be compensated. Expected order: ["step1"].
+	mu.Lock()
+	gotComp := make([]string, len(compensated))
+	copy(gotComp, compensated)
+	mu.Unlock()
+	wantOrder := []string{"step1"}
+	if !reflect.DeepEqual(gotComp, wantOrder) {
+		t.Errorf("compensation order = %v, want %v", gotComp, wantOrder)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_OutcomeExpired_MarksExpired
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_OutcomeExpired_MarksExpired verifies OutcomeExpired path: when
+// the saga-level Definition.Timeout has elapsed (clock advanced past StartedAt +
+// Timeout before driveOne runs), driveOne writes KindSagaExpired immediately
+// without calling the step Run func.
+func TestDriveOne_OutcomeExpired_MarksExpired(t *testing.T) {
+	const defID idutil.SafeID = "expiredoutcome"
+
+	stepCalled := false
+	def := &ksaga.Definition{
+		ID:      defID,
+		Timeout: testtime.D10ms, // saga-level timeout used by coordinator's pre-execution check
+		Steps: []ksaga.Step{
+			{
+				Name: "timeoutstep2",
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					stepCalled = true
+					return nil, nil
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	// Enqueue at t0, then advance past the 10ms saga timeout before claiming.
+	// driveOne checks clk.Now() - StartedAt > def.Timeout and marks Expired
+	// immediately without executing the step.
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	clk.Advance(testtime.D50ms) // advance past the 10ms Definition.Timeout
+	claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: %v / %d", claimErr, len(claimed))
+	}
+
+	if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+		t.Fatalf("driveOne: %v", err)
+	}
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(evs) == 0 {
+		t.Fatal("expected journal events, got 0")
+	}
+	last := evs[len(evs)-1]
+	if last.Kind != journal.KindSagaExpired {
+		t.Errorf("last event = %s, want saga_expired", last.Kind)
+	}
+	for _, ev := range evs {
+		if ev.Kind == journal.KindStepCompleted {
+			t.Errorf("unexpected KindStepCompleted on expired saga")
+		}
+	}
+	// The step Run func must NOT have been called (timeout detected before executor).
+	if stepCalled {
+		t.Error("step Run was called but should not have been (saga timeout pre-check)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_OutcomeCanceled_NoTerminalWrite
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_OutcomeCanceled_NoTerminalWrite verifies that when the drive
+// context is canceled (OutcomeCanceled), driveOne returns nil and writes NO
+// terminal event — the instance stays claimable for re-claim.
+func TestDriveOne_OutcomeCanceled_NoTerminalWrite(t *testing.T) {
+	const defID idutil.SafeID = "canceledoutcome"
+
+	stepStarted := make(chan struct{})
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "cancelstep",
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					close(stepStarted)
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: %v / %d", claimErr, len(claimed))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	driveErr := make(chan error, 1)
+	go func() { driveErr <- c.driveOne(ctx, claimed[0]) }()
+
+	// Wait for step to start, then cancel.
+	select {
+	case <-stepStarted:
+	case <-time.After(testtime.D2s):
+		t.Fatal("step did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-driveErr:
+		if err != nil {
+			t.Errorf("driveOne should return nil on OutcomeCanceled, got: %v", err)
+		}
+	case <-time.After(testtime.D2s):
+		t.Fatal("driveOne did not return after cancel")
+	}
+
+	// No terminal event written.
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, ev := range evs {
+		if ev.Kind.IsTerminal() {
+			t.Errorf("unexpected terminal event %s after cancel", ev.Kind)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite
+// ---------------------------------------------------------------------------
+
+// TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite verifies that when the
+// executor detects lease loss, driveOne logs at Info and returns nil without
+// writing any terminal journal event.
+func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
+	const defID idutil.SafeID = "leaselostoutcome"
+
+	// Use a very short heartbeat interval so the lease-lost path fires quickly.
+	clk := newFakeClock()
+	memJ := newMemJournal(clk)
+
+	// staleAfterFirstHBJournal returns ok=false after SetStale() is called.
+	j := &staleAfterFirstHBJournal{MemJournal: memJ}
+
+	// Short heartbeat interval so the loss is detected quickly.
+
+	reg, err := ksaga.NewInMemoryRegistry(&ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "longstep",
+				Run: func(ctx context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					// Arm the stale flag so next heartbeat sees ok=false.
+					j.SetStale()
+					<-ctx.Done()
+					return nil, ctx.Err()
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Use a short HeartbeatInterval so the executor's heartbeat goroutine
+	// fires after the test's clk.Advance(testtime.D10ms) below and observes
+	// the SetStale flag (forcing OutcomeLeaseLost).
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
+		WithLogger(logger),
+		WithConfig(Config{
+			PollInterval:      testtime.D10ms,
+			ClaimBatchSize:    16,
+			LeaseDuration:     testtime.D60s,
+			HeartbeatInterval: driveOneLeaseLostHB,
+		}))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := memJ.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, _, claimErr := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: %v / %d", claimErr, len(claimed))
+	}
+
+	driveErrCh := make(chan error, 1)
+	go func() { driveErrCh <- c.driveOne(context.Background(), claimed[0]) }()
+
+	// Wait for the stale flag to be set (i.e. the step goroutine has started and
+	// called j.SetStale()), then advance the fake clock to trigger the heartbeat
+	// tick that will detect the stale lease.
+	testwait.External(t, "step-stale-armed",
+		func() bool { return j.stale.Load() },
+		testtime.D2s, testtime.D1ms)
+	clk.Advance(testtime.D10ms)
+
+	// Receive driveOne's return value exactly once. Use a separate channel
+	// receive rather than a testwait peek so the error value is not consumed and
+	// discarded by the polling closure (double-consume race with buffered channel).
+	var driveErr error
+	var driveReturned bool
+	testwait.External(t, "drive-one-returned",
+		func() bool {
+			select {
+			case driveErr = <-driveErrCh:
+				driveReturned = true
+				return true
+			default:
+				return false
+			}
+		},
+		testtime.D2s, testtime.D1ms)
+
+	if !driveReturned {
+		t.Fatal("driveOne did not return within 2s")
+	}
+	if driveErr != nil {
+		t.Errorf("driveOne should return nil on LeaseLost, got: %v", driveErr)
+	}
+
+	// No terminal event.
+	evs, err := memJ.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, ev := range evs {
+		if ev.Kind.IsTerminal() {
+			t.Errorf("unexpected terminal event %s after lease lost", ev.Kind)
+		}
+	}
+}
+
+// staleAfterFirstHBJournal wraps MemJournal and returns ok=false for Heartbeat
+// once SetStale is called.
+type staleAfterFirstHBJournal struct {
+	*journal.MemJournal
+	stale atomic.Bool
+}
+
+func (s *staleAfterFirstHBJournal) SetStale() {
+	s.stale.Store(true)
+}
+
+func (s *staleAfterFirstHBJournal) Heartbeat(
+	ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration,
+) (bool, error) {
+	if s.stale.Load() {
+		return false, nil
+	}
+	return s.MemJournal.Heartbeat(ctx, instanceID, leaseID, leaseDuration)
+}
+
+// ---------------------------------------------------------------------------
+// TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
+// ---------------------------------------------------------------------------
+
+// TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
+// verifies that when a compensation step fails, runCompensation continues the
+// reverse walk (best-effort) and writes KindSagaCompensationFailed as the
+// final status (#1210 C6 — distinct from KindSagaFailed which signals a
+// forward-phase failure with no rollback).
+func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed(t *testing.T) {
+	const defID idutil.SafeID = "compfailcont"
+
+	var compensated []string
+	var mu sync.Mutex
+
+	def := &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name: "step1",
+				Run:  noopStep,
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					mu.Lock()
+					compensated = append(compensated, "step1")
+					mu.Unlock()
+					return nil
+				},
+			},
+			{
+				Name: "step2",
+				Run:  noopStep,
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					mu.Lock()
+					compensated = append(compensated, "step2-fail")
+					mu.Unlock()
+					return errors.New("step2 compensation failed")
+				},
+			},
+			{
+				Name: "step3",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step3 deliberately fails")
+				},
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					mu.Lock()
+					compensated = append(compensated, "step3")
+					mu.Unlock()
+					return nil
+				},
+			},
+		},
+	}
+
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Drive step1 → step2 → step3 (step3 fails, triggers compensation walk).
+	// After each non-terminal step completes, the journal lease remains active for
+	// LeaseDuration (60s). Advance past it so the next ClaimPending can re-claim.
+	for i := 0; i < 3; i++ {
+		// Expire any previous lease before claiming.
+		clk.Advance(testtime.D60s + testtime.D1ms)
+		claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+		if claimErr != nil {
+			t.Fatalf("ClaimPending round %d: %v", i, claimErr)
+		}
+		if len(claimed) == 0 {
+			break // instance terminal
+		}
+		if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+			t.Fatalf("driveOne round %d: %v", i, err)
+		}
+	}
+
+	evs, err := j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	last := evs[len(evs)-1]
+	// step2 compensation fails → final status must be KindSagaCompensationFailed
+	// (#1210 C6: distinct from KindSagaFailed which means forward-phase failed).
+	if last.Kind != journal.KindSagaCompensationFailed {
+		t.Errorf("last event = %s, want saga_compensation_failed (compensation error => compensation_failed)", last.Kind)
+	}
+
+	// Compensation ran for committed steps in reverse order.
+	// step1+step2 completed; step3 failed → compensation reverse-walks step2 first
+	// (records "step2-fail", returns error), then step1 (records "step1").
+	mu.Lock()
+	got := make([]string, len(compensated))
+	copy(got, compensated)
+	mu.Unlock()
+	wantOrder := []string{"step2-fail", "step1"}
+	if !reflect.DeepEqual(got, wantOrder) {
+		t.Errorf("compensation order = %v, want %v", got, wantOrder)
 	}
 }
 

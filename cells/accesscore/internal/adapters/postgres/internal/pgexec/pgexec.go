@@ -16,6 +16,20 @@
 // and store the returned PGExecutor as an unexported field on your repo /
 // store struct. All SQL goes through that field; the raw pool stays sealed
 // in this sub-package.
+//
+// # ExecDirect surface — integration-build-only
+//
+// accesscore production code has zero ExecDirect callsites: the cell never
+// needs an ADR-approved ambient-tx bypass. To prevent the test-only ExecDirect
+// function from leaking onto the production API surface, it lives in a sibling
+// file gated by the `integration` build tag (exec_direct_integration.go).
+// Default (production) builds do not compile it; integration tests (which set
+// `-tags=integration`) get the full top-level function. This mirrors the
+// per-cell ExecDirect exposure policy used by saga and devicecell (neither
+// exposes ExecDirect at all). The adapters/postgres root package is the only
+// production location holding an ExecDirect callsite — refresh_store.go
+// revokeSessionDetachedAt — and its sub-package keeps ExecDirect compiled
+// unconditionally.
 package pgexec
 
 import (
@@ -32,20 +46,16 @@ import (
 // transaction (when ctx carries one) or directly against the pool. The
 // concrete implementation is unexported.
 //
-// ExecDirect is intentionally NOT a method on this interface — it is the
-// top-level function pgexec.ExecDirect(e PGExecutor, ctx, sql, args...). This
-// closes the subset-interface bypass vector (R3-Hard form, ai-robust.md §Hard
-// 范本 #2 typed marker funnel): a caller cannot declare a local interface
-// re-shape with the same method set and call ExecDirect through it.
-//
-// accesscore production code currently has no ExecDirect callsite; the
-// top-level function exists only for integration tests
-// (role_repo_integration_test.go) that need to manipulate DB state directly
-// for fixture setup / verification. Test files are outside R3's archtest scope.
+// The interface is SEALED via the unexported sealPGExecutor marker method:
+// only *pgExecutor implements it, so a parent package cannot declare a
+// parallel PGExecutor that holds its own raw pool. See
+// adapters/postgres/internal/pgexec.PGExecutor for full rationale. Regression-
+// guarded by archtest PG-REPO-AMBIENT-TX-01 InterfaceSealed.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	sealPGExecutor()
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -63,6 +73,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
@@ -83,22 +95,4 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 		return tx.QueryRow(ctx, sql, args...)
 	}
 	return e.pool.QueryRow(ctx, sql, args...)
-}
-
-// ExecDirect bypasses the ambient transaction. Sealed top-level function — see
-// adapters/postgres/internal/pgexec.ExecDirect for full design rationale.
-func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	impl, ok := e.(*pgExecutor)
-	if !ok {
-		return pgconn.CommandTag{}, errExecDirectOnNonSealedExecutor
-	}
-	return impl.pool.Exec(ctx, sql, args...)
-}
-
-var errExecDirectOnNonSealedExecutor = &execDirectMisuseError{}
-
-type execDirectMisuseError struct{}
-
-func (*execDirectMisuseError) Error() string {
-	return "pgexec.ExecDirect: PGExecutor must originate from pgexec.New (mock impls cannot bypass ambient-tx routing via this function)"
 }

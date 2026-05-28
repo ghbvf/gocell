@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +52,19 @@ func (a *alwaysOKHeartbeater) Heartbeat(_ context.Context, instanceID, leaseID i
 }
 
 func (a *alwaysOKHeartbeater) Count() int { return int(atomic.LoadInt32(&a.callCount)) }
+
+// staleAfterFirstHeartbeater returns ok=true on the first call (typically the
+// synchronous preflight heartbeat in Execute) and ok=false on every subsequent
+// call (the async tick). This lets tests exercise the "step started → async
+// tick observes stale → cancel" path while still passing the #1181 F6 preflight.
+type staleAfterFirstHeartbeater struct {
+	callCount int32
+}
+
+func (s *staleAfterFirstHeartbeater) Heartbeat(_ context.Context, _, _ idutil.SafeID, _ time.Duration) (bool, error) {
+	n := atomic.AddInt32(&s.callCount, 1)
+	return n == 1, nil // first call ok; subsequent stale
+}
 
 // waitForOnePendingTimer waits for the FakeClock to have at least one pending
 // timer, ensuring the executor goroutine has registered its backoff Sleep
@@ -527,7 +541,10 @@ func TestExecute_LeaseLost_CancelsStepAndReturnsLeaseLost(t *testing.T) {
 	t.Parallel()
 	epoch := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
-	hb := newFakeHeartbeater(false) // stale lease from the first beat
+	// First HB call (preflight, #1181 F6) returns ok=true so the step runs;
+	// the next async tick returns ok=false so the goroutine observes stale
+	// mid-execution and cancels the step ctx.
+	hb := &staleAfterFirstHeartbeater{}
 	exec, err := NewExecutor(hb, fc, WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
 		WithLeaseDuration(testtime.D30s),
@@ -827,6 +844,53 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 	case <-done:
 	default:
 		t.Error("Compensate func not reached")
+	}
+}
+
+// TestSafeRun_PanicValueRedactedInInternalAttr asserts that a panic value
+// containing a sensitive substring is scrubbed before being stored in the
+// errcode InternalAttr. This closes the R1 security finding: without
+// redaction, a step that panics with a value like "password=hunter2" would
+// expose the raw payload via the errcode internal detail.
+func TestSafeRun_PanicValueRedactedInInternalAttr(t *testing.T) {
+	t.Parallel()
+	sensitive := "password=hunter2"
+	panicFn := func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+		panic(sensitive)
+	}
+	inst := newTestInstance()
+	_, err := safeRun(context.Background(), panicFn, inst, nil)
+	if err == nil {
+		t.Fatal("safeRun with panicking fn must return non-nil error")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "<REDACTED>") {
+		t.Errorf("safeRun error must contain <REDACTED>; got: %s", errStr)
+	}
+	if strings.Contains(errStr, "hunter2") {
+		t.Errorf("safeRun error must NOT contain raw sensitive value 'hunter2'; got: %s", errStr)
+	}
+}
+
+// TestSafeRunCompensate_PanicValueRedactedInInternalAttr mirrors
+// TestSafeRun_PanicValueRedactedInInternalAttr for the Compensate path.
+func TestSafeRunCompensate_PanicValueRedactedInInternalAttr(t *testing.T) {
+	t.Parallel()
+	sensitive := "password=hunter2"
+	panicFn := func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+		panic(sensitive)
+	}
+	inst := newTestInstance()
+	err := safeRunCompensate(context.Background(), panicFn, inst, nil)
+	if err == nil {
+		t.Fatal("safeRunCompensate with panicking fn must return non-nil error")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "<REDACTED>") {
+		t.Errorf("safeRunCompensate error must contain <REDACTED>; got: %s", errStr)
+	}
+	if strings.Contains(errStr, "hunter2") {
+		t.Errorf("safeRunCompensate error must NOT contain raw sensitive value 'hunter2'; got: %s", errStr)
 	}
 }
 

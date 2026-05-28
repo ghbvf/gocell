@@ -248,6 +248,25 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
 	})
 
+	t.Run("GetByIDForUpdate_success_returns_user", func(t *testing.T) {
+		// Success-path coverage for getForUpdateBy(lookupByID) helper after
+		// PR #1236 typed-enum extraction — guards against regressions in the
+		// shared scan / errcode wrap path.
+		u := newTestUser("forupd_id")
+		require.NoError(t, repo.Create(ctx, u))
+
+		var got *domain.User
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			var e error
+			got, e = repo.GetByIDForUpdate(txCtx, u.ID)
+			return e
+		})
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, u.ID, got.ID)
+		assert.Equal(t, u.Username, got.Username)
+	})
+
 	t.Run("GetByUsernameForUpdate_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {
 		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 			_, e := repo.GetByUsernameForUpdate(txCtx, "absent_"+uuid.NewString())
@@ -257,6 +276,24 @@ func TestPGUserRepo_Integration(t *testing.T) {
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
 		assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code)
+	})
+
+	t.Run("GetByUsernameForUpdate_success_returns_user", func(t *testing.T) {
+		// Success-path coverage for getForUpdateBy(lookupByUsername) helper —
+		// mirrors the GetByIDForUpdate_success case above.
+		u := newTestUser("forupd_username")
+		require.NoError(t, repo.Create(ctx, u))
+
+		var got *domain.User
+		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			var e error
+			got, e = repo.GetByUsernameForUpdate(txCtx, u.Username)
+			return e
+		})
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, u.ID, got.ID)
+		assert.Equal(t, u.Username, got.Username)
 	})
 
 	t.Run("BumpAuthzEpoch_missing_returns_ErrAuthUserNotFound", func(t *testing.T) {

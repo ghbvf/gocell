@@ -329,7 +329,13 @@ func (m *MemJournal) applyProjection(row *instanceRow, instanceID idutil.SafeID,
 		}
 	case KindCompensationStarted:
 		return saga.AdvanceSaga(&row.inst, saga.StatusCompensating, now)
-	case KindStepCompensated:
+	case KindStepCompensated, KindStepCompensationFailed:
+		// Both compensate outcomes are legal only while Compensating; status
+		// unchanged. KindStepCompensationFailed (#1181) is the per-step
+		// failure variant of KindStepCompensated — distinct so the log
+		// projects reverse-walk progress without overloading KindStepFailed
+		// (which the Running-phase projection accepts but Compensating
+		// rejects).
 		if st != saga.StatusCompensating {
 			return errEventPhase(instanceID, kind, st)
 		}

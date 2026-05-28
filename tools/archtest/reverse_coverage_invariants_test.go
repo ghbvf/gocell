@@ -857,37 +857,37 @@ func TestEmitDeclCover(t *testing.T) {
 				if !ok || typPkg != outboxPkg || typName != "Entry" {
 					return
 				}
-				for _, elt := range lit.Elts {
-					kv, ok := elt.(*ast.KeyValueExpr)
-					if !ok {
-						continue
-					}
+				// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 typed
+				// find-first over lit.Elts for the EventType KV entry.
+				// Original `for _, elt := range lit.Elts { elt.(*ast.KeyValueExpr) }`
+				// is the Path B violation.
+				kv, found := FindFirstChild[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) bool {
 					keyIdent, ok := kv.Key.(*ast.Ident)
-					if !ok || keyIdent.Name != "EventType" {
-						continue
-					}
-					topic, isConst := EvaluateConstString(p.TypesInfo, kv.Value)
-					if !isConst {
-						pos := p.Fset.Position(kv.Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: "non-const EventType in outbox.Entry literal; convert to const string " +
-								"(EMIT-DECL-COVER-01: non-const topics cannot be statically validated)",
-						})
-						return
-					}
-					if !allowedTopics[cellID][topic] {
-						pos := p.Fset.Position(kv.Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: "outbox.Entry{EventType: " + topic + "} topic not declared in any " +
-								"active contract for cell " + cellID + " (must be an event contract " +
-								"publisher or a triggers entry)",
-						})
-					}
+					return ok && keyIdent.Name == "EventType"
+				})
+				if !found {
 					return
+				}
+				topic, isConst := EvaluateConstString(p.TypesInfo, kv.Value)
+				if !isConst {
+					pos := p.Fset.Position(kv.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: "non-const EventType in outbox.Entry literal; convert to const string " +
+							"(EMIT-DECL-COVER-01: non-const topics cannot be statically validated)",
+					})
+					return
+				}
+				if !allowedTopics[cellID][topic] {
+					pos := p.Fset.Position(kv.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: "outbox.Entry{EventType: " + topic + "} topic not declared in any " +
+							"active contract for cell " + cellID + " (must be an event contract " +
+							"publisher or a triggers entry)",
+					})
 				}
 			})
 		}

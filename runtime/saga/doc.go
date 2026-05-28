@@ -32,9 +32,47 @@
 // PR-03; it becomes reachable via `/readyz` only after PR-09 wires it through
 // cellgen's `RegisterReadiness`.
 //
+// # Observer (PR-#1181)
+//
+// The Executor accepts an executor.Observer (set via executor.WithObserver) for
+// best-effort observability hooks. Three callbacks:
+//   - ObserveOutcome: called once per Execute/Compensate call at the terminal Result.
+//   - ObserveRetry: called between step attempts (attempt N > 1).
+//   - ObserveHeartbeatFailure: called on infra-error or stale-lease ticks.
+//
+// executor.NopObserver is the zero-cost default. executor.WithObserver(nil) is
+// silently ignored (builder-noop option); the Executor keeps NopObserver.
+// The Coordinator passes the WithObserver option through to the internal Executor
+// via NewCoordinator's options — see options.go for WithObserver.
+//
+// executor.HeartbeatFailureReason is the typed enum for ObserveHeartbeatFailure
+// reason values: HeartbeatFailureInfraError (transient backend error) and
+// HeartbeatFailureStaleLease (another coordinator owns the lease).
+//
+// executor.IsLeaseLost is the public predicate compensation walks use to
+// detect that RunWithHeartbeat returned because the lease was lost.
+//
+// During runCompensation, the heartbeat goroutine is maintained via
+// executor.RunWithHeartbeat. If the heartbeat reports a stale lease, the
+// compensation context is canceled (errLeaseLost) and the walk stops; the
+// instance will be re-claimed by another coordinator on its next tick.
+//
+// # Saga terminal states (PR-#1210)
+//
+// Five terminal states encode why a saga finished:
+//   - StatusSucceeded — all forward steps committed
+//   - StatusFailed — forward-phase failure with no rollback (never entered Compensating)
+//   - StatusCompensated — forward failure followed by clean rollback
+//   - StatusCompensationFailed — rollback itself failed; ops intervention required
+//   - StatusExpired — overall saga timeout elapsed at any non-terminal stage
+//
+// StatusFailed and StatusCompensationFailed are distinct on purpose: the
+// former says "we never tried to undo", the latter says "we tried and
+// could not". Dashboards and ops runbooks should branch on this distinction.
+// See kernel/saga.Status.String() for the wire labels (snake_case).
+//
 // # PR-03 deferred scope
 //
-//   - Retry policy (per-step backoff): deferred to PR-06.
 //   - Per-step parallelism: deferred to PR-06+ (tracked in #983).
 //   - Coordinator-level Start API for producers (typed producer facade):
 //     deferred to PR-07/PR-09.
@@ -46,12 +84,12 @@
 // # Coordinator lifecycle
 //
 // NewCoordinator validates required deps (journal/txRunner/outboxEmit/registry
-// non-nil; clock panics if nil via clock.MustHaveClock). Start launches two
-// goroutines:
+// non-nil; clock panics if nil via clock.MustHaveClock). Start launches a
+// single tickLoop goroutine:
 //   - tickLoop: calls ClaimPending each PollInterval, drives each claimed
 //     instance through one step (Run outside tx, Append + Emit + AfterCommit
-//     Kick inside tx).
-//   - heartbeatLoop: extends leases on actively-driven instances.
+//     Kick inside tx). Per-step lease maintenance (heartbeat) is owned by
+//     the Executor's per-step heartbeat goroutine (see runtime/saga/executor).
 //
 // Stop is idempotent. Ready() returns a channel closed once Start transitions
 // to running. RepoReady delegates to journal.RepoReady so the wrapping cell

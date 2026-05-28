@@ -1,7 +1,7 @@
 // invariants:
 //   - INVARIANT: PG-REPO-AMBIENT-TX-01
 //
-// # Package archtest — PG-REPO-AMBIENT-TX-01 (Hard upstream + Hard downstream)
+// # Package archtest — PG-REPO-AMBIENT-TX-01
 //
 // PG-REPO-AMBIENT-TX-01 enforces the ambient-tx routing contract for
 // PostgreSQL-backed repositories. The funnel is sealed at the Go visibility
@@ -9,122 +9,106 @@
 // /internal/pgexec/ sub-package and is unexported there; parent packages can
 // only obtain a value via pgexec.New(pool) and can only invoke methods through
 // the exported pgexec.PGExecutor interface, which does not expose the raw
-// *pgxpool.Pool field.
+// *pgxpool.Pool field. The interface itself is SEALED via an unexported marker
+// method (see InterfaceSealed below) so a parent package cannot declare a
+// parallel implementation.
 //
 //   - R1 (no raw pool in repo/store layer): every *_repo.go / *_store.go file
-//     in any package — repos must not declare a *pgxpool.Pool field. Pool
-//     access is funneled through the exported pgexec.PGExecutor interface
-//     (held as a field). Infrastructure files (pool.go, tx_manager.go) and
-//     the sub-package's own pgexec.go legitimately hold the raw pool and are
-//     out of scope by file-extension filter.
+//     must not declare a *pgxpool.Pool field. Pool access is funneled through
+//     the exported pgexec.PGExecutor interface (held as a field).
+//     Infrastructure files (pool.go, tx_manager.go) and the sub-package's own
+//     pgexec.go legitimately hold the raw pool and are out of scope by
+//     file-extension filter — a PRE-EXISTING Soft scope boundary (#1206 tracks
+//     the full pool-holder seal that would remove it).
 //
 //   - R2 (cross-package wrap funnel): every *_repo.go / *_store.go file's
 //     function parameter of type *pgxpool.Pool must satisfy BOTH (a) function
-//     name starts with "New" AND (b) function body contains a CallExpr whose
-//     Fun resolves via *types.Info.Uses to a *types.Func with Pkg().Path()
-//     ending /internal/pgexec AND Name() == "New", with the pool param as
-//     first argument. Exempt: any FuncDecl living inside a package whose
-//     import path ends /internal/pgexec (the sub-package's own New factory
-//     constructs &pgExecutor{pool: param} directly).
+//     name starts with "New" AND (b) function body calls pgexec.New(param)
+//     resolved via *types.Info to a *types.Func with Pkg().Path() ending
+//     /internal/pgexec AND Name() == "New". Unnamed pool params are counted
+//     too (an unnamed New* param cannot be referenced, hence cannot be wrapped,
+//     so it is flagged). Same PRE-EXISTING file-extension Soft scope as R1.
 //
-//   - R3 (ExecDirect typed marker funnel): every *_repo.go / *_store.go
-//     method calling `<x>.ExecDirect(...)` where <x> resolves to a named type
-//     pgexec.PGExecutor declared in a package whose import path ends
-//     /internal/pgexec MUST have a sibling pgrepoapproved.ApprovedExecDirect
-//     marker call in the SAME approval scope (FuncDecl body OR enclosing
-//     FuncLit body — nested closures are independent scopes). The marker
-//     is a typed funnel from pkg/pgrepoapproved; 5-门 form-uniqueness (callee
-//     resolves to the funnel, arg[0] is *ast.BasicLit + token.STRING +
-//     kebab-case regex + non-placeholder). Currently exactly one production
-//     callsite holds a marker:
-//     adapters/postgres/refresh_store.go::revokeSessionDetachedAt (the
-//     intentional independent-commit cascade-revoke compensation path).
+//   - R3 (ExecDirect call-bound approval, GLOBAL scope): every CallExpr
+//     resolving to pgexec.ExecDirect (callee identity via *types.Info →
+//     *types.Func with Pkg().Path() ending /internal/pgexec AND Name() ==
+//     "ExecDirect") MUST pass, as its FIRST argument, an inline CallExpr to
+//     pgrepoapproved.Approve whose own first argument is a kebab-case string
+//     literal (^[a-z][a-z0-9-]+$, non-placeholder). R3 scans ALL production
+//     files regardless of filename — ExecDirect is rare and identified by
+//     callee identity, so no file-extension scope is needed (unlike R1/R2).
 //
-// # AI-robust grading (Funnel 双向锁评级, amended 2026-05-27)
+// # AI-robust grading (Funnel 双向锁评级, amended 2026-05-28)
 //
 // **上游 — pgExecutor 形态包外不可达**: **Hard** (compile-time, Go visibility).
 // pgExecutor struct + *pgxpool.Pool field unexported in per-adapter
-// internal/pgexec/ sub-package; parent-package files cannot reference the
-// concrete type name to declare a field, accept a parameter, or perform a
-// type assertion — sealed construction (ai-robust.md §Hard 范本 #6, same form
-// as HEALTH-REDACTED-ERROR-MSG-FUNNEL-01 SlogDependencyEntry unexported fields).
+// internal/pgexec/ sub-package — sealed construction (ai-robust.md §Hard 范本 #6).
+//
+// **上游 — PGExecutor interface 包外不可实现**: **Hard** (Go visibility, sealed
+// interface) + **archtest regression backstop** (InterfaceSealed). The
+// unexported sealPGExecutor marker method means external packages cannot
+// declare a parallel PGExecutor; TestPGRepoAmbientTx_InterfaceSealed asserts
+// the marker stays present (exactly one unexported interface method) and that
+// *pgExecutor implements it, so the seal cannot be silently removed by a later
+// edit (sibling form to DETAILS-SEALED-FIELD-FROZEN-01 / ListenerAuth marker).
 //
 // **下游 R1 / R2 — pool field + wrap funnel**: archtest via *types.Info global
-// predicate, **scoped by *_repo.go / *_store.go file extension which is a
-// pre-existing Soft scope boundary** (PR #917). archtest is defense-in-depth;
-// the compile-time Hard comes from sub-pkg seal above. File-extension Soft
-// scope升级路径 backlog: PG-INFRA-FULL-SEAL-01 (track 6 pool-holder forms seal).
+// predicate, scoped by *_repo.go / *_store.go file extension — PRE-EXISTING
+// Soft scope (PR #917), upgrade tracked by #1206 (PG-INFRA-FULL-SEAL-01). The
+// compile-time Hard comes from the sub-pkg seal; archtest is defense-in-depth.
 //
-// **下游 R3 — ExecDirect callsite**: **Hard via callee identity** (F2-Hard).
-// ExecDirect is a top-level function pgexec.ExecDirect(e, ctx, sql, args...),
-// NOT a method. Subset-interface bypass (local interface re-shape with same
-// method set + structural-typing-satisfying value) is closed at the type
-// system level — there is no ExecDirect method on any interface to invoke.
-// Callsite identity via *types.Info.Uses → *types.Func with Pkg().Path()
-// ending /internal/pgexec AND Name() == "ExecDirect". Sibling marker funnel
-// pgrepoapproved.ApprovedExecDirect (typed marker, ai-robust.md §Hard 范本
-// #2 "typed marker funnel for unbounded ops") with arg-form uniqueness
-// (BasicLit + token.STRING + kebab-case regex + non-placeholder).
+// **下游 R3 — ExecDirect callsite**: **Hard via callee identity + call-bound
+// approval**. ExecDirect is a top-level function pgexec.ExecDirect(approval, e,
+// ctx, sql, args...), NOT a method — subset-interface bypass is closed at the
+// type level. The approval token is the first argument: a bypass cannot exist
+// without an inline pgrepoapproved.Approve("<kebab-literal>) (call-bound, no
+// scope co-location, no marker reuse, no nested-closure smuggling). Form-
+// uniqueness on the Approve arg (BasicLit + token.STRING + kebab regex +
+// non-placeholder) mirrors panicregister (ai-robust.md §Hard 范本 #2).
 //
 // # RED fixtures
 //
-// The authoritative expected-violation set is defined as
-// expectedFixtureViolations and asserted by
-// TestPGRepoAmbientTx_RedFixtureDetected. The fixture package at
-// tools/archtest/internal/pgrepoambienttxfixture/ exercises:
+// The authoritative expected-violation MULTISET is expectedFixtureViolations,
+// asserted by TestPGRepoAmbientTx_RedFixtureDetected with exact per-key counts.
+// The fixture package at tools/archtest/internal/pgrepoambienttxfixture/:
 //
-//   - R1 violations in fixture_repo.go (the _repo.go file extension triggers
-//     R1 scope; fixture.go is exempt by filename)
-//   - R2 violations in fixture_repo.go (file-extension filter applies to all
-//     three rules including R2)
-//   - R3(b) violations in fixture_repo.go (parent-pkg holds the fixture's own
-//     /internal/pgexec/PGExecutor interface; methods call ExecDirect through it)
+//   - fixture_repo.go: R1 + R2 (incl. unnamed-param cases) + R3 call-bound RED
+//     forms + GREEN controls.
+//   - fixture_service.go: a NON-_repo.go file holding an R3 RED case — proves
+//     R3's global scope (R1/R2 would exempt this filename; R3 must not).
+//   - internal/pgexec/pgexec.go: sealed sub-package mirroring production form.
 //
 // # Blind spots
 //
-// BS-1 Field embedding: an embedded struct that transitively carries
-// *pgxpool.Pool — TestPGRepoAmbientTx_SelfCheck walks production
-// repo/store struct types via *types.Info and asserts no anonymous/embedded
-// field transitively exposes a *pgxpool.Pool.
+// BS-1 Field embedding: an embedded struct transitively carrying *pgxpool.Pool
+// — covered by TestPGRepoAmbientTx_SelfCheck via *types.Info.
 //
-// BS-2 Interface-typed field that carries a *pgxpool.Pool at runtime — R1 is
-// a static-type check; it cannot see runtime dynamic values. Accepted per
-// ai-robust.md §3.
+// BS-2 Interface-typed field carrying *pgxpool.Pool at runtime — R1 is a
+// static-type check; accepted per ai-robust.md §3.
 //
-// BS-3 Function-value indirection of pgexec.New: `var fn = pgexec.New; fn(pool)`
-// — R2's callee resolution uses *types.Info.Uses, which only resolves direct
-// calls. Identity-based reverse check via EachInSubtree[ast.Ident] +
-// *types.Info.Uses asserts no function-value reference to pgexec.New exists in
-// any production package.
+// BS-3 Function-value indirection of pgexec.New (`var fn = pgexec.New;
+// fn(pool)`) — reverse check asserts no function-value reference to pgexec.New.
 //
-// BS-4 *pgxpool.Pool type alias: `type myPool = *pgxpool.Pool` — Go type
-// aliases resolve to the same underlying *types.Named so isPgxPoolType still
-// matches. Documented for completeness.
+// BS-4 *pgxpool.Pool type alias — resolves to the same *types.Named; documented.
 //
-// BS-9 Interface type alias re-export: `type MyExec = pgexec.PGExecutor` in
-// the parent package is permitted (same method set, same identity to
-// archtest's type resolver). The underlying *pgxpool.Pool is still
-// unreachable because the interface does not expose it; the alias adds no
-// bypass surface. Documented for completeness; no archtest cost.
+// BS-5 cells/accesscore PGBundle helper accepts *pgxpool.Pool as a param but
+// does not persist it — reverse check asserts no struct field outside internal/.
 //
-// BS-5 cells/accesscore PGBundle helper: the cells/accesscore root package
-// owns NewPGBundle which accepts *pgxpool.Pool as a constructor parameter
-// but the PGBundle struct does NOT retain it — only derived primitives
-// (userRepo / roleRepo / setupLock / txRunner). The reverse check asserts no
-// struct in cells/accesscore (outside the internal/ tree) carries
-// *pgxpool.Pool as a field — function-signature usage in NewPGBundle is
-// permitted because the body does not persist the pool.
+// BS-6 Function-value indirection of pgexec.ExecDirect (`var fn =
+// pgexec.ExecDirect; fn(approval, ...)`) — R3 resolves the direct CallExpr
+// callee, so a function-value call would escape it; reverse check asserts no
+// function-value reference to pgexec.ExecDirect in production.
 //
-// BS-6 ExecDirect method-value indirection: `var fn = s.db.ExecDirect; fn(...)`
-// — R3's detection requires a direct CallExpr. Identity-based reverse check
-// asserts no method-value use of ExecDirect on pgexec.PGExecutor exists in
-// any production file.
+// BS-7 Function-value indirection of pgrepoapproved.Approve (`f := Approve;
+// ExecDirect(f("x"), ...)`) — NOT a separate reverse check: R3's
+// execDirectHasInlineApproval requires arg[0] to be a direct CallExpr whose
+// callee resolves (via *types.Info) to pgrepoapproved.Approve. `f("x")` has
+// callee Ident `f` resolving to a *types.Var (not the *types.Func), so
+// resolveCalleeFunc returns nil and R3 flags it — caught by the main rule, no
+// reverse check needed.
 //
-// BS-8 Spurious marker: pgrepoapproved.ApprovedExecDirect markers placed in
-// FuncDecl/FuncLit bodies that do NOT actually call ExecDirect — review
-// hazard because it documents an ADR-approved bypass that never happens. The
-// reverse check scans every approval scope holding a marker and requires a
-// same-scope ExecDirect call.
+// (BS-8 spurious-marker retired: there is no standalone marker statement under
+// the call-bound form — an approval cannot exist without an ExecDirect call.)
 package archtest
 
 import (
@@ -133,15 +117,14 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const (
@@ -150,54 +133,35 @@ const (
 	pgexecPkgSuffix          = "/internal/pgexec"
 	pgexecFactoryName        = "New"
 	pgExecutorInterfaceName  = "PGExecutor"
+	pgExecutorImplName       = "pgExecutor"
 	execDirectName           = "ExecDirect"
 	approvedMarkerImportPath = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
-	approvedMarkerFuncName   = "ApprovedExecDirect"
+	approveFuncName          = "Approve"
+	approvalReasonTypeName   = "ApprovalReason"
 )
 
-// pgrepoApprovedReasonFormat is the required format for the reason argument to
-// pgrepoapproved.ApprovedExecDirect: kebab-case identifier (lowercase letters,
-// digits, hyphens; starting with lowercase letter; length ≥ 2). Aligned with
-// panicregister precedent (panic_invariants_test.go::panicRegisteredReasonFormat).
-var pgrepoApprovedReasonFormat = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
-
-// pgrepoApprovedReasonPlaceholder matches reason literals that are placeholder
-// identifiers (todo / fixme / tbd / xxx / placeholder / wip) optionally followed
-// by a hyphen and more text. Rejected because they provide no descriptive
-// information about the bypass site.
-var pgrepoApprovedReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|placeholder|wip)(-|$)`)
-
-// stopAtFuncLit halts descent at *ast.FuncLit boundaries. R3 uses this to
-// bound the "approval scope" to a single FuncDecl/FuncLit body — markers and
-// ExecDirect calls must co-locate in the SAME scope, not the entire subtree.
-func stopAtFuncLit(n ast.Node) bool {
-	_, ok := n.(*ast.FuncLit)
-	return ok
-}
-
 // isRepoOrStoreFile reports whether rel's basename ends with _repo.go or
-// _store.go. This is the file-extension scope filter for R1 / R3, separating
-// the repo layer (where pool access must be funneled) from the infrastructure
-// layer (pool.go / tx_manager.go / internal/pgexec/pgexec.go — these
-// legitimately hold the raw pool and are out of scope).
+// _store.go. This is the file-extension scope filter for R1 / R2 (PRE-EXISTING
+// Soft, #1206), separating the repo layer (where pool access must be funneled)
+// from the infrastructure layer (pool.go / tx_manager.go / internal/pgexec/
+// pgexec.go — these legitimately hold the raw pool and are out of scope).
 func isRepoOrStoreFile(rel string) bool {
 	base := filepath.Base(rel)
 	return strings.HasSuffix(base, "_repo.go") || strings.HasSuffix(base, "_store.go")
 }
 
 // isPgexecSubpackage reports whether pkgPath ends with /internal/pgexec. The
-// sub-package is the sealed holder location: its own New factory constructs
-// &pgExecutor{pool: param} directly and is exempt from R2's "must call
-// pgexec.New" requirement.
+// sub-package owns the New factory + raw pool; it is exempt from R1/R2.
 func isPgexecSubpackage(pkgPath string) bool {
 	return strings.HasSuffix(pkgPath, pgexecPkgSuffix)
 }
 
 // TestPGRepoAmbientTx guards PG-REPO-AMBIENT-TX-01 against the production
-// module. Discovery is removed — rules are global predicates over all
-// production packages (filtered by file extension where applicable). RED
-// fixtures are exercised separately by TestPGRepoAmbientTx_RedFixtureDetected.
-// Blind-spot self-checks are in TestPGRepoAmbientTx_SelfCheck.
+// module. R1/R2 are file-extension-scoped global predicates; R3 is a global
+// predicate over all production files. RED fixtures are exercised by
+// TestPGRepoAmbientTx_RedFixtureDetected; the interface seal regression guard
+// is TestPGRepoAmbientTx_InterfaceSealed; blind-spot self-checks are in
+// TestPGRepoAmbientTx_SelfCheck.
 func TestPGRepoAmbientTx(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -222,16 +186,12 @@ func TestPGRepoAmbientTx(t *testing.T) {
 
 // pgRepoAmbientTxRule is the Rule function for PG-REPO-AMBIENT-TX-01.
 //
-// File scope: all three rules apply ONLY to *_repo.go and *_store.go files.
-// Infrastructure files (pool.go, tx_manager.go), the sub-package's own
-// internal/pgexec/pgexec.go, composition-root helpers (cmd/corebundle/*.go),
-// and pass-through composition helpers (bundle.go, options.go) legitimately
-// pass *pgxpool.Pool around without wrapping — pool wrapping is the
-// responsibility of the leaf constructor (New<Repo>Repo / NewSessionStore /
-// etc.) which lives in *_repo.go / *_store.go. The file-extension filter is
-// the structurally correct layer boundary: it carves the repo layer (where
-// pool MUST be wrapped) from the infra/composition layer (which legitimately
-// hands the raw pool to repo constructors).
+// R3 (ExecDirect call-bound approval) and R4 (orphan Approve reverse ban) run
+// GLOBALLY over every non-generated file — ExecDirect and Approve are both
+// rare and identified by callee identity, so no file scope is needed. R1/R2
+// (pool field / wrap funnel) remain *_repo.go / *_store.go scoped
+// (PRE-EXISTING Soft, #1206) and exempt the /internal/pgexec sub-package,
+// which owns the New factory and the raw pool.
 func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	if p.TypesInfo == nil || p.Fset == nil {
 		return nil
@@ -240,20 +200,23 @@ func pgRepoAmbientTxRule(p *Pass) []Diagnostic {
 	if p.Pkg != nil {
 		pkgPath = p.Pkg.Path()
 	}
-	// The sub-package itself owns the New factory and constructs the impl
-	// directly. Exempt all FuncDecls in /internal/pgexec/ from R2.
-	if isPgexecSubpackage(pkgPath) {
-		return nil
-	}
+	subpkg := isPgexecSubpackage(pkgPath)
+
 	var diags []Diagnostic
 	for _, file := range p.Files {
+		if p.IsGenerated(file) {
+			continue
+		}
 		rel := p.Rel(file)
-		if !isRepoOrStoreFile(rel) {
+		// R3 (forward) + R4 (reverse) are global: every file, any filename.
+		diags = append(diags, scanR3ExecDirect(p.Fset, file, rel, p.TypesInfo)...)
+		diags = append(diags, scanR4OrphanApprove(p.Fset, file, rel, p.TypesInfo)...)
+		// R1/R2 are file-extension scoped and exempt the sub-package.
+		if subpkg || !isRepoOrStoreFile(rel) {
 			continue
 		}
 		diags = append(diags, scanR1PoolFields(p.Fset, file, rel, p.TypesInfo)...)
 		diags = append(diags, scanR2PoolParams(p.Fset, file, rel, p.TypesInfo)...)
-		diags = append(diags, scanR3ExecDirect(p.Fset, file, rel, p.TypesInfo)...)
 	}
 	return diags
 }
@@ -299,8 +262,7 @@ func scanR1PoolFields(fset *token.FileSet, file *ast.File, rel string, info *typ
 // scanR2PoolParams implements R2: in *_repo.go / *_store.go files, any
 // function parameter of type *pgxpool.Pool must be in a New*-prefixed function
 // whose body calls pgexec.New(param) where pgexec is the adapter's
-// /internal/pgexec/ sub-package. Pass-through helpers and composition-root
-// wiring live in non-repo/store files and are out of scope.
+// /internal/pgexec/ sub-package.
 func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var diags []Diagnostic
 	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
@@ -327,7 +289,9 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 			}
 			return
 		}
-		// R2b: New*-prefixed function must call pgexec.New(poolParam) in its body.
+		// R2b: New*-prefixed function must call pgexec.New(poolParam) in body.
+		// An unnamed pool param ("_") cannot be referenced, hence cannot be
+		// wrapped — bodyCallsPgexecNewWith never matches it, so it is flagged.
 		if fn.Body == nil {
 			return
 		}
@@ -340,7 +304,8 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 					Message: fmt.Sprintf(
 						"R2: New* constructor %s has *pgxpool.Pool param %q but does not call "+
 							"pgexec.New(%s); pool must be wrapped via the adapter's "+
-							"internal/pgexec/.New factory",
+							"internal/pgexec/.New factory (an unnamed pool param cannot be "+
+							"wrapped — give it a name and call pgexec.New)",
 						fn.Name.Name, paramName, paramName,
 					),
 				})
@@ -350,138 +315,45 @@ func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *typ
 	return diags
 }
 
-// scanR3ExecDirect implements R3: in *_repo.go / *_store.go files, any
-// CallExpr `<x>.ExecDirect(...)` where <x>'s static type resolves to the named
-// interface pgexec.PGExecutor (declared in a package whose import path ends
-// /internal/pgexec) must be co-located in the SAME approval scope with a
-// sibling pgrepoapproved.ApprovedExecDirect(literal) marker call.
-//
-// Approval scope handling: each FuncDecl body is visited once, then every
-// nested *ast.FuncLit body as its own independent scope. inspectStopAtFuncLit
-// bounds each per-scope scan so a marker in scope X cannot approve ExecDirect
-// calls in scope Y.
+// scanR3ExecDirect implements R3 (GLOBAL scope): every CallExpr resolving to
+// pgexec.ExecDirect must pass, as its first argument, an inline CallExpr to
+// pgrepoapproved.Approve("<kebab-literal>"). The approval is bound to the call
+// expression — there is no standalone marker, no approval scope, no nested-
+// closure handling.
 func scanR3ExecDirect(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var diags []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-		if fn.Body == nil {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPgexecExecDirectCall(call, info) {
 			return
 		}
-		diags = append(diags, scanR3ExecDirectInScope(fset, fn.Body, rel, info)...)
-		EachInSubtree[ast.FuncLit](fn.Body, func(fl *ast.FuncLit) {
-			if fl.Body == nil {
-				return
-			}
-			diags = append(diags, scanR3ExecDirectInScope(fset, fl.Body, rel, info)...)
-		})
-	})
-	return diags
-}
-
-// scanR3ExecDirectInScope flags pgexec.ExecDirect callsites in body when the
-// scope does not have at least one marker per callsite (1:1 per-callsite
-// pairing, Hard form). Marker count M and ExecDirect call count E in same
-// approval scope (FuncDecl/FuncLit body); when E > M, all E calls are flagged
-// (none of them has a dedicated marker — sharing is forbidden).
-//
-// Per-callsite (M >= E required) is strictly Hard:
-//   - Scope-level "1 marker covers N calls" (PR #917 form) was a Soft
-//     generalization — one declaration approves arbitrarily many sites,
-//     erasing the per-callsite audit trail.
-//   - Per-callsite means every ExecDirect bypass has its own documented
-//     reason; adding a new callsite requires a new marker, never inheriting
-//     someone else's approval.
-//
-// ExecDirect is a top-level function (not a method) — this closes the
-// subset-interface bypass vector (F2-Hard). A local interface re-shape with
-// same method set has no way to invoke pgexec.ExecDirect: there is no
-// ExecDirect method on any interface; the only call form is the package-
-// qualified function call, identified by callee identity.
-func scanR3ExecDirectInScope(fset *token.FileSet, body *ast.BlockStmt, rel string, info *types.Info) []Diagnostic {
-	execCalls := collectPgexecExecDirectCalls(body, info)
-	if len(execCalls) == 0 {
-		return nil
-	}
-	markerCount := countApprovedExecDirectMarkers(body, info)
-	if markerCount >= len(execCalls) {
-		return nil
-	}
-	// E > M: flag ALL ExecDirect calls. None has a dedicated marker — sharing
-	// is forbidden under per-callsite Hard form. The caller must add
-	// (E - M) more markers (one per remaining call) to satisfy the rule.
-	var diags []Diagnostic
-	for _, call := range execCalls {
-		line := fset.Position(call.Pos()).Line
+		if execDirectHasInlineApproval(call, info) {
+			return
+		}
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
-			Line: line,
-			Message: fmt.Sprintf(
-				"R3: pgexec.ExecDirect callsite requires its own sibling "+
-					"pgrepoapproved.ApprovedExecDirect(<kebab-case-literal>) marker "+
-					"(per-callsite 1:1 pairing, not scope-shared). This scope has "+
-					"%d marker(s) but %d pgexec.ExecDirect call(s); add %d more "+
-					"marker(s) in the same FuncDecl/FuncLit body (one reason per "+
-					"callsite). Production reference: "+
-					"adapters/postgres/refresh_store.go::revokeSessionDetachedAt "+
-					"(1 marker + 1 ExecDirect). ADR "+
-					"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
-				markerCount, len(execCalls), len(execCalls)-markerCount,
-			),
+			Line: fset.Position(call.Pos()).Line,
+			Message: "R3: pgexec.ExecDirect callsite must pass an inline " +
+				"pgrepoapproved.Approve(<catalog-const>) as its FIRST argument " +
+				"(call-bound authorization). The Approve argument must resolve via " +
+				"*types.Info.Uses to a *types.Const declared in pkg/pgrepoapproved " +
+				"with type pgrepoapproved.ApprovalReason — i.e. one of the catalog " +
+				"constants minted there (RevokeSessionCascade, IntegrationTest*). " +
+				"Rejected forms: missing approval; a reused/pre-constructed Approval " +
+				"variable; Approve called with a type conversion (ApprovalReason(\"…\")), " +
+				"a locally-declared ApprovalReason const outside pkg/pgrepoapproved, a " +
+				"string literal, BinaryExpr concatenation, fmt.Sprintf, or any other " +
+				"runtime expression. " +
+				"Production reference: " +
+				"adapters/postgres/refresh_store.go::revokeSessionDetachedAt. ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
 		})
-	}
+	})
 	return diags
-}
-
-// collectPgexecExecDirectCalls returns all CallExpr in body whose callee
-// resolves to pgexec.ExecDirect. Scope-bounded via stopAtFuncLit: nested
-// FuncLit bodies are independent approval scopes.
-func collectPgexecExecDirectCalls(body *ast.BlockStmt, info *types.Info) []*ast.CallExpr {
-	var calls []*ast.CallExpr
-	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		if isPgexecExecDirectCall(call, info) {
-			calls = append(calls, call)
-		}
-	})
-	return calls
-}
-
-// countApprovedExecDirectMarkers returns the number of well-formed
-// pgrepoapproved.ApprovedExecDirect marker callsites in body (same form-
-// uniqueness chain as bodyHasApprovedExecDirectMarker). Scope-bounded via
-// stopAtFuncLit. Multiple markers in same scope each count separately —
-// required for per-callsite pairing under R3-Hard.
-func countApprovedExecDirectMarkers(body *ast.BlockStmt, info *types.Info) int {
-	n := 0
-	EachInSubtreeStopAt[ast.CallExpr](body, stopAtFuncLit, func(call *ast.CallExpr) {
-		fn := resolveCalleeFunc(call.Fun, info)
-		if fn == nil || fn.Name() != approvedMarkerFuncName {
-			return
-		}
-		if fn.Pkg() == nil || fn.Pkg().Path() != approvedMarkerImportPath {
-			return
-		}
-		if len(call.Args) == 0 {
-			return
-		}
-		lit, ok := call.Args[0].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return
-		}
-		val, err := strconv.Unquote(lit.Value)
-		if err != nil || !pgrepoApprovedReasonFormat.MatchString(val) {
-			return
-		}
-		if pgrepoApprovedReasonPlaceholder.MatchString(val) {
-			return
-		}
-		n++
-	})
-	return n
 }
 
 // isPgexecExecDirectCall reports whether call's callee resolves via
 // *types.Info.Uses to a *types.Func with Pkg().Path() ending /internal/pgexec
-// AND Name() == "ExecDirect". This is the F2-Hard callsite-identity check
-// that replaces the former receiver-type-only check.
+// AND Name() == "ExecDirect".
 func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
 	fn := resolveCalleeFunc(call.Fun, info)
 	if fn == nil || fn.Name() != execDirectName {
@@ -493,51 +365,173 @@ func isPgexecExecDirectCall(call *ast.CallExpr, info *types.Info) bool {
 	return strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix)
 }
 
-// (bodyHasApprovedExecDirectMarker removed in round-3 — replaced by
-// countApprovedExecDirectMarkers, which returns the precise count for
-// per-callsite 1:1 pairing. Form-uniqueness chain (callee identity +
-// BasicLit + kebab regex + non-placeholder) is preserved in the counting
-// helper.)
+// isPgrepoapprovedApproveCall reports whether call's callee resolves to
+// pgrepoapproved.Approve (the typed-marker minter). Used by R4 reverse scan.
+func isPgrepoapprovedApproveCall(call *ast.CallExpr, info *types.Info) bool {
+	fn := resolveCalleeFunc(call.Fun, info)
+	if fn == nil || fn.Name() != approveFuncName {
+		return false
+	}
+	if fn.Pkg() == nil {
+		return false
+	}
+	return fn.Pkg().Path() == approvedMarkerImportPath
+}
 
-// isPGExecutorInterfaceType is retained for archtest helpers that need to
-// identify the sealed pgexec.PGExecutor interface type (e.g. future BS
-// reverse checks). Not used by R3 post-F2-Hard — R3 uses callee identity
-// (isPgexecExecDirectCall), not receiver type.
-func isPGExecutorInterfaceType(expr ast.Expr, info *types.Info) bool {
-	if info == nil {
+// scanR4OrphanApprove implements R4 (reverse direction of R3): every
+// pgrepoapproved.Approve callsite MUST appear as the first argument of a
+// pgexec.ExecDirect call. Orphan calls — `_ = Approve(reason)`, assignment to
+// a variable, return value, argument to a non-ExecDirect function, etc. —
+// leak the "approval without a call" form that ADR §轴B 2026-05-28 promises
+// is unrepresentable. The check is the symmetric backstop for R3: R3 ensures
+// every ExecDirect goes through Approve; R4 ensures every Approve goes
+// through ExecDirect.
+//
+// Implementation: two passes over the file using the same EachInSubtree walker
+// SCANNER-FRAMEWORK-USAGE-01 mandates. The first pass collects every Approve
+// CallExpr that is syntactically bound to an ExecDirect's Args[0]; the second
+// pass walks all Approve CallExprs and flags any not in that bound set. Both
+// passes are CallExpr-typed visits so no parent-tracking walker is needed —
+// the bound-set captures the only parent-direction information R4 cares
+// about (immediate-parent = ExecDirect AND occupies the Args[0] slot).
+func scanR4OrphanApprove(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
+	bound := make(map[*ast.CallExpr]struct{})
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPgexecExecDirectCall(call, info) {
+			return
+		}
+		if len(call.Args) == 0 {
+			return
+		}
+		approveCall, ok := call.Args[0].(*ast.CallExpr)
+		if !ok {
+			return
+		}
+		if !isPgrepoapprovedApproveCall(approveCall, info) {
+			return
+		}
+		bound[approveCall] = struct{}{}
+	})
+
+	var diags []Diagnostic
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if !isPgrepoapprovedApproveCall(call, info) {
+			return
+		}
+		if _, ok := bound[call]; ok {
+			return
+		}
+		diags = append(diags, Diagnostic{
+			Rel:  rel,
+			Line: fset.Position(call.Pos()).Line,
+			Message: "R4: pgrepoapproved.Approve callsite must be the first " +
+				"argument of a pgexec.ExecDirect call (reverse-direction Hard: " +
+				"every Approve goes through ExecDirect). Orphan Approve forms — " +
+				"`_ = Approve(reason)`, assignment to a variable not passed inline " +
+				"to ExecDirect, return value, argument to any non-ExecDirect " +
+				"function — leak the \"approval without a call\" form that the " +
+				"funnel forbids. If you need a fresh approval token for a new " +
+				"ExecDirect callsite, inline it: " +
+				"pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.<Reason>), " +
+				"db, ctx, sql, args...). ADR " +
+				"docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md",
+		})
+	})
+	return diags
+}
+
+// execDirectHasInlineApproval reports whether an ExecDirect call's first
+// argument is an inline CallExpr to pgrepoapproved.Approve whose own first
+// argument is an identifier or selector resolving to a *types.Const declared
+// in the pgrepoapproved package with type pgrepoapproved.ApprovalReason.
+//
+// The 5-gate form-uniqueness chain (Hard 范本 #2 + #3 combined):
+//
+//  1. arg[0] of ExecDirect is *ast.CallExpr — rejects reused / pre-constructed
+//     Approval variables (those are *ast.Ident).
+//  2. that CallExpr's callee resolves (via *types.Info.Uses) to a *types.Func
+//     named "Approve" in package pgrepoapproved — rejects look-alike functions
+//     and Approve-as-function-value forms (callee resolves to *types.Var).
+//  3. that CallExpr has at least one argument.
+//  4. that argument resolves (via *types.Info.Uses) to a *types.Const —
+//     rejects type conversions like ApprovalReason("untyped-orphan"), runtime
+//     expressions, function calls, BasicLit string literals, BinaryExpr
+//     concatenations, fmt.Sprintf, and empty arguments.
+//  5. the *types.Const is declared in package pgrepoapproved AND has type
+//     ApprovalReason — rejects locally-declared ApprovalReason consts (a
+//     fixture / external package defining its own typed const) and consts of
+//     unrelated types that happen to be named identically.
+func execDirectHasInlineApproval(call *ast.CallExpr, info *types.Info) bool {
+	if info == nil || len(call.Args) == 0 {
 		return false
 	}
-	tv, ok := info.Types[expr]
-	if !ok || tv.Type == nil {
+	approveCall, ok := call.Args[0].(*ast.CallExpr)
+	if !ok {
+		return false // reused / pre-constructed Approval variable, not inline
+	}
+	fn := resolveCalleeFunc(approveCall.Fun, info)
+	if fn == nil || fn.Name() != approveFuncName {
 		return false
 	}
-	t := tv.Type
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+	if fn.Pkg() == nil || fn.Pkg().Path() != approvedMarkerImportPath {
+		return false
 	}
-	named, ok := t.(*types.Named)
+	if len(approveCall.Args) == 0 {
+		return false
+	}
+	return isApprovedReasonConst(approveCall.Args[0], info)
+}
+
+// isApprovedReasonConst reports whether expr resolves (via *types.Info.Uses)
+// to a *types.Const declared in package pgrepoapproved with type
+// pgrepoapproved.ApprovalReason. Accepts *ast.Ident (unqualified in-package
+// reference) and *ast.SelectorExpr (qualified `pgrepoapproved.Name`); rejects
+// every other AST form (CallExpr for type conversion, BasicLit, BinaryExpr,
+// etc.).
+func isApprovedReasonConst(expr ast.Expr, info *types.Info) bool {
+	var ident *ast.Ident
+	switch e := expr.(type) {
+	case *ast.Ident:
+		ident = e
+	case *ast.SelectorExpr:
+		ident = e.Sel
+	default:
+		return false
+	}
+	obj, ok := info.Uses[ident]
 	if !ok {
 		return false
 	}
-	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
+	c, ok := obj.(*types.Const)
+	if !ok {
 		return false
 	}
-	if obj.Name() != pgExecutorInterfaceName {
+	if c.Pkg() == nil || c.Pkg().Path() != approvedMarkerImportPath {
 		return false
 	}
-	return strings.HasSuffix(obj.Pkg().Path(), pgexecPkgSuffix)
+	named, ok := c.Type().(*types.Named)
+	if !ok {
+		return false
+	}
+	tn := named.Obj()
+	if tn == nil || tn.Pkg() == nil {
+		return false
+	}
+	return tn.Pkg().Path() == approvedMarkerImportPath && tn.Name() == approvalReasonTypeName
 }
 
-// Compile-time anchor: prevent dead-code elimination of isPGExecutorInterfaceType.
-var _ = isPGExecutorInterfaceType
-
 // collectPGPoolParams returns the names of fn's parameters whose type resolves
-// to *pgxpool.Pool.
+// to *pgxpool.Pool. Unnamed parameters are reported as "_" so R2 does not
+// silently drop them (an unnamed pool param in a New* constructor cannot be
+// referenced, hence cannot be wrapped via pgexec.New, and must be flagged).
 func collectPGPoolParams(fn *ast.FuncDecl, info *types.Info) []string {
 	var names []string
 	for _, field := range fn.Type.Params.List {
 		if !isPgxPoolType(field.Type, info) {
+			continue
+		}
+		if len(field.Names) == 0 {
+			names = append(names, "_")
 			continue
 		}
 		for _, n := range field.Names {
@@ -619,46 +613,58 @@ func isPgxPoolType(expr ast.Expr, info *types.Info) bool {
 	return obj.Pkg().Path() == pgxpoolImportPath && obj.Name() == pgxpoolTypeName
 }
 
-// fixtureViolation is a (ruleID_prefix, line) pair identifying one expected
-// RED fixture diagnostic.
+// fixtureViolation is a (base, ruleID_prefix, line) triple identifying one
+// expected RED fixture diagnostic. base is the file basename (filepath.Base of
+// the diagnostic's module-relative path): including it distinguishes
+// same-line diagnostics across fixture files (F2 — a {rulePrefix, line}-only
+// key collapses cross-file collisions and is blind to which file a regression
+// landed in).
 type fixtureViolation struct {
+	base       string
 	rulePrefix string
 	line       int
 }
 
-// expectedFixtureViolations is the authoritative expected set for
+// expectedFixtureViolations is the authoritative expected MULTISET for
 // TestPGRepoAmbientTx_RedFixtureDetected. Lines are pinned to the fixture
 // sources. When the fixture changes intentionally, update both the fixture
-// and this set together.
+// and this set together. The oracle compares exact per-key counts (F2), so a
+// duplicate diagnostic (same base+prefix+line emitted twice) is a mismatch
+// unless listed twice here.
 //
 // File layout:
 //   - fixture.go: package godoc only (no rules apply — not _repo.go)
-//   - fixture_repo.go: ALL RED cases (R1 + R2 + R3) + GREEN repo controls
+//   - fixture_repo.go: R1 + R2 RED (file-extension scoped) + R3 RED + GREEN controls
+//   - fixture_service.go: R3 RED in a NON-_repo.go file (proves R3 global scope)
 //   - internal/pgexec/pgexec.go: sealed sub-package mirroring production form
 var expectedFixtureViolations = []fixtureViolation{
 	// R1 RED (fixture_repo.go) — pointer to field type pos.
-	{"R1:", 20}, // badR1Repo.pool
+	{"fixture_repo.go", "R1:", 21}, // badR1Repo.pool
 	// R2 RED (fixture_repo.go) — pointer to FuncDecl name pos.
-	{"R2:", 31}, // badR2NonNew
-	{"R2:", 37}, // NewBadR2NoWrap
-	// R3 RED (fixture_repo.go) — pointer to call pos. After F2-Hard:
-	// pgexec.ExecDirect callsite identity (not method receiver type).
-	{"R3:", 52}, // badR3ExecDirect
-	{"R3:", 59}, // badR3MarkerInNestedClosure (outer call, marker in nested closure)
-	{"R3:", 70}, // badR3MarkerOuterExecInNestedClosure (inner call, marker in outer)
-	{"R3:", 79}, // badR3ApprovedConstIdent (marker reason is *ast.Ident)
-	{"R3:", 85}, // badR3ApprovedConcat (marker reason is BinaryExpr)
-	{"R3:", 91}, // badR3ApprovedEmpty (marker reason "" fails kebab regex)
-	{"R3:", 97}, // badR3ApprovedPlaceholder (marker reason "todo")
-	// Round-3 C4 per-callsite Hard: badR3SharedMarker has M=1 + E=2 — both
-	// ExecDirect calls flagged (no callsite has its own dedicated marker).
-	{"R3:", 113}, // badR3SharedMarker first ExecDirect
-	{"R3:", 114}, // badR3SharedMarker second ExecDirect
+	{"fixture_repo.go", "R2:", 31}, // badR2NonNew (named param)
+	{"fixture_repo.go", "R2:", 37}, // NewBadR2NoWrap (named param, no pgexec.New)
+	{"fixture_repo.go", "R2:", 44}, // badR2Unnamed (F1: unnamed non-New param)
+	{"fixture_repo.go", "R2:", 49}, // NewBadR2Unnamed (F1: unnamed New param, cannot wrap)
+	// R3 RED (fixture_repo.go) — pointer to pgexec.ExecDirect call pos.
+	// Call-bound approval: arg[0] must be inline Approve(<catalog const>).
+	{"fixture_repo.go", "R3:", 69}, // badR3LocalConst (locally-declared ApprovalReason const)
+	{"fixture_repo.go", "R3:", 76}, // badR3TypeConversion (ApprovalReason("...") type conversion)
+	{"fixture_repo.go", "R3:", 84}, // badR3ReusedApproval (arg[0] is *ast.Ident, not inline CallExpr)
+	// R3 RED (fixture_service.go) — NON-_repo.go file; proves R3 global scope.
+	{"fixture_service.go", "R3:", 21}, // serviceLayerBadExecDirect (reused approval, non-repo file)
+	// R4 RED (fixture_repo.go) — pointer to pgrepoapproved.Approve call pos.
+	// Orphan Approve: every Approve callsite must be Args[0] of ExecDirect.
+	{"fixture_repo.go", "R4:", 83},  // badR3ReusedApproval's Approve is not inline at ExecDirect
+	{"fixture_repo.go", "R4:", 95},  // badR4OrphanDiscarded (Approve assigned to blank)
+	{"fixture_repo.go", "R4:", 102}, // badR4OrphanAssigned (Approve assigned to local var)
+	// R4 RED (fixture_service.go) — non-_repo.go file proving R4 global scope.
+	{"fixture_service.go", "R4:", 20}, // serviceLayerBadExecDirect's Approve is not inline
 }
 
 // TestPGRepoAmbientTx_RedFixtureDetected asserts the rule catches every RED
 // violation in tools/archtest/internal/pgrepoambienttxfixture. The assertion
-// is an exact-set match on (ruleID_prefix, line) pairs.
+// is an exact MULTISET match on (base, ruleID_prefix, line) triples — counts
+// must match exactly (F2), so duplicate or cross-file collisions are caught.
 func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	t.Parallel()
 
@@ -674,10 +680,11 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 	}
 
 	type diagKey struct {
+		base       string
 		rulePrefix string
 		line       int
 	}
-	actualSet := make(map[diagKey]struct{}, len(diags))
+	actualCounts := make(map[diagKey]int, len(diags))
 	for _, d := range diags {
 		var prefix string
 		switch {
@@ -687,40 +694,187 @@ func TestPGRepoAmbientTx_RedFixtureDetected(t *testing.T) {
 			prefix = "R2:"
 		case strings.HasPrefix(d.Message, "R3:"):
 			prefix = "R3:"
+		case strings.HasPrefix(d.Message, "R4:"):
+			prefix = "R4:"
 		default:
 			t.Errorf("unexpected diagnostic with unrecognized rulePrefix at %s:%d: %s",
 				d.Rel, d.Line, d.Message)
 			continue
 		}
-		actualSet[diagKey{prefix, d.Line}] = struct{}{}
+		actualCounts[diagKey{filepath.Base(d.Rel), prefix, d.Line}]++
 	}
 
-	expectedSet := make(map[diagKey]struct{}, len(expectedFixtureViolations))
+	expectedCounts := make(map[diagKey]int, len(expectedFixtureViolations))
 	for _, v := range expectedFixtureViolations {
-		expectedSet[diagKey(v)] = struct{}{}
+		expectedCounts[diagKey(v)]++
 	}
 
-	for k := range expectedSet {
-		if _, ok := actualSet[k]; !ok {
-			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: expected %s violation at line %d "+
-				"but it was NOT produced — rule may have regressed or fixture line shifted; "+
+	for k, want := range expectedCounts {
+		if got := actualCounts[k]; got != want {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: %s %s:%d expected %d diagnostic(s) "+
+				"but got %d — rule may have regressed or fixture line shifted; "+
 				"update expectedFixtureViolations if fixture changed intentionally",
-				k.rulePrefix, k.line)
+				k.rulePrefix, k.base, k.line, want, got)
 		}
 	}
-	for k := range actualSet {
-		if _, ok := expectedSet[k]; !ok {
-			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: unexpected %s violation at line %d "+
-				"— rule produced an extra diagnostic not in expectedFixtureViolations; "+
-				"update expectedFixtureViolations if fixture changed intentionally",
-				k.rulePrefix, k.line)
+	for k, got := range actualCounts {
+		if want := expectedCounts[k]; want != got {
+			t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: %s %s:%d produced %d diagnostic(s) "+
+				"not matched by expectedFixtureViolations (want %d) — GREEN cases must "+
+				"produce 0; update expectedFixtureViolations if fixture changed intentionally",
+				k.rulePrefix, k.base, k.line, got, want)
 		}
 	}
-	if len(actualSet) != len(expectedSet) {
-		t.Errorf("PG-REPO-AMBIENT-TX-01 RED fixture: got %d unique (rulePrefix, line) entries, "+
-			"want %d; GREEN cases must produce 0; "+
-			"see expectedFixtureViolations for the authoritative list",
-			len(actualSet), len(expectedSet))
+}
+
+// TestPGRepoAmbientTx_InterfaceSealed is the regression backstop for the
+// PGExecutor interface seal (upstream Hard). The seal property — external
+// packages cannot implement PGExecutor — comes from an unexported marker
+// method (sealPGExecutor). Go visibility makes that Hard against external
+// implementers, but cannot prevent a later edit from deleting the marker
+// method (the interface would still compile, all impls still work). This test
+// asserts, for every production pgexec sub-package, that PGExecutor has
+// EXACTLY ONE unexported method (the marker — structural, not name-anchored)
+// and that *pgExecutor implements PGExecutor. Sibling form to
+// DETAILS-SEALED-FIELD-FROZEN-01 (publicValue marker) / ListenerAuth marker.
+func TestPGRepoAmbientTx_InterfaceSealed(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	// Dynamic discovery: scan the whole production module and check EVERY
+	// package whose import path ends /internal/pgexec. A new PG adapter
+	// sub-package is covered automatically — no hand-maintained allowlist (which
+	// would be the same Soft scope this funnel exists to remove). The sanity
+	// anchor below guards the only failure mode dynamic discovery introduces:
+	// silently finding zero pgexec packages (e.g. prodscan regression) → the
+	// seal guard would vacuously pass.
+	root := findModuleRoot(t)
+	patterns := prodscan.Patterns(root)
+	const anchorPkg = "github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
+
+	var checked []string
+	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || !isPgexecSubpackage(p.Pkg.Path()) {
+			return nil
+		}
+		checked = append(checked, p.Pkg.Path())
+		assertSealedInterface(t, p.Pkg, pgExecutorInterfaceName, pgExecutorImplName)
+		return nil
+	})
+
+	assert.Contains(t, checked, anchorPkg,
+		"InterfaceSealed: prodscan discovery did not find the canonical "+
+			anchorPkg+" — discovery may have regressed; without it the seal "+
+			"regression guard would vacuously pass")
+}
+
+// TestPGRepoApprovedSealed is the symmetric regression backstop for the
+// pgrepoapproved.Approval token interface. R3 is the primary gate (arg[0] must
+// be an inline Approve(literal) CallExpr), but the sealed Approval interface is
+// defense-in-depth: if its unexported marker method were deleted, Approval
+// would collapse to interface{} and a forged value could be passed as the
+// approval token. This asserts the seal stays intact.
+func TestPGRepoApprovedSealed(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	const approvedPkg = "github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	found := false
+	_ = RunTyped(t, TypedOpts{}, []string{approvedPkg}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != approvedPkg {
+			return nil
+		}
+		found = true
+		assertSealedInterface(t, p.Pkg, "Approval", "approval")
+		return nil
+	})
+	assert.True(t, found, "TestPGRepoApprovedSealed: pkg/pgrepoapproved was not loaded/checked")
+}
+
+// assertSealedInterface asserts pkg's ifaceName interface has exactly one
+// unexported marker method (structural, not name-anchored — the seal makes the
+// interface unimplementable outside the package), that *implName implements
+// it, AND that implName is the ONLY in-package named type implementing it.
+// Removing the marker (interface still compiles), adding a second unexported
+// method, or declaring a sibling impl in the same package all fail here. The
+// uniqueness check closes the in-package drift hole that pure Go visibility
+// cannot prevent: external impls are blocked by the unexported marker, but a
+// package author could declare a parallel struct alongside *pgExecutor.
+func assertSealedInterface(t *testing.T, pkg *types.Package, ifaceName, implName string) {
+	t.Helper()
+	path := pkg.Path()
+	ifaceObj := pkg.Scope().Lookup(ifaceName)
+	if ifaceObj == nil {
+		t.Errorf("%s: no %s type declared", path, ifaceName)
+		return
+	}
+	named, ok := ifaceObj.Type().(*types.Named)
+	if !ok {
+		t.Errorf("%s: %s is not a named type", path, ifaceName)
+		return
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok {
+		t.Errorf("%s: %s underlying is not an interface", path, ifaceName)
+		return
+	}
+	unexported := 0
+	for i := range iface.NumMethods() {
+		if !iface.Method(i).Exported() {
+			unexported++
+		}
+	}
+	if unexported != 1 {
+		t.Errorf("%s: %s must have exactly one unexported marker method (seal); "+
+			"got %d — the seal makes the interface unimplementable outside the "+
+			"package; removing or duplicating it breaks the upstream Hard guarantee",
+			path, ifaceName, unexported)
+	}
+
+	implObj := pkg.Scope().Lookup(implName)
+	if implObj == nil {
+		t.Errorf("%s: no %s impl type declared", path, implName)
+		return
+	}
+	// typesutil.ImplementsInterface tries value-or-pointer (TYPESUTIL-
+	// IMPLEMENTS-FUNNEL-01: raw go/types.Implements is funnel-banned here).
+	if !typesutil.ImplementsInterface(implObj.Type(), iface) {
+		t.Errorf("%s: *%s does not implement %s (sanctioned impl must satisfy the sealed interface)",
+			path, implName, ifaceName)
+	}
+
+	// Uniqueness: enumerate every named type in pkg.Scope() and reject any
+	// sibling implementation. This closes the in-package drift hole that the
+	// unexported marker alone cannot prevent — Go visibility blocks external
+	// impls (the marker method is unexported, so no parallel implementation can
+	// be declared outside this package) but a package author could declare a
+	// parallel struct alongside the sanctioned impl inside the same package.
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		if name == implName {
+			continue
+		}
+		obj := scope.Lookup(name)
+		typeName, ok := obj.(*types.TypeName)
+		if !ok {
+			continue
+		}
+		if typeName.IsAlias() {
+			continue
+		}
+		siblingType := typeName.Type()
+		if _, isInterface := siblingType.Underlying().(*types.Interface); isInterface {
+			continue
+		}
+		if typesutil.ImplementsInterface(siblingType, iface) {
+			t.Errorf("%s: %s implements sealed interface %s but is not the sanctioned impl %s — "+
+				"the seal contract is that ONLY %s satisfies %s; declare neither a parallel "+
+				"struct nor an alias in this package",
+				path, name, ifaceName, implName, implName, ifaceName)
+		}
 	}
 }
 
@@ -777,8 +931,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 		"BS-1 self-check: no production repo/store struct may use an embedded field "+
 			"that carries *pgxpool.Pool")
 
-	// BS-3: pgexec.New must not appear as a function value (i.e., used as a
-	// value rather than directly called) in any production package.
+	// BS-3: pgexec.New must not appear as a function value (used as a value
+	// rather than directly called) in any production package.
 	var bs3Violations []string
 	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -790,7 +944,7 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 			}
 			rel := p.Rel(file)
 			bs3Violations = append(bs3Violations,
-				findPgexecNewValueUses(p.Fset, file, rel, p.TypesInfo)...)
+				findPgexecFuncValueUses(p.Fset, file, rel, p.TypesInfo, pgexecFactoryName)...)
 		}
 		return nil
 	})
@@ -832,11 +986,8 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 			"(userRepo/roleRepo/setupLock/txRunner)")
 
 	// BS-6: pgexec.ExecDirect must not appear as a function value (used as a
-	// value rather than directly called) in any production file. Same identity
-	// resolution as BS-3 (pgexec.New) but for the ExecDirect typed function.
-	// Method-value form (BS-6 pre-F2-Hard) is OBSOLETE — ExecDirect is no
-	// longer a method on any interface, so method-value indirection is
-	// compile-impossible.
+	// value rather than directly called) in any production file. A function-
+	// value call would escape R3's direct-CallExpr callee resolution.
 	var bs6Violations []string
 	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
@@ -854,64 +1005,6 @@ func TestPGRepoAmbientTx_SelfCheck(t *testing.T) {
 	})
 	assert.Empty(t, bs6Violations,
 		"BS-6 self-check: pgexec.ExecDirect must not be used as a function value in production")
-
-	// BS-8: pgrepoapproved.ApprovedExecDirect marker count M must equal
-	// pgexec.ExecDirect callsite count E in the same approval scope (M == E).
-	// Under per-callsite R3-Hard (1:1 pairing), M > E means at least one
-	// spurious marker that approves nothing (audit-trail noise); R3 already
-	// catches M < E (missing markers), so BS-8 covers the M > E half.
-	var bs8Violations []string
-	_ = RunTyped(t, TypedOpts{}, patterns, func(p *Pass) []Diagnostic {
-		if p.TypesInfo == nil {
-			return nil
-		}
-		for _, file := range p.Files {
-			if !p.IsFileInScope(file) {
-				continue
-			}
-			rel := p.Rel(file)
-			if !isRepoOrStoreFile(rel) {
-				continue
-			}
-			visitScope := func(body *ast.BlockStmt, label string, pos token.Pos) {
-				if body == nil {
-					return
-				}
-				m := countApprovedExecDirectMarkers(body, p.TypesInfo)
-				e := len(collectPgexecExecDirectCalls(body, p.TypesInfo))
-				if m <= e {
-					return
-				}
-				bs8Violations = append(bs8Violations, fmt.Sprintf(
-					"%s:%d: %s has %d pgrepoapproved.ApprovedExecDirect marker(s) "+
-						"but only %d pgexec.ExecDirect call(s) in same approval scope — "+
-						"%d spurious marker(s) approve nothing; remove the excess "+
-						"marker(s) or add the corresponding ExecDirect call(s)",
-					rel, p.Fset.Position(pos).Line, label, m, e, m-e,
-				))
-			}
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
-				visitScope(fn.Body, "func "+fn.Name.Name, fn.Pos())
-				EachInSubtree[ast.FuncLit](fn.Body, func(fl *ast.FuncLit) {
-					visitScope(fl.Body, "nested closure in "+fn.Name.Name, fl.Pos())
-				})
-			})
-		}
-		return nil
-	})
-	assert.Empty(t, bs8Violations,
-		"BS-8 self-check: pgrepoapproved.ApprovedExecDirect marker count M must "+
-			"equal pgexec.ExecDirect callsite count E in same approval scope; "+
-			"M > E means spurious marker(s) approve nothing")
-}
-
-// (bodyCallsPGExecutorExecDirect removed in round-3 — BS-8 now uses
-// collectPgexecExecDirectCalls for precise count and supports the M > E
-// spurious-marker semantic. Single-bool reduction is no longer needed.)
-
-// findPgexecNewValueUses returns BS-3 violations.
-func findPgexecNewValueUses(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []string {
-	return findPgexecFuncValueUses(fset, file, rel, info, pgexecFactoryName)
 }
 
 // findPgexecFuncValueUses returns violations for any Ident in the file that

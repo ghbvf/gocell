@@ -97,6 +97,10 @@ type Journal interface {
 	//     it is rejected.
 	//   - KindStepCompensated is legal only while Compensating (status unchanged);
 	//     elsewhere it is rejected.
+	//   - KindStepCompensationFailed is legal only while Compensating (status
+	//     unchanged, like KindStepCompensated); elsewhere it is rejected. It records
+	//     that a per-step CompensateFunc returned a non-nil error — distinct from
+	//     KindStepFailed (a forward-phase failure during Running).
 	// Terminal event kinds are rejected by ValidateForAppend — terminal status is
 	// committed only via MarkTerminal, which encodes the terminal state in the
 	// event kind. Append also does NOT maintain the step cursor
@@ -147,13 +151,20 @@ type Journal interface {
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 
 	// MarkTerminal transitions the instance projection to finalStatus and appends
-	// the matching terminal event (saga_succeeded / saga_failed / saga_compensated
-	// / saga_expired) atomically, so the log alone replays which terminal state was
-	// reached. finalStatus MUST be a terminal saga.Status reachable from the current
-	// status (validated via saga.AdvanceSaga). It is lease-fenced: ok is false (with a nil error) when
-	// leaseID no longer owns the instance. On success the lease is released.
-	// A never-enqueued instance also returns ok=false (nil error); callers
-	// cannot distinguish it from a stale lease.
+	// the matching terminal event atomically, so the log alone replays which
+	// terminal state was reached. Terminal event kinds per finalStatus:
+	//   - StatusSucceeded     → KindSagaSucceeded     (all steps committed)
+	//   - StatusFailed        → KindSagaFailed        (forward failure, no rollback)
+	//   - StatusCompensated   → KindSagaCompensated   (rollback completed cleanly)
+	//   - StatusExpired       → KindSagaExpired       (overall timeout elapsed)
+	//   - StatusCompensationFailed → KindSagaCompensationFailed (rollback itself
+	//     failed; reachable only from StatusCompensating)
+	//
+	// finalStatus MUST be a terminal saga.Status reachable from the current
+	// status (validated via saga.AdvanceSaga). It is lease-fenced: ok is false
+	// (with a nil error) when leaseID no longer owns the instance. On success
+	// the lease is released. A never-enqueued instance also returns ok=false
+	// (nil error); callers cannot distinguish it from a stale lease.
 	MarkTerminal(ctx context.Context, instanceID, leaseID idutil.SafeID, finalStatus saga.Status) (ok bool, err error)
 
 	// RepoReady is a differentiated readiness check (kernel/healthz.RepoProber):

@@ -559,17 +559,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// errHeartbeatJournal wraps MemJournal and forces Heartbeat to return an error,
-// exercising heartbeatOnce's failure-logging path (C2).
-type errHeartbeatJournal struct {
-	*journal.MemJournal
-	err error
-}
-
-func (e *errHeartbeatJournal) Heartbeat(context.Context, idutil.SafeID, idutil.SafeID, time.Duration) (bool, error) {
-	return false, e.err
-}
-
 // ---------------------------------------------------------------------------
 // F5 — leader-elect rejects sub-millisecond LeaseDuration (distlock TTL floor)
 // ---------------------------------------------------------------------------
@@ -583,11 +572,11 @@ func (e *errHeartbeatJournal) Heartbeat(context.Context, idutil.SafeID, idutil.S
 // Sub-ms durations for the leader-elect fail-fast test, below distlock.MinTTL
 // (1ms). Site-specific (no cross-cutting testtime const is sub-ms), declared as
 // package-level consts per TEST-TIME-LITERAL-01. They satisfy Config.Validate
-// (all > 0, HeartbeatInterval*2 < LeaseDuration: 200µs < 500µs).
+// (all > 0, PollInterval > 0, LeaseDuration > 0).
 const (
 	subMsLease     = 500 * time.Microsecond
-	subMsHeartbeat = 100 * time.Microsecond
 	subMsPoll      = 200 * time.Microsecond
+	subMsHeartbeat = 100 * time.Microsecond // satisfies HeartbeatInterval*HeartbeatLeaseSafetyFactor < LeaseDuration
 )
 
 func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
@@ -608,7 +597,10 @@ func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 	j, _ := journal.NewMemJournal(clk)
 	reg, _ := ksaga.NewInMemoryRegistry()
 
-	// Leader-elect mode → must fail fast.
+	// Leader-elect mode → must fail fast (distlock MinTTL floor). NewCoordinator
+	// constructs its internal Executor from the same journal + subMsCfg so the
+	// sub-ms HeartbeatInterval / LeaseDuration are carried into the Executor
+	// automatically (#1181 F5).
 	if _, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk,
 		WithConfig(subMsCfg), WithLeaderElect(locker)); err == nil {
 		t.Error("NewCoordinator(leader-elect, sub-ms lease) = nil error, want fail-fast")
@@ -654,42 +646,6 @@ func TestLeaderElectLockKey_Injective(t *testing.T) {
 	// Distinct instances of the same definition still differ.
 	if leaderElectLockKey("d", "i1") == leaderElectLockKey("d", "i2") {
 		t.Error("distinct instance IDs produced the same lock key")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// C2 — heartbeat failure log includes definition_id
-// ---------------------------------------------------------------------------
-
-// TestHeartbeatOnce_FailureLogIncludesDefinitionID asserts the heartbeat-failed
-// log line carries definition_id (so multi-definition deployments can attribute
-// a failing heartbeat). definition_id is sourced from the activeLeases entry.
-func TestHeartbeatOnce_FailureLogIncludesDefinitionID(t *testing.T) {
-	t.Parallel()
-	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
-	mem, _ := journal.NewMemJournal(clk)
-	j := &errHeartbeatJournal{MemJournal: mem, err: errors.New("simulated heartbeat I/O failure")}
-	reg, _ := ksaga.NewInMemoryRegistry()
-	var buf syncBuffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
-
-	c.activeLeases.Store(idutil.SafeID("inst-x"), inflightDrive{
-		leaseID: "lease-x",
-		defID:   "def-x",
-		release: func() {},
-	})
-	c.heartbeatOnce(context.Background())
-
-	logs := buf.String()
-	if !strings.Contains(logs, "heartbeat failed") {
-		t.Fatalf("no heartbeat-failed log emitted; logs=%s", logs)
-	}
-	if !strings.Contains(logs, `"definition_id":"def-x"`) {
-		t.Errorf("heartbeat-failed log missing definition_id; logs=%s", logs)
 	}
 }
 
@@ -750,7 +706,7 @@ func TestStop_ReleasesInflightLockOnShutdown(t *testing.T) {
 	}
 
 	testwait.External(t, "tickers-registered",
-		func() bool { return clk.PendingTickers() >= 2 },
+		func() bool { return clk.PendingTickers() >= 1 },
 		testtime.D2s, testtime.D1ms)
 	clk.Advance(leaderElectCfg().PollInterval) // fire a tick → claim + wedge
 

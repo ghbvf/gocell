@@ -365,9 +365,9 @@ cell := accesscore.New(
 
 - **R1（单一合法持有者）**：在 *_repo.go / *_store.go 文件中，无 struct 可声明 `*pgxpool.Pool` 字段（全局谓词，无包发现机制）。pool 由 `pgexec.PGExecutor` 接口字段持有；底层 unexported `pgExecutor` struct 在 `internal/pgexec` sub-pkg 内。
 - **R2（构造函数 wrap funnel）**：在 *_repo.go / *_store.go 文件中，所有 `*pgxpool.Pool` 函数参数必须在 `New*` 前缀的构造函数内，且函数体必须调用 `pgexec.New(pool)`（callee 解析到 `*types.Func`，`Pkg().Path()` 以 `/internal/pgexec` 结尾 AND `Name() == "New"`）。
-- **R3**：(a) retired（compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段）；(b) 在 *_repo.go / *_store.go 中，任何 `ExecDirect` 调用（receiver 类型 `pgexec.PGExecutor`）必须有同 scope 的 `pgrepoapproved.ApprovedExecDirect` typed marker。
+- **R3**（amended 2026-05-28，call-bound）：(a) retired（compile-time impossible — `pgexec.PGExecutor` interface 不暴露 `.pool` 字段）；(b) **global scope**——任何 callee 解析到 `pgexec.ExecDirect`（top-level function，`Pkg().Path()` 以 `/internal/pgexec` 结尾）的调用，其首参必须是 inline `pgrepoapproved.Approve("<kebab-literal>")` typed approval token（call-bound 授权；不再是同 scope sibling marker，不再受 file-extension scope 约束）。
 
-扫描范围为 `*_repo.go` 和 `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围）。覆盖保护：companion coverage guard 断言两个包模式各自至少有一个此类文件，防止包名变更导致覆盖静默归零。
+扫描范围：**R1/R2** 限 `*_repo.go` / `*_store.go` 后缀文件（infrastructure 文件合法持有 pool，不在范围；pre-existing Soft，#1206 跟踪）；**R3 global**（call-bound + callee identity 使 file scope 不必要）。`PGExecutor` 接口自 2026-05-28 经 unexported `sealPGExecutor` marker method 封印（包外不可实现），`TestPGRepoAmbientTx_InterfaceSealed` 回归守卫。详见 ADR `docs/architecture/202605241400-003-pg-repo-ambient-tx-discovery-hard.md` §Amendment 2026-05-28。
 
 **Funnel 双向锁评级（ai-robust.md §Funnel 双向锁评级）**：
 
@@ -376,7 +376,7 @@ cell := accesscore.New(
 
 > **历史脉络（2026-05-18 落地版本）**：原 Medium 上限来自"`pgExecutor` 是 `adapters/postgres` 包内 unexported struct，同包 sibling file 可直接访问 .pool"，与 `PANIC-REGISTERED-01` 同款 caveat。2026-05-27 amendment 通过 sub-package 物理隔离消除此 caveat。
 
-**RED/GREEN fixture 权威集**（amended 2026-05-27）：`tools/archtest/internal/pgrepoambienttxfixture/` 是 RED/GREEN fixture 的权威单一来源，含 `fixture.go`（package doc）、`fixture_repo.go`（所有 RED + GREEN repo controls，文件后缀触发 archtest 扫描）、`internal/pgexec/pgexec.go`（sub-package 镜像 production 形态）。`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行精确集合断言（exact-set assertion on (ruleID_prefix, fixture source line) pairs），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
+**RED/GREEN fixture 权威集**（amended 2026-05-28）：`tools/archtest/internal/pgrepoambienttxfixture/` 是 RED/GREEN fixture 的权威单一来源，含 `fixture.go`（package doc）、`fixture_repo.go`（R1 + R2 含 unnamed-param case + R3 call-bound RED/GREEN repo controls）、`fixture_service.go`（非 `_repo.go` 文件，验证 R3 global scope）、`internal/pgexec/pgexec.go`（sub-package 镜像 production 形态）。`TestPGRepoAmbientTx_RedFixtureDetected` 对其进行**精确 multiset 断言**（exact multiset assertion on `(filename, rulePrefix, line)` keys；filename 区分 fixture_repo.go vs fixture_service.go 是 R3 global scope 的可证伪证据），使规则可证伪。当前 RED fixture 集与期望违规计数见 `tools/archtest/pg_repo_ambient_tx_test.go` 包 godoc + `expectedFixtureViolations` — 不在本 ADR 中硬编码，避免每次 fixture 演化时 ADR 与代码双源漂移。
 
 **C2 行为保留**：`adapters/postgres.LedgerStore` 由 `pool *pgxpool.Pool` 字段改为 `db pgexec.PGExecutor` 字段，inline 三个辅助方法（`execCtx`/`queryRowCtx`/`queryCtx`）删除，所有 SQL 路径统一通过 `s.db.Exec/QueryRow/Query` 路由，行为等价（ambient tx 感知，读路径 Tail/Verify 原先直连 pool 现变为 ambient-aware，符合 DX4 "strictly more correct" 验收条件）。
 

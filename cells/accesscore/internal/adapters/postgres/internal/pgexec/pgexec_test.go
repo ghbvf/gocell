@@ -2,7 +2,6 @@ package pgexec
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -80,33 +79,5 @@ func TestQueryRow_RoutesThroughAmbientTx(t *testing.T) {
 	}
 	if !tx.queryRowCalled {
 		t.Fatal("expected ambient tx QueryRow to be called")
-	}
-}
-
-// mockExec is a non-sealed PGExecutor impl used to exercise ExecDirect's
-// type-assertion guard against external impls (security boundary check).
-type mockExec struct{}
-
-func (m mockExec) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
-}
-
-func (m mockExec) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
-	return nil, errors.ErrUnsupported
-}
-
-func (m mockExec) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
-
-// TestExecDirect_RejectsNonSealedExecutor verifies that pgexec.ExecDirect's
-// type-assertion guard fires when given a PGExecutor whose dynamic type isn't
-// *pgExecutor (e.g., an external mock). This blocks mock-mediated bypass of
-// ambient-tx routing.
-func TestExecDirect_RejectsNonSealedExecutor(t *testing.T) {
-	_, err := ExecDirect(mockExec{}, context.Background(), "SELECT 1")
-	if err == nil {
-		t.Fatal("expected ExecDirect on non-sealed executor to return error")
-	}
-	if !errors.Is(err, errExecDirectOnNonSealedExecutor) {
-		t.Fatalf("expected errExecDirectOnNonSealedExecutor, got %v", err)
 	}
 }
