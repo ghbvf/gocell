@@ -61,7 +61,7 @@
 | `publisher_test.go` | 320 | QoS1 / payload too large / publish timeout / order |
 | `subscriber_test.go` | 500 | Ack/Requeue/Reject / ConsumerBase 接入 / claim 失败降级 |
 | `deadletter_test.go` | 180 | DLT 路由 / publish 失败 fallback |
-| `metrics_test.go` | 230 | 6 metric 注册 + label 矩阵 |
+| `metrics_test.go` | 230 | PR-1: reconnect_total only（其余 5 个 metric 随 emitter 在 PR-2/3/4 落地；见 AC-8）|
 | `healthz_test.go` | 80 | probe 注册 + nil checker 拒绝 |
 | `redact_test.go` | 100 | payload key list / connect URL credentials strip |
 | `errors_test.go` | 120 | connack reason → disposition 矩阵 |

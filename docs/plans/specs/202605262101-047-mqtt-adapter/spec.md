@@ -88,7 +88,7 @@ external MDM 控制台 publish "command.device.reboot.v1"
 | AC-3 | QoS 1 + PUBACK 重投场景，ConsumerBase 幂等去重正确 | integration test |
 | AC-4 | TLS 1.2+ 强制、mTLS 经 `tls.Config` 注入 Vault PKI cert 路径可工作 | integration,mqtt_tls (nightly) |
 | AC-5 | clientId 必须 `{cellID}-{role}-{uuid}` 格式；构造期 `Validate()` 校验 | unit + archtest `MQTT-CLIENT-ID-NAMESPACE-01` |
-| AC-6 | adapter 内 topic 前缀 funnel（cell 只能 publish/subscribe 自己 namespace 的 topic） | unit + archtest `MQTT-TOPIC-NAMESPACE-01` |
+| AC-6 | adapter 内 topic 前缀 funnel（cell 只能 publish/subscribe 自己 namespace 的 topic）；PR-1 满足 sealed-struct 上游约束；下游 callsite funnel 在 PR-2/3 via gh #1225 | unit + archtest `MQTT-TOPIC-NAMESPACE-01` |
 | AC-7 | readyz 注册 `mqtt_ready` typed probe，列入 `PROBENAME-SEALED-FUNNEL-01` inventory | unit + archtest |
 | AC-8 | 6 个 metric (publish_total / ack_duration / reconnect_total / subscribe_inflight / dlx_total / packet_too_large_total)，带 `cell` label；PR-1 仅注册 `reconnect_total`，其余 5 个随其 emitter 在 PR-2/3/4 落地 | unit |
 | AC-9 | payload 与 last_error 经 `pkg/redaction` 单源 redact；span attribute 经 `safeStringAttr` | unit + 既有 `SPAN-SETATTR-REDACT-01` 覆盖 |
