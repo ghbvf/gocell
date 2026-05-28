@@ -255,7 +255,7 @@
 - **依赖**：T-06-1
 - **验收**：
   - [ ] crash recovery：杀进程 → 重启 → 第一个 tx 即从 checkpoint 恢复
-  - [ ] rebuild：POST /internal endpoint 触发 → 业务 read 503 → catch-up 完成后恢复
+  - [ ] rebuild：POST /internal endpoint 触发 → 业务 read **不阻塞**（harness 不强制 503，对标 Axon / Marten；业务可自查 `Phase()` 自行返回 503）→ catch-up 完成后继续消费（见 ADR §5）
 - **行数**：~400
 
 ### T-06-3 closeout + backlog 关闭

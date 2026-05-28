@@ -81,7 +81,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 | **business cell（projection consumer）** | 实现 `apply(ctx, event) error` hook（tx ambient，经 ctx；见 ADR §3 Q2），声明 `cell.yaml kind: projection` + slice contractUsages[subscribe] |
 | **harness（kernel/projection）** | 托管订阅循环 / checkpoint / rebuild 编排 / metrics |
 | **composition root (`cmd/*`)** | 通过 `WithProjectionCheckpointStore(...)` 注入 checkpoint adapter（mem / PG） |
-| **operator** | 通过 internal HTTP endpoint（`/internal/v1/.../projection/rebuild`）触发 rebuild；通过 readyz `<cell>_projection_<name>_ready` probe 监控 lag |
+| **operator** | 通过 internal HTTP endpoint（`POST /internal/v1/<cell>/projection/<name>/rebuild`，service-token + caller-cell allowlist，internal-only；契约见 ADR §5「Rebuild control-plane endpoint」）触发 rebuild；通过 readyz `<cell>_projection_<name>_ready` probe 监控 lag |
 | **AI co-author** | 写 slice handler apply 函数体；其余生命周期 wiring 由 codegen 派生 |
 
 ## 4. User Scenarios（验收场景）
@@ -140,7 +140,8 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 - [ ] `kernel/projection.Coordinator` 提供 `Subscribe(ctx, spec, projectionID, apply, opts...) error` API；apply 签名为 `func(ctx context.Context, event outbox.Entry) error`（tx ambient，经 ctx；见 ADR §3 Q1/Q2 —— 原 `persistence.TxHandle` 显式参数已被收敛，该类型不存在）
 - [ ] checkpoint store 抽象 `CheckpointStore` interface；提供 `mem` + `postgres` 两个 adapter
 - [ ] postgres adapter 的 `LoadOffset` / `SaveOffset` 在 caller-provided CellTx 内执行（exactly-once 与 business apply 同 commit）
-- [ ] rebuild state machine **4 相**（Stop / Reset / Replay / Catchup，对标 Axon；见 ADR §3 Phase enum），状态对外可读（HTTP endpoint 返回 phase + lag）
+- [ ] rebuild state machine **4 相**（Stop / Reset / Replay / Catchup，对标 Axon；见 ADR §3 Phase enum），状态对外可读（HTTP endpoint 返回 `{phase, replayLagSeconds, pendingEvents}`）
+- [ ] rebuild control-plane endpoint `POST /internal/v1/<cell>/projection/<name>/rebuild` 的安全 + HTTP 契约（service-token + caller-cell allowlist / internal-only / 202 async·409 已在 rebuild·404 未知 / `{"data":...}` envelope）—— forward contract 见 **ADR §5「Rebuild control-plane endpoint」**；完整 contract.yaml 在 PR-03（T-03-3）落地
 - [ ] cellgen 派生：`kind: projection` slice 自动生成 harness wiring（订阅 + Subscribe 调用 + apply 字段桥接），业务只填 apply 函数体
 - [ ] `PROJECTION-CONSISTENCY-01` 由 Medium 升 Hard：parser load-time `jsonschema.Validate` 拒绝 L0/L1/L2
 - [ ] 三个 metrics：`projection_event_replay_lag_seconds` / `projection_rebuild_duration_seconds` (histogram) / `projection_pending_events` (gauge)
@@ -196,7 +197,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 | ID | 张力 | 选项 |
 |----|------|------|
 | Q1 | **checkpoint exactly-once 协议** | A: harness 拿 caller-provided tx 在内部 SaveOffset（**对标 Axon JdbcTokenStore**）/ B: harness 暴露 `RegisterCheckpoint(tx, offset)` 让 business 主动提交 / C: after-commit hook 异步写 offset（非 exactly-once；对标 Marten Async / Commanded） |
-| Q2 | **business apply hook 签名** | A: `apply(ctx, event, txHandle) error`（**对标 Marten Async `Apply(IDocumentOperations, e)`**）/ B: `apply(ctx, event, entity) (entity, error)` + harness read-modify-write（**对标 eventhorizon**——已明确否决）/ C: `apply(ctx, event) error` + business 自管 tx（**对标 Watermill**）/ D: 注解驱动（对标 Axon `@EventHandler`，Go 不适用） |
+| Q2 | **business apply hook 签名** | A: ~~`apply(ctx, event, txHandle) error`~~ **→ 已收敛冻结为 `apply(ctx, event) error`（ambient tx 经 ctx；`txHandle` 类型不存在、与 `PG-REPO-AMBIENT-TX-01` 冲突，见 ADR §3 Q2 Correction）**（对标 Marten Async `Apply(IDocumentOperations, e)`）/ B: `apply(ctx, event, entity) (entity, error)` + harness read-modify-write（**对标 eventhorizon**——已明确否决）/ C: `apply(ctx, event) error` + business 自管 tx（**对标 Watermill**）/ D: 注解驱动（对标 Axon `@EventHandler`，Go 不适用） |
 | Q3 | **kind:projection codegen funnel 接法** | A: 单 slice 单 projection（subscribe 集合 = 单 projection 输入流）/ B: 多 slice 共享 projection（需新 metadata 节点） |
 | Q4 | **snapshot / 部分 replay 是否 v1** | A: v1 不做（rebuild 全量）/ B: v1 留 hook 但无 PG store / C: v1 完整支持 |
 | **Q5** | **多 pod 并发同一 projection 是否支持**（对标 Axon `token_entry.owner` 列） | A: v1 单 pod（leader election 走上层 `cmd/corebundle`，schema 预留 `owner` 列但不写）/ B: v1 内置 pessimistic claim（owner 列 + advisory lock） |
@@ -204,7 +205,7 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 **预填倾向**（待 ADR 论证后定）：Q1=A、Q2=A、Q3=A、Q4=A、**Q5=A**。理由（对标增强）：
 
 - **Q1=A**：与 outbox `Writer.Write` 同 pattern（caller 用 RunInTx 包，writer 内部用 TxFromContext join），AI-robust 形态一致；**对标 Axon JdbcTokenStore + 同 tx 提交模式**——业界最严谨的 exactly-once 实现。
-- **Q2=A**：tx handle 是最小依赖，不绑死读模型 schema / entity 类型；**直接对标 Marten Async `IDocumentOperations` 形态**。eventhorizon 的 entity read-modify-write（形态 B）已明确否决——GoCell L3 投影常需跨表写，单 entity 模型锁死业务。
+- **Q2=A**：ambient ctx-tx 是最小依赖（**无显式 tx handle 参数**——与 `outbox.Writer.Write` 同范式，hook 内经 `persistence.TxFromContext` 取 tx），不绑死读模型 schema / entity 类型；**对标 Marten Async `IDocumentOperations` 形态**。eventhorizon 的 entity read-modify-write（形态 B）已明确否决——GoCell L3 投影常需跨表写，单 entity 模型锁死业务。
 - **Q3=A**：单输入流单 projection 覆盖 winmdm `unified_device_id` / zerotrust `trustscore` 二条 roadmap-committed 场景；多 slice 多入是 v1.1 扩展点。
 - **Q4=A**：snapshot 的 PG 表抽象会越过 GAP-8 封存边界；v1 故意留白；**对标论证更扎实**——Axon 引入 snapshot 是因为 event log 全局共享 + replay 量级 ≥ 数百万条，GoCell outbox 是单 cell 局部事件流，全量重放量级远小于此。触发条件：winmdm Stage 1 实测 rebuild 全量 ≥ 30min 时新 epic 紧急加。
 - **Q5=A**：v1 单 pod 模式 complexity 最低；schema 预留 `owner TEXT` 列（对标 Axon `token_entry.owner`），v1 不写不读；多 pod 安全由上层 leader election 保证（`cmd/corebundle` 责任）；v1.1 在 owner 列上实现 pessimistic claim 即可。
@@ -223,6 +224,6 @@ GoCell L3 投影场景当前**手撕**（`examples/todoorder/cells/ordercell/int
 | #1079 [H2/W10] Projection / Replay runtime | PR-00 + PR-01 + PR-02 + PR-04（主体） |
 | #834 [L3-EXAMPLE-PROJECTION-01] | PR-06（orderprojection 改造为 reference） |
 | #960 PROJECTION-CONSISTENCY-01 升 Hard | PR-05（独立先行候选） |
-| #961 L3 投影可观测 metrics | PR-04（与 rebuild 编排同包） |
+| #961 L3 投影可观测 metrics | PR-03（rebuild + metrics + readyz 三件套同包） |
 
 Q&A、风险、PR 切分细节见 [implementation plan](./202605261600-1100-cqrs-projection-harness-implementation-plan.md)。

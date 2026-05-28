@@ -300,6 +300,31 @@ projection). It is constructed via `kernel/healthz.NewProbeName(...)` — there 
 PR-03's constructor returns `(ProbeName, error)` and fails fast at construction
 when the budget is exceeded, rather than silently dropping the probe.
 
+### Rebuild control-plane endpoint (PR-03 forward contract)
+
+The rebuild trigger is an internal HTTP endpoint. Its `contract.yaml` + handler
+land in **PR-03 (T-03-3)**; this section freezes the forward contract so PR-03
+does not drift and `/internal/v1/` declaration requirements
+(`.claude/rules/gocell/go-standards.md` §安全检查点) are satisfied at design time:
+
+- **Endpoint**: `POST /internal/v1/<cellID>/projection/<projectionID>/rebuild`.
+- **Caller / auth**: service-token authentication + caller-cell allowlist (the
+  caller's cell ID must be in the contract's `clients` allowlist). No public
+  access. Same shape as other `/internal/v1/` control-plane endpoints.
+- **Network boundary**: internal-only — never mounted on a public listener.
+- **HTTP semantics**: `202 Accepted` (rebuild is async — the state machine runs
+  in the background; the response acknowledges acceptance, not completion) /
+  `409 Conflict` (a rebuild is already in progress for this projection;
+  `Phase() != PhaseLive`) / `404 Not Found` (unknown cell/projection).
+- **Response envelope**: the unified `{"data": {...}}` shape
+  (`.claude/rules/gocell/error-handling.md`); the `data` object carries the
+  current `{phase, replayLagSeconds, pendingEvents}` snapshot. Errors use the
+  shared error envelope.
+
+The full `contract.yaml` (request/response schema, `clients` allowlist) is
+authored in PR-03; PR-00 freezes only the auth model + network boundary + status
+semantics above.
+
 ## 6. Threat matrix
 
 Each row names the threat, the v1 mechanism, and **which PR discharges it**

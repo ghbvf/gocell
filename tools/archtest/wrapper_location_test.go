@@ -265,6 +265,8 @@ func TestCellRawInfraWrapperLocation01_ScannerDetectsViolation(t *testing.T) {
 		"fixture must trigger outbox.WrapWriterForCell detection")
 	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/outbox.WrapEmitterForCell"],
 		"fixture must trigger outbox.WrapEmitterForCell detection")
+	assert.NotEmpty(t, got["github.com/ghbvf/gocell/kernel/projection.WrapCheckpointStoreForCell"],
+		"fixture must trigger projection.WrapCheckpointStoreForCell detection")
 
 	// dotimport.go uses `import . "kernel/outbox"` and writes the wrap
 	// calls without a package selector — call.Fun is *ast.Ident, not

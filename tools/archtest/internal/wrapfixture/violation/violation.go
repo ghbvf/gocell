@@ -19,6 +19,7 @@ package violation
 import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/projection"
 )
 
 // CallWrapForCell deliberately calls persistence.WrapForCell from a
@@ -46,4 +47,12 @@ func CallWrapWriterForCell(w outbox.Writer) outbox.CellWriter {
 // the outbox.WrapEmitterForCell function leg of the wrapper-location invariant.
 func CallWrapEmitterForCell(e outbox.Emitter) outbox.CellEmitter {
 	return outbox.WrapEmitterForCell(e)
+}
+
+// CallWrapCheckpointStoreForCell mirrors CallWrapForCell for the projection
+// checkpoint-store wrapper (epic #1100 PR-00). Gives the scanner-detection test
+// a negative case for the projection.WrapCheckpointStoreForCell function leg of
+// the wrapper-location invariant.
+func CallWrapCheckpointStoreForCell(s projection.CheckpointStore) projection.CellCheckpointStore {
+	return projection.WrapCheckpointStoreForCell(s)
 }

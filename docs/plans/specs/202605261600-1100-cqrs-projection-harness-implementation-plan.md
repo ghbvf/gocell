@@ -491,8 +491,8 @@ Dependent contracts (governance scan): 全部 kind:projection contract.yaml (ord
 | ID | PR | 评级 | 形态 |
 |----|----|------|------|
 | PROJECTION-APPLY-HOOK-FUNNEL-01 | PR-01 stub / PR-04 green | Hard 下游 + Medium 上游 | callsite 唯一性 |
-| PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | typed-param 形态 |
-| PROJECTION-STATE-PHASE-FROZEN-01 | PR-00 stub / PR-03 green | Hard | reflect 字段冻结（4 相 enum） |
+| PROJECTION-CHECKPOINT-TX-BOUND-01 | PR-01 stub / PR-02 green | Medium | ambient-tx 形态（SaveOffset 经 TxFromContext，禁裸 db.Exec） |
+| PROJECTION-STATE-PHASE-FROZEN-01 | **PR-00 green** | **Medium** | AST const-set + String-arm 锁（5 成员 enum；Go enum 不可 reflect 成集，AST/golden 锁是天花板） |
 | PROJECTION-CONSISTENCY-PARSE-TIME-01 | PR-05 | Hard 下游 | parser callsite identity |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | **PR-02** | **Medium** | **SQL 字面量扫 reject owner 写入**（v1 范围；v1.1 启用 claim 时同 PR 删除） |
 
