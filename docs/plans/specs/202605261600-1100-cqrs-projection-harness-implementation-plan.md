@@ -33,7 +33,7 @@ PR-00 ADR + skeleton ─┬─> PR-01 Coordinator + mem store ────> PR-0
 | `kernel/projection/doc.go` + 包 godoc | `kernel/projection/` | ~80 |
 | `kernel/projection/types.go`（Apply / CheckpointStore / Coordinator interface 声明，**无实现**） | `kernel/projection/` | ~120 |
 | `kernel/projection/cell_marker.go`（sealed CellCheckpointStore marker，对齐 outbox.CellPublisher 范式） | `kernel/projection/` | ~60 |
-| `kernel/projection/phase.go`（rebuild state machine **4 相**枚举（Stop / Reset / Replay / Catchup，对标 Axon）+ frozen reflect 测试 placeholder） | `kernel/projection/` | ~90 |
+| `kernel/projection/phase.go`（**5 成员** Phase enum：PhaseLive + rebuild **4 相** Stop/Reset/Replay/Catchup，对标 Axon）+ PROJECTION-STATE-PHASE-FROZEN-01 AST const-set 锁（PR-00 即 green） | `kernel/projection/` | ~90 |
 | spec / plan 文档 | `docs/plans/` | 已落 |
 | backlog 登记 (#1100 评论) | gh | — |
 | **预算总计** | | ~700 行 + ADR |
@@ -43,7 +43,7 @@ PR-00 ADR + skeleton ─┬─> PR-01 Coordinator + mem store ────> PR-0
 逐项**列出选项 + 论证 + 预填决议 + 风险 + 回滚条件 + 对标框架引用**：
 
 - Q1 → A（caller-provided tx + harness 内部 SaveOffset，与 outbox.Writer 同范式；`ref:` Axon JdbcTokenStore §同 tx 提交模型）
-- Q2 → A（`apply(ctx, event, txHandle) error` —— tx handle minimum dep；`ref:` Marten Async `IDocumentOperations` 形态；明确否决 eventhorizon `Project(ctx, evt, entity) (entity, error)` 形态）
+- Q2 → A（`apply(ctx, event) error` —— **ambient tx 经 ctx，无显式 tx handle 参数**（`persistence.TxHandle` 不存在、与 `PG-REPO-AMBIENT-TX-01` 冲突，见 ADR §3 Q2 Correction）；`ref:` Marten Async `IDocumentOperations` 形态；明确否决 eventhorizon `Project(ctx, evt, entity) (entity, error)` 形态）
 - Q3 → A（单 slice 单 projection，v1 scope）
 - Q4 → A（snapshot 不入 v1；触发条件：winmdm Stage 1 rebuild 全量实测 ≥ 30min；`ref:` Axon snapshot 设计动机 vs GoCell 单 cell event 流量级差异）
 - **Q5 → A**（v1 单 pod 模式；schema 预留 `owner TEXT` 列；多 pod 并发安全由上层 leader election 保证；`ref:` Axon `token_entry.owner` 字段，v1.1 在此列上实现 pessimistic claim）
@@ -73,7 +73,7 @@ Dependent contracts (governance scan): kind:projection contract.yaml schema (PR-
 
 - [ ] ADR 文件评 owner approval（review by architect agent）
 - [ ] `go build ./...` 通过
-- [ ] meta-archtest `PROJECTION-STATE-PHASE-FROZEN-01` 预先登记 placeholder 测试（fail-pending → 等 PR-03 实现 phase struct 后转 green）
+- [ ] meta-archtest `PROJECTION-STATE-PHASE-FROZEN-01`（AST const-set + String-arm 锁，5 成员 enum）—— PR-00 即 **green**（仓库无 fail-pending 约定；enum 已在本 PR 声明，无需等 PR-03）
 - [ ] backlog #1100 评论同步 ADR 文件路径
 
 ### 风险
@@ -257,7 +257,7 @@ Invariant inventory (DROP COLUMN 不适用)
 | `runtime/projection/rebuild_handler.go`（internal HTTP endpoint `POST /internal/v1/<cell>/projection/<name>/rebuild`） | `runtime/projection/` | ~150 |
 | `runtime/projection/rebuild_handler_test.go` | `runtime/projection/` | ~200 |
 | `contracts/http/projection/rebuild/v1/`（contract.yaml + payload schema） | `contracts/` | ~80 |
-| metrics 字段冻结 archtest（PROJECTION-STATE-PHASE-FROZEN-01 转 green） | `tools/archtest/` | ~100 |
+| PROJECTION-STATE-PHASE-FROZEN-01 保持 green（PR-00 已锁 5 成员 enum；PR-03 加 rebuild transition table 不改 enum 集，无新 archtest） | `tools/archtest/` | ~0 |
 | metrics label 入 `kernel/observability/metrics.MustValidateLabels` 注册 | `kernel/observability/...` | ~50 |
 | ops doc 更新 `docs/ops/`（projection_event_replay_lag_seconds alert example） | `docs/ops/` | ~80 |
 | **预算总计** | | ~1800 行 |
@@ -299,7 +299,7 @@ func ProjectionReadyProbeName(cellID, projectionID string) (healthz.ProbeName, e
 - [ ] `POST /internal/v1/<cell>/projection/<name>/rebuild` contract test
 - [ ] metrics 三件套 fired in 集成测试
 - [ ] readyz probe 在 lag > threshold 时返回 unhealthy
-- [ ] PROJECTION-STATE-PHASE-FROZEN-01 archtest 转 green（reflect 锁 4 相 enum）
+- [ ] PROJECTION-STATE-PHASE-FROZEN-01 保持 green（PR-00 已 AST 锁 5 成员 enum；PR-03 加 rebuild transition table 不改 enum 集）
 - [ ] **rebuild 期 business read 不阻塞**——对标 Axon / Marten / Commanded 业界共识；harness 仅暴露 `Phase()` 让业务自定决策（默认不返回 503），契约文档明示
 - [ ] Stop 相 graceful 退出验证：consumer 循环退出 + checkpoint claim 释放 + 新 event Requeue 至下一启动周期
 
@@ -346,7 +346,7 @@ func (s *Service) Subscribe(ctx context.Context, coord *projection.Coordinator) 
 }
 
 // hand-written hook in service.go:
-//   func (s *Service) applyOrderCreated(ctx context.Context, evt outbox.Entry, tx persistence.TxHandle) error { ... }
+//   func (s *Service) applyOrderCreated(ctx context.Context, evt outbox.Entry) error { ... }  // tx ambient via ctx
 ```
 
 ### contractUsages slice.yaml 新字段
