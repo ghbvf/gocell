@@ -41,16 +41,27 @@ const maxSessionExpiryDuration = time.Duration(4294967295) * time.Second
 
 // Error message constants (MESSAGE-CONST-LITERAL-01: all messages are const literals).
 const (
-	msgConfigClientIDRequired   = "mqtt: config ClientID required"
-	msgConfigNoBrokers          = "mqtt: config requires at least one broker"
-	msgConfigBadBrokerURL       = "mqtt: broker URL is invalid or uses an unsupported scheme"
-	msgConfigTLSRequired        = "mqtt: TLS config required for tls broker"
-	msgConfigPlaintextRemote    = "mqtt: plaintext broker scheme requires loopback host"
-	msgConfigConnectTimeout     = "mqtt: ConnectTimeout must be > 0"
-	msgConfigKeepAlive          = "mqtt: KeepAlive must be > 0"
-	msgConfigKeepAliveOverflow  = "mqtt: KeepAlive exceeds uint16 seconds (65535s)"
-	msgConfigSessionExpiryRange = "mqtt: SessionExpiry must be >= 0 and <= uint32 max seconds"
-	msgConfigBackoffInvalid     = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
+	msgConfigClientIDRequired         = "mqtt: config ClientID required"
+	msgConfigNoBrokers                = "mqtt: config requires at least one broker"
+	msgConfigBadBrokerURL             = "mqtt: broker URL is invalid or uses an unsupported scheme"
+	msgConfigTLSRequired              = "mqtt: TLS config required for tls broker"
+	msgConfigPlaintextRemote          = "mqtt: plaintext broker scheme requires loopback host"
+	msgConfigConnectTimeout           = "mqtt: ConnectTimeout must be > 0"
+	msgConfigKeepAlive                = "mqtt: KeepAlive must be > 0"
+	msgConfigKeepAliveBelowSecond     = "mqtt: KeepAlive must be >= 1s (uint16 seconds wire field truncates sub-second values to 0)"
+	msgConfigKeepAliveOverflow        = "mqtt: KeepAlive exceeds uint16 seconds (65535s)"
+	msgConfigSessionExpiryBelowSecond = "mqtt: SessionExpiry > 0 must be >= 1s (uint32 seconds wire field truncates sub-second values to 0)"
+	msgConfigSessionExpiryRange       = "mqtt: SessionExpiry must be >= 0 and <= uint32 max seconds"
+	msgConfigBackoffInvalid           = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
+
+	// PublicDetail key constants — extracted per go-standards.md
+	// "同义字符串重复 ≥ 3 次抽常量". keepAlive / sessionExpiry / broker
+	// are the keys surfaced in 4xx error details for operator diagnosis.
+	detailKeyBroker        = "broker"
+	detailKeyKeepAlive     = "keepAlive"
+	detailKeySessionExpiry = "sessionExpiry"
+	detailKeyMax           = "max"
+	detailKeyMin           = "min"
 )
 
 // AuthConfig holds optional MQTT broker authentication credentials.
@@ -134,7 +145,7 @@ func (c Config) validateBrokers() error {
 		if secErr := secutil.ValidateTLSEndpoint(u.Host); secErr != nil {
 			return errcode.Wrap(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
 				msgConfigPlaintextRemote, secErr,
-				errcode.WithDetails(errcode.PublicString("broker", redactConnectURL(raw))))
+				errcode.WithDetails(errcode.PublicString(detailKeyBroker, redactConnectURL(raw))))
 		}
 	}
 	if needsTLS && c.TLS == nil {
@@ -143,9 +154,13 @@ func (c Config) validateBrokers() error {
 	return nil
 }
 
-// validateTimings checks ConnectTimeout, KeepAlive, and SessionExpiry. The
-// KeepAlive/SessionExpiry upper bounds correspond to the uint16/uint32 wire
-// fields in autopaho.ClientConfig — exceeding them would silently wrap.
+// validateTimings checks ConnectTimeout, KeepAlive, and SessionExpiry against
+// both the upper bound (uint16/uint32 wire field overflow) AND the lower
+// bound (sub-second values that would floor-truncate to 0 at the
+// uint16(d.Seconds()) / uint32(d.Seconds()) conversion site in Open). The
+// "ms passes Validate but wires 0" failure mode is silent — a 500ms KeepAlive
+// configured for a chatty client would actually disable KeepAlive (broker
+// never times out idle), so Validate fails-closed at < 1s.
 func (c Config) validateTimings() error {
 	if c.ConnectTimeout <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigConnectTimeout,
@@ -153,20 +168,38 @@ func (c Config) validateTimings() error {
 	}
 	if c.KeepAlive <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAlive,
-			errcode.WithDetails(errcode.PublicDuration("keepAlive", c.KeepAlive)))
+			errcode.WithDetails(errcode.PublicDuration(detailKeyKeepAlive, c.KeepAlive)))
+	}
+	if c.KeepAlive < time.Second {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAliveBelowSecond,
+			errcode.WithDetails(
+				errcode.PublicDuration(detailKeyKeepAlive, c.KeepAlive),
+				errcode.PublicDuration(detailKeyMin, time.Second),
+			))
 	}
 	if c.KeepAlive > maxKeepAliveDuration {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAliveOverflow,
 			errcode.WithDetails(
-				errcode.PublicDuration("keepAlive", c.KeepAlive),
-				errcode.PublicDuration("max", maxKeepAliveDuration),
+				errcode.PublicDuration(detailKeyKeepAlive, c.KeepAlive),
+				errcode.PublicDuration(detailKeyMax, maxKeepAliveDuration),
 			))
 	}
 	if c.SessionExpiry < 0 || c.SessionExpiry > maxSessionExpiryDuration {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigSessionExpiryRange,
 			errcode.WithDetails(
-				errcode.PublicDuration("sessionExpiry", c.SessionExpiry),
-				errcode.PublicDuration("max", maxSessionExpiryDuration),
+				errcode.PublicDuration(detailKeySessionExpiry, c.SessionExpiry),
+				errcode.PublicDuration(detailKeyMax, maxSessionExpiryDuration),
+			))
+	}
+	// SessionExpiry > 0 must also be >= 1s to survive uint32 floor truncation —
+	// 500ms would wire 0 and disable persistent session, defeating the caller's
+	// intent. SessionExpiry == 0 (clean session) is the explicit non-persistent
+	// path and stays accepted.
+	if c.SessionExpiry > 0 && c.SessionExpiry < time.Second {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigSessionExpiryBelowSecond,
+			errcode.WithDetails(
+				errcode.PublicDuration(detailKeySessionExpiry, c.SessionExpiry),
+				errcode.PublicDuration(detailKeyMin, time.Second),
 			))
 	}
 	return nil
@@ -211,7 +244,7 @@ func parseBrokerURL(raw string) (*url.URL, error) {
 		return nil, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
 			msgConfigBadBrokerURL,
-			errcode.WithDetails(errcode.PublicString("broker", redactConnectURL(raw))),
+			errcode.WithDetails(errcode.PublicString(detailKeyBroker, redactConnectURL(raw))),
 		)
 	}
 	return u, nil

@@ -187,9 +187,11 @@ func mqttEnclosingFuncName(file *ast.File, pos token.Pos) string {
 }
 
 // scanMQTTCompositeLitConstruction scans file for composite literals whose
-// type resolves (via go/types) to mqttTypeName inside mqttPkgPath. It reports
-// a diagnostic for every literal NOT enclosed in any function listed in
-// allowedFuncs (set semantics).
+// type resolves (via go/types) to mqttTypeName inside mqttPkgPath. It is a
+// thin wrapper over scanSealedCompositeLitConstruction with the production
+// mqtt package path bound; the parameterized form below lets the
+// red-fixture self-check exercise the same scanner against
+// tools/archtest/internal/mqttredfixture/.
 //
 // Production files only (caller must skip *_test.go before calling).
 func scanMQTTCompositeLitConstruction(
@@ -198,6 +200,26 @@ func scanMQTTCompositeLitConstruction(
 	rel string,
 	info *types.Info,
 	mqttTypeName string,
+	allowedFuncs []string,
+	ruleID string,
+) []Diagnostic {
+	return scanSealedCompositeLitConstruction(fset, file, rel, info,
+		mqttPkgPath, mqttTypeName, allowedFuncs, ruleID)
+}
+
+// scanSealedCompositeLitConstruction is the generalized A2 scanner. It
+// reports a diagnostic for every composite literal in file whose type
+// resolves (via go/types) to (targetPkgPath, targetTypeName) AND is NOT
+// enclosed in any function listed in allowedFuncs (set semantics).
+// Zero-value literals (no Elts) are accepted anywhere (used in error paths
+// like `return ClientID{}, err`).
+func scanSealedCompositeLitConstruction(
+	fset *token.FileSet,
+	file *ast.File,
+	rel string,
+	info *types.Info,
+	targetPkgPath string,
+	targetTypeName string,
 	allowedFuncs []string,
 	ruleID string,
 ) []Diagnostic {
@@ -221,10 +243,10 @@ func scanMQTTCompositeLitConstruction(
 			return
 		}
 		tobj := named.Obj()
-		if tobj.Pkg() == nil || tobj.Pkg().Path() != mqttPkgPath {
+		if tobj.Pkg() == nil || tobj.Pkg().Path() != targetPkgPath {
 			return
 		}
-		if tobj.Name() != mqttTypeName {
+		if tobj.Name() != targetTypeName {
 			return
 		}
 
@@ -249,7 +271,7 @@ func scanMQTTCompositeLitConstruction(
 			Message: fmt.Sprintf(
 				"%s/A2: %s composite literal at %s:%d is not enclosed in any of %v — "+
 					"non-zero %s construction must go through the Parse factory",
-				ruleID, mqttTypeName, rel, pos.Line, allowedFuncs, mqttTypeName,
+				ruleID, targetTypeName, rel, pos.Line, allowedFuncs, targetTypeName,
 			),
 		})
 	})
@@ -789,18 +811,26 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 			"if this fails, the go/types resolution path is silently broken")
 }
 
-// TestMQTTFunnel_A2ScannerFiresOnRedFixture proves the A2 scanner fires on a
-// genuine outside-allowedFuncs violation. The red fixture lives inside the
-// adapters/mqtt package itself behind the //go:build archtest_fixture tag —
-// only an in-package fixture can construct a non-zero ClientID literal because
-// the value field is unexported.
+// TestMQTTFunnel_A2ScannerFiresOnRedFixture proves the generalized A2 scanner
+// fires on a genuine outside-allowedFuncs violation. The red fixture lives at
+// tools/archtest/internal/mqttredfixture (NOT inside adapters/mqtt itself —
+// the path-scoped allowlist guard #944 rejects archtest_fixture in production
+// paths because a production file silently skipped by the default-tag scan is
+// a fail-open vector).
 //
-// This test loads the mqtt package WITH the archtest_fixture tag and asserts
-// the scanner reports ≥1 violation. Without it, a regression where the
-// scanner silently fails to identify outside literals would still pass
-// TestMQTTFunnel_A2ScannerFires (which only verifies the inside count).
+// The fixture declares a shape replica of mqtt.ClientID (struct{value string})
+// — exactly because mqtt.ClientID.value is unexported and an external package
+// cannot construct a literal of the real type. This proves the scanner's
+// go/types composite-literal resolution path works for any sealed-struct
+// following the {value string} convention, which IS the structural invariant
+// the production scanner relies on.
 //
-// See adapters/mqtt/archtest_redfixture.go for the planted violation.
+// Without this self-check, a regression where the type-resolution path is
+// silently broken would still pass TestMQTTFunnel_A2ScannerFires (which only
+// verifies the inside count) because production has no violations.
+//
+// See tools/archtest/internal/mqttredfixture/fixture.go for the planted
+// violation.
 func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -808,11 +838,12 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 	}
 
 	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
+	const fixturePkgPath = "github.com/ghbvf/gocell/tools/archtest/internal/mqttredfixture"
 
 	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
-		[]string{mqttPkgPath},
+		[]string{fixturePkgPath},
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != fixturePkgPath {
 				return nil
 			}
 			var out []Diagnostic
@@ -821,30 +852,32 @@ func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				out = append(out, scanMQTTCompositeLitConstruction(
+				out = append(out, scanSealedCompositeLitConstruction(
 					p.Fset, f, rel, p.TypesInfo,
-					"ClientID", []string{"assembleClientID"}, ruleID,
+					fixturePkgPath, "FixtureClientID",
+					[]string{"ParseFixtureClientID"}, ruleID,
 				)...)
 			}
 			return out
 		})
 
 	require.NotEmpty(t, diags,
-		"A2 scanner must report ≥1 violation on the red fixture in archtest_redfixture.go — "+
+		"A2 scanner must report ≥1 violation on the red fixture in "+
+			"tools/archtest/internal/mqttredfixture/fixture.go — "+
 			"if this fails, the scanner is silently broken")
 
-	// Confirm the violation points at the red-fixture file specifically — guards
+	// Confirm the violation points at the fixture file specifically — guards
 	// against the scanner reporting an unrelated false positive that happens
 	// to satisfy "non-empty".
 	foundRedfixture := false
 	for _, d := range diags {
-		if strings.HasSuffix(d.Rel, "archtest_redfixture.go") {
+		if strings.HasSuffix(d.Rel, "fixture.go") {
 			foundRedfixture = true
 			break
 		}
 	}
 	assert.True(t, foundRedfixture,
-		"A2 scanner reported diagnostics but none from archtest_redfixture.go; got: %+v", diags)
+		"A2 scanner reported diagnostics but none from the red fixture; got: %+v", diags)
 }
 
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed

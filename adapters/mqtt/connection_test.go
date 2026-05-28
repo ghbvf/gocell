@@ -131,7 +131,10 @@ func TestConnection_HappyPath_HealthOk(t *testing.T) {
 	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
 
 	assert.NoError(t, conn.Health(ctx))
-	assert.NotNil(t, conn.Client())
+	// R4 round-2: Client() was demoted to unexported client(); the cm is
+	// indirectly asserted live by conn.Health(ctx) == nil (Health reads
+	// c.phase which is set to phaseConnected only after autopaho.NewConnection
+	// returned a non-nil cm and OnConnectionUp fired).
 }
 
 // TestConnection_Close_IdempotentAndTerminal verifies that Close is idempotent

@@ -271,7 +271,7 @@ func (c *Connection) onConnectionUp(_ *autopaho.ConnectionManager, _ *paho.Conna
 		c.collector.RecordReconnect(context.Background())
 	}
 	slog.Info("mqtt: connection established",
-		slog.String("clientID", c.cfg.ClientID.String()),
+		slog.String("client_id", c.cfg.ClientID.String()),
 		slog.Bool("reconnect", isReconnect))
 }
 
@@ -286,11 +286,11 @@ func (c *Connection) onConnectionDown() bool {
 
 	if closed {
 		slog.Debug("mqtt: connection down after close; stopping retry",
-			slog.String("clientID", c.cfg.ClientID.String()))
+			slog.String("client_id", c.cfg.ClientID.String()))
 		return false
 	}
 	slog.Info("mqtt: connection lost; autopaho will reconnect",
-		slog.String("clientID", c.cfg.ClientID.String()))
+		slog.String("client_id", c.cfg.ClientID.String()))
 	return true
 }
 
@@ -310,8 +310,8 @@ func (c *Connection) onConnectError(err error) {
 		permErr := buildConnackError(code, err,
 			"mqtt: connection rejected (fail-fast)")
 		slog.Error("mqtt: bootstrap-fatal connect error",
-			slog.String("clientID", c.cfg.ClientID.String()),
-			slog.String("code", string(code)),
+			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
 		c.emitFirstOutcome(bootstrapOutcome{permErr: permErr})
@@ -320,8 +320,8 @@ func (c *Connection) onConnectError(err error) {
 		permErr := buildConnackError(code, err,
 			"mqtt: connection rejected (permanent; retrying until operator fix)")
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
-			slog.String("clientID", c.cfg.ClientID.String()),
-			slog.String("code", string(code)),
+			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.String("errcode", string(code)),
 			slog.Any("error", redacted))
 		c.recordPermanentLocked(permErr)
 		// First-attempt permanent error: surface to Open as bootstrap outcome
@@ -335,7 +335,7 @@ func (c *Connection) onConnectError(err error) {
 		}
 		c.mu.Unlock()
 		slog.Warn("mqtt: transient connect error; autopaho will retry",
-			slog.String("clientID", c.cfg.ClientID.String()),
+			slog.String("client_id", c.cfg.ClientID.String()),
 			slog.Any("error", redacted))
 	}
 }
@@ -374,21 +374,17 @@ func buildConnackError(code errcode.Code, cause error, message string) error {
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
-		slog.String("clientID", c.cfg.ClientID.String()),
-		slog.Int("reasonCode", int(d.ReasonCode)))
+		slog.String("client_id", c.cfg.ClientID.String()),
+		slog.Int("reason_code", int(d.ReasonCode)))
 }
 
-// Client returns the underlying autopaho.ConnectionManager. Callers use this
-// to publish messages or subscribe to topics.
-//
-// Warning: PR-2 Publisher and PR-3 Subscriber MUST route publish/subscribe
-// topic arguments through TopicNamespace.PublishOK / TopicNamespace.SubscribeOK
-// before calling any ConnectionManager methods. The callsite funnel is not yet
-// enforced at compile time; it is tracked by gh issue #1225 and will be locked
-// in PR-2/PR-3.
-func (c *Connection) Client() *autopaho.ConnectionManager {
-	return c.cm
-}
+// R4 round-2: Client() raw accessor removed entirely from PR-1. PR-2
+// (Publisher) and PR-3 (Subscriber) will add typed Publish / Subscribe
+// methods on *Connection that route topic arguments through
+// TopicNamespace.PublishOK / SubscribeOK before calling cm.Publish /
+// cm.Subscribe, and the callsite funnel archtest (gh #1225) will lock the
+// routing. Internal callers reach the manager via c.cm directly within the
+// package; no external access is needed.
 
 // Health returns the current readiness of the connection:
 //   - nil         — phaseConnected and no permanent error

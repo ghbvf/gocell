@@ -23,10 +23,20 @@ const configNegTimeout = -1 * time.Second
 // const per TEST-TIME-LITERAL-01.
 const configKeepAliveOverflow = time.Duration(65536) * time.Second
 
+// configKeepAliveSubSecond is used in TestConfig_Validate_KeepAliveSubSecond
+// to assert KeepAlive ∈ (0, 1s) is rejected before it floor-truncates to
+// uint16(0) on the wire.
+const configKeepAliveSubSecond = 500 * time.Millisecond
+
 // configNegSessionExpiry is used in TestConfig_Validate_SessionExpiryNegative
 // to assert that negative SessionExpiry is rejected. Extracted to a const
 // per TEST-TIME-LITERAL-01.
 const configNegSessionExpiry = -1 * time.Second
+
+// configSessionExpirySubSecond is used in TestConfig_Validate_SessionExpirySubSecond
+// to assert SessionExpiry ∈ (0, 1s) is rejected before it floor-truncates to
+// uint32(0) on the wire.
+const configSessionExpirySubSecond = 500 * time.Millisecond
 
 // validClientID returns a ClientID for use in tests.
 func mustClientID(t *testing.T) ClientID {
@@ -216,6 +226,36 @@ func TestConfig_Validate_KeepAliveOverflow(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
 	cfg.KeepAlive = configKeepAliveOverflow
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+}
+
+// TestConfig_Validate_KeepAliveSubSecond covers R3 round-2 finding:
+// uint16(time.Duration(500*time.Millisecond).Seconds()) == 0 would silently
+// disable the broker KeepAlive at the wire. Validate must reject < 1s
+// before Open's uint16 cast.
+func TestConfig_Validate_KeepAliveSubSecond(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.KeepAlive = configKeepAliveSubSecond
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+}
+
+// TestConfig_Validate_SessionExpirySubSecond covers R3 round-2 finding:
+// SessionExpiry == 500ms requested persistent session but uint32 floor
+// truncation drops it to 0 (clean session) on the wire. Validate must
+// reject SessionExpiry ∈ (0, 1s).
+func TestConfig_Validate_SessionExpirySubSecond(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.SessionExpiry = configSessionExpirySubSecond
 	err := cfg.Validate()
 	require.Error(t, err)
 	var ec *errcode.Error

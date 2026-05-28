@@ -124,6 +124,63 @@ func TestTopicNamespace_SubscribeOK(t *testing.T) {
 	}
 }
 
+// TestTopicNamespace_ZeroReceiver_Rejected covers R2 round-2 finding:
+// `var ns TopicNamespace; ns.PublishOK("...")` previously returned nil for
+// topic == "" or any prefix match against empty namespace, because the
+// PublishOK / SubscribeOK methods accept zero-value receivers structurally.
+// The fix asserts both methods reject the zero-value receiver with
+// ErrAdapterMQTTInvalidTopicNamespace before any other check.
+func TestTopicNamespace_ZeroReceiver_Rejected(t *testing.T) {
+	t.Parallel()
+	var zero TopicNamespace
+
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{"PublishOK-empty-topic", func() error { return zero.PublishOK("") }},
+		{"PublishOK-nonempty-topic", func() error { return zero.PublishOK("any/topic") }},
+		{"SubscribeOK-empty-filter", func() error { return zero.SubscribeOK("") }},
+		{"SubscribeOK-nonempty-filter", func() error { return zero.SubscribeOK("any/+/#") }},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.fn()
+			if err == nil {
+				t.Fatalf("zero-value receiver %s expected error, got nil", tc.name)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrAdapterMQTTInvalidTopicNamespace {
+				t.Errorf("zero-value receiver %s: code = %s, want %s",
+					tc.name, ec.Code, ErrAdapterMQTTInvalidTopicNamespace)
+			}
+		})
+	}
+}
+
+// TestTopicNamespace_EmptyTopicAndFilter_Rejected covers MQTT v5 §4.7.3
+// (forbid empty topic name) for PublishOK and the parallel empty-filter
+// rejection for SubscribeOK.
+func TestTopicNamespace_EmptyTopicAndFilter_Rejected(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := ns.PublishOK(""); err == nil {
+		t.Error("PublishOK(empty) must be rejected")
+	}
+	if err := ns.SubscribeOK(""); err == nil {
+		t.Error("SubscribeOK(empty) must be rejected")
+	}
+}
+
 func TestTopicNamespace_PublishOK_PrefixBoundary(t *testing.T) {
 	// "ns" should not match "ns2" or "nsx"
 	ns, _ := ParseTopicNamespace("ns")

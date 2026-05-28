@@ -15,6 +15,17 @@ const (
 	msgSubscribeOutsideNS       = "mqtt subscribe filter head is outside the declared namespace"
 	msgInvalidWildcardPlacement = "mqtt subscribe filter has invalid wildcard placement (# must be at end, each level must be a lone token)"
 	msgPublishTopicWildcard     = "mqtt publish topic must not contain + or # wildcards"
+	msgEmptyTopic               = "mqtt publish topic must not be empty (MQTT v5 §4.7.3)"
+	msgEmptyFilter              = "mqtt subscribe filter must not be empty"
+	msgZeroNamespaceReceiver    = "mqtt topic namespace receiver is zero-value; construct via ParseTopicNamespace"
+
+	// detailKeyNamespace / detailKeyTopic / detailKeyFilter are extracted
+	// per go-standards.md "同义字符串重复 ≥ 3 次抽常量". These are public-
+	// detail key names exposed in errcode.PublicDetail for 4xx response
+	// surfacing.
+	detailKeyNamespace = "namespace"
+	detailKeyTopic     = "topic"
+	detailKeyFilter    = "filter"
 )
 
 // TopicNamespace is a validated topic prefix that scopes a cell's publish /
@@ -40,21 +51,21 @@ func ParseTopicNamespace(ns string) (TopicNamespace, error) {
 		return TopicNamespace{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			msgInvalidTopicNamespace,
-			errcode.WithDetails(errcode.PublicString("namespace", ns)),
+			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
 	if strings.HasPrefix(ns, "/") || strings.HasSuffix(ns, "/") {
 		return TopicNamespace{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			msgInvalidTopicNamespace,
-			errcode.WithDetails(errcode.PublicString("namespace", ns)),
+			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
 	if strings.ContainsAny(ns, "+#") {
 		return TopicNamespace{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			msgInvalidTopicNamespace,
-			errcode.WithDetails(errcode.PublicString("namespace", ns)),
+			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 		)
 	}
 	levels := strings.Split(ns, "/")
@@ -63,7 +74,7 @@ func ParseTopicNamespace(ns string) (TopicNamespace, error) {
 			return TopicNamespace{}, errcode.New(
 				errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 				msgInvalidTopicNamespace,
-				errcode.WithDetails(errcode.PublicString("namespace", ns)),
+				errcode.WithDetails(errcode.PublicString(detailKeyNamespace, ns)),
 			)
 		}
 	}
@@ -74,22 +85,43 @@ func ParseTopicNamespace(ns string) (TopicNamespace, error) {
 func (n TopicNamespace) String() string { return n.value }
 
 // PublishOK reports whether topic is a valid publish target under this namespace.
-// MQTT v5.0 §3.3.2.1 forbids wildcards in publish topics; this check rejects any
-// "+" or "#" before the namespace prefix check. A topic without wildcards is
-// under the namespace if it equals the prefix exactly or starts with prefix + "/".
+// MQTT v5.0 §3.3.2.1 forbids wildcards in publish topics; §4.7.3 forbids the
+// empty topic name. This check rejects:
+//   - zero-value receiver (`var ns TopicNamespace; ns.PublishOK(...)` is an
+//     in-package programmer error — the only construction path that yields a
+//     usable namespace is ParseTopicNamespace, which never returns the zero
+//     value);
+//   - empty topic;
+//   - any topic containing "+" or "#";
 //
-// Returns ErrAdapterMQTTInvalidSubscribeFilter when the topic contains a
-// wildcard (publish wildcards are a protocol error, not a namespace boundary
-// issue) and ErrAdapterMQTTTopicOutsideNamespace when the topic falls outside
-// the declared namespace.
+// before the namespace-prefix check. A topic without wildcards is under the
+// namespace if it equals the prefix exactly or starts with prefix + "/".
+//
+// Returns ErrAdapterMQTTInvalidTopicNamespace for the zero-value receiver,
+// ErrAdapterMQTTInvalidSubscribeFilter for wildcard/empty topic violations,
+// and ErrAdapterMQTTTopicOutsideNamespace for boundary violations.
 func (n TopicNamespace) PublishOK(topic string) error {
+	if n.value == "" {
+		return errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
+			msgZeroNamespaceReceiver,
+			errcode.WithDetails(errcode.PublicString(detailKeyTopic, topic)),
+		)
+	}
+	if topic == "" {
+		return errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			msgEmptyTopic,
+			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, n.value)),
+		)
+	}
 	if strings.ContainsAny(topic, "+#") {
 		return errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 			msgPublishTopicWildcard,
 			errcode.WithDetails(
-				errcode.PublicString("namespace", n.value),
-				errcode.PublicString("topic", topic),
+				errcode.PublicString(detailKeyNamespace, n.value),
+				errcode.PublicString(detailKeyTopic, topic),
 			),
 		)
 	}
@@ -103,8 +135,8 @@ func (n TopicNamespace) PublishOK(topic string) error {
 		errcode.KindInvalid, ErrAdapterMQTTTopicOutsideNamespace,
 		msgTopicOutsideNamespace,
 		errcode.WithDetails(
-			errcode.PublicString("namespace", n.value),
-			errcode.PublicString("topic", topic),
+			errcode.PublicString(detailKeyNamespace, n.value),
+			errcode.PublicString(detailKeyTopic, topic),
 		),
 	)
 }
@@ -120,6 +152,20 @@ func (n TopicNamespace) PublishOK(topic string) error {
 // the namespace, or ErrAdapterMQTTInvalidSubscribeFilter on malformed wildcard
 // placement (e.g. "#" not at last level, or wildcard embedded in a level).
 func (n TopicNamespace) SubscribeOK(filter string) error {
+	if n.value == "" {
+		return errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
+			msgZeroNamespaceReceiver,
+			errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+		)
+	}
+	if filter == "" {
+		return errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			msgEmptyFilter,
+			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, n.value)),
+		)
+	}
 	// Split into levels and validate wildcard placement.
 	levels := strings.Split(filter, "/")
 	for i, lvl := range levels {
@@ -129,7 +175,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 				return errcode.New(
 					errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 					msgInvalidWildcardPlacement,
-					errcode.WithDetails(errcode.PublicString("filter", filter)),
+					errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
 				)
 			}
 			continue
@@ -142,7 +188,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 			return errcode.New(
 				errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 				msgInvalidWildcardPlacement,
-				errcode.WithDetails(errcode.PublicString("filter", filter)),
+				errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
 			)
 		}
 	}
@@ -159,8 +205,8 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 		errcode.KindInvalid, ErrAdapterMQTTTopicOutsideNamespace,
 		msgSubscribeOutsideNS,
 		errcode.WithDetails(
-			errcode.PublicString("namespace", n.value),
-			errcode.PublicString("filter", filter),
+			errcode.PublicString(detailKeyNamespace, n.value),
+			errcode.PublicString(detailKeyFilter, filter),
 		),
 	)
 }
