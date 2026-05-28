@@ -100,7 +100,8 @@ func (n TopicNamespace) PublishOK(topic string) error {
 //   - "+" must appear alone as its entire level token (not embedded in a word)
 //
 // Returns ErrAdapterMQTTTopicOutsideNamespace if the filter head is not under
-// the namespace, or ErrAdapterMQTTInvalidTopicNamespace on malformed wildcards.
+// the namespace, or ErrAdapterMQTTInvalidSubscribeFilter on malformed wildcard
+// placement (e.g. "#" not at last level, or wildcard embedded in a level).
 func (n TopicNamespace) SubscribeOK(filter string) error {
 	// Split into levels and validate wildcard placement.
 	levels := strings.Split(filter, "/")
@@ -109,7 +110,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 			// # is only legal at the last level.
 			if i != len(levels)-1 {
 				return errcode.New(
-					errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
+					errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 					msgInvalidWildcardPlacement,
 					errcode.WithDetails(errcode.PublicString("filter", filter)),
 				)
@@ -122,7 +123,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 		// A level that contains + or # but is not exactly "+" or "#" is invalid.
 		if strings.ContainsAny(lvl, "+#") {
 			return errcode.New(
-				errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
+				errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 				msgInvalidWildcardPlacement,
 				errcode.WithDetails(errcode.PublicString("filter", filter)),
 			)

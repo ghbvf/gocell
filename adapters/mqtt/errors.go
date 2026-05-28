@@ -65,6 +65,14 @@ const (
 	// ErrAdapterMQTTPayloadTooLarge signals that a publish payload exceeds the
 	// maximum allowed size.
 	ErrAdapterMQTTPayloadTooLarge errcode.Code = "ERR_ADAPTER_MQTT_PAYLOAD_TOO_LARGE"
+
+	// ErrAdapterMQTTInvalidSubscribeFilter signals that a subscribe filter has
+	// invalid wildcard placement (e.g. "#" not at the last level, or a wildcard
+	// character embedded inside a non-wildcard level token). This is distinct
+	// from ErrAdapterMQTTInvalidTopicNamespace which means the namespace prefix
+	// itself is malformed, and ErrAdapterMQTTTopicOutsideNamespace which means
+	// the filter's non-wildcard head falls outside the declared namespace.
+	ErrAdapterMQTTInvalidSubscribeFilter errcode.Code = "ERR_ADAPTER_MQTT_INVALID_SUBSCRIBE_FILTER"
 )
 
 // connackClass classifies an OnConnectError into one of three categories.
@@ -74,7 +82,9 @@ type connackClass uint8
 const (
 	// classTransient: network/timeout/0x88/0x97 — autopaho retries normally.
 	classTransient connackClass = iota
-	// classBootstrapFatal: 0x81/0x82/0x84/0x85/0x8A/0x95 + TLS x509 — operator
+	// classBootstrapFatal: 0x81 MalformedPacket / 0x82 ProtocolError /
+	// 0x84 UnsupportedProtocolVersion / 0x85 ClientIdentifierNotValid /
+	// 0x8A Banned / 0x95 PacketTooLarge + TLS x509 — operator
 	// must fix the deployment; fail-fast at bootstrap.
 	classBootstrapFatal
 	// classPermanentRetain: 0x87 NotAuthorized, 0x86 BadUserOrPass — credentials
@@ -89,7 +99,7 @@ const (
 // ReasonCode field (byte) to a class. TLS handshake errors are classified as
 // classBootstrapFatal regardless of the ConnackError path.
 //
-// Reason-code → class mapping:
+// Reason-code → class mapping (ref: MQTT v5.0 spec §3.2.2.2):
 //
 //	0x87 NotAuthorized                → classPermanentRetain + ErrAdapterMQTTConnectPermanent
 //	0x86 BadUserNameOrPassword        → classPermanentRetain + ErrAdapterMQTTConnectPermanent
@@ -97,8 +107,8 @@ const (
 //	0x82 ProtocolError                → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
 //	0x84 UnsupportedProtocolVersion   → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
 //	0x85 ClientIdentifierNotValid     → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x8A KeepAliveTimeout             → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
-//	0x95 MessageRateTooHigh (fatal)   → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
+//	0x8A Banned                       → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
+//	0x95 PacketTooLarge               → classBootstrapFatal  + ErrAdapterMQTTConnectPermanent
 //	0x88 ServerUnavailable            → classTransient       + ErrAdapterMQTTConnect
 //	0x97 QuotaExceeded                → classTransient       + ErrAdapterMQTTConnect
 //	default                           → classTransient       + ErrAdapterMQTTConnect
@@ -123,8 +133,8 @@ func classifyConnackReason(err error) (connackClass, errcode.Code) {
 		0x82, // ProtocolError
 		0x84, // UnsupportedProtocolVersion
 		0x85, // ClientIdentifierNotValid
-		0x8A, // KeepAliveTimeout
-		0x95: // MessageRateTooHigh (treated as bootstrap fatal: payload/rate config mismatch)
+		0x8A, // Banned
+		0x95: // PacketTooLarge (bootstrap fatal: maximum packet size mismatch)
 		return classBootstrapFatal, ErrAdapterMQTTConnectPermanent
 
 	default:

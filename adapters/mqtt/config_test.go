@@ -3,6 +3,7 @@ package mqtt
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -256,6 +257,44 @@ func TestConfig_BrokerURLs_ReturnsErrorOnInvalidURL(t *testing.T) {
 	cfg.Brokers = []string{"http://invalid:1883"}
 	_, err := cfg.brokerURLs()
 	require.Error(t, err)
+}
+
+// TestConfig_ParseBrokerURL_CredentialsRedacted verifies that a broker URL
+// containing userinfo (user:pass@host) has credentials stripped before being
+// placed in the Public Details channel, preventing exposure via 4xx wire or slog.
+func TestConfig_ParseBrokerURL_CredentialsRedacted(t *testing.T) {
+	t.Parallel()
+	// Unsupported scheme so we hit the error path — credentials must be redacted.
+	cfg := validConfig(t)
+	cfg.Brokers = []string{"http://admin:supersecret@broker.example.com:1883"}
+	err := cfg.Validate()
+	require.Error(t, err)
+
+	// The error string (code + message) must not contain the raw password.
+	assert.NotContains(t, err.Error(), "supersecret",
+		"password must not appear in error string")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+
+	// Inspect the Details slice directly for the broker key.
+	// redactConnectURL produces "http://xxxxx@broker.example.com:1883" for
+	// this URL, preserving the host but masking credentials.
+	found := false
+	for _, d := range ec.Details {
+		if d.Key() == "broker" {
+			v := fmt.Sprintf("%v", d.Value())
+			// Password must be redacted (url.URL.Redacted() replaces it with xxxxx).
+			assert.NotContains(t, v, "supersecret",
+				"broker detail must not contain password")
+			// Host should still be visible so operators can identify the broker.
+			assert.Contains(t, v, "broker.example.com",
+				"host should still appear in redacted URL")
+			found = true
+		}
+	}
+	assert.True(t, found, "no 'broker' detail found in error details")
 }
 
 // TestConfig_Validate_MultipleBrokersMixed verifies that one invalid broker

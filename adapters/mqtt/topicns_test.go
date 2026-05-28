@@ -1,7 +1,10 @@
 package mqtt
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestParseTopicNamespace_Valid(t *testing.T) {
@@ -132,5 +135,58 @@ func TestTopicNamespace_PublishOK_PrefixBoundary(t *testing.T) {
 	}
 	if err := ns.PublishOK("ns/sub"); err != nil {
 		t.Errorf("PublishOK(ns/sub) should succeed: %v", err)
+	}
+}
+
+// TestTopicNamespace_SubscribeOK_WildcardErrorCodes verifies that wildcard
+// placement errors return ErrAdapterMQTTInvalidSubscribeFilter (not the
+// namespace-invalid code) and that outside-namespace errors return
+// ErrAdapterMQTTTopicOutsideNamespace.
+func TestTopicNamespace_SubscribeOK_WildcardErrorCodes(t *testing.T) {
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		filter   string
+		wantCode errcode.Code
+	}{
+		{
+			name:     "hash-not-at-tail returns InvalidSubscribeFilter",
+			filter:   "ns/#/x",
+			wantCode: ErrAdapterMQTTInvalidSubscribeFilter,
+		},
+		{
+			name:     "plus-not-lone-token returns InvalidSubscribeFilter",
+			filter:   "ns/ab+c",
+			wantCode: ErrAdapterMQTTInvalidSubscribeFilter,
+		},
+		{
+			name:     "hash-not-lone-token returns InvalidSubscribeFilter",
+			filter:   "ns/ab#c",
+			wantCode: ErrAdapterMQTTInvalidSubscribeFilter,
+		},
+		{
+			name:     "outside-namespace returns TopicOutsideNamespace",
+			filter:   "other/#",
+			wantCode: ErrAdapterMQTTTopicOutsideNamespace,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ns.SubscribeOK(tc.filter)
+			if err == nil {
+				t.Fatalf("SubscribeOK(%q) expected error, got nil", tc.filter)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("SubscribeOK(%q) error is not *errcode.Error: %T", tc.filter, err)
+			}
+			if ec.Code != tc.wantCode {
+				t.Errorf("SubscribeOK(%q) code = %v, want %v", tc.filter, ec.Code, tc.wantCode)
+			}
+		})
 	}
 }

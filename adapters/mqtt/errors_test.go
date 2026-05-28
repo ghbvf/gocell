@@ -29,8 +29,8 @@ func TestClassifyConnackReason(t *testing.T) {
 		{"protocol-error-0x82", 0x82, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
 		{"unsupported-0x84", 0x84, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
 		{"client-id-invalid-0x85", 0x85, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
-		{"keep-alive-0x8A", 0x8A, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
-		{"payload-too-large-0x95", 0x95, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"banned-0x8A", 0x8A, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
+		{"packet-too-large-0x95", 0x95, classBootstrapFatal, ErrAdapterMQTTConnectPermanent},
 
 		// Permanent retain
 		{"not-authorized-0x87", 0x87, classPermanentRetain, ErrAdapterMQTTConnectPermanent},
@@ -139,6 +139,7 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTNeverConnected,
 		ErrAdapterMQTTClosed,
 		ErrAdapterMQTTPayloadTooLarge,
+		ErrAdapterMQTTInvalidSubscribeFilter,
 	}
 	for _, c := range codes {
 		if c == "" {

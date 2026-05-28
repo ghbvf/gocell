@@ -52,14 +52,13 @@ type BackoffConfig struct {
 }
 
 // Config holds all configuration required to construct an MQTT connection.
-// Populate via struct literal; call Validate before passing to the connection
-// constructor (Batch B3).
+// Populate via struct literal; call Validate before passing to Open.
 //
 // Zero values are invalid for most fields — Validate reports all failures with
 // typed errcode details so callers can surface them in structured logs without
 // PII leaking into messages (MESSAGE-CONST-LITERAL-01).
 type Config struct {
-	ClientID          ClientID      // sealed type from clientid.go (B1); zero value invalid
+	ClientID          ClientID      // sealed type from clientid.go; zero value invalid
 	Brokers           []string      // e.g. "tcp://host:1883", "tls://host:8883"
 	TLS               *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
 	SessionExpiry     time.Duration // 0 = clean session
@@ -73,6 +72,8 @@ type Config struct {
 // Validate checks all fields for internal consistency and returns the first
 // validation error encountered. Each error carries ErrAdapterMQTTInvalidConfig
 // with relevant public details so the caller can surface structured diagnostics.
+//
+// Callers must call Validate before passing Config to Open.
 //
 // Cognitive-complexity budget: split into validateBrokers + validateTimings +
 // validateBackoff helpers to stay ≤ 15 per function.
@@ -151,13 +152,18 @@ func (c Config) brokerURLs() ([]*url.URL, error) {
 
 // parseBrokerURL parses raw into a *url.URL and validates the scheme and host.
 // Returns ErrAdapterMQTTInvalidConfig on any failure.
+//
+// The "broker" detail is redacted via redactConnectURL before being placed in
+// the Public Details channel so that URLs with userinfo (tcp://user:pass@host)
+// do not leak credentials into 4xx responses or slog (security: PII/credential
+// redaction, MESSAGE-CONST-LITERAL-01 / observability.md).
 func parseBrokerURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !validBrokerSchemes[u.Scheme] || u.Host == "" {
 		return nil, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
 			msgConfigBadBrokerURL,
-			errcode.WithDetails(errcode.PublicString("broker", raw)),
+			errcode.WithDetails(errcode.PublicString("broker", redactConnectURL(raw))),
 		)
 	}
 	return u, nil

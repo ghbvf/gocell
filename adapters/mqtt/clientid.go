@@ -52,14 +52,14 @@ type ClientID struct {
 // The offending values are placed in Details (not the message) to satisfy the
 // MESSAGE-CONST-LITERAL-01 constraint.
 func ParseClientID(cellID, role string) (ClientID, error) {
-	if err := validateSegment(cellID); err != nil {
+	if !validateSegment(cellID) {
 		return ClientID{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidClientID,
 			msgInvalidClientID,
 			errcode.WithDetails(errcode.PublicString("cellID", cellID)),
 		)
 	}
-	if err := validateSegment(role); err != nil {
+	if !validateSegment(role) {
 		return ClientID{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidClientID,
 			msgInvalidClientID,
@@ -88,18 +88,11 @@ func ParseClientID(cellID, role string) (ClientID, error) {
 // empty string for the zero-value ClientID.
 func (c ClientID) String() string { return c.value }
 
-// validateSegment checks that s is a valid cellID/role segment.
-func validateSegment(s string) error {
+// validateSegment reports whether s is a valid cellID/role segment.
+// Returns false for empty, too long, or non-matching strings.
+func validateSegment(s string) bool {
 	if len(s) == 0 || len(s) > maxSegmentLen {
-		return errInvalidSegment
+		return false
 	}
-	if !segmentRe.MatchString(s) {
-		return errInvalidSegment
-	}
-	return nil
+	return segmentRe.MatchString(s)
 }
-
-// errInvalidSegment is an internal sentinel used only by validateSegment.
-// It is never returned to callers directly — ParseClientID wraps it in an
-// errcode.Error with the appropriate code and public details.
-var errInvalidSegment = errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidClientID, msgInvalidClientID)

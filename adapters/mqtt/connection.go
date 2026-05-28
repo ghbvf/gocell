@@ -43,7 +43,7 @@ var (
 // ref: adapters/rabbitmq/connection.go reconnect wrap pattern.
 type Connection struct {
 	cfg       Config
-	clk       clock.Clock         // retained for future clock-based health timeouts; unused in B3
+	clk       clock.Clock         // reserved for clock-based health timeouts (used from PR-3)
 	collector ConnectionCollector // optional; nil → no-op
 
 	cm *autopaho.ConnectionManager
@@ -209,7 +209,8 @@ func (c *Connection) onConnectionDown() bool {
 	c.mu.Unlock()
 
 	if closed {
-		slog.Debug("mqtt: connection down after close; stopping retry")
+		slog.Debug("mqtt: connection down after close; stopping retry",
+			slog.String("clientID", c.cfg.ClientID.String()))
 		return false
 	}
 	slog.Info("mqtt: connection lost; autopaho will reconnect",
@@ -229,6 +230,7 @@ func (c *Connection) onConnectError(err error) {
 	switch class {
 	case classBootstrapFatal:
 		slog.Error("mqtt: bootstrap-fatal connect error",
+			slog.String("clientID", c.cfg.ClientID.String()),
 			slog.String("code", string(code)),
 			slog.Any("error", redacted))
 		bootErr := errcode.New(errcode.KindInternal, code,
@@ -243,10 +245,12 @@ func (c *Connection) onConnectError(err error) {
 
 	case classPermanentRetain:
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
+			slog.String("clientID", c.cfg.ClientID.String()),
 			slog.String("code", string(code)),
 			slog.Any("error", redacted))
 		c.wakeWaitersWithPermanentErr(
-			errcode.New(errcode.KindInternal, code, "mqtt: connection rejected (fail-fast)"),
+			errcode.New(errcode.KindInternal, code,
+				"mqtt: connection rejected (permanent; retrying until operator fix)"),
 		)
 
 	default: // classTransient
@@ -256,6 +260,7 @@ func (c *Connection) onConnectError(err error) {
 		}
 		c.mu.Unlock()
 		slog.Warn("mqtt: transient connect error; autopaho will retry",
+			slog.String("clientID", c.cfg.ClientID.String()),
 			slog.Any("error", redacted))
 	}
 }
@@ -275,11 +280,18 @@ func (c *Connection) wakeWaitersWithPermanentErr(permErr error) {
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
+		slog.String("clientID", c.cfg.ClientID.String()),
 		slog.Int("reasonCode", int(d.ReasonCode)))
 }
 
 // Client returns the underlying autopaho.ConnectionManager. Callers use this
 // to publish messages or subscribe to topics.
+//
+// Warning: PR-2 Publisher and PR-3 Subscriber MUST route publish/subscribe
+// topic arguments through TopicNamespace.PublishOK / TopicNamespace.SubscribeOK
+// before calling any ConnectionManager methods. The callsite funnel is not yet
+// enforced at compile time; it is tracked by gh issue #1225 and will be locked
+// in PR-2/PR-3.
 func (c *Connection) Client() *autopaho.ConnectionManager {
 	return c.cm
 }
