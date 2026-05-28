@@ -245,19 +245,21 @@ func TestProviderPublisherCollector_RecordPublishSuccess(t *testing.T) {
 	assert.True(t, foundDuration, "mqtt_publish_ack_duration_seconds Observe not found in spy ops")
 }
 
-// TestProviderPublisherCollector_RecordPublishFailure verifies all 8 reason
+// TestProviderPublisherCollector_RecordPublishFailure verifies all 10 reason
 // consts increment mqtt_publish_failed_total with the correct reason label.
 func TestProviderPublisherCollector_RecordPublishFailure(t *testing.T) {
 	t.Parallel()
 	allReasons := []PublishFailureReason{
 		PublishFailurePayloadTooLarge,
-		PublishFailureNeverConnected,
 		PublishFailureClosed,
 		PublishFailurePubAckTimeout,
 		PublishFailureContextCanceled,
 		PublishFailurePublishError,
 		PublishFailureTopicOutsideNamespace,
 		PublishFailureRateLimited,
+		PublishFailureNotAuthorized,
+		PublishFailurePayloadFormatInvalid,
+		PublishFailureRejected,
 	}
 	for _, reason := range allReasons {
 		reason := reason

@@ -68,29 +68,42 @@ type PublishFailureReason string
 
 const (
 	// PublishFailurePayloadTooLarge means the message payload exceeded the
-	// broker's or adapter's configured maximum size.
+	// adapter's configured MaximumPacketSize (client-side guard, pre-network).
 	PublishFailurePayloadTooLarge PublishFailureReason = "payload_too_large"
-	// PublishFailureNeverConnected means Publish() was called before the
-	// adapter established its first successful connection.
-	PublishFailureNeverConnected PublishFailureReason = "never_connected"
 	// PublishFailureClosed means Publish() was called after the adapter was
 	// shut down (Close() already called).
 	PublishFailureClosed PublishFailureReason = "closed"
 	// PublishFailurePubAckTimeout means the broker did not send a PUBACK
-	// within the configured deadline (QoS 1 / QoS 2 flows).
+	// within the configured deadline (QoS 1 / QoS 2 flows). A publish issued
+	// before the connection is established surfaces here (or as
+	// context_canceled): autopaho queues the publish until connected, so the
+	// caller observes a deadline, not a distinct "never connected" reason.
 	PublishFailurePubAckTimeout PublishFailureReason = "puback_timeout"
 	// PublishFailureContextCanceled means the caller's context was canceled
 	// or its deadline exceeded before the publish completed.
 	PublishFailureContextCanceled PublishFailureReason = "context_canceled"
-	// PublishFailurePublishError means the underlying MQTT client returned
-	// an error from the publish wire call.
+	// PublishFailurePublishError means the underlying MQTT client returned a
+	// transport-level error from the publish wire call (not a broker PUBACK
+	// reason code).
 	PublishFailurePublishError PublishFailureReason = "publish_error"
 	// PublishFailureTopicOutsideNamespace means the topic was rejected because
 	// it falls outside the adapter's allowed topic namespace.
 	PublishFailureTopicOutsideNamespace PublishFailureReason = "topic_outside_namespace"
-	// PublishFailureRateLimited means the publish attempt was rejected by the
-	// adapter's rate limiter before the message reached the broker.
+	// PublishFailureRateLimited means the broker returned PUBACK 0x97 (Quota
+	// Exceeded) — the publisher is rate-limited.
 	PublishFailureRateLimited PublishFailureReason = "rate_limited"
+	// PublishFailureNotAuthorized means the broker returned PUBACK 0x87 (Not
+	// Authorized) — the publisher's ACL forbids the topic. Retryable after an
+	// operator fixes the broker ACL.
+	PublishFailureNotAuthorized PublishFailureReason = "not_authorized"
+	// PublishFailurePayloadFormatInvalid means the broker returned PUBACK 0x99
+	// (Payload Format Invalid) — the payload violates its declared format/
+	// content-type. Distinct from payload_too_large (size).
+	PublishFailurePayloadFormatInvalid PublishFailureReason = "payload_format_invalid"
+	// PublishFailureRejected means the broker returned a permanent-reject PUBACK
+	// reason code (0x80 Unspecified / 0x83 ImplementationSpecific / 0x90
+	// TopicNameInvalid) — a client-side fix is required before retrying.
+	PublishFailureRejected PublishFailureReason = "rejected"
 )
 
 // PublisherCollector observes publisher-side metrics. Construction-time cellID
@@ -181,9 +194,9 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	publishFailed, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_failed_total",
 		Help: "Total number of MQTT publish attempts that failed, classified by reason. " +
-			"reason ∈ {payload_too_large, never_connected, closed, puback_timeout, context_canceled, " +
-			"publish_error, topic_outside_namespace, rate_limited} — closed set; alerting rules can rely " +
-			"on the literals. Label: cell = construction-time cell identifier.",
+			"reason ∈ {payload_too_large, closed, puback_timeout, context_canceled, publish_error, " +
+			"topic_outside_namespace, rate_limited, not_authorized, payload_format_invalid, rejected} — " +
+			"closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {

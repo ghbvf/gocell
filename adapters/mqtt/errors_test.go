@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -145,6 +146,8 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTPublishNoSubscribers,
 		ErrAdapterMQTTPublishRejected,
 		ErrAdapterMQTTPublishRateLimited,
+		ErrAdapterMQTTPublishNotAuthorized,
+		ErrAdapterMQTTPublishPayloadFormatInvalid,
 		ErrAdapterMQTTPublishCanceled,
 		ErrAdapterMQTTPublishFailed,
 		ErrAdapterMQTTPublisherCloseTimeout,
@@ -153,7 +156,10 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		if c == "" {
 			t.Errorf("error code is empty string: %v", c)
 		}
-		if string(c)[:len("ERR_ADAPTER_MQTT_")] != "ERR_ADAPTER_MQTT_" {
+		// strings.HasPrefix is bounds-safe for codes shorter than the prefix;
+		// a slice index ([:len(prefix)]) would panic on a short code instead of
+		// reporting a clean test failure.
+		if !strings.HasPrefix(string(c), "ERR_ADAPTER_MQTT_") {
 			t.Errorf("code %q does not have ERR_ADAPTER_MQTT_ prefix", c)
 		}
 	}
@@ -175,14 +181,15 @@ func TestClassifyPubackReason(t *testing.T) {
 		{"unspecified-error-0x80", 0x80, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
 		// 0x83 Implementation specific error
 		{"implementation-specific-0x83", 0x83, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
-		// 0x87 Not authorized — retryable (KindUnavailable, aligned with CONNACK 0x87 classPermanentRetain)
-		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishRejected, errcode.KindUnavailable},
+		// 0x87 Not authorized — retryable (KindUnavailable, aligned with CONNACK 0x87 classPermanentRetain),
+		// dedicated code (not the permanent ErrAdapterMQTTPublishRejected)
+		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishNotAuthorized, errcode.KindUnavailable},
 		// 0x90 Topic Name invalid
 		{"topic-name-invalid-0x90", 0x90, ErrAdapterMQTTPublishRejected, errcode.KindInvalid},
 		// 0x97 Quota exceeded / rate limited
 		{"quota-exceeded-0x97", 0x97, ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable},
-		// 0x99 Payload format invalid — reuse ErrAdapterMQTTPayloadTooLarge
-		{"payload-format-invalid-0x99", 0x99, ErrAdapterMQTTPayloadTooLarge, errcode.KindInvalid},
+		// 0x99 Payload format invalid — dedicated code, distinct from PayloadTooLarge (size)
+		{"payload-format-invalid-0x99", 0x99, ErrAdapterMQTTPublishPayloadFormatInvalid, errcode.KindInvalid},
 		// default — unknown code
 		{"unknown-code-0x7f", 0x7F, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
 	}

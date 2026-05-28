@@ -61,6 +61,13 @@ func WithPublisherCollector(c PublisherCollector) PublisherOption {
 //
 // Returns error if conn is nil or ns is the zero-value namespace (which would
 // fail every Mint).
+//
+// Signature note: unlike adapters/rabbitmq.NewPublisher (which returns *Publisher
+// and panics via clock.MustHaveClock on a nil clock), this constructor returns
+// (*Publisher, error). The difference is deliberate: a nil clock is a programmer
+// error (panic, same as rabbitmq), but a nil Connection / zero TopicNamespace are
+// caller-supplied runtime values validated into a returned error so the bootstrap
+// wiring path can surface them as structured diagnostics rather than crashing.
 func NewPublisher(clk clock.Clock, conn *Connection, ns TopicNamespace, opts ...PublisherOption) (*Publisher, error) {
 	clock.MustHaveClock(clk, "mqtt.NewPublisher")
 	if conn == nil {
@@ -148,11 +155,15 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		return wrapPublishErr(err)
 	}
 
-	// Inspect PUBACK reason code.
+	// Inspect PUBACK reason code. The outer guard (ReasonCode != 0x00) means
+	// classifyPubackReason never returns the empty Success code here, so no
+	// `code != ""` check is needed — only 0x10 NoMatchingSubscribers is the
+	// non-error case to skip.
 	if resp != nil && resp.ReasonCode != 0x00 {
 		code, kind := classifyPubackReason(resp.ReasonCode)
-		if code != "" && code != ErrAdapterMQTTPublishNoSubscribers {
-			// Rejected / RateLimited path — record failure + return wrapped error.
+		if code != ErrAdapterMQTTPublishNoSubscribers {
+			// Rejected / RateLimited / NotAuthorized / PayloadFormatInvalid path —
+			// record failure + return wrapped error.
 			reason := pubackReasonToMetric(code)
 			p.collector.RecordPublishFailure(ctx, reason)
 			return errcode.New(kind, code,
@@ -163,9 +174,13 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 				))
 		}
 		// 0x10 NoMatchingSubscribers is informational: count as success, but warn
-		// for operator visibility (device-not-yet-online scenario).
+		// for operator visibility (device-not-yet-online scenario). topic is the
+		// operator's actionable field here; it may carry device/tenant identifiers
+		// in IoT deployments — configure slog handler redaction if that is a
+		// concern for the target sink.
 		if resp.ReasonCode == 0x10 {
 			slog.Warn("mqtt: publish succeeded with no matching subscribers",
+				slog.String("client_id", p.conn.cfg.ClientID.String()),
 				slog.String("topic", t.String()))
 		}
 	}
@@ -227,7 +242,8 @@ func wrapPublishErr(err error) error {
 }
 
 // pubackReasonToMetric maps an errcode.Code (from classifyPubackReason) to a
-// PublishFailureReason metric label.
+// PublishFailureReason metric label, keeping the errcode↔metric mapping coherent
+// (each distinct PUBACK errcode → a distinct, actionable metric reason).
 //
 // Caller MUST pre-filter ErrAdapterMQTTPublishNoSubscribers — that code is
 // treated as success path (0x10 NoMatchingSubscribers) and never reaches this
@@ -236,8 +252,12 @@ func pubackReasonToMetric(code errcode.Code) PublishFailureReason {
 	switch code {
 	case ErrAdapterMQTTPublishRateLimited:
 		return PublishFailureRateLimited
-	case ErrAdapterMQTTPayloadTooLarge:
-		return PublishFailurePayloadTooLarge
+	case ErrAdapterMQTTPublishNotAuthorized:
+		return PublishFailureNotAuthorized
+	case ErrAdapterMQTTPublishPayloadFormatInvalid:
+		return PublishFailurePayloadFormatInvalid
+	case ErrAdapterMQTTPublishRejected:
+		return PublishFailureRejected
 	default:
 		return PublishFailurePublishError
 	}

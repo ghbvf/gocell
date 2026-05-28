@@ -25,11 +25,10 @@ import (
 // ---------------------------------------------------------------------------
 
 // sharedInternalBroker is a package-level shared mochi broker for all
-// publisher/connection unit tests in this file. Using sync.Once with a
-// pre-allocated random port (obtained via net.Listen then reused immediately
-// via listeners.NewTCP) avoids the TOCTOU window of the previous
-// ln.Close() + re-bind pattern. The broker is started once per test binary
-// run and all parallel tests share it safely.
+// publisher/connection unit tests in this file. It is started once per test
+// binary run (sync.Once) and shared by all parallel tests. Sharing one broker
+// (rather than one per test) is what minimizes port churn — NOT a claim of
+// TOCTOU-freedom: see initSharedInternalBroker for the close-then-rebind window.
 var (
 	sharedInternalBrokerOnce sync.Once
 	sharedInternalBrokerAddr string
@@ -37,15 +36,16 @@ var (
 )
 
 // initSharedInternalBroker starts the shared in-process mochi broker exactly
-// once. It allocates a random port via net.Listen, passes the open listener
-// directly to mochi's TCP listener (eliminating the TOCTOU close-then-rebind
-// window), and waits until the broker is ready.
+// once and waits until it is ready.
 //
-// Note: mochi's listeners.NewTCP accepts an address string; the OS may assign
-// a different port if we close before passing, but here we pass the already-
-// bound address string immediately—the listener was closed after extracting the
-// port so we can re-bind before any other goroutine takes it. The window is
-// tiny and test-binary-scoped (no external competition).
+// Port allocation uses the standard probe-then-rebind idiom: net.Listen(":0")
+// to obtain a free port, Close it, then hand the address string to mochi's
+// listeners.NewTCP. This leaves a genuine — but small and test-binary-scoped —
+// TOCTOU window between Close and rebind. It is acceptable here because no other
+// process competes for the loopback ephemeral port within a single `go test`
+// run; mochi v2 does not accept a pre-bound net.Listener, so the window cannot
+// be fully eliminated without a different broker. Do NOT describe this as
+// TOCTOU-free.
 func initSharedInternalBroker(t *testing.T) {
 	t.Helper()
 	sharedInternalBrokerOnce.Do(func() {
@@ -62,8 +62,9 @@ func initSharedInternalBroker(t *testing.T) {
 			return
 		}
 		sharedInternalBrokerAddr = ln.Addr().String()
-		// Close immediately so mochi can re-bind. The window is safe within
-		// a single test binary (no external process competition).
+		// Close so mochi can rebind the same address. This is the close-then-
+		// rebind TOCTOU window documented on initSharedInternalBroker — small and
+		// test-binary-scoped, not eliminated.
 		_ = ln.Close()
 
 		tcp := listeners.NewTCP(listeners.Config{
@@ -98,6 +99,16 @@ func startInternalBroker(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	initSharedInternalBroker(t)
 	return sharedInternalBrokerAddr, func() {} // stop is a no-op; shared broker outlives individual tests
+}
+
+// stopSharedInternalBroker stops the shared in-process mochi broker if it was
+// started. Nil-safe and idempotent (srv.Close tolerates repeat calls), so both
+// the unit and integration TestMain can call it. Called once after m.Run() so
+// the broker goroutine + listener are released instead of leaking to exit.
+func stopSharedInternalBroker() {
+	if sharedInternalBrokerStop != nil {
+		sharedInternalBrokerStop()
+	}
 }
 
 // newInternalConfig returns a minimal valid Config pointing at addr.

@@ -285,7 +285,9 @@ func (c *Connection) onConnectionDown() bool {
 	c.mu.Unlock()
 
 	if closed {
-		slog.Debug("mqtt: connection down after close; stopping retry",
+		// Graceful-shutdown lifecycle event — Info per observability.md (not Debug,
+		// which is off in production and would hide the orderly-stop confirmation).
+		slog.Info("mqtt: connection down after close; stopping retry",
 			slog.String("client_id", c.cfg.ClientID.String()))
 		return false
 	}
@@ -396,10 +398,14 @@ func buildConnackError(code errcode.Code, cause error, message string) error {
 }
 
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
+// reason_name is decoded via disconnectReasonName (MQTT v5 §3.14.2.1) — the
+// DISCONNECT reason-code table, NOT the CONNACK table, which shares numeric
+// codes with different meanings.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
 		slog.String("client_id", c.cfg.ClientID.String()),
-		slog.Int("reason_code", int(d.ReasonCode)))
+		slog.Int("reason_code", int(d.ReasonCode)),
+		slog.String("reason_name", disconnectReasonName(d.ReasonCode)))
 }
 
 // publishOpts captures per-Publish options that are not part of the

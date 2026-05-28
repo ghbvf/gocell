@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -239,10 +240,16 @@ func TestPublisher_Publish_ContextCanceled(t *testing.T) {
 
 	err = pub.Publish(canceledCtx, "test/cancel", []byte("payload"))
 	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTPublishCanceled, ec.Code,
+		"canceled ctx must wrap ErrAdapterMQTTPublishCanceled")
 
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 	assert.Equal(t, 1, spy.failureCount, "RecordPublishFailure should be called on context cancel")
+	assert.Equal(t, PublishFailureContextCanceled, spy.lastFailureReason,
+		"canceled ctx must record the context_canceled metric reason")
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +346,142 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 	assert.NoError(t, closeErr, "Close should succeed after draining in-flight publishes")
 
 	wg.Wait()
+	// NOTE: this test cannot deterministically pin the publish to the "mid-flight
+	// at conn.Publish" window (scheduler-dependent). The deterministic mid-flight
+	// case — where the broker withholds PUBACK so the WaitGroup is provably held
+	// across Close — is covered by TestPublisher_Close_TimesOutOnStuckPublish.
+}
+
+// TestPublisher_Close_TimesOutOnStuckPublish deterministically exercises the
+// Close drain-timeout path (publisher.go select on ctx.Done): a broker hook
+// withholds the QoS-1 PUBACK so a publish is provably in-flight (WaitGroup
+// held), then Close is invoked with an already-canceled ctx. Close must return
+// ErrAdapterMQTTPublisherCloseTimeout, and — crucially — the in-flight publish
+// goroutine must NOT be killed: releasing the hook lets it complete, proving
+// Close-timeout is a bounded wait, not a cancellation.
+func TestPublisher_Close_TimesOutOnStuckPublish(t *testing.T) {
+	t.Parallel()
+	hook := &blockingPubAckHook{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	addr, stop := startBrokerWithHook(t, hook)
+	defer stop()
+
+	clk := clock.Real()
+	cfg := newInternalConfig(addr)
+	cfg.PublishTimeout = 0 // no adapter timeout — publish blocks on the withheld PUBACK
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D15s)
+	defer cancel()
+
+	conn, err := Open(ctx, clk, cfg)
+	require.NoError(t, err)
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	ns, err := ParseTopicNamespace("test")
+	require.NoError(t, err)
+	pub, err := NewPublisher(clk, conn, ns)
+	require.NoError(t, err)
+
+	// Launch a publish the broker will not PUBACK until we release the hook.
+	pubDone := make(chan error, 1)
+	go func() { pubDone <- pub.Publish(ctx, "test/stuck", []byte("x")) }()
+
+	// Barrier: the broker received the PUBLISH (PUBACK now withheld), so the
+	// publisher's WaitGroup is held and Close must drain-wait.
+	select {
+	case <-hook.entered:
+	case <-ctx.Done():
+		t.Fatal("publish never reached broker hook")
+	}
+
+	// Close with an already-canceled ctx: drain cannot complete → timeout.
+	canceledCtx, cancelFn := context.WithCancel(context.Background())
+	cancelFn()
+	closeErr := pub.Close(canceledCtx)
+	require.Error(t, closeErr)
+	var ec *errcode.Error
+	require.True(t, errors.As(closeErr, &ec))
+	assert.Equal(t, ErrAdapterMQTTPublisherCloseTimeout, ec.Code,
+		"Close with canceled ctx and an in-flight publish must time out")
+
+	// Release the broker: the in-flight goroutine must still complete (Close
+	// timeout did not cancel it).
+	close(hook.release)
+	select {
+	case perr := <-pubDone:
+		assert.NoError(t, perr, "released in-flight publish should complete successfully")
+	case <-ctx.Done():
+		t.Fatal("in-flight publish goroutine did not complete after broker release")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// classifyPublishErr / wrapPublishErr — pure-function table-driven coverage
+// (no broker; exercises every branch including the generic-error path that the
+// broker-backed tests do not reach).
+// ---------------------------------------------------------------------------
+
+func TestClassifyPublishErr(t *testing.T) {
+	t.Parallel()
+
+	// deadline-exceeded publishCtx: the first branch keys off publishCtx.Err().
+	deadlineCtx, dcancel := context.WithTimeout(context.Background(), 0)
+	defer dcancel()
+	<-deadlineCtx.Done() // ensure Err() == DeadlineExceeded
+
+	canceledCtx, ccancel := context.WithCancel(context.Background())
+	ccancel()
+	<-canceledCtx.Done()
+
+	bg := context.Background()
+	wrapCanceled := fmt.Errorf("wrap: %w", context.Canceled)
+	wrapDeadline := fmt.Errorf("wrap: %w", context.DeadlineExceeded)
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want PublishFailureReason
+	}{
+		{"deadline-ctx-maps-puback-timeout", deadlineCtx, errors.New("transport"), PublishFailurePubAckTimeout},
+		{"canceled-err-maps-context-canceled", canceledCtx, wrapCanceled, PublishFailureContextCanceled},
+		{"deadline-err-without-deadline-ctx", bg, wrapDeadline, PublishFailureContextCanceled},
+		{"generic-transport-err", bg, errors.New("connection reset"), PublishFailurePublishError},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyPublishErr(tc.ctx, tc.err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestWrapPublishErr(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		err      error
+		wantCode errcode.Code
+	}{
+		{"deadline-exceeded", fmt.Errorf("wrap: %w", context.DeadlineExceeded), ErrAdapterMQTTPubAckTimeout},
+		{"canceled", fmt.Errorf("wrap: %w", context.Canceled), ErrAdapterMQTTPublishCanceled},
+		{"generic", errors.New("connection reset by peer"), ErrAdapterMQTTPublishFailed},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := wrapPublishErr(tc.err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, tc.wantCode, ec.Code)
+			assert.Equal(t, errcode.KindUnavailable, ec.Kind)
+			assert.ErrorIs(t, err, tc.err, "wrapPublishErr must preserve the cause chain")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -399,8 +542,9 @@ func TestPubackReasonToMetric(t *testing.T) {
 		reason PublishFailureReason
 	}{
 		{ErrAdapterMQTTPublishRateLimited, PublishFailureRateLimited},
-		{ErrAdapterMQTTPublishRejected, PublishFailurePublishError},
-		{ErrAdapterMQTTPayloadTooLarge, PublishFailurePayloadTooLarge},
+		{ErrAdapterMQTTPublishNotAuthorized, PublishFailureNotAuthorized},
+		{ErrAdapterMQTTPublishPayloadFormatInvalid, PublishFailurePayloadFormatInvalid},
+		{ErrAdapterMQTTPublishRejected, PublishFailureRejected},
 		{"UNKNOWN_CODE", PublishFailurePublishError},
 	}
 	for _, tc := range tests {
@@ -436,6 +580,60 @@ func (h *noMatchingSubscribersHook) OnPublish(_ *mqttserver.Client, pk mqttpacke
 		return pk, mqttpackets.CodeNoMatchingSubscribers
 	}
 	return pk, nil
+}
+
+// blockingPubAckHook withholds the QoS-1 PUBACK: mochi invokes OnPublish
+// synchronously before writing the PUBACK (server.go processPublish), so
+// blocking here provably holds a publish in-flight on the client side. `entered`
+// is signaled once when the first QoS>0 PUBLISH arrives; OnPublish then blocks
+// until `release` is closed. Used by TestPublisher_Close_TimesOutOnStuckPublish.
+type blockingPubAckHook struct {
+	mqttserver.HookBase
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *blockingPubAckHook) ID() string           { return "blocking-puback" }
+func (h *blockingPubAckHook) Provides(b byte) bool { return b == mqttserver.OnPublish }
+
+func (h *blockingPubAckHook) OnPublish(_ *mqttserver.Client, pk mqttpackets.Packet) (mqttpackets.Packet, error) {
+	if pk.FixedHeader.Qos > 0 {
+		h.once.Do(func() { close(h.entered) })
+		<-h.release
+	}
+	return pk, nil
+}
+
+// startBrokerWithHook starts a dedicated in-process mochi broker with the given
+// hook (plus AllowHook), on a fresh random port. Mirrors
+// startBrokerWithNoSubscribersHook but parameterized over the hook so callers
+// can inject custom PUBACK behavior.
+func startBrokerWithHook(t *testing.T, h mqttserver.Hook) (addr string, stop func()) {
+	t.Helper()
+	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
+	require.NoError(t, srv.AddHook(new(auth.AllowHook), nil), "add allow hook")
+	require.NoError(t, srv.AddHook(h, nil), "add custom hook")
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "listen random port")
+	addr = ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	tcp := listeners.NewTCP(listeners.Config{ID: "hook-tcp", Address: addr})
+	require.NoError(t, srv.AddListener(tcp), "add listener")
+	go func() { _ = srv.Serve() }()
+
+	testwait.External(t, "hook-broker-ready", func() bool {
+		c, derr := net.Dial("tcp", addr)
+		if derr != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}, testtime.D2s, testtime.D10ms)
+
+	return addr, func() { _ = srv.Close() }
 }
 
 // startBrokerWithNoSubscribersHook starts a broker that always returns PUBACK

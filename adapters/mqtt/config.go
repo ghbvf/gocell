@@ -2,10 +2,12 @@ package mqtt
 
 import (
 	"crypto/tls"
+	"log/slog"
 	"net/url"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
@@ -69,6 +71,22 @@ const (
 type AuthConfig struct {
 	Username string
 	Password []byte // autopaho ConnectPassword is []byte
+}
+
+// LogValue implements slog.LogValuer so the broker password is never emitted in
+// structured logs. Any slog call that resolves an AuthConfig (directly, or as a
+// nested Attr) sees the username and a redacted password placeholder instead of
+// the raw bytes. Defensive: AuthConfig is not logged on any current path, but
+// this seals the credential against future logging wiring.
+func (a AuthConfig) LogValue() slog.Value {
+	pw := ""
+	if len(a.Password) > 0 {
+		pw = redaction.Mask
+	}
+	return slog.GroupValue(
+		slog.String("username", a.Username),
+		slog.String("password", pw),
+	)
 }
 
 // BackoffConfig controls reconnect back-off behavior.

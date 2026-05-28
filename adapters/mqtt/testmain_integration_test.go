@@ -101,12 +101,15 @@ func TestMain(m *testing.M) {
 }
 
 // runTestsWithShutdown runs m.Run() and defers broker shutdown so the
-// container is torn down even if m.Run() panics before returning.
+// container is torn down even if m.Run() panics before returning. It also stops
+// the shared in-process mochi broker: the untagged unit tests (which start it)
+// are compiled into the integration binary too, so it would otherwise leak here.
 func runTestsWithShutdown(m *testing.M) int {
 	defer func() {
 		if sharedBrokerShutdown != nil {
 			sharedBrokerShutdown()
 		}
+		stopSharedInternalBroker()
 	}()
 	return m.Run()
 }

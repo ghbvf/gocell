@@ -50,6 +50,10 @@
 //     callees in adapters/mqtt production files ⊆ {(*Connection).Publish body}.
 //   - A2 Mint construction allowlist (Medium): `publishableTopic{...}` composite
 //     literal in adapters/mqtt production files ⊆ {TopicNamespace.Mint body}.
+//   - A2b field-assignment blind-spot (Medium): no assignment to a
+//     publishableTopic `topic` field (`t.topic = …`) outside the Mint body — the
+//     in-package construction form A2's composite-literal scan does not cover.
+//     gh #1247 tracks the package-internal Hard-upgrade question.
 //   - A3 publishableTopic field freeze (Medium): reflect lock asserting
 //     NumField()==1, field name "topic", type string, unexported.
 //   - A4 method-value blind-spot (Hard reverse self-check): no `cm.Publish` as
@@ -81,6 +85,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"strings"
@@ -626,19 +631,7 @@ func TestMQTTPublishCallsiteFunnel_A6_BlindSpot_NoReflectMethodByName(t *testing
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
-						return
-					}
-					if len(call.Args) < 1 {
-						return
-					}
-					lit, isLit := call.Args[0].(*ast.BasicLit)
-					if !isLit {
-						return
-					}
-					val, ok := StringLitValue(lit)
-					if !ok || val != publishMethodName {
+					if !isMethodByNamePublishCall(call) {
 						return
 					}
 					pos := p.Fset.Position(call.Pos())
@@ -800,6 +793,260 @@ func isCMSelectorExpr(expr ast.Expr) bool {
 		return false
 	}
 	return sel.Sel != nil && sel.Sel.Name == connectionManagerTypeName
+}
+
+// ─── A2b: publishableTopic field-assignment blind-spot (Medium) ───────────────
+
+// TestMQTTPublishCallsiteFunnel_A2b_NoFieldAssignmentBypass closes the A2
+// package-internal blind spot: A2 locks `publishableTopic{...}` composite-literal
+// construction to Mint, but a same-package caller could obtain a zero value
+// (`var t publishableTopic`) and then mutate the field directly
+// (`t.topic = "evil"`), driving Connection.Publish with a topic that never went
+// through PublishOK. This scanner bans any assignment to a publishableTopic
+// `topic` field outside the Mint body.
+//
+// AI-robust: Medium (package-internal upstream ceiling — Go cannot forbid
+// same-package field assignment at compile time; gh #1247 tracks the Hard
+// upgrade question). This is a REQUIRED blind-spot reverse self-check per
+// ai-robust.md §载体决策原则, NOT optional hardening: without it the A2 Medium
+// rating covers only one of the two in-package construction forms.
+func TestMQTTPublishCallsiteFunnel_A2b_NoFieldAssignmentBypass(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b"
+
+	var diags []Diagnostic
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
+					for _, lhs := range assign.Lhs {
+						sel, ok := lhs.(*ast.SelectorExpr)
+						if !ok || sel.Sel == nil || sel.Sel.Name != "topic" {
+							continue
+						}
+						// Gate on receiver type == publishableTopic (same go/types
+						// path A2/A3 exercise) so unrelated `.topic` fields are ignored.
+						if !mqttIsPublishableTopicTyped(p.TypesInfo, sel.X) {
+							continue
+						}
+						if mqttEnclosingFuncName(f, assign.Pos()) == "Mint" {
+							continue
+						}
+						pos := p.Fset.Position(sel.Pos())
+						diags = append(diags, Diagnostic{
+							Rel:  rel,
+							Line: pos.Line,
+							Message: fmt.Sprintf(
+								"%s: assignment to publishableTopic.topic at %s:%d outside Mint — "+
+									"field-assignment bypasses PublishOK validation; construct via Mint only",
+								ruleID, rel, pos.Line,
+							),
+						})
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.Empty(t, diags,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b: publishableTopic.topic field assignment outside Mint detected")
+}
+
+// ─── Non-vacuous self-checks for the blind-spot scanners (F14) ────────────────
+//
+// A4–A7 (and A2b) are absence-checks: by design the forbidden form does NOT
+// exist in production, so `assert.Empty` alone could pass vacuously if the
+// detector silently broke. ai-robust.md §载体决策原则 requires each blind-spot
+// self-check to also prove the detector FIRES on a positive example. The
+// AST-mechanism detectors are proven against in-memory positive snippets; the
+// go/types-gated detectors (A4 receiver-type) are proven against the real
+// production cm.Publish receiver (the same path A1/A2 exercise).
+
+// TestMQTTPublishCallsiteFunnel_A4_ScannerNonVacuous proves isCMReceiver resolves
+// the receiver type of the real production `c.cm.Publish(...)` call inside
+// (*Connection).Publish to *autopaho.ConnectionManager. If this returns 0, the
+// types path A4 depends on is silently broken and A4 would vacuously pass.
+func TestMQTTPublishCallsiteFunnel_A4_ScannerNonVacuous(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	var cmReceiverHits int
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{mqttPkgPath},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			for _, f := range p.Files {
+				if strings.HasSuffix(p.Rel(f), "_test.go") {
+					continue
+				}
+				EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+					if sel.Sel == nil || sel.Sel.Name != publishMethodName {
+						return
+					}
+					if isCMReceiver(p.TypesInfo, sel.X) {
+						cmReceiverHits++
+					}
+				})
+			}
+			return nil
+		})
+
+	assert.GreaterOrEqual(t, cmReceiverHits, 1,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A4: isCMReceiver found 0 *autopaho.ConnectionManager "+
+			"receivers of a Publish selector — the go/types receiver-resolution path may be broken")
+}
+
+// TestMQTTPublishCallsiteFunnel_A5_ScannerNonVacuous proves
+// isMethodExpressionPublishCall fires on a synthetic method-expression call.
+func TestMQTTPublishCallsiteFunnel_A5_ScannerNonVacuous(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+import "github.com/eclipse/paho.golang/autopaho"
+func f(cm *autopaho.ConnectionManager) { (*autopaho.ConnectionManager).Publish(cm, nil) }
+`
+	f := mqttParseSnippet(t, src)
+	var fired bool
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if isMethodExpressionPublishCall(call) {
+			fired = true
+		}
+	})
+	assert.True(t, fired,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A5: isMethodExpressionPublishCall did not fire on a "+
+			"known method-expression call — the detector is broken (A5 would pass vacuously)")
+}
+
+// TestMQTTPublishCallsiteFunnel_A6_ScannerNonVacuous proves
+// isMethodByNamePublishCall fires on a synthetic reflect MethodByName("Publish").
+func TestMQTTPublishCallsiteFunnel_A6_ScannerNonVacuous(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+import "reflect"
+func f(v reflect.Value) { v.MethodByName("Publish") }
+`
+	f := mqttParseSnippet(t, src)
+	var fired bool
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if isMethodByNamePublishCall(call) {
+			fired = true
+		}
+	})
+	assert.True(t, fired,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A6: isMethodByNamePublishCall did not fire on a "+
+			"known MethodByName(\"Publish\") call — the detector is broken (A6 would pass vacuously)")
+}
+
+// TestMQTTPublishCallsiteFunnel_A7_ScannerNonVacuous proves the alias-form
+// detection (TypeSpec with Assign != token.NoPos) fires on a synthetic alias.
+// The autopaho-type RHS match is gated by the same go/types path A1/A2 prove
+// non-vacuous; this guards the AST traversal half from silently breaking.
+func TestMQTTPublishCallsiteFunnel_A7_ScannerNonVacuous(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+type CM = int
+`
+	f := mqttParseSnippet(t, src)
+	var aliasForms int
+	EachInSubtree[ast.TypeSpec](f, func(ts *ast.TypeSpec) {
+		if ts.Assign != token.NoPos {
+			aliasForms++
+		}
+	})
+	assert.GreaterOrEqual(t, aliasForms, 1,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A7: alias-form detection (TypeSpec.Assign != NoPos) found 0 "+
+			"aliases in a snippet that declares one — the AST traversal is broken (A7 would pass vacuously)")
+}
+
+// TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous proves the field-assignment
+// detection (LHS SelectorExpr with Sel "topic") fires on a synthetic snippet.
+func TestMQTTPublishCallsiteFunnel_A2b_ScannerNonVacuous(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+func f(t struct{ topic string }) { t.topic = "y" }
+`
+	f := mqttParseSnippet(t, src)
+	var fired bool
+	EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
+		for _, lhs := range assign.Lhs {
+			if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == "topic" {
+				fired = true
+			}
+		}
+	})
+	assert.True(t, fired,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2b: topic-field-assignment detection did not fire on a "+
+			"known `t.topic = ...` snippet — the AST traversal is broken (A2b would pass vacuously)")
+}
+
+// ─── Shared predicates / helpers for the blind-spot scanners ──────────────────
+
+// isMethodByNamePublishCall reports whether call is `_.MethodByName("Publish")`.
+// Pure AST (conservative over-approximation: any MethodByName("Publish")).
+// Shared by A6 and its non-vacuous self-check so both exercise one predicate.
+func isMethodByNamePublishCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
+		return false
+	}
+	if len(call.Args) < 1 {
+		return false
+	}
+	lit, isLit := call.Args[0].(*ast.BasicLit)
+	if !isLit {
+		return false
+	}
+	val, ok := StringLitValue(lit)
+	return ok && val == publishMethodName
+}
+
+// mqttIsPublishableTopicTyped reports whether expr has type publishableTopic
+// (value or pointer) declared in adapters/mqtt. Used by A2b.
+func mqttIsPublishableTopicTyped(info *types.Info, expr ast.Expr) bool {
+	if info == nil || expr == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok {
+		return false
+	}
+	typ := tv.Type
+	if ptr, isPtr := typ.(*types.Pointer); isPtr {
+		typ = ptr.Elem()
+	}
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return false
+	}
+	tobj := named.Obj()
+	return tobj.Pkg() != nil &&
+		tobj.Pkg().Path() == mqttPkgPath &&
+		tobj.Name() == "publishableTopic"
+}
+
+// mqttParseSnippet parses an in-memory Go source string into an *ast.File for
+// pure-AST detector non-vacuity proofs (no type checking).
+func mqttParseSnippet(t *testing.T, src string) *ast.File {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "snippet.go", src, 0)
+	require.NoError(t, err, "parse in-memory snippet for non-vacuous self-check")
+	return f
 }
 
 // ─── Compile-time import guard ────────────────────────────────────────────────
