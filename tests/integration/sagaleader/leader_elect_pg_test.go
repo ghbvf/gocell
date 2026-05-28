@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 	"github.com/ghbvf/gocell/runtime/saga"
-	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
 
 // noopEmitter is a koutbox.Emitter that discards entries — leader-elect tests
@@ -34,26 +33,15 @@ func (noopEmitter) Emit(context.Context, koutbox.Entry) error { return nil }
 
 // leaderPGCfg is the coordinator config for the two-process PG test: fast poll
 // (clock-driven), small batch, long lease (no expiry within the test).
-// Heartbeat lives on the Executor now (#1181) — see newLeaderPGExecutor.
+// HeartbeatInterval is set to LeaseDuration/3 = 20s; both flow into the
+// internally-constructed Executor via Config (#1181 F5).
 func leaderPGCfg() saga.Config {
 	return saga.Config{
-		PollInterval:   testtime.D10ms,
-		ClaimBatchSize: 4,
-		LeaseDuration:  testtime.D60s,
+		PollInterval:      testtime.D10ms,
+		ClaimBatchSize:    4,
+		LeaseDuration:     testtime.D60s,
+		HeartbeatInterval: testtime.D20s,
 	}
-}
-
-// newLeaderPGExecutor constructs the Executor injected into every leader-elect
-// Coordinator in this suite. The heartbeat interval (20s, = LeaseDuration/3)
-// mirrors the pre-#1181 leaderPGCfg.HeartbeatInterval default.
-func newLeaderPGExecutor(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) *executor.Executor {
-	t.Helper()
-	exec, err := executor.NewExecutor(j, clk,
-		executor.WithHeartbeatInterval(testtime.D20s),
-		executor.WithLeaseDuration(testtime.D60s),
-	)
-	require.NoError(t, err)
-	return exec
 }
 
 // newPGStore clones one fresh migrated DB and returns a PGJournal + a TxManager
@@ -83,7 +71,6 @@ func startLeaderCoord(
 	t.Helper()
 	c, err := saga.NewCoordinator(j, tx, noopEmitter{}, reg, clk,
 		saga.WithConfig(leaderPGCfg()),
-		saga.WithExecutor(newLeaderPGExecutor(t, j, clk)),
 		saga.WithLeaderElect(locker))
 	require.NoError(t, err)
 
@@ -160,9 +147,12 @@ func TestSagaLeaderElect_TwoCoordinators_PG_ExactlyOnce(t *testing.T) {
 	startLeaderCoord(t, j, tx, clk, reg, locker1)
 	startLeaderCoord(t, j, tx, clk, reg, locker2)
 
-	// Wait for both coordinators' tick+heartbeat tickers to register (4 total).
+	// Wait for both coordinators' tickLoop tickers to register (2 total).
+	// Each Coordinator registers exactly one ticker (the poll ticker); the
+	// heartbeat ticker is internal to the Executor and only created when a
+	// step is actively running. At startup there are no active steps.
 	testwait.External(t, "both-coordinator-tickers-registered",
-		func() bool { return clk.PendingTickers() >= 4 },
+		func() bool { return clk.PendingTickers() >= 2 },
 		testtime.D2s, testtime.D1ms)
 
 	// Drive: advance the clock on each poll until every instance is terminal.
