@@ -33,9 +33,11 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithConfig replaces the operational config. cfg is applied unconditionally;
-// NewCoordinator calls cfg.Validate() after all options have run. Must be
-// called before Start.
+// WithConfig replaces the entire Config struct. cfg is applied
+// unconditionally; NewCoordinator calls cfg.Validate() after all options have
+// run. Zero-value fields in cfg are NOT merged with the defaults — they still
+// get DefaultConfig() substitution inside NewCoordinator. Must be called
+// before Start.
 func WithConfig(cfg Config) Option {
 	return func(c *Coordinator) {
 		c.cfg = cfg

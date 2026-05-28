@@ -69,6 +69,10 @@ const (
 // source of truth — #1181 F5 deleted the WithExecutor option that previously
 // allowed callers to inject an Executor with a different journal / lease;
 // claim and heartbeat are now guaranteed same-source by construction.
+//
+// When supplied via WithConfig(cfg), the entire Config struct replaces the
+// default — fields are NOT partially merged; zero values still get
+// DefaultConfig() substitution inside NewCoordinator.
 type Config struct {
 	// PollInterval is how often tickLoop calls ClaimPending. Default 200ms.
 	PollInterval time.Duration
@@ -720,7 +724,10 @@ func shouldCompensate(events []journal.Event, def *ksaga.Definition) bool {
 // Compensate on each. The entire walk runs under a single RunWithHeartbeat
 // call to keep the lease alive throughout. Per-step compensate errors are
 // accumulated (best-effort continue); final status is Compensated if all
-// steps compensated cleanly, Failed otherwise.
+// steps compensated cleanly; CompensationFailed if any step's Compensate
+// fails and errors are accumulated without aborting the rollback walk.
+// StatusFailed remains the terminal for forward-failure paths where
+// compensation was never entered.
 //
 // ref: itimofeev/go-saga coordinator.go abort() — best-effort reverse
 // compensation with error aggregation.
@@ -730,7 +737,10 @@ func shouldCompensate(events []journal.Event, def *ksaga.Definition) bool {
 // is already Compensating (a prior coordinator crashed mid-rollback or a
 // leader handoff occurred between KindCompensationStarted and StatusCompensated).
 // In recovery mode appendCompensationStarted is skipped (event already on
-// log) and the reverse walk derives remaining work from events.
+// log) and the reverse walk derives remaining work from events. Prior
+// KindStepCompensationFailed events in the log are treated as known failures
+// (not retried) and seed compensateErrors so recovery still terminates with
+// StatusCompensationFailed rather than StatusCompensated.
 func (c *Coordinator) runCompensation(
 	ctx context.Context,
 	ci journal.ClaimedInstance,
@@ -752,10 +762,23 @@ func (c *Coordinator) runCompensation(
 	// emitted KindStepCompensated / KindStepCompensationFailed are filtered
 	// out so a recovering reverse walk only runs the work that remains
 	// (#1181 F2). Side-effects are NOT re-applied on recovery.
-	committed, stepByName := collectCommittedSteps(events, def)
+	// priorFailureCount carries the count of KindStepCompensationFailed
+	// events already in the log so that a recovery with no remaining work
+	// still terminates as StatusCompensationFailed (#1181 F1).
+	committed, stepByName, priorFailureCount := collectCommittedSteps(events, def)
 
 	// Step c: reverse-walk under heartbeat.
-	var compensateErrors []error
+	// Seed compensateErrors from historical failures so that a recovery
+	// run where all remaining steps were already attempted (and failed)
+	// does not silently produce StatusCompensated.
+	// Each prior failure is represented by a sentinel error; the actual
+	// error text was already persisted in the KindStepCompensationFailed
+	// event payload — this is an idempotent "known failure, do not retry"
+	// signal aligned with itimofeev/go-saga compensateErrors accumulation.
+	compensateErrors := make([]error, 0, priorFailureCount)
+	for i := 0; i < priorFailureCount; i++ {
+		compensateErrors = append(compensateErrors, errors.New("prior compensation failure (not retried)"))
+	}
 	walkErr := c.executor.RunWithHeartbeat(ctx, &ci.Instance, ci.LeaseID, func(hbCtx context.Context) error {
 		c.reverseWalkCompensate(hbCtx, ci, committed, stepByName, &compensateErrors)
 		// hbCtx.Err() is propagated so RunWithHeartbeat's lease-loss override
@@ -840,10 +863,19 @@ type committedStepEntry struct {
 // after a crash mid-rollback would re-run compensate on steps already
 // rolled back, producing duplicate external side effects).
 //
+// priorFailureCount is the number of KindStepCompensationFailed events found
+// in history. Steps with that kind are still excluded from the returned
+// committed slice (idempotent signal: already attempted, not retried), but
+// the count lets runCompensation seed compensateErrors so a recovery that
+// finds all remaining work already done still terminates with
+// StatusCompensationFailed rather than the incorrect StatusCompensated.
+//
+// ref: itimofeev/go-saga compensateErrors accumulation pattern.
+//
 // Returns committed entries in forward order; runCompensation walks them
 // reverse. The name→Step index is built from def.Steps for compensate
 // dispatch.
-func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]committedStepEntry, map[idutil.SafeID]ksaga.Step) {
+func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]committedStepEntry, map[idutil.SafeID]ksaga.Step, int) {
 	// Mark every step name that already has a compensate outcome (success or
 	// failure). Both kinds remove the step from the reverse-walk frontier:
 	// once the executor's CompensateFunc has run we MUST NOT run it a second
@@ -851,10 +883,14 @@ func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]com
 	// the operator can rerun the saga or surface the failure via the
 	// terminal StatusCompensationFailed projection.
 	compensated := make(map[idutil.SafeID]struct{})
+	var priorFailureCount int
 	for i := range events {
 		switch events[i].Kind {
 		case journal.KindStepCompensated, journal.KindStepCompensationFailed:
 			compensated[events[i].StepName] = struct{}{}
+		}
+		if events[i].Kind == journal.KindStepCompensationFailed {
+			priorFailureCount++
 		}
 	}
 
@@ -875,7 +911,7 @@ func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]com
 	for _, s := range def.Steps {
 		stepByName[s.Name] = s
 	}
-	return committed, stepByName
+	return committed, stepByName, priorFailureCount
 }
 
 // compensateOneStep runs step.Compensate and records the outcome in the journal.

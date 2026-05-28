@@ -1549,11 +1549,13 @@ func TestDriveOne_OutcomeFailed_TriggersReverseCompensation(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Verify final status is Compensated (or Failed if compensation itself fails
-	// — but in this test all compensations succeed).
+	// All compensations in this test succeed (recordComp returns nil), so
+	// the saga must reach StatusCompensated — not StatusFailed (forward
+	// failure without rollback) and not StatusCompensationFailed (partial
+	// rollback failure).
 	lastEv := evs[len(evs)-1]
-	if lastEv.Kind != journal.KindSagaCompensated && lastEv.Kind != journal.KindSagaFailed {
-		t.Errorf("last event = %s, want saga_compensated or saga_failed", lastEv.Kind)
+	if lastEv.Kind != journal.KindSagaCompensated {
+		t.Errorf("last event = %s, want saga_compensated (all compensations succeed in this scenario)", lastEv.Kind)
 	}
 
 	// Verify compensation ran in reverse order: step1 completed, step2 failed → only

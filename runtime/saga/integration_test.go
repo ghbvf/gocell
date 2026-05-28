@@ -1053,11 +1053,13 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	}
 	// coordinator-2's recovery: collectCommittedSteps filters step1 (already has
 	// KindStepCompensationFailed on the log from coordinator-1's partial attempt).
-	// The remaining compensation walk is empty → no new compensateErrors →
-	// markTerminal(StatusCompensated). This is the correct #1181 F2 idempotency:
-	// the recovery only runs the work that remains, not already-attempted steps.
-	if last.Kind != journal.KindSagaCompensated {
-		t.Errorf("last event = %s, want saga_compensated (recovery completed empty walk)", last.Kind)
+	// The remaining compensation walk is empty — step1.Compensate is NOT re-run
+	// (idempotent: already attempted, not retried, #1181 F2). However,
+	// priorFailureCount > 0 so compensateErrors is seeded from history (#1181 F1):
+	// the recovery terminates with StatusCompensationFailed, not StatusCompensated,
+	// because the prior partial failure must not be silently discarded.
+	if last.Kind != journal.KindSagaCompensationFailed {
+		t.Errorf("last event = %s, want saga_compensation_failed (prior failure preserved across recovery)", last.Kind)
 	}
 	// step1.Compensate called exactly once (coordinator-1's first attempt before
 	// lease-lost; coordinator-2's recovery skips it because KindStepCompensationFailed
