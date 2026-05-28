@@ -51,9 +51,9 @@ import (
 // marker funnel): a caller cannot declare a local interface re-shape with the
 // same method set and call ExecDirect through it, because ExecDirect simply
 // isn't a method anywhere. The only sanctioned callsite form is
-// pgexec.ExecDirect(pgrepoapproved.Approve("<reason>"), s.db, ctx, ...),
-// identified by archtest R3 via callee-identity resolution + the call-bound
-// approval token.
+// pgexec.ExecDirect(pgrepoapproved.Approve(pgrepoapproved.<CatalogConst>),
+// s.db, ctx, ...), identified by archtest R3 via callee-identity resolution
+// + the call-bound typed ApprovalReason catalog token.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -108,17 +108,24 @@ func (e *pgExecutor) Query(ctx context.Context, sql string, args ...any) (pgx.Ro
 // for ADR-approved cascade-revoke and similar independent-commit semantics.
 //
 // The first parameter is a pgrepoapproved.Approval token that MUST be minted
-// inline as pgrepoapproved.Approve("<kebab-reason>") at the callsite: the
-// authorization is bound to the call expression itself, so a bypass cannot
-// exist without a documented reason and a reason cannot be stranded away from
-// its call. Form is a top-level function (not a method) so no local interface
-// re-shape can invoke it.
+// inline as pgrepoapproved.Approve(pgrepoapproved.<CatalogConst>) at the
+// callsite: the authorization is bound to the call expression itself, so a
+// bypass cannot exist without a documented reason and a reason cannot be
+// stranded away from its call. Form is a top-level function (not a method) so
+// no local interface re-shape can invoke it.
 //
 // archtest R3 (global scope) enforces:
 //  1. callee identity is pgexec.ExecDirect (Pkg().Path() ending /internal/pgexec)
 //  2. arg[0] is an inline CallExpr to pgrepoapproved.Approve whose own arg[0]
-//     is a kebab-case string literal (not const ident / concat / placeholder /
-//     a reused variable)
+//     resolves via *types.Info.Uses to a *types.Const declared in
+//     pkg/pgrepoapproved with type pgrepoapproved.ApprovalReason (rejects
+//     locally-declared ApprovalReason consts, ApprovalReason("…") type
+//     conversion, string literals, BinaryExpr concat, fmt.Sprintf, and any
+//     reused/pre-constructed Approval variable)
+//
+// archtest R4 (reverse, global scope) enforces every pgrepoapproved.Approve
+// callsite appears exactly as Args[0] of a pgexec.ExecDirect call — closing
+// the orphan-Approve dead-code form.
 //
 // Currently exactly one production callsite exists:
 // adapters/postgres/refresh_store.go::revokeSessionDetachedAt.

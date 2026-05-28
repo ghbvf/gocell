@@ -81,4 +81,3 @@ func TestQueryRow_RoutesThroughAmbientTx(t *testing.T) {
 		t.Fatal("expected ambient tx QueryRow to be called")
 	}
 }
-
