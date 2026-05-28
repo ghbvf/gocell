@@ -57,9 +57,10 @@ type ManifestSpec struct {
 // discovery.
 //
 // Excludes applies path-prefix filters across all source kinds in this module.
-// Defaults effectively include "generated/**" and "vendor/**". Specifying
-// an explicit excludes: list overrides the defaults; to keep the defaults
-// while adding more, repeat them explicitly.
+// "generated/**" is always appended to the effective excludes list (additive).
+// "vendor/**" is NOT added automatically — declare it explicitly if needed.
+// Specifying an explicit excludes: list does not replace the generated/** guard;
+// both the user-declared patterns and "generated/**" are applied.
 type ManifestModule struct {
 	Path     string           `yaml:"path"`
 	Includes ManifestIncludes `yaml:"includes"`
@@ -79,13 +80,20 @@ type ManifestModule struct {
 // in Modules[0] (validated by loadManifest). Declaring them in more than one
 // module entry causes loadManifest to return ErrDuplicateWorkspaceSingleton.
 type ManifestIncludes struct {
-	Cells       []string `yaml:"cells"`
-	Slices      []string `yaml:"slices"`
-	Contracts   []string `yaml:"contracts"`
-	Journeys    []string `yaml:"journeys"`
-	Assemblies  []string `yaml:"assemblies"`
-	Actors      string   `yaml:"actors"`
-	StatusBoard string   `yaml:"statusBoard"`
+	// Cells corresponds to the "cells:" YAML key.
+	Cells []string `yaml:"cells"`
+	// Slices corresponds to the "slices:" YAML key.
+	Slices []string `yaml:"slices"`
+	// Contracts corresponds to the "contracts:" YAML key.
+	Contracts []string `yaml:"contracts"`
+	// Journeys corresponds to the "journeys:" YAML key.
+	Journeys []string `yaml:"journeys"`
+	// Assemblies corresponds to the "assemblies:" YAML key.
+	Assemblies []string `yaml:"assemblies"`
+	// Actors corresponds to the "actors:" YAML key (singular string, not a list).
+	Actors string `yaml:"actors"`
+	// StatusBoard corresponds to the "statusBoard:" YAML key (camelCase, not kebab-case).
+	StatusBoard string `yaml:"statusBoard"`
 }
 
 // defaultManifestIncludes mirrors the conventional 5-pattern layout. Used
@@ -116,6 +124,13 @@ const (
 	// above any realistic workspace size and below the threshold where
 	// glob expansion becomes a DoS vector.
 	maxManifestModules = 256
+
+	// maxManifestIncludePatternsPerKind caps the number of include patterns
+	// per kind (cells/slices/contracts/journeys/assemblies) per module at 128.
+	// Actors and StatusBoard are single-string fields and are not subject to
+	// this cap. The limit prevents O(patterns × files) WalkDir amplification
+	// from a manifest with thousands of explicit include globs.
+	maxManifestIncludePatternsPerKind = 128
 )
 
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
@@ -213,51 +228,91 @@ func validateManifestModuleDir(fsys fs.FS, manifestPath string, i int, normPath 
 	info, err := fs.Stat(fsys, normPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("manifest %s: modules[%d].path %q does not exist (or is not a directory)",
+			return fmt.Errorf("manifest %s: modules[%d].path %q does not exist",
 				manifestPath, i, normPath)
 		}
 		return fmt.Errorf("manifest %s: modules[%d].path %q stat: %w", manifestPath, i, normPath, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("manifest %s: modules[%d].path %q does not exist (or is not a directory)",
+		return fmt.Errorf("manifest %s: modules[%d].path %q exists but is not a directory",
 			manifestPath, i, normPath)
 	}
 	return nil
 }
 
 // validateManifestGlobs rejects glob patterns in includes/excludes that
-// contain parent-escape ("..") segments. Without this guard, an exclude
-// like "../../other-module/cells/**" could suppress entries from a
-// sibling module in Workspace mode, breaking cell-scan isolation, while
-// includes leaking outside the module root would silently match nothing
-// (WalkDir doesn't surface "..") and confuse the user.
+// contain parent-escape ("..") segments, contain empty strings, or exceed
+// the per-kind pattern count cap. Without the path-escape guard, an exclude
+// like "../../other-module/cells/**" could suppress entries from a sibling
+// module in Workspace mode. Empty patterns are rejected to surface manifest
+// typos early. The per-kind cap (maxManifestIncludePatternsPerKind) prevents
+// O(patterns × files) WalkDir amplification.
 func validateManifestGlobs(manifestPath string, i int, m ManifestModule) error {
-	for _, p := range m.Excludes {
+	if err := validateManifestExcludeGlobs(manifestPath, i, m.Excludes); err != nil {
+		return err
+	}
+	return validateManifestIncludeGlobs(manifestPath, i, m.Includes)
+}
+
+// validateManifestExcludeGlobs validates the excludes list for a module entry.
+func validateManifestExcludeGlobs(manifestPath string, i int, excludes []string) error {
+	for _, p := range excludes {
 		if err := validateManifestModulePath(p); err != nil {
 			return fmt.Errorf("manifest %s: modules[%d].excludes %q: %w", manifestPath, i, p, err)
 		}
 	}
-	includeBuckets := [][]string{
-		m.Includes.Cells, m.Includes.Slices, m.Includes.Contracts,
-		m.Includes.Journeys, m.Includes.Assemblies,
+	return nil
+}
+
+// validateManifestIncludeGlobs validates the includes struct for a module entry:
+// checks per-kind count cap, rejects empty patterns, and validates path safety.
+func validateManifestIncludeGlobs(manifestPath string, i int, inc ManifestIncludes) error {
+	type namedBucket struct {
+		name     string
+		patterns []string
 	}
-	for _, bucket := range includeBuckets {
-		for _, p := range bucket {
-			if err := validateManifestModulePath(p); err != nil {
-				return fmt.Errorf("manifest %s: modules[%d].includes %q: %w", manifestPath, i, p, err)
-			}
+	buckets := []namedBucket{
+		{"cells", inc.Cells},
+		{"slices", inc.Slices},
+		{"contracts", inc.Contracts},
+		{"journeys", inc.Journeys},
+		{"assemblies", inc.Assemblies},
+	}
+	for _, nb := range buckets {
+		if err := validateIncludeBucket(manifestPath, i, nb.name, nb.patterns); err != nil {
+			return err
 		}
 	}
-	if m.Includes.Actors != "" {
-		if err := validateManifestModulePath(m.Includes.Actors); err != nil {
+	if inc.Actors != "" {
+		if err := validateManifestModulePath(inc.Actors); err != nil {
 			return fmt.Errorf("manifest %s: modules[%d].includes.actors %q: %w",
-				manifestPath, i, m.Includes.Actors, err)
+				manifestPath, i, inc.Actors, err)
 		}
 	}
-	if m.Includes.StatusBoard != "" {
-		if err := validateManifestModulePath(m.Includes.StatusBoard); err != nil {
+	if inc.StatusBoard != "" {
+		if err := validateManifestModulePath(inc.StatusBoard); err != nil {
 			return fmt.Errorf("manifest %s: modules[%d].includes.statusBoard %q: %w",
-				manifestPath, i, m.Includes.StatusBoard, err)
+				manifestPath, i, inc.StatusBoard, err)
+		}
+	}
+	return nil
+}
+
+// validateIncludeBucket validates a single named include pattern bucket.
+func validateIncludeBucket(manifestPath string, i int, name string, patterns []string) error {
+	if len(patterns) > maxManifestIncludePatternsPerKind {
+		return fmt.Errorf(
+			"manifest %s: modules[%d].includes.%s: too many patterns (count=%d limit=%d)",
+			manifestPath, i, name, len(patterns), maxManifestIncludePatternsPerKind,
+		)
+	}
+	for _, p := range patterns {
+		if p == "" {
+			return fmt.Errorf("manifest %s: modules[%d].includes.%s: empty pattern not allowed",
+				manifestPath, i, name)
+		}
+		if err := validateManifestModulePath(p); err != nil {
+			return fmt.Errorf("manifest %s: modules[%d].includes %q: %w", manifestPath, i, p, err)
 		}
 	}
 	return nil
@@ -388,28 +443,37 @@ func buildManifestModulePlan(mod ManifestModule, allowSingletons bool) manifestM
 		base = ""
 	}
 	excludes := appendGeneratedExclude(mod.Excludes)
+	// userDeclared is true for a specific kind's emission only when the user
+	// explicitly provided patterns for that kind. When the user declares ANY
+	// includes but omits a specific kind, that kind's patterns come from
+	// defaults (or are empty) and should not trigger fail-closed on zero match.
+	cellsDeclared := userHasIncludes && len(mod.Includes.Cells) > 0
+	slicesDeclared := userHasIncludes && len(mod.Includes.Slices) > 0
+	contractsDeclared := userHasIncludes && len(mod.Includes.Contracts) > 0
+	journeysDeclared := userHasIncludes && len(mod.Includes.Journeys) > 0
+	assembliesDeclared := userHasIncludes && len(mod.Includes.Assemblies) > 0
 	plan := manifestModulePlan{
 		base:            base,
 		excludes:        compileManifestExcludes(base, excludes),
 		allowSingletons: allowSingletons,
 		emissions: []manifestEmission{
 			{
-				patterns: includes.Cells, kind: SourceCell, userDeclared: userHasIncludes,
+				patterns: includes.Cells, kind: SourceCell, userDeclared: cellsDeclared,
 				deriveCell: func(p string) string {
 					id, _ := matchCellPath(stripBase(p, base))
 					return id
 				},
 			},
 			{
-				patterns: includes.Slices, kind: SourceSlice, userDeclared: userHasIncludes,
+				patterns: includes.Slices, kind: SourceSlice, userDeclared: slicesDeclared,
 				deriveCell: func(p string) string {
 					cellID, _ := matchSlicePath(stripBase(p, base))
 					return cellID
 				},
 			},
-			{patterns: includes.Contracts, kind: SourceContract, userDeclared: userHasIncludes},
-			{patterns: includes.Journeys, kind: SourceJourney, userDeclared: userHasIncludes},
-			{patterns: includes.Assemblies, kind: SourceAssembly, userDeclared: userHasIncludes},
+			{patterns: includes.Contracts, kind: SourceContract, userDeclared: contractsDeclared},
+			{patterns: includes.Journeys, kind: SourceJourney, userDeclared: journeysDeclared},
+			{patterns: includes.Assemblies, kind: SourceAssembly, userDeclared: assembliesDeclared},
 		},
 	}
 	if allowSingletons {
@@ -459,29 +523,67 @@ func (l *Locator) discoverManifestPlanEmissions(plan manifestModulePlan) ([]Meta
 // applicable. Split out so discoverManifestPlanEmissions itself stays a
 // straight three-line walk under the kernel/-layer 15-complexity budget.
 //
-// For user-declared patterns (em.userDeclared == true): zero matches returns
-// a hard error — this is almost always a manifest typo (e.g. "cell.yml"
-// instead of "cell.yaml") and silent skipping would hide misconfiguration
-// behind a "PASS, but 0 cells found" outcome (F2 fail-closed).
+// Fail-closed at emission granularity (all patterns combined); per-pattern
+// zero-match emits slog.Warn for typo diagnostics.
 //
-// For default patterns (em.userDeclared == false): zero matches emits only
-// a structured slog.Warn for workspaces that legitimately omit certain source
-// kinds.
+// For user-declared patterns (em.userDeclared == true): if all patterns
+// combined produce zero matches, a hard error is returned — this is almost
+// always a manifest typo and silent skipping would hide misconfiguration
+// behind a "PASS, but 0 cells found" outcome (F2 fail-closed). Individual
+// patterns that match zero files within a multi-pattern emission emit a
+// slog.Warn; the emission as a whole succeeds as long as at least one
+// pattern matches (multi-pattern fallback is legitimate).
+//
+// For default patterns (em.userDeclared == false): zero matches across the
+// entire emission emits only a structured slog.Warn for workspaces that
+// legitimately omit certain source kinds.
 func (l *Locator) discoverEmission(base string, excludes *manifestExcludeSet, em manifestEmission) ([]MetadataSource, error) {
 	var out []MetadataSource
 	for _, g := range em.patterns {
-		emitted, err := l.discoverEmissionPattern(base, g, excludes, em)
+		emitted, err := l.collectEmissionPattern(base, g, excludes, em)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, emitted...)
 	}
+	if len(out) == 0 {
+		return l.handleEmissionZeroMatch(base, em)
+	}
 	return out, nil
 }
 
-// discoverEmissionPattern handles a single glob pattern within an emission,
+// handleEmissionZeroMatch is called when all patterns in an emission produced
+// zero results after excludes filtering. For user-declared emissions it returns
+// a hard error (fail-closed); for default emissions it emits a slog.Warn.
+func (l *Locator) handleEmissionZeroMatch(base string, em manifestEmission) ([]MetadataSource, error) {
+	displayBase := base
+	if displayBase == "" {
+		displayBase = "."
+	}
+	if em.userDeclared {
+		err := fmt.Errorf(
+			"manifest module %q include patterns for kind=%s matched zero files"+
+				" — check extension: .yaml not .yml; check path separator: forward slash;"+
+				" verify glob pattern matches expected layout",
+			displayBase, em.kind.String(),
+		)
+		slog.Error("metadata: locator manifest emission zero-match — fail-closed",
+			slog.String("kind", em.kind.String()),
+			slog.String("module_base", displayBase),
+			slog.Any("err", err))
+		return nil, err
+	}
+	slog.Warn("metadata: locator manifest emission matched zero files (default patterns)",
+		slog.String("kind", em.kind.String()),
+		slog.String("module_base", displayBase))
+	return nil, nil
+}
+
+// collectEmissionPattern handles a single glob pattern within an emission,
 // split from discoverEmission to keep cognitive complexity within budget.
-func (l *Locator) discoverEmissionPattern(
+// Per-pattern zero matches emit a slog.Warn for typo diagnostics; the
+// emission-level fail-closed check is in discoverEmission.
+func (l *Locator) collectEmissionPattern(
 	base, g string,
 	excludes *manifestExcludeSet,
 	em manifestEmission,
@@ -501,18 +603,15 @@ func (l *Locator) discoverEmissionPattern(
 		}
 		out = append(out, src)
 	}
-	if len(out) == 0 {
-		if em.userDeclared {
-			return nil, fmt.Errorf(
-				"manifest module %q include pattern %q (kind=%s) matched zero files"+
-					" — likely a typo (e.g. cell.yml vs cell.yaml)",
-				base, g, em.kind.String(),
-			)
+	if len(out) == 0 && em.userDeclared {
+		displayBase := base
+		if displayBase == "" {
+			displayBase = "."
 		}
 		slog.Warn("metadata: locator manifest include pattern matched zero files",
 			slog.String("pattern", g),
 			slog.String("kind", em.kind.String()),
-			slog.String("module_base", base))
+			slog.String("module_base", displayBase))
 	}
 	return out, nil
 }
@@ -630,7 +729,8 @@ func (es *manifestExcludeSet) match(filePath string) bool {
 }
 
 // matchManifestGlob expands a glob pattern against fsys via WalkDir. Returns
-// sorted matches.
+// sorted matches. Symlinks are explicitly skipped to avoid traversal through
+// unexpected filesystem topology that os.DirFS might not prevent.
 //
 // To avoid O(modules × total_files) WalkDir amplification, the walk is
 // started from the longest fixed prefix before the first wildcard segment
@@ -638,35 +738,64 @@ func (es *manifestExcludeSet) match(filePath string) bool {
 // only the cells/ subtree is scanned. Patterns that begin with a wildcard
 // (e.g. "**/cell.yaml" or "*/cell.yaml") fall back to walking from ".".
 // When the computed prefix does not exist in fsys, an empty match list is
-// returned without error.
+// returned without error. Passing an empty pattern returns (nil, nil).
 func matchManifestGlob(fsys fs.FS, pattern string) ([]string, error) {
-	root := manifestGlobFixedPrefix(pattern)
-	if root != "." {
-		if _, err := fs.Stat(fsys, root); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil, nil
-			}
-			return nil, err
-		}
+	if pattern == "" {
+		return nil, nil
+	}
+	root, ok, err := manifestGlobWalkRoot(fsys, pattern)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 	var matches []string
-	err := fs.WalkDir(fsys, root, func(p string, d fs.DirEntry, walkErr error) error {
+	if err := fs.WalkDir(fsys, root, manifestGlobWalkFn(pattern, &matches)); err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	return matches, nil
+}
+
+// manifestGlobWalkRoot resolves the WalkDir start directory for a glob pattern.
+// Returns (root, true, nil) when the root exists, ("", false, nil) when the
+// computed root does not exist in fsys, or ("", false, err) for other stat errors.
+func manifestGlobWalkRoot(fsys fs.FS, pattern string) (string, bool, error) {
+	root := manifestGlobFixedPrefix(pattern)
+	if root == "." {
+		return root, true, nil
+	}
+	if _, err := fs.Stat(fsys, root); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return root, true, nil
+}
+
+// manifestGlobWalkFn returns a WalkDir callback that appends matching paths to
+// matches. Symlinks are skipped to avoid traversal through unexpected topology.
+func manifestGlobWalkFn(pattern string, matches *[]string) fs.WalkDirFunc {
+	return func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		// Explicitly skip symlinks regardless of whether the underlying fs.FS
+		// follows them. This avoids traversal through unexpected filesystem
+		// topology (e.g. symlink loops) that os.DirFS does not prevent.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
 		}
 		if d.IsDir() {
 			return nil
 		}
 		if matchManifestPattern(pattern, p) {
-			matches = append(matches, p)
+			*matches = append(*matches, p)
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	sort.Strings(matches)
-	return matches, nil
 }
 
 // manifestGlobFixedPrefix extracts the longest fixed (non-wildcard) path

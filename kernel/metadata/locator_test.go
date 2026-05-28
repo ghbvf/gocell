@@ -302,8 +302,8 @@ modules:
 
 // TestLocator_ManifestGlobNoMatch verifies that a custom include glob
 // that explicitly declares a pattern but matches zero files returns an
-// error (F2: fail-closed for explicit patterns — typo guard).
-// Nil/empty patterns are not affected.
+// error (F2/S1: fail-closed at emission granularity for explicit patterns —
+// typo guard). The error must mention "matched zero files" and the kind.
 func TestLocator_ManifestGlobNoMatch(t *testing.T) {
 	manifest := `version: v1
 modules:
@@ -327,8 +327,9 @@ modules:
 	if !strings.Contains(err.Error(), "matched zero files") {
 		t.Errorf("error %q does not contain %q", err.Error(), "matched zero files")
 	}
-	if !strings.Contains(err.Error(), "cells/bar/cell.yaml") {
-		t.Errorf("error %q does not contain pattern %q", err.Error(), "cells/bar/cell.yaml")
+	// S1 redesign: error is at emission (kind) level, not per-pattern.
+	if !strings.Contains(err.Error(), "cell") {
+		t.Errorf("error %q should mention kind 'cell'", err.Error())
 	}
 }
 
@@ -392,7 +393,7 @@ func TestParseLocatorMode(t *testing.T) {
 
 // TestLocator_ManifestModulePathExistence verifies that a manifest module.path
 // that does not exist as a directory in fsys returns an error (F1: fail-closed
-// existence + IsDir check).
+// existence + IsDir check). O3: ErrNotExist and file-not-dir are distinct messages.
 func TestLocator_ManifestModulePathExistence(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -406,7 +407,7 @@ func TestLocator_ManifestModulePathExistence(t *testing.T) {
 			fsys: fstest.MapFS{
 				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: nonexistent\n")},
 			},
-			wantSub: `does not exist (or is not a directory)`,
+			wantSub: `does not exist`,
 		},
 		{
 			name:     "module path is a file not a directory",
@@ -415,7 +416,7 @@ func TestLocator_ManifestModulePathExistence(t *testing.T) {
 				".gocell/manifest.yaml": &fstest.MapFile{Data: []byte("version: v1\nmodules:\n  - path: iam-a-file\n")},
 				"iam-a-file":            &fstest.MapFile{Data: []byte("not a dir\n")},
 			},
-			wantSub: `does not exist (or is not a directory)`,
+			wantSub: `is not a directory`,
 		},
 		{
 			name: "dot path (workspace root) always valid",
@@ -591,6 +592,198 @@ modules:
 	if got := summariseSources(sources); !reflect.DeepEqual(got, want) {
 		t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
 	}
+}
+
+// TestLocator_ManifestEmissionPerEmissionFailClosed verifies S1: zero matches
+// are fail-closed at the emission (kind) level, not the per-pattern level.
+// A manifest with two patterns for the same kind where the first matches and
+// the second doesn't should succeed (multi-pattern fallback).
+// A manifest with two patterns where neither matches should fail.
+func TestLocator_ManifestEmissionPerEmissionFailClosed(t *testing.T) {
+	t.Run("first pattern matches second empty — should succeed", func(t *testing.T) {
+		manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+        - "alt/*/cell.yaml"
+`
+		fsys := fstest.MapFS{
+			".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
+			"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
+			// alt/ does not exist — second pattern matches zero files, but
+			// the emission (cells kind) as a whole matched at least one file.
+		}
+		l, err := NewLocatorFS(fsys)
+		if err != nil {
+			t.Fatalf("NewLocatorFS: %v", err)
+		}
+		sources, err := l.Discover()
+		if err != nil {
+			t.Fatalf("Discover unexpected error (multi-pattern fallback must succeed): %v", err)
+		}
+		got := summariseSources(sources)
+		want := []string{"cell:cells/foo/cell.yaml:foo"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Discover output mismatch.\ngot:  %v\nwant: %v", got, want)
+		}
+	})
+
+	t.Run("all patterns match zero — should fail-closed", func(t *testing.T) {
+		manifest := `version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/bar/cell.yaml"
+        - "alt/bar/cell.yaml"
+`
+		fsys := fstest.MapFS{
+			".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
+			"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
+		}
+		l, err := NewLocatorFS(fsys)
+		if err != nil {
+			t.Fatalf("NewLocatorFS: %v", err)
+		}
+		_, err = l.Discover()
+		if err == nil {
+			t.Fatal("expected fail-closed error when all patterns for an emission match zero files")
+		}
+		if !strings.Contains(err.Error(), "matched zero files") {
+			t.Errorf("error %q does not contain %q", err.Error(), "matched zero files")
+		}
+		// S1: error message must mention both patterns or at least the kind.
+		if !strings.Contains(err.Error(), "cell") {
+			t.Errorf("error %q should mention kind 'cell'", err.Error())
+		}
+	})
+
+	t.Run("per-pattern warn not error when default patterns", func(t *testing.T) {
+		// Default-patterns emission that produces zero for journeys/assemblies is OK
+		// (e.g. a repo with only cells, no journeys). No error expected.
+		manifest := "version: v1\nmodules:\n  - path: .\n"
+		fsys := fstest.MapFS{
+			".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
+			"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
+			// no journeys, no assemblies, no contracts, no slices
+		}
+		l, err := NewLocatorFS(fsys)
+		if err != nil {
+			t.Fatalf("NewLocatorFS: %v", err)
+		}
+		_, err = l.Discover()
+		if err != nil {
+			t.Errorf("expected no error for default-pattern zero-match, got: %v", err)
+		}
+	})
+}
+
+// TestManifestGlobFixedPrefix exercises manifestGlobFixedPrefix with the
+// examples from the godoc plus edge cases.
+func TestManifestGlobFixedPrefix(t *testing.T) {
+	cases := []struct {
+		pattern string
+		want    string
+	}{
+		// godoc examples
+		{"cells/*/cell.yaml", "cells"},
+		{"contracts/**/contract.yaml", "contracts"},
+		{"**/cell.yaml", "."},
+		{"*/cell.yaml", "."},
+		{"actors.yaml", "."},
+		{"cells/foo/bar/cell.yaml", "cells/foo/bar"},
+		// additional edge cases
+		{"journeys/J-*.yaml", "journeys"},
+		{"assemblies/*/assembly.yaml", "assemblies"},
+		{"journeys/status-board.yaml", "journeys"},
+		// wildcard at root
+		{"**", "."},
+		{"*", "."},
+		// no wildcard, single file at root
+		{"cell.yaml", "."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern, func(t *testing.T) {
+			got := manifestGlobFixedPrefix(tc.pattern)
+			if got != tc.want {
+				t.Errorf("manifestGlobFixedPrefix(%q) = %q, want %q", tc.pattern, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMatchManifestPattern exercises matchManifestPattern with various
+// wildcard forms.
+func TestMatchManifestPattern(t *testing.T) {
+	cases := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		// "*" matches a single path segment only
+		{"cells/*/cell.yaml", "cells/foo/cell.yaml", true},
+		{"cells/*/cell.yaml", "cells/foo/bar/cell.yaml", false},
+		{"cells/*/cell.yaml", "cells/cell.yaml", false},
+		// "**" matches zero or more segments
+		{"contracts/**/contract.yaml", "contracts/http/auth/login/v1/contract.yaml", true},
+		{"contracts/**/contract.yaml", "contracts/contract.yaml", true}, // zero segments
+		{"contracts/**/contract.yaml", "other/contract.yaml", false},
+		// "**" in middle
+		{"a/**/b/c.yaml", "a/x/y/b/c.yaml", true},
+		{"a/**/b/c.yaml", "a/b/c.yaml", true}, // ** matches zero
+		{"a/**/b/c.yaml", "a/c.yaml", false},
+		// literal file — exact match
+		{"actors.yaml", "actors.yaml", true},
+		{"actors.yaml", "other.yaml", false},
+		{"actors.yaml", "sub/actors.yaml", false},
+		// literal mismatch
+		{"cells/foo/cell.yaml", "cells/bar/cell.yaml", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.pattern+"~"+tc.name, func(t *testing.T) {
+			got := matchManifestPattern(tc.pattern, tc.name)
+			if got != tc.want {
+				t.Errorf("matchManifestPattern(%q, %q) = %v, want %v",
+					tc.pattern, tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAppendGeneratedExclude verifies idempotency (already-present entry is
+// not duplicated) and additive behavior (entry is appended when absent).
+func TestAppendGeneratedExclude(t *testing.T) {
+	t.Run("appends when absent", func(t *testing.T) {
+		in := []string{"fixtures/**"}
+		got := appendGeneratedExclude(in)
+		want := []string{"fixtures/**", "generated/**"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+	t.Run("idempotent when already present", func(t *testing.T) {
+		in := []string{"fixtures/**", "generated/**"}
+		got := appendGeneratedExclude(in)
+		if !reflect.DeepEqual(got, in) {
+			t.Errorf("got %v, want %v (idempotent)", got, in)
+		}
+	})
+	t.Run("nil input appends generated", func(t *testing.T) {
+		got := appendGeneratedExclude(nil)
+		want := []string{"generated/**"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+	t.Run("generated in middle — still idempotent", func(t *testing.T) {
+		in := []string{"generated/**", "other/**"}
+		got := appendGeneratedExclude(in)
+		if !reflect.DeepEqual(got, in) {
+			t.Errorf("got %v, want %v (idempotent)", got, in)
+		}
+	})
 }
 
 // TestLocator_AutoDetectStatErrorPropagates ensures probe failures other than

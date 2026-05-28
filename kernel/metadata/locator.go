@@ -3,11 +3,11 @@
 // about GoCell's filesystem topology must flow.
 //
 // Two modes:
-//   - Conventional — walks the hardcoded 5-pattern layout
+//   - Conventional — walks the hardcoded 5-pattern layout plus 2
+//     workspace-level singletons (actors.yaml, journeys/status-board.yaml)
 //     (cells/*/cell.yaml, cells/*/slices/*/slice.yaml,
 //     contracts/{kind}/.../contract.yaml, journeys/J-*.yaml,
-//     assemblies/*/assembly.yaml, plus the two singletons
-//     actors.yaml and journeys/status-board.yaml). examples/ subtree
+//     assemblies/*/assembly.yaml). examples/ subtree
 //     follows the same patterns with one extra prefix.
 //   - Manifest — reads .gocell/manifest.yaml and walks the modules:
 //     entries it declares. Single-module entry covers Operator-SDK external
@@ -174,6 +174,10 @@ func WithLocatorMode(m LocatorMode) LocatorOption {
 
 // WithManifestPath sets an explicit manifest path. Defaults to
 // .gocell/manifest.yaml.
+//
+// Passing an empty string is a no-op (default path unchanged).
+// Non-empty paths containing ".." segments or absolute paths cause
+// NewLocator / NewLocatorFS to return an error.
 func WithManifestPath(p string) LocatorOption {
 	return func(l *Locator) {
 		if p != "" {
@@ -272,10 +276,9 @@ func (l *Locator) Root() string { return l.root }
 // monorepo's examples/ subtree. This is a conventional-layout query
 // exposed here (rather than open-coded in governance rules) so that the
 // path-prefix literal "examples/" stays inside the Locator funnel —
-// see LOCATOR-DISCOVERY-FUNNEL-01. External-repo callers that follow
-// Manifest mode without an examples/ subtree get false uniformly,
-// which is the desired behavior for skip-style rules that key off the
-// gocell self-repo's examples/ scope.
+// see LOCATOR-DISCOVERY-FUNNEL-01. External-repo callers under Manifest
+// mode without an examples/ subtree always get false; this function is
+// intended for gocell-self-repo skip-style rules.
 func IsInExamplesSubtree(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "examples/")
 }
@@ -289,6 +292,10 @@ func IsInExamplesSubtree(p string) bool {
 // Returns false for examples/, Manifest-mode custom paths, and an empty
 // string. Callers (e.g. deriveAssembly) check for empty file before calling
 // and apply convention-default behavior for that case.
+//
+// Intended for internal derivation logic only (deriveAssembly entrypoint
+// heuristic); governance rules should consume AssemblyMeta.File via
+// path.Dir instead of calling this directly.
 func IsConventionalAssemblyPath(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "assemblies/")
 }
@@ -311,7 +318,7 @@ func (l *Locator) resolveMode() error {
 			slog.Error("metadata: locator manifest load failed",
 				slog.String("manifest_path", l.manifestPath),
 				slog.String("requested_mode", l.requestedMode.String()),
-				slog.String("err", err.Error()))
+				slog.Any("err", err))
 			return fmt.Errorf("metadata: locator: explicit manifest mode but manifest load failed: %w", err)
 		}
 		l.manifestSpec = spec
@@ -326,7 +333,7 @@ func (l *Locator) resolveMode() error {
 				slog.Error("metadata: locator manifest load failed (auto-detected)",
 					slog.String("manifest_path", l.manifestPath),
 					slog.String("requested_mode", l.requestedMode.String()),
-					slog.String("err", lerr.Error()))
+					slog.Any("err", lerr))
 				return fmt.Errorf("metadata: locator: manifest %s detected but load failed: %w", l.manifestPath, lerr)
 			}
 			l.manifestSpec = spec
@@ -334,6 +341,10 @@ func (l *Locator) resolveMode() error {
 			l.logResolved()
 			return nil
 		} else if !errors.Is(err, fs.ErrNotExist) {
+			slog.Error("metadata: locator manifest probe failed",
+				slog.String("manifest_path", l.manifestPath),
+				slog.String("requested_mode", l.requestedMode.String()),
+				slog.Any("err", err))
 			return fmt.Errorf("metadata: locator: probe manifest %s: %w", l.manifestPath, err)
 		}
 		l.resolvedMode = LocatorConventional
@@ -355,6 +366,7 @@ func (l *Locator) logResolved() {
 	}
 	slog.Info("metadata: locator mode resolved",
 		slog.String("mode", l.resolvedMode.String()),
+		slog.String("root", l.root),
 		slog.String("manifest_path", l.manifestPath),
 		slog.Int("manifest_modules", modules),
 		slog.String("requested_mode", l.requestedMode.String()))
