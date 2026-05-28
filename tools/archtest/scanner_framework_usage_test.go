@@ -1683,6 +1683,12 @@ func TestScannerFrameworkUsage02_Fixture(t *testing.T) {
 		{"red_scanner_eachinsubtree_done_sentinel", 1},
 		{"red_archtest_eachinsubtree_done_sentinel", 1},
 		{"red_scanner_eachinsubtree_bs5_helper", 1},
+		// arg[1] anchor regression fixtures (F1, PR #1252 round-3 Review A):
+		// arg[0] subtree contains a FuncLit grandchild via CallExpr type
+		// conversion. Detector must anchor to arg[1] explicitly regardless
+		// of arg[0] shape — both BS5 and sentinel outcomes covered.
+		{"red_scanner_eachinsubtree_arg0_complex_arg1_bs5", 1},
+		{"red_scanner_eachinsubtree_arg0_complex_arg1_sentinel", 1},
 		// BS4 nested-walker form: outer EachInSubtree's callback contains
 		// an inner monitored walker call with a sentinel. The top-level
 		// CallExpr walk examines each monitored CallExpr. AFTER F3 fix
