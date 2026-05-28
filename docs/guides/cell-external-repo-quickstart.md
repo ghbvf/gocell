@@ -48,6 +48,7 @@ mkdir -p contracts/http/payment/charge/v1
 id: payment
 type: core
 consistencyLevel: L2
+durabilityMode: demo
 lifecycle: experimental
 owner:
   team: acme-platform
@@ -56,7 +57,7 @@ schema:
   primary: payments
 verify:
   smoke:
-    - payment/smoke
+    - smoke.payment.charge
 ```
 
 `cells/payment/slices/charge/slice.yaml`:
@@ -65,14 +66,20 @@ verify:
 id: charge
 belongsToCell: payment        # 必填（manifest 模式无路径自动派生）
 consistencyLevel: L2
+allowedFiles:
+  - "cells/payment/slices/charge/**"
 contractUsages:
   - contract: http.payment.charge.v1
     role: serve
 verify:
   unit:
-    - payment/charge/unit
-  contract:
-    - contract.http.payment.charge.v1.serve
+    - unit.payment.charge
+  contract: []
+  waivers:
+    - contract: http.payment.charge.v1
+      owner: acme-platform
+      reason: "contract still in draft lifecycle; no executable contract test yet"
+      expiresAt: "2026-12-31"
 ```
 
 `contracts/http/payment/charge/v1/contract.yaml`:
@@ -80,20 +87,28 @@ verify:
 ```yaml
 id: http.payment.charge.v1
 kind: http
-lifecycle: experimental
+lifecycle: draft
+ownerCell: payment
+consistencyLevel: L1
 endpoints:
+  server: payment
   http:
     method: POST
     path: /api/v1/payment/charge
+    successStatus: 204
+    noContent: true
 ```
 
 ### 4. 跑 gocell validate
 
 ```bash
+# 必须在 module root（go.mod / .gocell/manifest.yaml 所在目录）运行；或用 --root=/path/to/repo 显式指定
 gocell validate
 ```
 
-预期：退出码 0，stderr/stdout 中出现 `INFO metadata: locator mode resolved mode=manifest`，stdout 输出 `PASS: no errors` 或仅 advisory warnings；governance rules 在 conventional-mode-specific 规则上自动 skip（因 `examples/` 子树在外部 repo 不存在）。
+预期：退出码 0，stderr/stdout 中出现 `INFO metadata: locator mode resolved mode=manifest`，stdout 输出 `No issues found.` 或仅 advisory warnings；governance rules 在 conventional-mode-specific 规则上自动 skip（因 `examples/` 子树在外部 repo 不存在）。
+
+> **说明**：外部仓库无 `examples/` 子树，conventional-layout-specific 规则（如 ADV-04 examples 反向覆盖）在 manifest 模式下自动 skip；详见 ADR § AI-robust 评级。
 
 需要显式 override 时：
 
@@ -101,6 +116,8 @@ gocell validate
 gocell validate --layout=manifest
 gocell validate --layout=manifest --manifest=./config/manifest.yaml
 ```
+
+> 跑通上方 `gocell validate` 即表示 M1 (#1082) acceptance criteria 已达到，后续能力见下方已知限制表。
 
 ### 5. Workspace 模式
 
@@ -123,7 +140,9 @@ modules:
   - path: acme-payment-cell          # 第二个 module
 ```
 
-`gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。预期退出码 0，输出末尾包含 `PASS: no errors` 或仅 advisory warnings。
+> manifest 的 `path:` 字段不需要 `./` 前缀；`path: gocell` 等价于 `./gocell`，Locator 内部 `path.Clean` 会规范化。
+
+`gocell validate --root=.` 会聚合两个 module 的 cell/slice/contract。预期退出码 0，输出末尾包含 `No issues found.` 或仅 advisory warnings。
 
 ## 已知限制（M1 范围）
 

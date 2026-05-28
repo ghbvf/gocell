@@ -364,6 +364,8 @@ locator funnel 的两个方向分别评级，对齐 `.claude/rules/gocell/ai-rob
 （`tools/archtest/locator_discovery_funnel_test.go`），含 A1/A2a/A2b/A5 四条子规则；
 符号清单活在该 archtest 的 package godoc，不在本 ADR 复制。
 
+> 外部仓库在 M3 (#1084 archtest library-isation) 落地前不受 `LOCATOR-DISCOVERY-FUNNEL-01` archtest 守护，依赖文档约定。
+
 ### ENTERING funnel（path-prefix 比较，A1/A2 轴）
 
 | 方向 | 形态 | 评级 |
@@ -401,7 +403,7 @@ Locator 输出派生路径，不得通过 `filepath.Join("cells", id)` 等形式
 | 场景 | 风险 | 处置 |
 |------|------|------|
 | Monorepo 误植 `.gocell/manifest.yaml` | 切到 manifest 模式，可能解析错误路径 | `--layout=conventional` flag 显式 override；governance 检查双模式声明冲突 |
-| manifest `path` 含 `../` 越界 | 路径逃逸至 repo 边界外 | `Locator` 在解析期拒绝绝对路径与含 `..` 段的相对路径，fail-fast，返回 `ErrUnsafePath` |
+| manifest `path` 含 `../` 越界 | 路径逃逸至 repo 边界外 | `Locator` 在解析期拒绝绝对路径与含 `..` 段的相对路径，fail-fast，返回 wrapped `fmt.Errorf` 包含 `"path escape not allowed"` 或 `"absolute path not allowed"` 提示，无独立 sentinel |
 | manifest 漏写 `excludes: ["generated/**"]` | `generated/` 下的 contract YAML 被重复解析，parser 报重复 ID | `excludes` 默认含 `generated/**`；用户显式写空时 warn |
 | symlink 跨 module 引入循环 | `fs.WalkDir` 死循环 | `Locator.discoverManifest` 走 `os.DirFS`，`fs.WalkDir` 不追踪 symlinked dir（标准库行为：`DirEntry.Type()&ModeSymlink != 0` 时 skip） |
 | Workspace 多模块 cell ID 冲突 | 同名 cell 被装配两次 | `parser.go` 现有 `duplicate cell ID` 校验保持不变，locator 不旁路此检查 |
@@ -416,11 +418,11 @@ Locator 输出派生路径，不得通过 `filepath.Join("cells", id)` 等形式
 **M1 PR 提供以下测试（落地状态）：**
 
 1. `kernel/metadata/locator_test.go`：`fstest.MapFS` 三组 fixture
-   - `TestLocatorConventional`：monorepo 标准 layout，`NewLocatorFS` 返回
+   - `TestLocator_ConventionalDiscover`：monorepo 标准 layout，`NewLocatorFS` 返回
      `LocatorConventional`，`Discover()` 中 `SourceCell` 条目与现有 parser 结果一致
-   - `TestLocatorManifestSingle`：单模块外部 repo（`.gocell/manifest.yaml`
+   - `TestLocator_ManifestSingleModuleDefaults`：单模块外部 repo（`.gocell/manifest.yaml`
      存在），`Discover()` 返回 manifest 配置路径下的 MetadataSource 列表
-   - `TestLocatorManifestWorkspace`：两个 module path 的 workspace，
+   - `TestLocator_ManifestWorkspaceMultiModule`：两个 module path 的 workspace，
      `Discover()` 返回两个模块合并后的 SourceCell 列表
 
 2. `kernel/metadata/locator_manifest_e2e_test.go`（Batch 4 补充）：os.TempDir
