@@ -66,7 +66,7 @@
 - 同主题规则 ≥ 3 → `{theme}_invariants_test.go` 主题文件；已有单文件升到第 3 条时重命名
 - 每个 `*_test.go` 在文件头 CommentGroup 写 `// INVARIANT: <ID>`；多规则文件用 `//   - INVARIANT: <ID>` 列表续行
 
-archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.sh`）与三种 execution mode 见 CLAUDE.md。两条 meta-archtest 守卫该 wiring：`ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（CI 显式 `SHARD_COUNT=16`，step-scoped match-all）与 `ARCHTEST-VERIFY-COVERAGE-01`（script discovery 与 *_test.go AST 集合一致，防 shard 漏 test）。
+archtest CI 入口、本地触发方式（`make verify` / `hack/verify-archtest.sh`）与三种 execution mode 见 CLAUDE.md。两条 meta-archtest 守卫该 wiring：`ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01`（CI 显式 `SHARD_COUNT=24`，step-scoped match-all；详 ADR 202605120000 §Amendment 2026-05-28）与 `ARCHTEST-VERIFY-COVERAGE-01`（script discovery 与 *_test.go AST 集合一致，防 shard 漏 test）。
 
 ## Review checklist
 

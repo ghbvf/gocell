@@ -209,14 +209,16 @@ func TestChangePasswordInactiveGate_01_NegativeFixture(t *testing.T) {
 // UpdatePassword mutation inside its body. Returns the diagnostics plus whether
 // the target function was present (so the caller can fail on a silent no-op).
 func changePasswordGateDiagnostics(info *types.Info, fset *token.FileSet, file *ast.File, rel string) (diags []Diagnostic, foundFunc bool) {
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Name == nil || fd.Name.Name != cpgTargetFunc || fd.Body == nil {
-			continue
+	// SCANNER-FRAMEWORK-USAGE-01 Path B compliance: depth-1 typed walk of
+	// file.Decls *ast.FuncDecl entries. Original `for _, decl := range
+	// file.Decls { decl.(*ast.FuncDecl) }` is the Path B violation.
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		if fd.Name == nil || fd.Name.Name != cpgTargetFunc || fd.Body == nil {
+			return
 		}
 		foundFunc = true
 		diags = append(diags, checkGateOrdering(info, fset, fd, rel)...)
-	}
+	})
 	return diags, foundFunc
 }
 
