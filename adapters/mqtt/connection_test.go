@@ -17,19 +17,20 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // connBackoffJitterFloor is the expected lower bound (0.75 × 100 ms base) for
 // the ExponentialBackoffWithJitter result at attempt 0.
 const connBackoffJitterFloor = 75 * time.Millisecond
 
-// newEmbeddedBroker starts an in-process mochi MQTT v2 broker on a random port
-// and returns the address and a stop function. The AllowHook permits all clients.
-func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
+// startEmbeddedBroker starts an in-process mochi broker with the given hook on
+// a random port, waits until it accepts connections, and returns addr + stop.
+func startEmbeddedBroker(t *testing.T, hook mqttserver.Hook, hookID string) (addr string, stop func()) {
 	t.Helper()
 	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
-	err := srv.AddHook(new(auth.AllowHook), nil)
-	require.NoError(t, err, "add allow hook")
+	err := srv.AddHook(hook, nil)
+	require.NoError(t, err, "add hook %s", hookID)
 
 	// Bind a random port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -40,7 +41,7 @@ func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
 	}
 
 	tcp := listeners.NewTCP(listeners.Config{
-		ID:      "test-tcp",
+		ID:      hookID,
 		Address: addr,
 	})
 	err = srv.AddListener(tcp)
@@ -49,42 +50,36 @@ func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
 	go func() {
 		_ = srv.Serve()
 	}()
-	// Give the broker a moment to start accepting connections.
-	time.Sleep(testtime.D10ms)
+
+	// Poll until the broker is accepting TCP connections — deterministic
+	// alternative to time.Sleep (TEST-SLEEP-DISCIPLINE-01).
+	listenAddr := addr
+	testwait.External(t, "mqtt-broker-accepts-connections", func() bool {
+		c, derr := net.Dial("tcp", listenAddr)
+		if derr != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}, testtime.D2s, testtime.D10ms)
 
 	return addr, func() {
 		_ = srv.Close()
 	}
 }
 
+// newEmbeddedBroker starts an in-process mochi MQTT v2 broker on a random port
+// and returns the address and a stop function. The AllowHook permits all clients.
+func newEmbeddedBroker(t *testing.T) (addr string, stop func()) {
+	t.Helper()
+	return startEmbeddedBroker(t, new(auth.AllowHook), "allow-tcp")
+}
+
 // newEmbeddedBrokerWithDenyHook starts a broker that denies all auth and
 // returns the addr and a stop function.
 func newEmbeddedBrokerWithDenyHook(t *testing.T) (addr string, stop func()) {
 	t.Helper()
-	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
-	h := &denyAuthHook{deny: true}
-	err := srv.AddHook(h, nil)
-	require.NoError(t, err, "add deny hook")
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "listen random port")
-	addr = ln.Addr().String()
-	if err = ln.Close(); err != nil {
-		t.Logf("close probe listener: %v", err)
-	}
-
-	tcp := listeners.NewTCP(listeners.Config{
-		ID:      "deny-tcp",
-		Address: addr,
-	})
-	err = srv.AddListener(tcp)
-	require.NoError(t, err, "add listener")
-
-	go func() {
-		_ = srv.Serve()
-	}()
-	time.Sleep(testtime.D10ms)
-	return addr, func() { _ = srv.Close() }
+	return startEmbeddedBroker(t, &denyAuthHook{deny: true}, "deny-tcp")
 }
 
 // denyAuthHook is a mochi hook that denies all connections when deny=true.

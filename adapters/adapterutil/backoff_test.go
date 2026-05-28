@@ -14,12 +14,12 @@ import (
 // Each constant represents a ±25% jitter floor or ceiling on a specific
 // attempt's expected delay value.
 const (
-	backoffJitter750ms   = 750 * time.Millisecond  // floor: 0.75 × 1 s (attempt 0)
-	backoffJitter1250ms  = 1250 * time.Millisecond // ceil:  1.25 × 1 s (attempt 0)
-	backoffJitter1500ms  = 1500 * time.Millisecond // floor: 0.75 × 2 s (attempt 1)
-	backoffJitter2500ms  = 2500 * time.Millisecond // ceil:  1.25 × 2 s (attempt 1)
-	backoffJitter22500ms = 22500 * time.Millisecond // floor: 0.75 × 30 s (capped region)
-	backoffSmallBase1300ms = 1300 * time.Millisecond // ceil for SmallBase attempt-10 range check
+	backoffJitter750ms     = 750 * time.Millisecond   // floor: 0.75 × 1 s (attempt 0)
+	backoffJitter1250ms    = 1250 * time.Millisecond  // ceil:  1.25 × 1 s (attempt 0)
+	backoffJitter1500ms    = 1500 * time.Millisecond  // floor: 0.75 × 2 s (attempt 1)
+	backoffJitter2500ms    = 2500 * time.Millisecond  // ceil:  1.25 × 2 s (attempt 1)
+	backoffJitter22500ms   = 22500 * time.Millisecond // floor: 0.75 × 30 s (capped region)
+	backoffSmallBase1300ms = 1300 * time.Millisecond  // ceil for SmallBase attempt-10 range check
 )
 
 // TestExponentialBackoffWithJitter_Growth verifies that the returned delay
