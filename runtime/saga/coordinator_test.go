@@ -2047,6 +2047,49 @@ func TestDriveOne_FoldFailed_LeaseIDLogged(t *testing.T) {
 	}
 }
 
+// TestReverseWalkCompensate_UnknownStep_LeaseIDLogged asserts the "unknown
+// committed step name, skipping" Warn carries lease_id (#1211). White-box: a
+// committed entry whose name is absent from stepByName forces the unknown-step
+// branch directly, without needing a definition-drift fake journal — this is a
+// defensive branch (a committed step name not present in the current
+// definition) that the normal drive path does not reach.
+func TestReverseWalkCompensate_UnknownStep_LeaseIDLogged(t *testing.T) {
+	const leaseID = idutil.SafeID("lease-unknown-step")
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	clk := newFakeClock()
+	j := newMemJournal(clk)
+	reg, err := ksaga.NewInMemoryRegistry(&ksaga.Definition{
+		ID:    "unknownstepdef",
+		Steps: []ksaga.Step{{Name: "step1", Run: noopStep}},
+	})
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	ci := journal.ClaimedInstance{
+		Instance: ksaga.NewInstance(mustNewUUID(t), "unknownstepdef", clk.Now()),
+		LeaseID:  leaseID,
+	}
+	// committed step whose name is NOT in stepByName → unknown-step branch.
+	committed := []committedStepEntry{{name: "phantom-step", payload: nil}}
+	stepByName := map[idutil.SafeID]ksaga.Step{}
+	var compensateErrors []error
+	c.reverseWalkCompensate(context.Background(), ci, committed, stepByName, &compensateErrors)
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "unknown committed step name, skipping")
+	if entry == nil {
+		t.Fatal("expected WARN log: unknown committed step name, skipping")
+	}
+	if entry["lease_id"] != string(leaseID) {
+		t.Errorf("unknown-step log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
+	}
+}
+
 // mustNewUUID is a test helper that creates a UUID or fatals.
 func mustNewUUID(t *testing.T) idutil.SafeID {
 	t.Helper()
