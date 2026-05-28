@@ -33,7 +33,19 @@ ALTER TABLE saga_instances ADD CONSTRAINT saga_instances_status_range
 -- +goose Down
 -- +goose StatementBegin
 
-SELECT gocell.allow_destructive_down();
+-- Reverting requires that no saga_events row carry kind=11 and no
+-- saga_instances row carry status=8. Production workflows that have written
+-- KindSagaCompensationFailed events or StatusCompensationFailed instances
+-- must be archived / dropped before this Down runs — otherwise the narrowed
+-- CHECK rejects existing rows and the migration aborts. Fail-closed: gate
+-- behind gocell.allow_destructive_down, matching the pattern in 041 + 040.
+
+DO $$
+BEGIN
+    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'refusing destructive Down: set gocell.allow_destructive_down=true to proceed';
+    END IF;
+END $$;
 
 ALTER TABLE saga_events DROP CONSTRAINT saga_events_kind_range;
 ALTER TABLE saga_events ADD CONSTRAINT saga_events_kind_range
