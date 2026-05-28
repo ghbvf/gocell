@@ -141,7 +141,7 @@ bootstrap.New(
 | `auth.NewAuthJWT(v) (AuthJWT, error)` | JWT 验证（直接注入 IntentTokenVerifier）。error-first；`Must*` 变体已删除（B2-K-02，ADR `202605171800`）。 | PrimaryListener |
 | `auth.NewAuthJWTFromAssembly(asm) (..., error)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
 | `auth.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
-| `auth.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
+| `auth.AuthMTLS{}` | mTLS — 链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS）；中间件 `runtime/http/middleware.MTLS()` 守 peer cert presence + 把 curated `PeerIdentity{Subject,DNSNames,URIs}` 写入 ctx（`pkg/ctxkeys.PeerIdentityFrom`）；server-side `*tls.Config` 用 `runtime/http/tlsutil.NewServerMTLSConfig(certPEM, keyPEM, clientCAs)` 构造 | InternalListener（高安全场景） |
 | `auth.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
 
 **多 plan chain 示例**：

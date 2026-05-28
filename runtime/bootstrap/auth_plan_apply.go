@@ -20,9 +20,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
@@ -70,7 +70,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 			routerOpts = append(routerOpts, authOpts...)
 
 		case kauth.AuthMTLS:
-			mws = append(mws, mtlsMiddleware())
+			mws = append(mws, middleware.MTLS())
 
 		case kauth.AuthServiceToken:
 			mws = append(mws, auth.ServiceTokenMiddleware(
@@ -166,27 +166,6 @@ func discoverAuthVerifierFromAssembly(asm kauth.AssemblyRef) (kauth.IntentTokenV
 				"or wire the verifier explicitly via kauth.NewAuthJWT(verifier)")
 	}
 	return found, nil
-}
-
-// ─── Middleware factories ─────────────────────────────────────────────────────
-
-// mtlsMiddleware returns the peer-cert-presence guard. The handshake layer
-// has already done the chain check (see auth_plan_validate.go phase0), so
-// the middleware only asserts that the connection terminated as TLS with at
-// least one peer cert.
-//
-// Moved from policy_mtls.go.
-func mtlsMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-				httputil.WriteError(r.Context(), w,
-					errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "mTLS client certificate required"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // sortedListenerRefs returns listener refs in deterministic string order.
