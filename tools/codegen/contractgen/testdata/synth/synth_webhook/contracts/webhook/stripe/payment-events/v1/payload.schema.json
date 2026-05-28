@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "webhook.stripe.payment-events.v1.payload",
+  "type": "object",
+  "properties": {
+    "eventId": { "type": "string" },
+    "type": { "type": "string" },
+    "data": { "type": "object" }
+  },
+  "required": ["eventId", "type"]
+}

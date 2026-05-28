@@ -1,0 +1,10 @@
+id: webhook.stripe.payment-events.v1
+kind: webhook
+ownerCell: hooks
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  publisher: hooks
+schemaRefs:
+  payload: payload.schema.json
+codegen: true
