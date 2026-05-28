@@ -204,7 +204,9 @@ func TestProjectionCheckpointConformanceEnroll01(t *testing.T) {
 
 // TestProjectionCheckpointConformanceEnroll01_REDFixture simulates a missing
 // enrollment by removing one impl from the enrolled set and asserts the
-// diagnostic logic produces at least one violation.
+// diagnostic logic produces at least one violation. It also verifies that an
+// entirely-empty enrolledImpls set (zero enrollments) produces violations for
+// all discovered implementations.
 func TestProjectionCheckpointConformanceEnroll01_REDFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -246,6 +248,23 @@ func TestProjectionCheckpointConformanceEnroll01_REDFixture(t *testing.T) {
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty (need at least MemCheckpointStore)")
 
+	// --- Case A: zero enrollments (enrolledImpls entirely empty) ---
+	// Simulates a world where no _test.go has called RunCheckpointConformance.
+	// Every discovered impl must be flagged.
+	t.Run("zero enrollments fires for all impls", func(t *testing.T) {
+		emptyEnrolled := make(map[string]bool)
+		var diags []Diagnostic
+		for implKey := range implSet {
+			if !emptyEnrolled[implKey] {
+				diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
+			}
+		}
+		assert.Equal(t, len(implSet), len(diags),
+			"REDFixture zero-enrollment: expected one diagnostic per impl (%d), got %d",
+			len(implSet), len(diags))
+	})
+
+	// --- Case B: one impl missing from enrolled set ---
 	// Pick an arbitrary impl as the "missing enrollment" target.
 	var targetImplKey string
 	for k := range implSet {

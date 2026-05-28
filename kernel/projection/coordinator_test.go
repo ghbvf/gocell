@@ -107,7 +107,8 @@ func (s *errSaveStore) SaveOffset(_ context.Context, _, _ string, _ int64) error
 	return s.saveErr // does NOT update currentOffset — models "failed write"
 }
 
-// fakeRegistrar records Subscribe calls and returns an injected error.
+// fakeRegistrar records Subscribe calls and mirrors RegistryRecorder.Subscribe
+// validation so tests fail-close in the same way as production wiring.
 // It embeds cell.Registrar (nil) — only Subscribe is implemented.
 type fakeRegistrar struct {
 	cell.Registrar // nil embedding; panics on any other method call
@@ -121,11 +122,33 @@ type fakeRegistrar struct {
 
 func (f *fakeRegistrar) Subscribe(
 	spec contractspec.ContractSpec,
-	_ outbox.EntryHandler,
+	handler outbox.EntryHandler,
 	consumerGroup string,
 	cellID string,
 	_ ...cell.SubscriptionOption,
 ) error {
+	// Mirror RegistryRecorder.Subscribe validation (registry.go:468-488) so
+	// tests fail-close identically to production — prevents spec-kind drift.
+	if handler == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"fakeRegistrar Subscribe: handler must not be nil")
+	}
+	if consumerGroup == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"fakeRegistrar Subscribe: consumerGroup must not be empty")
+	}
+	if cellID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"fakeRegistrar Subscribe: cellID must not be empty")
+	}
+	if spec.Kind != cellvocab.ContractEvent {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"fakeRegistrar Subscribe: spec.Kind must be \"event\"")
+	}
+	if spec.Topic == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"fakeRegistrar Subscribe: spec.Topic must not be empty")
+	}
 	f.subscribeCalls++
 	f.lastSpec = spec
 	f.lastCG = consumerGroup
@@ -133,15 +156,47 @@ func (f *fakeRegistrar) Subscribe(
 	return f.subscribeErr
 }
 
+// spySpan records SetStatus calls for assertion in span status tests.
+type spySpan struct {
+	statusCode wrapper.StatusCode
+	statusDesc string
+	statusSet  bool
+}
+
+func (s *spySpan) SetAttributes(_ ...wrapper.Attr) {}
+func (s *spySpan) RecordError(_ error)             {}
+func (s *spySpan) End()                            {}
+func (s *spySpan) SetStatus(code wrapper.StatusCode, desc string) {
+	s.statusCode = code
+	s.statusDesc = desc
+	s.statusSet = true
+}
+
+// spyTracer returns the last created spySpan so tests can inspect SetStatus calls.
+type spyTracer struct {
+	last *spySpan
+}
+
+func (st *spyTracer) Start(ctx context.Context, _ string, _ ...wrapper.Attr) (context.Context, wrapper.Span) {
+	sp := &spySpan{}
+	st.last = sp
+	return ctx, sp
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
+// minimalSpec returns a valid event ContractSpec suitable for passing to
+// Coordinator.Subscribe. Kind must be "event" (not "projection" — projection is
+// the slice concept, not the kind of the subscribed event contract) and Topic
+// must be non-empty to satisfy RegistryRecorder.Subscribe validation.
 func minimalSpec(id string) contractspec.ContractSpec {
 	return contractspec.ContractSpec{
 		ID:        id,
-		Kind:      cellvocab.ContractProjection,
-		Transport: "internal",
+		Kind:      cellvocab.ContractEvent,
+		Transport: "amqp",
+		Topic:     "myproj.events.v1",
 	}
 }
 
@@ -232,7 +287,16 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 			wantDisp:       outbox.DispositionReject,
 		},
 		{
-			name:           "SaveOffset error → Requeue, LoadOffset still old",
+			// fail-closed: SaveOffset error keeps checkpoint at the old value.
+			// The Coordinator requeues the event so it will be retried; the
+			// read-model write (Apply) has already run, but without a committed
+			// checkpoint the event is not considered "done" — on retry the tx
+			// will roll back both Apply and SaveOffset together (atomic).
+			// NOTE: Apply's effect on the read model is rolled back atomically
+			// by the TxRunner only in real PG usage; mem fake + recordingApply
+			// have no side-effects to roll back, so that invariant is covered
+			// by PR-02 PG integration tests rather than here.
+			name:           "fail-closed: SaveOffset error → Requeue, checkpoint not advanced",
 			currentOffset:  0,
 			cursorPos:      1,
 			saveFails:      true,
@@ -247,6 +311,20 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 			wantApplyCalls: 0,
 			wantSaved:      false,
 			wantDisp:       outbox.DispositionRequeue,
+		},
+		{
+			// Gap: current=5, pos=7 — gap events 6 is simply never applied.
+			// After pos=7 is applied and checkpoint advances to 7, a subsequent
+			// event at pos=6 (≤7) will be skipped by the pos<=checkpoint guard.
+			// This is expected: the Coordinator relies on Cursor monotonicity;
+			// events at positions inside a gap are intentionally not retried.
+			name:           "gap: current=5 pos=7 → applied and saved at 7",
+			currentOffset:  5,
+			cursorPos:      7,
+			wantApplyCalls: 1,
+			wantSaved:      true,
+			wantLastSaved:  7,
+			wantDisp:       outbox.DispositionAck,
 		},
 	}
 
@@ -338,14 +416,102 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestCoordinator_CrashRecovery — simulates restart with a shared store
+// TestBuildHandler_SpanStatus — span SetStatus correctness (FIX-2)
 // ---------------------------------------------------------------------------
 
+// TestBuildHandler_SpanStatus verifies that buildHandler marks the "projection.apply"
+// span status correctly for each disposition:
+//
+//   - success (nil err)        → SetStatus(StatusOK, "")
+//   - transient error          → SetStatus(StatusError, "requeue")
+//   - permanent error          → SetStatus(StatusError, "reject")
+//
+// Detailed error recording (RecordError) is delegated to the outer WrapConsumer
+// span to avoid re-introducing a redaction funnel obligation here.
+func TestBuildHandler_SpanStatus(t *testing.T) {
+	t.Parallel()
+
+	errTransient := errors.New("transient")
+	errPermanent := outbox.NewPermanentError(errors.New("permanent"))
+
+	tests := []struct {
+		name     string
+		applyErr error
+		wantCode wrapper.StatusCode
+		wantDesc string
+	}{
+		{
+			name:     "success → StatusOK",
+			applyErr: nil,
+			wantCode: wrapper.StatusOK,
+			wantDesc: "",
+		},
+		{
+			name:     "transient error → StatusError requeue",
+			applyErr: errTransient,
+			wantCode: wrapper.StatusError,
+			wantDesc: "requeue",
+		},
+		{
+			name:     "permanent error → StatusError reject",
+			applyErr: errPermanent,
+			wantCode: wrapper.StatusError,
+			wantDesc: "reject",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			spy := &spyTracer{}
+			apply := &recordingApply{err: tc.applyErr}
+			store := newSeededStore("testcell", "p1", 0)
+			cursor := &fakeCursor{pos: 1}
+
+			c, err := NewCoordinator("testcell", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, spy)
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+
+			h := c.buildHandler("testcell", "p1", apply.fn)
+			_ = h(context.Background(), outbox.Entry{})
+
+			if spy.last == nil {
+				t.Fatal("spy tracer: no span was started")
+			}
+			if !spy.last.statusSet {
+				t.Fatal("span.SetStatus was never called")
+			}
+			if spy.last.statusCode != tc.wantCode {
+				t.Errorf("SetStatus code = %v, want %v", spy.last.statusCode, tc.wantCode)
+			}
+			if spy.last.statusDesc != tc.wantDesc {
+				t.Errorf("SetStatus desc = %q, want %q", spy.last.statusDesc, tc.wantDesc)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestCoordinator_CrashRecovery — same-process offset handoff via shared store
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_CrashRecovery verifies that a second Coordinator pointed at
+// the same in-memory store correctly reads the checkpoint written by the first
+// and skips already-applied events. This models same-process offset handoff
+// (e.g. a coordinator restart within the same test run sharing a MemCheckpointStore).
+//
+// True cross-process / cross-pod crash recovery (where the checkpoint is durably
+// persisted to Postgres and a newly-started pod reads it back) is exercised by
+// PR-02 PG integration tests — MemCheckpointStore has no persistence across
+// process boundaries.
 func TestCoordinator_CrashRecovery(t *testing.T) {
 	t.Parallel()
 
-	// Shared persistent store, simulating a process restart by creating a
-	// second Coordinator pointing at the same store.
+	// Shared in-memory store: both coordinators share the same pointer.
+	// This simulates same-process checkpoint handoff, not true crash recovery.
 	store := NewMemCheckpointStore()
 	cursor := &fakeCursor{pos: 6}
 	apply := &recordingApply{}
@@ -389,6 +555,58 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	}
 	if r3.Disposition != outbox.DispositionAck {
 		t.Errorf("third coordinator: Disposition = %v, want Ack", r3.Disposition)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestCoordinator_GapSkip — forward-gap position handling (FIX-3)
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_GapSkip proves that after a gap (current=5 → apply pos=7),
+// a later event at pos=6 (now ≤ checkpoint=7) is skipped with Ack and Apply is
+// not called. This is the correct behavior: the Coordinator relies on Cursor
+// monotonicity; gap-interior events arriving late are silently consumed.
+func TestCoordinator_GapSkip(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+
+	// Seed checkpoint at 5.
+	if err := store.SaveOffset(context.Background(), "testcell", "p1", 5); err != nil {
+		t.Fatalf("seed SaveOffset: %v", err)
+	}
+
+	// Apply pos=7 (gap over 6).
+	applyFirst := &recordingApply{}
+	c1 := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 7})
+	h1 := c1.buildHandler("testcell", "p1", applyFirst.fn)
+	r1 := h1(context.Background(), outbox.Entry{})
+
+	if applyFirst.calls != 1 {
+		t.Errorf("first apply: calls = %d, want 1", applyFirst.calls)
+	}
+	if r1.Disposition != outbox.DispositionAck {
+		t.Errorf("first apply: Disposition = %v, want Ack", r1.Disposition)
+	}
+	if off, _ := store.LoadOffset(context.Background(), "testcell", "p1"); off != 7 {
+		t.Errorf("checkpoint after pos=7: got %d, want 7", off)
+	}
+
+	// Now deliver pos=6 — it is ≤ checkpoint=7, so it must be skipped.
+	// This is expected behavior: pos=6 arrived inside a gap that was already
+	// passed by the monotonically-advancing cursor. Apply must NOT be called.
+	applyLate := &recordingApply{}
+	c2 := newCoordinator(t, &fakeRegistrar{}, txr, store, &fakeCursor{pos: 6})
+	h2 := c2.buildHandler("testcell", "p1", applyLate.fn)
+	r2 := h2(context.Background(), outbox.Entry{})
+
+	if applyLate.calls != 0 {
+		t.Errorf("late gap event pos=6: apply.calls = %d, want 0 (must be skipped — pos ≤ checkpoint=7)", applyLate.calls)
+	}
+	if r2.Disposition != outbox.DispositionAck {
+		t.Errorf("late gap event pos=6: Disposition = %v, want Ack", r2.Disposition)
 	}
 }
 
@@ -582,6 +800,36 @@ func TestCoordinator_Subscribe(t *testing.T) {
 			wantSubCalls: 1,
 		},
 	}
+
+	// Negative test: non-event spec (kind:projection, no Topic) must be rejected
+	// by fakeRegistrar (mirrors RegistryRecorder.Subscribe validation). This proves
+	// the registrar-side kind check is exercised end-to-end through
+	// Coordinator.Subscribe — ContractSpec.Validate() permits kind:projection
+	// without a Topic, so the rejection comes from reg.Subscribe, not spec.Validate().
+	t.Run("non-event spec rejected by registrar", func(t *testing.T) {
+		t.Parallel()
+		reg := &fakeRegistrar{}
+		c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		badSpec := contractspec.ContractSpec{
+			ID:        "projection.myproj.v1",
+			Kind:      cellvocab.ContractProjection, // wrong: must be event
+			Transport: "internal",
+			// Topic intentionally absent
+		}
+		subscribeErr := c.Subscribe(context.Background(), badSpec, "myproj",
+			func(_ context.Context, _ outbox.Entry) error { return nil },
+		)
+		if subscribeErr == nil {
+			t.Fatal("expected error for non-event spec, got nil")
+		}
+		// fakeRegistrar rejects kind:projection before incrementing subscribeCalls.
+		if reg.subscribeCalls != 0 {
+			t.Errorf("subscribeCalls = %d, want 0 (registrar must reject before recording the call)", reg.subscribeCalls)
+		}
+	})
 
 	for _, tc := range tests {
 		tc := tc

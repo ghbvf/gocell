@@ -28,6 +28,24 @@ import (
 // store. Each sub-test uses a distinct (cellID, projectionID) key to prevent
 // ordering-dependent interference on a shared store instance.
 //
+// # Caller responsibilities
+//
+//  1. Monotonicity is the Coordinator's responsibility, not the store's. The
+//     store must accept any int64 offset, including backward writes. MemCheckpointStore
+//     overwrites unconditionally; a PG implementation must do the same (no
+//     "reject-if-lower" guard) — deduplication is handled by the Coordinator's
+//     pos <= checkpoint check.
+//
+//  2. Isolation before call: a durable store (e.g. PR-02 Postgres adapter) must
+//     start from an empty or isolated namespace before calling this helper. Use
+//     a separate schema, a per-test table prefix, or a TRUNCATE to prevent
+//     interference from other tests or prior runs.
+//
+//  3. Transaction semantics are NOT asserted here: this helper only verifies
+//     the offset roundtrip contract (SaveOffset → LoadOffset). Atomic commit
+//     behavior (Apply + SaveOffset in a single transaction) is exercised in each
+//     adapter's own integration test suite (PR-02 for Postgres).
+//
 // Usage (from a package that creates its own store):
 //
 //	func TestMyStore_Conformance(t *testing.T) {
