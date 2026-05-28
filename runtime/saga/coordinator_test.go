@@ -295,6 +295,7 @@ func assertNilDepFailure(t *testing.T, c *Coordinator, err error, wantMessage st
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_NilClock(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -315,6 +316,7 @@ func TestNewCoordinator_NilClock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewCoordinator_HappyPath(t *testing.T) {
+	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
 	tx := &fakeTxRunner{}
@@ -1301,6 +1303,29 @@ func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
 	if c.cfg.LeaseDuration != testtime.D60s {
 		t.Errorf("c.cfg.LeaseDuration = %v, want %v", c.cfg.LeaseDuration, testtime.D60s)
 	}
+
+	// invalid_config: HeartbeatInterval * HeartbeatLeaseSafetyFactor (=2) >= LeaseDuration
+	// → Config.Validate rejects before reaching Executor construction, proving Config
+	// values flow through the validation pipeline rather than being silently ignored.
+	t.Run("invalid_config_HBI_too_large_rejected", func(t *testing.T) {
+		t.Parallel()
+		invalidCfg := Config{
+			PollInterval:   testtime.D10ms,
+			ClaimBatchSize: 4,
+			// HBI=30s, LeaseDuration=60s → HBI*2 = 60s, NOT < 60s → reject.
+			HeartbeatInterval: testtime.D30s,
+			LeaseDuration:     testtime.D60s,
+		}
+		_, err := NewCoordinator(j, tx, em, reg, clk, WithConfig(invalidCfg))
+		if err == nil {
+			t.Fatal("NewCoordinator with HeartbeatInterval*2 >= LeaseDuration must fail")
+		}
+		// The error must mention "heartbeat" (from Config.Validate message),
+		// confirming the Config values reached the validation pipeline.
+		if !strings.Contains(err.Error(), "heartbeat") && !strings.Contains(err.Error(), "HeartbeatInterval") {
+			t.Errorf("error must mention 'heartbeat' or 'HeartbeatInterval' to confirm Config flows through; got: %v", err)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

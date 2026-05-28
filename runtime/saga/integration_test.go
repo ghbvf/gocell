@@ -1,10 +1,18 @@
 package saga
 
-// integration_test.go covers TDD scenarios 1, 2, 4, 6, 7, 8 from plan §220
-// plus the compensation-lease-lost recovery path introduced by #1181. Scenarios
-// 3 (retry budget) and 5 (multi-step compensation walk) are covered by
-// white-box unit tests in coordinator_test.go and executor_test.go;
-// the integration tier focuses on cross-coordinator goroutine paths.
+// integration_test.go covers Coordinator integration scenarios:
+//   - TestIntegration_HappyPath1Step (§220 scenario 1)
+//   - TestIntegration_StepRunError (§220 scenario 2)
+//   - TestIntegration_TotalSagaTimeout (§220 scenario 4)
+//   - TestIntegration_ClaimContention (§220 scenario 6)
+//   - TestIntegration_ResumeAfterRestart (§220 scenario 7)
+//   - TestIntegration_PanicRecovery (§220 scenario 8)
+//   - TestIntegration_Compensation_LeaseLost_ResumesOnReclaim (#1210 C3 — compensation-phase lease-lost recovery)
+//
+// §220 scenarios 3 (retry budget) and 5 (multi-step compensation walk)
+// are covered by white-box unit tests in coordinator_test.go and
+// executor_test.go; the integration tier focuses on cross-coordinator
+// goroutine paths.
 //
 // Fake helpers live in testfakes_test.go (same package, test-only).
 
@@ -12,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -864,7 +873,7 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	compensationStarted := make(chan struct{}, 1)
 	// step1CompensateCalls tracks how many times step1.Compensate was invoked
 	// so we can assert the recovery (coordinator-2) ran it exactly once.
-	var step1CompensateCalls int
+	var step1CompensateCalls atomic.Int64
 
 	def := &ksaga.Definition{
 		ID: defID,
@@ -881,8 +890,8 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 				// compensationStarted is already full (buffered cap=1, non-blocking
 				// send falls through) so the second call returns immediately.
 				Compensate: func(ctx context.Context, _ *ksaga.Instance, _ []byte) error {
-					step1CompensateCalls++
-					if step1CompensateCalls == 1 {
+					n := step1CompensateCalls.Add(1)
+					if n == 1 {
 						// First call (coordinator-1): signal and block for lease-lost.
 						select {
 						case compensationStarted <- struct{}{}:
@@ -989,6 +998,24 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 		}
 	}
 
+	// Phase 2 invariant: instance is in StatusCompensating with no terminal event.
+	// Asserting this before Phase 3 ClaimPending makes failure diagnosis friendlier:
+	// if driveOne (phase2) wrote a terminal event, Phase 3 ClaimPending would find
+	// zero instances, surfacing a confusing "claimed 0" error rather than the root cause.
+	{
+		phase2Evs, loadErr := memJ.Load(context.Background(), inst.ID)
+		if loadErr != nil {
+			t.Fatalf("Phase 2 invariant check: Load: %v", loadErr)
+		}
+		if len(phase2Evs) == 0 {
+			t.Fatal("Phase 2 invariant check: no events in journal after coordinator-1 compensation walk")
+		}
+		last2 := phase2Evs[len(phase2Evs)-1]
+		if last2.Kind.IsTerminal() {
+			t.Fatalf("Phase 2 invariant violated: last event is terminal %s before Phase 3 recovery", last2.Kind)
+		}
+	}
+
 	// Phase 3 — coordinator-2 re-claims the StatusCompensating instance and
 	// drives recovery. c2 uses memJ directly so its Heartbeat always returns true.
 	cfg2 := Config{
@@ -1035,7 +1062,7 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	// step1.Compensate called exactly once (coordinator-1's first attempt before
 	// lease-lost; coordinator-2's recovery skips it because KindStepCompensationFailed
 	// already appears in the journal).
-	if step1CompensateCalls != 1 {
-		t.Errorf("step1CompensateCalls = %d, want 1 (c1 attempted; c2 recovery skips already-attempted)", step1CompensateCalls)
+	if got := step1CompensateCalls.Load(); got != 1 {
+		t.Errorf("step1CompensateCalls = %d, want 1 (c1 attempted; c2 recovery skips already-attempted)", got)
 	}
 }
