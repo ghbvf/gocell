@@ -78,6 +78,7 @@ func exportCatalog(args []string) error {
 	layers := fs.String("layers", "", "comma-separated layers; empty = all")
 	cellsArg := fs.String("cells", "", "comma-separated cell IDs to focus on (with first-order neighbors); empty = all")
 	root := fs.String("root", "", "project root directory; empty triggers go.mod auto-detection (walks up from cwd to find nearest go.mod)")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,7 +92,11 @@ func exportCatalog(args []string) error {
 		return err
 	}
 
-	pm, err := loadProjectMeta(rootDir)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("export catalog: %w", err)
+	}
+	pm, err := loadProjectMeta(rootDir, locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -200,8 +205,8 @@ func resolveRoot(arg string) (string, error) {
 }
 
 // loadProjectMeta parses the GoCell metadata under root.
-func loadProjectMeta(root string) (*metadata.ProjectMeta, error) {
-	pm, err := metadata.NewParser(root).Parse()
+func loadProjectMeta(root string, opts ...metadata.LocatorOption) (*metadata.ProjectMeta, error) {
+	pm, err := metadata.NewParser(root, opts...).Parse()
 	if err != nil {
 		return nil, fmt.Errorf("metadata parse: %w", err)
 	}

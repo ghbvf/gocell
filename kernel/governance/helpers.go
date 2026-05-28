@@ -192,6 +192,10 @@ func repositoryRoot(root string) string {
 //
 // Exported so cmd/gocell and other callers share a single implementation
 // rather than carrying a duplicate with a hand-maintained `// SYNC:` note.
+//
+// kernel/metadata.isWithinRoot is a forced duplicate (layering forbids
+// kernel/metadata importing kernel/governance); keep both in sync until the
+// shared-helper extraction tracked in #1255 lands.
 func IsWithinRoot(root, target string) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

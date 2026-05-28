@@ -34,6 +34,10 @@ type ResolvedSchemaRef struct {
 }
 
 // SchemaRefError reports a schema ref resolution failure.
+//
+// Kind is a free-form descriptive string used only in Error(); no caller
+// compares it. If a caller ever needs to switch on it, type it via the
+// string-typed concept funnel pattern — tracked in #1254.
 type SchemaRefError struct {
 	Field string
 	Ref   string
@@ -44,21 +48,19 @@ func (e *SchemaRefError) Error() string {
 	return fmt.Sprintf("%s %q: %s", e.Field, e.Ref, e.Kind)
 }
 
-// ContractDirFromMeta returns the contract directory relative to the project root.
+// ContractDirFromMeta returns the contract directory relative to the project
+// root. Returns "" when c is nil or c.Dir is unset. c.Dir is populated by the
+// Locator funnel during ParseFS — callers that hit "" should treat it as a
+// parsed-meta-missing condition, not as an opportunity to derive a default
+// path from the ID. The prior ContractDirFromID-based fallback was removed
+// when M1 (#1082) made layout discovery go through Locator: a derived
+// "contracts/<id>" path is wrong in manifest mode and was masking real bugs
+// when c.Dir was unexpectedly empty.
 func ContractDirFromMeta(c *ContractMeta) string {
 	if c == nil {
 		return ""
 	}
-	if c.Dir != "" {
-		return filepath.ToSlash(c.Dir)
-	}
-	return ContractDirFromID(c.ID)
-}
-
-// ContractDirFromID converts a contract ID to its default directory path.
-func ContractDirFromID(id string) string {
-	segments := strings.Split(id, ".")
-	return filepath.ToSlash(filepath.Join("contracts", filepath.Join(segments...)))
+	return filepath.ToSlash(c.Dir)
 }
 
 // ContractSchemaRefs returns every schema reference declared by c in deterministic
@@ -165,6 +167,9 @@ func sortedStringKeys(m map[string]string) []string {
 	return keys
 }
 
+// isWithinRoot mirrors kernel/governance.IsWithinRoot. The duplication is
+// forced by layering (kernel/metadata cannot import kernel/governance); keep
+// the two in sync. Extracting a shared helper is tracked in #1255.
 func isWithinRoot(root, target string) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

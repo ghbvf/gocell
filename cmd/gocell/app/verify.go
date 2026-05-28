@@ -146,6 +146,7 @@ func runVerifyResultCmd(ctx context.Context, args []string, spec verifyResultExe
 	id := fs.String(spec.flag, "", "<required>")
 	format := fs.String("format", "text",
 		"output format: "+strings.Join(printers.SupportedVerifyFormats(), " | "))
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -162,7 +163,11 @@ func runVerifyResultCmd(ctx context.Context, args []string, spec verifyResultExe
 		return err
 	}
 
-	root, project, err := parseProjectMeta()
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", spec.name, err)
+	}
+	root, project, err := parseProjectMeta(locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -211,13 +216,12 @@ func verifyJourney(ctx context.Context, args []string) error {
 	active := fs.Bool("active", false, "run all active journeys")
 	format := fs.String("format", "text",
 		"output format: "+strings.Join(printers.SupportedVerifyFormats(), " | "))
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *id == "" && !*active {
-		return fmt.Errorf("exactly one of --id or --active is required")
-	}
-	if *id != "" && *active {
+	// Exactly one of --id or --active must be set (XOR).
+	if (*id == "") == !*active {
 		return fmt.Errorf("exactly one of --id or --active is required")
 	}
 
@@ -225,7 +229,11 @@ func verifyJourney(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	root, project, err := parseProjectMeta()
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify journey: %w", err)
+	}
+	root, project, err := parseProjectMeta(locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -262,6 +270,7 @@ func verifyJourney(ctx context.Context, args []string) error {
 func verifyTargets(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify targets", flag.ContinueOnError)
 	files := fs.String("files", "", "comma-separated file paths (required)")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -270,7 +279,11 @@ func verifyTargets(_ context.Context, args []string) error {
 		return fmt.Errorf("--files is required")
 	}
 
-	_, project, err := parseProjectMeta()
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify targets: %w", err)
+	}
+	_, project, err := parseProjectMeta(locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -300,11 +313,16 @@ func verifyTargets(_ context.Context, args []string) error {
 func verifyGenerated(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify generated", flag.ContinueOnError)
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	root, project, err := parseProjectMeta()
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify generated: %w", err)
+	}
+	root, project, err := parseProjectMeta(locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -354,13 +372,13 @@ func ctxInterrupted(ctx context.Context, label string) error {
 }
 
 // parseProjectMeta finds the project root, parses metadata, and returns both.
-func parseProjectMeta() (root string, project *metadata.ProjectMeta, err error) {
+func parseProjectMeta(opts ...metadata.LocatorOption) (root string, project *metadata.ProjectMeta, err error) {
 	root, err = findRoot()
 	if err != nil {
 		return "", nil, fmt.Errorf("cannot find project root: %w", err)
 	}
 
-	parser := metadata.NewParser(root)
+	parser := metadata.NewParser(root, opts...)
 	project, err = parser.Parse()
 	if err != nil {
 		return "", nil, fmt.Errorf("metadata parse: %w", err)

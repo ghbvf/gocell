@@ -134,6 +134,7 @@ func generateAssembly(args []string) error {
 	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
 	all := fs.Bool("all", false, "generate for every assembly")
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -152,7 +153,11 @@ func generateAssembly(args []string) error {
 	if err != nil {
 		return err
 	}
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("generate assembly: %w", err)
+	}
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf("metadata parse: %w", err)
@@ -261,6 +266,7 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
 	all := fs.Bool("all", false, "generate for every assembly")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -276,7 +282,11 @@ func generateMetricsSchema(ctx context.Context, args []string) error {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
 
-	parser := metadata.NewParser(root)
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("generate metrics-schema: %w", err)
+	}
+	parser := metadata.NewParser(root, locatorOpts...)
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf("metadata parse: %w", err)

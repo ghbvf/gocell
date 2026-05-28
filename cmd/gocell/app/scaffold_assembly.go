@@ -39,6 +39,7 @@ func scaffoldAssembly(root string, args []string) error {
 	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateAssemblyUsage)
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,12 +49,17 @@ func scaffoldAssembly(root string, args []string) error {
 		return err
 	}
 
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("scaffold assembly: %w", err)
+	}
+
 	mod, err := readModule(root)
 	if err != nil {
 		return fmt.Errorf("scaffold assembly: read module path: %w", err)
 	}
 
-	project, err := metadata.NewParser(root).Parse()
+	project, err := metadata.NewParser(root, locatorOpts...).Parse()
 	if err != nil {
 		return fmt.Errorf("scaffold assembly: parse project: %w", err)
 	}

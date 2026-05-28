@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
+	"log/slog"
+	"path"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -31,25 +31,65 @@ const (
 	internalIDPathQuotedFmt = "id=%q path=%s"
 )
 
-// Parser loads and parses all YAML metadata from a project root.
+// ParserOption is an alias for LocatorOption. NewParser accepts ParserOption
+// values so call sites are semantically named without exposing Locator
+// internals. ParserOption and LocatorOption are interchangeable — you can
+// pass a LocatorOption directly or construct one via WithLocatorMode /
+// WithManifestPath.
+//
+// e.g.: metadata.NewParser(root, metadata.WithLocatorMode(metadata.LocatorManifest))
+//
+// Don't declare ParserOption-typed variables separately; use the LocatorOption
+// constructors (WithLocatorMode, WithManifestPath) directly.
+//
+// AI-robust: the line above is a Soft godoc convention (no type-system /
+// archtest guard). Upgrade-or-remove is tracked in #1253 — likely resolution
+// is dropping the alias so NewParser takes ...LocatorOption directly.
+type ParserOption = LocatorOption
+
+// Parser loads and parses all YAML metadata from a project root via a Locator.
+//
+// The Locator funnel is the single source of truth for filesystem topology
+// — see kernel/metadata/locator.go. Parser does NOT walk the filesystem
+// directly; it consumes []MetadataSource from Locator and dispatches each
+// entry to the matching parseXxx method by SourceKind.
 type Parser struct {
-	root string
+	root        string
+	locatorOpts []LocatorOption
 }
 
-// NewParser creates a Parser that reads from the given filesystem root.
-// The root should point to the project root directory (containing go.mod).
-func NewParser(root string) *Parser {
-	return &Parser{root: root}
+// NewParser creates a Parser that reads from the given filesystem root. The
+// root should point to the project root directory (containing go.mod). Pass
+// ParserOption (alias for LocatorOption) to override the auto-detected layout
+// (e.g., WithLocatorMode(LocatorManifest) for CI override).
+func NewParser(root string, opts ...ParserOption) *Parser {
+	return &Parser{root: root, locatorOpts: opts}
 }
 
-// Parse walks the real file system and loads all metadata YAML files.
-// Returns a fully populated ProjectMeta.
+// Parse walks the real file system via Locator and loads all metadata YAML
+// files. Returns a fully populated ProjectMeta.
 func (p *Parser) Parse() (*ProjectMeta, error) {
-	return p.ParseFS(os.DirFS(p.root))
+	loc, err := NewLocator(p.root, p.locatorOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return p.parseWith(loc)
 }
 
-// ParseFS parses from an fs.FS (for testing with fstest.MapFS).
+// ParseFS parses from an fs.FS (for testing with fstest.MapFS or any caller
+// that already has an fs.FS handle).
 func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
+	loc, err := NewLocatorFS(fsys, p.locatorOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return p.parseWith(loc)
+}
+
+// parseWith drains the Locator into a fully populated ProjectMeta. The
+// Locator funnels all filesystem walking + path-prefix classification; this
+// method only dispatches by SourceKind and runs derivation passes.
+func (p *Parser) parseWith(loc *Locator) (*ProjectMeta, error) {
 	pm := &ProjectMeta{
 		Cells:      make(map[string]*CellMeta),
 		Slices:     make(map[string]*SliceMeta),
@@ -58,203 +98,127 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 		Assemblies: make(map[string]*AssemblyMeta),
 		fileNodes:  make(map[string]*yaml.Node),
 	}
-
-	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		switch {
-		case matchCellYAML(path):
-			return p.parseCell(fsys, path, pm)
-		case matchSliceYAML(path):
-			return p.parseSlice(fsys, path, pm)
-		case matchContractYAML(path):
-			return p.parseContract(fsys, path, pm)
-		case matchJourneyYAML(path):
-			return p.parseJourney(fsys, path, pm)
-		case matchAssemblyYAML(path):
-			return p.parseAssembly(fsys, path, pm)
-		case path == "journeys/status-board.yaml":
-			return p.parseStatusBoard(fsys, path, pm)
-		case path == "actors.yaml":
-			return p.parseActors(fsys, path, pm)
-		}
-		return nil
-	}); err != nil {
+	sources, err := loc.Discover()
+	if err != nil {
 		return nil, err
 	}
-
+	if len(sources) == 0 {
+		// Warn so operators can distinguish a legitimately empty project from
+		// a misconfigured root path or manifest that scanned nothing. Behavior
+		// is unchanged: return an empty ProjectMeta with nil error.
+		slog.Warn("metadata: parser discovered zero sources — verify root path and locator mode",
+			slog.String("root", p.root),
+		)
+	}
+	fsys := loc.FS()
+	for _, src := range sources {
+		if err := p.dispatchSource(fsys, src, pm); err != nil {
+			return nil, err
+		}
+	}
 	applyAssemblyDerivations(pm)
 	deriveEventSubscribers(pm)
-
 	return pm, nil
 }
 
-// matchCellYAML matches cells/*/cell.yaml and examples/*/cells/*/cell.yaml.
-func matchCellYAML(path string) bool {
-	_, ok := cellDirFromPath(path)
-	return ok
-}
-
-// matchSliceYAML matches cells/*/slices/*/slice.yaml and
-// examples/*/cells/*/slices/*/slice.yaml.
-func matchSliceYAML(path string) bool {
-	_, _, ok := sliceDirsFromPath(path)
-	return ok
-}
-
-// matchContractYAML matches paths like contracts/{kind}/{...}/{version}/contract.yaml
-// and examples/*/contracts/{kind}/{...}/{version}/contract.yaml.
-// The path must start with "contracts/" and end with "contract.yaml", with at least
-// 4 segments between (kind + at least one domain segment + version).
-func matchContractYAML(path string) bool {
-	_, ok := contractDirFromPath(path)
-	return ok
-}
-
-// matchJourneyYAML matches journeys/J-*.yaml and examples/*/journeys/J-*.yaml.
-func matchJourneyYAML(path string) bool {
-	_, ok := journeyIDFromPath(path)
-	return ok
-}
-
-// matchAssemblyYAML matches paths like assemblies/*/assembly.yaml (3 segments)
-// and examples/*/assembly.yaml (3 segments under examples/ root — symmetric
-// with matchCellYAML / matchSliceYAML / matchContractYAML / matchJourneyYAML).
-//
-// ref: helm/helm pkg/chartutil/create.go — identity by location (any dir with
-// Chart.yaml is a chart); kustomize-sigs pkg/types/kustomization.go — per-dir metadata.
-func matchAssemblyYAML(path string) bool {
-	parts := splitPath(path)
-	if len(parts) == 3 && parts[0] == "assemblies" && parts[2] == "assembly.yaml" {
-		return true
-	}
-	return len(parts) == 3 && parts[0] == "examples" && parts[2] == "assembly.yaml"
-}
-
-// splitPath splits a forward-slash-separated path into its segments.
-func splitPath(path string) []string {
-	// Normalise to forward slashes for consistent matching.
-	clean := filepath.ToSlash(path)
-	return strings.Split(clean, "/")
-}
-
-func cellDirFromPath(path string) (string, bool) {
-	parts := splitPath(path)
-	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
-		return parts[1], true
-	}
-	if len(parts) == 5 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "cell.yaml" {
-		return parts[3], true
-	}
-	return "", false
-}
-
-func sliceDirsFromPath(path string) (cellDir, sliceDir string, ok bool) {
-	parts := splitPath(path)
-	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
-		return parts[1], parts[3], true
-	}
-	if len(parts) == 7 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "slices" && parts[6] == "slice.yaml" {
-		return parts[3], parts[5], true
-	}
-	return "", "", false
-}
-
-func contractDirFromPath(path string) (string, bool) {
-	parts := splitPath(path)
-	if len(parts) >= 5 && parts[0] == "contracts" && parts[len(parts)-1] == "contract.yaml" {
-		return strings.Join(parts[:len(parts)-1], "/"), true
-	}
-	if len(parts) >= 7 && parts[0] == "examples" && parts[2] == "contracts" && parts[len(parts)-1] == "contract.yaml" {
-		return strings.Join(parts[:len(parts)-1], "/"), true
-	}
-	return "", false
-}
-
-func journeyIDFromPath(path string) (string, bool) {
-	parts := splitPath(path)
-	var name string
-	switch {
-	case len(parts) == 2 && parts[0] == "journeys":
-		name = parts[1]
-	case len(parts) == 4 && parts[0] == "examples" && parts[2] == "journeys":
-		name = parts[3]
+// dispatchSource routes a discovered MetadataSource to its parse method.
+func (p *Parser) dispatchSource(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
+	switch src.Kind {
+	case SourceCell:
+		return p.parseCell(fsys, src, pm)
+	case SourceSlice:
+		return p.parseSlice(fsys, src, pm)
+	case SourceContract:
+		return p.parseContract(fsys, src, pm)
+	case SourceJourney:
+		return p.parseJourney(fsys, src, pm)
+	case SourceAssembly:
+		return p.parseAssembly(fsys, src, pm)
+	case SourceStatusBoard:
+		return p.parseStatusBoard(fsys, src.Path, pm)
+	case SourceActors:
+		return p.parseActors(fsys, src.Path, pm)
 	default:
-		return "", false
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"unknown metadata source kind",
+			errcode.WithInternal(errcode.InternalAttr("_",
+				fmt.Sprintf("kind=%s path=%s", src.Kind, src.Path))))
 	}
-	if !strings.HasPrefix(name, "J-") || !strings.HasSuffix(name, ".yaml") {
-		return "", false
-	}
-	return strings.TrimSuffix(name, ".yaml"), true
 }
 
 // --- individual parsers ---
 
-func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseCell(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
 	var m CellMeta
-	node, err := unmarshalFile(fsys, path, &m)
+	node, err := unmarshalFile(fsys, src.Path, &m)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[src.Path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"cell id is empty",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, src.Path))))
 	}
 	// Record the real filesystem directory so strict rules (REF-04) can
 	// compare it against m.ID instead of self-comparing against the map key.
-	// Use ToSlash so that on Windows (where os.DirFS produces backslash paths)
-	// all metadata file paths are normalised to forward slashes — making
-	// validation error messages cross-platform consistent.
-	cellDir, _ := cellDirFromPath(path)
-	m.Dir = cellDir
-	m.File = filepath.ToSlash(path)
+	// CellID from Locator is the directory name in conventional mode; in
+	// manifest mode the locator may emit an empty CellID, in which case we
+	// derive the directory name from the file path.
+	if src.CellID != "" {
+		m.Dir = src.CellID
+	} else {
+		m.Dir = path.Base(path.Dir(src.Path))
+	}
+	m.File = filepath.ToSlash(src.Path)
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate cell ID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, src.Path))))
 	}
 	pm.Cells[m.ID] = &m
 	return nil
 }
 
 // parseSlice parses a slice.yaml and applies G-7 auto-derivation:
-// if belongsToCell is omitted, it is inferred from the file path
-// (cells/{cellID}/slices/{sliceID}/slice.yaml → belongsToCell = cellID).
-// If an explicit value is provided but mismatches the path, an error is returned.
-func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
+// if belongsToCell is omitted, it is inferred from MetadataSource.CellID
+// (which Locator derives from conventional layout). When the locator cannot
+// derive CellID (manifest mode with non-conventional layout), slice.yaml
+// MUST declare belongsToCell explicitly.
+func (p *Parser) parseSlice(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
 	var m SliceMeta
-	node, err := unmarshalFile(fsys, path, &m)
+	node, err := unmarshalFile(fsys, src.Path, &m)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[src.Path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice id is empty",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, src.Path))))
 	}
 
-	// G-7: auto-derive belongsToCell from path.
-	cellID, sliceDir, _ := sliceDirsFromPath(path)
-
+	// G-7: prefer Locator-derived CellID, fall back to explicit field. When
+	// neither is set, reject the slice — manifest mode without layout
+	// derivation REQUIRES explicit belongsToCell.
+	derivedCellID := src.CellID
 	if m.BelongsToCell == "" {
-		m.BelongsToCell = cellID
-	} else if m.BelongsToCell != cellID {
+		if derivedCellID == "" {
+			return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"slice belongsToCell is required (no layout derivation available)",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q path=%s",
+					m.ID, src.Path))))
+		}
+		m.BelongsToCell = derivedCellID
+	} else if derivedCellID != "" && m.BelongsToCell != derivedCellID {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice belongsToCell does not match directory cell",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q belongs_to=%q dir_cell=%q path=%s",
-				m.ID, m.BelongsToCell, cellID, path))))
+				m.ID, m.BelongsToCell, derivedCellID, src.Path))))
 	}
 
 	// Record filesystem truth separately from the yaml id. Strict rules
@@ -262,15 +226,19 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	// (kebab dir paired with no-dash id, or vice versa) cannot escape the
 	// governance gate. ToSlash normalises Windows backslashes so error
 	// messages are cross-platform consistent.
-	m.Dir = sliceDir
-	m.CellDir = cellID
-	m.File = filepath.ToSlash(path)
+	m.Dir = path.Base(path.Dir(src.Path))
+	if derivedCellID != "" {
+		m.CellDir = derivedCellID
+	} else {
+		m.CellDir = m.BelongsToCell
+	}
+	m.File = filepath.ToSlash(src.Path)
 
-	key := cellID + "/" + m.ID
+	key := m.BelongsToCell + "/" + m.ID
 	if _, exists := pm.Slices[key]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate slice ID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, key, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, key, src.Path))))
 	}
 	// slice.yaml is the single source of truth for slice consistency level
 	// (codegen funnel projects it into slice_gen.go.sliceMeta). The prior
@@ -280,7 +248,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.ConsistencyLevel == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"slice consistencyLevel is empty: declare consistencyLevel: L0|L1|L2|L3|L4",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q path=%s", m.ID, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("slice=%q path=%s", m.ID, src.Path))))
 	}
 	pm.Slices[key] = &m
 	return nil
@@ -296,9 +264,9 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 // omits the `codegen:` key. The yaml.Node AST is inspected before the struct
 // decode is finalized so an absent key (vs. an explicit `codegen: false`) is
 // distinguishable. Explicit `codegen: false` is the only way to opt out.
-func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseContract(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
 	var m ContractMeta
-	node, err := unmarshalFile(fsys, path, &m)
+	node, err := unmarshalFile(fsys, src.Path, &m)
 	if err != nil {
 		return err
 	}
@@ -306,19 +274,21 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		m.Codegen = true
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[src.Path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"contract id is empty",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, src.Path))))
 	}
 	// G-7: auto-derive ownerCell from provider endpoint if omitted (per contract.schema.json).
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
-	m.Dir, _ = contractDirFromPath(path)
-	m.File = filepath.ToSlash(path)
+	// Contract directory is derived uniformly from the source path (works
+	// for both conventional layout and manifest mode with arbitrary layout).
+	m.Dir = path.Dir(filepath.ToSlash(src.Path))
+	m.File = filepath.ToSlash(src.Path)
 
 	if err := resolveParamRefs(fsys, &m); err != nil {
 		return err
@@ -327,88 +297,86 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate contract ID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, src.Path))))
 	}
 	pm.Contracts[m.ID] = &m
 	return nil
 }
 
-func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseJourney(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
 	var m JourneyMeta
-	node, err := unmarshalFile(fsys, path, &m)
+	node, err := unmarshalFile(fsys, src.Path, &m)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[src.Path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"journey id is empty",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, src.Path))))
 	}
-	m.File = filepath.ToSlash(path)
+	m.File = filepath.ToSlash(src.Path)
 	if _, exists := pm.Journeys[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate journey ID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, src.Path))))
 	}
 	pm.Journeys[m.ID] = &m
 	return nil
 }
 
-func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseAssembly(fsys fs.FS, src MetadataSource, pm *ProjectMeta) error {
 	var m AssemblyMeta
-	node, err := unmarshalFile(fsys, path, &m)
+	node, err := unmarshalFile(fsys, src.Path, &m)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[src.Path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"assembly id is empty",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalPathFmt, src.Path))))
 	}
-	// Record filesystem truth so strict rules (FMT-16) can compare the directory
-	// segment against m.ID. matchAssemblyYAML guarantees len(parts)==3 and
-	// parts[2]=="assembly.yaml". parts[0] is "assemblies" for platform assemblies
-	// or "examples" for example assemblies; parts[1] is the assembly directory
-	// in both cases.
-	parts := splitPath(path)
-	m.Dir = parts[1]
-	m.File = filepath.ToSlash(path)
+	// Record filesystem truth so strict rules (FMT-16) can compare the
+	// directory segment against m.ID. The directory name is the parent of
+	// the assembly.yaml file (works uniformly for assemblies/<id>/ and
+	// examples/<id>/ paths).
+	m.Dir = path.Base(path.Dir(filepath.ToSlash(src.Path)))
+	m.File = filepath.ToSlash(src.Path)
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"duplicate assembly ID",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, path))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalIDPathQuotedFmt, m.ID, src.Path))))
 	}
 	pm.Assemblies[m.ID] = &m
 	return nil
 }
 
-func (p *Parser) parseStatusBoard(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseStatusBoard(fsys fs.FS, srcPath string, pm *ProjectMeta) error {
 	var entries []StatusBoardEntry
-	node, err := unmarshalFile(fsys, path, &entries)
+	node, err := unmarshalFile(fsys, srcPath, &entries)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[srcPath] = node
 	}
 	pm.StatusBoard = entries
 	return nil
 }
 
-func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
+func (p *Parser) parseActors(fsys fs.FS, srcPath string, pm *ProjectMeta) error {
 	var actors []ActorMeta
-	node, err := unmarshalFile(fsys, path, &actors)
+	node, err := unmarshalFile(fsys, srcPath, &actors)
 	if err != nil {
 		return err
 	}
 	if shouldCacheFileNode(node) {
-		pm.fileNodes[path] = node
+		pm.fileNodes[srcPath] = node
 	}
 	pm.Actors = actors
 	return nil

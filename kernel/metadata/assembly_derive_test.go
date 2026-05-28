@@ -168,10 +168,16 @@ func TestAssemblyGeneratedDir(t *testing.T) {
 			wantPath: "assemblies/corebundle/generated",
 		},
 		{
-			name:     "empty_file_defaults_to_assemblies",
+			// Post-M1 (#1082) Locator funnel: empty File is a parsing-contract
+			// violation, not a recoverable fallback condition. AssemblyGeneratedDir
+			// returns "" so callers detect the missing-meta condition rather than
+			// silently producing a derived path that could collide with real
+			// output. Scaffold (kernel/assembly.synthesizeAssemblyMeta) now sets
+			// File explicitly to "assemblies/<id>/assembly.yaml".
+			name:     "empty_file_returns_empty",
 			asmID:    "newasm",
 			file:     "",
-			wantPath: "assemblies/newasm/generated",
+			wantPath: "",
 		},
 	}
 	for _, tc := range cases {
@@ -184,6 +190,69 @@ func TestAssemblyGeneratedDir(t *testing.T) {
 				t.Errorf("AssemblyGeneratedDir(%q): want %q, got %q", tc.file, tc.wantPath, got)
 			}
 		})
+	}
+}
+
+// TestApplyAssemblyDerivations_ConventionalAssemblyEntrypoint verifies that an
+// assembly under assemblies/<id>/ derives the conventional cmd/<id>/main.go
+// entrypoint (not identity-by-location assemblies/<id>/main.go), so the
+// conventional starter layout is preserved.
+func TestApplyAssemblyDerivations_ConventionalAssemblyEntrypoint(t *testing.T) {
+	t.Parallel()
+	asm := &metadata.AssemblyMeta{
+		ID:    "corebundle",
+		File:  "assemblies/corebundle/assembly.yaml",
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+	}
+	pm := buildAssemblyProject(map[string]string{}, []string{}, asm)
+
+	metadata.ExportedApplyAssemblyDerivations(pm)
+
+	if asm.Build.Entrypoint != "cmd/corebundle/main.go" {
+		t.Errorf("entrypoint: want %q, got %q", "cmd/corebundle/main.go", asm.Build.Entrypoint)
+	}
+}
+
+// TestApplyAssemblyDerivations_ManifestCustomEntrypoint verifies that an
+// assembly in a Manifest-mode custom path (not assemblies/ or examples/)
+// derives the identity-by-location entrypoint (path.Dir(file)/main.go).
+func TestApplyAssemblyDerivations_ManifestCustomEntrypoint(t *testing.T) {
+	t.Parallel()
+	asm := &metadata.AssemblyMeta{
+		ID:    "payment",
+		File:  "services/payment/assembly.yaml",
+		Owner: metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+	}
+	pm := buildAssemblyProject(map[string]string{}, []string{}, asm)
+
+	metadata.ExportedApplyAssemblyDerivations(pm)
+
+	if asm.Build.Entrypoint != "services/payment/main.go" {
+		t.Errorf("entrypoint: want %q, got %q", "services/payment/main.go", asm.Build.Entrypoint)
+	}
+}
+
+// TestIsConventionalAssemblyPath exercises all branches of the
+// IsConventionalAssemblyPath classification funnel.
+func TestIsConventionalAssemblyPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"assemblies/corebundle/assembly.yaml", true},
+		{"assemblies/corebundle/", true},
+		{"assemblies/", true},
+		{"examples/todoorder/assembly.yaml", false},
+		{"services/payment/assembly.yaml", false},
+		{"", false},
+		{"cmd/corebundle/main.go", false},
+	}
+	for _, tc := range cases {
+		got := metadata.IsConventionalAssemblyPath(tc.path)
+		if got != tc.want {
+			t.Errorf("IsConventionalAssemblyPath(%q): want %v, got %v", tc.path, tc.want, got)
+		}
 	}
 }
 

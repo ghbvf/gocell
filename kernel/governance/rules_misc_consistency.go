@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -114,15 +115,13 @@ func newSliceRef(key string, s *metadata.SliceMeta) sliceRef {
 			}
 		}
 	}
-	cellDir := s.CellDir
-	if cellDir == "" {
-		cellDir = cellID
-	}
-	sliceDir := s.Dir
-	if sliceDir == "" {
-		sliceDir = sliceID
-	}
-	dir := filepath.ToSlash(filepath.Join("cells", cellDir, "slices", sliceDir))
+	// Post-M1 (#1082): slice.File is authoritative (populated by Locator).
+	// The dir is derived from File directly. The legacy
+	// filepath.Join("cells", cellDir, "slices", sliceDir) fallback was
+	// removed when the Locator funnel made File mandatory — keeping the
+	// fallback would re-leak the conventional layout "cells" literal into
+	// governance, violating LOCATOR-DISCOVERY-FUNNEL-01.
+	dir := ""
 	if s.File != "" {
 		dir = filepath.ToSlash(filepath.Dir(s.File))
 	}
@@ -221,9 +220,11 @@ func (v *Validator) runPerContractPhase(
 	return results
 }
 
-// isExamplePath returns true if the path is under an examples/ subtree.
+// isExamplePath reports whether p is under the examples/ subtree. Delegates
+// to metadata.IsInExamplesSubtree so the conventional-layout literal "examples/"
+// stays inside the Locator funnel (LOCATOR-DISCOVERY-FUNNEL-01).
 func isExamplePath(p string) bool {
-	return strings.HasPrefix(p, "examples/")
+	return metadata.IsInExamplesSubtree(p)
 }
 
 // checkConsistencyConstraints12 validates constraints 1 and 2 for a contract.
@@ -360,11 +361,29 @@ func (v *Validator) checkReverseEmits(
 	return results
 }
 
+// newSliceRef note: when s.File is empty (e.g. the slice was constructed
+// without a Locator-populated path), ref.dir will be "". Callers of
+// scanSliceEmitTopics must skip such refs — passing dir="" would cause
+// path.Dir(path.Dir("")) to return "." and filepath.Join(root, ".") to
+// scan the entire project root.
 func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[string]struct{}, []ValidationResult) {
 	topics := map[string]struct{}{}
 	var results []ValidationResult
 
-	cellDir := filepath.Join(root, "cells", ref.cellID)
+	// Guard: an empty dir means the slice has no resolvable filesystem path
+	// (manifest mode with non-conventional layout, or a test-fixture slice
+	// whose File field was not populated). Scanning would fall back to the
+	// project root; skip silently instead.
+	if ref.dir == "" {
+		return topics, results
+	}
+
+	// Derive cellDir from the slice's directory (ref.dir is slash-separated,
+	// e.g. "cells/accesscore/slices/sessionlogin"). The cell directory is two
+	// levels up from the slice directory. Using path.Dir twice avoids
+	// hardcoding the "cells" layout token, satisfying
+	// LOCATOR-DISCOVERY-FUNNEL-01.A5.
+	cellDir := filepath.Join(root, filepath.FromSlash(path.Dir(path.Dir(ref.dir))))
 	pkgConsts, constResults := buildPkgConsts(cellDir, fileForError)
 	results = append(results, constResults...)
 	sliceDir := filepath.Join(root, filepath.FromSlash(ref.dir))

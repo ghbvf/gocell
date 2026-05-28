@@ -620,3 +620,93 @@ assembly.yaml 必填仅 `id` + `cells` + `owner`，其余从 cell 元数据派�
 | `maxConsistencyLevel` | `max(cells[].consistencyLevel)` | ✗ 派生只读，yaml 出现该 key 即拒（KnownFields + schema additionalProperties:false 双层守） |
 
 详见 ADR `docs/architecture/202605061800-adr-assembly-yaml-minimal-derivation.md`。
+
+## External Repository 模式（M1 of #1082）
+
+GoCell 支持三种 Cell 开发模式：
+
+| 模式 | 仓库形态 | 配置方式 |
+|------|---------|---------|
+| **Monorepo**（gocell 自身） | 同一 `go.mod` 内 | 默认 conventional layout（无 `.gocell/manifest.yaml`） |
+| **Operator-SDK** | 外部仓库 `go get github.com/ghbvf/gocell` | 仓库根放 `.gocell/manifest.yaml`，1 个 module 条目 |
+| **Workspace** | `go.work` 聚合 gocell + 多 cell module | workspace 根放 `.gocell/manifest.yaml`，多 module 条目 |
+
+### Conventional Layout（默认）
+
+无 `.gocell/manifest.yaml` 时，Locator 走 conventional 5-pattern 探测：
+
+```
+<root>/
+├── cells/<cellID>/cell.yaml
+├── cells/<cellID>/slices/<sliceID>/slice.yaml
+├── contracts/<kind>/.../v<N>/contract.yaml
+├── journeys/J-<id>.yaml
+├── assemblies/<id>/assembly.yaml
+├── journeys/status-board.yaml     # workspace-level singleton
+└── actors.yaml                    # workspace-level singleton
+```
+
+### Manifest Layout
+
+放置 `<root>/.gocell/manifest.yaml`：
+
+```yaml
+version: v1
+modules:
+  - path: .                            # required, relative to manifest dir
+    # includes: 省略 = 使用默认 5-pattern
+    excludes: ["generated/**", "vendor/**"]
+```
+
+#### Workspace 多模块
+
+```yaml
+version: v1
+modules:
+  - path: .                            # workspace 根，承载 actors / status-board singleton
+    includes:
+      cells: ["cells/*/cell.yaml"]
+      slices: ["cells/*/slices/*/slice.yaml"]
+      contracts: ["contracts/**/contract.yaml"]
+      journeys: ["journeys/J-*.yaml"]
+      assemblies: ["assemblies/*/assembly.yaml"]
+      actors: "actors.yaml"
+      statusBoard: "journeys/status-board.yaml"
+  - path: ./vendor-cells/payment       # 子 module，由 go.work `use ./vendor-cells/payment` 聚合
+    # includes 同上结构；actors / statusBoard 留空（singleton 仅 modules[0] 可声明）
+```
+
+`actors.yaml` 与 `journeys/status-board.yaml` 是 workspace-level singleton：**只能在 modules[0] 声明**，多 module 重复填写会被 Locator 拒绝（fail-fast）。
+
+### CLI Flag
+
+`gocell validate` 与 `gocell check ...` 支持显式 layout override：
+
+```bash
+# auto-detect (默认)
+gocell validate
+
+# 强制 manifest 模式
+gocell validate --layout=manifest
+
+# 显式 manifest 路径
+gocell validate --layout=manifest --manifest=./config/.gocell/manifest.yaml
+
+# 强制 conventional (CI 防止 manifest 误植)
+gocell validate --layout=conventional
+```
+
+其他 11 个 CLI 子命令（`generate / verify / export / scaffold-assembly / codegen / graph` 等）通过 auto-detect 自动工作——`<root>/.gocell/manifest.yaml` 存在即用，无需显式 flag。
+
+> **例外**：`gocell check unconditional-skip` 不走 metadata.Locator（它直接通过 `go/packages` 扫描 Go 代码做静态分析），其行为完全由 Go 包路径决定，manifest 配置不影响其扫描范围。
+
+### Manifest 模式下的 slice belongsToCell
+
+Conventional layout 下，`slice.yaml::belongsToCell` 可省略，由路径 `cells/<X>/slices/<Y>/slice.yaml` 中的 `<X>` 自动派生。Manifest 模式下，如果 slice 包含的 includes pattern 不遵循 `cells/<X>/slices/<Y>/` 结构，**Locator 无法派生 cellID，slice.yaml 必须显式声明 `belongsToCell`**，否则 parse 失败。
+
+### 限制（M1 范围）
+
+- M2 (#1083) 之前，archtest / codegen 的 module path 仍硬编码 `github.com/ghbvf/gocell/...`——外部仓库需要 M2 完工后才能跑完整 archtest。
+- M11 (#1092) 之前没有 starter repo template。当前 quickstart 见 `docs/guides/cell-external-repo-quickstart.md`。
+
+详见 ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md`。
