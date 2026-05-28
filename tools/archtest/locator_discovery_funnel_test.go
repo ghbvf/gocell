@@ -100,10 +100,10 @@ var locatorFunnelFiles = map[string]bool{
 // filepath.Walk / fs.ReadDir may appear inside kernel/metadata/**. Anything
 // else trips A1.
 var locatorAllowedWalkCallers = map[string]bool{
-	"discoverConventional":   true,
-	"discoverManifest":       true,
-	"discoverManifestModule": true,
-	"matchManifestGlob":      true,
+	"discoverConventional":    true,
+	"discoverManifest":        true,
+	"discoverManifestModule":  true,
+	"matchManifestGlobCapped": true, // holds the WalkDir; matchManifestGlob delegates here
 }
 
 // locatorGovernanceConventionalFiles names governance files allowed to hold

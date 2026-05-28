@@ -326,17 +326,20 @@ modules:
 	}
 }
 
-// TestManifestGlobWalkFn_CapExceeded verifies that matching more than
-// maxManifestMatchesPerGlob files per glob returns an error.
+// TestManifestGlobWalkFn_CapExceeded verifies that matching more than the
+// per-glob match cap returns an error. The cap is injected via
+// matchManifestGlobCapped so the test exercises the abort path with a tiny
+// value (testCap+1 files) instead of materializing 50 000 files in a MapFS —
+// which would blow the per-test slowgate budget. matchManifestGlob delegates
+// to matchManifestGlobCapped with maxManifestMatchesPerGlob in production.
 func TestManifestGlobWalkFn_CapExceeded(t *testing.T) {
-	// Build a filesystem with maxManifestMatchesPerGlob+1 matching files.
+	const testCap = 3
 	fsys := fstest.MapFS{}
-	cap := maxManifestMatchesPerGlob
-	for i := 0; i <= cap; i++ {
+	for i := 0; i <= testCap; i++ { // testCap+1 matching files
 		path := fmt.Sprintf("cells/c%d/cell.yaml", i)
 		fsys[path] = &fstest.MapFile{Data: []byte(fmt.Sprintf("id: c%d\n", i))}
 	}
-	_, err := matchManifestGlob(fsys, "cells/*/cell.yaml", nil)
+	_, err := matchManifestGlobCapped(fsys, "cells/*/cell.yaml", nil, testCap)
 	if err == nil {
 		t.Fatalf("expected error when cap exceeded, got nil")
 	}
@@ -345,21 +348,21 @@ func TestManifestGlobWalkFn_CapExceeded(t *testing.T) {
 	}
 }
 
-// TestManifestGlobWalkFn_CapNotExceeded verifies that exactly
-// maxManifestMatchesPerGlob matches does not return an error.
+// TestManifestGlobWalkFn_CapNotExceeded verifies that exactly testCap matches
+// does not return an error (boundary: count > cap aborts, count == cap is ok).
 func TestManifestGlobWalkFn_CapNotExceeded(t *testing.T) {
+	const testCap = 3
 	fsys := fstest.MapFS{}
-	cap := maxManifestMatchesPerGlob
-	for i := 0; i < cap; i++ {
+	for i := 0; i < testCap; i++ {
 		path := fmt.Sprintf("cells/c%d/cell.yaml", i)
 		fsys[path] = &fstest.MapFile{Data: []byte(fmt.Sprintf("id: c%d\n", i))}
 	}
-	matches, err := matchManifestGlob(fsys, "cells/*/cell.yaml", nil)
+	matches, err := matchManifestGlobCapped(fsys, "cells/*/cell.yaml", nil, testCap)
 	if err != nil {
 		t.Fatalf("unexpected error at exactly cap matches: %v", err)
 	}
-	if len(matches) != cap {
-		t.Errorf("got %d matches, want %d", len(matches), cap)
+	if len(matches) != testCap {
+		t.Errorf("got %d matches, want %d", len(matches), testCap)
 	}
 }
 

@@ -778,6 +778,17 @@ func (es *manifestExcludeSet) matchDir(dir string) bool {
 // The number of matches is capped at maxManifestMatchesPerGlob to prevent
 // unbounded WalkDir amplification; exceeding the cap aborts with an error.
 func matchManifestGlob(fsys fs.FS, pattern string, excludes *manifestExcludeSet) ([]string, error) {
+	return matchManifestGlobCapped(fsys, pattern, excludes, maxManifestMatchesPerGlob)
+}
+
+// matchManifestGlobCapped is matchManifestGlob with an injectable match cap.
+// Production always passes maxManifestMatchesPerGlob via matchManifestGlob;
+// the parameter exists so tests can exercise the cap-exceeded path with a
+// small value instead of materializing 50 000 files in a MapFS (which would
+// blow the per-test slowgate budget).
+func matchManifestGlobCapped(
+	fsys fs.FS, pattern string, excludes *manifestExcludeSet, maxMatches int,
+) ([]string, error) {
 	if pattern == "" {
 		return nil, nil
 	}
@@ -790,7 +801,7 @@ func matchManifestGlob(fsys fs.FS, pattern string, excludes *manifestExcludeSet)
 	}
 	var matches []string
 	count := 0
-	if err := fs.WalkDir(fsys, root, manifestGlobWalkFn(pattern, excludes, &matches, &count)); err != nil {
+	if err := fs.WalkDir(fsys, root, manifestGlobWalkFn(pattern, excludes, &matches, &count, maxMatches)); err != nil {
 		return nil, err
 	}
 	sort.Strings(matches)
@@ -823,8 +834,9 @@ func manifestGlobWalkRoot(fsys fs.FS, pattern string) (string, bool, error) {
 // (collectEmissionPattern) does a post-walk file-level check.
 //
 // count is incremented for each appended match; when it would exceed
-// maxManifestMatchesPerGlob the walk is aborted with a descriptive error.
-func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[]string, count *int) fs.WalkDirFunc {
+// maxMatches the walk is aborted with a descriptive error. Production passes
+// maxManifestMatchesPerGlob (via matchManifestGlob); tests inject a small cap.
+func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[]string, count *int, maxMatches int) fs.WalkDirFunc {
 	return func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -845,11 +857,11 @@ func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[
 		}
 		if matchManifestPattern(pattern, p) {
 			*count++
-			if *count > maxManifestMatchesPerGlob {
+			if *count > maxMatches {
 				return fmt.Errorf(
 					"metadata: glob %q exceeded match cap (limit=%d)"+
 						" — workspace may be too large or pattern too broad",
-					pattern, maxManifestMatchesPerGlob,
+					pattern, maxMatches,
 				)
 			}
 			*matches = append(*matches, p)
