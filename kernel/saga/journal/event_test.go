@@ -195,8 +195,8 @@ func TestEvent_ValidateForAppend_StepKinds(t *testing.T) {
 	}
 }
 
-// TestEvent_ValidateForAppend_TerminalRejected verifies that all 4 terminal kinds
-// are rejected by ValidateForAppend (they must go through MarkTerminal).
+// TestEvent_ValidateForAppend_TerminalRejected verifies that all terminal kinds
+// (currently 5) are rejected by ValidateForAppend (they must go through MarkTerminal).
 func TestEvent_ValidateForAppend_TerminalRejected(t *testing.T) {
 	t.Parallel()
 
@@ -205,6 +205,7 @@ func TestEvent_ValidateForAppend_TerminalRejected(t *testing.T) {
 		journal.KindSagaFailed,
 		journal.KindSagaCompensated,
 		journal.KindSagaExpired,
+		journal.KindSagaCompensationFailed,
 	}
 	for _, k := range terminalKinds {
 		k := k

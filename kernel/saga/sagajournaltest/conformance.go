@@ -642,28 +642,40 @@ func conformAppendArrayPayload(t *testing.T, factory Factory) {
 	}
 }
 
-// conformAppendTerminalKindRejected asserts that Append with a terminal kind
-// (e.g. KindSagaSucceeded) is rejected — terminal events are written only via
-// MarkTerminal.
+// conformAppendTerminalKindRejected asserts that Append with any of the 5
+// terminal kinds is rejected — terminal events are written only via MarkTerminal.
 func conformAppendTerminalKindRejected(t *testing.T, factory Factory) {
 	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
 
-	inst := NewInstanceFixture(t, "inst-terminal-kind", clk.Now())
-	mustEnqueue(t, j, inst)
-	claimed, _ := mustClaimAll(t, j)
-	ci := findClaimed(t, claimed, inst.ID)
-
-	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
-		Kind: journal.KindSagaSucceeded,
-		// KindSagaSucceeded is a terminal kind; no StepName required.
-	})
-	if err == nil {
-		t.Fatal("Append with KindSagaSucceeded should return error, got nil")
+	terminalKinds := []journal.EventKind{
+		journal.KindSagaSucceeded,
+		journal.KindSagaFailed,
+		journal.KindSagaCompensated,
+		journal.KindSagaExpired,
+		journal.KindSagaCompensationFailed,
 	}
-	if !isKindInvalid(err) {
-		t.Errorf("Append with KindSagaSucceeded: want KindInvalid error, got %v", err)
+	for _, kind := range terminalKinds {
+		kind := kind
+		t.Run(kind.String(), func(t *testing.T) {
+			t.Helper()
+			j, clk, cleanup := factory(t)
+			defer cleanup()
+
+			inst := NewInstanceFixture(t, "inst-terminal-kind-"+kind.String(), clk.Now())
+			mustEnqueue(t, j, inst)
+			claimed, _ := mustClaimAll(t, j)
+			ci := findClaimed(t, claimed, inst.ID)
+
+			_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+				Kind: kind,
+			})
+			if err == nil {
+				t.Fatalf("Append with %s should return error, got nil", kind)
+			}
+			if !isKindInvalid(err) {
+				t.Errorf("Append with %s: want KindInvalid error, got %v", kind, err)
+			}
+		})
 	}
 }
 
