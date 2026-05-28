@@ -206,6 +206,30 @@ linters:
                 implicitly denied by strict mode; explicit deny makes the constraint
                 self-documenting and prevents accidental re-allowance. Ref: DX4 PR #578
                 A4 reciprocal guard.
+        saga-executor-no-journal-import:
+          # SAGA-JOURNAL-HOLDER-SEAL-01 / #1209 companion. runtime/saga/executor
+          # declares its OWN narrow Heartbeater interface (heartbeat.go) precisely
+          # so it never imports kernel/saga/journal — kernel/ cannot be a runtime/
+          # dependency direction it inverts, and importing journal would let the
+          # executor reference journal.Journal / journal.Heartbeater directly,
+          # eroding the decoupling the structural-duplication relies on (the
+          # executor subpackage is the sanctioned Heartbeat caller, excluded from
+          # SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01's A1 callsite scan). This deny is
+          # the Hard (path-level import ban) enforcement of the // INVARIANT:
+          # branded in heartbeat.go / executor.go. Ref: ai-robust.md §"路径级
+          # import ban → depguard". Layered on top of runtime-isolation (which
+          # allows kernel/* broadly); this rule subtracts just this one package.
+          files:
+            - "**/runtime/saga/executor/**"
+            - "!**/runtime/saga/executor/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/kernel/saga/journal
+              desc: |
+                runtime/saga/executor must never import kernel/saga/journal; it
+                declares its own narrow Heartbeater interface (heartbeat.go) that
+                journal implementations satisfy structurally. Keeps the executor a
+                generic per-step engine decoupled from the saga journal package
+                (SAGA-JOURNAL-HOLDER-SEAL-01 / #1209).
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` is owned by the cell

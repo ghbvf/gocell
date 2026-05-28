@@ -270,10 +270,12 @@ func NewCoordinator(
 	if err := c.cfg.Validate(); err != nil {
 		return nil, err
 	}
-	// Construct the internal Executor with c.journal as its Heartbeater so
-	// claim and heartbeat are guaranteed same-source by type-system
-	// construction (#1181 F5). observer / tracer flow from Coordinator-level
-	// options into Executor — single tracing root, single observer fan-out.
+	// Construct the internal Executor with the full journal.Journal value j as
+	// its Heartbeater so claim and heartbeat are guaranteed same-source by
+	// type-system construction (#1181 F5). j (the parameter) carries Heartbeat;
+	// c.journal stores only the JournalCore facet — see the struct doc. observer
+	// / tracer flow from Coordinator-level options into Executor — single tracing
+	// root, single observer fan-out.
 	exec, err := executor.NewExecutor(j, clk,
 		executor.WithHeartbeatInterval(c.cfg.HeartbeatInterval),
 		executor.WithLeaseDuration(c.cfg.LeaseDuration),

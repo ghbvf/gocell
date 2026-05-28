@@ -106,10 +106,14 @@
 // code never executes with a database transaction held open. This invariant is
 // locked by the SAGA-STEP-RUN-OUTSIDE-TX-01 archtest.
 //
-// # Coordinator is the single sanctioned Journal holder
+// # Coordinator is the single sanctioned JournalCore holder
 //
-// Coordinator is the only struct in this package that holds a journal.Journal
-// field. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
+// Coordinator is the only struct in this package that holds a
+// journal.JournalCore field — the Heartbeat-free core of journal.Journal, so a
+// centralized heartbeat loop is a compile error (#1209). No struct in this
+// package may persist the Heartbeat-bearing full journal.Journal (or a bare
+// journal.Heartbeater) as a field. Locked by SAGA-JOURNAL-HOLDER-SEAL-01 and
+// SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 archtests.
 //
 // ref: dtm dtmsvr/cron.go (CronTransOnce structure)
 // ref: temporalio sdk-go internal_task_pollers.go

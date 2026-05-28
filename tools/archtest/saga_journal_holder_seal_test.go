@@ -77,6 +77,8 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"strings"
@@ -314,4 +316,83 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 	})
 
 	Report(t, sagaJournalHolderSealRule+"-B1", diags)
+}
+
+// TestSagaJournalHolderSeal_BlindSpot_B1_MatcherNonVacuous proves the B1
+// alias-matcher is wired and non-vacuous. B1's production scan reports zero
+// violations today (by design), so — unlike NO-HEARTBEAT-LOOP's B1, which can
+// assert "executor has >=1 callsite" — it cannot demonstrate non-vacuity from
+// production source. Instead this exercises journalInterfaceAliasName against a
+// synthetic AST covering every form: the three sealed alias names must match,
+// and non-aliases / wrong package / non-selector / definition (non-alias) forms
+// must NOT. If the matcher silently stopped firing, B1 would pass vacuously and
+// this test catches it.
+func TestSagaJournalHolderSeal_BlindSpot_B1_MatcherNonVacuous(t *testing.T) {
+	t.Parallel()
+
+	const src = `package x
+type A = journal.Journal
+type B = journal.JournalCore
+type C = journal.Heartbeater
+type D = journal.Other
+type E = other.Journal
+type F journal.Journal
+type G = SomethingElse
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse synthetic source: %v", err)
+	}
+
+	// typeName -> expected aliased journal interface name ("" = must NOT match).
+	want := map[string]string{
+		"A": journalInterfaceTypeName,     // type X = journal.Journal
+		"B": journalCoreInterfaceTypeName, // type X = journal.JournalCore
+		"C": heartbeaterInterfaceTypeName, // type X = journal.Heartbeater
+		"D": "",                           // journal.Other — not a sealed name
+		"E": "",                           // other.Journal — wrong package ident
+		"F": "",                           // definition, not an alias (no '=')
+		"G": "",                           // not a selector expression
+	}
+
+	seen := map[string]bool{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			exp, tracked := want[ts.Name.Name]
+			if !tracked {
+				continue
+			}
+			seen[ts.Name.Name] = true
+			aliased, matched := journalInterfaceAliasName(ts)
+			if exp == "" {
+				if matched {
+					t.Errorf("journalInterfaceAliasName(%s) = (%q, true); want no match",
+						ts.Name.Name, aliased)
+				}
+				continue
+			}
+			if !matched || aliased != exp {
+				t.Errorf("journalInterfaceAliasName(%s) = (%q, %v); want (%q, true)",
+					ts.Name.Name, aliased, matched, exp)
+			}
+		}
+	}
+
+	// Non-vacuity: the three positive cases must have been exercised — otherwise
+	// the fixture or the parse silently skipped them.
+	for _, name := range []string{"A", "B", "C"} {
+		if !seen[name] {
+			t.Errorf("synthetic fixture did not exercise positive case %q — "+
+				"B1 matcher self-test is vacuous", name)
+		}
+	}
 }

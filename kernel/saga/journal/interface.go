@@ -90,6 +90,9 @@ type Journal interface {
 // so a centralized heartbeat loop cannot be built on a stored JournalCore field
 // (the call would not type-check). See the "Interface split" section on
 // [Journal] and archtest SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01.
+//
+// Only runtime/saga.Coordinator may hold a JournalCore field, enforced by the
+// SAGA-JOURNAL-HOLDER-SEAL-01 archtest.
 type JournalCore interface {
 	// Enqueue enrolls a new saga instance for orchestration. The instance MUST
 	// pass saga.Instance.ValidateNew (Pending, CurrentStep 0, no timestamps
