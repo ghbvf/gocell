@@ -255,6 +255,26 @@ func TestRedactString(t *testing.T) {
 			want: "plain validation error: field foo missing",
 		},
 		{
+			name: "webhook_secret_keyEqValue",
+			in:   "config rejected: webhook_secret=whsec_abc123 source=stripe",
+			want: "config rejected: webhook_secret=<REDACTED> source=stripe",
+		},
+		{
+			name: "x_signature_json",
+			in:   `{"x-signature":"v1,abc==","deliveryId":"d-1"}`,
+			want: `{"x-signature":"<REDACTED>","deliveryId":"d-1"}`,
+		},
+		{
+			name: "svix_signature_keyColon",
+			in:   "verify failed: svix_signature: v1,deadbeef",
+			want: "verify failed: svix_signature: <REDACTED>",
+		},
+		{
+			name: "hmac_key_keyEqValue",
+			in:   "signer init: hmac_key=supersecret done",
+			want: "signer init: hmac_key=<REDACTED> done",
+		},
+		{
 			name: "empty",
 			in:   "",
 			want: "",
@@ -454,6 +474,21 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"private_key", true},
 		{"signing_key", true},
 		{"dsn", true},
+		// webhook signing surface (KERNEL-WEBHOOK-01)
+		{"webhook_secret", true},
+		{"webhook-secret", true},
+		{"webhooksecret", true},
+		{"webhookSecret", true},
+		{"x_signature", true},
+		{"x-signature", true},
+		{"x_hub_signature", true},
+		{"x-hub-signature", true},
+		{"x_webhook_signature", true},
+		{"x-webhook-signature", true},
+		{"svix_signature", true},
+		{"svix-signature", true},
+		{"hmac_key", true},
+		{"hmac-key", true},
 		// case insensitivity
 		{"PASSWORD", true},
 		{"API_KEY", true},
