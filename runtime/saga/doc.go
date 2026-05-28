@@ -45,10 +45,31 @@
 // The Coordinator passes the WithObserver option through to the internal Executor
 // via NewCoordinator's options — see options.go for WithObserver.
 //
+// executor.HeartbeatFailureReason is the typed enum for ObserveHeartbeatFailure
+// reason values: HeartbeatFailureInfraError (transient backend error) and
+// HeartbeatFailureStaleLease (another coordinator owns the lease).
+//
+// executor.IsLeaseLost is the public predicate compensation walks use to
+// detect that RunWithHeartbeat returned because the lease was lost.
+//
 // During runCompensation, the heartbeat goroutine is maintained via
 // executor.RunWithHeartbeat. If the heartbeat reports a stale lease, the
 // compensation context is canceled (errLeaseLost) and the walk stops; the
 // instance will be re-claimed by another coordinator on its next tick.
+//
+// # Saga terminal states (PR-#1210)
+//
+// Five terminal states encode why a saga finished:
+//   - StatusSucceeded — all forward steps committed
+//   - StatusFailed — forward-phase failure with no rollback (never entered Compensating)
+//   - StatusCompensated — forward failure followed by clean rollback
+//   - StatusCompensationFailed — rollback itself failed; ops intervention required
+//   - StatusExpired — overall saga timeout elapsed at any non-terminal stage
+//
+// StatusFailed and StatusCompensationFailed are distinct on purpose: the
+// former says "we never tried to undo", the latter says "we tried and
+// could not". Dashboards and ops runbooks should branch on this distinction.
+// See kernel/saga.Status.String() for the wire labels (snake_case).
 //
 // # PR-03 deferred scope
 //
