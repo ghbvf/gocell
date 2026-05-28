@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -78,7 +79,7 @@ type ManifestModule struct {
 //
 // Actors and StatusBoard are workspace-level singletons: they may only appear
 // in Modules[0] (validated by loadManifest). Declaring them in more than one
-// module entry causes loadManifest to return ErrDuplicateWorkspaceSingleton.
+// module entry causes loadManifest to return a validation error.
 type ManifestIncludes struct {
 	// Cells corresponds to the "cells:" YAML key.
 	Cells []string `yaml:"cells"`
@@ -131,6 +132,13 @@ const (
 	// this cap. The limit prevents O(patterns × files) WalkDir amplification
 	// from a manifest with thousands of explicit include globs.
 	maxManifestIncludePatternsPerKind = 128
+
+	// maxManifestMatchesPerGlob caps the number of files a single glob pattern
+	// may match per WalkDir invocation. 50 000 is well above any realistic
+	// workspace size (GoCell itself has ~50 metadata files). Exceeding the cap
+	// aborts the walk with an error rather than silently returning a truncated
+	// result set — no silent truncation.
+	maxManifestMatchesPerGlob = 50_000
 )
 
 // loadManifest reads and decodes the manifest at manifestPath from fsys,
@@ -340,11 +348,15 @@ func validateManifestSingleton(manifestPath string, i int, m ManifestModule) err
 // validateManifestModulePath rejects absolute paths and any path containing
 // ".." segments. "." is allowed and means the manifest directory itself.
 // This is the security boundary against escape outside the workspace root.
+//
+// Uses filepath.IsAbs(filepath.FromSlash(p)) — consistent with
+// validateManifestRelativePath in locator.go — so that Windows-style absolute
+// paths (e.g. "C:\foo") that path.IsAbs would not recognize are also caught.
 func validateManifestModulePath(p string) error {
 	if p == "" {
 		return errors.New("path is required")
 	}
-	if path.IsAbs(p) {
+	if filepath.IsAbs(filepath.FromSlash(p)) {
 		return fmt.Errorf("absolute path not allowed: %s", p)
 	}
 	for _, seg := range strings.Split(p, "/") {
@@ -588,7 +600,7 @@ func (l *Locator) collectEmissionPattern(
 	excludes *manifestExcludeSet,
 	em manifestEmission,
 ) ([]MetadataSource, error) {
-	matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g))
+	matches, err := matchManifestGlob(l.fsys, joinManifestPath(base, g), excludes)
 	if err != nil {
 		return nil, fmt.Errorf("glob %s: %w", g, err)
 	}
@@ -728,6 +740,23 @@ func (es *manifestExcludeSet) match(filePath string) bool {
 	return false
 }
 
+// matchDir reports whether dir's entire subtree is excluded by a
+// "<prefix>/**" pattern, so WalkDir can SkipDir-prune it. Non-"/**" patterns
+// (e.g. a literal file path) never prune a directory — the directory may
+// still contain non-excluded files and must be walked.
+func (es *manifestExcludeSet) matchDir(dir string) bool {
+	for _, pat := range es.patterns {
+		prefix, ok := strings.CutSuffix(pat, "/**")
+		if !ok {
+			continue
+		}
+		if dir == prefix || strings.HasPrefix(dir, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // matchManifestGlob expands a glob pattern against fsys via WalkDir. Returns
 // sorted matches. Symlinks are explicitly skipped to avoid traversal through
 // unexpected filesystem topology that os.DirFS might not prevent.
@@ -739,7 +768,16 @@ func (es *manifestExcludeSet) match(filePath string) bool {
 // (e.g. "**/cell.yaml" or "*/cell.yaml") fall back to walking from ".".
 // When the computed prefix does not exist in fsys, an empty match list is
 // returned without error. Passing an empty pattern returns (nil, nil).
-func matchManifestGlob(fsys fs.FS, pattern string) ([]string, error) {
+//
+// excludes may be nil (no directory pruning). When non-nil, directories whose
+// entire subtree is excluded by a "<prefix>/**" pattern are pruned via
+// fs.SkipDir, avoiding needless traversal of large excluded subtrees such as
+// vendor/ or generated/. File-level exclude filtering is NOT performed here —
+// that remains in collectEmissionPattern to cover non-"/**" patterns.
+//
+// The number of matches is capped at maxManifestMatchesPerGlob to prevent
+// unbounded WalkDir amplification; exceeding the cap aborts with an error.
+func matchManifestGlob(fsys fs.FS, pattern string, excludes *manifestExcludeSet) ([]string, error) {
 	if pattern == "" {
 		return nil, nil
 	}
@@ -751,7 +789,8 @@ func matchManifestGlob(fsys fs.FS, pattern string) ([]string, error) {
 		return nil, nil
 	}
 	var matches []string
-	if err := fs.WalkDir(fsys, root, manifestGlobWalkFn(pattern, &matches)); err != nil {
+	count := 0
+	if err := fs.WalkDir(fsys, root, manifestGlobWalkFn(pattern, excludes, &matches, &count)); err != nil {
 		return nil, err
 	}
 	sort.Strings(matches)
@@ -777,7 +816,15 @@ func manifestGlobWalkRoot(fsys fs.FS, pattern string) (string, bool, error) {
 
 // manifestGlobWalkFn returns a WalkDir callback that appends matching paths to
 // matches. Symlinks are skipped to avoid traversal through unexpected topology.
-func manifestGlobWalkFn(pattern string, matches *[]string) fs.WalkDirFunc {
+//
+// When excludes is non-nil, directories whose subtree is entirely covered by a
+// "<prefix>/**" exclude pattern are pruned with fs.SkipDir. File-level
+// excludes (non-"/**" patterns) are NOT filtered here — the caller
+// (collectEmissionPattern) does a post-walk file-level check.
+//
+// count is incremented for each appended match; when it would exceed
+// maxManifestMatchesPerGlob the walk is aborted with a descriptive error.
+func manifestGlobWalkFn(pattern string, excludes *manifestExcludeSet, matches *[]string, count *int) fs.WalkDirFunc {
 	return func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -789,9 +836,22 @@ func manifestGlobWalkFn(pattern string, matches *[]string) fs.WalkDirFunc {
 			return nil
 		}
 		if d.IsDir() {
+			// SkipDir-prune directories whose entire subtree is excluded by a
+			// "<prefix>/**" pattern. Non-"/**" excludes are left to the caller.
+			if excludes != nil && excludes.matchDir(p) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if matchManifestPattern(pattern, p) {
+			*count++
+			if *count > maxManifestMatchesPerGlob {
+				return fmt.Errorf(
+					"metadata: glob %q exceeded match cap (limit=%d)"+
+						" — workspace may be too large or pattern too broad",
+					pattern, maxManifestMatchesPerGlob,
+				)
+			}
 			*matches = append(*matches, p)
 		}
 		return nil
@@ -819,24 +879,12 @@ func manifestGlobFixedPrefix(pattern string) string {
 		}
 		fixed = append(fixed, seg)
 	}
-	// No fixed directory prefix (pattern starts with wildcard, or the only
-	// fixed segment is the final filename at the root like "actors.yaml").
-	// In the latter case, fixed equals all segments (no wildcard at all) —
-	// we must not use the last segment as a directory root because it is a
-	// file, not a directory. Drop the last segment if it looks like a file.
-	//
-	// Heuristic: if the last fixed segment contains "." it is likely a
-	// filename; drop it. The remaining prefix is what to walk from.
-	//
-	// When no wildcards: walk from the parent of the literal file path so we
-	// don't need a separate Stat-and-match path.
-	hasWild := false
-	for _, seg := range segs {
-		if strings.ContainsAny(seg, "*?[") {
-			hasWild = true
-			break
-		}
-	}
+	// fixed is shorter than segs when the loop broke early on a wildcard
+	// segment. When fixed == segs, the pattern is a pure literal path with
+	// no wildcards; in that case drop the last segment (the filename) so we
+	// walk from its parent directory instead of needing a separate
+	// Stat-and-match path.
+	hasWild := len(fixed) < len(segs)
 	if !hasWild && len(fixed) > 0 {
 		// Literal path (no wildcards) — walk parent directory.
 		fixed = fixed[:len(fixed)-1]

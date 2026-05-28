@@ -466,7 +466,7 @@ func TestLocator_ManifestGlobWalkPrefix(t *testing.T) {
 	var readDirCalls []string
 	traceFS := &walkTraceFS{MapFS: fsys, visited: &readDirCalls}
 
-	matches, err := matchManifestGlob(traceFS, "cells/*/cell.yaml")
+	matches, err := matchManifestGlob(traceFS, "cells/*/cell.yaml", nil)
 	if err != nil {
 		t.Fatalf("matchManifestGlob: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestLocator_ManifestGlobWalkPrefixDoubleStarFromRoot(t *testing.T) {
 	}
 	var readDirCalls []string
 	traceFS := &walkTraceFS{MapFS: fsys, visited: &readDirCalls}
-	_, err := matchManifestGlob(traceFS, "**/cell.yaml")
+	_, err := matchManifestGlob(traceFS, "**/cell.yaml", nil)
 	if err != nil {
 		t.Fatalf("matchManifestGlob: %v", err)
 	}

@@ -31,6 +31,13 @@ func (l *Locator) discoverConventional() ([]MetadataSource, error) {
 		if walkErr != nil {
 			return walkErr
 		}
+		// Explicitly skip symlinks regardless of whether the underlying fs.FS
+		// follows them. This avoids traversal through unexpected filesystem
+		// topology (e.g. symlink loops) that os.DirFS does not prevent.
+		// Mirrors the same guard in manifestGlobWalkFn.
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
 		if d.IsDir() {
 			return nil
 		}

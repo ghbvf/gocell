@@ -120,7 +120,10 @@ type LocatorMode int
 
 const (
 	// LocatorAuto selects Conventional unless .gocell/manifest.yaml exists at
-	// root, in which case Manifest mode is used.
+	// root, in which case Manifest mode is used. If the manifest file is found
+	// but fails to parse, Locator returns an error and does NOT fall back to
+	// Conventional mode. Use WithLocatorMode(LocatorConventional) to bypass
+	// manifest detection explicitly.
 	LocatorAuto LocatorMode = iota
 	// LocatorConventional walks the hardcoded 5-pattern layout. Used when no
 	// manifest file is present, or explicitly via WithLocatorMode.

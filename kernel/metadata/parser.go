@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"sort"
@@ -96,6 +97,14 @@ func (p *Parser) parseWith(loc *Locator) (*ProjectMeta, error) {
 	sources, err := loc.Discover()
 	if err != nil {
 		return nil, err
+	}
+	if len(sources) == 0 {
+		// Warn so operators can distinguish a legitimately empty project from
+		// a misconfigured root path or manifest that scanned nothing. Behavior
+		// is unchanged: return an empty ProjectMeta with nil error.
+		slog.Warn("metadata: parser discovered zero sources — verify root path and locator mode",
+			slog.String("root", p.root),
+		)
 	}
 	fsys := loc.FS()
 	for _, src := range sources {
