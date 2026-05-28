@@ -6,6 +6,7 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
@@ -130,10 +131,15 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 
 // ObserveOutcome implements executor.Observer.
 // Records one increment on saga_step_outcome_total{cell,definition_id,outcome}.
-// attempts is not labeled (would explode cardinality) but is carried into
-// trace spans and slog by the executor itself.
+// instanceID and leaseID are carried for future audit/tracing use; they are
+// intentionally NOT used as metric label dimensions to prevent cardinality
+// explosion (per-instance high-cardinality values — see Observer godoc).
+// attempts is also not labeled; it is carried into trace spans and slog by
+// the executor itself.
 func (c *SagaStepCollector) ObserveOutcome(
 	ctx context.Context,
+	_ /* instanceID */ idutil.SafeID,
+	_ /* leaseID */ idutil.SafeID,
 	definitionID, _ /* stepName */ string,
 	outcome executor.Outcome,
 	_ /* attempts */ int,
@@ -147,7 +153,14 @@ func (c *SagaStepCollector) ObserveOutcome(
 
 // ObserveRetry implements executor.Observer.
 // Records one increment on saga_step_retry_total{cell,definition_id,step_name}.
-func (c *SagaStepCollector) ObserveRetry(ctx context.Context, definitionID, stepName string) {
+// instanceID and leaseID are carried for future audit/tracing use; they are
+// intentionally NOT used as metric label dimensions (see ObserveOutcome).
+func (c *SagaStepCollector) ObserveRetry(
+	ctx context.Context,
+	_ /* instanceID */ idutil.SafeID,
+	_ /* leaseID */ idutil.SafeID,
+	definitionID, stepName string,
+) {
 	c.retry.With(kernelmetrics.Labels{
 		"cell":          c.cellID,
 		"definition_id": definitionID,
@@ -157,7 +170,14 @@ func (c *SagaStepCollector) ObserveRetry(ctx context.Context, definitionID, step
 
 // ObserveHeartbeatFailure implements executor.Observer.
 // Records one increment on saga_heartbeat_failed_total{cell,reason}.
-func (c *SagaStepCollector) ObserveHeartbeatFailure(ctx context.Context, reason executor.HeartbeatFailureReason) {
+// instanceID and leaseID are carried for future audit/tracing use; they are
+// intentionally NOT used as metric label dimensions (see ObserveOutcome).
+func (c *SagaStepCollector) ObserveHeartbeatFailure(
+	ctx context.Context,
+	_ /* instanceID */ idutil.SafeID,
+	_ /* leaseID */ idutil.SafeID,
+	reason executor.HeartbeatFailureReason,
+) {
 	c.hbFail.With(kernelmetrics.Labels{
 		"cell":   c.cellID,
 		"reason": string(reason),

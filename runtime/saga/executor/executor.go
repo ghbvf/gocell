@@ -138,19 +138,25 @@ type Executor struct {
 // drop the instance lease. defer recover() keeps observability strictly
 // best-effort: a misbehaving observer logs Warn (with redacted panic payload
 // per F10) and execution continues.
-func (e *Executor) safeObserveOutcome(ctx context.Context, defID, stepName string, outcome Outcome, attempts int) {
+func (e *Executor) safeObserveOutcome(
+	ctx context.Context,
+	instanceID, leaseID idutil.SafeID,
+	defID, stepName string,
+	outcome Outcome,
+	attempts int,
+) {
 	defer e.recoverObserverPanic(ctx, "ObserveOutcome")
-	e.observer.ObserveOutcome(ctx, defID, stepName, outcome, attempts)
+	e.observer.ObserveOutcome(ctx, instanceID, leaseID, defID, stepName, outcome, attempts)
 }
 
-func (e *Executor) safeObserveRetry(ctx context.Context, defID, stepName string) {
+func (e *Executor) safeObserveRetry(ctx context.Context, instanceID, leaseID idutil.SafeID, defID, stepName string) {
 	defer e.recoverObserverPanic(ctx, "ObserveRetry")
-	e.observer.ObserveRetry(ctx, defID, stepName)
+	e.observer.ObserveRetry(ctx, instanceID, leaseID, defID, stepName)
 }
 
-func (e *Executor) safeObserveHeartbeatFailure(ctx context.Context, reason HeartbeatFailureReason) {
+func (e *Executor) safeObserveHeartbeatFailure(ctx context.Context, instanceID, leaseID idutil.SafeID, reason HeartbeatFailureReason) {
 	defer e.recoverObserverPanic(ctx, "ObserveHeartbeatFailure")
-	e.observer.ObserveHeartbeatFailure(ctx, reason)
+	e.observer.ObserveHeartbeatFailure(ctx, instanceID, leaseID, reason)
 }
 
 // recoverObserverPanic is the shared recover handler for observer calls.
@@ -296,7 +302,7 @@ func (e *Executor) Execute(
 		span.SetStatus(wrapper.StatusError, result.Outcome.String())
 	}
 
-	e.safeObserveOutcome(ctx, defID, stepName, result.Outcome, result.Attempts)
+	e.safeObserveOutcome(ctx, inst.ID, leaseID, defID, stepName, result.Outcome, result.Attempts)
 	return result
 }
 
@@ -326,8 +332,22 @@ func (e *Executor) executeInner(
 			slog.String("lease_id", string(leaseID)),
 			slog.String("reason", string(HeartbeatFailureStaleLease)),
 		)
-		e.safeObserveHeartbeatFailure(ctx, HeartbeatFailureStaleLease)
+		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureStaleLease)
 		return Result{Outcome: OutcomeLeaseLost, Err: errLeaseLost, Attempts: 0}
+	} else if err != nil {
+		// F4: infra error on preflight — fail-open (don't block execution) but
+		// emit Warn + observer metric so the operator can see repeated preflight
+		// failures without inspecting per-tick heartbeat logs separately.
+		e.logger.WarnContext(ctx, "saga executor: preflight heartbeat infra error (fail-open)",
+			slog.String("instance_id", string(inst.ID)),
+			slog.String("definition_id", string(inst.DefinitionID)),
+			slog.String("lease_id", string(leaseID)),
+			slog.String("reason", string(HeartbeatFailureInfraError)),
+			slog.Any("error", err),
+		)
+		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureInfraError)
+		// continue — fail-open matches original intent; async heartbeat will
+		// detect persistent infra failures via the regular tick budget.
 	}
 
 	policy := resolvePolicy(step.RetryPolicy, defPolicy)
@@ -349,7 +369,7 @@ func (e *Executor) executeInner(
 	// so no sync.Once is needed.
 	onStale := func() { cancelCause(errLeaseLost) }
 	onHBFailure := func(reason HeartbeatFailureReason) {
-		e.safeObserveHeartbeatFailure(runCtx, reason)
+		e.safeObserveHeartbeatFailure(runCtx, inst.ID, leaseID, reason)
 	}
 	go func() {
 		defer hbWG.Done()
@@ -359,6 +379,9 @@ func (e *Executor) executeInner(
 				// visible and the panic value may carry headers / tokens.
 				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
 					slog.String("instance_id", string(inst.ID)),
+					slog.String("definition_id", string(inst.DefinitionID)),
+					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureInfraError)),
 					slog.Any("panic", redaction.RedactAny(r)),
 				)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
@@ -380,7 +403,7 @@ func (e *Executor) executeInner(
 		// Attempt failed and retry is allowed — observer fires BEFORE the
 		// backoff Sleep so a stuck heartbeater that races to cancel runCtx
 		// during Sleep does not swallow the retry signal.
-		e.safeObserveRetry(runCtx, defID, stepName)
+		e.safeObserveRetry(runCtx, inst.ID, leaseID, defID, stepName)
 		// Wait for backoff while the heartbeat keeps renewing the lease. A
 		// runCtx cancellation (parent shutdown/deadline or lease lost) unblocks
 		// the Sleep immediately.
@@ -424,6 +447,34 @@ func (e *Executor) RunWithHeartbeat(
 	leaseID idutil.SafeID,
 	fn func(ctx context.Context) error,
 ) error {
+	// F3: preflight heartbeat — confirm the lease is still ours BEFORE starting
+	// the heartbeat goroutine or invoking fn. This prevents a compensation walk
+	// from externalizing side effects under a lease another coordinator already
+	// owns. Matches the same preflight in executeInner (#1210 round-N F3).
+	if ok, err := e.heartbeater.Heartbeat(ctx, inst.ID, leaseID, e.leaseDuration); err == nil && !ok {
+		e.logger.InfoContext(ctx, "saga executor: preflight heartbeat reported stale lease (RunWithHeartbeat)",
+			slog.String("instance_id", string(inst.ID)),
+			slog.String("definition_id", string(inst.DefinitionID)),
+			slog.String("lease_id", string(leaseID)),
+			slog.String("reason", string(HeartbeatFailureStaleLease)),
+		)
+		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureStaleLease)
+		return errLeaseLost
+	} else if err != nil {
+		// F4: infra error on preflight — fail-open (don't block compensation) but
+		// emit Warn + observer metric.
+		e.logger.WarnContext(ctx, "saga executor: preflight heartbeat infra error (fail-open, RunWithHeartbeat)",
+			slog.String("instance_id", string(inst.ID)),
+			slog.String("definition_id", string(inst.DefinitionID)),
+			slog.String("lease_id", string(leaseID)),
+			slog.String("reason", string(HeartbeatFailureInfraError)),
+			slog.Any("error", err),
+		)
+		e.safeObserveHeartbeatFailure(ctx, inst.ID, leaseID, HeartbeatFailureInfraError)
+		// continue — fail-open; async heartbeat goroutine will detect persistent
+		// infra failures via the regular tick budget.
+	}
+
 	runCtx, cancelCause := context.WithCancelCause(ctx)
 	defer cancelCause(nil)
 
@@ -432,7 +483,7 @@ func (e *Executor) RunWithHeartbeat(
 	hbWG.Add(1)
 	onStale := func() { cancelCause(errLeaseLost) }
 	onHBFailure := func(reason HeartbeatFailureReason) {
-		e.safeObserveHeartbeatFailure(runCtx, reason)
+		e.safeObserveHeartbeatFailure(runCtx, inst.ID, leaseID, reason)
 	}
 	go func() {
 		defer hbWG.Done()
@@ -440,6 +491,9 @@ func (e *Executor) RunWithHeartbeat(
 			if r := recover(); r != nil {
 				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
 					slog.String("instance_id", string(inst.ID)),
+					slog.String("definition_id", string(inst.DefinitionID)),
+					slog.String("lease_id", string(leaseID)),
+					slog.String("reason", string(HeartbeatFailureInfraError)),
 					slog.Any("panic", redaction.RedactAny(r)),
 				)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails

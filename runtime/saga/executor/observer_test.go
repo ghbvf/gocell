@@ -25,6 +25,8 @@ type recordingObserver struct {
 }
 
 type recordedOutcome struct {
+	instanceID   string
+	leaseID      string
 	definitionID string
 	stepName     string
 	outcome      Outcome
@@ -32,25 +34,37 @@ type recordedOutcome struct {
 }
 
 type recordedRetry struct {
+	instanceID   string
+	leaseID      string
 	definitionID string
 	stepName     string
 }
 
-func (o *recordingObserver) ObserveOutcome(_ context.Context, defID, stepName string, outcome Outcome, attempts int) {
+func (o *recordingObserver) ObserveOutcome(
+	_ context.Context,
+	instanceID, leaseID idutil.SafeID,
+	defID, stepName string,
+	outcome Outcome,
+	attempts int,
+) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.outcomes = append(o.outcomes, recordedOutcome{
+		instanceID: string(instanceID), leaseID: string(leaseID),
 		definitionID: defID, stepName: stepName, outcome: outcome, attempts: attempts,
 	})
 }
 
-func (o *recordingObserver) ObserveRetry(_ context.Context, defID, stepName string) {
+func (o *recordingObserver) ObserveRetry(_ context.Context, instanceID, leaseID idutil.SafeID, defID, stepName string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.retries = append(o.retries, recordedRetry{definitionID: defID, stepName: stepName})
+	o.retries = append(o.retries, recordedRetry{
+		instanceID: string(instanceID), leaseID: string(leaseID),
+		definitionID: defID, stepName: stepName,
+	})
 }
 
-func (o *recordingObserver) ObserveHeartbeatFailure(_ context.Context, reason HeartbeatFailureReason) {
+func (o *recordingObserver) ObserveHeartbeatFailure(_ context.Context, _ idutil.SafeID, _ idutil.SafeID, reason HeartbeatFailureReason) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.hbReasons = append(o.hbReasons, reason)
@@ -110,6 +124,12 @@ func TestExecute_ObserveOutcome_Succeeded(t *testing.T) {
 	}
 	if got[0].definitionID != string(inst.DefinitionID) || got[0].stepName != "step-x" {
 		t.Errorf("labels = (%q, %q), want (%q, step-x)", got[0].definitionID, got[0].stepName, inst.DefinitionID)
+	}
+	if got[0].instanceID != string(inst.ID) {
+		t.Errorf("instanceID = %q, want %q", got[0].instanceID, inst.ID)
+	}
+	if got[0].leaseID != "lease-1" {
+		t.Errorf("leaseID = %q, want lease-1", got[0].leaseID)
 	}
 	if got[0].attempts != 1 {
 		t.Errorf("attempts = %d, want 1", got[0].attempts)
@@ -297,7 +317,7 @@ func TestRunHeartbeat_ObserveHeartbeatFailure_InfraError(t *testing.T) {
 	defer cancel()
 
 	onHBFailure := func(reason HeartbeatFailureReason) {
-		obs.ObserveHeartbeatFailure(ctx, reason)
+		obs.ObserveHeartbeatFailure(ctx, "inst-err", "lease-err", reason)
 	}
 
 	var wg sync.WaitGroup
@@ -375,12 +395,15 @@ func TestRunWithHeartbeat_FnError_PassedThrough(t *testing.T) {
 }
 
 // TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost asserts that when fn is
-// long-running and the heartbeater reports ok=false, RunWithHeartbeat returns
-// an error satisfying IsLeaseLost (and fn's ctx was canceled by the wrapper).
+// long-running and the heartbeater reports ok=false on an async tick,
+// RunWithHeartbeat returns an error satisfying IsLeaseLost (and fn's ctx was
+// canceled by the wrapper). Uses staleAfterFirstHeartbeater so the preflight
+// heartbeat passes (ok=true) and the step actually starts; the first async
+// tick returns ok=false to trigger lease-lost cancellation (#1210 F3).
 func TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost(t *testing.T) {
 	t.Parallel()
 	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
-	hb := &staleHeartbeater{}
+	hb := &staleAfterFirstHeartbeater{} // first call (preflight) ok=true; subsequent stale
 	exec, err := NewExecutor(hb, fc,
 		WithLogger(noopLogger()),
 		WithHeartbeatInterval(testtime.D5s),
@@ -410,6 +433,37 @@ func TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost(t *testing.T) {
 
 	if !IsLeaseLost(got) {
 		t.Errorf("got %v, want IsLeaseLost", got)
+	}
+}
+
+// TestRunWithHeartbeat_PreflightStaleLease_ReturnsLeaseLost asserts that
+// RunWithHeartbeat returns errLeaseLost immediately when the preflight
+// heartbeat observes ok=false, without invoking fn at all (#1210 F3).
+func TestRunWithHeartbeat_PreflightStaleLease_ReturnsLeaseLost(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	hb := &staleHeartbeater{} // always returns ok=false
+	exec, err := NewExecutor(hb, fc,
+		WithLogger(noopLogger()),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fnCalled := false
+	got := exec.RunWithHeartbeat(context.Background(), newTestInstance(), "lease-preflight",
+		func(_ context.Context) error {
+			fnCalled = true
+			return nil
+		})
+
+	if !IsLeaseLost(got) {
+		t.Errorf("got %v, want IsLeaseLost (preflight stale)", got)
+	}
+	if fnCalled {
+		t.Error("fn must not be called when preflight heartbeat is stale")
 	}
 }
 

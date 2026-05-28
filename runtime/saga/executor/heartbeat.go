@@ -95,8 +95,16 @@ func runHeartbeat(
 					slog.String("lease_id", string(leaseID)),
 					slog.String("reason", string(HeartbeatFailureStaleLease)),
 				)
-				onHBFailure(HeartbeatFailureStaleLease)
+				// #1210 round-N F2: onStale FIRST — cancel the worker ctx so
+				// the in-flight step can bail immediately. onHBFailure is
+				// synchronous and potentially slow (observer implementations
+				// must be non-blocking per Observer godoc, but recover() guards
+				// the Executor goroutine only, not runHeartbeat's caller stack).
+				// Canceling the worker first ensures step authors selecting on
+				// ctx.Done() observe the cancellation without waiting for the
+				// observer call to complete.
 				onStale()
+				onHBFailure(HeartbeatFailureStaleLease)
 				return
 			}
 		}

@@ -6,6 +6,7 @@ import (
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
@@ -82,7 +83,7 @@ func TestSagaStepCollector_ObserveOutcome_AllFiveOutcomes(t *testing.T) {
 		t.Fatalf("NewSagaStepCollector: %v", err)
 	}
 	for _, tc := range cases {
-		c.ObserveOutcome(context.Background(), "def-x", "step-1", tc.outcome, 1)
+		c.ObserveOutcome(context.Background(), idutil.SafeID("inst-x"), idutil.SafeID("lease-x"), "def-x", "step-1", tc.outcome, 1)
 	}
 
 	ops := p.counterOps["saga_step_outcome_total"]
@@ -161,7 +162,7 @@ func TestSagaStepCollector_ObserveRetry_IncrementsWithStepName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSagaStepCollector: %v", err)
 	}
-	c.ObserveRetry(context.Background(), "def-y", "step-validate")
+	c.ObserveRetry(context.Background(), idutil.SafeID("inst-y"), idutil.SafeID("lease-y"), "def-y", "step-validate")
 
 	ops := p.counterOps["saga_step_retry_total"]
 	if len(ops) != 1 {
@@ -184,8 +185,8 @@ func TestSagaStepCollector_ObserveHeartbeatFailure_BothReasons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSagaStepCollector: %v", err)
 	}
-	c.ObserveHeartbeatFailure(context.Background(), executor.HeartbeatFailureInfraError)
-	c.ObserveHeartbeatFailure(context.Background(), executor.HeartbeatFailureStaleLease)
+	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("inst-hb"), idutil.SafeID("lease-hb"), executor.HeartbeatFailureInfraError)
+	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("inst-hb"), idutil.SafeID("lease-hb"), executor.HeartbeatFailureStaleLease)
 
 	ops := p.counterOps["saga_heartbeat_failed_total"]
 	if len(ops) != 2 {
@@ -212,9 +213,9 @@ func TestSagaStepCollector_NopObserver_DoesNotPanic(t *testing.T) {
 		t.Fatalf("NewSagaStepCollector: %v", err)
 	}
 	// Verify that a properly constructed (non-nil) collector does not panic on all methods.
-	c.ObserveOutcome(context.Background(), "d", "s", executor.OutcomeSucceeded, 1)
-	c.ObserveRetry(context.Background(), "d", "s")
-	c.ObserveHeartbeatFailure(context.Background(), executor.HeartbeatFailureInfraError)
+	c.ObserveOutcome(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "d", "s", executor.OutcomeSucceeded, 1)
+	c.ObserveRetry(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "d", "s")
+	c.ObserveHeartbeatFailure(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), executor.HeartbeatFailureInfraError)
 }
 
 // TestOutcomeLabel_UnknownVariant_Panics asserts that outcomeLabel panics when
@@ -242,7 +243,7 @@ func TestOutcomeLabel_UnknownVariant_Panics(t *testing.T) {
 			t.Errorf("panic payload must be *errcode.Error (panicregister.Approved A-class); got %T: %v", r, r)
 		}
 	}()
-	c.ObserveOutcome(context.Background(), "def", "step", executor.Outcome(99), 1)
+	c.ObserveOutcome(context.Background(), idutil.SafeID("i"), idutil.SafeID("l"), "def", "step", executor.Outcome(99), 1)
 }
 
 // TestNewSagaStepCollector_NoHistograms freezes the invariant that
