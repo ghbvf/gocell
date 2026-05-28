@@ -39,6 +39,13 @@ const (
 	// topic/filter does not fall within the declared TopicNamespace.
 	ErrAdapterMQTTTopicOutsideNamespace errcode.Code = "ERR_ADAPTER_MQTT_TOPIC_OUTSIDE_NAMESPACE"
 
+	// ErrAdapterMQTTInvalidPublishTopic signals that a publish topic is malformed
+	// under MQTT v5 rules: empty topic name, or a topic containing +/# wildcards.
+	// Subscribe filters use ErrAdapterMQTTInvalidSubscribeFilter because wildcard
+	// placement is legal-but-constrained there; publish topics are a distinct
+	// failure domain and must never reuse the subscribe-filter code.
+	ErrAdapterMQTTInvalidPublishTopic errcode.Code = "ERR_ADAPTER_MQTT_INVALID_PUBLISH_TOPIC"
+
 	// ErrAdapterMQTTConnect signals a transient connection failure (network
 	// timeout, server unavailable, quota exceeded). autopaho will retry.
 	ErrAdapterMQTTConnect errcode.Code = "ERR_ADAPTER_MQTT_CONNECT"

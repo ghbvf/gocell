@@ -134,6 +134,7 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTInvalidClientID,
 		ErrAdapterMQTTInvalidTopicNamespace,
 		ErrAdapterMQTTTopicOutsideNamespace,
+		ErrAdapterMQTTInvalidPublishTopic,
 		ErrAdapterMQTTConnect,
 		ErrAdapterMQTTConnectTimeout,
 		ErrAdapterMQTTConnectPermanent,

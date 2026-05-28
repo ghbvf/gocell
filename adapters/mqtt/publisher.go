@@ -276,7 +276,7 @@ func wrapPublishErr(callerCtx, publishCtx context.Context, err error) error {
 			"mqtt: PUBACK timeout (adapter PublishTimeout budget exceeded)", err)
 	}
 	return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishFailed,
-		"mqtt: publish failed", err)
+		"mqtt: publish failed", redactErr(err))
 }
 
 // pubackReasonToMetric maps an errcode.Code (from classifyPubackReason) to a

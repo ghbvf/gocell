@@ -93,6 +93,32 @@ func TestTopicNamespace_PublishOK(t *testing.T) {
 	}
 }
 
+func TestTopicNamespace_PublishOK_InvalidPublishTopicCode(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	for _, topic := range []string{"", "ns/+", "ns/#", "ns/a/+"} {
+		topic := topic
+		t.Run(topic, func(t *testing.T) {
+			t.Parallel()
+			err := ns.PublishOK(topic)
+			if err == nil {
+				t.Fatalf("PublishOK(%q) expected error, got nil", topic)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
+			}
+		})
+	}
+}
+
 func TestTopicNamespace_SubscribeOK(t *testing.T) {
 	ns, err := ParseTopicNamespace("ns")
 	if err != nil {
@@ -305,8 +331,8 @@ func TestTopicNamespace_Mint_PublishOKFailure(t *testing.T) {
 }
 
 // TestTopicNamespace_Mint_Empty verifies that Mint of an empty string returns
-// an error with code ErrAdapterMQTTInvalidSubscribeFilter (per PublishOK rule
-// for empty topics).
+// an error with code ErrAdapterMQTTInvalidPublishTopic (per PublishOK rule for
+// empty topics).
 func TestTopicNamespace_Mint_Empty(t *testing.T) {
 	t.Parallel()
 	ns, err := ParseTopicNamespace("ns")
@@ -321,13 +347,13 @@ func TestTopicNamespace_Mint_Empty(t *testing.T) {
 	if !errors.As(err, &ec) {
 		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
 	}
-	if ec.Code != ErrAdapterMQTTInvalidSubscribeFilter {
-		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidSubscribeFilter)
+	if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
 	}
 }
 
 // TestTopicNamespace_Mint_Wildcard verifies that Mint of a wildcard topic
-// returns an error with code ErrAdapterMQTTInvalidSubscribeFilter.
+// returns an error with code ErrAdapterMQTTInvalidPublishTopic.
 func TestTopicNamespace_Mint_Wildcard(t *testing.T) {
 	t.Parallel()
 	ns, err := ParseTopicNamespace("ns")
@@ -346,8 +372,8 @@ func TestTopicNamespace_Mint_Wildcard(t *testing.T) {
 			if !errors.As(err, &ec) {
 				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
 			}
-			if ec.Code != ErrAdapterMQTTInvalidSubscribeFilter {
-				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidSubscribeFilter)
+			if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
 			}
 		})
 	}

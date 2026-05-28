@@ -98,8 +98,8 @@ func (n TopicNamespace) String() string { return n.value }
 // namespace if it equals the prefix exactly or starts with prefix + "/".
 //
 // Returns ErrAdapterMQTTInvalidTopicNamespace for the zero-value receiver,
-// ErrAdapterMQTTInvalidSubscribeFilter for wildcard/empty topic violations,
-// and ErrAdapterMQTTTopicOutsideNamespace for boundary violations.
+// ErrAdapterMQTTInvalidPublishTopic for wildcard/empty topic violations, and
+// ErrAdapterMQTTTopicOutsideNamespace for boundary violations.
 func (n TopicNamespace) PublishOK(topic string) error {
 	if n.value == "" {
 		return errcode.New(
@@ -110,14 +110,14 @@ func (n TopicNamespace) PublishOK(topic string) error {
 	}
 	if topic == "" {
 		return errcode.New(
-			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			errcode.KindInvalid, ErrAdapterMQTTInvalidPublishTopic,
 			msgEmptyTopic,
 			errcode.WithDetails(errcode.PublicString(detailKeyNamespace, n.value)),
 		)
 	}
 	if strings.ContainsAny(topic, "+#") {
 		return errcode.New(
-			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			errcode.KindInvalid, ErrAdapterMQTTInvalidPublishTopic,
 			msgPublishTopicWildcard,
 			errcode.WithDetails(
 				errcode.PublicString(detailKeyNamespace, n.value),

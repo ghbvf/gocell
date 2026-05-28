@@ -498,6 +498,22 @@ func TestWrapPublishErr(t *testing.T) {
 	}
 }
 
+func TestWrapPublishErr_GenericTransportRedactsCause(t *testing.T) {
+	t.Parallel()
+
+	raw := errors.New("mqtt write failed: password=hunter2 token=abc123 host=broker")
+	err := wrapPublishErr(context.Background(), context.Background(), raw)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTPublishFailed, ec.Code)
+	assert.NotContains(t, err.Error(), "hunter2")
+	assert.NotContains(t, err.Error(), "abc123")
+	assert.Contains(t, err.Error(), "<REDACTED>")
+	assert.False(t, errors.Is(err, raw),
+		"redacted generic transport errors intentionally break the raw cause chain")
+}
+
 // ---------------------------------------------------------------------------
 // Concurrent safety
 // ---------------------------------------------------------------------------
