@@ -47,6 +47,10 @@ jobs:
 
       - name: Pre-shard memory baseline (before Build + Verify)
         if: always()
+        # Explicit `shell: bash` opts into `-eo pipefail` per GHA docs.
+        # Default `run: |` is `bash -e {0}` (no pipefail), which would let
+        # broken pipes silently mask diagnostic failures.
+        shell: bash
         run: |
           echo "=== /proc/meminfo (pre-shard, before Build slowgate) ==="
           grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree):' /proc/meminfo
@@ -81,13 +85,20 @@ jobs:
 
       - name: Post-step memory + dmesg
         if: always()
+        # Explicit `shell: bash` enables `-eo pipefail` so the dmesg fallback
+        # chain actually surfaces failures instead of being swallowed by tail's
+        # 0 exit code in the default `bash -e` (no pipefail) shell.
+        shell: bash
         run: |
           echo "=== /proc/meminfo (post-shard) ==="
           grep -E '^(MemTotal|MemFree|MemAvailable|Cached):' /proc/meminfo
           echo "=== top RSS processes ==="
           ps -eo pid,rss,vsz,cmd --sort -rss | head -10
           echo "=== kernel ring buffer (OOM evidence — fallback paths if dmesg restricted) ==="
-          sudo dmesg | tail -100 2>/dev/null || dmesg | tail -100 2>/dev/null || echo "(dmesg not available without privileges)"
+          # Wrap the fallback chain in a subshell that always exits 0 (echo
+          # branch tail-covers no-privilege case); the outer pipe then survives
+          # pipefail regardless of dmesg availability.
+          ( sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg not available without privileges)" ) | tail -100
 
       - name: Upload archtest-json artifact (failure only)
         if: failure()

@@ -117,8 +117,8 @@
 // fields require a same-PR update to both this file and the ADR §1 field
 // table. See ADR §3 升级路径. A1 is not in the PR-time governance.yml
 // 4-class core invariant set; it is covered by nightly
-// archtest-nightly.yml 16-shard matrix — this is an intentional latency
-// tradeoff (see ADR §4).
+// archtest-nightly.yml 24-shard matrix (ADR 202605120000 §Amendment
+// 2026-05-28) — this is an intentional latency tradeoff (see ADR §4).
 //
 // ref: tools/archtest/cell_id_pattern_single_source_test.go — sibling
 //

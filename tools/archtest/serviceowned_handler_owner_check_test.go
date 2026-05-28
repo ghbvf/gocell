@@ -110,8 +110,9 @@
 // fixture.
 //
 // CI gating: this archtest is **nightly-only** at present — it runs via
-// archtest-nightly.yml (16-shard) and locally via `make verify` /
-// `bash hack/verify-archtest.sh`, but is NOT in PR-time
+// archtest-nightly.yml (24-shard, ADR 202605120000 §Amendment 2026-05-28)
+// and locally via `make verify` / `bash hack/verify-archtest.sh`, but is
+// NOT in PR-time
 // `hack/verify-archtest-invariants.sh`. The PR-time set is frozen by ADR
 // `docs/architecture/202605120000` §Amendment 2026-05-23 §D8 to four
 // categories (clock / duration / testtime / panic) plus the

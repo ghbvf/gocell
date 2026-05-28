@@ -349,6 +349,13 @@ func (r *PGUserRepo) getForUpdateBy(
 		// embedded whitespace / special chars stay parseable in slog Internal.
 		sql = selectUserByUsernameForUpdateSQL
 		attrPart = fmt.Sprintf("username=%q", value)
+	default:
+		// Fail-fast before any DB roundtrip. Unknown kind is a programmer
+		// error (new const added without extending this switch); panic-
+		// registered A class per PANIC-REGISTERED-01 surfaces it immediately
+		// at runtime instead of routing an empty SQL string to the database.
+		panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
+			errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
 	}
 	row := r.db.QueryRow(ctx, sql, value)
 	u, err := scanUser(row)
@@ -369,14 +376,13 @@ func (r *PGUserRepo) getForUpdateBy(
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-for-update", err)
 	case lookupByUsername:
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-username-for-update", err)
+	default:
+		// Symmetric defense to the first switch's default — already covered
+		// there, but Go's return-exhaustiveness analyzer requires a terminal
+		// statement here.
+		panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
+			errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
 	}
-	// Unreachable: userLookupKind enum is closed at 2 const values, both
-	// covered above. Adding a new const without extending this switch is a
-	// programmer error — panic-registered A class per PANIC-REGISTERED-01
-	// surfaces it immediately at runtime instead of silently routing through
-	// a generic wrap.
-	panic(panicregister.Approved("user-repo-lookup-kind-unreachable",
-		errcode.Assertion("user_repo: unexpected userLookupKind in getForUpdateBy")))
 }
 
 // GetByIDForUpdate (S4d) — see ports.UserRepository godoc. Acquires a row

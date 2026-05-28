@@ -129,28 +129,26 @@ func TestMQTTConfigValidateFirst01(t *testing.T) {
 // IfStmt-init (`if err := cfg.Validate(); ...`) and bare ExprStmt
 // (`cfg.Validate()`) are accepted.
 func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
-	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed subtree walk replaces raw
-	// ast.Inspect (Path A banned symbol). Early-stop via `found` sentinel
-	// preserved since EachInSubtree has no implicit break.
-	found := false
-	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed find-first subtree walk
+	// replaces raw ast.Inspect (Path A banned symbol). FindFirstInSubtree is
+	// the canonical typed funnel for early-stop subtree search — collapses
+	// the `EachInSubtree + found sentinel` idiom into a bool-returning
+	// predicate with implicit short-circuit.
+	_, found := FindFirstInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return
+			return false
 		}
 		if sel.Sel.Name != "Validate" {
-			return
+			return false
 		}
 		fn, ok := ResolveMethodCall(info, sel)
 		if !ok {
-			return
+			return false
 		}
 		recv := fn.Type().(*types.Signature).Recv()
 		if recv == nil {
-			return
+			return false
 		}
 		recvType := recv.Type()
 		// Strip pointer.
@@ -159,13 +157,11 @@ func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
 		}
 		named, isNamed := recvType.(*types.Named)
 		if !isNamed {
-			return
+			return false
 		}
-		if named.Obj().Pkg() != nil &&
+		return named.Obj().Pkg() != nil &&
 			named.Obj().Pkg().Path() == mqttPkgPath &&
-			named.Obj().Name() == "Config" {
-			found = true
-		}
+			named.Obj().Name() == "Config"
 	})
 	return found
 }
@@ -173,23 +169,18 @@ func callsConfigValidate(stmt ast.Stmt, info *types.Info) bool {
 // callsAutopahoNewConnection reports whether stmt contains a call to
 // autopaho.NewConnection (any package alias). Resolution via ResolvePackageRef.
 func callsAutopahoNewConnection(stmt ast.Stmt, info *types.Info) bool {
-	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed subtree walk replaces raw
-	// ast.Inspect (Path A banned symbol).
-	found := false
-	EachInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	// SCANNER-FRAMEWORK-USAGE-01 compliance: typed find-first subtree walk
+	// replaces raw ast.Inspect (Path A banned symbol). See callsConfigValidate
+	// godoc for rationale on FindFirstInSubtree vs EachInSubtree+sentinel.
+	_, found := FindFirstInSubtree[ast.CallExpr](stmt, func(call *ast.CallExpr) bool {
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 		if !ok {
-			return
+			return false
 		}
 		if name != "NewConnection" {
-			return
+			return false
 		}
-		if pkgPath == "github.com/eclipse/paho.golang/autopaho" {
-			found = true
-		}
+		return pkgPath == "github.com/eclipse/paho.golang/autopaho"
 	})
 	return found
 }
