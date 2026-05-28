@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -87,6 +88,32 @@ func TestTopicNamespace_PublishOK(t *testing.T) {
 			err := ns.PublishOK(tc.topic)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("PublishOK(%q) error = %v, wantErr = %v", tc.topic, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestTopicNamespace_PublishOK_InvalidPublishTopicCode(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	for _, topic := range []string{"", "ns/+", "ns/#", "ns/a/+"} {
+		topic := topic
+		t.Run(topic, func(t *testing.T) {
+			t.Parallel()
+			err := ns.PublishOK(topic)
+			if err == nil {
+				t.Fatalf("PublishOK(%q) expected error, got nil", topic)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
 			}
 		})
 	}
@@ -245,5 +272,149 @@ func TestTopicNamespace_SubscribeOK_WildcardErrorCodes(t *testing.T) {
 				t.Errorf("SubscribeOK(%q) code = %v, want %v", tc.filter, ec.Code, tc.wantCode)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// publishableTopic / TopicNamespace.Mint tests (B3a)
+// ---------------------------------------------------------------------------
+
+// TestTopicNamespace_Mint_Success verifies that Mint returns a non-zero
+// publishableTopic with String() == the input topic when the topic passes
+// PublishOK validation.
+func TestTopicNamespace_Mint_Success(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	pt, err := ns.Mint("ns/foo")
+	if err != nil {
+		t.Fatalf("Mint(%q) unexpected error: %v", "ns/foo", err)
+	}
+	if pt.String() != "ns/foo" {
+		t.Errorf("publishableTopic.String() = %q, want %q", pt.String(), "ns/foo")
+	}
+	// Also verify exact-topic (prefix == topic) succeeds.
+	pt2, err := ns.Mint("ns")
+	if err != nil {
+		t.Fatalf("Mint(%q) unexpected error: %v", "ns", err)
+	}
+	if pt2.String() != "ns" {
+		t.Errorf("publishableTopic.String() = %q, want %q", pt2.String(), "ns")
+	}
+}
+
+// TestTopicNamespace_Mint_PublishOKFailure verifies that Mint of an
+// out-of-namespace topic returns the zero publishableTopic and a non-nil error
+// with code ErrAdapterMQTTTopicOutsideNamespace.
+func TestTopicNamespace_Mint_PublishOKFailure(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns1")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	pt, err := ns.Mint("ns2/x")
+	if err == nil {
+		t.Fatalf("Mint(out-of-namespace) expected error, got nil")
+	}
+	if pt != (publishableTopic{}) {
+		t.Errorf("Mint(out-of-namespace) returned non-zero publishableTopic: %v", pt)
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTTopicOutsideNamespace {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTTopicOutsideNamespace)
+	}
+}
+
+// TestTopicNamespace_Mint_Empty verifies that Mint of an empty string returns
+// an error with code ErrAdapterMQTTInvalidPublishTopic (per PublishOK rule for
+// empty topics).
+func TestTopicNamespace_Mint_Empty(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, err = ns.Mint("")
+	if err == nil {
+		t.Fatal("Mint(empty) expected error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
+	}
+}
+
+// TestTopicNamespace_Mint_Wildcard verifies that Mint of a wildcard topic
+// returns an error with code ErrAdapterMQTTInvalidPublishTopic.
+func TestTopicNamespace_Mint_Wildcard(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	for _, wc := range []string{"ns/+", "ns/#", "ns/a/+"} {
+		wc := wc
+		t.Run(wc, func(t *testing.T) {
+			t.Parallel()
+			_, err := ns.Mint(wc)
+			if err == nil {
+				t.Fatalf("Mint(%q) expected error, got nil", wc)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
+			}
+		})
+	}
+}
+
+// TestTopicNamespace_Mint_ZeroNS verifies that calling Mint on a zero-value
+// TopicNamespace returns an error with code ErrAdapterMQTTInvalidTopicNamespace.
+func TestTopicNamespace_Mint_ZeroNS(t *testing.T) {
+	t.Parallel()
+	var ns TopicNamespace
+	_, err := ns.Mint("x")
+	if err == nil {
+		t.Fatal("Mint on zero-value namespace expected error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidTopicNamespace {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidTopicNamespace)
+	}
+}
+
+// TestPublishableTopic_FieldFreeze locks the publishableTopic struct shape:
+// exactly one field named "topic" of type string, unexported. Any accidental
+// drift (rename, type change, export, new field) fails this test before it
+// could silently break the sealed-construction invariant.
+func TestPublishableTopic_FieldFreeze(t *testing.T) {
+	t.Parallel()
+	rt := reflect.TypeOf(publishableTopic{})
+	if rt.NumField() != 1 {
+		t.Errorf("publishableTopic NumField = %d, want 1", rt.NumField())
+	}
+	f := rt.Field(0)
+	if f.Name != "topic" {
+		t.Errorf("field[0].Name = %q, want %q", f.Name, "topic")
+	}
+	if f.Type.Kind() != reflect.String {
+		t.Errorf("field[0].Type = %v, want string", f.Type.Kind())
+	}
+	if f.IsExported() {
+		t.Error("field[0] is exported; want unexported")
 	}
 }

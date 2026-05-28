@@ -37,7 +37,7 @@
 |------|---------|------|
 | `doc.go` | 80 | package godoc + INVARIANT 锚点（archtest 入口） |
 | `config.go` | 250 | `Config{ClientID, Brokers, TLS, SessionExpiry, Auth, Backoff, ...}` + `Validate()` |
-| `clientid.go` | 100 | `type ClientID struct{value string}` (sealed struct) + `ParseClientID(cellID, role string) (ClientID, error)` |
+| `clientid.go` | 100 | `type ClientID struct{value string}` (sealed struct) + `ParseEphemeralClientID(cellID, role string) (ClientID, error)` + `ParseStableClientID(cellID, role, instanceID string) (ClientID, error)` |
 | `topicns.go` | 130 | `type TopicNamespace struct{value string}` (sealed struct) + `ParseTopicNamespace(ns string) (TopicNamespace, error)` + `PublishOK` / `SubscribeOK` funnel |
 | `connection.go` | 550 | autopaho wrap + reconnect 循环 + `Health() error` + `Close(ctx)` + permanentErr 状态机 |
 | `publisher.go` | 220 | `Publisher` 实现：`Publish(ctx, topic, payload) error`，QoS 1 + WaitConnected + 超时 |
@@ -89,7 +89,7 @@
 
 | 文件 | 估算行数 | 内容 |
 |------|---------|------|
-| `.github/workflows/_build-lint.yml` | +30 | integration-test job 加 mosquitto service container |
+| `.github/workflows/_build-lint.yml` | +30 | integration-test job 通过 testcontainers 自动发现新增的 `adapters/mqtt` integration 包（CI-INTEGRATION-DISCOVERY-01 自动接入，无需静态 service container 配置） |
 | `go.mod` / `go.sum` | +30 | autopaho v0.12 + mochi v2.7 + paho.golang/paho v0.21 |
 
 ### 2.6 iotdevice demo
@@ -138,11 +138,11 @@
 |------|------|
 | Publisher 实现 | `adapters/mqtt/publisher.go` |
 | Publisher 单测 | `publisher_test.go`（in-process mochi） |
-| 集成测试基础 | `testmain_integration_test.go`（Mosquitto GenericContainer + wait strategy） |
+| 集成测试基础 | `testmain_integration_test.go`（`testcontainers.GenericContainer` 起 `eclipse-mosquitto:2.0`，in-memory conf mount + wait.ForLog strategy；非 docker-compose static service container） |
 | 集成测试 publisher | `integration_test.go` PR-2 部分（仅 publisher 场景：QoS1 / broker 断连重连 / publish timeout） |
-| CI | `.github/workflows/_build-lint.yml` 加 mqtt mosquitto service container |
+| CI | `.github/workflows/_build-lint.yml` 通过 testcontainers auto-discovery（`CI-INTEGRATION-DISCOVERY-01`）接入，无需手动添加 mqtt service 配置 |
 
-**验收**：unit + integration（mosquitto container）publisher 路径全过；adapters shard CI 实测时长 +<60s。
+**验收**：unit + integration（testcontainers eclipse-mosquitto:2.0）publisher 路径全过；adapters shard CI 实测时长 +<60s（待 CI 实测回填；计划估算基于 rabbitmq integration 同类参考值）。
 
 ### PR-3 / 047-pr3: Subscriber + ConsumerBase 接入
 

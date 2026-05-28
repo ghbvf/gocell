@@ -95,6 +95,13 @@ linters:
       # Project codebase + comments use US English; misspell flags British
       # variants as errors (no auto-fix unless `golangci-lint run --fix` invoked).
       locale: US
+      extra-words:
+        # "Mosquitto" is the Eclipse Mosquitto MQTT broker product name.
+        # The misspell linter incorrectly flags it as "mosquito".
+        - typo: "mosquitto"
+          correction: "mosquitto"
+        - typo: "Mosquitto"
+          correction: "Mosquitto"
 
     godot:
       scope: declarations

@@ -285,7 +285,9 @@ func (c *Connection) onConnectionDown() bool {
 	c.mu.Unlock()
 
 	if closed {
-		slog.Debug("mqtt: connection down after close; stopping retry",
+		// Graceful-shutdown lifecycle event — Info per observability.md (not Debug,
+		// which is off in production and would hide the orderly-stop confirmation).
+		slog.Info("mqtt: connection down after close; stopping retry",
 			slog.String("client_id", c.cfg.ClientID.String()))
 		return false
 	}
@@ -349,19 +351,43 @@ func (c *Connection) recordPermanentLocked(permErr error) {
 	c.mu.Unlock()
 }
 
+// isAuthRelatedConnackCode reports whether a CONNACK reason code is
+// auth-related (bad credentials or unauthorized). For these codes, the
+// human-readable reason name is moved to the Internal channel so it does
+// not help an attacker enumerate "credentials wrong vs authz missing".
+func isAuthRelatedConnackCode(code byte) bool {
+	return code == 0x86 || code == 0x87 || code == 0x8C
+}
+
 // buildConnackError wraps a CONNACK rejection into an errcode.Error with
-// public reasonCode/reasonName details so operators get structured diagnostics
-// (C5 F9 — reason code/name visibility). The cause is preserved via WithCause
-// for errors.Is/As chains; redaction happens at logging boundaries (slog), not
-// here (errcode WithCause does not redact).
+// structured diagnostics (C5 F9 — reason code/name visibility). For auth-related
+// reason codes (0x86/0x87/0x8C) the reason name is moved to the Internal channel
+// so it does not aid attacker enumeration of "credentials wrong vs authz missing";
+// only the numeric reasonCode is kept on wire. For all other codes, reasonName
+// stays in Public details for operator diagnostics.
+// The cause is preserved via WithCause for errors.Is/As chains; redaction
+// happens at logging boundaries (slog), not here.
 func buildConnackError(code errcode.Code, cause error, message string) error {
 	opts := []errcode.Option{}
 	var connackErr *autopaho.ConnackError
 	if errors.As(cause, &connackErr) {
-		opts = append(opts, errcode.WithDetails(
-			errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
-			errcode.PublicString("reasonName", connackReasonName(connackErr.ReasonCode)),
-		))
+		if isAuthRelatedConnackCode(connackErr.ReasonCode) {
+			// Auth-related: keep only numeric code on wire; move name to Internal.
+			opts = append(opts,
+				errcode.WithDetails(
+					errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
+				),
+				errcode.WithInternal(
+					errcode.InternalAttr("reasonName", connackReasonName(connackErr.ReasonCode)),
+				),
+			)
+		} else {
+			// Non-auth: both code and name are safe for operator diagnostics on wire.
+			opts = append(opts, errcode.WithDetails(
+				errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
+				errcode.PublicString("reasonName", connackReasonName(connackErr.ReasonCode)),
+			))
+		}
 	}
 	if cause != nil {
 		opts = append(opts, errcode.WithInternal(
@@ -372,19 +398,59 @@ func buildConnackError(code errcode.Code, cause error, message string) error {
 }
 
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
+// reason_name is decoded via disconnectReasonName (MQTT v5 §3.14.2.1) — the
+// DISCONNECT reason-code table, NOT the CONNACK table, which shares numeric
+// codes with different meanings.
 func (c *Connection) onServerDisconnect(d *paho.Disconnect) {
 	slog.Warn("mqtt: server requested disconnect",
 		slog.String("client_id", c.cfg.ClientID.String()),
-		slog.Int("reason_code", int(d.ReasonCode)))
+		slog.Int("reason_code", int(d.ReasonCode)),
+		slog.String("reason_name", disconnectReasonName(d.ReasonCode)))
 }
 
-// R4 round-2: Client() raw accessor removed entirely from PR-1. PR-2
-// (Publisher) and PR-3 (Subscriber) will add typed Publish / Subscribe
-// methods on *Connection that route topic arguments through
-// TopicNamespace.PublishOK / SubscribeOK before calling cm.Publish /
-// cm.Subscribe, and the callsite funnel archtest (gh #1225) will lock the
-// routing. Internal callers reach the manager via c.cm directly within the
-// package; no external access is needed.
+// publishOpts captures per-Publish options that are not part of the
+// (ns, topic, payload) triple. Future MQTT v5 PUBLISH fields (MessageExpiry,
+// UserProperties, ContentType, etc.) should be added here without breaking
+// Connection.Publish's signature.
+type publishOpts struct {
+	QoS    byte
+	Retain bool
+}
+
+// Publish sends a single MQTT PUBLISH packet via the underlying autopaho
+// ConnectionManager. The publishableTopic argument carries a topic that has
+// already been validated against the caller's TopicNamespace (constructor:
+// TopicNamespace.Mint). Internally this method calls c.cm.Publish — the
+// MQTT-PUBLISH-CALLSITE-FUNNEL-01 archtest locks this as the only callsite of
+// (*autopaho.ConnectionManager).Publish in the adapters/mqtt package.
+//
+// Returns:
+//   - (*paho.PublishResponse, nil) on broker Ack (QoS 1).
+//   - (nil, ErrAdapterMQTTClosed) if Close has been called.
+//   - (nil, ErrAdapterMQTTPublishCanceled) if ctx is already canceled.
+//   - (nil, errcode-wrapped error) on transport-level failure from autopaho.
+//
+// The caller is responsible for setting any per-publish timeout via the ctx
+// (the Publisher derives a child ctx from Config.PublishTimeout).
+func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []byte, opts publishOpts) (*paho.PublishResponse, error) {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+			"mqtt: connection is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
+			"mqtt: publish canceled by caller context", err)
+	}
+	return c.cm.Publish(ctx, &paho.Publish{
+		Topic:   t.topic,
+		QoS:     opts.QoS,
+		Retain:  opts.Retain,
+		Payload: payload,
+	})
+}
 
 // Health returns the current readiness of the connection:
 //   - nil         — phaseConnected and no permanent error

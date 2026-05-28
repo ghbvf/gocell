@@ -39,6 +39,13 @@ const (
 	// topic/filter does not fall within the declared TopicNamespace.
 	ErrAdapterMQTTTopicOutsideNamespace errcode.Code = "ERR_ADAPTER_MQTT_TOPIC_OUTSIDE_NAMESPACE"
 
+	// ErrAdapterMQTTInvalidPublishTopic signals that a publish topic is malformed
+	// under MQTT v5 rules: empty topic name, or a topic containing +/# wildcards.
+	// Subscribe filters use ErrAdapterMQTTInvalidSubscribeFilter because wildcard
+	// placement is legal-but-constrained there; publish topics are a distinct
+	// failure domain and must never reuse the subscribe-filter code.
+	ErrAdapterMQTTInvalidPublishTopic errcode.Code = "ERR_ADAPTER_MQTT_INVALID_PUBLISH_TOPIC"
+
 	// ErrAdapterMQTTConnect signals a transient connection failure (network
 	// timeout, server unavailable, quota exceeded). autopaho will retry.
 	ErrAdapterMQTTConnect errcode.Code = "ERR_ADAPTER_MQTT_CONNECT"
@@ -73,6 +80,69 @@ const (
 	// itself is malformed, and ErrAdapterMQTTTopicOutsideNamespace which means
 	// the filter's non-wildcard head falls outside the declared namespace.
 	ErrAdapterMQTTInvalidSubscribeFilter errcode.Code = "ERR_ADAPTER_MQTT_INVALID_SUBSCRIBE_FILTER"
+
+	// ErrAdapterMQTTPubAckTimeout signals that no PUBACK was received within
+	// the configured PublishTimeout budget. The broker may have received the
+	// message but the acknowledgement was lost; callers should treat this as a
+	// retryable transient failure and apply idempotency controls before retrying.
+	ErrAdapterMQTTPubAckTimeout errcode.Code = "ERR_ADAPTER_MQTT_PUBACK_TIMEOUT"
+
+	// ErrAdapterMQTTPublishNoSubscribers signals that the broker returned
+	// PUBACK reason code 0x10 (No Matching Subscribers): the message was
+	// accepted but no active subscriber matched the topic filter. This is an
+	// informational condition for QoS 1; the publisher may log a warning and
+	// continue rather than treating it as a hard error.
+	ErrAdapterMQTTPublishNoSubscribers errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_NO_SUBSCRIBERS"
+
+	// ErrAdapterMQTTPublishRejected signals that the broker returned a PUBACK
+	// reason code indicating the message was permanently rejected: unspecified
+	// error (0x80), implementation-specific error (0x83), or topic name invalid
+	// (0x90). These conditions require a client-side fix before retrying.
+	// Not-authorized (0x87) is NOT covered here — it is retryable-after-operator-
+	// ACL-fix and carries its own ErrAdapterMQTTPublishNotAuthorized code (below);
+	// payload-format-invalid (0x99) carries ErrAdapterMQTTPublishPayloadFormatInvalid.
+	ErrAdapterMQTTPublishRejected errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_REJECTED"
+
+	// ErrAdapterMQTTPublishRateLimited signals that the broker returned PUBACK
+	// reason code 0x97 (Quota Exceeded), indicating the publisher has been
+	// rate-limited or its message quota is exhausted. Callers should back off
+	// and retry after a delay.
+	ErrAdapterMQTTPublishRateLimited errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_RATE_LIMITED"
+
+	// ErrAdapterMQTTPublishNotAuthorized signals that the broker returned PUBACK
+	// reason code 0x87 (Not Authorized): the publisher's ACL does not permit
+	// publishing to the topic. Classified KindUnavailable (retryable) — aligned
+	// with CONNACK 0x87 classPermanentRetain semantics: the condition persists
+	// until an operator fixes the broker-side ACL, after which retries succeed.
+	// The outbox relay should keep retrying (bounded by its retry budget, then
+	// DLX) rather than treating it as a permanent client error. Decision recorded
+	// in ADR docs/architecture/202605281200-048-adr-mqtt-adapter.md §错误映射表.
+	ErrAdapterMQTTPublishNotAuthorized errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_NOT_AUTHORIZED"
+
+	// ErrAdapterMQTTPublishPayloadFormatInvalid signals that the broker returned
+	// PUBACK reason code 0x99 (Payload Format Invalid): the payload does not
+	// conform to the declared Payload Format Indicator / Content Type (e.g. a
+	// UTF-8 declaration carrying non-UTF-8 bytes). Classified KindInvalid —
+	// semantically distinct from ErrAdapterMQTTPayloadTooLarge (size), which it
+	// previously and incorrectly shared. A client-side payload-encoding fix is
+	// required.
+	ErrAdapterMQTTPublishPayloadFormatInvalid errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_PAYLOAD_FORMAT_INVALID"
+
+	// ErrAdapterMQTTPublishCanceled signals that a publish call was canceled
+	// because the caller's context was canceled before the broker responded.
+	ErrAdapterMQTTPublishCanceled errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_CANCELED"
+
+	// ErrAdapterMQTTPublishFailed signals a transport-level publish failure (the
+	// underlying autopaho returned a non-context error and not a PUBACK reason
+	// code). Distinct from ErrAdapterMQTTConnect which is connection-side, and
+	// from ErrAdapterMQTTPubAckTimeout / PublishRejected which are PUBACK-side.
+	ErrAdapterMQTTPublishFailed errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_FAILED"
+
+	// ErrAdapterMQTTPublisherCloseTimeout signals that Publisher.Close exceeded
+	// its drain budget waiting for in-flight publishes to complete. Distinct from
+	// ErrAdapterMQTTPubAckTimeout (single-publish PUBACK timeout) — Close timeout
+	// indicates one or more goroutines are stuck.
+	ErrAdapterMQTTPublisherCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_PUBLISHER_CLOSE_TIMEOUT"
 )
 
 // connackClass classifies an OnConnectError into one of three categories.
@@ -178,6 +248,115 @@ var connackReasonNames = map[byte]string{
 // numeric reasonCode field.
 func connackReasonName(code byte) string {
 	if name, ok := connackReasonNames[code]; ok {
+		return name
+	}
+	return "Unknown"
+}
+
+// classifyPubackReason maps an MQTT v5 PUBACK reason code (byte) to the
+// corresponding errcode.Code and errcode.Kind.
+//
+// Reason-code → (code, kind) mapping (ref: MQTT v5.0 spec §3.4.2.1):
+//
+//	0x00 Success                  → ("", KindInternal)               — Ack path; caller MUST guard ReasonCode != 0x00 before calling
+//	0x10 NoMatchingSubscribers    → (ErrAdapterMQTTPublishNoSubscribers, KindUnavailable)
+//	0x80 UnspecifiedError         → (ErrAdapterMQTTPublishRejected,            KindInternal)
+//	0x83 ImplementationSpecific   → (ErrAdapterMQTTPublishRejected,            KindInternal)
+//	0x87 NotAuthorized            → (ErrAdapterMQTTPublishNotAuthorized,       KindUnavailable) — retryable; operator fixes ACL
+//	0x90 TopicNameInvalid         → (ErrAdapterMQTTPublishRejected,            KindInvalid)
+//	0x97 QuotaExceeded            → (ErrAdapterMQTTPublishRateLimited,         KindUnavailable)
+//	0x99 PayloadFormatInvalid     → (ErrAdapterMQTTPublishPayloadFormatInvalid, KindInvalid)
+//	default                       → (ErrAdapterMQTTPublishRejected,            KindInternal)
+//
+// ref: MQTT v5.0 spec §3.4.2.1 PUBACK Reason Code table
+func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
+	switch code {
+	case 0x00: // Success — Ack path; caller MUST guard ReasonCode != 0x00 before calling
+		return "", errcode.KindInternal
+	case 0x10: // No Matching Subscribers
+		return ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable
+	case 0x80: // Unspecified Error
+		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
+	case 0x83: // Implementation Specific Error
+		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
+	case 0x87: // Not Authorized — retryable after operator fixes ACL (aligned with CONNACK 0x87 classPermanentRetain)
+		return ErrAdapterMQTTPublishNotAuthorized, errcode.KindUnavailable
+	case 0x90: // Topic Name Invalid
+		return ErrAdapterMQTTPublishRejected, errcode.KindInvalid
+	case 0x97: // Quota Exceeded
+		return ErrAdapterMQTTPublishRateLimited, errcode.KindUnavailable
+	case 0x99: // Payload Format Invalid — distinct from PayloadTooLarge (size)
+		return ErrAdapterMQTTPublishPayloadFormatInvalid, errcode.KindInvalid
+	default:
+		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
+	}
+}
+
+// pubackReasonNames is the single source of MQTT v5 PUBACK reason code →
+// spec-defined name mapping (MQTT v5.0 §3.4.2.1 PUBACK Reason Code table).
+// Distinct from connackReasonNames — the two tables are different despite
+// some overlapping codes (CONNACK §3.2.2.2 vs PUBACK §3.4.2.1).
+var pubackReasonNames = map[byte]string{
+	0x00: "Success",
+	0x10: "NoMatchingSubscribers",
+	0x80: "UnspecifiedError",
+	0x83: "ImplementationSpecificError",
+	0x87: "NotAuthorized",
+	0x90: "TopicNameInvalid",
+	0x91: "PacketIdentifierInUse",
+	0x97: "QuotaExceeded",
+	0x99: "PayloadFormatInvalid",
+}
+
+// pubackReasonName returns the spec name for an MQTT v5 PUBACK reason code.
+// Unknown codes return "Unknown" so operators can still match the numeric
+// reasonCode field in structured logs.
+func pubackReasonName(code byte) string {
+	if name, ok := pubackReasonNames[code]; ok {
+		return name
+	}
+	return "Unknown"
+}
+
+// disconnectReasonNames is the single source of MQTT v5 DISCONNECT reason code →
+// spec-defined name mapping (MQTT v5.0 §3.14.2.1 Disconnect Reason Code table).
+// This is a DISTINCT table from connackReasonNames (§3.2.2.2) and
+// pubackReasonNames (§3.4.2.1): the three packets share some numeric codes with
+// different meanings, so a server-initiated DISCONNECT must be decoded with this
+// table, not the CONNACK one. Only the server-initiated subset is enumerated;
+// unrecognized codes fall back to "Unknown".
+var disconnectReasonNames = map[byte]string{
+	0x00: "NormalDisconnection",
+	0x04: "DisconnectWithWillMessage",
+	0x80: "UnspecifiedError",
+	0x81: "MalformedPacket",
+	0x82: "ProtocolError",
+	0x83: "ImplementationSpecificError",
+	0x87: "NotAuthorized",
+	0x89: "ServerBusy",
+	0x8B: "ServerShuttingDown",
+	0x8D: "KeepAliveTimeout",
+	0x8E: "SessionTakenOver",
+	0x8F: "TopicFilterInvalid",
+	0x90: "TopicNameInvalid",
+	0x93: "ReceiveMaximumExceeded",
+	0x94: "TopicAliasInvalid",
+	0x95: "PacketTooLarge",
+	0x96: "MessageRateTooHigh",
+	0x97: "QuotaExceeded",
+	0x98: "AdministrativeAction",
+	0x99: "PayloadFormatInvalid",
+	0x9C: "UseAnotherServer",
+	0x9D: "ServerMoved",
+	0x9F: "ConnectionRateExceeded",
+	0xA0: "MaximumConnectTime",
+}
+
+// disconnectReasonName returns the spec name for an MQTT v5 DISCONNECT reason
+// code. Unknown codes return "Unknown" so operators can still match the numeric
+// reasonCode field in structured logs.
+func disconnectReasonName(code byte) string {
+	if name, ok := disconnectReasonNames[code]; ok {
 		return name
 	}
 	return "Unknown"
