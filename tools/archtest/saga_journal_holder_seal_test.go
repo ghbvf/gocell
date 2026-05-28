@@ -2,7 +2,7 @@
 //
 // INVARIANT: SAGA-JOURNAL-HOLDER-SEAL-01
 //
-// Two field-shape rules over runtime/saga production structs:
+// Three field-shape rules over runtime/saga production structs:
 //
 //  1. No struct may hold a Heartbeat-bearing journal interface as a persisted
 //     field — i.e. neither kernel/saga/journal.Journal (the full interface) nor
@@ -11,6 +11,13 @@
 //     it is forbidden everywhere, Coordinator included.
 //  2. kernel/saga/journal.JournalCore (the Heartbeat-free core) may be held only
 //     by runtime/saga.Coordinator. Any other holder is a violation.
+//  3. No struct may persist a Heartbeater-SHAPED func value as a field
+//     (func(context.Context, idutil.SafeID, idutil.SafeID, time.Duration)
+//     (bool, error)). A persisted heartbeat func is the func-value equivalent of
+//     a journal.Heartbeater field: it lets a centralized loop be reconstructed
+//     from a heartbeat func handed in from OUTSIDE runtime/saga (where the
+//     `.Heartbeat` selector is beyond SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 A1's
+//     scope). Forbidden everywhere, Coordinator included. (rule 3 / F3)
 //
 // The full journal.Journal still exists transiently as the NewCoordinator
 // parameter handed straight to executor.NewExecutor (the sanctioned per-step
@@ -30,8 +37,9 @@
 // # AI-robust rating
 //
 // Upstream Medium: a typed-aware go/types scan locks holder-struct identity
-// within the package; a new non-Coordinator JournalCore field (or any
-// Heartbeat-bearing field) is rejected at archtest time, not by the compiler.
+// within the package; a new non-Coordinator JournalCore field, any
+// Heartbeat-bearing journal interface field, or any Heartbeater-shaped func
+// field (rule 3) is rejected at archtest time, not by the compiler.
 // Downstream N/A: this is a field-shape invariant, not a callsite invariant —
 // there is no caller allowlist.
 //
@@ -50,8 +58,9 @@
 //
 //   - B1 (reverse self-test): a `type X = journal.{Journal,JournalCore,Heartbeater}`
 //     alias in runtime/saga would let a struct hold `X` evading a pure-AST name
-//     match. A1's go/types resolution already chases through aliases, but B1
-//     catches the alias declaration itself before any struct uses it. Covered.
+//     match. A1's go/types resolution chases through aliases via types.Unalias
+//     (mandatory on Go 1.23+ where an alias is *types.Alias), but B1 catches the
+//     alias declaration itself before any struct uses it. Covered.
 //   - Embedded (anonymous) field `struct { journal.Heartbeater }`: ast.StructType
 //     Fields.List includes embedded fields (Names empty, Type set), so A1
 //     classifies it. Covered.
@@ -60,10 +69,11 @@
 //     degenerate, non-idiomatic form — accepted residual blind spot.
 //   - Cross-package alias `type J = journal.JournalCore` declared OUTSIDE
 //     runtime/saga then imported and used as a field type inside runtime/saga:
-//     A1 still classifies it correctly (Named.Obj().Pkg()/Name() are canonical
-//     after type-checking), but B1 (which only scans runtime/saga) does not flag
-//     the foreign declaration. Accepted residual blind spot — cross-package
-//     interface aliases are rare and A1 resolves the field type regardless.
+//     A1 classifies it correctly because classifyResolvedJournalType calls
+//     types.Unalias (required on Go 1.23+ where an alias is *types.Alias, not
+//     *types.Named). B1 (which only scans runtime/saga) does not flag the foreign
+//     declaration, but A1 resolves the field type regardless. Accepted residual
+//     for B1; A1-covered.
 //   - Local interface that re-declares the Heartbeat shape, e.g.
 //     `type beat interface { Heartbeat(...) }` held as a field: a new named type,
 //     NOT journal.*, so this seal does not classify it. Accepted residual —
@@ -71,7 +81,13 @@
 //     is signature-shape (not name) based and flags any actual .Heartbeat(...)
 //     call in runtime/saga regardless of the holder type. Holding without calling
 //     is inert; calling is caught there.
-//   - B1 only scans non-test files in runtime/saga; test files may alias freely.
+//   - B1 resolves the journal package's local binding from each file's imports
+//     (journalPackageLocalNames), so an import alias `import sagajournal "…/journal"`
+//     is covered (F2 fix). A dot-import `import . "…/journal"` would make the
+//     alias RHS a bare Ident (`type X = JournalCore`, no SelectorExpr) — not
+//     matched by B1; accepted residual (dot-imports are non-idiomatic and A1
+//     still resolves any field that actually uses such an alias). B1 only scans
+//     non-test files in runtime/saga; test files may alias freely.
 package archtest
 
 import (
@@ -80,7 +96,9 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -136,16 +154,27 @@ func classifyJournalFieldType(info *types.Info, expr ast.Expr) journalFieldKind 
 }
 
 // classifyResolvedJournalType checks whether t (possibly wrapped in one pointer
-// or resolved through an alias) is journal.Journal, journal.Heartbeater, or
-// journal.JournalCore. Aliases resolve at the types.Type level, so
-// Named.Obj().Pkg().Path() and Name() are canonical after type-checking.
+// or resolved through a type alias) is journal.Journal, journal.Heartbeater, or
+// journal.JournalCore.
+//
+// On Go 1.23+ (gotypesalias=1, the default — this module is on go 1.25), a type
+// alias materializes as *types.Alias, NOT transparently as the aliased
+// *types.Named. A bare t.(*types.Named) assertion therefore MISSES alias-typed
+// fields (a field of `type J = journal.JournalCore` resolves to *types.Alias and
+// the assertion fails). types.Unalias collapses an alias to its underlying type
+// so the Obj().Pkg().Path()/Name() check below is canonical regardless of how
+// many alias / pointer layers wrap the field type (go/types.Unalias expands a
+// type to the one it denotes after resolving package-level aliases).
 func classifyResolvedJournalType(t types.Type) journalFieldKind {
 	if t == nil {
 		return journalFieldNone
 	}
-	// Unwrap a pointer: *journal.JournalCore is not idiomatic but we cover it.
+	// Collapse a top-level alias (`type J = journal.JournalCore`) before the
+	// pointer probe, then again after unwrapping a pointer (`*J`, or
+	// `type J = *journal.JournalCore`), so every alias⇄pointer ordering resolves.
+	t = types.Unalias(t)
 	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+		t = types.Unalias(ptr.Elem())
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
@@ -198,6 +227,51 @@ func journalFieldSealMessage(kind journalFieldKind, holderName string) string {
 		sagaJournalHolderSealRule, holderName)
 }
 
+// heartbeatFuncFieldDiag (rule 3) flags a struct field whose type is a func —
+// anonymous, named, aliased, or pointer-to-func — matching the Heartbeater
+// signature shape. Persisting such a callable is the func-value equivalent of
+// holding a journal.Heartbeater field: a centralized heartbeat loop can be
+// reconstructed from a heartbeat func passed into the constructor from OUTSIDE
+// runtime/saga, where the `.Heartbeat` selector is beyond
+// SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 A1's scope. Closing the field-
+// persistence path here blocks the loop (a loop needs a persisted callable; a
+// bare constructor closure capturing the param is the irreducible residual, same
+// class as that archtest's NewCoordinator pass-through window). No struct in
+// runtime/saga — Coordinator included — may persist a heartbeat-shaped func.
+func heartbeatFuncFieldDiag(p *Pass, rel, holderName string, field *ast.Field) (Diagnostic, bool) {
+	if p.TypesInfo == nil {
+		return Diagnostic{}, false
+	}
+	tv, ok := p.TypesInfo.Types[field.Type]
+	if !ok {
+		return Diagnostic{}, false
+	}
+	// Collapse alias + one pointer level (mirrors classifyResolvedJournalType),
+	// then require the underlying type to be a func signature of the heartbeat
+	// shape. Interface fields (Underlying = *types.Interface) never match here —
+	// they are journal-package interfaces handled by classifyJournalFieldType.
+	t := types.Unalias(tv.Type)
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+	sig, ok := t.Underlying().(*types.Signature)
+	if !ok || !signatureMatchesHeartbeaterShape(sig) {
+		return Diagnostic{}, false
+	}
+	pos := p.Fset.Position(field.Pos())
+	return Diagnostic{
+		Rel:  rel,
+		Line: pos.Line,
+		Message: fmt.Sprintf(
+			"%s: struct %q holds a Heartbeater-shaped func field "+
+				"(func(context.Context, idutil.SafeID, idutil.SafeID, time.Duration) (bool, error)); "+
+				"no struct in runtime/saga may persist a Heartbeat-capable callable (interface OR func) "+
+				"— a persisted heartbeat func reconstructs the centralized-loop anti-pattern from a value "+
+				"passed in from outside runtime/saga. Funnel per-step heartbeat through executor.",
+			sagaJournalHolderSealRule, holderName),
+	}, true
+}
+
 // TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal scans runtime/saga
 // production source for struct fields whose resolved type is a journal-package
 // interface, applying both seal rules (see package godoc):
@@ -233,6 +307,10 @@ func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 				for _, field := range st.Fields.List {
 					if d, ok := journalFieldSealDiag(p, rel, holderName, field); ok {
 						out = append(out, d)
+						continue
+					}
+					if d, ok := heartbeatFuncFieldDiag(p, rel, holderName, field); ok {
+						out = append(out, d)
 					}
 				}
 			})
@@ -243,9 +321,39 @@ func TestSagaJournalHolderSeal_A1_OnlyCoordinatorHoldsJournal(t *testing.T) {
 	Report(t, sagaJournalHolderSealRule+"-A1", diags)
 }
 
+// journalPackageLocalNames returns the set of local identifiers in file bound
+// to the journal interface package (journalInterfacePkgPath): the default
+// package name for a plain import, plus any explicit import alias
+// (`import sagajournal "…/journal"`). Blank (`_`) and dot (`.`) imports are not
+// usable as a `pkg.Type` selector base and are excluded — a dot-imported
+// `type X = JournalCore` is a bare-Ident form (no SelectorExpr) noted as a
+// residual in the package godoc.
+func journalPackageLocalNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	for _, imp := range file.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || p != journalInterfacePkgPath {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			names[path.Base(journalInterfacePkgPath)] = true // default name: "journal"
+		case imp.Name.Name == "_" || imp.Name.Name == ".":
+			// not usable as a selector base; skip
+		default:
+			names[imp.Name.Name] = true
+		}
+	}
+	return names
+}
+
 // journalInterfaceAliasName reports the journal interface name aliased by ts if
-// ts is `type X = journal.{Journal,JournalCore,Heartbeater}`, else ("", false).
-func journalInterfaceAliasName(ts *ast.TypeSpec) (string, bool) {
+// ts is `type X = <localName>.{Journal,JournalCore,Heartbeater}` where localName
+// is any local binding of the journal package (journalLocalNames), else
+// ("", false). Resolving via journalLocalNames rather than a hardcoded "journal"
+// closes the import-alias evasion: `import sagajournal "…/journal"` followed by
+// `type X = sagajournal.JournalCore` is now flagged.
+func journalInterfaceAliasName(ts *ast.TypeSpec, journalLocalNames map[string]bool) (string, bool) {
 	// An alias has a valid Assign token.
 	if !ts.Assign.IsValid() {
 		return "", false
@@ -255,7 +363,7 @@ func journalInterfaceAliasName(ts *ast.TypeSpec) (string, bool) {
 		return "", false
 	}
 	id, ok := sel.X.(*ast.Ident)
-	if !ok || id.Name != "journal" {
+	if !ok || !journalLocalNames[id.Name] {
 		return "", false
 	}
 	switch sel.Sel.Name {
@@ -276,8 +384,10 @@ func journalInterfaceAliasName(ts *ast.TypeSpec) (string, bool) {
 //
 // B1 uses Run (AST-only) because detecting the alias is a pure syntactic check:
 // an alias TypeSpec has a valid ts.Assign token and the RHS is a SelectorExpr
-// whose X.Name == "journal". No cross-package resolution is needed at the alias
-// declaration site itself.
+// whose X.Name binds to the journal package. The binding is resolved from the
+// file's own import specs (journalPackageLocalNames), so an import alias
+// (`import sagajournal "…/journal"`) is covered without cross-package type
+// resolution at the declaration site.
 func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 
@@ -294,9 +404,13 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 			if !strings.HasPrefix(rel, "runtime/saga/") {
 				continue
 			}
+			journalNames := journalPackageLocalNames(file)
+			if len(journalNames) == 0 {
+				continue // file does not import the journal package
+			}
 
 			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
-				aliased, ok := journalInterfaceAliasName(ts)
+				aliased, ok := journalInterfaceAliasName(ts, journalNames)
 				if !ok {
 					return
 				}
@@ -327,6 +441,10 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 // and non-aliases / wrong package / non-selector / definition (non-alias) forms
 // must NOT. If the matcher silently stopped firing, B1 would pass vacuously and
 // this test catches it.
+//
+// Case H (`sagajournal.JournalCore`) locks the F2 fix: the journal package
+// imported under a non-default local name must still match, while case E
+// (`other.Journal`, a name NOT bound to the journal package) must not.
 func TestSagaJournalHolderSeal_BlindSpot_B1_MatcherNonVacuous(t *testing.T) {
 	t.Parallel()
 
@@ -338,6 +456,7 @@ type D = journal.Other
 type E = other.Journal
 type F journal.Journal
 type G = SomethingElse
+type H = sagajournal.JournalCore
 `
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "synthetic.go", src, 0)
@@ -345,15 +464,21 @@ type G = SomethingElse
 		t.Fatalf("parse synthetic source: %v", err)
 	}
 
+	// journalNames models a file that imports the journal package both plainly
+	// (local name "journal") and under an alias (`import sagajournal "…/journal"`).
+	// "other" is deliberately absent — it is NOT a binding of the journal pkg.
+	journalNames := map[string]bool{"journal": true, "sagajournal": true}
+
 	// typeName -> expected aliased journal interface name ("" = must NOT match).
 	want := map[string]string{
 		"A": journalInterfaceTypeName,     // type X = journal.Journal
 		"B": journalCoreInterfaceTypeName, // type X = journal.JournalCore
 		"C": heartbeaterInterfaceTypeName, // type X = journal.Heartbeater
 		"D": "",                           // journal.Other — not a sealed name
-		"E": "",                           // other.Journal — wrong package ident
+		"E": "",                           // other.Journal — name not bound to journal pkg
 		"F": "",                           // definition, not an alias (no '=')
 		"G": "",                           // not a selector expression
+		"H": journalCoreInterfaceTypeName, // type X = sagajournal.JournalCore (import alias)
 	}
 
 	seen := map[string]bool{}
@@ -372,7 +497,7 @@ type G = SomethingElse
 				continue
 			}
 			seen[ts.Name.Name] = true
-			aliased, matched := journalInterfaceAliasName(ts)
+			aliased, matched := journalInterfaceAliasName(ts, journalNames)
 			if exp == "" {
 				if matched {
 					t.Errorf("journalInterfaceAliasName(%s) = (%q, true); want no match",
@@ -387,12 +512,133 @@ type G = SomethingElse
 		}
 	}
 
-	// Non-vacuity: the three positive cases must have been exercised — otherwise
-	// the fixture or the parse silently skipped them.
-	for _, name := range []string{"A", "B", "C"} {
+	// Non-vacuity: every positive case (incl. the import-aliased H) must have
+	// been exercised — otherwise the fixture or the parse silently skipped them.
+	for _, name := range []string{"A", "B", "C", "H"} {
 		if !seen[name] {
 			t.Errorf("synthetic fixture did not exercise positive case %q — "+
 				"B1 matcher self-test is vacuous", name)
 		}
+	}
+}
+
+// TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias is the F1 regression:
+// classifyResolvedJournalType must resolve a struct field whose type is a
+// package-level alias to journal.JournalCore. On Go 1.23+ (gotypesalias=1, this
+// module is on go 1.25) the field type is *types.Alias; without types.Unalias
+// the *types.Named assertion fails and the alias-typed holder silently evades
+// the seal — defeating the holder seal with a one-line alias.
+//
+// The fixture (testdata/saga_journal_alias_fixtures/aliasholder) has two
+// non-Coordinator holders — one direct, one via alias — and BOTH must be flagged.
+// Pre-fix the alias holder is missed (this test fails); post-fix both surface.
+func TestSagaJournalHolderSeal_A1_AliasFieldResolvedViaUnalias(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedFixture(t, FixtureOpts{},
+		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/aliasholder"},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := filepath.ToSlash(p.Rel(file))
+				EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok || st.Fields == nil {
+						return
+					}
+					// holderName is never "Coordinator" for fixture structs, so
+					// the rule-2 JournalCore allowance never applies — every
+					// JournalCore field (direct or aliased) must surface.
+					for _, field := range st.Fields.List {
+						if d, ok := journalFieldSealDiag(p, rel, ts.Name.Name, field); ok {
+							out = append(out, d)
+						}
+					}
+				})
+			}
+			return out
+		})
+
+	var directFlagged, aliasFlagged bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, "HolderDirect") {
+			directFlagged = true
+		}
+		if strings.Contains(d.Message, "HolderViaAlias") {
+			aliasFlagged = true
+		}
+	}
+	if !directFlagged {
+		t.Errorf("%s-A1: fixture HolderDirect (journal.JournalCore field) not flagged — "+
+			"the holder-seal classifier is broken (fixture wiring or scan logic)",
+			sagaJournalHolderSealRule)
+	}
+	if !aliasFlagged {
+		t.Errorf("%s-A1: fixture HolderViaAlias (alias to journal.JournalCore) not flagged — "+
+			"classifyResolvedJournalType is not calling types.Unalias; on Go 1.23+ an alias "+
+			"is *types.Alias, so the alias-typed field evades the seal (F1 regression)",
+			sagaJournalHolderSealRule)
+	}
+}
+
+// TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged is the F3 regression
+// (rule 3): a struct persisting a Heartbeater-shaped func value as a field — the
+// func-value equivalent of a journal.Heartbeater field — must be flagged, while
+// a non-heartbeat func field must NOT (shape-specific, not "any func"). This
+// closes the path where a heartbeat func handed in from outside runtime/saga is
+// stashed in a field to drive a centralized loop, which neither the interface
+// holder seal nor the name-filtered NO-HEARTBEAT-LOOP A1 catches.
+func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
+	t.Parallel()
+
+	diags := RunTypedFixture(t, FixtureOpts{},
+		[]string{"./tools/archtest/testdata/saga_journal_holder_seal_fixtures/funcfieldholder"},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var out []Diagnostic
+			for _, file := range p.Files {
+				rel := filepath.ToSlash(p.Rel(file))
+				EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok || st.Fields == nil {
+						return
+					}
+					for _, field := range st.Fields.List {
+						if d, ok := heartbeatFuncFieldDiag(p, rel, ts.Name.Name, field); ok {
+							out = append(out, d)
+						}
+					}
+				})
+			}
+			return out
+		})
+
+	var anonFlagged, namedFlagged, plainFlagged bool
+	for _, d := range diags {
+		switch {
+		case strings.Contains(d.Message, "HeartbeatFuncHolder"):
+			anonFlagged = true
+		case strings.Contains(d.Message, "NamedFuncHolder"):
+			namedFlagged = true
+		case strings.Contains(d.Message, "PlainFuncHolder"):
+			plainFlagged = true
+		}
+	}
+	if !anonFlagged {
+		t.Errorf("%s-A1: HeartbeatFuncHolder (anonymous heartbeat-shaped func field) not flagged — "+
+			"the func-value evasion path is open (F3 regression)", sagaJournalHolderSealRule)
+	}
+	if !namedFlagged {
+		t.Errorf("%s-A1: NamedFuncHolder (named heartbeat-shaped func type field) not flagged — "+
+			"heartbeatFuncFieldDiag must resolve the named type's underlying signature", sagaJournalHolderSealRule)
+	}
+	if plainFlagged {
+		t.Errorf("%s-A1: PlainFuncHolder (non-heartbeat func field) wrongly flagged — "+
+			"the shape match is too loose (would false-positive on ordinary func fields)", sagaJournalHolderSealRule)
 	}
 }

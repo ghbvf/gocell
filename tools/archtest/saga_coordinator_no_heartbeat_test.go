@@ -23,14 +23,17 @@
 //
 // # Funnel shape (AI-robust §funnel 双向锁)
 //
-// Upstream HARD + downstream Medium (full rating in the "Funnel 双向锁评级"
-// section below). In short: #1209 split journal.Journal into JournalCore +
+// Upstream is Hard for the journal-INTERFACE-field loop + Medium for the
+// func-value-field loop; downstream Medium (full rating in the "Funnel 双向锁
+// 评级" section below). In short: #1209 split journal.Journal into JournalCore +
 // Heartbeater and narrowed Coordinator.journal to journal.JournalCore, which has
-// no Heartbeat method — so a centralized heartbeat loop (a long-lived
-// Heartbeat-bearing field re-Heartbeat-ing leases) is compile-time
-// inexpressible. A1 (this archtest) is retained to ban any .Heartbeat callsite
-// over the one transient full-Journal value: the NewCoordinator parameter handed
-// to the executor funnel.
+// no Heartbeat method — so a centralized heartbeat loop built on a persisted
+// Heartbeat-bearing INTERFACE field is compile-time inexpressible. The
+// func-value variant (a heartbeat-shaped func field fed from a .Heartbeat
+// selector OUTSIDE runtime/saga) is NOT compile-sealed; it is archtest-banned by
+// SAGA-JOURNAL-HOLDER-SEAL-01 rule 3 (Medium). A1 (this archtest) is retained to
+// ban any .Heartbeat callsite over the one transient full-Journal value: the
+// NewCoordinator parameter handed to the executor funnel.
 //
 // # Blind-spot self-test
 //
@@ -57,14 +60,21 @@
 //
 // # Funnel 双向锁评级
 //
-// Upstream (type-system seal): HARD (landed in #1209). Coordinator.journal is
-// journal.JournalCore, which declares no Heartbeat method, so the centralized
-// heartbeat loop this invariant forbids — a long-lived Heartbeat-bearing field
-// re-Heartbeat-ing leases in a goroutine — cannot be expressed: c.journal.Heartbeat
-// is a compile error. SAGA-JOURNAL-HOLDER-SEAL-01 complements the seal by
-// forbidding any runtime/saga struct from persisting the full journal.Journal or
-// a bare journal.Heartbeater as a field. The loop is therefore compile-time
-// unbuildable, not merely archtest-banned.
+// Upstream (type-system seal): HARD for the INTERFACE-field loop (landed in
+// #1209). Coordinator.journal is journal.JournalCore, which declares no Heartbeat
+// method, so the centralized heartbeat loop this invariant forbids — a long-lived
+// Heartbeat-bearing field re-Heartbeat-ing leases in a goroutine — cannot be
+// expressed via a journal interface field: c.journal.Heartbeat is a compile
+// error. BUT the loop is ALSO expressible via a heartbeat-SHAPED func field
+// (`beat func(ctx, idutil.SafeID, idutil.SafeID, time.Duration) (bool, error)`)
+// populated from a `.Heartbeat` selector OUTSIDE runtime/saga — a path that is
+// NOT compile-sealed. SAGA-JOURNAL-HOLDER-SEAL-01 closes it at archtest time:
+// rule 1 forbids persisting the full journal.Journal / bare journal.Heartbeater
+// as a field, rule 3 forbids persisting a Heartbeater-shaped func field (Medium).
+// So the interface-field loop is compile-unbuildable (Hard) and the func-field
+// loop is archtest-banned (Medium); the only irreducible residual is a
+// constructor closure that captures the NewCoordinator heartbeat param WITHOUT
+// persisting it (same class as the downstream pass-through window below).
 //
 // Downstream (callsite ban — this archtest, A1): retained, honestly Medium. The
 // field seal closes the LOOP, but one transient Heartbeat-bearing value remains:
@@ -79,17 +89,21 @@
 // sanctioned caller — see B1 below). Handing j to the executor constructor is a
 // value pass, not a .Heartbeat selector, and stays green.
 //
-// Current rating: Hard upstream (loop compile-time inexpressible) + Medium
-// downstream (A1 guards the irreducible constructor pass-through window).
+// Current rating: upstream Hard for the interface-field loop (compile-time
+// inexpressible) + Medium for the func-field loop (SAGA-JOURNAL-HOLDER-SEAL-01
+// rule 3 archtest); downstream Medium (A1 guards the irreducible constructor
+// pass-through window).
 //
-// This is NOT a blanket double-Hard, and the earlier godoc framing that "#1209
-// upgrades BOTH upstream and downstream to Hard" was aspirational. The
-// constructor parameter cannot be compile-sealed without forcing callers to pass
-// the journal twice (a worse API for zero real gain — a centralized loop needs a
-// PERSISTED Heartbeat field, which is now impossible). A1 therefore remains the
-// honest mechanism for that narrow, low-risk residual. Per ai-robust.md §"Funnel
-// 双向锁评级", a Hard-upstream funnel needs no gh-tracked upgrade path; the Medium
-// downstream here is a deliberate residual, not a Soft carryover.
+// The earlier blanket "Hard upstream / loop compile-time inexpressible" framing
+// was overstated: a PERSISTED heartbeat callable need not be a journal interface
+// — a func-typed field of the heartbeat shape works too, and func fields are not
+// type-system-sealable here. That path is now archtest-banned (Medium) rather
+// than left open. The single irreducible residual is a constructor closure
+// capturing the NewCoordinator heartbeat param (not persisted in any field) —
+// same low-risk class as the downstream window; compile-sealing it would force
+// callers to pass the journal twice (worse API, zero real gain). Per ai-robust.md
+// §"Funnel 双向锁评级", the Hard interface-field seal needs no gh-tracked upgrade;
+// the Medium func-field + downstream residuals are deliberate, not Soft carryovers.
 package archtest
 
 import (
@@ -211,11 +225,26 @@ func methodIsHeartbeaterShape(fn *types.Func) bool {
 		return false
 	}
 	sig, ok := fn.Type().(*types.Signature)
-	if !ok {
-		return false
+	if !ok || sig.Recv() == nil {
+		return false // nil signature, or not a method
 	}
-	if sig.Recv() == nil {
-		return false // not a method
+	return signatureMatchesHeartbeaterShape(sig)
+}
+
+// signatureMatchesHeartbeaterShape reports whether sig has the parameter and
+// result types of journal.Heartbeater.Heartbeat, independent of whether sig is
+// a method (has a receiver) or a bare func type:
+//
+//	(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (bool, error)
+//
+// It backs two scans in this package: the .Heartbeat method-call scan
+// (SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01 A1, via methodIsHeartbeaterShape) and
+// the heartbeat-shaped func-FIELD scan (SAGA-JOURNAL-HOLDER-SEAL-01, where a
+// persisted func value of this shape is the func-value equivalent of holding a
+// journal.Heartbeater field).
+func signatureMatchesHeartbeaterShape(sig *types.Signature) bool {
+	if sig == nil {
+		return false
 	}
 	params := sig.Params()
 	if params.Len() != 4 {
