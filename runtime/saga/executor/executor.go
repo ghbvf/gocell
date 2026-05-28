@@ -444,7 +444,7 @@ func (e *Executor) executeInner(
 	stopAndJoin := func() { stopHB(); hbWG.Wait() }
 
 	for attempt := 1; ; attempt++ {
-		result, done := e.runAttempt(runCtx, inst, step, policy, prevState, attempt)
+		result, done := e.runAttempt(runCtx, inst, leaseID, step, policy, prevState, attempt)
 		if done {
 			stopAndJoin()
 			return result
@@ -581,6 +581,7 @@ func (e *Executor) RunWithHeartbeat(
 func (e *Executor) runAttempt(
 	runCtx context.Context,
 	inst *ksaga.Instance,
+	leaseID idutil.SafeID,
 	step ksaga.Step,
 	policy resolvedPolicy,
 	prevState []byte,
@@ -610,6 +611,7 @@ func (e *Executor) runAttempt(
 		e.logger.WarnContext(runCtx, "saga executor: retry budget exhausted",
 			slog.String("instance_id", string(inst.ID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(leaseID)),
 			slog.Int("attempts", attempt),
 			slog.String("outcome", OutcomeFailed.String()),
 			slog.Any("error", runErr),
@@ -669,9 +671,15 @@ func (e *Executor) buildStepCtx(runCtx context.Context, step ksaga.Step) (contex
 // by step.Timeout (deliberate, mirrors Temporal's lack of CompensateTimeout).
 // The only bound is the saga-level ctx (parent deadline) plus the heartbeat
 // goroutine's lease-loss cancel (~heartbeatInterval granularity).
+//
+// leaseID is the fence token identifying the current coordinator's claim. Unlike
+// Execute it is NOT forwarded to any Heartbeat call (Compensate runs no
+// heartbeat); it is carried only into the compensation log lines so an operator
+// can correlate a compensation entry back to the ClaimPending cycle that drove it.
 func (e *Executor) Compensate(
 	ctx context.Context,
 	inst *ksaga.Instance,
+	leaseID idutil.SafeID,
 	step ksaga.Step,
 	committedState []byte,
 ) error {
@@ -690,11 +698,13 @@ func (e *Executor) Compensate(
 	e.logger.InfoContext(ctx, "saga executor: compensating step",
 		slog.String("instance_id", string(inst.ID)),
 		slog.String("step_name", string(step.Name)),
+		slog.String("lease_id", string(leaseID)),
 	)
 	if err := safeRunCompensate(ctx, step.Compensate, inst, committedState); err != nil {
 		e.logger.WarnContext(ctx, "saga executor: compensate failed",
 			slog.String("instance_id", string(inst.ID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(leaseID)),
 			slog.Any("error", err),
 		)
 		// Redact before recording — see ObserveOutcome rationale above.
