@@ -136,6 +136,8 @@ verify:
 
 ADV-06（contract.subscribers ↔ slice CU 双向对齐）已退役——cell 订阅者单源派生后漂移结构上不可能；VERIFY-01 保留。守卫见 archtest `SUBSCRIBERS-DERIVED-FIELD-FROZEN-01`（reflect 锁 `yaml:"-"`）/ `CONTRACT-YAML-NO-SUBSCRIBERS-KEY-01` / `SUBSCRIBE-MARKER-RETIRED-01`。
 
+> **同范式：webhook 双角色**。`contractUsages[role=webhook-receive|webhook-dispatch]` 走与 subscribe 完全一致的「slice.yaml 单源 → cellgen 派生进 cell_gen.go」范式，派生出 `reg.RegisterWebhookReceiver(webhook.ReceiverSpec{...}, handler)` / `reg.RegisterWebhookDispatch(...)`；contract.yaml 的 `endpoints.receivers` / `dispatchers` 是派生字段（`yaml:"-"`，禁手写）。守卫见 `CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01` / `WEBHOOK-MARKER-RETIRED-01`。字段集、派生形态、演化策略见 `contracts/webhook/README.md`。**运行时**（`reg.RegisterWebhookReceiver/Dispatch` 方法本体 + HTTP 接收 / dispatcher consumer）在 PR-3/PR-5 落地——PR-2 只覆盖契约识别 + cellgen 派生层。
+
 ### 常见错误排查
 
 - **`gocell generate cell` 报 "no cell.go struct field for subscribing slice"**：cell.go

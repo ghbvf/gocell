@@ -40,12 +40,14 @@ func buildWebhookProject(
 }
 
 // inboundWebhookContract builds a minimal webhook contract with direction=inbound.
+//
+//nolint:unparam // id is parameterised for future callers; current tests happen to share one contractID
 func inboundWebhookContract(id, sourceID string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
-		ID:    id,
-		Kind:  "webhook",
-		Dir:   "contracts/webhook/stripe/events/v1",
-		File:  "contracts/webhook/stripe/events/v1/contract.yaml",
+		ID:   id,
+		Kind: "webhook",
+		Dir:  "contracts/webhook/stripe/events/v1",
+		File: "contracts/webhook/stripe/events/v1/contract.yaml",
 		Endpoints: metadata.EndpointsMeta{
 			Inbound: &metadata.WebhookInboundMeta{
 				PathPattern: "/webhooks/stripe/events",

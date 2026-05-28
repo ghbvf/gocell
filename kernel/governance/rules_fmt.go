@@ -48,20 +48,23 @@ var (
 		string(cellvocab.CellTypeSupport): true,
 	}
 	validRoles = map[string]bool{
-		string(cellvocab.RoleServe):     true,
-		string(cellvocab.RoleCall):      true,
-		string(cellvocab.RolePublish):   true,
-		string(cellvocab.RoleSubscribe): true,
-		string(cellvocab.RoleHandle):    true,
-		string(cellvocab.RoleInvoke):    true,
-		string(cellvocab.RoleProvide):   true,
-		string(cellvocab.RoleRead):      true,
+		string(cellvocab.RoleServe):           true,
+		string(cellvocab.RoleCall):            true,
+		string(cellvocab.RolePublish):         true,
+		string(cellvocab.RoleSubscribe):       true,
+		string(cellvocab.RoleHandle):          true,
+		string(cellvocab.RoleInvoke):          true,
+		string(cellvocab.RoleProvide):         true,
+		string(cellvocab.RoleRead):            true,
+		string(cellvocab.RoleWebhookReceive):  true,
+		string(cellvocab.RoleWebhookDispatch): true,
 	}
 	validKinds = map[string]bool{
 		string(cellvocab.ContractHTTP):       true,
 		string(cellvocab.ContractEvent):      true,
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
+		string(cellvocab.ContractWebhook):    true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
@@ -304,6 +307,8 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				field = "endpoints.handler"
 			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
+			case cellvocab.ContractWebhook:
+				field = "endpoints.inbound"
 			default:
 				field = "endpoints"
 			}
@@ -328,8 +333,8 @@ func (v *Validator) validateFMT09() []ValidationResult {
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
-				"set kind to http, event, command, or projection",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, or webhook)", c.ID, c.Kind),
+				"set kind to http, event, command, projection, or webhook",
 			))
 		}
 	}

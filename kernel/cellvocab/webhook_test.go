@@ -56,7 +56,7 @@ func TestParseContractRoleWebhookRoundTrip(t *testing.T) {
 }
 
 // TestParseContractKindRejectsUnknownIncludingWebhookSimilar verifies that
-// ParseContractKind still rejects unrecognised input after the webhook kind is
+// ParseContractKind still rejects unrecognized input after the webhook kind is
 // added. Tests both near-miss names and truly unknown values.
 func TestParseContractKindRejectsUnknownIncludingWebhookSimilar(t *testing.T) {
 	tests := []struct {
@@ -80,7 +80,7 @@ func TestParseContractKindRejectsUnknownIncludingWebhookSimilar(t *testing.T) {
 }
 
 // TestParseContractRoleRejectsUnknownIncludingWebhookSimilar verifies that
-// ParseContractRole still rejects unrecognised input after the webhook roles
+// ParseContractRole still rejects unrecognized input after the webhook roles
 // are added.
 func TestParseContractRoleRejectsUnknownIncludingWebhookSimilar(t *testing.T) {
 	tests := []struct {

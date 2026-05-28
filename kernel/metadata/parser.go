@@ -118,6 +118,9 @@ func (p *Parser) parseWith(loc *Locator) (*ProjectMeta, error) {
 	}
 	applyAssemblyDerivations(pm)
 	deriveEventSubscribers(pm)
+	if err := deriveWebhookEndpoints(pm); err != nil {
+		return nil, err
+	}
 	return pm, nil
 }
 
@@ -526,6 +529,129 @@ func deriveEventSubscribers(pm *ProjectMeta) {
 		combined = append(combined, cellSubs[c.ID]...)
 		c.Endpoints.Subscribers = dedupSorted(combined)
 	}
+}
+
+// webhookCellIndex accumulates receiver/dispatcher cell IDs per contract.
+type webhookCellIndex struct {
+	receivers   map[string][]string // contractID → []cellID
+	dispatchers map[string][]string // contractID → []cellID
+}
+
+func newWebhookCellIndex() *webhookCellIndex {
+	return &webhookCellIndex{
+		receivers:   make(map[string][]string),
+		dispatchers: make(map[string][]string),
+	}
+}
+
+// validateWebhookReceive validates a webhook-receive ContractUsage and records
+// the owning cell in the index.
+func validateWebhookReceive(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webhookCellIndex) error {
+	const (
+		msgMissingHandler   = "webhook-receive contractUsage missing required handler"
+		msgMissingSourceID  = "webhook-receive contractUsage missing required sourceID"
+		msgNoInboundBlock   = "webhook-receive contractUsage on a contract with no inbound block (direction/role mismatch)"
+		msgSourceIDMismatch = "webhook-receive contractUsage sourceID does not match contract inbound.sourceID"
+	)
+	if cu.Handler == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingHandler,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if cu.SourceID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingSourceID,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if c.Endpoints.Inbound == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgNoInboundBlock,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if c.Endpoints.Inbound.SourceID != "" && cu.SourceID != c.Endpoints.Inbound.SourceID {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgSourceIDMismatch,
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("cuSourceID", cu.SourceID),
+				errcode.PublicString("contractSourceID", c.Endpoints.Inbound.SourceID),
+			))
+	}
+	idx.receivers[cu.Contract] = append(idx.receivers[cu.Contract], sl.BelongsToCell)
+	return nil
+}
+
+// validateWebhookDispatch validates a webhook-dispatch ContractUsage and records
+// the owning cell in the index.
+func validateWebhookDispatch(cu ContractUsage, sl *SliceMeta, idx *webhookCellIndex) error {
+	const (
+		msgMissingTargetSel = "webhook-dispatch contractUsage missing required targetSelector"
+		msgMissingSourceID  = "webhook-dispatch contractUsage missing required sourceID"
+	)
+	if cu.TargetSelector == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingTargetSel,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if cu.SourceID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingSourceID,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	idx.dispatchers[cu.Contract] = append(idx.dispatchers[cu.Contract], sl.BelongsToCell)
+	return nil
+}
+
+// deriveWebhookEndpoints populates EndpointsMeta.Receivers and
+// EndpointsMeta.Dispatchers for every webhook contract from the slice
+// contractUsages[role=webhook-receive] and [role=webhook-dispatch]
+// respectively. The resulting lists are deduped and sorted alphabetically —
+// mirroring deriveEventSubscribers.
+//
+// Validation rules (return error):
+//   - webhook-receive requires non-empty handler AND sourceID
+//   - webhook-dispatch requires non-empty targetSelector AND sourceID
+//   - webhook-receive CU sourceID must equal contract.endpoints.inbound.sourceID
+//     (when an inbound block is present)
+//   - webhook-receive CU on a contract with no inbound block → direction/role
+//     mismatch
+//
+// Skip conditions (no error — other governance rules handle them):
+//   - contract not found in pm.Contracts
+//   - contract.Kind != "webhook"
+func deriveWebhookEndpoints(pm *ProjectMeta) error {
+	idx := newWebhookCellIndex()
+	for _, sl := range pm.Slices {
+		if err := indexWebhookSlice(sl, pm.Contracts, idx); err != nil {
+			return err
+		}
+	}
+	for _, c := range pm.Contracts {
+		if c.Kind == "webhook" {
+			c.Endpoints.Receivers = dedupSorted(idx.receivers[c.ID])
+			c.Endpoints.Dispatchers = dedupSorted(idx.dispatchers[c.ID])
+		}
+	}
+	return nil
+}
+
+// indexWebhookSlice processes all webhook contractUsages in a single slice,
+// validating each and recording the owning cell ID in the index.
+func indexWebhookSlice(sl *SliceMeta, contracts map[string]*ContractMeta, idx *webhookCellIndex) error {
+	for _, cu := range sl.ContractUsages {
+		if cu.Role != "webhook-receive" && cu.Role != "webhook-dispatch" {
+			continue
+		}
+		c, ok := contracts[cu.Contract]
+		if !ok || c.Kind != "webhook" {
+			continue
+		}
+		if cu.Role == "webhook-receive" {
+			if err := validateWebhookReceive(cu, sl, c, idx); err != nil {
+				return err
+			}
+		} else {
+			if err := validateWebhookDispatch(cu, sl, idx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // dedupSorted returns a new sorted slice with duplicate strings removed.

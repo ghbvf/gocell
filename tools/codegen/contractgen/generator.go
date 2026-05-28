@@ -112,6 +112,12 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
 
+	// webhook: recognized, zero artifacts by design — registration uses
+	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
+	if spec.Kind == "webhook" {
+		return nil
+	}
+
 	// For kind=command and kind=projection only types_gen.go + iface_gen.go are
 	// emitted (no handler/spec/subscription). This keeps the closed-set valid
 	// while full generators are pending.
@@ -211,6 +217,12 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 	spec, err := buildContractSpec(root, p, contractID)
 	if err != nil {
 		return nil, err
+	}
+
+	// webhook: recognized, zero artifacts by design — registration uses
+	// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
+	if spec.Kind == "webhook" {
+		return nil, nil
 	}
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))

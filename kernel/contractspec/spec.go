@@ -31,7 +31,7 @@ type ContractSpec struct {
 	// contract.yaml file identified by Kind + path.
 	ID string
 
-	// Kind is one of ContractHTTP | ContractEvent | ContractCommand | ContractProjection.
+	// Kind is one of ContractHTTP | ContractEvent | ContractCommand | ContractProjection | ContractWebhook.
 	Kind cellvocab.ContractKind
 
 	// Transport names the wire protocol: "http" for Kind=="http",
@@ -72,12 +72,12 @@ func (s ContractSpec) Validate() error {
 		return s.validateHTTP()
 	case cellvocab.ContractEvent:
 		return s.validateEvent()
-	case cellvocab.ContractCommand, cellvocab.ContractProjection:
+	case cellvocab.ContractCommand, cellvocab.ContractProjection, cellvocab.ContractWebhook:
 		// Allowed but no additional validation yet — future PRs add
-		// command/projection transports.
+		// command/projection/webhook transports.
 		return nil
 	default:
-		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
+		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|webhook)", s.Kind)
 	}
 }
 

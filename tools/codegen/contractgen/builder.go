@@ -71,9 +71,15 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
 		// without hard-failing. No spec/handler/subscription file is emitted.
 		// When a full generator is added, add the corresponding case here.
+	case "webhook":
+		// webhook: recognized, zero artifacts by design — registration uses
+		// kernel/webhook.ReceiverSpec literals via cellgen, no per-contract package.
+		// generateOneContract and RenderContractArtifacts skip all artifact emission
+		// for this kind; the early-return branches in those functions are the
+		// enforcement point.
 	default:
 		return nil, fmt.Errorf(
-			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)",
+			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection|webhook only)",
 			contractID, contract.Kind)
 	}
 

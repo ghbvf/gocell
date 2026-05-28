@@ -2,12 +2,15 @@
 
 import (
 	"context"
-{{- if .Subscriptions }}
+{{- if or .Subscriptions .WebhookReceivers .WebhookDispatches }}
 	"fmt"
 {{- end }}
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
+{{- if or .WebhookReceivers .WebhookDispatches }}
+	webhook "github.com/ghbvf/gocell/kernel/webhook"
+{{- end }}
 {{- range .Subscriptions }}
 	{{.SubscriptionAlias}} "{{.SubscriptionPackage}}"
 {{- end }}
@@ -68,6 +71,24 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 	     ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md */}}
 	if err := {{.SubscriptionAlias}}.NewSubscription({{.HandlerExpr}}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }}, {{ printf "%q" $.CellID }}, {{ printf "%q" .SliceID }}).Mount(reg); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: subscribe %s: %%w" $.CellID .ContractID) }}, err)
+	}
+{{ end }}
+{{- range .WebhookReceivers }}
+	if err := reg.RegisterWebhookReceiver(webhook.ReceiverSpec{
+		ContractID: {{ printf "%q" .ContractID }},
+		SourceID:   {{ printf "%q" .SourceID }},
+		CellID:     {{ printf "%q" $.CellID }},
+	}, {{ .HandlerExpr }}); err != nil {
+		return fmt.Errorf({{ printf "%q" (printf "%s: webhook-receive %s: %%w" $.CellID .ContractID) }}, err)
+	}
+{{ end }}
+{{- range .WebhookDispatches }}
+	if err := reg.RegisterWebhookDispatch(webhook.DispatchSpec{
+		ContractID: {{ printf "%q" .ContractID }},
+		SourceID:   {{ printf "%q" .SourceID }},
+		CellID:     {{ printf "%q" $.CellID }},
+	}, {{ .SelectorExpr }}); err != nil {
+		return fmt.Errorf({{ printf "%q" (printf "%s: webhook-dispatch %s: %%w" $.CellID .ContractID) }}, err)
 	}
 {{ end }}
 	return nil

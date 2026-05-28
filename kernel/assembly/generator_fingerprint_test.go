@@ -649,14 +649,27 @@ func mutateContractSliceField(v reflect.Value) {
 }
 
 func mutateContractPointerField(v reflect.Value) {
-	if v.Type() != reflect.TypeFor[*bool]() {
+	// *bool (Replayable): flip the pointed value, allocating when nil.
+	if v.Type() == reflect.TypeFor[*bool]() {
+		b := true
+		if !v.IsNil() {
+			b = !v.Elem().Bool()
+		}
+		v.Set(reflect.ValueOf(&b))
 		return
 	}
-	b := true
-	if !v.IsNil() {
-		b = !v.Elem().Bool()
+	// Pointer-to-struct (e.g. *WebhookSignatureMeta, *WebhookPayloadMeta):
+	// toggle the nil state. canonicalEncode emits "N" for nil and "P{...}" for
+	// non-nil, so flipping nil↔non-nil always changes the fingerprint — which is
+	// all this exhaustive structural test asserts. New pointer-to-struct fields
+	// on ContractMeta are thus covered without per-field updates here.
+	if v.Type().Elem().Kind() == reflect.Struct {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		} else {
+			v.Set(reflect.Zero(v.Type()))
+		}
 	}
-	v.Set(reflect.ValueOf(&b))
 }
 
 func mutateContractStructField(v reflect.Value, fieldName string) {

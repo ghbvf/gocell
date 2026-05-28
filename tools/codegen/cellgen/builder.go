@@ -136,6 +136,18 @@ func BuildCellSpec(
 	}
 	spec.Subscriptions = subs
 
+	receivers, err := buildWebhookReceiversFromSlices(p, cellID, fieldIndex)
+	if err != nil {
+		return nil, err
+	}
+	spec.WebhookReceivers = receivers
+
+	dispatches, err := buildWebhookDispatchesFromSlices(p, cellID, fieldIndex)
+	if err != nil {
+		return nil, err
+	}
+	spec.WebhookDispatches = dispatches
+
 	return spec, nil
 }
 
@@ -293,6 +305,188 @@ func buildSubscriptionSpecFromCU(
 		SliceID:       sliceID,
 		HandlerExpr:   "c." + fieldName + "." + cu.Handler,
 		ConsumerGroup: cu.Group,
+	}, nil
+}
+
+// buildWebhookReceiversFromSlices scans all slices belonging to cellID and
+// converts each contractUsage[role=webhook-receive] entry into a WebhookReceiverGenSpec.
+// fieldIndex is used to resolve the cell struct field for each receiving slice.
+// Results are sorted deterministically by SliceID then ContractID.
+func buildWebhookReceiversFromSlices(
+	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
+) ([]WebhookReceiverGenSpec, error) {
+	var out []WebhookReceiverGenSpec
+	for key, s := range p.Slices {
+		if !strings.HasPrefix(key, cellID+"/") {
+			continue
+		}
+		if s == nil {
+			continue
+		}
+		for _, cu := range s.ContractUsages {
+			if cu.Role != "webhook-receive" {
+				continue
+			}
+			spec, err := buildWebhookReceiverSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, spec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		// sort by ContractID since WebhookReceiverGenSpec has no SliceID field
+		return out[i].ContractID < out[j].ContractID
+	})
+	return out, nil
+}
+
+// resolveWebhookField resolves and validates the cell struct field name and
+// validates the referenced contract is a webhook kind. It is the shared
+// validation kernel for both buildWebhookReceiverSpecFromCU and
+// buildWebhookDispatchSpecFromCU.
+//
+// Returns (fieldName, nil) on success; the role string ("webhook-receive" /
+// "webhook-dispatch") is included in error messages for diagnostics.
+func resolveWebhookField(
+	p *metadata.ProjectMeta,
+	cellID, sliceID, role, contractID, explicitField string,
+	fieldIndex *CellFieldIndex,
+) (string, error) {
+	fieldName, err := fieldIndex.resolveSliceField(explicitField, cellID, sliceID)
+	if err != nil {
+		return "", err
+	}
+	if !goLocalIdentPattern.MatchString(fieldName) {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook field name must be a valid Go identifier",
+			errcode.WithDetails(
+				errcode.PublicString("role", role),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("field", fieldName),
+				errcode.PublicString("pattern", goLocalIdentPattern.String()),
+			))
+	}
+
+	contract, ok := p.Contracts[contractID]
+	if !ok {
+		return "", errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
+			"cellgen build: webhook usage references unknown contract",
+			errcode.WithDetails(
+				errcode.PublicString("role", role),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+			))
+	}
+	if contract.Kind != "webhook" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook usage requires a contract of kind webhook",
+			errcode.WithDetails(
+				errcode.PublicString("role", role),
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("contract", contractID),
+				errcode.PublicString("kind", contract.Kind),
+			))
+	}
+	return fieldName, nil
+}
+
+// buildWebhookReceiverSpecFromCU validates one ContractUsage[role=webhook-receive]
+// and converts it to a WebhookReceiverGenSpec.
+//
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
+// HandlerExpr is rendered as `c.<fieldName>.<cu.Handler>`.
+func buildWebhookReceiverSpecFromCU(
+	p *metadata.ProjectMeta,
+	cellID, sliceID string,
+	cu metadata.ContractUsage,
+	fieldIndex *CellFieldIndex,
+) (WebhookReceiverGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(cu.Handler) {
+		return WebhookReceiverGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook-receive Handler must be a non-empty exported Go identifier (e.g. HandleStripeEvent)",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("handler", cu.Handler),
+				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-receive", cu.Contract, cu.Field, fieldIndex)
+	if err != nil {
+		return WebhookReceiverGenSpec{}, err
+	}
+	return WebhookReceiverGenSpec{
+		ContractID:  cu.Contract,
+		SourceID:    cu.SourceID,
+		HandlerExpr: "c." + fieldName + "." + cu.Handler,
+	}, nil
+}
+
+// buildWebhookDispatchesFromSlices scans all slices belonging to cellID and
+// converts each contractUsage[role=webhook-dispatch] entry into a WebhookDispatchGenSpec.
+// fieldIndex is used to resolve the cell struct field for each dispatching slice.
+// Results are sorted deterministically by ContractID.
+func buildWebhookDispatchesFromSlices(
+	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
+) ([]WebhookDispatchGenSpec, error) {
+	var out []WebhookDispatchGenSpec
+	for key, s := range p.Slices {
+		if !strings.HasPrefix(key, cellID+"/") {
+			continue
+		}
+		if s == nil {
+			continue
+		}
+		for _, cu := range s.ContractUsages {
+			if cu.Role != "webhook-dispatch" {
+				continue
+			}
+			spec, err := buildWebhookDispatchSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, spec)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].ContractID < out[j].ContractID
+	})
+	return out, nil
+}
+
+// buildWebhookDispatchSpecFromCU validates one ContractUsage[role=webhook-dispatch]
+// and converts it to a WebhookDispatchGenSpec.
+//
+// The cell struct field is resolved via fieldIndex.resolveSliceField.
+// SelectorExpr is rendered as `c.<fieldName>.<cu.TargetSelector>`.
+func buildWebhookDispatchSpecFromCU(
+	p *metadata.ProjectMeta,
+	cellID, sliceID string,
+	cu metadata.ContractUsage,
+	fieldIndex *CellFieldIndex,
+) (WebhookDispatchGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(cu.TargetSelector) {
+		return WebhookDispatchGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: webhook-dispatch TargetSelector must be a non-empty exported Go identifier (e.g. ShopifyTarget)",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("sliceID", sliceID),
+				errcode.PublicString("targetSelector", cu.TargetSelector),
+				errcode.PublicString("pattern", goExportedIdentPattern.String()),
+			))
+	}
+	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-dispatch", cu.Contract, cu.Field, fieldIndex)
+	if err != nil {
+		return WebhookDispatchGenSpec{}, err
+	}
+	return WebhookDispatchGenSpec{
+		ContractID:   cu.Contract,
+		SourceID:     cu.SourceID,
+		SelectorExpr: "c." + fieldName + "." + cu.TargetSelector,
 	}, nil
 }
 

@@ -10,12 +10,12 @@
     "id": {
       "type": "string",
       "description": "Unique contract identifier in the form {kind}.{domain-path}.{version}.",
-      "pattern": "^(http|event|command|projection)\\..+\\.v[0-9]+$"
+      "pattern": "^(http|event|command|projection|webhook)\\..+\\.v[0-9]+$"
     },
     "kind": {
       "type": "string",
       "description": "Contract kind that determines the endpoint structure.",
-      "enum": ["http", "event", "command", "projection"]
+      "enum": ["http", "event", "command", "projection", "webhook"]
     },
     "ownerCell": {
       "type": "string",
@@ -59,6 +59,34 @@
       "type": "boolean",
       "default": false,
       "description": "Opt the contract into `gocell generate contract` output. When true, contractgen produces types_gen.go / iface_gen.go (and handler_gen.go for kind=http). Default false; will be removed in PR-4 when all contracts are migrated."
+    },
+    "direction": {
+      "type": "string",
+      "description": "Webhook flow direction. Only valid for kind=webhook.",
+      "enum": ["inbound", "outbound"]
+    },
+    "signature": {
+      "type": "object",
+      "description": "HMAC signature verification parameters for a webhook contract.",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "type": "string" },
+        "toleranceSeconds": { "type": "integer", "minimum": 0 },
+        "deliveryIDHeader": { "type": "string" },
+        "timestampHeader": { "type": "string" },
+        "signatureHeader": { "type": "string" },
+        "signedStringForm": { "type": "string" }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "description": "Payload constraints for a webhook contract.",
+      "additionalProperties": false,
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "contentType": { "type": "string" },
+        "maxBodyBytes": { "type": "integer", "minimum": 0 }
+      }
     },
     "description": {
       "type": "string",
@@ -414,6 +442,37 @@
                 "type": "array",
                 "description": "Cells or actors that read this projection.",
                 "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "webhook" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "inbound": {
+                "type": "object",
+                "description": "Inbound webhook routing metadata (direction=inbound only).",
+                "additionalProperties": false,
+                "properties": {
+                  "pathPattern": {
+                    "type": "string",
+                    "description": "HTTP path the platform exposes for receiving webhook callbacks."
+                  },
+                  "sourceID": {
+                    "type": "string",
+                    "description": "Secret-isolation key identifying the webhook source."
+                  }
+                }
               }
             }
           }

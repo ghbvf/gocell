@@ -29,6 +29,7 @@ const (
 	ContractEvent      ContractKind = "event"
 	ContractCommand    ContractKind = "command"
 	ContractProjection ContractKind = "projection"
+	ContractWebhook    ContractKind = "webhook"
 )
 
 // ContractRole describes how a Slice participates in a Contract.
@@ -43,6 +44,10 @@ const (
 	RoleInvoke    ContractRole = "invoke"
 	RoleProvide   ContractRole = "provide"
 	RoleRead      ContractRole = "read"
+	// Webhook roles: a cell either receives inbound webhooks (consumer-side) or
+	// dispatches outbound webhooks (provider-side). See ValidRolesForKind.
+	RoleWebhookReceive  ContractRole = "webhook-receive"
+	RoleWebhookDispatch ContractRole = "webhook-dispatch"
 )
 
 // ContractLifecycle represents the wire-stability governance state of a Contract
@@ -85,6 +90,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractCommand, nil
 	case "projection":
 		return ContractProjection, nil
+	case "webhook":
+		return ContractWebhook, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract kind",
@@ -112,6 +119,10 @@ func ParseContractRole(s string) (ContractRole, error) {
 		return RoleProvide, nil
 	case "read":
 		return RoleRead, nil
+	case "webhook-receive":
+		return RoleWebhookReceive, nil
+	case "webhook-dispatch":
+		return RoleWebhookDispatch, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",

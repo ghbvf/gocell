@@ -15,44 +15,54 @@
 //     `receivers:` or `dispatchers:` key in contract.yaml. The cell
 //     receiver/dispatcher sets are computed from slice contractUsages;
 //     deriveWebhookEndpoints populates both fields.
-//  2. cell.go `// +webhook:receive` / `// +webhook:dispatch` markers — RETIRED
-//     before they could ever exist. markergen's knownMarkers set does NOT
-//     include any "webhook:" marker, so a mistakenly added marker is an
-//     unknown-marker error at generate time; cellgen builds wiring from
-//     slice.yaml.
+//  2. cell.go `// +webhook:receive` / `// +webhook:dispatch` markers — never a
+//     wiring source. markergen recognizes only the "cell:" / "slice:" marker
+//     prefixes, so a "webhook:" marker is OUTSIDE that scope: markergen.Merge
+//     silently ignores it (nil error, empty WireBundle) — marker-driven webhook
+//     wiring is structurally impossible. NOTE: this is NOT an unknown-marker
+//     generate-time error (that fires only for a known prefix + unknown suffix,
+//     e.g. the retired `slice:subscribe`); a stray `webhook:` marker produces no
+//     error and no wiring. The deterministic CI enforcement is the downstream
+//     AST scan (scanWebhookMarker) over production cell.go; cellgen builds all
+//     wiring from slice.yaml.
 //
 // AI-robust ratings (per .claude/rules/gocell/ai-robust.md):
 //
-//   - CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01 — Funnel dual-lock:
+//   - CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01 — Funnel dual-lock.
 //     下游 Hard: yaml:"-" on EndpointsMeta.Receivers + EndpointsMeta.Dispatchers
-//     + KnownFields strict decode makes hand-written `receivers:` / `dispatchers:`
-//     keys in contract.yaml unrepresentable parse errors (type-system gate;
-//     mirrors EndpointsMeta.Subscribers yaml:"-" precedent).
-//     This reflect-based test LOCKS that mechanism: if an author re-adds a yaml
-//     key to Receivers or Dispatchers (re-opening the bypass), this test fires.
-//     Type-level assertion, no string anchor.
+//     makes hand-written `receivers:` / `dispatchers:` keys in contract.yaml
+//     unrepresentable parse errors under KnownFields strict decode (type-system
+//     gate; mirrors EndpointsMeta.Subscribers yaml:"-" precedent). This
+//     reflect-based test LOCKS that mechanism: re-adding a yaml key to Receivers
+//     or Dispatchers (re-opening the bypass) makes this test fire. Type-level
+//     assertion, no string anchor.
 //     上游 Medium: EndpointsMeta.Receivers / Dispatchers are exported fields on
 //     a public struct — direct assignment by any package (cells/, examples/,
 //     cmd/) is not currently guarded; package-internal AND package-external Go
 //     code can assign them directly, bypassing deriveWebhookEndpoints. Archtest
 //     does not yet lock the write path to the derive funnel. Upstream Hard-ization
-//     tracked in gh issue #1254 (same pattern as Subscribers gh #985).
-//   - WEBHOOK-MARKER-RETIRED-01 — Hard upstream (markergen closed set; any
-//     "webhook:*" marker not in knownMarkers is an unknown-marker error at
-//     generate time) + Medium downstream (AST backstop cell.go scan catches
-//     stray markers statically before generate runs).
+//     tracked in gh issue #985 (EndpointsMeta derive-funnel upstream lock — covers Subscribers + Receivers/Dispatchers).
+//   - WEBHOOK-MARKER-RETIRED-01 — Medium (AST backstop scan). markergen
+//     recognizes only "cell:" / "slice:" prefixes, so a "webhook:" marker is
+//     silently ignored — no wiring is possible (a structural upstream property),
+//     but there is NO generate-time error and thus no developer feedback. The
+//     teeth are the downstream string-anchored AST scan (scanWebhookMarker) over
+//     production cell.go, which flags any stray marker in CI. A compile-error
+//     gate (Hard upstream) would require adding "webhook:" to markergen as a
+//     reject-only prefix; deliberately not done — webhook never had a marker to
+//     retire, and the AST backstop is sufficient deterministic enforcement.
 //
 // Blind spots (reverse self-checks below assert the scanners have teeth):
 //   - The reflect lock keys on field NAMES "Receivers"/"Dispatchers"; a rename
 //     surfaces as a test error (visible), not a silent pass.
 //   - The markergen Merge oracle: uses Merge black-box to verify no "webhook:"
 //     marker is in knownMarkers. If markergen adds "webhook:" by mistake, Merge
-//     would succeed and this test would fail — correct behaviour.
+//     would succeed and this test would fail — correct behavior.
 //   - The cell.go scan matches the literal tokens "+webhook:receive" /
 //     "+webhook:dispatch"; a marker split across comment lines is a documented
-//     blind spot (markergen's line-based parser also would not recognise it).
+//     blind spot (markergen's line-based parser also would not recognize it).
 //   - Receivers/Dispatchers are exported fields on a public struct — direct
-//     assignment is not guarded; upstream Hard-ization tracked in gh issue #1254.
+//     assignment is not guarded; upstream Hard-ization tracked in gh issue #985 (EndpointsMeta derive-funnel upstream lock).
 package archtest
 
 import (
@@ -82,7 +92,7 @@ import (
 //   - yaml:"-" tag is verified precisely; yaml:"-,omitempty" or other variants
 //     are treated as failures so they cannot sneak in a yaml-serialisable form.
 //   - Exported fields on a public struct can still be written directly by
-//     cells/examples/cmd — upstream Hard-ization tracked in gh issue #1254.
+//     cells/examples/cmd — upstream Hard-ization tracked in gh issue #985 (EndpointsMeta derive-funnel upstream lock).
 //
 // Reverse self-check: see TestContractYAMLWebhookFieldsFrozen01_ReverseCheck below.
 //
@@ -201,13 +211,17 @@ func TestWebhookMarkerRetired01(t *testing.T) {
 func TestWebhookMarkerRetired01_ScannerFires(t *testing.T) {
 	t.Parallel()
 	// receive marker must be flagged
-	violatingReceive := []byte("type Cell struct {\n\t// +webhook:receive:contract=webhook.stripe.events.v1\n\tingest *webhookingest.Service\n}\n")
+	violatingReceive := []byte("type Cell struct {\n" +
+		"\t// +webhook:receive:contract=webhook.stripe.events.v1\n" +
+		"\tingest *webhookingest.Service\n}\n")
 	if got := scanWebhookMarker("cells/x/cell.go", violatingReceive); len(got) == 0 {
 		t.Error("WEBHOOK-MARKER-RETIRED-01: scanner did not flag a +webhook:receive marker")
 	}
 
 	// dispatch marker must be flagged
-	violatingDispatch := []byte("type Cell struct {\n\t// +webhook:dispatch:contract=webhook.shopify.v1\n\tdispatch *webhookdispatch.Service\n}\n")
+	violatingDispatch := []byte("type Cell struct {\n" +
+		"\t// +webhook:dispatch:contract=webhook.shopify.v1\n" +
+		"\tdispatch *webhookdispatch.Service\n}\n")
 	if got := scanWebhookMarker("cells/x/cell.go", violatingDispatch); len(got) == 0 {
 		t.Error("WEBHOOK-MARKER-RETIRED-01: scanner did not flag a +webhook:dispatch marker")
 	}
@@ -277,7 +291,8 @@ type WebhookCell struct{}
 
 	bundles, err := markergen.Merge(tmp, pm)
 	if err != nil {
-		t.Errorf("WEBHOOK-MARKER-RETIRED-01: markergen.Merge must return nil error for +webhook:receive (marker silently ignored, not unknown-marker error), got: %v", err)
+		t.Errorf("WEBHOOK-MARKER-RETIRED-01: markergen.Merge must return nil error for "+
+			"+webhook:receive (marker silently ignored, not unknown-marker error), got: %v", err)
 		return
 	}
 	// Verify the WireBundle for the cell is empty — no listeners, no routes.

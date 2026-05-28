@@ -175,10 +175,11 @@ func (s *SliceMeta) Clone() *SliceMeta {
 // ContractUsage declares a Slice's participation in a Contract.
 type ContractUsage struct {
 	Contract string `yaml:"contract"`
-	Role     string `yaml:"role"` // serve|call|publish|subscribe|handle|invoke|provide|read
+	Role     string `yaml:"role"` // serve|call|publish|subscribe|handle|invoke|provide|read|webhook-receive|webhook-dispatch
 	// Handler is the consumer handler method name on the slice's service/consumer
-	// struct field; REQUIRED for role=subscribe, forbidden otherwise. Single source
-	// for the reg.Subscribe handler expression that cellgen emits.
+	// struct field; REQUIRED for role=subscribe and role=webhook-receive, forbidden
+	// otherwise. Single source for the reg.Subscribe handler expression that
+	// cellgen emits.
 	Handler string `yaml:"handler,omitempty"`
 	// Group is the broker consumer group for role=subscribe; optional, defaults to
 	// the owning cell ID when empty. Forbidden for non-subscribe roles.
@@ -188,6 +189,15 @@ type ContractUsage struct {
 	// (e.g. a route Handler plus a subscribe Consumer). Optional for role=subscribe
 	// (cellgen resolves by package convention when empty); forbidden otherwise.
 	Field string `yaml:"field,omitempty"`
+	// SourceID is the secret-isolation key identifying the webhook source (e.g.
+	// "stripe", "shopify"). REQUIRED for role=webhook-receive and
+	// role=webhook-dispatch; forbidden for all other roles. For webhook-receive,
+	// this value must equal contract.endpoints.inbound.sourceID.
+	SourceID string `yaml:"sourceID,omitempty"`
+	// TargetSelector is the target-URL selector method name used by the
+	// dispatcher to resolve the outbound webhook URL at runtime. REQUIRED for
+	// role=webhook-dispatch; forbidden for all other roles.
+	TargetSelector string `yaml:"targetSelector,omitempty"`
 }
 
 // SliceVerifyMeta holds verification requirements for a Slice.
@@ -208,7 +218,7 @@ type WaiverMeta struct {
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
 	ID               string `yaml:"id"`
-	Kind             string `yaml:"kind"` // http|event|command|projection
+	Kind             string `yaml:"kind"` // http|event|command|projection|webhook
 	OwnerCell        string `yaml:"ownerCell"`
 	ConsistencyLevel string `yaml:"consistencyLevel"`
 	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
@@ -234,6 +244,15 @@ type ContractMeta struct {
 	// opt out. Scaffold output omits the field entirely so the funnel is
 	// the single source of truth (INVARIANT SCAFFOLD-BUNDLE-NO-CODEGEN-LITERAL-01).
 	Codegen bool `yaml:"codegen,omitempty"`
+	// Direction is the webhook flow direction: "inbound" (external → cell) or
+	// "outbound" (cell → external). Only populated for kind=webhook.
+	Direction string `yaml:"direction,omitempty"`
+	// Signature holds the webhook signature verification metadata. Only
+	// populated for kind=webhook contracts.
+	Signature *WebhookSignatureMeta `yaml:"signature,omitempty"`
+	// Payload holds webhook payload constraints. Only populated for
+	// kind=webhook contracts.
+	Payload *WebhookPayloadMeta `yaml:"payload,omitempty"`
 	// Description / DeprecatedAt are documentation only — excluded from
 	// structural fingerprint via fingerprint:"-".
 	Description  string `yaml:"description,omitempty" fingerprint:"-"`
@@ -246,6 +265,11 @@ type ContractMeta struct {
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract
 // based on its Kind. Returns "" if Kind is unknown or provider is unset.
+//
+// For kind=webhook: an inbound webhook (direction=inbound or endpoints.inbound
+// set) has the receiving cell as provider — returns the first Receiver; an
+// outbound webhook has the dispatching cell as provider — returns the first
+// Dispatcher. Returns "" when the derived list is empty.
 func (c *ContractMeta) ProviderEndpoint() string {
 	switch c.Kind {
 	case "http":
@@ -256,6 +280,19 @@ func (c *ContractMeta) ProviderEndpoint() string {
 		return c.Endpoints.Handler
 	case "projection":
 		return c.Endpoints.Provider
+	case "webhook":
+		// Inbound: provider is the receiving cell.
+		if c.Endpoints.Inbound != nil || c.Direction == "inbound" {
+			if len(c.Endpoints.Receivers) > 0 {
+				return c.Endpoints.Receivers[0]
+			}
+			return ""
+		}
+		// Outbound: provider is the dispatching cell.
+		if len(c.Endpoints.Dispatchers) > 0 {
+			return c.Endpoints.Dispatchers[0]
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -281,6 +318,48 @@ type EndpointsMeta struct {
 	// Projection
 	Provider string   `yaml:"provider,omitempty"`
 	Readers  []string `yaml:"readers,omitempty"`
+	// Webhook (kind=webhook only)
+	Inbound *WebhookInboundMeta `yaml:"inbound,omitempty"`
+	// Receivers is derived by deriveWebhookEndpoints (parser post-process): cell
+	// IDs from slice.yaml contractUsages[role=webhook-receive].belongsToCell,
+	// deduped and sorted alphabetically. yaml:"-" means hand-written "receivers:"
+	// in YAML is rejected by KnownFields strict decode — mirrors the Subscribers
+	// field pattern.
+	Receivers []string `yaml:"-"`
+	// Dispatchers is derived by deriveWebhookEndpoints (parser post-process): cell
+	// IDs from slice.yaml contractUsages[role=webhook-dispatch].belongsToCell,
+	// deduped and sorted alphabetically. yaml:"-" means hand-written "dispatchers:"
+	// in YAML is rejected by KnownFields strict decode — mirrors the Subscribers
+	// field pattern.
+	Dispatchers []string `yaml:"-"`
+}
+
+// WebhookSignatureMeta holds HMAC signature verification parameters for an
+// inbound webhook contract.
+type WebhookSignatureMeta struct {
+	Algorithm        string `yaml:"algorithm"`
+	ToleranceSeconds int    `yaml:"toleranceSeconds,omitempty"`
+	DeliveryIDHeader string `yaml:"deliveryIDHeader"`
+	TimestampHeader  string `yaml:"timestampHeader"`
+	SignatureHeader  string `yaml:"signatureHeader"`
+	SignedStringForm string `yaml:"signedStringForm"`
+}
+
+// WebhookPayloadMeta holds payload constraints for a webhook contract.
+type WebhookPayloadMeta struct {
+	SchemaRef    string `yaml:"schemaRef,omitempty"`
+	ContentType  string `yaml:"contentType,omitempty"`
+	MaxBodyBytes int64  `yaml:"maxBodyBytes,omitempty"`
+}
+
+// WebhookInboundMeta holds inbound-specific routing fields for a webhook
+// contract (direction=inbound). PathPattern is the HTTP path the platform
+// exposes for receiving webhook callbacks from the external source.
+// SourceID must match the SourceID declared in every webhook-receive
+// ContractUsage for this contract.
+type WebhookInboundMeta struct {
+	PathPattern string `yaml:"pathPattern"`
+	SourceID    string `yaml:"sourceID"`
 }
 
 // JourneyMeta maps to journeys/J-*.yaml.

@@ -30,6 +30,8 @@ func consumerFieldName(kind string) string {
 		return "invokers"
 	case cellvocab.ContractProjection:
 		return "readers"
+	case cellvocab.ContractWebhook:
+		return "receivers"
 	default:
 		return "consumers"
 	}
@@ -60,6 +62,8 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 		return c.Endpoints.Invokers
 	case cellvocab.ContractProjection:
 		return c.Endpoints.Readers
+	case cellvocab.ContractWebhook:
+		return c.Endpoints.Receivers
 	default:
 		return nil
 	}

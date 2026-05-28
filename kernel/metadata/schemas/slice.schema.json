@@ -37,11 +37,11 @@
           "role": {
             "type": "string",
             "description": "The role this slice plays in the contract.",
-            "enum": ["serve", "call", "publish", "subscribe", "handle", "invoke", "provide", "read"]
+            "enum": ["serve", "call", "publish", "subscribe", "handle", "invoke", "provide", "read", "webhook-receive", "webhook-dispatch"]
           },
           "handler": {
             "type": "string",
-            "description": "Consumer handler method name on the slice's service struct. REQUIRED for role=subscribe, forbidden otherwise."
+            "description": "Consumer handler method name on the slice's service struct. REQUIRED for role=subscribe and role=webhook-receive, forbidden otherwise."
           },
           "group": {
             "type": "string",
@@ -51,6 +51,14 @@
             "type": "string",
             "description": "Cell-struct field name holding the subscribe consumer; disambiguates slices that own more than one *sliceID.T field. Optional for role=subscribe (cellgen resolves by package convention when empty); forbidden for non-subscribe roles.",
             "pattern": "^[a-zA-Z_][A-Za-z0-9_]*$"
+          },
+          "sourceID": {
+            "type": "string",
+            "description": "Secret-isolation key identifying the webhook source. REQUIRED for role=webhook-receive and role=webhook-dispatch; forbidden for all other roles."
+          },
+          "targetSelector": {
+            "type": "string",
+            "description": "Target-URL selector method name for outbound webhook dispatch. REQUIRED for role=webhook-dispatch; forbidden for all other roles."
           }
         },
         "allOf": [
@@ -65,9 +73,44 @@
           },
           {
             "if": {
+              "properties": { "role": { "const": "webhook-receive" } },
+              "required": ["role"]
+            },
+            "then": {
+              "required": ["handler", "sourceID"],
               "not": {
-                "properties": { "role": { "const": "subscribe" } },
-                "required": ["role"]
+                "anyOf": [
+                  { "required": ["group"] },
+                  { "required": ["field"] },
+                  { "required": ["targetSelector"] }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "role": { "const": "webhook-dispatch" } },
+              "required": ["role"]
+            },
+            "then": {
+              "required": ["targetSelector", "sourceID"],
+              "not": {
+                "anyOf": [
+                  { "required": ["handler"] },
+                  { "required": ["group"] },
+                  { "required": ["field"] }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "anyOf": [
+                  { "properties": { "role": { "const": "subscribe" } }, "required": ["role"] },
+                  { "properties": { "role": { "const": "webhook-receive" } }, "required": ["role"] },
+                  { "properties": { "role": { "const": "webhook-dispatch" } }, "required": ["role"] }
+                ]
               }
             },
             "then": {
@@ -75,7 +118,9 @@
                 "anyOf": [
                   { "required": ["handler"] },
                   { "required": ["group"] },
-                  { "required": ["field"] }
+                  { "required": ["field"] },
+                  { "required": ["sourceID"] },
+                  { "required": ["targetSelector"] }
                 ]
               }
             }
