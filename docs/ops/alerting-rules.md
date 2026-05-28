@@ -648,9 +648,80 @@ increase(gocell_saga_step_outcome_total{outcome="failed"}[5m])
 increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
 ```
 
-Ops runbook for `StatusCompensationFailed` instances: inspect the journal
-(`saga_events` table) for `KindStepCompensationFailed` entries, identify the failing
-step, and perform manual remediation. A follow-up runbook is tracked in #1210.
+### GoCellSagaCompensationFailed Runbook
+
+**症状**: `saga_instance_status_total{status="compensation_failed"} > 0` — 至少一个
+saga 实例的补偿阶段本身失败（`status=8` in PG，即 `StatusCompensationFailed`）。
+这与 `status=failed`（前向阶段失败，未进入补偿）是不同的终态；两者可通过终态值本身
+区分，无需读取事件日志。
+
+**诊断 SQL**:
+
+```sql
+-- 列出近 1h 进入 CompensationFailed 的实例（status=8）
+SELECT id, definition_id, started_at, updated_at
+FROM saga_instances
+WHERE status = 8 AND updated_at > NOW() - INTERVAL '1 hour'
+ORDER BY updated_at DESC;
+
+-- 查看特定实例的失败补偿步骤（kind=10 = KindStepCompensationFailed）
+SELECT instance_id, version, step_name, created_at
+FROM saga_events
+WHERE kind = 10 AND instance_id = '<instance_id>'
+ORDER BY version ASC;
+
+-- 对比同实例的完整事件日志（kind 1-11，按 version 升序）
+SELECT version, kind, step_name, created_at
+FROM saga_events
+WHERE instance_id = '<instance_id>'
+ORDER BY version ASC;
+```
+
+`kind` 速查：1=step_started，2=step_completed，3=step_failed，4=step_compensated，
+5=compensation_started，6=saga_succeeded，7=saga_failed，8=saga_compensated，
+9=saga_expired，10=step_compensation_failed，11=saga_compensation_failed。
+
+**决策树**:
+
+1. **失败步骤是幂等外部副作用**（如发 HTTP 请求、写远端系统）：
+   - 验证外部系统当前状态，确认副作用是否已生效。
+   - 若已生效，视为幂等成功——在 `saga_events` 手动插入一条 `kind=4`
+     (step_compensated) 审计记录，并用运维工具将实例状态置为 `status=6`
+     (compensated)。所有操作需携带 operator、ticket、instance_id 字段写入
+     audit log（见下方审计要求）。
+   - 若未生效，重新触发补偿动作后同上标记。
+
+2. **失败步骤是不可逆操作**（如已下发的物理动作、已消费的外部资源）：
+   - 评估业务影响范围，判断是否需要人工补偿（线下流程）。
+   - 将实例标记为已接受失败（保留 `status=8` 作为运维 audit trail），在
+     `saga_events` 插入一条业务注释行（`kind=11` 的 payload 写 `{"operator_note":"...","ticket":"..."}`）。
+   - 通知相关业务方走线下补偿流程。
+
+3. **失败步骤是基础设施故障**（DB 宕机、外部服务不可达）：
+   - 等待基础设施自愈（监控 `saga_coordinator_ready` 探针）。
+   - 基础设施恢复后，该 saga 实例已是终态（`status=8`），**不会自动重试**——
+     需运维人员将 `status` 回拨到 `3` (compensating) 后由 Coordinator 重新
+     认领驱动。此操作需谨慎评估幂等性，建议开独立 PR 引入重试入口（当前
+     tracking #1210）。
+
+**审计要求**:
+
+所有决策与处置动作必须在 audit log 中留存，最低字段集：
+
+```json
+{
+  "instance_id": "<id>",
+  "definition_id": "<def>",
+  "decision": "accepted_irreversible | re_triggered | awaiting_retry",
+  "operator": "<email>",
+  "ticket": "<jira/linear ticket>",
+  "timestamp": "<ISO8601>",
+  "notes": "<optional free text>"
+}
+```
+
+若系统已接入 `auditcore`，通过 `cells/auditcore/slices/auditwrite` 写入；
+否则直接写运维 audit log 系统，保存 ≥ 90 天。
 
 ---
 
