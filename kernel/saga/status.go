@@ -26,11 +26,19 @@ const (
 	StatusFailed                         // could not / should not compensate (terminal)
 	StatusCompensated                    // forward failed, rollback completed cleanly (terminal)
 	StatusExpired                        // overall timeout elapsed (terminal)
+	// StatusCompensationFailed is reached when the compensation phase itself
+	// encounters a step failure: at least one CompensateFunc returned a non-nil
+	// error. It is distinct from StatusFailed (which signals a forward-phase
+	// failure with no compensation, or an explicit no-compensate decision) so
+	// operators can distinguish "rollback failed" from "forward failed" by
+	// inspecting the terminal status alone, without reading the event log.
+	// Reachable only from StatusCompensating (terminal).
+	StatusCompensationFailed // = 8
 )
 
 // Valid reports whether s is a recognized Status value.
 func (s Status) Valid() bool {
-	return s >= StatusPending && s <= StatusExpired
+	return s >= StatusPending && s <= StatusCompensationFailed
 }
 
 // String returns a human-readable label for the Status.
@@ -52,16 +60,18 @@ func (s Status) String() string {
 		return "compensated"
 	case StatusExpired:
 		return "expired"
+	case StatusCompensationFailed:
+		return "compensation_failed"
 	default:
 		return fmt.Sprintf("status(%d)", s)
 	}
 }
 
 // IsTerminal reports whether s is a terminal (final) state.
-// Terminal states: Succeeded, Failed, Compensated, Expired.
+// Terminal states: Succeeded, Failed, Compensated, Expired, CompensationFailed.
 func (s Status) IsTerminal() bool {
 	switch s {
-	case StatusSucceeded, StatusFailed, StatusCompensated, StatusExpired:
+	case StatusSucceeded, StatusFailed, StatusCompensated, StatusExpired, StatusCompensationFailed:
 		return true
 	default:
 		return false
@@ -81,10 +91,13 @@ func (s Status) IsTerminal() bool {
 //     based on whether any compensable step has committed.
 //   - Running → Failed: failed before any step committed (nothing to undo) —
 //     terminate directly, avoiding a no-op Compensating hop.
-//   - Compensating → Failed: a Compensate action itself failed (second-order
-//     failure). The saga cannot reach a clean Compensated state, so it
-//     terminates in Failed for dead-letter / ops intervention. Failed is thus
-//     reachable from two states by design.
+//   - Compensating → CompensationFailed: a Compensate action itself failed
+//     (second-order failure). Distinct from StatusFailed so operators can
+//     differentiate "rollback failed" (CompensationFailed) from "forward
+//     failed, no rollback" (Failed) by reading the terminal status alone.
+//   - StatusFailed is intentionally NOT reachable from StatusCompensating:
+//     any second-order compensate failure must land in StatusCompensationFailed.
+//     This makes the two root causes structurally unambiguous.
 //   - There is no Compensating → Running: compensation is monotonic, never
 //     resuming forward work.
 //   - Expired is reachable from every non-terminal state: the overall timeout
@@ -92,7 +105,7 @@ func (s Status) IsTerminal() bool {
 var statusTransitions = map[Status][]Status{
 	StatusPending:      {StatusRunning, StatusFailed, StatusExpired},
 	StatusRunning:      {StatusSucceeded, StatusCompensating, StatusFailed, StatusExpired},
-	StatusCompensating: {StatusCompensated, StatusFailed, StatusExpired},
+	StatusCompensating: {StatusCompensated, StatusCompensationFailed, StatusExpired},
 	// Terminal states have no outgoing transitions.
 }
 

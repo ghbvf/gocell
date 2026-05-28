@@ -56,11 +56,20 @@ const (
 	// vocabulary (previously runCompensation co-opted KindStepFailed, which
 	// the Compensating-phase projection rejected).
 	KindStepCompensationFailed // step_compensation_failed
+
+	// KindSagaCompensationFailed is the terminal journal event for
+	// saga.StatusCompensationFailed. Written exclusively via MarkTerminal when
+	// the compensation phase completed but at least one CompensateFunc returned a
+	// non-nil error. Wire value 11 (appended after KindStepCompensationFailed at
+	// position 10) to keep existing kind values 1..10 stable.
+	// Introduced by #1210 to give the "rollback failed" terminal state a
+	// dedicated event kind distinct from KindSagaFailed ("forward failed").
+	KindSagaCompensationFailed // saga_compensation_failed
 )
 
 // Valid reports whether k is a recognized EventKind.
 func (k EventKind) Valid() bool {
-	return k >= KindStepStarted && k <= KindStepCompensationFailed
+	return k >= KindStepStarted && k <= KindSagaCompensationFailed
 }
 
 // String returns a human-readable label for k. The snake_case labels map 1:1
@@ -87,6 +96,8 @@ func (k EventKind) String() string {
 		return "saga_expired"
 	case KindStepCompensationFailed:
 		return "step_compensation_failed"
+	case KindSagaCompensationFailed:
+		return "saga_compensation_failed"
 	default:
 		return fmt.Sprintf("eventkind(%d)", k)
 	}
@@ -110,7 +121,8 @@ func (k EventKind) isStepKind() bool {
 // one definition.
 func (k EventKind) IsTerminal() bool {
 	switch k {
-	case KindSagaSucceeded, KindSagaFailed, KindSagaCompensated, KindSagaExpired:
+	case KindSagaSucceeded, KindSagaFailed, KindSagaCompensated, KindSagaExpired,
+		KindSagaCompensationFailed:
 		return true
 	default:
 		return false
@@ -130,6 +142,8 @@ func TerminalEventKind(s saga.Status) (EventKind, bool) {
 		return KindSagaCompensated, true
 	case saga.StatusExpired:
 		return KindSagaExpired, true
+	case saga.StatusCompensationFailed:
+		return KindSagaCompensationFailed, true
 	default:
 		return 0, false
 	}

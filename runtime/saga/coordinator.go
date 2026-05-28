@@ -780,8 +780,10 @@ func (c *Coordinator) runCompensation(
 	}
 
 	// Step e: determine final status.
+	// Compensation step failures → StatusCompensationFailed (distinct from
+	// StatusFailed which signals a forward-phase failure with no rollback).
 	if len(compensateErrors) > 0 {
-		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
+		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusCompensationFailed)
 	}
 	return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusCompensated)
 }

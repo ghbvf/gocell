@@ -21,7 +21,7 @@ var legalEdges = []struct{ from, to Status }{
 	{StatusRunning, StatusFailed},
 	{StatusRunning, StatusExpired},
 	{StatusCompensating, StatusCompensated},
-	{StatusCompensating, StatusFailed},
+	{StatusCompensating, StatusCompensationFailed},
 	{StatusCompensating, StatusExpired},
 }
 
@@ -29,6 +29,7 @@ func allStatuses() []Status {
 	return []Status{
 		StatusPending, StatusRunning, StatusCompensating,
 		StatusSucceeded, StatusFailed, StatusCompensated, StatusExpired,
+		StatusCompensationFailed,
 	}
 }
 
@@ -72,6 +73,7 @@ func TestStatus_Valid(t *testing.T) {
 		{StatusFailed, true},
 		{StatusCompensated, true},
 		{StatusExpired, true},
+		{StatusCompensationFailed, true},
 		{Status(99), false},
 	}
 	for _, tt := range tests {
@@ -96,6 +98,7 @@ func TestStatus_String(t *testing.T) {
 		{StatusFailed, "failed"},
 		{StatusCompensated, "compensated"},
 		{StatusExpired, "expired"},
+		{StatusCompensationFailed, "compensation_failed"},
 		{Status(99), "status(99)"},
 	}
 	for _, tt := range tests {
@@ -119,6 +122,7 @@ func TestStatus_IsTerminal(t *testing.T) {
 		{StatusFailed, true},
 		{StatusCompensated, true},
 		{StatusExpired, true},
+		{StatusCompensationFailed, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.s.String(), func(t *testing.T) {
@@ -142,7 +146,7 @@ func TestStatus_CanTransitionTo_Matrix(t *testing.T) {
 
 func TestStatus_ValidTransitions_TerminalReturnsNil(t *testing.T) {
 	t.Parallel()
-	for _, s := range []Status{StatusSucceeded, StatusFailed, StatusCompensated, StatusExpired} {
+	for _, s := range []Status{StatusSucceeded, StatusFailed, StatusCompensated, StatusExpired, StatusCompensationFailed} {
 		t.Run(s.String(), func(t *testing.T) {
 			t.Parallel()
 			assert.Nil(t, s.ValidTransitions())

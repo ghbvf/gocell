@@ -112,7 +112,9 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"Append_KindStepFailed_PendingToRunning", conformAppendStepFailedPendingToRunning},
 		{"MarkTerminal_RunningToFailed", conformMarkTerminalRunningToFailed},
 		{"MarkTerminal_RunningToExpired", conformMarkTerminalRunningToExpired},
-		{"MarkTerminal_CompensatingToFailed", conformMarkTerminalCompensatingToFailed},
+		// C6 (#1210): Compensating → CompensationFailed replaces Compensating → Failed.
+		{"MarkTerminal_CompensatingToCompensationFailed", conformMarkTerminalCompensatingToFailed},
+		{"MarkTerminal_CompensatingToFailed_Rejected", conformMarkTerminalCompensatingToFailedRejected},
 		{"MarkTerminal_CompensatingToExpired", conformMarkTerminalCompensatingToExpired},
 		{"MarkTerminal_CompensatingToSucceeded_KindInvalid", conformMarkTerminalCompensatingToSucceededIllegal},
 		{"MarkTerminal_RunningToCompensated_KindInvalid", conformMarkTerminalRunningToCompensatedIllegal},
@@ -1553,8 +1555,11 @@ func driveToCompensating(t *testing.T, j journal.Journal, clk *clockmock.FakeClo
 	return ci
 }
 
-// conformMarkTerminalCompensatingToFailed verifies Compensating → Failed is a valid terminal path.
-// Must reach Compensating first via StepStarted + CompensationStarted.
+// conformMarkTerminalCompensatingToFailed verifies Compensating → CompensationFailed is the valid
+// terminal path for a saga whose rollback itself encountered step errors.
+// StatusFailed is no longer reachable from StatusCompensating (#1210 C6 — the
+// two root causes are structurally distinct: CompensationFailed = rollback
+// failed; Failed = forward failed / no rollback).
 func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
@@ -1562,15 +1567,34 @@ func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
 
 	ci := driveToCompensating(t, j, clk, "inst-compensating-failed")
 
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensationFailed)
 	if err != nil {
-		t.Fatalf("MarkTerminal(Compensating→Failed): %v", err)
+		t.Fatalf("MarkTerminal(Compensating→CompensationFailed): %v", err)
 	}
 	if !ok {
-		t.Fatal("MarkTerminal(Compensating→Failed): expected ok=true")
+		t.Fatal("MarkTerminal(Compensating→CompensationFailed): expected ok=true")
 	}
 	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensating→Failed) did not append a terminal event")
+		t.Error("MarkTerminal(Compensating→CompensationFailed) did not append a terminal event")
+	}
+}
+
+// conformMarkTerminalCompensatingToFailedRejected verifies that
+// Compensating → Failed is no longer a valid transition after C6 (#1210).
+// The correct terminal for a rollback failure is StatusCompensationFailed.
+func conformMarkTerminalCompensatingToFailedRejected(t *testing.T, factory Factory) {
+	t.Helper()
+	j, clk, cleanup := factory(t)
+	defer cleanup()
+
+	ci := driveToCompensating(t, j, clk, "inst-compensating-to-failed-rejected")
+
+	_, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	if err == nil {
+		t.Fatal("MarkTerminal(Compensating→Failed) should return error after C6 split, got nil")
+	}
+	if !isKindInvalid(err) {
+		t.Errorf("MarkTerminal(Compensating→Failed): want KindInvalid error, got %v", err)
 	}
 }
 

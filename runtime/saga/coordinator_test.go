@@ -1774,13 +1774,15 @@ func (s *staleAfterFirstHBJournal) Heartbeat(
 }
 
 // ---------------------------------------------------------------------------
-// TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed
+// TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 // ---------------------------------------------------------------------------
 
-// TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed verifies that
-// when a compensation step fails, runCompensation continues the reverse walk
-// (best-effort) and writes KindSagaFailed as the final status.
-func TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed(t *testing.T) {
+// TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
+// verifies that when a compensation step fails, runCompensation continues the
+// reverse walk (best-effort) and writes KindSagaCompensationFailed as the
+// final status (#1210 C6 — distinct from KindSagaFailed which signals a
+// forward-phase failure with no rollback).
+func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed(t *testing.T) {
 	const defID idutil.SafeID = "compfailcont"
 
 	var compensated []string
@@ -1863,9 +1865,10 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusFailed(t *testing.
 		t.Fatalf("Load: %v", err)
 	}
 	last := evs[len(evs)-1]
-	// step2 compensation fails → final status must be KindSagaFailed.
-	if last.Kind != journal.KindSagaFailed {
-		t.Errorf("last event = %s, want saga_failed (compensation error => failed)", last.Kind)
+	// step2 compensation fails → final status must be KindSagaCompensationFailed
+	// (#1210 C6: distinct from KindSagaFailed which means forward-phase failed).
+	if last.Kind != journal.KindSagaCompensationFailed {
+		t.Errorf("last event = %s, want saga_compensation_failed (compensation error => compensation_failed)", last.Kind)
 	}
 
 	// Compensation ran for committed steps in reverse order.
