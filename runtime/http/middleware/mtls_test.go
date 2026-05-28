@@ -170,6 +170,68 @@ func TestMTLS_PeerIdentityFieldsInjected(t *testing.T) {
 	}
 }
 
+// TestMTLS_PeerIdentityIsolatedFromCert locks F1 (cluster C1): the PeerIdentity
+// handed to handlers must own all of its slices/pointers, so a handler mutating
+// it cannot corrupt the connection-cached *x509.Certificate (which net/http
+// reuses across keep-alive requests). The handler below mutates every mutable
+// field of the identity; afterwards the source cert must be byte-for-byte
+// unchanged.
+func TestMTLS_PeerIdentityIsolatedFromCert(t *testing.T) {
+	t.Parallel()
+
+	cert := &x509.Certificate{
+		Subject: pkix.Name{
+			CommonName:         "wl-1",
+			Organization:       []string{"acme"},
+			OrganizationalUnit: []string{"edge"},
+			Country:            []string{"US"},
+			Locality:           []string{"sf"},
+			Province:           []string{"ca"},
+			StreetAddress:      []string{"1 main"},
+			PostalCode:         []string{"94105"},
+		},
+		DNSNames: []string{"host-1.example.com", "alt.example.com"},
+		URIs: []*url.URL{
+			mustURL(t, "spiffe://example.org/ns/edge/sa/wl-1"),
+		},
+	}
+
+	// Snapshot the cert's mutable state before the request.
+	wantDNS := append([]string(nil), cert.DNSNames...)
+	wantOrg := append([]string(nil), cert.Subject.Organization...)
+	wantOU := append([]string(nil), cert.Subject.OrganizationalUnit...)
+	wantCountry := append([]string(nil), cert.Subject.Country...)
+	wantURIHost := cert.URIs[0].Host
+	wantURIPath := cert.URIs[0].Path
+
+	handler := MTLS()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := ctxkeys.PeerIdentityFrom(r.Context())
+		require.True(t, ok)
+		// Hostile handler: mutate every slice/pointer field in place.
+		id.DNSNames[0] = "evil.example.com"
+		id.Subject.Organization[0] = "evil-org"
+		id.Subject.OrganizationalUnit[0] = "evil-ou"
+		id.Subject.Country[0] = "ZZ"
+		id.URIs[0].Host = "evil.example.org"
+		id.URIs[0].Path = "/evil"
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// The source certificate must be untouched by the handler's mutations.
+	assert.Equal(t, wantDNS, cert.DNSNames, "cert.DNSNames must not alias the identity")
+	assert.Equal(t, wantOrg, cert.Subject.Organization, "cert.Subject.Organization must not alias")
+	assert.Equal(t, wantOU, cert.Subject.OrganizationalUnit, "cert.Subject.OrganizationalUnit must not alias")
+	assert.Equal(t, wantCountry, cert.Subject.Country, "cert.Subject.Country must not alias")
+	assert.Equal(t, wantURIHost, cert.URIs[0].Host, "cert.URIs[0] must not alias the identity URL")
+	assert.Equal(t, wantURIPath, cert.URIs[0].Path, "cert.URIs[0] must not alias the identity URL")
+}
+
 // ─── Integration: end-to-end handshake via httptest.NewUnstartedServer ───────
 
 // integTestChain holds server + client materials for a full mTLS round-trip.

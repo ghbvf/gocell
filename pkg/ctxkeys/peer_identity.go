@@ -15,7 +15,9 @@ const peerIdentity ctxKey = "peer_identity"
 // OU / ...), DNS SANs, and URI SANs (including raw SPIFFE spiffe:// entries
 // that callers parse with their own helper). Raw *x509.Certificate is
 // deliberately not exposed, so handlers do not depend on the x509 internal
-// representation. Adding a field requires a focused review of this file.
+// representation. This field set is frozen by archtest
+// PEER-IDENTITY-FIELDS-FROZEN-01 (reflect lock: names, types, visibility, no
+// embedding, no raw-cert field) — adding/removing/retyping a field fails CI.
 //
 // SECURITY NOTE: Subject is the stdlib pkix.Name. Beyond CN/O/OU it carries
 // Names []pkix.AttributeTypeAndValue and ExtraNames []pkix.AttributeTypeAndValue
@@ -31,7 +33,15 @@ type PeerIdentity struct {
 }
 
 // WithPeerIdentity returns a new context carrying the given peer identity.
-// runtime/http/middleware.MTLS is the sole producer.
+//
+// runtime/http/middleware.MTLS is the sole producer in practice, but this is a
+// CONVENTION, not a statically enforced guarantee: WithPeerIdentity is exported
+// (a cross-package context setter cannot be sealed in Go), so any package could
+// call it. There is deliberately no caller-allowlist archtest — a handler
+// injecting a forged identity into its own request context gains nothing it
+// could not already do, so the sole-producer property is not security-load-
+// bearing. What IS enforced (Hard) is the curated field set: see PeerIdentity's
+// doc and archtest PEER-IDENTITY-FIELDS-FROZEN-01.
 func WithPeerIdentity(ctx context.Context, id PeerIdentity) context.Context {
 	return context.WithValue(ctx, peerIdentity, id)
 }

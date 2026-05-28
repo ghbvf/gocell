@@ -173,3 +173,30 @@ func TestNewClientCAPool_NoValidCertReturnsError(t *testing.T) {
 		assert.Nil(t, pool)
 	})
 }
+
+// TestNewClientCAPool_FailsClosedOnBadBundleInMix locks the fail-closed
+// contract (F4 / cluster C2): a non-contributing bundle anywhere in the
+// variadic input fails the whole construction, regardless of position, even
+// when another bundle is valid. The pre-fix code returned a pool that
+// silently omitted the bad bundle's intended anchors.
+func TestNewClientCAPool_FailsClosedOnBadBundleInMix(t *testing.T) {
+	valid := genTestChain(t)
+
+	t.Run("valid_then_garbage_returns_error", func(t *testing.T) {
+		pool, err := NewClientCAPool(valid.rootCertPEM, []byte("not a cert"))
+		assert.Error(t, err)
+		assert.Nil(t, pool)
+	})
+
+	t.Run("valid_then_empty_returns_error", func(t *testing.T) {
+		pool, err := NewClientCAPool(valid.rootCertPEM, []byte{})
+		assert.Error(t, err)
+		assert.Nil(t, pool)
+	})
+
+	t.Run("garbage_then_valid_returns_error", func(t *testing.T) {
+		pool, err := NewClientCAPool([]byte("not a cert"), valid.rootCertPEM)
+		assert.Error(t, err)
+		assert.Nil(t, pool)
+	})
+}

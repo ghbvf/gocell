@@ -717,7 +717,7 @@ linters:
         linters:
           - gosec
         text: "G706"
-      - path: ^runtime/http/middleware/(recovery|csrf|mtls)\.go
+      - path: ^runtime/http/middleware/(recovery|csrf)\.go
         linters:
           - gosec
         text: "G706"

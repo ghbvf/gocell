@@ -32,9 +32,13 @@ WM-32 trade-off 明文：**大规模 mTLS 卸载在 K8s/Service Mesh 解决，�
    出厂 config 同样硬编；nil pool 返回 error。
 4. **PeerIdentity 字段集 curated**：`pkg/ctxkeys.PeerIdentity{Subject pkix.
    Name, DNSNames []string, URIs []*url.URL}`——3 字段。**不暴露 raw
-   `*x509.Certificate`**，下游耦合 x509 内部"在 type system 不可表达"。字段
-   集 curation 仅 godoc 约定，不立 archtest enforcement（Cx2 scope；若将
-   来需 Hard 守卫，按 ai-robust §适用范围单独评级）。
+   `*x509.Certificate`**：给定当前字段集，handler 无法从 PeerIdentity 读到
+   不存在的字段，下游对 x509 内部表示的耦合不可达。字段集本身由 reflect 字段
+   冻结 archtest `PEER-IDENTITY-FIELDS-FROZEN-01` 守卫（Hard：锁字段名/类型/
+   可见性，禁 embedding、禁 raw-cert 字段，附非空 reverse self-check）——
+   加/删字段或改类型即 CI 红。middleware 侧 `ownedPeerIdentity` 对 9 个
+   pkix.Name 切片 + 每个 `*url.URL` + DNSNames 做防御性深拷贝，使 ctx 中的
+   身份与连接缓存的证书完全隔离（见 `mtls.go`）。
 5. **PeerIdentity 放 `pkg/ctxkeys/`**：与 `request_id` / `real_ip` / `trace_id`
    同族 request-scope；让 cells/ 与 runtime/ 共同消费时无 import 环。
 6. **不引入 spiffe/go-spiffe 依赖**：URIs 保留 raw `*url.URL`，业务侧若需
@@ -76,13 +80,15 @@ WM-32 trade-off 明文：**大规模 mTLS 卸载在 K8s/Service Mesh 解决，�
 | 错误信息不含裸 `"mtls"` 小写字面量 | 既有 AUTH-PLAN-01 archtest | Hard |
 | `MTLS()` 函数与 kernel/auth 包零交互 | 函数签名零 auth 类型参 + body 只依赖 stdlib+pkg/* | Hard (type-system) |
 | `runtime/http/tlsutil/` 只接 PEM bytes | 函数签名 `[]byte` 类型 | Hard (type-system) |
-| `NewServerMTLSConfig` 出厂 TLS1.3 + RequireAndVerify | builder body 硬编字段写入；返回 stdlib `*tls.Config` 可变结构 | Soft (godoc 约定) — 升 Hard 不可行（`crypto/tls.Server` 接 `*tls.Config`，无 opaque wrapper 通道） |
-| PeerIdentity 字段集 curated（不含 `Raw *x509.Certificate`） | pkg/ctxkeys 包边界 = single sanctioned holder | 结构上 Hard |
+| `NewServerMTLSConfig` 出厂 TLS1.3 + RequireAndVerify | emit 形态：builder 唯一成功路径无条件硬编字段（无参数/分支可产出弱 config）；post-return：返回 stdlib `*tls.Config` 可变结构 | emit-time **Hard**（type-system：唯一成功路径硬编）+ post-return-mutation **Soft**（`crypto/tls.Server` 接 `*tls.Config`，无 opaque wrapper 通道，升 Hard 不可行） |
+| PeerIdentity 字段集 curated（不含 `Raw *x509.Certificate`） | reflect 字段冻结 archtest `PEER-IDENTITY-FIELDS-FROZEN-01`（锁字段名/类型/可见性，禁 embedding/raw-cert 字段，附非空 reverse self-check） | **Hard** |
 | `applyListenerAuthChain` `case AuthMTLS:` 唯一 caller | sealed `ListenerAuth` interface + type-switch | Hard (type-system) |
 
-> Row 5 Soft 的天花板限制：Go 生态约束。`crypto/tls.Server`/`http.ServeTLS` 强制接收 `*tls.Config` 标准类型；自定义 opaque wrapper 无法注入握手层。godoc 警告（见 `server.go::NewServerMTLSConfig`）是该 surface 唯一可行 enforcement。
+> **Row 5 的 post-return-mutation Soft 天花板**：Go 生态约束。`crypto/tls.Server`/`http.ServeTLS` 强制接收 `*tls.Config` 标准类型；自定义 opaque wrapper 无法注入握手层，故 builder 返回后调用方仍可改写 `cfg.MinVersion`。godoc 警告（见 `server.go::NewServerMTLSConfig`）是该 post-return surface 唯一可行 enforcement。emit-time（builder 出厂即 TLS1.3 + RequireAndVerify）则是 type-system Hard——唯一成功路径无条件写入，无分支可产出弱 config。
 
-Row 5 Soft 属 Go 生态技术上限（`crypto/tls.Server` 接受 `*tls.Config` 标准类型，无 opaque wrapper 通道），物理不可行升 Hard，符合 ai-robust §"Soft 严禁立项"之豁免条件。其余行均为 Hard。
+> **sole-producer 有意不在 Hard 清单**：`runtime/http/middleware.MTLS` 是 `WithPeerIdentity` 今日唯一生产者，但这是约定、非 enforcement——跨包 `context.WithValue` setter 在 Go 无法 seal，caller-allowlist archtest 至多 Medium，且威胁模型显示 handler 伪造自身 ctx 身份无收益（不承重）。故**有意不立** sole-producer 守卫，也不声明其为 Hard（这正是修正前 Row 6 "single sanctioned holder = 结构上 Hard" 的错标，本版已移除）。
+
+本表唯一 Soft 是 Row 5 的 post-return-mutation 分量（Go 技术上限，符合 ai-robust §"Soft 严禁立项"之豁免条件）；其余形态均为 Hard，含 Row 6 经 `PEER-IDENTITY-FIELDS-FROZEN-01` 实证落地。
 
 ref: spiffe/go-spiffe v2/spiffetls/tlsconfig — MTLSServerConfig（curated 字段）
 ref: kubernetes/apiserver pkg/server/secure_serving.go — server cert plumbing

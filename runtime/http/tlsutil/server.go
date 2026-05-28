@@ -70,26 +70,30 @@ func NewServerMTLSConfig(certPEMBlock, keyPEMBlock []byte, clientCAs *x509.CertP
 // bundles are appended into the same pool; intra-bundle concatenation
 // (`cat ca1.pem ca2.pem > bundle.pem`) is also supported.
 //
-// Returns an error when no input is supplied or none of the supplied bytes
-// parse to at least one certificate.
+// Fail-closed: every supplied bundle MUST contribute at least one parseable
+// certificate. An empty or unparseable bundle returns an error identifying
+// its positional index (server-side detail) — silently dropping a bundle
+// would shrink the trust-anchor set without operator awareness, a fail-open
+// misconfiguration for a verification pool. Returns an error when no input
+// is supplied at all.
+//
+// Note on AppendCertsFromPEM semantics: the stdlib helper reports whether ANY
+// certificate was parsed; PEM blocks that are not CERTIFICATE (CRLs, keys) are
+// ignored. A bundle of only such blocks therefore yields zero certs and is
+// rejected here — correct for a CA verification pool, whose every input is
+// meant to contribute trust anchors.
 func NewClientCAPool(caPEMBlocks ...[]byte) (*x509.CertPool, error) {
 	if len(caPEMBlocks) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"tlsutil: no CA PEM bundles supplied")
 	}
 	pool := x509.NewCertPool()
-	any := false
-	for _, b := range caPEMBlocks {
-		if len(b) == 0 {
-			continue
+	for i, b := range caPEMBlocks {
+		if !pool.AppendCertsFromPEM(b) {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"tlsutil: CA PEM bundle contained no parseable certificate",
+				errcode.WithInternal(errcode.InternalAttr("bundleIndex", i)))
 		}
-		if pool.AppendCertsFromPEM(b) {
-			any = true
-		}
-	}
-	if !any {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"tlsutil: no valid CA certificates parsed from supplied PEM bundles")
 	}
 	return pool, nil
 }
