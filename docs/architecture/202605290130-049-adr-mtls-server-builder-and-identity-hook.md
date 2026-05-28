@@ -88,7 +88,7 @@ WM-32 trade-off 明文：**大规模 mTLS 卸载在 K8s/Service Mesh 解决，�
 
 > **sole-producer 有意不在 Hard 清单**：`runtime/http/middleware.MTLS` 是 `WithPeerIdentity` 今日唯一生产者，但这是约定、非 enforcement——跨包 `context.WithValue` setter 在 Go 无法 seal，caller-allowlist archtest 至多 Medium，且威胁模型显示 handler 伪造自身 ctx 身份无收益（不承重）。故**有意不立** sole-producer 守卫，也不声明其为 Hard（这正是修正前 Row 6 "single sanctioned holder = 结构上 Hard" 的错标，本版已移除）。
 
-本表唯一 Soft 是 Row 5 的 post-return-mutation 分量（Go 技术上限，符合 ai-robust §"Soft 严禁立项"之豁免条件）；其余形态均为 Hard，含 Row 6 经 `PEER-IDENTITY-FIELDS-FROZEN-01` 实证落地。
+本表唯一 Soft 是 Row 5 的 post-return-mutation 分量：它不是新增 enforcement 立项，而是 stdlib `*tls.Config` 可变 API 带来的 residual risk；本 PR 不把该 post-return surface 声明为 Hard，也不新增 Soft enforcement。其余形态均为 Hard，含 Row 6 经 `PEER-IDENTITY-FIELDS-FROZEN-01` 实证落地。
 
 ref: spiffe/go-spiffe v2/spiffetls/tlsconfig — MTLSServerConfig（curated 字段）
 ref: kubernetes/apiserver pkg/server/secure_serving.go — server cert plumbing
