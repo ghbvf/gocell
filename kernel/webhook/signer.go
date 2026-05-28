@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -37,6 +38,10 @@ type hmacSigner struct {
 	source Source
 }
 
+// Compile-time assertion: *hmacSigner implements slog.LogValuer so callers
+// using slog.Any("signer", s) never leak the embedded source secret.
+var _ slog.LogValuer = (*hmacSigner)(nil)
+
 // NewHMACSigner returns an HMAC-SHA256 [Signer] bound to source. It fails if
 // the source has no secret (a zero-value Source from outside the package).
 func NewHMACSigner(source Source) (Signer, error) {
@@ -48,6 +53,12 @@ func NewHMACSigner(source Source) (Signer, error) {
 }
 
 func (*hmacSigner) sealed() {}
+
+// LogValue implements slog.LogValuer so logging a *hmacSigner never leaks the
+// source secret (defense-in-depth alongside Source.LogValue).
+func (s *hmacSigner) LogValue() slog.Value {
+	return slog.GroupValue(slog.Any("source", s.source))
+}
 
 func (s *hmacSigner) Sign(payload []byte, ts time.Time, deliveryID DeliveryID) (Headers, error) {
 	if err := deliveryID.Validate(); err != nil {

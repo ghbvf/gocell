@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,11 +37,8 @@ func (v vector) secretBytes(t *testing.T) []byte {
 // unixTime returns the vector timestamp as a time.Time.
 func (v vector) unixTime(t *testing.T) time.Time {
 	t.Helper()
-	var sec int64
-	for _, r := range v.Timestamp {
-		require.True(t, r >= '0' && r <= '9', "vector %s: non-numeric timestamp", v.Name)
-		sec = sec*10 + int64(r-'0')
-	}
+	sec, err := strconv.ParseInt(v.Timestamp, 10, 64)
+	require.NoError(t, err, "vector %s: non-numeric timestamp", v.Name)
 	return time.Unix(sec, 0)
 }
 

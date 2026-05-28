@@ -36,6 +36,7 @@ func (e errcodeAsError) As(target any) bool {
 // strings so renames are caught. The intended Kind→HTTP mapping is verified at
 // the real construction points in kernel/webhook/webhook_test.go.
 func TestWebhookSentinelCodes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		code Code
 		want string
@@ -57,7 +58,9 @@ func TestWebhookSentinelCodes(t *testing.T) {
 		t.Fatalf("expected 12 webhook sentinels, got %d", len(cases))
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, string(tc.code))
 		})
 	}

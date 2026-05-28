@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"log/slog"
 )
 
 // ── A1 violation: crypto/hmac.New outside kernel/webhook/signer.go ───────────
@@ -26,3 +27,9 @@ func forgeMAC(secret, payload []byte) []byte {
 func compareSig(a, b []byte) bool {
 	return bytes.Equal(a, b) // VIOLATION A2
 }
+
+// ── B6 violation: slog call referencing a raw .secret field ──────────────────
+// scanWebhookSecretSlog must detect this call.
+type leakyHolder struct{ secret []byte }
+
+func (h leakyHolder) logIt() { slog.Info("dump", slog.Any("secret", h.secret)) } // VIOLATION B6

@@ -28,9 +28,10 @@ func NewSourceRegistry() *SourceRegistry {
 	return &SourceRegistry{sources: make(map[SourceID]Source)}
 }
 
-// Register adds or replaces the source registered under src.ID(). It fails if
-// src is a zero-value Source (no secret), which cannot occur for a Source built
-// via [NewSource].
+// Register adds or replaces the source registered under src.ID(). It fails with
+// [errcode.ErrWebhookConfigInvalid] when src has an empty secret — a zero-value
+// Source{} built without [NewSource]. [NewSource] always yields a valid Source,
+// so this guard only catches accidental zero-value passing.
 func (r *SourceRegistry) Register(src Source) error {
 	if len(src.secret) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,

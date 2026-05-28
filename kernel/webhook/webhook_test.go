@@ -56,6 +56,7 @@ func TestSourceIDValidate(t *testing.T) {
 		{"leading_digit", "1stripe", true},
 		{"too_long", strings.Repeat("a", sourceIDMaxLen+1), true},
 		{"dot_forbidden", "stripe.payments", true},
+		{"max_len_valid", strings.Repeat("a", sourceIDMaxLen), false},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -97,6 +98,7 @@ func TestDeliveryIDValidate(t *testing.T) {
 		{"empty", "", true},
 		{"whitespace", "evt 001", true},
 		{"too_long", strings.Repeat("a", deliveryIDMaxLen+1), true},
+		{"max_len_valid", strings.Repeat("a", deliveryIDMaxLen), false},
 	}
 	for _, tc := range cases {
 		tc := tc

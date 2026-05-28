@@ -83,7 +83,7 @@ private construction, following the SPAN-SETATTR-HOLDER-SEAL #851 precedent):
 |--------|-----------|--------|
 | Forged payload (no secret) | HMAC over full signed content; `hmac.Equal` | ✅ |
 | Algorithm downgrade (SHA-1) | single legal `Algorithm`; `Validate` rejects others | ✅ |
-| Replay of a captured valid delivery | bidirectional timestamp tolerance window | ✅ (bounded to ±tolerance; full idempotency dedupe is the receiver's Claimer, PR-3/PR-6) |
+| Replay of a captured valid delivery | bidirectional timestamp tolerance window | ⚠️ partial (bounded to ±tolerance; full idempotency dedupe is the receiver's Claimer, PR-3/PR-6) |
 | Timing side-channel on signature compare | `hmac.Equal` constant-time; A2 AST lock | ✅ |
 | Secret leak via logs/spans/error text | unexported secret + no getter + `Source.LogValue` mask + redaction key set + archtest B6 | ✅ |
 | Secret mutation after construction | `NewSource` defensive copy | ✅ |

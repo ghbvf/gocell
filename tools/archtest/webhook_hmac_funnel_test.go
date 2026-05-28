@@ -208,7 +208,7 @@ func TestWebhookHMACFunnel_ReverseFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "webhook_hmac_violate")
 
-	var a1, a2 []Diagnostic
+	var a1, a2, b6 []Diagnostic
 	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
@@ -221,12 +221,14 @@ func TestWebhookHMACFunnel_ReverseFixture(t *testing.T) {
 				}
 				a1 = append(a1, scanWebhookHMACNew(p.Fset, f, rel, p.TypesInfo)...)
 				a2 = append(a2, scanWebhookBytesEqual(p.Fset, f, rel, p.TypesInfo)...)
+				b6 = append(b6, scanWebhookSecretSlog(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
 
 	assert.NotEmpty(t, a1, "A1 reverse fixture: expected ≥1 diagnostic for hmac.New outside signer.go")
 	assert.NotEmpty(t, a2, "A2 reverse fixture: expected ≥1 diagnostic for bytes.Equal")
+	assert.NotEmpty(t, b6, "B6 reverse fixture: expected ≥1 diagnostic for slog of .secret")
 }
 
 // TestWebhookFunnel_NoRawSecretSlog is the B6 blind-spot self-check: production

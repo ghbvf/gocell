@@ -728,7 +728,10 @@ const (
 	// KindUnauthenticated → HTTP 401.
 	ErrWebhookTimestampExpired Code = "ERR_WEBHOOK_TIMESTAMP_EXPIRED"
 	// ErrWebhookDuplicateDelivery signals a delivery ID was already processed
-	// (idempotent replay). Constructed with KindConflict → HTTP 409.
+	// (idempotent replay). Receiver maps idempotent replay to HTTP 200; this
+	// sentinel classifies the replay for logging. The wire status (200
+	// idempotent vs 409) is decided in PR-3 (receiver runtime). First
+	// constructed in PR-3 (receiver runtime).
 	ErrWebhookDuplicateDelivery Code = "ERR_WEBHOOK_DUPLICATE_DELIVERY"
 	// ErrWebhookInvalidHeader signals a required signature header is missing or
 	// malformed (bad scheme, unparseable timestamp). Constructed with
@@ -739,24 +742,28 @@ const (
 	// HTTP 400.
 	ErrWebhookAlgorithmUnsupported Code = "ERR_WEBHOOK_ALGORITHM_UNSUPPORTED"
 	// ErrWebhookSourceNotFound signals the source ID has no registered secret.
-	// Constructed with KindNotFound → HTTP 404.
+	// Constructed with KindNotFound → HTTP 404. First constructed in PR-3
+	// (receiver runtime).
 	ErrWebhookSourceNotFound Code = "ERR_WEBHOOK_SOURCE_NOT_FOUND"
 	// ErrWebhookSSRFBlocked signals an outbound dispatch target resolved to a
 	// blocked address (SSRF defense). Constructed with KindPermissionDenied →
-	// HTTP 403.
+	// HTTP 403. First constructed in PR-4 (SSRF guard).
 	ErrWebhookSSRFBlocked Code = "ERR_WEBHOOK_SSRF_BLOCKED"
 	// ErrWebhookDeliveryFailed signals a transient delivery failure (connection
 	// refused, 5xx from target). Constructed with KindUnavailable → HTTP 503.
+	// First constructed in PR-5 (dispatcher).
 	ErrWebhookDeliveryFailed Code = "ERR_WEBHOOK_DELIVERY_FAILED"
 	// ErrWebhookDeliveryTimeout signals delivery exceeded its deadline.
-	// Constructed with KindDeadlineExceeded → HTTP 504.
+	// Constructed with KindDeadlineExceeded → HTTP 504. First constructed in
+	// PR-5 (dispatcher).
 	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
 	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
 	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
-	// → HTTP 500.
+	// → HTTP 500. First constructed in PR-5 (dispatcher).
 	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
 	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
-	// limit. Constructed with KindPayloadTooLarge → HTTP 413.
+	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed
+	// in PR-3 (receiver runtime).
 	ErrWebhookBodyTooLarge Code = "ERR_WEBHOOK_BODY_TOO_LARGE"
 	// ErrWebhookConfigInvalid signals invalid webhook configuration (bad source
 	// ID / delivery ID / empty secret). Constructed with KindInvalid → HTTP 400.

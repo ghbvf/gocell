@@ -33,7 +33,7 @@ type hmacVerifier struct {
 	tolerance time.Duration
 }
 
-// VerifierOption configures a [hmacVerifier].
+// VerifierOption configures [NewHMACVerifier]; use [WithTolerance] to override defaults.
 type VerifierOption func(*hmacVerifier)
 
 // WithTolerance overrides the default ±5min timestamp window. A non-positive
@@ -70,7 +70,7 @@ func (v *hmacVerifier) Verify(rawBody []byte, headers Headers, source Source) er
 	if err := headers.DeliveryID.Validate(); err != nil {
 		return err
 	}
-	if err := v.checkTimestamp(headers.Timestamp); err != nil {
+	if err := v.validateTimestamp(headers.Timestamp); err != nil {
 		return err
 	}
 	expected := computeMAC(source.secret, headers.DeliveryID, headers.Timestamp, rawBody)
@@ -82,14 +82,14 @@ func (v *hmacVerifier) Verify(rawBody []byte, headers Headers, source Source) er
 	return nil
 }
 
-// checkTimestamp parses the unix-seconds timestamp header and enforces the
+// validateTimestamp parses the unix-seconds timestamp header and enforces the
 // bidirectional tolerance window.
-func (v *hmacVerifier) checkTimestamp(timestamp string) error {
+func (v *hmacVerifier) validateTimestamp(timestamp string) error {
 	tsInt, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrWebhookInvalidHeader,
 			"webhook: timestamp header is not a unix-seconds integer",
-			errcode.WithDetails(errcode.PublicString("timestamp", timestamp)))
+			errcode.WithInternal(errcode.InternalAttr("rawTimestamp", timestamp)))
 	}
 	skew := v.clk.Now().Sub(time.Unix(tsInt, 0))
 	if skew < 0 {

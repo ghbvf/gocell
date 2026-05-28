@@ -1,6 +1,8 @@
 package webhook
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,4 +40,31 @@ func TestSourceRegistry_RejectsEmptySecret(t *testing.T) {
 	reg := NewSourceRegistry()
 	err := reg.Register(Source{})
 	requireErrCode(t, err, errcode.ErrWebhookConfigInvalid, errcode.KindInvalid)
+}
+
+// TestSourceRegistry_ConcurrentAccess surfaces data races under -race by
+// running concurrent Register and Lookup calls on a shared registry.
+func TestSourceRegistry_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+	reg := NewSourceRegistry()
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			id := fmt.Sprintf("src-%d", i)
+			src, err := NewSource(MustSourceID(id), minSecret())
+			if err != nil {
+				return
+			}
+			if i%2 == 0 {
+				_ = reg.Register(src)
+			} else {
+				_, _ = reg.Lookup(MustSourceID(fmt.Sprintf("src-%d", i-1)))
+			}
+		}()
+	}
+	wg.Wait()
 }

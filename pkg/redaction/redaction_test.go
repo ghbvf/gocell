@@ -275,6 +275,21 @@ func TestRedactString(t *testing.T) {
 			want: "signer init: hmac_key=<REDACTED> done",
 		},
 		{
+			name: "stripe_sig_kv",
+			in:   "stripe_signature=abc next=ok",
+			want: "stripe_signature=<REDACTED> next=ok",
+		},
+		{
+			name: "x_hub_signature_256_kv",
+			in:   "x_hub_signature_256=abc trailing",
+			want: "x_hub_signature_256=<REDACTED> trailing",
+		},
+		{
+			name: "x_hub_signature_1_kv",
+			in:   "x-hub-signature-1=abc trailing",
+			want: "x-hub-signature-1=<REDACTED> trailing",
+		},
+		{
 			name: "empty",
 			in:   "",
 			want: "",
@@ -489,6 +504,12 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"svix-signature", true},
 		{"hmac_key", true},
 		{"hmac-key", true},
+		// stripe + x-hub-signature-256/-1 variants (SEC-02/SEC-03)
+		{"stripe_signature", true},
+		{"stripe-signature", true},
+		{"x_hub_signature_256", true},
+		{"x-hub-signature-256", true},
+		{"x-hub-signature-1", true},
 		// case insensitivity
 		{"PASSWORD", true},
 		{"API_KEY", true},

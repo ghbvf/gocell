@@ -59,7 +59,8 @@ const sensitiveKeyPattern = `password|passwd|pwd|secret|` +
 	`private[_-]?key|signing[_-]?key|dsn|` +
 	// Webhook signing surface (KERNEL-WEBHOOK-01): inbound/outbound HMAC
 	// secrets + signature headers in Svix/Stripe/GitHub naming variants.
-	`webhook[_-]?secret|x[_-]?signature|x[_-]?hub[_-]?signature|` +
+	`webhook[_-]?secret|stripe[_-]?signature|x[_-]?signature|` +
+	`x[_-]?hub[_-]?signature(?:[_-](?:256|1))?|` +
 	`x[_-]?webhook[_-]?signature|svix[_-]?signature|hmac[_-]?key`
 
 // defaultPattern matches single-token `key=value` / `key: value` forms.

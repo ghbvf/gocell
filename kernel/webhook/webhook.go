@@ -162,7 +162,7 @@ type Source struct {
 }
 
 // NewSource validates id and secret and returns a [Source]. The secret must be
-// at least minSecretLen bytes.
+// at least 16 bytes (128-bit minimum for HMAC-SHA256 keying material).
 func NewSource(id SourceID, secret []byte) (Source, error) {
 	if err := id.Validate(); err != nil {
 		return Source{}, err

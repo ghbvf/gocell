@@ -13,8 +13,10 @@ import (
 
 // Test-time durations extracted to package-level consts (TEST-TIME-LITERAL-01).
 const (
-	tenMinutes       = 10 * time.Minute
-	oneHourTolerance = time.Hour
+	tenMinutes        = 10 * time.Minute
+	oneHourTolerance  = time.Hour
+	fiveMinutes       = 5 * time.Minute
+	justOverTolerance = 5*time.Minute + time.Second
 )
 
 // TestVerify_Vectors drives every golden vector through the verifier with the
@@ -52,6 +54,12 @@ func TestNewHMACVerifier_Options(t *testing.T) {
 	t.Run("nil_clock_panics", func(t *testing.T) {
 		t.Parallel()
 		assert.Panics(t, func() { _, _ = NewHMACVerifier(nil) })
+	})
+
+	t.Run("nil_option_ignored", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewHMACVerifier(fixedClock(t), nil)
+		require.NoError(t, err)
 	})
 
 	t.Run("non_positive_tolerance_rejected", func(t *testing.T) {
@@ -168,6 +176,24 @@ func TestVerify_Errors(t *testing.T) {
 			wantCode: errcode.ErrWebhookInvalidSignature,
 			wantKind: errcode.KindUnauthenticated,
 		},
+		{
+			name:     "empty_signature",
+			headers:  Headers{DeliveryID: good.DeliveryID, Timestamp: good.Timestamp, Signature: ""},
+			body:     []byte("body"),
+			source:   src,
+			clockAt:  base,
+			wantCode: errcode.ErrWebhookInvalidSignature,
+			wantKind: errcode.KindUnauthenticated,
+		},
+		{
+			name:     "timestamp_one_second_past_tolerance",
+			headers:  good,
+			body:     []byte("body"),
+			source:   src,
+			clockAt:  base.Add(justOverTolerance),
+			wantCode: errcode.ErrWebhookTimestampExpired,
+			wantKind: errcode.KindUnauthenticated,
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -182,4 +208,22 @@ func TestVerify_Errors(t *testing.T) {
 			assert.Equal(t, tc.wantKind, ec.Kind)
 		})
 	}
+}
+
+// TestVerify_AcceptsAtExactTolerance checks that skew == tolerance is accepted
+// (the check is strict `>`, so skew equal to tolerance must pass).
+func TestVerify_AcceptsAtExactTolerance(t *testing.T) {
+	t.Parallel()
+	base := time.Unix(1700000000, 0)
+	src, err := NewSource(MustSourceID("s"), minSecret())
+	require.NoError(t, err)
+	signer, err := NewHMACSigner(src)
+	require.NoError(t, err)
+	good, err := signer.Sign([]byte("body"), base, MustDeliveryID("d1"))
+	require.NoError(t, err)
+
+	// Clock is exactly fiveMinutes after signing — skew == tolerance, must pass.
+	verifier, err := NewHMACVerifier(clockmockAt(base.Add(fiveMinutes)))
+	require.NoError(t, err)
+	assert.NoError(t, verifier.Verify([]byte("body"), good, src))
 }
