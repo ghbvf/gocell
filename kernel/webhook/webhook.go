@@ -146,9 +146,12 @@ func MustDeliveryID(s string) DeliveryID {
 	return id
 }
 
-// minSecretLen is the floor for an HMAC secret. 16 bytes (128 bits) is the
-// minimum recommended for HMAC-SHA256 keying material.
-const minSecretLen = 16
+// minSecretLen is the floor for an HMAC secret: 24 bytes (192 bits). This sits
+// well above the NIST SP800-107 floor of L/2 = 128 bits for HMAC-SHA256 while
+// staying compatible with real provider secrets — Svix issues 24-byte keys, so
+// a higher floor (e.g. 32) would reject genuine Svix/provider secrets and break
+// inbound verification. Outbound (dispatcher) secrets should prefer 32+ bytes.
+const minSecretLen = 24
 
 // Source is an opaque webhook source: an identifier plus the shared secret
 // used to sign/verify its deliveries. The secret is an unexported field with
@@ -162,7 +165,8 @@ type Source struct {
 }
 
 // NewSource validates id and secret and returns a [Source]. The secret must be
-// at least 16 bytes (128-bit minimum for HMAC-SHA256 keying material).
+// at least 24 bytes (192-bit floor; above NIST's 128-bit HMAC-SHA256 minimum
+// and compatible with provider keys such as Svix's 24-byte secrets).
 func NewSource(id SourceID, secret []byte) (Source, error) {
 	if err := id.Validate(); err != nil {
 		return Source{}, err
