@@ -214,4 +214,7 @@ func TestConnection_Publish_ContextCanceled(t *testing.T) {
 
 	_, pubErr := conn.Publish(canceledCtx, pt, []byte("payload"), publishOpts{QoS: 1})
 	require.Error(t, pubErr, "expected error with canceled context")
+	var ec *errcode.Error
+	require.True(t, errors.As(pubErr, &ec), "expected *errcode.Error, got %T: %v", pubErr, pubErr)
+	assert.Equal(t, ErrAdapterMQTTPublishCanceled, ec.Code)
 }

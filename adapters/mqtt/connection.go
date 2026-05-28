@@ -427,6 +427,7 @@ type publishOpts struct {
 // Returns:
 //   - (*paho.PublishResponse, nil) on broker Ack (QoS 1).
 //   - (nil, ErrAdapterMQTTClosed) if Close has been called.
+//   - (nil, ErrAdapterMQTTPublishCanceled) if ctx is already canceled.
 //   - (nil, errcode-wrapped error) on transport-level failure from autopaho.
 //
 // The caller is responsible for setting any per-publish timeout via the ctx
@@ -438,6 +439,10 @@ func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []
 	if closed {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
 			"mqtt: connection is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
+			"mqtt: publish canceled by caller context", err)
 	}
 	return c.cm.Publish(ctx, &paho.Publish{
 		Topic:   t.topic,
