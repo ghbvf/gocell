@@ -73,8 +73,11 @@ func chainContainsAuthMTLS(chain []auth.ListenerAuth) bool {
 // chainContainsInternalGuard reports whether the listener chain has the
 // service-token guard required for /internal/v1/* routes. JWT is intentionally
 // excluded: internal routes use caller_cell allowlist via contract.clients
-// (enforced by auth.RequireCallerCell). AuthMTLS may be layered with
-// service-token, but mTLS alone does not currently establish caller identity.
+// (enforced by auth.RequireCallerCell). AuthMTLS surfaces peer identity
+// (Subject/DNS/URIs) into request ctx via runtime/http/middleware.MTLS, but
+// mTLS alone does not establish the caller_cell allowlist mapping that
+// /internal/v1/* requires; service-token remains the sole producer of
+// caller_cell.
 func chainContainsInternalGuard(chain []auth.ListenerAuth) bool {
 	for _, p := range chain {
 		if _, ok := p.(auth.AuthServiceToken); ok {
