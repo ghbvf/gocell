@@ -57,11 +57,17 @@
 -- ref: tools/archtest/audit_hash_input_frozen_test.go AUDIT-HASH-INPUT-FROZEN-01
 
 -- +goose Up
+-- Up guard uses pg_class (not information_schema.tables) so the existence
+-- check works regardless of whether the migration role has SELECT on
+-- information_schema. Behavior matrix:
+--   - table missing             → DROP+CREATE runs unconditionally (fresh deploy)
+--   - table present, 0 rows     → DROP+CREATE runs unconditionally (idempotent dev re-run)
+--   - table present, ≥1 row     → require GUC gocell.allow_destructive_down=true
 -- +goose StatementBegin
 DO $$
 BEGIN
     IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true'
-       AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'audit_entries')
+       AND EXISTS (SELECT 1 FROM pg_class WHERE relname = 'audit_entries' AND relkind = 'r')
        AND EXISTS (SELECT 1 FROM audit_entries) THEN
         RAISE EXCEPTION 'audit_entries v2 rebuild blocked: existing rows present and GUC gocell.allow_destructive_down not set';
     END IF;

@@ -17,16 +17,22 @@
 //     fails immediately. Combined with the JSON-source-order determinism of
 //     encoding/json, the canonical message bytes cannot drift.
 //
-//   - A2 下游 Hard (typed function choice + AST callsite uniqueness):
-//     Within runtime/audit/ledger/*.go (production files), any call to
-//     hmac.New(...) must be located inside the body of the exported
-//     ComputeHash method on *Protocol. No helper, no test seam, no
-//     "tamper utility" gets to re-derive the HMAC outside the single
-//     sanctioned funnel; if it did, the message format could disagree with
-//     auditHashInput silently. Production callers of the funnel are
-//     enumerated as `(MemStore.Append, MemStore.Verify, LedgerStore.Append,
-//     LedgerStore.verifyRange)` via Protocol.ComputeHash; no other code path
-//     may construct an HMAC over audit data.
+//   - A2 下游 Hard (typed function choice + AST callsite uniqueness with
+//     receiver-type lock): Within runtime/audit/ledger/*.go (production
+//     files), any call to hmac.New(...) must be located inside the body of
+//     the ComputeHash method on a *Protocol receiver. The receiver-type
+//     check rejects same-package re-shape attacks (a sibling struct adding
+//     `func (X) ComputeHash() string` would not satisfy the funnel and would
+//     be flagged). No helper, no test seam, no "tamper utility" gets to
+//     re-derive the HMAC outside the single sanctioned funnel; if it did,
+//     the message format could disagree with auditHashInput silently.
+//     Production callers of the funnel are enumerated as `(MemStore.Append,
+//     MemStore.Verify, LedgerStore.Append, LedgerStore.verifyRange)` via
+//     Protocol.ComputeHash; no other code path may construct an HMAC over
+//     audit data. Note: sha256.New called outside hmac (content fingerprint
+//     in mem_store.go) is intentionally NOT in scope — that path is a
+//     non-HMAC content-id digest, never the chain hash; it cannot drift
+//     the chain because the chain hash funnel routes only through hmac.New.
 //
 //   - A3 上游 Hard (field-order freeze backing JSON-source-order):
 //     encoding/json honors struct source-declaration order. Reordering
@@ -134,15 +140,18 @@ func TestAuditHashInputFrozen_A2_HmacCallsite(t *testing.T) {
 }
 
 // TestAuditHashInputFrozen_B_ReverseSelfCheck proves that the A2 scanner
-// distinguishes allowed vs. forbidden hmac.New callsites: a synthetic file
-// outside ComputeHash MUST produce a violation. If the reverse self-check
-// passes silently the scanner is broken.
+// distinguishes allowed vs. forbidden hmac.New callsites:
+//   - bare function (no receiver) outside ComputeHash must fire
+//   - method ComputeHash on a non-Protocol receiver must fire (receiver-type lock)
+//
+// If either reverse case passes silently the scanner is broken.
 func TestAuditHashInputFrozen_B_ReverseSelfCheck(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	// Synthesize a production-like file with a forbidden hmac.New callsite
-	// (outside any function named ComputeHash).
-	src := `package fakeledger
+
+	t.Run("bare_function_outside_ComputeHash_fires", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		src := `package fakeledger
 
 import (
 	"crypto/hmac"
@@ -155,14 +164,42 @@ func notComputeHash(key []byte) []byte {
 	return mac.Sum(nil)
 }
 `
-	if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o644); err != nil {
-		t.Fatalf("write synthetic source: %v", err)
-	}
+		if err := os.WriteFile(filepath.Join(dir, "fake.go"), []byte(src), 0o644); err != nil {
+			t.Fatalf("write synthetic source: %v", err)
+		}
+		if violations := scanHmacNewCallsitesOutsideComputeHash(t, dir); len(violations) == 0 {
+			t.Error("AUDIT-HASH-INPUT-FROZEN-01 B: bare-function reverse case did not fire")
+		}
+	})
 
-	violations := scanHmacNewCallsitesOutsideComputeHash(t, dir)
-	if len(violations) == 0 {
-		t.Error("AUDIT-HASH-INPUT-FROZEN-01 B: reverse self-check did not fire — scanner cannot tell allowed vs. forbidden callsites")
-	}
+	t.Run("ComputeHash_on_wrong_receiver_fires", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		src := `package fakeledger
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+)
+
+// Imposter struct with method named ComputeHash but receiver != Protocol.
+// Receiver-type lock must reject this so a same-package re-shape cannot
+// bypass A2.
+type Imposter struct{}
+
+func (Imposter) ComputeHash(key []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("imposter"))
+	return mac.Sum(nil)
+}
+`
+		if err := os.WriteFile(filepath.Join(dir, "imposter.go"), []byte(src), 0o644); err != nil {
+			t.Fatalf("write synthetic source: %v", err)
+		}
+		if violations := scanHmacNewCallsitesOutsideComputeHash(t, dir); len(violations) == 0 {
+			t.Error("AUDIT-HASH-INPUT-FROZEN-01 B: wrong-receiver reverse case did not fire — receiver-type lock is missing")
+		}
+	})
 }
 
 // collectAuditHashInputFields parses protocolPath, locates the auditHashInput
@@ -247,7 +284,7 @@ func scanHmacNewCallsitesOutsideComputeHash(t *testing.T, dir string) []string {
 			if fn.Body == nil {
 				continue
 			}
-			isComputeHash := fn.Name != nil && fn.Name.Name == "ComputeHash"
+			isComputeHash := fn.Name != nil && fn.Name.Name == "ComputeHash" && hasProtocolReceiver(fn)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -270,6 +307,26 @@ func scanHmacNewCallsitesOutsideComputeHash(t *testing.T, dir string) []string {
 		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01 A2: walk %s: %v", dir, walkErr)
 	}
 	return violations
+}
+
+// hasProtocolReceiver reports whether fn declares a value-or-pointer receiver
+// whose base type identifier is exactly "Protocol". This narrows A2's "function
+// named ComputeHash" check to the canonical method on *Protocol — a same-package
+// re-shape that adds a `func (X) ComputeHash() string` to bypass A2 is rejected
+// because X != Protocol.
+func hasProtocolReceiver(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return false
+	}
+	recvType := fn.Recv.List[0].Type
+	if star, ok := recvType.(*ast.StarExpr); ok {
+		recvType = star.X
+	}
+	ident, ok := recvType.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "Protocol"
 }
 
 // isHmacNewSelector reports whether expr is the selector hmac.New (with any

@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -218,9 +219,19 @@ func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
 		Payload:            e.Payload,
 	}
 	// json.Marshal on a struct of string / int64 / []byte fields cannot
-	// return a non-nil error: the only error paths are channel / function /
-	// cyclic-reference values, none of which the typed input contains.
-	msgBytes, _ := json.Marshal(input)
+	// return a non-nil error in practice: the only error paths are channel /
+	// function / cyclic-reference values, none of which auditHashInput
+	// contains (AUDIT-HASH-INPUT-FROZEN-01 A1 reflect-locks the field set).
+	// Treat any future regression as an unreachable-branch programmer error:
+	// panic via the registered funnel so the audit chain hash is never
+	// silently computed over an empty message.
+	msgBytes, err := json.Marshal(input)
+	if err != nil {
+		panic(panicregister.Approved(
+			"audit-hash-input-marshal-unreachable",
+			errcode.Assertion("audit ledger: auditHashInput json.Marshal returned error (unreachable per AUDIT-HASH-INPUT-FROZEN-01 A1)"),
+		))
+	}
 	mac := hmac.New(sha256.New, p.hmacKey)
 	// crypto/hmac hash.Write always returns (len(b), nil) per io.Writer contract.
 	mac.Write(msgBytes)

@@ -191,40 +191,59 @@ helper 写入 delivery span：
 
 #### A. 旧 6-field hash chain（develop `020_audit_ledger.sql`）
 
-- **原 invariant**：HMAC msg `prevHash|eventID|eventType|actorID|UnixNano|payload`，字段边界由 `|` 分隔（6 字段）；chain 验证只读取这 6 字段。
+- **原 invariant**：
+  1. **字段边界**：HMAC msg `prevHash|eventID|eventType|actorID|UnixNano|payload`，字段边界由 `|` 分隔（6 字段）；chain 验证只读取这 6 字段。
+  2. **运维约定**：业务侧 payload 不含 `|` 字节（无强制 enforcement，依赖业务侧守约）。
+  3. **类型路由**：`fmt.Sprintf("%s", []byte)` 隐式走 `string` 路径（payload 以原始字节直接落 HMAC msg），string vs []byte 的类型路由由 `fmt.Sprintf` 动词运行时分支决定。
 - **替代证明**：
   - 11-field canonical JSON (`auditHashInput` unexported typed struct,
     `json.Marshal` source-order) 包含全 5 新字段（subject_id / tenant_id /
     session_id / correlation_id / occurred_at_unix_nano）+ 旧 6 字段。
   - JSON quote/escape 消除字段边界 collision 风险（PR #1218 F3+F6）：任何字段
-    值都无法移动字段边界，即便 payload 含 `|` 也无法伪造另一条 entry 的边界。
-  - Payload `[]byte` 由 `encoding/json` base64 自编码，无需手工 hex / 字符串
-    拼接。
+    值都无法移动字段边界，即便 payload 含 `|` 也无法伪造另一条 entry 的边界；
+    旧 invariant #2 的运维守约被静态消除。
+  - Payload `[]byte` 由 `encoding/json` base64 自编码，**类型路由从 runtime
+    `fmt.Sprintf` 分支降为编译期静态绑定**：`auditHashInput.Payload` 字段类型
+    硬编 `[]byte`，encoding/json 对 `[]byte` 的处理在标准库内唯一确定，
+    旧 invariant #3 的隐式分支被 Go 类型系统消除。
   - 所有 hash 期望 fixture（`mem_store_test.go::TestMemStore_Append_HashEquivalence`，
     `TestProtocol_ComputeHash_ByteForByte`）在 PR-A1 内 regen 为 11-field 形态。
   - **funnel 守卫**：`AUDIT-HASH-INPUT-FROZEN-01` 双向 Hard 锁（A1 字段集 + 顺序 + JSON
     tag + Go 类型 reflect/AST 锁；A2 `hmac.New` callsite ⊆
-    `{Protocol.ComputeHash.Body}`）保证 caller 无法旁路 ComputeHash 或漂移 msg 格式。
+    `{Protocol.ComputeHash.Body}` 且 receiver 必须是 `*Protocol`）保证 caller
+    无法旁路 ComputeHash 或漂移 msg 格式 / 类型路由。
 
 #### B. audit_entries 表数据（develop 已有 row）
 
-- **原 invariant**：已有 row 在 020 schema 下生成 hash valid；
-  `RestartRecoveryStrictTailVerify` 在 restart 期 SELECT 最大 seq_no 再 verify
-  tail HMAC，确保新 Append 接在合法 chain 末尾。
+- **原 invariant**：
+  1. **chain SoR**：已有 row 在 020 schema 下生成 hash valid；`RestartRecoveryStrictTailVerify` 在 restart 期 SELECT 最大 seq_no 再 verify tail HMAC，确保新 Append 接在合法 chain 末尾。
+  2. **DB-level dedup**：`021_audit_entries_event_id_unique.sql` 引入的 `uq_audit_namespace_event_id` UNIQUE INDEX `(namespace, event_id)` 是 application-layer `selectFingerprintSQL` 的二线 dedup guard（`mem_store.go:308-309` 注释明示），防止两个并发 Append 在 fingerprint check 之间窗口插入同 EventID 的 row。
+  3. **hash 格式 CHECK**：`ck_audit_hash_format` CHECK 约束在 DB 层强制 prev_hash / hash 是 64-char 小写 hex（seq_no-coupled，genesis row 例外），作为 wire-format 的最后一道防线。
 - **替代证明**：
-  - migration 041_audit_entries_v2 在 +goose Up 阶段 DROP TABLE audit_entries
-    （配合 `gocell.allow_destructive_down` GUC fail-closed guard：发现表已
-    存在且含 row 时拒绝迁移，运维必须显式置位再跑），然后 CREATE TABLE 重建。
-  - DROP 之后表不存在 → `TailVerify` SELECT 取不到任何旧 row（结果集为空）→
-    `RestartRecoveryStrictTailVerify` 自动从 `prevHash=""`, `seqNo=1` 重建 chain
-    起点（与首次部署语义等价），无 W0 detection / sentinel 检测路径。
-  - 旧 row 的 hash 无法被新 ComputeHash 验证（11-field 与 6-field 字节不同），
-    但由于行已被 DROP，不存在「旧 hash 与新 hash 共存」二义性。
+  - **chain SoR**（替代原 invariant #1）：migration 041_audit_entries_v2 在
+    +goose Up 阶段 DROP TABLE audit_entries（配合
+    `gocell.allow_destructive_down` GUC fail-closed guard：发现表已存在且
+    含 row 时拒绝迁移；以 `pg_class` 探测表存在以避免 `information_schema`
+    权限盲区），然后 CREATE TABLE 重建。DROP 之后表不存在 → `TailVerify`
+    SELECT 取不到任何旧 row（结果集为空）→ `RestartRecoveryStrictTailVerify`
+    自动从 `prevHash=""`, `seqNo=1` 重建 chain 起点（与首次部署语义等价），
+    无 W0 detection / sentinel 检测路径。旧 row 的 hash 无法被新 ComputeHash
+    验证（11-field 与 6-field 字节不同），但由于行已被 DROP，不存在
+    「旧 hash 与新 hash 共存」二义性。
+  - **DB-level dedup**（替代原 invariant #2）：041 line 101 `CREATE UNIQUE INDEX
+    uq_audit_namespace_event_id ON audit_entries (namespace, event_id)` 复刻
+    021 的 UNIQUE 约束。schema_guard `expectedIndexes` 同步注册该索引名 +
+    `Unique: true` 标记，运行时 schema_guard 启动校验保证索引未漂移。
+  - **hash 格式 CHECK**（替代原 invariant #3）：041 CREATE TABLE 内联
+    `CONSTRAINT ck_audit_hash_format CHECK (...)` 子句，约束 regex 字面与 020
+    一致；schema_guard `expectedChecks` 注册 `ck_audit_hash_format` 名持续守
+    护其存在性。
   - **事实陈述**：gocell 无外部部署 → dev/test/CI 环境重跑 migration 即可。
     这是事实层面的运维真值，不在 §Consequences 重复作免责论述（CLAUDE.md
     「Review 和重构时不考虑向后兼容」明确该原则的应用前提，非个案豁免）。
   - 关联 archtest：schema_guard `expectedColumns` 15 行（10 旧 + 5 新 NotNull=true，
-    无 expectedDefault），`expectedVersion=41`；`MIGRATION-PAIR-DEPLOY-01`
+    无 expectedDefault），`expectedVersion=41`；`expectedIndexes` 含 `uq_audit_namespace_event_id Unique=true`；
+    `expectedChecks` 含 `ck_audit_hash_format`；`MIGRATION-PAIR-DEPLOY-01`
     无新加 pair-deploy directive（041 自包含含 020 + 021 全部约束）。
 
 #### C. ALTER ADD 5 列 + 哨兵 DEFAULT（PR #1218 旧方案 `041_extend_audit_principal_correlation.sql`）
