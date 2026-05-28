@@ -62,7 +62,8 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
 	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10);
 	// 041 extends saga_events.kind CHECK range from 1..9 to 1..10 (#1181 F3 — adds KindStepCompensationFailed);
-	// 042 extends saga_events.kind 1..11 and saga_instances.status 1..8 (#1210 C6 — adds KindSagaCompensationFailed / StatusCompensationFailed).
+	// 042 extends saga_events.kind 1..11 and saga_instances.status 1..8
+	// (#1210 C6 — adds KindSagaCompensationFailed / StatusCompensationFailed).
 	assert.Equal(t, int64(42), v,
 		"expected version should be exactly 42 (current migration max — 042 saga kind/status range)")
 }

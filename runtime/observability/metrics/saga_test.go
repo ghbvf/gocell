@@ -262,11 +262,11 @@ type sagaSpyRecord struct {
 }
 
 type sagaSpyProvider struct {
-	counterNames  map[string]struct{}
-	counterLabels map[string][]string
-	gaugeNames    map[string]struct{}
+	counterNames   map[string]struct{}
+	counterLabels  map[string][]string
+	gaugeNames     map[string]struct{}
 	histogramNames map[string]struct{}
-	counterOps    map[string][]sagaSpyRecord
+	counterOps     map[string][]sagaSpyRecord
 }
 
 func newSagaSpyProvider() *sagaSpyProvider {
