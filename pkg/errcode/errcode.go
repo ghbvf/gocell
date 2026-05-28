@@ -742,8 +742,13 @@ const (
 	// HTTP 400.
 	ErrWebhookAlgorithmUnsupported Code = "ERR_WEBHOOK_ALGORITHM_UNSUPPORTED"
 	// ErrWebhookSourceNotFound signals the source ID has no registered secret.
-	// Constructed with KindNotFound → HTTP 404. First constructed in PR-3
-	// (receiver runtime).
+	// KindNotFound → HTTP 404 is ONLY for management/config lookups
+	// (list/get source). On the inbound receive/verify path this sentinel MUST
+	// NOT be used — the receiver must return ErrWebhookInvalidSignature
+	// (KindUnauthenticated → 401) for any source-lookup failure, so the response
+	// is byte-identical to a bad-signature failure and cannot be used to
+	// enumerate which source IDs exist (via either HTTP status or wire error
+	// code). First constructed in PR-3 (receiver runtime).
 	ErrWebhookSourceNotFound Code = "ERR_WEBHOOK_SOURCE_NOT_FOUND"
 	// ErrWebhookSSRFBlocked signals an outbound dispatch target resolved to a
 	// blocked address (SSRF defense). Constructed with KindPermissionDenied →

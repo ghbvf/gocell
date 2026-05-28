@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"fmt"
 	"log/slog"
 	"regexp"
 
@@ -197,10 +198,29 @@ func (s Source) LogValue() slog.Value {
 	)
 }
 
-// Compile-time guarantee that Source redacts itself when logged — the
-// type-system half of the secret-leak defense (WEBHOOK-HMAC-FUNNEL-01 B6).
-// slog.Any honors slog.LogValuer, so even slog.Any("source", src) is safe.
-var _ slog.LogValuer = Source{}
+// String implements fmt.Stringer so fmt.Sprintf("%v", src), fmt.Errorf("… %v",
+// src), and log.Print(src) never leak the secret. fmt invokes String for %v,
+// %s, %q, and %+v — covering every non-#v verb. slog.LogValuer only covers the
+// slog package, so this closes the fmt/log/panic path (WEBHOOK-HMAC-FUNNEL-01
+// secret-leak defense).
+func (s Source) String() string {
+	return "Source(id=" + string(s.id) + ", secret=" + redaction.Mask + ")"
+}
+
+// GoString implements fmt.GoStringer so fmt.Sprintf("%#v", src) is also safe.
+func (s Source) GoString() string {
+	return "webhook.Source{id:" + string(s.id) + ", secret:" + redaction.Mask + "}"
+}
+
+// Compile-time guarantee that Source redacts itself across every formatting
+// path — the type-system half of the secret-leak defense
+// (WEBHOOK-HMAC-FUNNEL-01 B6). slog.Any honors slog.LogValuer; fmt honors
+// Stringer (%v/%s/%q/%+v) and GoStringer (%#v).
+var (
+	_ slog.LogValuer = Source{}
+	_ fmt.Stringer   = Source{}
+	_ fmt.GoStringer = Source{}
+)
 
 // Headers is the set of signature headers a [Signer] produces and a [Verifier]
 // consumes. Timestamp is unix seconds as a decimal string; Signature is one or

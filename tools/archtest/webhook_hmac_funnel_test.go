@@ -3,17 +3,18 @@
 // WEBHOOK-HMAC-FUNNEL-01 — kernel/webhook HMAC signing funnel (KERNEL-WEBHOOK-01).
 //
 //   - A1 (downstream Hard): crypto/hmac.New has exactly one callsite in the
-//     kernel/webhook package — computeMAC in signer.go. Any other hmac.New call
-//     in the package fails. This also closes the package-internal upstream blind
-//     spot: any new struct that wants to sign MUST call hmac.New, which is
-//     allowlisted to signer.go, so an unsealed internal holder cannot produce a
+//     kernel/webhook package — the computeMAC function in signer.go. The check is
+//     FUNCTION-level, not file-level: an hmac.New in any other function (even
+//     inside signer.go) fails. This also closes the package-internal upstream
+//     blind spot: any new struct that wants to sign MUST call hmac.New, which is
+//     allowlisted to computeMAC, so an unsealed internal holder cannot produce a
 //     signature undetected. Detection: ResolvePackageRef(callee) == crypto/hmac.New
-//     AND enclosing file != signer.go.
+//     AND (file basename != signer.go OR enclosing func != computeMAC).
 //   - A2 (downstream Hard): signature comparison must use crypto/hmac.Equal or
-//     crypto/subtle.ConstantTimeCompare. bytes.Equal is banned in the package
-//     (it is not constant-time). This makes the constant-time invariant an AST
-//     lock rather than a flaky timing test. Detection:
-//     ResolvePackageRef(callee) == bytes.Equal in the package.
+//     crypto/subtle.ConstantTimeCompare. The non-constant-time comparison callees
+//     bytes.Equal / bytes.Compare / slices.Equal / reflect.DeepEqual are banned in
+//     the package. This makes the constant-time invariant an AST lock rather than
+//     a flaky timing test. Detection: ResolvePackageRef(callee) ∈ the banned set.
 //   - A3 (upstream Hard external / Medium internal): the Signer and Verifier
 //     interfaces each carry an unexported sealed() marker method, so
 //     package-external implementations are a compile error (Hard). Package-internal
@@ -26,12 +27,23 @@
 // Blind spots (ai-robust 强制反向自检; each has a reverse self-test below):
 //
 //	B-A1/A2 — rule-logic regression: a reverse fixture module
-//	  (testdata/webhook_hmac_violate) calls hmac.New outside signer.go and
-//	  bytes.Equal, and TestWebhookHMACFunnel_ReverseFixture asserts A1/A2 fire.
+//	  (testdata/webhook_hmac_violate) calls hmac.New outside computeMAC (both
+//	  outside signer.go and inside signer.go in a non-computeMAC func) and the
+//	  banned comparison callees; TestWebhookHMACFunnel_ReverseFixture asserts A1/A2
+//	  fire on each form.
 //	B6 — Source.Secret leak: slog of the raw unexported secret field would leak
 //	  it (Source.LogValue + slog.LogValuer covers slog.Any of a whole Source, but
-//	  not slog of src.secret directly). TestWebhookFunnel_NoRawSecretSlog asserts
-//	  no slog.* call in the package references a `.secret` selector.
+//	  not slog of src.secret directly). scanWebhookSecretSlog covers BOTH the
+//	  package-function form (slog.Info(...)) and the method form
+//	  (logger.Info(...)). TestWebhookFunnel_NoRawSecretSlog asserts no such call in
+//	  the package references a `.secret` selector.
+//	B7 — non-AST-detectable constant-time bypass: comparing the base64 signature
+//	  STRINGS with `==` (e.g. expectedB64 == presentedB64) is non-constant-time but
+//	  is a plain *ast.BinaryExpr with no resolvable callee, so the A2 callee scan
+//	  cannot see it. Detecting it would need type-level data-flow analysis. Bounded
+//	  response: production matchAnySignature compares raw MAC bytes via hmac.Equal
+//	  (A2-clean), and this blind spot is documented here so a future reviewer knows
+//	  the AST scan does not cover string-`==`.
 //
 // ref: docs/architecture/202605291200-adr-webhook-signing-algorithm.md
 // ref: tools/archtest/healthz_invariants_test.go (callsite-allowlist template)
@@ -50,65 +62,95 @@ import (
 )
 
 const (
-	webhookPkgPattern   = "./kernel/webhook/..."
-	webhookSignerSuffix = "kernel/webhook/signer.go"
-	hmacPkgPath         = "crypto/hmac"
-	slogPkgPath         = "log/slog"
+	webhookPkgPattern  = "./kernel/webhook/..."
+	signerFileBasename = "signer.go"
+	computeMACFuncName = "computeMAC"
+	hmacPkgPath        = "crypto/hmac"
+	slogPkgPath        = "log/slog"
 )
 
 // webhookSealedInterfaces are the interface type names in kernel/webhook that
 // must carry an unexported sealed() marker (A3).
 var webhookSealedInterfaces = map[string]bool{"Signer": true, "Verifier": true}
 
-// scanWebhookHMACNew implements A1: crypto/hmac.New callsites must live in
-// signer.go.
+// nonConstTimeCompareCallees is the A2 banned set: package-qualified callees
+// that compare bytes/values in non-constant time. Signature comparison must use
+// crypto/hmac.Equal or crypto/subtle.ConstantTimeCompare instead.
+var nonConstTimeCompareCallees = map[[2]string]bool{
+	{"bytes", "Equal"}:       true,
+	{"bytes", "Compare"}:     true,
+	{"slices", "Equal"}:      true,
+	{"reflect", "DeepEqual"}: true,
+}
+
+// scanWebhookHMACNew implements A1: crypto/hmac.New may be called only inside the
+// computeMAC function of signer.go (function-level, not merely file-level).
 func scanWebhookHMACNew(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
-	allowed := strings.HasSuffix(filepath.ToSlash(rel), webhookSignerSuffix)
+	inSignerFile := filepath.Base(filepath.ToSlash(rel)) == signerFileBasename
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 		if !ok || pkgPath != hmacPkgPath || name != "New" {
 			return
 		}
-		if allowed {
-			return
+		if inSignerFile {
+			if fn, ok := ResolveEnclosingFunc(info, file, call); ok && fn != nil && fn.Name() == computeMACFuncName {
+				return
+			}
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
 			Line: fset.Position(call.Pos()).Line,
-			Message: "crypto/hmac.New called outside kernel/webhook/signer.go; " +
+			Message: "crypto/hmac.New called outside computeMAC (signer.go); " +
 				"all HMAC computation must funnel through computeMAC (WEBHOOK-HMAC-FUNNEL-01/A1)",
 		})
 	})
 	return out
 }
 
-// scanWebhookBytesEqual implements A2: bytes.Equal is banned in the package
-// (signature comparison must use hmac.Equal / subtle.ConstantTimeCompare).
+// scanWebhookBytesEqual implements A2: non-constant-time comparison callees are
+// banned in the package (signature comparison must use hmac.Equal /
+// subtle.ConstantTimeCompare). See nonConstTimeCompareCallees for the set; the
+// string-`==` form is the documented blind spot B7.
 func scanWebhookBytesEqual(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		if !ok || pkgPath != "bytes" || name != "Equal" {
+		if !ok || !nonConstTimeCompareCallees[[2]string{pkgPath, name}] {
 			return
 		}
 		out = append(out, Diagnostic{
 			Rel:  rel,
 			Line: fset.Position(call.Pos()).Line,
-			Message: "bytes.Equal called in kernel/webhook; signature comparison must use " +
+			Message: pkgPath + "." + name + " called in kernel/webhook; signature comparison must use " +
 				"crypto/hmac.Equal or crypto/subtle.ConstantTimeCompare (WEBHOOK-HMAC-FUNNEL-01/A2)",
 		})
 	})
 	return out
 }
 
-// scanWebhookSecretSlog implements B6: no slog.* call may pass a `.secret`
-// selector (the raw unexported secret field).
+// isSlogCall reports whether call is a log/slog call in either form: a
+// package-function call (slog.Info(...)) or a method call on a *slog.Logger
+// (logger.Info(...)).
+func isSlogCall(call *ast.CallExpr, info *types.Info) bool {
+	if pkgPath, _, ok := ResolvePackageRef(info, call.Fun); ok && pkgPath == slogPkgPath {
+		return true
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := ResolveMethodCall(info, sel)
+	return ok && fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == slogPkgPath
+}
+
+// scanWebhookSecretSlog implements B6: no slog call (package-function OR
+// *slog.Logger method form) may pass a `.secret` selector (the raw unexported
+// secret field).
 func scanWebhookSecretSlog(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var out []Diagnostic
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, _, ok := ResolvePackageRef(info, call.Fun)
-		if !ok || pkgPath != slogPkgPath {
+		if !isSlogCall(call, info) {
 			return
 		}
 		for _, arg := range call.Args {
@@ -226,9 +268,16 @@ func TestWebhookHMACFunnel_ReverseFixture(t *testing.T) {
 			return nil
 		})
 
-	assert.NotEmpty(t, a1, "A1 reverse fixture: expected ≥1 diagnostic for hmac.New outside signer.go")
-	assert.NotEmpty(t, a2, "A2 reverse fixture: expected ≥1 diagnostic for bytes.Equal")
-	assert.NotEmpty(t, b6, "B6 reverse fixture: expected ≥1 diagnostic for slog of .secret")
+	// A1: both forms must fire — hmac.New outside signer.go (violations.go) AND
+	// hmac.New inside signer.go but outside computeMAC (signer.go fixture file).
+	assert.GreaterOrEqual(t, len(a1), 2,
+		"A1 reverse fixture: expected ≥2 diagnostics (hmac.New outside signer.go + inside signer.go non-computeMAC)")
+	// A2: every banned comparison callee must fire (Equal/Compare/slices.Equal/reflect.DeepEqual).
+	assert.GreaterOrEqual(t, len(a2), 4,
+		"A2 reverse fixture: expected ≥4 diagnostics (bytes.Equal/bytes.Compare/slices.Equal/reflect.DeepEqual)")
+	// B6: both the package-function form and the *slog.Logger method form must fire.
+	assert.GreaterOrEqual(t, len(b6), 2,
+		"B6 reverse fixture: expected ≥2 diagnostics (slog.Info package form + logger.Info method form)")
 }
 
 // TestWebhookFunnel_NoRawSecretSlog is the B6 blind-spot self-check: production

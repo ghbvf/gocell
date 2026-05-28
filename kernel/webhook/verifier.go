@@ -75,9 +75,12 @@ func (v *hmacVerifier) Verify(rawBody []byte, headers Headers, source Source) er
 	}
 	expected := computeMAC(source.secret, headers.DeliveryID, headers.Timestamp, rawBody)
 	if !matchAnySignature(headers.Signature, expected) {
+		// sourceId goes to Internal (server-side slog), not Details: the wire
+		// 401 must be uniform with the unknown-source case so the receive path
+		// is not a source-ID enumeration oracle (WEBHOOK-HMAC-FUNNEL-01 F8/F9).
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
 			"webhook: no presented signature matches the computed digest",
-			errcode.WithDetails(errcode.PublicString("sourceId", string(source.id))))
+			errcode.WithInternal(errcode.InternalAttr("sourceId", string(source.id))))
 	}
 	return nil
 }

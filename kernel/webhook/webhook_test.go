@@ -3,6 +3,7 @@ package webhook
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -192,6 +193,27 @@ func TestSourceLogValueRedactsSecret(t *testing.T) {
 		}
 	}
 	assert.Equal(t, redactionMask, secretAttr)
+}
+
+// TestSourceFmtRedactsSecret asserts the fmt-path defense (F1): String and
+// GoString keep the secret out of every fmt/log verb, since slog.LogValuer does
+// not cover fmt/log/panic.
+func TestSourceFmtRedactsSecret(t *testing.T) {
+	t.Parallel()
+	rawSecret := []byte("topsecret-hmac-key-material")
+	src, err := NewSource(MustSourceID("stripe"), rawSecret)
+	require.NoError(t, err)
+
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		out := fmt.Sprintf(verb, src)
+		assert.NotContains(t, out, string(rawSecret), "verb %s must not leak the raw secret", verb)
+		assert.Contains(t, out, redactionMask, "verb %s must render the mask", verb)
+		assert.Contains(t, out, "stripe", "verb %s keeps the non-secret id observable", verb)
+	}
+
+	// A Source embedded in an error wrapped with %v must also stay redacted.
+	wrapped := fmt.Errorf("processing %v: boom", src)
+	assert.NotContains(t, wrapped.Error(), string(rawSecret))
 }
 
 // TestSentinelKindMappingAtConstructionSites verifies that the webhook
