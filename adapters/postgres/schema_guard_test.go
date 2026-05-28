@@ -42,9 +42,9 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 34 migrations: 001-033 contiguous, plus 040 (intentional gap
+	// Currently 35 migrations: 001-033 contiguous, plus 040 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
-	// by number, gaps are harmless).
+	// by number, gaps are harmless) and 041 (audit_entries v2 rebuild).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
 	// 020 adds audit_entries table for the ledger.Store PG backend; 021 adds the
 	// (namespace, event_id) UNIQUE INDEX second-line idempotency guard;
@@ -60,9 +60,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 031 adds unique index on commands metadata->>'_idempotency_key' (DB-level TOCTOU-safe dedup);
 	// 032 adds users.failed_login_count / last_failed_at / locked_until (accesscore auto-lockout);
 	// 033 adds users.password_version >= 0 CHECK (#940 P2-1 defense-in-depth);
-	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10).
-	assert.Equal(t, int64(40), v,
-		"expected version should be exactly 40 (current migration max — 040 saga tables)")
+	// 040 creates saga_instances + saga_events for the PG saga journal (PR-04 / W6 step 4/10);
+	// 041 rebuilds audit_entries (DROP+CREATE) with 5 new NOT NULL columns
+	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) for
+	// the 11-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition).
+	assert.Equal(t, int64(41), v,
+		"expected version should be exactly 41 (current migration max — 041 audit_entries v2)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

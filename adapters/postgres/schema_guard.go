@@ -33,7 +33,11 @@ import (
 //   - roles              (019)  accesscore role definitions
 //   - role_assignments   (019)  accesscore user-role grants
 //                                 + effective_admin_invariant_on_role_assignments trigger (024)
-//   - audit_entries      (020)  tamper-evident audit ledger (per-namespace hash chain)
+//   - audit_entries      (020/041)  tamper-evident audit ledger (per-namespace hash chain)
+//                                 + 041_audit_entries_v2 DROP+CREATE rebuild adding
+//                                   5 NOT NULL columns (subject_id / tenant_id /
+//                                   session_id / correlation_id / occurred_at) for
+//                                   the 11-field canonical-JSON HMAC chain.
 //   - devices            (029)  examples/iotdevice devicecell PG repo (B2.B)
 //                                 + devices_status_chk CHECK (status IN online/offline)
 //   - commands           (030)  examples/iotdevice command queue PG adapter (B2.B)
@@ -361,13 +365,21 @@ var expectedColumns = []expectedColumn{
 	{Table: "role_assignments", Column: "user_id", Type: "uuid", NotNull: true},
 	{Table: "role_assignments", Column: "role_id", Type: "text", NotNull: true},
 	{Table: "role_assignments", Column: "granted_at", Type: pgTypeTSTZ, NotNull: true},
-	// audit_entries (020_audit_ledger.sql)
+	// audit_entries (020_audit_ledger.sql + 041_audit_entries_v2.sql)
+	// 041 rebuilds the table (DROP+CREATE) with 5 NOT NULL columns added for
+	// the 11-field canonical-JSON HMAC chain — no DEFAULT sentinels, callers
+	// must supply values.
 	{Table: "audit_entries", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "audit_entries", Column: "namespace", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "seq_no", Type: "bigint", NotNull: true},
 	{Table: "audit_entries", Column: "event_id", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "event_type", Type: "text", NotNull: true},
 	{Table: "audit_entries", Column: "actor_id", Type: "text", NotNull: true},
+	{Table: "audit_entries", Column: "subject_id", Type: "text", NotNull: true},      // 041 NEW
+	{Table: "audit_entries", Column: "tenant_id", Type: "text", NotNull: true},       // 041 NEW
+	{Table: "audit_entries", Column: "session_id", Type: "text", NotNull: true},      // 041 NEW
+	{Table: "audit_entries", Column: "correlation_id", Type: "text", NotNull: true},  // 041 NEW
+	{Table: "audit_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 041 NEW
 	{Table: "audit_entries", Column: "timestamp", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "audit_entries", Column: "payload", Type: "bytea", NotNull: true},
 	{Table: "audit_entries", Column: "prev_hash", Type: "text", NotNull: true},
@@ -427,7 +439,7 @@ var expectedPKs = []expectedPK{
 	{Table: "sessions", Columns: []string{"id"}},
 	{Table: "roles", Columns: []string{"id"}},
 	{Table: "role_assignments", Columns: []string{"user_id", "role_id"}},
-	// audit_entries (020_audit_ledger.sql)
+	// audit_entries (020_audit_ledger.sql + 041_audit_entries_v2.sql rebuild)
 	{Table: "audit_entries", Columns: []string{"id"}},
 	// devices / commands (029, 030) — B2.B.
 	{Table: "devices", Columns: []string{"id"}},
@@ -451,7 +463,8 @@ var expectedIndexes = []expectedIndex{
 	// roles: no additional non-PK indexes in migration 019
 	// role_assignments
 	{Table: "role_assignments", Name: "idx_role_assignments_role", Unique: false},
-	// audit_entries (020_audit_ledger.sql + 021 event_id unique)
+	// audit_entries (020_audit_ledger.sql + 021 event_id unique;
+	// 041_audit_entries_v2.sql rebuilds the table preserving index names)
 	{Table: "audit_entries", Name: "uq_audit_namespace_seq", Unique: true},
 	{Table: "audit_entries", Name: "idx_audit_namespace_ts_id", Unique: false},
 	{Table: "audit_entries", Name: "idx_audit_namespace_event_type", Unique: false},
@@ -566,8 +579,9 @@ var expectedChecks = []expectedCheck{
 	{Table: "devices", Name: "devices_status_chk"},
 	{Table: "commands", Name: "commands_status_chk"},
 	{Table: "commands", Name: "commands_attempt_chk"},
-	// audit_entries hash-format guard (020_audit_ledger.sql) — seq_no-coupled
-	// 64-char lowercase hex format for prev_hash/hash with the genesis exception.
+	// audit_entries hash-format guard (020_audit_ledger.sql + 041_audit_entries_v2.sql
+	// rebuild preserves the constraint name) — seq_no-coupled 64-char lowercase
+	// hex format for prev_hash/hash with the genesis exception.
 	{Table: "audit_entries", Name: "ck_audit_hash_format"},
 	// saga_instances (040_create_saga_tables.sql).
 	{Table: "saga_instances", Name: "saga_instances_status_range"},

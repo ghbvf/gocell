@@ -154,6 +154,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_EmptySort_Rejected", func(t *testing.T) { runQueryEmptySortRejected(t, factory) })
 	t.Run("Query_InvalidCursor_Rejected", func(t *testing.T) { runQueryInvalidCursorRejected(t, factory) })
 	t.Run("Protocol_HashParity", func(t *testing.T) { runProtocolHashParity(t, factory, protocol) })
+	t.Run("PrincipalFields_RoundTrip", func(t *testing.T) { RunPrincipalFieldsRoundTrip(t, factory, protocol) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -748,6 +749,90 @@ func runProtocolHashParity(t *testing.T, factory Factory, protocol *ledger.Proto
 		t.Errorf("seq 2 hash parity broken: store=%s protocol=%s "+
 			"(chain link broken — Store does not use Protocol.ComputeHash for prevHash threading)",
 			got2.Hash, want2)
+	}
+}
+
+// principalOccurredAtSkew is the producer-clock skew used by
+// RunPrincipalFieldsRoundTrip to set Entry.OccurredAt distinct from
+// Entry.Timestamp. The value is a fixture offset only — extracted to a
+// package-level const per TEST-TIME-LITERAL-01.
+const principalOccurredAtSkew = -30 * time.Second
+
+// RunPrincipalFieldsRoundTrip asserts that the five canonical Principal /
+// Correlation / OccurredAt fields added in migration 041_audit_entries_v2 round
+// trip through Append → GetBySeq with byte-equal values, and that the persisted
+// Hash matches protocol.ComputeHash on the populated entry. Combined with
+// Protocol_HashParity it forms the single-source HMAC parity contract: any
+// Store implementation must (a) persist all 11 input fields losslessly and
+// (b) compute Hash via Protocol.ComputeHash so identical inputs map to
+// identical hashes across MemStore / PG Store / future backends.
+//
+// Wired into Run() as the "PrincipalFields_RoundTrip" subtest; also exported
+// for direct invocation from per-backend tests that wish to call it outside the
+// full Run() suite.
+func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger.Protocol) {
+	t.Helper()
+	if factory == nil {
+		t.Fatal("storetest.RunPrincipalFieldsRoundTrip: factory must not be nil")
+	}
+	if protocol == nil {
+		t.Fatal("storetest.RunPrincipalFieldsRoundTrip: protocol must not be nil")
+	}
+
+	store, fc, cleanup := factory(t)
+	defer cleanup()
+
+	occurredAt := fc.Now().Add(principalOccurredAtSkew).UTC()
+	entry := &ledger.Entry{
+		EventID:       "principal-roundtrip",
+		EventType:     "user.login",
+		ActorID:       "actor-impersonator",
+		SubjectID:     "subject-end-user",
+		TenantID:      "tenant-alpha",
+		SessionID:     "sess-42",
+		CorrelationID: "corr-xyz-001",
+		OccurredAt:    occurredAt,
+		Timestamp:     fc.Now(),
+		Payload:       []byte(`{"action":"login"}`),
+	}
+
+	if err := store.Append(context.Background(), entry); err != nil {
+		t.Fatalf("Append principal-roundtrip: %v", err)
+	}
+
+	got, err := store.GetBySeq(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("GetBySeq(1): %v", err)
+	}
+
+	// All 5 new canonical fields must round-trip byte-equal.
+	if got.SubjectID != entry.SubjectID {
+		t.Errorf("SubjectID round-trip: got %q, want %q", got.SubjectID, entry.SubjectID)
+	}
+	if got.TenantID != entry.TenantID {
+		t.Errorf("TenantID round-trip: got %q, want %q", got.TenantID, entry.TenantID)
+	}
+	if got.SessionID != entry.SessionID {
+		t.Errorf("SessionID round-trip: got %q, want %q", got.SessionID, entry.SessionID)
+	}
+	if got.CorrelationID != entry.CorrelationID {
+		t.Errorf("CorrelationID round-trip: got %q, want %q", got.CorrelationID, entry.CorrelationID)
+	}
+	// time.Time round-trip via PG uses TIMESTAMPTZ → time.Time; compare via
+	// .Equal so monotonic clock readings are ignored (UTC normalization).
+	if !got.OccurredAt.Equal(entry.OccurredAt) {
+		t.Errorf("OccurredAt round-trip: got %v, want %v", got.OccurredAt, entry.OccurredAt)
+	}
+
+	// HMAC parity: store-persisted Hash must equal protocol.ComputeHash on the
+	// loaded entry. This is the audit-side parity contract — combined with the
+	// fact that MemStore and PG Store both delegate to protocol.ComputeHash
+	// (single source), identical Entry inputs yield identical Hash outputs
+	// across backends.
+	want := protocol.ComputeHash("", got)
+	if got.Hash != want {
+		t.Errorf("Hash parity broken with populated Principal fields: store=%s protocol=%s",
+			got.Hash, want)
 	}
 }
 

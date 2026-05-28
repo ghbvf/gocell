@@ -4,7 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"encoding/json"
 	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -136,26 +136,94 @@ func (p *Protocol) RestartRecovery() RestartRecoveryMode { return p.restartRecov
 // Idempotency returns the configured idempotency mode.
 func (p *Protocol) Idempotency() IdempotencyMode { return p.idempotency }
 
+// auditHashInput is the canonical typed input to the HMAC-SHA256 hash chain
+// computation. json.Marshal serializes struct fields in source-declaration
+// order (Go spec — reflect.Value.MapKeys does not apply to structs), producing
+// deterministic bytes across all Go versions and platforms.
+//
+// Using a typed struct with JSON encoding eliminates the field-boundary
+// collision risk that existed with the prior pipe-separated fmt.Sprintf format:
+// JSON's quote/escape handling makes it impossible for any field value to
+// shift the boundary between fields, regardless of the bytes a field contains
+// (PR #1218 F3+F6).
+//
+// Payload is []byte; encoding/json serializes []byte as a base64-encoded JSON
+// string (RFC 4648 §4), so Payload is self-encoding — no manual hex/base64
+// step is required.
+//
+// The type is unexported (package-private) so external packages cannot
+// construct, alias, or re-shape an equivalent struct. Combined with the
+// archtest funnel AUDIT-HASH-INPUT-FROZEN-01 (which locks the field set +
+// order + JSON tags by reflect and locks hmac.New callsites to ComputeHash by
+// AST), this struct is the single source of truth for the HMAC message and
+// cannot be bypassed.
+//
+// ref: google/trillian storage/leafdata.go — typed canonical input struct
+// pattern for log-leaf HMAC.
+// ref: RFC 8785 (JCS) — canonical JSON for deterministic signing (struct-order
+// determinism is sufficient here because auditHashInput is a private,
+// append-only type with no external serialiser).
+type auditHashInput struct {
+	PrevHash           string `json:"prev_hash"`
+	EventID            string `json:"event_id"`
+	EventType          string `json:"event_type"`
+	ActorID            string `json:"actor_id"`
+	SubjectID          string `json:"subject_id"`
+	TenantID           string `json:"tenant_id"`
+	SessionID          string `json:"session_id"`
+	CorrelationID      string `json:"correlation_id"`
+	OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
+	TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
+	Payload            []byte `json:"payload"`
+}
+
 // ComputeHash produces the HMAC-SHA256 hex digest for an entry using the
-// configured HMAC key. The message format is byte-for-byte compatible with
-// cells/auditcore/internal/domain/hashchain.go computeHash:
+// configured HMAC key.
 //
-//	msg = prevHash|eventID|eventType|actorID|UnixNano|payload
+// The HMAC message is the canonical JSON encoding of an auditHashInput struct
+// (json.Marshal in source-declaration order). The 11-field canonical-JSON
+// format supersedes the prior pipe-separated fmt.Sprintf format introduced in
+// 020_audit_ledger.sql; both the field-boundary collision risk (any bytes in
+// a field could shift `|` semantics) and the lack of OAuth Principal /
+// CorrelationID / OccurredAt coverage are closed in one rewrite.
 //
-// ref: cells/auditcore/internal/domain/hashchain.go computeHash (must remain
-// byte-for-byte equivalent to preserve chain continuity when PG store lands).
+// There is no protocol version byte and no legacy path: per CLAUDE.md
+// "Review 和重构时不考虑向后兼容——当前只有 gocell 自身", existing audit
+// rows in the pre-041 schema are discarded (DROP TABLE in 041_audit_entries_v2.sql)
+// and all hash fixture expectations are regenerated in the same PR.
+//
+// Payload is encoded as a base64 JSON string by encoding/json's []byte
+// handling; no manual hex-encoding is needed.
+//
+// INVARIANT: AUDIT-HASH-INPUT-FROZEN-01 — the auditHashInput struct shape +
+// hmac.New callsite uniqueness are double-locked by archtest. ComputeHash is
+// the only place in the audit ledger package that may construct an HMAC over
+// audit data.
+//
+// ref: google/trillian storage/leafdata.go (canonical input struct).
+// ref: RFC 8785 JCS.
+// ref: tools/archtest/audit_hash_input_frozen_test.go.
 func (p *Protocol) ComputeHash(prevHash string, e *Entry) string {
+	input := auditHashInput{
+		PrevHash:           prevHash,
+		EventID:            e.EventID,
+		EventType:          e.EventType,
+		ActorID:            e.ActorID,
+		SubjectID:          e.SubjectID,
+		TenantID:           e.TenantID,
+		SessionID:          e.SessionID,
+		CorrelationID:      e.CorrelationID,
+		OccurredAtUnixNano: e.OccurredAt.UnixNano(),
+		TimestampUnixNano:  e.Timestamp.UnixNano(),
+		Payload:            e.Payload,
+	}
+	// json.Marshal on a struct of string / int64 / []byte fields cannot
+	// return a non-nil error: the only error paths are channel / function /
+	// cyclic-reference values, none of which the typed input contains.
+	msgBytes, _ := json.Marshal(input)
 	mac := hmac.New(sha256.New, p.hmacKey)
-	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
-		prevHash,
-		e.EventID,
-		e.EventType,
-		e.ActorID,
-		e.Timestamp.UnixNano(),
-		string(e.Payload),
-	)
 	// crypto/hmac hash.Write always returns (len(b), nil) per io.Writer contract.
-	mac.Write([]byte(msg))
+	mac.Write(msgBytes)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
