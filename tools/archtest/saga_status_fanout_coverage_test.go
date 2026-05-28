@@ -57,10 +57,21 @@
 //   - B3 (legend entry-count lock): a legend reformat could empty the parser →
 //     C3 passes vacuously. Guarded by the C3 sub-test asserting parsed-entry-
 //     count == EventKind-const-count.
+//   - B4 (switch-form coupling): C4 / the terminal-set derivation parse the
+//     case clauses of journal.TerminalEventKind and Status.IsTerminal(). If
+//     either is refactored away from a switch (e.g. to a map lookup or
+//     slices.Contains), sfcCollectSwitchStatusCases yields an empty set. This is
+//     NOT a vacuous pass: the require.NotEmpty floor guards in
+//     TestSagaStatusFanoutCoverage (run against real source) fire and name both
+//     root causes (switch-form change OR type rename) — those floor guards ARE
+//     B4's reverse self-check.
 //   - RED-fixture: TestSagaStatusFanoutCoverage_REDFixture exercises the shared
-//     coverage matcher (sfcMissing) on a synthetic dropped entry, proving the
-//     live C1/C2a teeth detect drift even though the live rule is green on
-//     aligned source. Parser drift is covered by TestSfcParseReadyzStatusTable /
+//     coverage matcher (sfcMissing) on a synthetic dropped entry (C1/C2a teeth);
+//     TestSagaStatusFanoutCoverage_REDFixtureLegendForward and
+//     ..._REDFixtureTerminalEventKind do the same for the C3a (sfcDiagsLegendForward)
+//     and C4 (sfcDiagsTerminalEventKind) detection paths, proving the live rule
+//     emits diagnostics on drift even though it is green on aligned source.
+//     Parser drift is covered by TestSfcParseReadyzStatusTable /
 //     TestSfcParseKindLegend (real red→green on synthetic + malformed inputs).
 //
 // # AI-robust grading: Medium (permanent ceiling — open enum by design)
@@ -341,6 +352,9 @@ func sfcCollectSwitchStatusCases(p *Pass, fnName, recvType string) map[string]bo
 func sfcCollectMarkTerminalTargets(p *Pass) map[string]bool {
 	out := map[string]bool{}
 	for _, f := range p.Files {
+		if strings.HasSuffix(p.Rel(f), "_test.go") {
+			continue // consistency with peer collectors; conformance calls live in conformance.go
+		}
 		EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 			sel, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel.Name != "MarkTerminal" || len(call.Args) < 4 {
@@ -401,7 +415,11 @@ func sfcParseReadyzStatusTable(md []byte) []string {
 
 // sfcParseKindLegend extracts the "kind 速查" legend (N=wire_form entries) from
 // alerting-rules.md. The legend region runs from the "速查" marker line to the
-// first line containing the "。" terminator.
+// first line containing the "。" terminator — and is also bounded by the first
+// blank line, so that if the "。" terminator is ever removed by a doc edit the
+// parser does not run away over the rest of the document (which could match
+// stray `N=snake_case` text and produce same-count-wrong-entries drift that the
+// B3 count lock would not catch).
 func sfcParseKindLegend(md []byte) map[int]string {
 	lines := strings.Split(string(md), "\n")
 	start := -1
@@ -416,6 +434,9 @@ func sfcParseKindLegend(md []byte) map[int]string {
 	}
 	var b strings.Builder
 	for i := start; i < len(lines); i++ {
+		if i > start && strings.TrimSpace(lines[i]) == "" {
+			break // blank line bounds the contiguous legend block
+		}
 		b.WriteString(lines[i])
 		b.WriteByte('\n')
 		if strings.Contains(lines[i], "。") {
@@ -451,8 +472,10 @@ func sfcMissing(required []string, carrier map[string]bool) []string {
 	return out
 }
 
-// ─── diag builders ──────────────────────────────────────────────────────────
+// ─── diag builders (one per sub-rule; see file-header sub-rule index) ────────
 
+// sfcDiagsConformanceTerminal builds C1 diagnostics: terminal saga.Status consts
+// with no MarkTerminal(...) subtest in the conformance package.
 func sfcDiagsConformanceTerminal(statuses []sfcStatusConst, isTerminal, markTargets map[string]bool) []Diagnostic {
 	var terminal []string
 	for _, s := range statuses {
@@ -469,6 +492,8 @@ func sfcDiagsConformanceTerminal(statuses []sfcStatusConst, isTerminal, markTarg
 	return diags
 }
 
+// sfcDiagsReadyzForward builds C2a diagnostics: saga.Status consts with no row
+// in the readyz.md lifecycle table.
 func sfcDiagsReadyzForward(statuses []sfcStatusConst, tableSet map[string]bool) []Diagnostic {
 	var stripped []string
 	for _, s := range statuses {
@@ -482,6 +507,8 @@ func sfcDiagsReadyzForward(statuses []sfcStatusConst, tableSet map[string]bool) 
 	return diags
 }
 
+// sfcDiagsReadyzReverse builds C2b diagnostics: readyz.md table rows that do not
+// map to any saga.Status const (dangling row after a rename/removal).
 func sfcDiagsReadyzReverse(tableIdents []string, strippedSet map[string]bool) []Diagnostic {
 	var diags []Diagnostic
 	for _, id := range tableIdents {
@@ -493,6 +520,8 @@ func sfcDiagsReadyzReverse(tableIdents []string, strippedSet map[string]bool) []
 	return diags
 }
 
+// sfcDiagsLegendForward builds C3a diagnostics: journal.EventKind consts missing
+// from, or value-mismatched against, the alerting-rules.md "kind 速查" legend.
 func sfcDiagsLegendForward(kinds []sfcKindConst, legend map[int]string) []Diagnostic {
 	var diags []Diagnostic
 	for _, k := range kinds {
@@ -510,6 +539,8 @@ func sfcDiagsLegendForward(kinds []sfcKindConst, legend map[int]string) []Diagno
 	return diags
 }
 
+// sfcDiagsLegendReverse builds C3b diagnostics: alerting-rules.md legend entries
+// that do not map to any journal.EventKind const (dangling/renamed).
 func sfcDiagsLegendReverse(legend map[int]string, kinds []sfcKindConst) []Diagnostic {
 	byVal := map[int]string{}
 	for _, k := range kinds {
@@ -525,6 +556,9 @@ func sfcDiagsLegendReverse(legend map[int]string, kinds []sfcKindConst) []Diagno
 	return diags
 }
 
+// sfcDiagsTerminalEventKind builds C4 diagnostics: the journal.TerminalEventKind
+// switch case set must equal the Status.IsTerminal() terminal set (both
+// directions — missing case, or extra case not classified terminal).
 func sfcDiagsTerminalEventKind(isTerminal, tekCases map[string]bool) []Diagnostic {
 	var diags []Diagnostic
 	for name := range isTerminal {
@@ -589,8 +623,11 @@ func TestSagaStatusFanoutCoverage(t *testing.T) {
 			"floor guard prevents a vacuous pass", len(statuses))
 	require.GreaterOrEqual(t, len(kinds), 11,
 		"SAGA-STATUS-FANOUT-COVERAGE-01: resolved %d journal.EventKind consts (<11) — type likely renamed/moved", len(kinds))
-	require.NotEmpty(t, isTerminal, "SAGA-STATUS-FANOUT-COVERAGE-01: Status.IsTerminal() terminal set empty — switch parse failed")
-	require.NotEmpty(t, tekCases, "SAGA-STATUS-FANOUT-COVERAGE-01: journal.TerminalEventKind case set empty — switch parse failed")
+	require.NotEmpty(t, isTerminal, "SAGA-STATUS-FANOUT-COVERAGE-01: Status.IsTerminal() terminal set resolved empty — "+
+		"either IsTerminal() was refactored away from a switch (sfcCollectSwitchStatusCases requires a switch body; see blind-spot B4) "+
+		"or the receiver type was renamed/moved from saga.Status")
+	require.NotEmpty(t, tekCases, "SAGA-STATUS-FANOUT-COVERAGE-01: journal.TerminalEventKind case set resolved empty — "+
+		"either TerminalEventKind was refactored away from a switch (see blind-spot B4) or saga.Status was renamed/moved")
 
 	docs := sfcLoadDocs(t, root)
 	require.NotEmpty(t, docs[sfcReadyzDocRel], "load %s", sfcReadyzDocRel)
@@ -656,8 +693,6 @@ func TestSagaStatusFanoutCoverage_BlindSpotNoNumericStatusConv(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	root := findModuleRoot(t)
-	_ = root
 
 	var diags []Diagnostic
 	_ = RunTyped(t, TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
@@ -721,6 +756,45 @@ func TestSagaStatusFanoutCoverage_REDFixture(t *testing.T) {
 		"dropping a carrier entry must surface it as missing (drift detection)")
 }
 
+// TestSagaStatusFanoutCoverage_REDFixtureLegendForward proves the C3a detection
+// path (sfcDiagsLegendForward) fires when a legend entry is missing, mismatched,
+// or has an unresolved wire form — not just that the parser works.
+func TestSagaStatusFanoutCoverage_REDFixtureLegendForward(t *testing.T) {
+	t.Parallel()
+	kinds := []sfcKindConst{
+		{Name: "KindStepStarted", Wire: "step_started", Value: 1},
+		{Name: "KindStepCompleted", Wire: "step_completed", Value: 2},
+	}
+	aligned := map[int]string{1: "step_started", 2: "step_completed"}
+	assert.Empty(t, sfcDiagsLegendForward(kinds, aligned), "aligned legend must yield zero C3a diags")
+
+	missing := map[int]string{1: "step_started"} // entry 2 dropped
+	assert.NotEmpty(t, sfcDiagsLegendForward(kinds, missing), "missing legend entry must fire C3a")
+
+	mismatch := map[int]string{1: "step_started", 2: "step_complete"} // typo'd label
+	assert.NotEmpty(t, sfcDiagsLegendForward(kinds, mismatch), "mismatched legend label must fire C3a")
+
+	unresolved := []sfcKindConst{{Name: "KindMystery", Wire: "", Value: 3}}
+	assert.NotEmpty(t, sfcDiagsLegendForward(unresolved, map[int]string{3: "mystery"}),
+		"unresolved wire form (String() switch gap) must fire C3a")
+}
+
+// TestSagaStatusFanoutCoverage_REDFixtureTerminalEventKind proves the C4
+// detection path (sfcDiagsTerminalEventKind) fires on either-direction drift
+// between the IsTerminal() set and the TerminalEventKind switch case set.
+func TestSagaStatusFanoutCoverage_REDFixtureTerminalEventKind(t *testing.T) {
+	t.Parallel()
+	terminal := map[string]bool{"StatusSucceeded": true, "StatusFailed": true}
+	assert.Empty(t, sfcDiagsTerminalEventKind(terminal, terminal), "matching sets must yield zero C4 diags")
+
+	missingCase := map[string]bool{"StatusSucceeded": true} // StatusFailed absent from TerminalEventKind
+	assert.NotEmpty(t, sfcDiagsTerminalEventKind(terminal, missingCase), "terminal status missing a TerminalEventKind case must fire C4")
+
+	extraCase := map[string]bool{"StatusSucceeded": true, "StatusFailed": true, "StatusRunning": true}
+	assert.NotEmpty(t, sfcDiagsTerminalEventKind(terminal, extraCase),
+		"TerminalEventKind case not classified terminal by IsTerminal() must fire C4")
+}
+
 func TestSfcParseReadyzStatusTable(t *testing.T) {
 	t.Parallel()
 	md := []byte("intro\n\n" +
@@ -733,6 +807,17 @@ func TestSfcParseReadyzStatusTable(t *testing.T) {
 
 	// No header signature → empty (a stray backtick table elsewhere is ignored).
 	assert.Empty(t, sfcParseReadyzStatusTable([]byte("| Foo | Bar |\n|---|---|\n| `x` | 1 |\n")))
+
+	// Contract: a blank line inside the table body terminates parsing early
+	// (rows after it are dropped). This is intentional — the real table has no
+	// blank rows, and the B1 row-count lock catches any resulting truncation.
+	truncated := sfcParseReadyzStatusTable([]byte(
+		"| Status | Value | Phase | Terminal? |\n" +
+			"|---|---|---|---|\n" +
+			"| `Pending` | 1 | x | No |\n" +
+			"\n" +
+			"| `Failed` | 5 | y | Yes |\n"))
+	assert.Equal(t, []string{"Pending"}, truncated, "blank line mid-table ends parsing (B1 count lock catches truncation)")
 }
 
 func TestSfcParseKindLegend(t *testing.T) {
@@ -745,4 +830,15 @@ func TestSfcParseKindLegend(t *testing.T) {
 		sfcParseKindLegend(md))
 
 	assert.Nil(t, sfcParseKindLegend([]byte("no legend marker here\n")))
+
+	// Contract: if the "。" terminator is ever removed by a doc edit, the blank
+	// line still bounds the legend region so the parser does not run away over
+	// the rest of the document (which could otherwise produce same-count-wrong-
+	// entries drift the B3 count lock would not catch).
+	noTerminator := []byte(
+		"`kind` 速查：1=step_started，2=step_completed\n" +
+			"\n" +
+			"## Some later section with 9=stray_match text\n")
+	assert.Equal(t, map[int]string{1: "step_started", 2: "step_completed"},
+		sfcParseKindLegend(noTerminator), "blank line bounds the legend when 。 terminator is absent")
 }
