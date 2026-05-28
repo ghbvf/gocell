@@ -243,3 +243,35 @@ func isValidNSLevel(lvl string) bool {
 	}
 	return true
 }
+
+// publishableTopic carries a topic string that has been validated against a
+// TopicNamespace via PublishOK. Package-unexported and constructed exclusively
+// by TopicNamespace.Mint — the only way to obtain a publishableTopic is to
+// call Mint, which internally calls PublishOK. This encodes "PublishOK
+// precedence" as a type-system invariant: any callsite that accepts a
+// publishableTopic is guaranteed (at compile time) that the topic has passed
+// namespace validation.
+//
+// The Connection.Publish method (mqtt internal funnel) accepts only
+// publishableTopic, so no other package can drive a publish without minting
+// a topic through PublishOK. The single sanctioned holder + sealed
+// construction Hard funnel pattern. See archtest MQTT-PUBLISH-CALLSITE-FUNNEL-01.
+type publishableTopic struct {
+	topic string
+}
+
+// Mint validates topic against this namespace via PublishOK and returns a
+// publishableTopic on success. Caller passes the result to Connection.Publish
+// (or to any future publish helper) — the type system guarantees PublishOK
+// has been called.
+func (n TopicNamespace) Mint(topic string) (publishableTopic, error) {
+	if err := n.PublishOK(topic); err != nil {
+		return publishableTopic{}, err
+	}
+	return publishableTopic{topic: topic}, nil
+}
+
+// String returns the validated topic string. Provided for slog logging and
+// for the internal Publish path to read the topic when constructing the
+// paho.Publish packet.
+func (t publishableTopic) String() string { return t.topic }
