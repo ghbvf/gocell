@@ -28,7 +28,7 @@ var stubSpec = codegenSpec[cellgen.Result]{
 // cognitive complexity budget (< 15).
 func runParseCodegenFlagCase(t *testing.T, args []string, wantDry, wantVer bool, wantOnly, wantErrIn string) {
 	t.Helper()
-	dryRun, verify, only, err := parseCodegenFlags(stubSpec, args)
+	dryRun, verify, only, _, err := parseCodegenFlags(stubSpec, args)
 	if wantErrIn != "" {
 		if err == nil || !strings.Contains(err.Error(), wantErrIn) {
 			t.Fatalf("expected error containing %q, got %v", wantErrIn, err)

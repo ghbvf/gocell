@@ -42,8 +42,8 @@ type CodegenResult interface {
 // wrap used by every codegen sub-command (`metadata parse: %w`).
 // Centralized so the wrap message stays consistent across dispatchers and
 // is the single place to extend (e.g. with structured logging) later.
-func parseProject(root string) (*metadata.ProjectMeta, error) {
-	project, err := metadata.NewParser(root).Parse()
+func parseProject(root string, opts ...metadata.LocatorOption) (*metadata.ProjectMeta, error) {
+	project, err := metadata.NewParser(root, opts...).Parse()
 	if err != nil {
 		return nil, fmt.Errorf("metadata parse: %w", err)
 	}
@@ -80,7 +80,7 @@ type codegenSpec[R CodegenResult] struct {
 //   - --all=false without positional id: error
 //   - --dry-run + --verify: mutually exclusive
 func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) error {
-	dryRun, verify, only, err := parseCodegenFlags(spec, args)
+	dryRun, verify, only, locatorOpts, err := parseCodegenFlags(spec, args)
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
-	project, err := parseProject(root)
+	project, err := parseProject(root, locatorOpts...)
 	if err != nil {
 		return err
 	}
@@ -110,41 +110,50 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	return nil
 }
 
-// parseCodegenFlags is the common --all/--dry-run/--verify/<id> parser.
+// parseCodegenFlags is the common --all/--dry-run/--verify/<id>/--layout/--manifest parser.
 //
 // Default behavior (K#05 W2 DX defaults):
 //   - --all defaults to true: `gocell generate cell` runs all cells
 //   - positional <id> wins over --all default: `gocell generate cell ordercell`
 //     scopes to ordercell only (--all is implicitly cleared)
 //   - explicit --all=false without a positional id is an error
-func parseCodegenFlags[R CodegenResult](spec codegenSpec[R], args []string) (dryRun, verify bool, only string, err error) {
+func parseCodegenFlags[R CodegenResult](
+	spec codegenSpec[R], args []string,
+) (dryRun, verify bool, only string, locatorOpts []metadata.LocatorOption, err error) {
 	fs := flag.NewFlagSet("generate "+spec.Kind, flag.ContinueOnError)
 	all := fs.Bool("all", true, spec.AllFlagDesc)
 	dr := fs.Bool("dry-run", false, "print would-write file paths without writing")
 	ver := fs.Bool("verify", false, "diff against disk, exit non-zero on drift, no write")
+	layout, manifestPath := addLocatorFlags(fs)
 	if perr := fs.Parse(args); perr != nil {
-		return false, false, "", perr
+		return false, false, "", nil, perr
 	}
+	const dryVerMutexMsg = "--dry-run (stdout preview) and --verify " +
+		"(CI drift check, no write) are mutually exclusive; pick one"
 	if *dr && *ver {
-		return false, false, "", errors.New("--dry-run (stdout preview) and --verify (CI drift check, no write) are mutually exclusive; pick one")
+		return false, false, "", nil, errors.New(dryVerMutexMsg)
+	}
+	opts, lerr := buildLocatorOptions(*layout, *manifestPath)
+	if lerr != nil {
+		return false, false, "", nil, fmt.Errorf("generate %s: %w", spec.Kind, lerr)
 	}
 	pos := fs.Args()
 	// Reject more than one positional id to avoid silent arg-drop surprises.
 	if len(pos) > 1 {
-		return false, false, "", fmt.Errorf("only one %s id allowed; got: %v", spec.Kind, pos)
+		return false, false, "", nil, fmt.Errorf("only one %s id allowed; got: %v", spec.Kind, pos)
 	}
 	// Positional id takes priority over --all (including the default true).
 	if len(pos) == 1 {
-		return *dr, *ver, pos[0], nil
+		return *dr, *ver, pos[0], opts, nil
 	}
 	// No positional id: honor --all flag value.
 	if !*all {
 		if *dr || *ver {
-			return false, false, "", fmt.Errorf("specify a %s id or --all when using --dry-run/--verify", spec.Kind)
+			return false, false, "", nil, fmt.Errorf("specify a %s id or --all when using --dry-run/--verify", spec.Kind)
 		}
-		return false, false, "", fmt.Errorf("usage: %s", spec.GenerateUsage)
+		return false, false, "", nil, fmt.Errorf("usage: %s", spec.GenerateUsage)
 	}
-	return *dr, *ver, "", nil
+	return *dr, *ver, "", opts, nil
 }
 
 // runCodegenVerify implements `gocell verify codegen-<kind>` (sandbox + --local).
@@ -157,21 +166,26 @@ func runCodegenVerify[R CodegenResult](spec codegenSpec[R], args []string) error
 	local := fs.Bool("local", true,
 		"skip git worktree sandbox; verify in-place against current working tree "+
 			"(default true; CI should pass --local=false for sandbox mode)")
+	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	locatorOpts, err := buildLocatorOptions(*layout, *manifestPath)
+	if err != nil {
+		return fmt.Errorf("verify codegen-%s: %w", spec.Kind, err)
 	}
 	root, err := findRoot()
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
 	if *local {
-		return runCodegenVerifyInPlace(spec, root)
+		return runCodegenVerifyInPlace(spec, root, locatorOpts...)
 	}
 	return runCodegenVerifySandbox(spec, root)
 }
 
-func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string) error {
-	project, err := parseProject(root)
+func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string, locatorOpts ...metadata.LocatorOption) error {
+	project, err := parseProject(root, locatorOpts...)
 	if err != nil {
 		return err
 	}

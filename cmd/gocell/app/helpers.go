@@ -58,14 +58,13 @@ func readModule(root string) (string, error) {
 	return "", fmt.Errorf("module directive not found in go.mod")
 }
 
-// buildLocatorOptions translates the validate/check --layout and --manifest
-// flags into LocatorOption values for kernel/metadata.NewParser. Empty flag
-// values mean "use defaults" (auto-detect mode + .gocell/manifest.yaml path).
+// buildLocatorOptions translates the --layout and --manifest flags into
+// LocatorOption values for kernel/metadata.NewParser. Empty flag values mean
+// "use defaults" (auto-detect mode + .gocell/manifest.yaml path).
 //
-// CLI flag wiring is currently restricted to `gocell validate` and `gocell check`
-// (M1 #1082 scope). Other subcommands (generate / verify / export / scaffold /
-// codegen) inherit auto-detect behavior transparently: if .gocell/manifest.yaml
-// exists at root, manifest mode kicks in without a flag.
+// Used by every subcommand that calls metadata.NewParser: validate, check,
+// scaffold assembly, generate (assembly / metrics-schema / catalog), verify
+// (all codegen variants), and export catalog.
 func buildLocatorOptions(layout, manifest string) ([]metadata.LocatorOption, error) {
 	var opts []metadata.LocatorOption
 	mode, err := metadata.ParseLocatorMode(layout)
@@ -82,15 +81,17 @@ func buildLocatorOptions(layout, manifest string) ([]metadata.LocatorOption, err
 }
 
 // addLocatorFlags registers --layout and --manifest on fs and returns
-// pointers to their string values. Used by `gocell validate` and the five
-// `gocell check ...` subcommands to share a single flag schema (M1 #1082).
+// pointers to their string values. Shared by all subcommands that call
+// metadata.NewParser: validate, check (all variants), scaffold assembly,
+// generate (assembly / metrics-schema / catalog), verify (codegen variants),
+// and export catalog.
 func addLocatorFlags(fs *flag.FlagSet) (layout, manifestPath *string) {
 	layout = fs.String("layout", "",
 		"locator mode: auto (default; empty also resolves to auto) | conventional | manifest. "+
 			"auto probes <root>/.gocell/manifest.yaml; manifest forces the manifest path.")
 	manifestPath = fs.String("manifest", "",
 		"explicit manifest file path (default: <root>/.gocell/manifest.yaml). "+
-			"Honored under --layout=manifest and under --layout=auto when the manifest file is detected; "+
-			"silently ignored under --layout=conventional.")
+			"Only used when --layout=manifest or when auto-detect selects manifest mode (.gocell/manifest.yaml present); "+
+			"has no effect otherwise.")
 	return layout, manifestPath
 }

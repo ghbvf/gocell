@@ -207,4 +207,28 @@ func TestAddLocatorFlags(t *testing.T) {
 			t.Errorf("layout = %q, want conventional", *layout)
 		}
 	})
+
+	// Two-phase validation contract: flag.FlagSet accepts any string value for
+	// --layout (phase 1 — the FlagSet is value-agnostic for string flags), but
+	// buildLocatorOptions rejects unknown mode values (phase 2 — semantic
+	// validation). This test documents the explicit split so callers do not
+	// assume FlagSet.Parse is the sole gatekeeper.
+	t.Run("invalid layout value: Parse accepts, buildLocatorOptions rejects", func(t *testing.T) {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		layout, manifestPath := addLocatorFlags(fs)
+
+		// Phase 1: FlagSet accepts any string — no error expected here.
+		if err := fs.Parse([]string{"--layout=bogus"}); err != nil {
+			t.Fatalf("FlagSet.Parse unexpected error for unknown layout string: %v", err)
+		}
+
+		// Phase 2: semantic validation rejects the unknown mode.
+		_, err := buildLocatorOptions(*layout, *manifestPath)
+		if err == nil {
+			t.Fatal("buildLocatorOptions: expected error for layout=bogus, got nil")
+		}
+		if want := "unknown locator mode"; !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err.Error(), want)
+		}
+	})
 }
