@@ -232,6 +232,7 @@ linters:
             - github.com/jackc/pgx
             - github.com/pressly/goose
             - github.com/prometheus/client_golang
+            - github.com/eclipse/paho.golang
             - github.com/rabbitmq/amqp091-go
             - github.com/redis/go-redis
             - github.com/sony/gobreaker

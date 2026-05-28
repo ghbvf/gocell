@@ -108,7 +108,23 @@ goal:      RS256 钉扎、kid 轮换支持、Claims 注入 context
 ```
 primary:   ThreeDotsLabs/watermill → 12+ backend adapters 的接口抽象模式
 secondary: micro/go-micro          → 多 Store/Broker/Registry 后端
-goal:      First-class（PG/Redis/OIDC）+ Family（RabbitMQ/WebSocket）+ Optional 三层
+goal:      First-class（PG/Redis/OIDC）+ Family（RabbitMQ/WebSocket/MQTT）+ Optional 三层
+```
+
+### adapters/mqtt — MQTT v5 连接适配
+
+```
+primary:   eclipse/paho.golang autopaho → ConnectionManager reconnect（v0.23.0）
+           取用：ConnectionManager 内置 goroutine 自动重连（比 rabbitmq 自实现少约 400 行）；
+                 ReconnectBackoff 注入接口对接 adapterutil.ExponentialBackoffWithJitter；
+                 ConnackError.ReasonCode typed 枚举驱动 bootstrap fail-fast / 瞬态 / 永久分类；
+                 SessionExpiryInterval + CleanStartOnInitialConnection 会话恢复配置。
+deviations:
+  - DLT：MQTT v5 无原生 DLT；adapter app-level publish 到 $dead/<topic>（broker 无关）
+  - clientId：{cellID}-{role}-{uuid} 格式，sealed struct，uuid 保证 k8s 滚动更新唯一性
+  - TopicNamespace sealed struct 门控 publish/subscribe 前缀（下游 callsite funnel #1225）
+
+ref PR:  073-mqtt-adapter-pr1 … pr5（ADR 202605281200-048-adr-mqtt-adapter.md）
 ```
 
 ### runtime/distlock/ — 分布式锁运行时
@@ -158,6 +174,7 @@ ref PR: PR-DISTLOCK-LOCK-AS-RESOURCE（caller ctx 与持锁解耦，Lock 不再�
 |-------------|--------|-------------|---------|
 | adapters/postgres | `jackc/pgx/v5` | `jackc/pgx` | 连接池、事务隔离、pgxpool 生命周期 |
 | adapters/redis | `redis/go-redis/v9` | `redis/go-redis` | Pipeline/Tx、Pub/Sub 重连 |
+| adapters/mqtt | `eclipse/paho.golang` (autopaho) | `eclipse/paho.golang` | ConnectionManager 内置重连（`ReconnectBackoff` 注入）、`ConnackError.ReasonCode` typed reason code、`SessionExpiryInterval` 会话恢复；v5 only，不用 v3 shim |
 | adapters/rabbitmq | `rabbitmq/amqp091-go` | `rabbitmq/amqp091-go` | Channel 不跨 goroutine、重连、Confirm |
 | runtime/http | stdlib `net/http.ServeMux` (Go 1.22+) | — (no third-party router) | 中间件顺序、route-pattern recorder（mux.Handler + ServeHTTP 双 pass） |
 | runtime/auth/jwt | `golang-jwt/jwt/v5` | `golang-jwt/jwt` | SigningMethod、Claims、kid |
