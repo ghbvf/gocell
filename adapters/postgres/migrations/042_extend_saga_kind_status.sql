@@ -23,6 +23,11 @@ ALTER TABLE saga_instances DROP CONSTRAINT saga_instances_status_range;
 ALTER TABLE saga_instances ADD CONSTRAINT saga_instances_status_range
     CHECK (status BETWEEN 1 AND 8);
 
+-- idx_saga_instances_claimable partial index (WHERE status IN (1, 2, 3)) is
+-- intentionally NOT updated: StatusCompensationFailed (=8) is terminal and
+-- must never be returned by ClaimPending. Same reasoning for store.go::
+-- claimPendingQuery's hardcoded status filter.
+
 -- +goose StatementEnd
 
 -- +goose Down

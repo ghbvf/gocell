@@ -11,6 +11,8 @@ import "context"
 // SHOULD NOT panic; the Executor wraps each Observer call in a defer/recover
 // guard so a misbehaving observer logs Warn and execution continues —
 // observability is best-effort and never affects step correctness.
+// Recovery is provided by Executor.safeObserveOutcome / safeObserveRetry /
+// safeObserveHeartbeatFailure helpers (executor.go).
 //
 // ref: temporalio/sdk-go internal_task_handlers.go — server-emitted activity
 // metric envelope (best-effort, non-blocking sink).

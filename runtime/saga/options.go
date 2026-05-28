@@ -68,12 +68,16 @@ func WithTracer(t wrapper.Tracer) Option {
 // Must be called before Start.
 //
 // Category: builder-noop (cf. runtime-api.md). The Observer is wired into
-// the Executor that NewCoordinator constructs internally — there is no
-// way to inject a fully-formed Executor at the Coordinator level (#1181 F8
-// typed-nil guard: WithObserver uses validation.IsNilInterface so a nil
-// *SagaStepCollector is rejected and NopObserver is kept; design decision:
-// Executor must use the Coordinator's journal so claim and heartbeat are
-// guaranteed same-source by construction, not by convention).
+// the Executor that NewCoordinator constructs internally.
+//
+// #1181 F8 typed-nil guard: WithObserver uses validation.IsNilInterface so a
+// nil *SagaStepCollector is rejected and NopObserver is kept.
+//
+// For why the Coordinator owns Executor construction (rather than accepting an
+// injected Executor), see runtime/saga/coordinator.go Coordinator struct
+// comments (#1181 F5 design): the Executor must use the Coordinator's journal
+// so claim and heartbeat are guaranteed same-source by construction, not by
+// convention.
 func WithObserver(o executor.Observer) Option {
 	return func(c *Coordinator) {
 		if !validation.IsNilInterface(o) {

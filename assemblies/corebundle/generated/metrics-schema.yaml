@@ -378,6 +378,35 @@ metrics:
         - cell
         - outcome
       file: cmd/corebundle/bundle_configcore_storage.go
+    - name: saga_heartbeat_failed_total
+      fqName: gocell_saga_heartbeat_failed_total
+      namespace: gocell
+      type: counter
+      help: Total heartbeat tick failures observed by the saga executor, labeled by reason (infra_error = transient err; stale_lease = ok=false / another coordinator took over). Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.
+      labels:
+        - cell
+        - reason
+      file: runtime/observability/metrics/saga.go
+    - name: saga_step_outcome_total
+      fqName: gocell_saga_step_outcome_total
+      namespace: gocell
+      type: counter
+      help: Total saga step Execute outcomes (succeeded/failed/expired/canceled/lease_lost). step_name is intentionally excluded to bound the step×outcome cardinality; per-step drill-down uses saga_step_retry_total.
+      labels:
+        - cell
+        - definition_id
+        - outcome
+      file: runtime/observability/metrics/saga.go
+    - name: saga_step_retry_total
+      fqName: gocell_saga_step_retry_total
+      namespace: gocell
+      type: counter
+      help: Total retry attempts emitted by the saga executor (attempt N>1 fired) per definition+step.
+      labels:
+        - cell
+        - definition_id
+        - step_name
+      file: runtime/observability/metrics/saga.go
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total
       namespace: gocell

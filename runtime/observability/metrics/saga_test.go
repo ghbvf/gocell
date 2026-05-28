@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/saga/executor"
 )
@@ -228,9 +229,17 @@ func TestOutcomeLabel_UnknownVariant_Panics(t *testing.T) {
 	}
 	// Outcome(99) is not declared in executor and must trigger a panic via
 	// the panicregister.Approved funnel (A-class unreachable state machine branch).
+	// panicregister.Approved returns value unchanged, so recover() observes the
+	// underlying *errcode.Error from errcode.Assertion (the A-class payload).
 	defer func() {
-		if recover() == nil {
+		r := recover()
+		if r == nil {
 			t.Fatal("ObserveOutcome with unknown Outcome must panic; got nil recover")
+		}
+		// Verify the panic payload is *errcode.Error (A-class panicregister.Approved
+		// wraps errcode.Assertion — PANIC-REGISTERED-01 funnel verification).
+		if _, ok := r.(*errcode.Error); !ok {
+			t.Errorf("panic payload must be *errcode.Error (panicregister.Approved A-class); got %T: %v", r, r)
 		}
 	}()
 	c.ObserveOutcome(context.Background(), "def", "step", executor.Outcome(99), 1)

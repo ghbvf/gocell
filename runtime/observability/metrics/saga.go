@@ -117,7 +117,9 @@ func NewSagaStepCollector(p kernelmetrics.Provider, cellID string) (*SagaStepCol
 	}
 
 	// hbFail intentionally not appended to registered — it is the last
-	// registration; no subsequent rollback needed.
+	// registration; no subsequent rollback needed. IMPORTANT: if a 4th counter
+	// is added after hbFail, append it to `registered` BEFORE this return AND
+	// update this comment, or partial-registration failures will leak counters.
 	return &SagaStepCollector{
 		cellID:  cellID,
 		outcome: outcome,
