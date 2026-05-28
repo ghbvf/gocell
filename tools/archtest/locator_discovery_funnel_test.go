@@ -1,5 +1,6 @@
 // invariants asserted in this file:
 //   - INVARIANT: LOCATOR-DISCOVERY-FUNNEL-01
+//   - INVARIANT: LOCATOR-DISCOVERY-FUNNEL-01.A5
 //
 // LOCATOR-DISCOVERY-FUNNEL-01 (M1 of #1082) keeps kernel/metadata.Locator the
 // sole place in the codebase that knows how the filesystem topology maps to
@@ -19,12 +20,28 @@
 //      assemblies/, examples/} are restricted to the locator's own files in
 //      kernel/metadata/locator*.go (plus two governance helper files for
 //      conventional-mode strict rules). The form catalog locks two AST
-//      shapes today and a reverse blind-spot self-check rejects two
-//      additional shapes via negative tests.
+//      shapes today (HasPrefix + == ) and uses EvaluateConstString (go/types
+//      constant folding) so that cross-package const references (e.g.
+//      const cellsPrefix = "cells/") cannot bypass the check.
+//      A reverse blind-spot self-check rejects const-eval bypass forms via
+//      negative tests.
+//
+//   A5 (downstream Hard — consumer-path reverse funnel): filepath.Join calls
+//      whose arguments evaluate to conventional layout tokens ("cells", "cmd")
+//      are banned from kernel/governance/**, cmd/gocell/**, and
+//      kernel/metadata/** (outside the Locator funnel files). This closes
+//      the EXITING side: governance and CLI code must not reconstruct
+//      conventional paths; they must instead consume paths from the Locator
+//      output (MetadataSource.File / CellMeta.File / etc.).
+//      AI-robust grading: upstream Medium (archtest caller allowlist) +
+//      downstream Hard (form uniqueness via const-eval arg scanning).
+//      TODO(LOCATOR-FUNNEL-A5-UPSTREAM-HARD): gh issue #?? — Batch 4 will
+//      fill the upstream Hard tracking issue number once opened.
 //
 // AI-robust grading: Medium upstream + Hard downstream is a final form per
-// ai-robust §"Funnel 双向锁评级". No follow-up issue is opened; the upstream
-// ceiling is a Go-language limit, not a deferred TODO. See ADR 202605281200.
+// ai-robust §"Funnel 双向锁评级". No follow-up issue is opened for A1/A2; the
+// upstream ceiling is a Go-language limit, not a deferred TODO. See ADR
+// 202605281200. A5 upstream tracking: see TODO comment above.
 
 package archtest
 
@@ -99,7 +116,20 @@ var locatorAllowedWalkCallers = map[string]bool{
 var locatorGovernanceConventionalFiles = map[string]bool{
 	"helpers.go":           true,
 	"rules_misc_strict.go": true,
-	"locator.go":           true,
+	// ctmCheckExamplesArrow uses strings.HasPrefix(_, "examples/") for conventional-layout
+	// enforcement — intrinsically conventional, would be incorrect under Manifest mode.
+	"rules_contract_test_mapping.go": true,
+	"locator.go":                     true,
+}
+
+// locatorConsumerPathTokens are the conventional layout tokens whose presence
+// as a literal argument to filepath.Join in consumer code (kernel/governance,
+// cmd/gocell, kernel/metadata outside Locator funnel files) indicates a
+// hardcoded path reconstruction that should instead consume the path from the
+// Locator's output (e.g. CellMeta.File, SliceMeta.File).
+var locatorConsumerPathTokens = []string{
+	"cells",
+	"cmd",
 }
 
 // locatorScanDirs returns the directories whose Go files are scanned by
@@ -110,6 +140,17 @@ func locatorScanDirs() []string {
 	return []string{
 		"kernel/metadata",
 		"kernel/governance",
+	}
+}
+
+// locatorConsumerScanPatterns returns the Go package patterns for A5 (consumer-
+// path reverse funnel). These are the packages outside the Locator core that
+// must not reconstruct conventional layout paths via filepath.Join.
+func locatorConsumerScanPatterns() []string {
+	return []string{
+		"./kernel/governance/...",
+		"./cmd/gocell/...",
+		"./kernel/metadata/...",
 	}
 }
 
@@ -156,10 +197,23 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // strings.HasPrefix(_, lit) call shapes with a conventional-layout-prefix
 // literal as the second argument may only appear in the Locator's own
 // files inside kernel/metadata/** and kernel/governance/**.
+//
+// Uses EvaluateConstString (go/types constant folding) to resolve the second
+// argument so that cross-package const references such as:
+//
+//	const cellsPrefix = "cells/"
+//	strings.HasPrefix(p, cellsPrefix)
+//
+// are caught, not just bare BasicLit forms.
+//
+// Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
+// and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
-	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, locatorScanDirs()),
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/..."},
 		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
@@ -170,7 +224,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 					if !locatorIsCalleeStringsHasPrefix(call) || len(call.Args) < 2 {
 						return
 					}
-					lit, ok := locatorStringLiteral(call.Args[1])
+					lit, ok := EvaluateConstString(p.TypesInfo, call.Args[1])
 					if !ok {
 						return
 					}
@@ -197,10 +251,23 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 // conventional-layout token) inside kernel/metadata/** or
 // kernel/governance/** must live in the Locator's own files. This is the
 // shape used by path-segment matchers (`parts[N] == "cells"`).
+//
+// Uses EvaluateConstString (go/types constant folding) to resolve operands so
+// that cross-package const references such as:
+//
+//	const cellsTok = "cells"
+//	parts[0] == cellsTok
+//
+// are caught, not just bare BasicLit operands.
+//
+// Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
+// and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *testing.T) {
-	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, locatorScanDirs()),
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/..."},
 		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
 			var d []Diagnostic
 			for _, f := range p.Files {
 				rel := p.Rel(f)
@@ -211,9 +278,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 					if bin.Op != token.EQL && bin.Op != token.NEQ {
 						return
 					}
-					lit, ok := locatorStringLiteral(bin.Y)
+					lit, ok := EvaluateConstString(p.TypesInfo, bin.Y)
 					if !ok {
-						lit, ok = locatorStringLiteral(bin.X)
+						lit, ok = EvaluateConstString(p.TypesInfo, bin.X)
 						if !ok {
 							return
 						}
@@ -432,6 +499,325 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONTAINS", containsDiags)
 }
 
+// TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots asserts that
+// the two forms that would bypass a BasicLit-only A2 check are absent from
+// production code in kernel/metadata/** and kernel/governance/**:
+//
+//  1. Cross-package const used as HasPrefix argument:
+//     const cellsPrefix = "cells/"
+//     strings.HasPrefix(p, cellsPrefix)
+//     → EvaluateConstString resolves cellsPrefix to "cells/" and catches it;
+//     this test asserts it does NOT appear so A2a keeps its PASS status.
+//
+//  2. Cross-package const used as equality operand:
+//     const cellsTok = "cells"
+//     parts[0] == cellsTok
+//     → EvaluateConstString resolves cellsTok to "cells" and catches it;
+//     this test asserts it does NOT appear so A2b keeps its PASS status.
+//
+// These negative tests are required by ai-robust §"工具选定后强制盲区自检".
+// The tests are vacuously true today (production AST has no such forms), which
+// confirms that upgrading A2a/A2b from BasicLit to EvaluateConstString does not
+// introduce false positives.
+func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) {
+	// Blind-spot BS-A: const Ident as strings.HasPrefix second arg evaluating to
+	// a banned prefix. EvaluateConstString resolves it; a production occurrence
+	// would mean A2a already catches it and a developer should not be able to
+	// bypass the funnel this way.
+	hasPrefixConstDiags := RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if !locatorIsCalleeStringsHasPrefix(call) || len(call.Args) < 2 {
+						return
+					}
+					// Only flag non-BasicLit second args that const-eval to a banned prefix.
+					// BasicLit forms are already caught by A2a; this catches the bypass
+					// where an Ident (cross-package const) is used instead.
+					if _, isLit := call.Args[1].(*ast.BasicLit); isLit {
+						return // already covered by A2a
+					}
+					lit, ok := EvaluateConstString(p.TypesInfo, call.Args[1])
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutPrefixes {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(call.Pos()).Line,
+								Message: "A2-BS-A (const-eval bypass): strings.HasPrefix(_, <const>=" +
+									strconv.Quote(lit) + ") outside Locator funnel — " +
+									"A2a now catches this; presence indicates a regression in bypass coverage",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2.BLINDSPOT.CONST-HASPFIX", hasPrefixConstDiags)
+
+	// Blind-spot BS-B: const Ident as equality operand evaluating to a banned token.
+	equalityConstDiags := RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.BinaryExpr](f, func(bin *ast.BinaryExpr) {
+					if bin.Op != token.EQL && bin.Op != token.NEQ {
+						return
+					}
+					for _, operand := range []ast.Expr{bin.X, bin.Y} {
+						if _, isLit := operand.(*ast.BasicLit); isLit {
+							return // already covered by A2b
+						}
+					}
+					var lit string
+					var ok bool
+					lit, ok = EvaluateConstString(p.TypesInfo, bin.Y)
+					if !ok {
+						lit, ok = EvaluateConstString(p.TypesInfo, bin.X)
+					}
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutTokens {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(bin.Pos()).Line,
+								Message: "A2-BS-B (const-eval bypass): <expr> ==/!= <const>=" +
+									strconv.Quote(lit) + " outside Locator funnel — " +
+									"A2b now catches this; presence indicates a regression in bypass coverage",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A2.BLINDSPOT.CONST-EQ", equalityConstDiags)
+}
+
+// TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel enforces that
+// filepath.Join callsites in the consumer packages (kernel/governance,
+// cmd/gocell, kernel/metadata outside Locator funnel files) do not reconstruct
+// conventional layout paths by passing literal "cells" or "cmd" as arguments.
+//
+// Consumer code must derive paths from Locator output (CellMeta.File,
+// SliceMeta.File, AssemblyMeta.File, etc.) rather than hardcoding the
+// conventional layout topology.
+//
+// AI-robust grading:
+//   - Upstream: Medium (archtest caller allowlist; Go type system cannot
+//     prevent package-internal code from calling filepath.Join freely).
+//   - Downstream: Hard (form-uniqueness: EvaluateConstString resolves every
+//     filepath.Join argument; any arg that evaluates to a banned token fails).
+//
+// TODO(LOCATOR-FUNNEL-A5-UPSTREAM-HARD): gh issue #?? — Batch 4 will fill
+// the tracking issue number once opened.
+//
+// Blind spots enforced by TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots.
+//
+// NOTE: This test is expected to FAIL until Batch 3 fixes the following
+// known violations (each will become a PASS after Batch 3):
+//   - kernel/governance/rules_misc_consistency.go:367
+//     filepath.Join(root, "cells", ref.cellID)
+//   - cmd/gocell/app/check.go:338
+//     filepath.Join(root, "cells", cid, "slices")
+//   - kernel/metadata/assembly_derive.go:74
+//     filepath.Join("cmd", asm.ID, "main.go")
+//
+// Additional violations in cmd/gocell/app/scaffold.go (scaffold.go:492,
+// scaffold.go:598, scaffold.go:612, scaffold.go:640) are also captured and
+// must be fixed by Batch 3.
+func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
+	diags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				// Skip test files.
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				// Skip Locator funnel files (they legitimately hold layout tokens).
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if !locatorIsFilepathJoin(call) || len(call.Args) == 0 {
+						return
+					}
+					for _, arg := range call.Args {
+						lit, ok := EvaluateConstString(p.TypesInfo, arg)
+						if !ok {
+							continue
+						}
+						for _, banned := range locatorConsumerPathTokens {
+							if lit == banned {
+								d = append(d, Diagnostic{
+									Rel:  rel,
+									Line: p.Fset.Position(call.Pos()).Line,
+									Message: "A5 (Hard downstream): filepath.Join arg " +
+										strconv.Quote(lit) +
+										" reconstructs a conventional layout path; " +
+										"use Locator output (e.g. CellMeta.File) instead",
+								})
+								return // one diagnostic per callsite
+							}
+						}
+					}
+				})
+			}
+			return d
+		})
+	// A5 is intentionally expected to FAIL until Batch 3 fixes the violations
+	// listed in the function godoc. We use Report which marks the test as failed
+	// when diagnostics are non-empty — this is the desired TDD "RED" state.
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5", diags)
+}
+
+// TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots asserts that the two A5 blind
+// spots are absent from the consumer-path scan scope:
+//
+//  1. path.Join (not filepath.Join) with a banned token — different callee, same
+//     semantic violation.
+//
+//  2. String concatenation that rebuilds a banned token ("ce"+"lls") — the
+//     EvaluateConstString constant folding via go/types handles BinaryExpr ADD,
+//     but hand-split literals are unusual in production; this negative test
+//     ensures they never appear.
+//
+// Both are required reverse negative tests per ai-robust §"工具选定后强制盲区自检".
+func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots(t *testing.T) {
+	// Blind-spot A5-BS1: path.Join (not filepath.Join) with banned token.
+	pathJoinDiags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel == nil || sel.Sel.Name != "Join" {
+						return
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "path" {
+						return
+					}
+					for _, arg := range call.Args {
+						lit, ok := EvaluateConstString(p.TypesInfo, arg)
+						if !ok {
+							continue
+						}
+						for _, banned := range locatorConsumerPathTokens {
+							if lit == banned {
+								d = append(d, Diagnostic{
+									Rel:  rel,
+									Line: p.Fset.Position(call.Pos()).Line,
+									Message: "A5-BS1 (path.Join blind spot): path.Join arg " +
+										strconv.Quote(lit) +
+										" reconstructs a conventional layout path — A5 only scans filepath.Join",
+								})
+								return
+							}
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5.BLINDSPOT.PATHJOIN", pathJoinDiags)
+
+	// Blind-spot A5-BS2: string concatenation rebuilding a banned token in
+	// filepath.Join args. EvaluateConstString handles BinaryExpr ADD via
+	// go/types constant folding, so "ce"+"lls" would be resolved to "cells"
+	// and caught by A5. This negative test confirms no such form exists.
+	concatDiags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if !locatorIsFilepathJoin(call) {
+						return
+					}
+					for _, arg := range call.Args {
+						bin, ok := arg.(*ast.BinaryExpr)
+						if !ok || bin.Op != token.ADD {
+							continue
+						}
+						// Only flag if both operands are basic literals (split literal concat).
+						_, lhsIsLit := bin.X.(*ast.BasicLit)
+						_, rhsIsLit := bin.Y.(*ast.BasicLit)
+						if !lhsIsLit || !rhsIsLit {
+							continue
+						}
+						lit, ok := EvaluateConstString(p.TypesInfo, arg)
+						if !ok {
+							continue
+						}
+						for _, banned := range locatorConsumerPathTokens {
+							if lit == banned {
+								d = append(d, Diagnostic{
+									Rel:  rel,
+									Line: p.Fset.Position(call.Pos()).Line,
+									Message: "A5-BS2 (concat blind spot): filepath.Join arg " +
+										strconv.Quote(lit) +
+										" from literal concat — present despite A5 catching it via const-eval",
+								})
+								return
+							}
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.A5.BLINDSPOT.CONCAT", concatDiags)
+}
+
 // --- internal helpers ---
 
 // locatorWalkCalleeName returns the name (e.g. "fs.WalkDir") of a call
@@ -481,6 +867,19 @@ func locatorStringLiteral(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	return unq, true
+}
+
+// locatorIsFilepathJoin reports whether the call expression is filepath.Join(...).
+func locatorIsFilepathJoin(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return ident.Name == "filepath" && sel.Sel.Name == "Join"
 }
 
 // locatorIsAllowedFile reports whether the module-relative path is one of
