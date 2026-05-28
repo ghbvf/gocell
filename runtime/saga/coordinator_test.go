@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -1913,7 +1914,11 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk)
+	// Capture logs so we can assert the compensation-failure log carries lease_id
+	// (#1211): an operator must be able to correlate the entry to the claim cycle.
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1926,6 +1931,9 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 	// Drive step1 → step2 → step3 (step3 fails, triggers compensation walk).
 	// After each non-terminal step completes, the journal lease remains active for
 	// LeaseDuration (60s). Advance past it so the next ClaimPending can re-claim.
+	// compLeaseID holds the lease of the last (compensation) round so we can
+	// assert the compensation-failed log carries it.
+	var compLeaseID idutil.SafeID
 	for i := 0; i < 3; i++ {
 		// Expire any previous lease before claiming.
 		clk.Advance(testtime.D60s + testtime.D1ms)
@@ -1936,6 +1944,7 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 		if len(claimed) == 0 {
 			break // instance terminal
 		}
+		compLeaseID = claimed[0].LeaseID
 		if err := c.driveOne(context.Background(), claimed[0]); err != nil {
 			t.Fatalf("driveOne round %d: %v", i, err)
 		}
@@ -1962,6 +1971,79 @@ func TestRunCompensation_StepFails_ContinuesReverseFinalStatusCompensationFailed
 	wantOrder := []string{"step2-fail", "step1"}
 	if !reflect.DeepEqual(got, wantOrder) {
 		t.Errorf("compensation order = %v, want %v", got, wantOrder)
+	}
+
+	// #1211: the "step compensate failed, continuing" Warn must carry lease_id.
+	entry := sloghelper.FindLogEntry(logBuf.String(), "step compensate failed, continuing")
+	if entry == nil {
+		t.Fatal("expected WARN log: step compensate failed, continuing")
+	}
+	if entry["lease_id"] != string(compLeaseID) {
+		t.Errorf("compensate-failed log lease_id = %v, want %q", entry["lease_id"], string(compLeaseID))
+	}
+}
+
+// foldFailJournal wraps MemJournal and injects a KindStepFailed event into Load
+// results, forcing foldEvents to return errFoldEventMismatch so driveOne
+// exercises the defensive "fold failed, marking terminal" branch. ClaimPending
+// is unaffected (the real projection stays non-terminal), so the instance is
+// still claimable — this isolates an otherwise-unreachable defensive path (the
+// real journal marks an instance terminal on a KindStepFailed append).
+type foldFailJournal struct {
+	*journal.MemJournal
+}
+
+func (f *foldFailJournal) Load(ctx context.Context, instanceID idutil.SafeID) ([]journal.Event, error) {
+	evs, err := f.MemJournal.Load(ctx, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	return append(evs, journal.Event{Kind: journal.KindStepFailed, StepName: "phantom"}), nil
+}
+
+// TestDriveOne_FoldFailed_LeaseIDLogged asserts the defensive "fold failed,
+// marking terminal" log carries lease_id (#1211). foldFailJournal injects a
+// KindStepFailed into Load so foldEvents returns an error during driveOne.
+func TestDriveOne_FoldFailed_LeaseIDLogged(t *testing.T) {
+	const defID idutil.SafeID = "foldfaillog"
+
+	def := &ksaga.Definition{
+		ID:    defID,
+		Steps: []ksaga.Step{{Name: "step1", Run: noopStep}},
+	}
+
+	clk := newFakeClock()
+	j := &foldFailJournal{MemJournal: newMemJournal(clk)}
+	reg, err := ksaga.NewInMemoryRegistry(def)
+	if err != nil {
+		t.Fatalf("NewInMemoryRegistry: %v", err)
+	}
+	var logBuf syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), reg, clk, WithLogger(logger))
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	inst := ksaga.NewInstance(mustNewUUID(t), defID, clk.Now())
+	if err := j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	claimed, _, claimErr := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if claimErr != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: %v / %d", claimErr, len(claimed))
+	}
+
+	if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+		t.Fatalf("driveOne: %v", err)
+	}
+
+	entry := sloghelper.FindLogEntry(logBuf.String(), "fold failed, marking terminal")
+	if entry == nil {
+		t.Fatal("expected WARN log: fold failed, marking terminal")
+	}
+	if entry["lease_id"] != string(claimed[0].LeaseID) {
+		t.Errorf("fold-failed log lease_id = %v, want %q", entry["lease_id"], string(claimed[0].LeaseID))
 	}
 }
 
