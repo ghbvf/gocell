@@ -1469,12 +1469,29 @@ func monitoredEachWalkerCallee(info *types.Info, call *ast.CallExpr) bool {
 	return path == scannerPkgPath || path == archtestPkgPath
 }
 
+// monitoredWalkerNames is the single source of truth for the SCANNER-FRAMEWORK
+// -USAGE-02 monitored walker identifier set, shared by:
+//
+//   - isMonitoredWalkerName (syntactic fast-path skip + typed resolution branch
+//     in monitoredEachWalkerCallee);
+//   - TestScannerFrameworkUsage02_MonitoredCalleeArgShape (typed shape guard
+//     asserting every monitored walker has the 2-arg, callback-in-arg[1]
+//     shape forbiddenClosureDoneSentinel assumes).
+//
+// Adding a name here is sufficient to monitor that walker; the shape guard
+// fails if the new walker's *types.Signature does not match (e.g. a 3-arg
+// walker like EachInSubtreeStopAt would fail param-count assertion).
+var monitoredWalkerNames = map[string]struct{}{
+	"EachInChildren": {},
+	"EachInSubtree":  {},
+}
+
 // isMonitoredWalkerName reports whether n is one of the monitored walker
 // identifiers, factored out so the syntactic fast-path and the typed
-// resolution branch stay structurally identical (single source of truth for
-// the monitored-name set).
+// resolution branch stay structurally identical.
 func isMonitoredWalkerName(n string) bool {
-	return n == "EachInChildren" || n == "EachInSubtree"
+	_, ok := monitoredWalkerNames[n]
+	return ok
 }
 
 // ifBodyHasDirectReturn reports whether ifStmt.Body has a ReturnStmt as a
@@ -1962,5 +1979,83 @@ func TestScannerFrameworkUsage02_BlindSpotForwardFixtures(t *testing.T) {
 					"detector, got %d hits: %v", name, len(d), d)
 			}
 		})
+	}
+}
+
+// TestScannerFrameworkUsage02_MonitoredCalleeArgShape is a Medium archtest
+// guarding the structural assumption baked into forbiddenClosureDoneSentinel
+// AND monitoredEachWalkerCallee: the monitored walker has exactly 2
+// parameters and the second parameter is the callback (a function type).
+// FindFirstChild[ast.FuncLit] in the main detector locates the callback by
+// "first FuncLit direct child of the call"; that lookup is correct only when
+// the callback is in arg[1]. Adding a 3-arg walker (e.g. EachInSubtreeStopAt
+// = (root, stopAt, fn)) to monitoredWalkerNames would silently move the
+// callback to arg[2] — the detector would inspect the wrong FuncLit (the
+// stopAt predicate) and either miss sentinels or hit BS5 spuriously.
+//
+// The guard enumerates monitoredWalkerNames (single source of truth), looks
+// each name up in scanner.scannerPkgPath via *types.Signature, and asserts
+// param-count == 2 + second-param-is-func-type. Any drift (new walker
+// added with different shape, or an existing walker's signature changed)
+// fails this test at archtest time, before the silent mis-detection ships.
+//
+// AI-Robust rating (per .claude/rules/gocell/ai-robust.md):
+//
+//	下游 Medium: typed *types.Signature shape assertion (typed function call
+//	  + structural property check, NOT string anchor / name convention).
+//	  Per ai-robust.md §"Soft → Hard 改造方向: 字符串锚点 → typed function
+//	  call" this upgrades the previously proposed Soft form
+//	  (`if isMonitoredWalkerName("EachInSubtreeStopAt") { t.Fatal(...) }`,
+//	  Review A round-1) into a structurally enumerated Medium guard.
+//	上游 Hard: monitoredWalkerNames is the single source of truth used by
+//	  both isMonitoredWalkerName AND this test — Go compiler enforces no
+//	  drift between the production lookup and the test enumeration (any
+//	  bypass would have to be a syntactic divergence visible at compile time).
+func TestScannerFrameworkUsage02_MonitoredCalleeArgShape(t *testing.T) {
+	type expectation struct {
+		name string
+		seen bool
+	}
+	want := make([]*expectation, 0, len(monitoredWalkerNames))
+	for n := range monitoredWalkerNames {
+		want = append(want, &expectation{name: n})
+	}
+	RunTyped(t, TypedOpts{Tests: false}, []string{scannerPkgPath},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != scannerPkgPath {
+				return nil
+			}
+			for _, exp := range want {
+				obj := p.Pkg.Scope().Lookup(exp.name)
+				if obj == nil {
+					t.Errorf("scanner.%s not declared in package scope (monitored name has no backing symbol)", exp.name)
+					continue
+				}
+				exp.seen = true
+				sig, isSig := obj.Type().(*types.Signature)
+				if !isSig {
+					t.Errorf("scanner.%s expected *types.Signature, got %T", exp.name, obj.Type())
+					continue
+				}
+				if got := sig.Params().Len(); got != 2 {
+					t.Errorf("scanner.%s: expected 2 parameters (root, callback) — the shape "+
+						"forbiddenClosureDoneSentinel assumes — got %d. If this is a new "+
+						"walker shape (e.g. EachInSubtreeStopAt with 3 params), it MUST NOT "+
+						"be added to monitoredWalkerNames; the callback-extraction logic "+
+						"(FindFirstChild[ast.FuncLit] at call site) assumes the callback is in arg[1]",
+						exp.name, got)
+					continue
+				}
+				if _, isFunc := sig.Params().At(1).Type().(*types.Signature); !isFunc {
+					t.Errorf("scanner.%s: expected param[1] to be a function type "+
+						"(callback), got %s", exp.name, sig.Params().At(1).Type())
+				}
+			}
+			return nil
+		})
+	for _, exp := range want {
+		if !exp.seen {
+			t.Errorf("scanner.%s: package %s not loaded — RunTyped scope mismatch", exp.name, scannerPkgPath)
+		}
 	}
 }
