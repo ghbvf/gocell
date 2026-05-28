@@ -41,6 +41,21 @@ func WithLeaseDuration(d time.Duration) Option {
 	}
 }
 
+// WithObserverCallDeadline overrides the per-Observer-call bounded wait
+// (default DefaultObserverCallDeadline = 5s). Non-positive values are silently
+// ignored — the constructor default is kept. Primarily a test seam: package
+// tests use a short deadline so a deliberately blocking observer surfaces the
+// timeout in milliseconds rather than seconds. Production callers should rely
+// on the default; the only reason to extend it is an observer with a
+// known-bounded but slow remote dependency (rare). #1210 round-3 F2.
+func WithObserverCallDeadline(d time.Duration) Option {
+	return func(e *Executor) {
+		if d > 0 {
+			e.observerCallDeadline = d
+		}
+	}
+}
+
 // WithTracer is a cumulative builder option. Category: builder-noop.
 // Sets the Tracer used for per-step Execute / Compensate spans
 // (`saga.executor.step.run` / `saga.executor.step.compensate`). A nil tracer

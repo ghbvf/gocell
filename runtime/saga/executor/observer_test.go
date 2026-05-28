@@ -94,6 +94,54 @@ func (o *recordingObserver) snapshotHBReasons() []HeartbeatFailureReason {
 	return out
 }
 
+// blockingObserver simulates an out-of-contract Observer that blocks
+// indefinitely. Each method signals it has been entered via the matching
+// "entered" chan and then waits on release before returning. Used by
+// #1210 round-3 F2 regression tests to assert the executor's bounded-wait
+// helper (callObserverBounded) keeps RunWithHeartbeat / Execute making
+// progress even when the observer violates its "MUST NOT block" contract.
+type blockingObserver struct {
+	hbEntered      chan struct{} // closed when ObserveHeartbeatFailure is called
+	outcomeEntered chan struct{} // closed when ObserveOutcome is called
+	release        chan struct{} // close to release the blocked observer goroutines
+}
+
+func newBlockingObserver() *blockingObserver {
+	return &blockingObserver{
+		hbEntered:      make(chan struct{}),
+		outcomeEntered: make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+}
+
+func (o *blockingObserver) ObserveOutcome(
+	_ context.Context,
+	_, _ idutil.SafeID,
+	_, _ string,
+	_ Outcome,
+	_ int,
+) {
+	select {
+	case <-o.outcomeEntered:
+	default:
+		close(o.outcomeEntered)
+	}
+	<-o.release
+}
+
+func (o *blockingObserver) ObserveRetry(_ context.Context, _, _ idutil.SafeID, _, _ string) {
+	<-o.release
+}
+
+func (o *blockingObserver) ObserveHeartbeatFailure(_ context.Context, _, _ idutil.SafeID, _ HeartbeatFailureReason) {
+	select {
+	case <-o.hbEntered:
+	default:
+		close(o.hbEntered)
+	}
+	<-o.release
+}
+
 // TestExecute_ObserveOutcome_Succeeded asserts ObserveOutcome fires once with
 // OutcomeSucceeded after a first-attempt success.
 func TestExecute_ObserveOutcome_Succeeded(t *testing.T) {
@@ -464,6 +512,54 @@ func TestRunWithHeartbeat_PreflightStaleLease_ReturnsLeaseLost(t *testing.T) {
 	}
 	if fnCalled {
 		t.Error("fn must not be called when preflight heartbeat is stale")
+	}
+}
+
+// TestRunWithHeartbeat_BlockingObserver_DoesNotStall asserts the bounded
+// observer-call wait (#1210 round-3 F2): an out-of-contract Observer that
+// blocks indefinitely on ObserveHeartbeatFailure does NOT stall the
+// RunWithHeartbeat preflight path. Without the bound, the preflight-stale
+// branch would block forever in safeObserveHeartbeatFailure and
+// RunWithHeartbeat would never return.
+func TestRunWithHeartbeat_BlockingObserver_DoesNotStall(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	hb := &staleHeartbeater{} // preflight returns ok=false → blocks on observer
+	obs := newBlockingObserver()
+	defer close(obs.release) // unblock observer goroutines on test exit (no leak across tests)
+
+	exec, err := NewExecutor(hb, fc,
+		WithLogger(noopLogger()),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
+		WithObserver(obs),
+		WithObserverCallDeadline(20*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- exec.RunWithHeartbeat(context.Background(), newTestInstance(), "lease-blocking-obs",
+			func(_ context.Context) error {
+				t.Error("fn must not be called when preflight heartbeat is stale")
+				return nil
+			})
+	}()
+
+	// Wait for the observer call to enter so we know the bounded timer was
+	// created before we advance the clock past its deadline.
+	testwait.Deterministic(t, obs.hbEntered, testtime.EventuallyShort, "observer-call-entered")
+
+	// Advance past the bounded deadline; the timer fires, callObserverBounded
+	// logs Warn and returns, and the preflight branch returns errLeaseLost.
+	fc.Advance(21 * time.Millisecond)
+
+	got := testwait.Deterministic(t, errCh, testtime.EventuallyShort,
+		"RunWithHeartbeat must return despite blocked observer")
+	if !IsLeaseLost(got) {
+		t.Errorf("got %v, want IsLeaseLost (preflight stale)", got)
 	}
 }
 

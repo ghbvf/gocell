@@ -96,6 +96,15 @@ const (
 	// Exported so the Coordinator can reference the same constant without
 	// duplicating the value (cross-package single source of truth, #1210 C9).
 	HeartbeatLeaseSafetyFactor = 2
+	// DefaultObserverCallDeadline bounds each Observer method invocation when
+	// WithObserverCallDeadline is unset. The Observer contract documents that
+	// implementations MUST NOT block, but it is a Soft contract — a faulty
+	// metrics adapter that blocks indefinitely (network stall, lock contention)
+	// would otherwise wedge the heartbeat goroutine on the stale-lease branch
+	// and stall RunWithHeartbeat / Execute on the subsequent goroutine join.
+	// Bounded waits keep the executor fail-closed even when the observer
+	// violates its contract (#1210 round-3 F2).
+	DefaultObserverCallDeadline = 5 * time.Second
 )
 
 // Internal cancel-cause sentinels distinguish why the run context ended. They
@@ -121,23 +130,34 @@ type Result struct {
 
 // Executor drives a single step of a saga.
 type Executor struct {
-	heartbeater       Heartbeater
-	clk               clock.Clock
-	heartbeatInterval time.Duration
-	leaseDuration     time.Duration
-	jitter            jitterSource
-	logger            *slog.Logger
-	observer          Observer
-	tracer            wrapper.Tracer
+	heartbeater          Heartbeater
+	clk                  clock.Clock
+	heartbeatInterval    time.Duration
+	leaseDuration        time.Duration
+	observerCallDeadline time.Duration
+	jitter               jitterSource
+	logger               *slog.Logger
+	observer             Observer
+	tracer               wrapper.Tracer
 }
 
 // safeObserveOutcome / safeObserveRetry / safeObserveHeartbeatFailure wrap
-// every Observer call (#1181 F7). The Observer contract documents that
-// implementations MUST NOT panic, but it is a Soft contract — a faulty metrics
-// adapter that does panic would otherwise crash the executor goroutine and
-// drop the instance lease. defer recover() keeps observability strictly
-// best-effort: a misbehaving observer logs Warn (with redacted panic payload
-// per F10) and execution continues.
+// every Observer call with two layers of fail-closed protection:
+//
+//  1. Panic recovery (#1181 F7): defer recoverObserverPanic so a panicking
+//     observer logs Warn with redacted payload (#1181 F10) and execution
+//     continues instead of crashing the executor goroutine.
+//
+//  2. Bounded wait (#1210 round-3 F2): the observer call runs on a fresh
+//     goroutine; the caller waits at most observerCallDeadline (default
+//     DefaultObserverCallDeadline) before logging Warn and moving on. A
+//     blocking observer cannot wedge the heartbeat goroutine on the
+//     stale-lease branch and therefore cannot stall the subsequent
+//     hbWG.Wait() in stopAndJoin / RunWithHeartbeat. The leaked observer
+//     goroutine may continue running indefinitely — bounded only by
+//     observer behavior, not by the executor (Go cannot kill a goroutine).
+//     Memory leaks are bounded by Observer impl quality; the Observer
+//     contract reminds implementers MUST NOT block.
 func (e *Executor) safeObserveOutcome(
 	ctx context.Context,
 	instanceID, leaseID idutil.SafeID,
@@ -145,18 +165,46 @@ func (e *Executor) safeObserveOutcome(
 	outcome Outcome,
 	attempts int,
 ) {
-	defer e.recoverObserverPanic(ctx, "ObserveOutcome")
-	e.observer.ObserveOutcome(ctx, instanceID, leaseID, defID, stepName, outcome, attempts)
+	e.callObserverBounded(ctx, "ObserveOutcome", func() {
+		e.observer.ObserveOutcome(ctx, instanceID, leaseID, defID, stepName, outcome, attempts)
+	})
 }
 
 func (e *Executor) safeObserveRetry(ctx context.Context, instanceID, leaseID idutil.SafeID, defID, stepName string) {
-	defer e.recoverObserverPanic(ctx, "ObserveRetry")
-	e.observer.ObserveRetry(ctx, instanceID, leaseID, defID, stepName)
+	e.callObserverBounded(ctx, "ObserveRetry", func() {
+		e.observer.ObserveRetry(ctx, instanceID, leaseID, defID, stepName)
+	})
 }
 
 func (e *Executor) safeObserveHeartbeatFailure(ctx context.Context, instanceID, leaseID idutil.SafeID, reason HeartbeatFailureReason) {
-	defer e.recoverObserverPanic(ctx, "ObserveHeartbeatFailure")
-	e.observer.ObserveHeartbeatFailure(ctx, instanceID, leaseID, reason)
+	e.callObserverBounded(ctx, "ObserveHeartbeatFailure", func() {
+		e.observer.ObserveHeartbeatFailure(ctx, instanceID, leaseID, reason)
+	})
+}
+
+// callObserverBounded runs call on a fresh goroutine and waits up to
+// e.observerCallDeadline for it to finish. On timeout it logs Warn and
+// returns; the goroutine may continue to run (Go cannot cancel a synchronous
+// observer call from outside). Used by all three safeObserve* helpers so the
+// Observer "MUST NOT block" contract is enforced at the boundary rather than
+// trusted on faith.
+func (e *Executor) callObserverBounded(ctx context.Context, method string, call func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer e.recoverObserverPanic(ctx, method)
+		call()
+	}()
+	timer := e.clk.NewTimerAt(e.clk.Now().Add(e.observerCallDeadline))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C():
+		e.logger.WarnContext(ctx, "saga executor: observer call exceeded deadline; continuing",
+			slog.String("method", method),
+			slog.Duration("deadline", e.observerCallDeadline),
+		)
+	}
 }
 
 // recoverObserverPanic is the shared recover handler for observer calls.
@@ -206,14 +254,15 @@ func NewExecutor(hb Heartbeater, clk clock.Clock, opts ...Option) (*Executor, er
 	clock.MustHaveClock(clk, "runtime/saga/executor.NewExecutor")
 
 	e := &Executor{
-		heartbeater:       hb,
-		clk:               clk,
-		heartbeatInterval: DefaultHeartbeatInterval,
-		leaseDuration:     DefaultLeaseDuration,
-		jitter:            newDefaultJitter(clk),
-		logger:            slog.Default(),
-		observer:          NopObserver{},
-		tracer:            wrapper.NoopTracer{},
+		heartbeater:          hb,
+		clk:                  clk,
+		heartbeatInterval:    DefaultHeartbeatInterval,
+		leaseDuration:        DefaultLeaseDuration,
+		observerCallDeadline: DefaultObserverCallDeadline,
+		jitter:               newDefaultJitter(clk),
+		logger:               slog.Default(),
+		observer:             NopObserver{},
+		tracer:               wrapper.NoopTracer{},
 	}
 
 	for _, o := range opts {
