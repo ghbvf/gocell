@@ -33,11 +33,17 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
-// WithConfig replaces the entire Config struct. cfg is applied
-// unconditionally; NewCoordinator calls cfg.Validate() after all options have
-// run. Zero-value fields in cfg are NOT merged with the defaults — they still
-// get DefaultConfig() substitution inside NewCoordinator. Must be called
-// before Start.
+// WithConfig replaces the entire Config struct (c.cfg = cfg). No partial
+// merge, no per-field default substitution: NewCoordinator runs cfg.Validate()
+// after the options loop and Validate rejects zero values for PollInterval /
+// ClaimBatchSize / LeaseDuration / HeartbeatInterval. Callers that want
+// defaults for unset fields must start from DefaultConfig():
+//
+//	cfg := saga.DefaultConfig()
+//	cfg.PollInterval = 500 * time.Millisecond
+//	saga.WithConfig(cfg)
+//
+// Must be called before Start.
 func WithConfig(cfg Config) Option {
 	return func(c *Coordinator) {
 		c.cfg = cfg

@@ -63,16 +63,25 @@ const (
 	defaultCoordLeaseDuration  = 30 * time.Second
 )
 
-// Config holds tunable parameters for the Coordinator engine. Zero values are
-// replaced by DefaultConfig() inside NewCoordinator. HeartbeatInterval +
-// LeaseDuration flow into the internally-constructed Executor as the single
-// source of truth — #1181 F5 deleted the WithExecutor option that previously
-// allowed callers to inject an Executor with a different journal / lease;
-// claim and heartbeat are now guaranteed same-source by construction.
+// Config holds tunable parameters for the Coordinator engine.
 //
-// When supplied via WithConfig(cfg), the entire Config struct replaces the
-// default — fields are NOT partially merged; zero values still get
-// DefaultConfig() substitution inside NewCoordinator.
+// NewCoordinator initializes c.cfg = DefaultConfig() BEFORE running options,
+// so callers that never invoke WithConfig get the documented defaults. If
+// WithConfig is supplied, it replaces the whole struct (assigns c.cfg = cfg);
+// there is no partial-merge and no per-field substitution. Validate() then
+// runs once and rejects zero values for PollInterval / ClaimBatchSize /
+// LeaseDuration / HeartbeatInterval — those four fields MUST be positive.
+// To override only some fields, start from the defaults:
+//
+//	cfg := saga.DefaultConfig()
+//	cfg.PollInterval = 500 * time.Millisecond
+//	c, err := saga.NewCoordinator(..., saga.WithConfig(cfg))
+//
+// HeartbeatInterval + LeaseDuration flow into the internally-constructed
+// Executor as the single source of truth — #1181 F5 deleted the WithExecutor
+// option that previously allowed callers to inject an Executor with a
+// different journal / lease; claim and heartbeat are now guaranteed
+// same-source by construction.
 type Config struct {
 	// PollInterval is how often tickLoop calls ClaimPending. Default 200ms.
 	PollInterval time.Duration
