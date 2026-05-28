@@ -28,7 +28,8 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 //     and should be routed to the dead-letter exchange.
 //
 // PR-01 ships this interface and a test fake only; the production
-// journal/metadata-backed cursor implementation lands in a later PR.
+// journal/metadata-backed cursor implementation lands in PR-04 (#1176), where
+// cellgen-derived wiring first needs a concrete Cursor to pass to Subscribe.
 //
 // ref: Axon TrackingToken (position is a property of the token store / stream).
 type Cursor interface {
