@@ -712,6 +712,67 @@ const (
 	// ErrConflict so operator dashboards can route saga producer-side races
 	// separately from cell-wide conflict signals.
 	ErrSagaDuplicateInstance Code = "ERR_SAGA_DUPLICATE_INSTANCE"
+
+	// Webhook signing / verification / delivery codes (KERNEL-WEBHOOK-01).
+	// Each comment notes the intended Kind the construction site passes to
+	// errcode.New — the sentinel itself carries no Kind (Kind is framework-owned
+	// per status.go and set per call). kernel/webhook constructs these as
+	// *errcode.Error so handlers/consumers can errors.As + map to HTTP.
+
+	// ErrWebhookInvalidSignature signals HMAC signature verification failed —
+	// the recomputed digest does not match any presented signature header.
+	// Constructed with KindUnauthenticated → HTTP 401.
+	ErrWebhookInvalidSignature Code = "ERR_WEBHOOK_INVALID_SIGNATURE"
+	// ErrWebhookTimestampExpired signals the signed timestamp falls outside the
+	// allowed replay window (default ±5min). Constructed with
+	// KindUnauthenticated → HTTP 401.
+	ErrWebhookTimestampExpired Code = "ERR_WEBHOOK_TIMESTAMP_EXPIRED"
+	// ErrWebhookDuplicateDelivery signals a delivery ID was already processed
+	// (idempotent replay). Receiver maps idempotent replay to HTTP 200; this
+	// sentinel classifies the replay for logging. The wire status (200
+	// idempotent vs 409) is decided in PR-3 (receiver runtime). First
+	// constructed in PR-3 (receiver runtime).
+	ErrWebhookDuplicateDelivery Code = "ERR_WEBHOOK_DUPLICATE_DELIVERY"
+	// ErrWebhookInvalidHeader signals a required signature header is missing or
+	// malformed (bad scheme, unparseable timestamp). Constructed with
+	// KindInvalid → HTTP 400.
+	ErrWebhookInvalidHeader Code = "ERR_WEBHOOK_INVALID_HEADER"
+	// ErrWebhookAlgorithmUnsupported signals an unrecognized / disallowed signing
+	// algorithm (only HMAC-SHA256 is legal). Constructed with KindInvalid →
+	// HTTP 400.
+	ErrWebhookAlgorithmUnsupported Code = "ERR_WEBHOOK_ALGORITHM_UNSUPPORTED"
+	// ErrWebhookSourceNotFound signals the source ID has no registered secret.
+	// KindNotFound → HTTP 404 is ONLY for management/config lookups
+	// (list/get source). On the inbound receive/verify path this sentinel MUST
+	// NOT be used — the receiver must return ErrWebhookInvalidSignature
+	// (KindUnauthenticated → 401) for any source-lookup failure, so the response
+	// is byte-identical to a bad-signature failure and cannot be used to
+	// enumerate which source IDs exist (via either HTTP status or wire error
+	// code). First constructed in PR-3 (receiver runtime).
+	ErrWebhookSourceNotFound Code = "ERR_WEBHOOK_SOURCE_NOT_FOUND"
+	// ErrWebhookSSRFBlocked signals an outbound dispatch target resolved to a
+	// blocked address (SSRF defense). Constructed with KindPermissionDenied →
+	// HTTP 403. First constructed in PR-4 (SSRF guard).
+	ErrWebhookSSRFBlocked Code = "ERR_WEBHOOK_SSRF_BLOCKED"
+	// ErrWebhookDeliveryFailed signals a transient delivery failure (connection
+	// refused, 5xx from target). Constructed with KindUnavailable → HTTP 503.
+	// First constructed in PR-5 (dispatcher).
+	ErrWebhookDeliveryFailed Code = "ERR_WEBHOOK_DELIVERY_FAILED"
+	// ErrWebhookDeliveryTimeout signals delivery exceeded its deadline.
+	// Constructed with KindDeadlineExceeded → HTTP 504. First constructed in
+	// PR-5 (dispatcher).
+	ErrWebhookDeliveryTimeout Code = "ERR_WEBHOOK_DELIVERY_TIMEOUT"
+	// ErrWebhookPermanentFailure signals a non-retryable delivery failure
+	// (retry budget exhausted, endpoint disabled). Constructed with KindInternal
+	// → HTTP 500. First constructed in PR-5 (dispatcher).
+	ErrWebhookPermanentFailure Code = "ERR_WEBHOOK_PERMANENT_FAILURE"
+	// ErrWebhookBodyTooLarge signals the inbound webhook body exceeded the size
+	// limit. Constructed with KindPayloadTooLarge → HTTP 413. First constructed
+	// in PR-3 (receiver runtime).
+	ErrWebhookBodyTooLarge Code = "ERR_WEBHOOK_BODY_TOO_LARGE"
+	// ErrWebhookConfigInvalid signals invalid webhook configuration (bad source
+	// ID / delivery ID / empty secret). Constructed with KindInvalid → HTTP 400.
+	ErrWebhookConfigInvalid Code = "ERR_WEBHOOK_CONFIG_INVALID"
 )
 
 // PublicError is the structured projection shared by HTTP responses, CLI text

@@ -30,6 +30,42 @@ func (e errcodeAsError) As(target any) bool {
 	return true
 }
 
+// TestWebhookSentinelCodes locks the wire code string of every webhook sentinel
+// (KERNEL-WEBHOOK-01). Sentinels carry no intrinsic Kind — Kind is set at the
+// construction site (see kernel/webhook); this test only freezes the code
+// strings so renames are caught. The intended Kind→HTTP mapping is verified at
+// the real construction points in kernel/webhook/webhook_test.go.
+func TestWebhookSentinelCodes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		code Code
+		want string
+	}{
+		{ErrWebhookInvalidSignature, "ERR_WEBHOOK_INVALID_SIGNATURE"},
+		{ErrWebhookTimestampExpired, "ERR_WEBHOOK_TIMESTAMP_EXPIRED"},
+		{ErrWebhookDuplicateDelivery, "ERR_WEBHOOK_DUPLICATE_DELIVERY"},
+		{ErrWebhookInvalidHeader, "ERR_WEBHOOK_INVALID_HEADER"},
+		{ErrWebhookAlgorithmUnsupported, "ERR_WEBHOOK_ALGORITHM_UNSUPPORTED"},
+		{ErrWebhookSourceNotFound, "ERR_WEBHOOK_SOURCE_NOT_FOUND"},
+		{ErrWebhookSSRFBlocked, "ERR_WEBHOOK_SSRF_BLOCKED"},
+		{ErrWebhookDeliveryFailed, "ERR_WEBHOOK_DELIVERY_FAILED"},
+		{ErrWebhookDeliveryTimeout, "ERR_WEBHOOK_DELIVERY_TIMEOUT"},
+		{ErrWebhookPermanentFailure, "ERR_WEBHOOK_PERMANENT_FAILURE"},
+		{ErrWebhookBodyTooLarge, "ERR_WEBHOOK_BODY_TOO_LARGE"},
+		{ErrWebhookConfigInvalid, "ERR_WEBHOOK_CONFIG_INVALID"},
+	}
+	if len(cases) != 12 {
+		t.Fatalf("expected 12 webhook sentinels, got %d", len(cases))
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, string(tc.code))
+		})
+	}
+}
+
 func TestNewWrapAndOptions(t *testing.T) {
 	cause := errors.New("pool exhausted")
 	err := Wrap(

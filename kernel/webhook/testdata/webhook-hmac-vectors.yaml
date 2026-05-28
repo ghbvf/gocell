@@ -1,0 +1,72 @@
+# HMAC-SHA256 webhook signature test vectors (KERNEL-WEBHOOK-01 PR-1).
+#
+# Each vector exercises kernel/webhook signer + verifier round-trips. The signed
+# content is "{deliveryId}.{timestamp}.{payload}" (Svix-aligned). secretBase64
+# is the base64 of the RAW HMAC key bytes (decoded by the test into a
+# webhook.Source secret); it is NOT a Svix "whsec_"-prefixed string.
+#
+# `signature` values are golden (computed independently with Python hmac), so a
+# regression in computeMAC is caught as a value mismatch, not a self-consistent
+# pass.
+#
+#   - svix_official_basic: the canonical vector published at
+#     https://docs.svix.com/receiving/verifying-payloads/how-manual — proves
+#     byte-for-byte agreement with the reference implementation.
+#   - the remaining vectors use a self-constructed key and cover empty body,
+#     tampered body, a bogus signature, and multi-signature rotation.
+vectors:
+  - name: svix_official_basic
+    sourceId: svix-demo
+    secretBase64: "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+    deliveryId: "msg_p5jXN8AQM9LWM0D4loKWxJek"
+    timestamp: "1614265330"
+    payload: '{"test": 2432232314}'
+    signature: "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+    valid: true
+
+  - name: empty_payload
+    sourceId: self-source
+    secretBase64: "c3VwZXJzZWNyZXRrZXktMDEyMzQ1Njc4OQ=="
+    deliveryId: "evt_empty_001"
+    timestamp: "1700000000"
+    payload: ""
+    signature: "v1,/PLGNECH9y5aabNVERytMyuKm70+9GBab321aIZvr/k="
+    valid: true
+
+  - name: simple_object
+    sourceId: self-source
+    secretBase64: "c3VwZXJzZWNyZXRrZXktMDEyMzQ1Njc4OQ=="
+    deliveryId: "evt_simple_002"
+    timestamp: "1700000100"
+    payload: '{"order":42}'
+    signature: "v1,jvo2tkmfTaIYx1PAg3CcatRmyg5BV4dZlwI+fEca7uc="
+    valid: true
+
+  - name: tampered_payload
+    sourceId: self-source
+    secretBase64: "c3VwZXJzZWNyZXRrZXktMDEyMzQ1Njc4OQ=="
+    deliveryId: "evt_simple_002"
+    timestamp: "1700000100"
+    payload: '{"order":43}'
+    signature: "v1,jvo2tkmfTaIYx1PAg3CcatRmyg5BV4dZlwI+fEca7uc="
+    valid: false
+
+  - name: bogus_signature
+    sourceId: self-source
+    secretBase64: "c3VwZXJzZWNyZXRrZXktMDEyMzQ1Njc4OQ=="
+    deliveryId: "evt_simple_002"
+    timestamp: "1700000100"
+    payload: '{"order":42}'
+    signature: "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    valid: false
+
+  - name: multi_signature_rotation
+    sourceId: self-source
+    secretBase64: "c3VwZXJzZWNyZXRrZXktMDEyMzQ1Njc4OQ=="
+    deliveryId: "evt_rotate_003"
+    timestamp: "1700000200"
+    payload: '{"a":1}'
+    # First token is bogus, second is the valid signature — verify accepts when
+    # any space-separated token matches.
+    signature: "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= v1,lgk0U1f4d1VQlNIUEiLrl0brTuq8/eMyzq+Zx1PPnXY="
+    valid: true
