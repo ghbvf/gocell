@@ -11,7 +11,9 @@ import (
 // instance. A saga orchestrates a sequence of steps with compensation: on
 // forward failure it rolls back committed steps in reverse.
 //
-// ref: dtm-labs/dtm saga branch state; temporalio/temporal workflow state.
+// ref: dtm-labs/dtm saga branch state (CompensateFailed maps to StatusCompensationFailed);
+// temporalio/temporal workflow state (no direct equivalent — Temporal compensates
+// via activities/saga pattern, not built-in terminal status).
 type Status uint8
 
 const (
@@ -23,7 +25,7 @@ const (
 	StatusRunning                        // executing steps forward
 	StatusCompensating                   // a step failed; running Compensate in reverse
 	StatusSucceeded                      // all steps committed (terminal)
-	StatusFailed                         // could not / should not compensate (terminal)
+	StatusFailed                         // forward-phase failure with no rollback (never entered Compensating; terminal)
 	StatusCompensated                    // forward failed, rollback completed cleanly (terminal)
 	StatusExpired                        // overall timeout elapsed (terminal)
 	// StatusCompensationFailed is reached when the compensation phase itself

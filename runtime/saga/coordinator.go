@@ -30,7 +30,7 @@ var _ healthz.RepoProber = (*Coordinator)(nil)
 
 // ProbeCoordinatorReady is the healthz ProbeName for the saga coordinator
 // journal readiness probe. Cell-side registration (RegisterReadiness) is
-// tracked in the saga-as-cell migration follow-up; this PR lands the const
+// tracked in #978 (saga-as-cell migration follow-up); this PR lands the const
 // declaration so the PROBENAME-SEALED-FUNNEL-01 archtest golden inventory
 // can lock the declared form. Wiring is not performed here to avoid scope
 // creep — the coordinator is not yet a first-class Cell.
@@ -849,7 +849,7 @@ func collectCommittedSteps(events []journal.Event, def *ksaga.Definition) ([]com
 	// once the executor's CompensateFunc has run we MUST NOT run it a second
 	// time on the same persisted state, even if the first attempt failed —
 	// the operator can rerun the saga or surface the failure via the
-	// terminal StatusFailed projection.
+	// terminal StatusCompensationFailed projection.
 	compensated := make(map[idutil.SafeID]struct{})
 	for i := range events {
 		switch events[i].Kind {

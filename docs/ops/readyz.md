@@ -399,6 +399,16 @@ The runtime no longer imposes a hard-coded time budget on probes —
 `CheckCtxRespected`'s budget is caller-supplied and only affects the
 developer test, not production behaviour.
 
+## Saga probes
+
+### saga_coordinator_ready (deferred to saga-as-cell migration)
+
+The `saga_coordinator_ready` ProbeName is declared in `runtime/saga` (PR #1210 C7) but is
+**not yet registered** with any cell — cell-side `RegisterReadiness` wiring lands after the
+saga-as-cell migration tracked in #978. Until that migration ships, this probe does **not**
+appear in `/readyz?verbose` output. After migration it will report journal backend availability
+for the saga coordinator (same semantics as the `*_repo_ready` cell probes).
+
 ## Concurrent probe storms
 
 Concurrent `/readyz` requests (kubelet + LB + manual curl) are

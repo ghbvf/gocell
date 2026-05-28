@@ -615,6 +615,45 @@ lazy-unlock 频率持续偏高，可能意味着攻击者在利用 TTL 边界周
 
 ---
 
+## Saga (PR-1210)
+
+Saga step metrics are registered per-cell when a `SagaStepCollector` is wired via
+`obmetrics.NewSagaStepCollector(provider, cellID)`. The three counters share the
+`gocell_` namespace prefix.
+
+- `gocell_saga_step_outcome_total{cell,definition_id,outcome}`: total Execute calls
+  terminated, labeled by outcome variant (`succeeded` / `failed` / `expired` /
+  `canceled` / `lease_lost`). Filter `outcome="failed"` to baseline forward-step
+  failure rate per definition.
+
+- `gocell_saga_step_retry_total{cell,definition_id,step_name}`: total retry attempts
+  fired between Execute invocations (attempt N > 1). Per-step label allows per-step
+  retry-budget tuning.
+
+- `gocell_saga_heartbeat_failed_total{cell,reason}`: total heartbeat tick failures,
+  labeled by reason (`infra_error` = transient backend error; `stale_lease` = another
+  coordinator owns the lease). Sustained `stale_lease` rate indicates leader-elect
+  instability.
+
+**StatusCompensationFailed terminal state**: when a saga instance reaches
+`status=compensation_failed` (status=8 in PG), the compensation phase itself failed.
+This is distinct from `status=failed` (forward failure, no rollback attempted).
+Dashboard queries should branch on this distinction:
+
+```promql
+# Forward step failures — saga will attempt compensation if steps were committed.
+increase(gocell_saga_step_outcome_total{outcome="failed"}[5m])
+
+# Heartbeat / lease instability.
+increase(gocell_saga_heartbeat_failed_total{reason="stale_lease"}[5m])
+```
+
+Ops runbook for `StatusCompensationFailed` instances: inspect the journal
+(`saga_events` table) for `KindStepCompensationFailed` entries, identify the failing
+step, and perform manual remediation. A follow-up runbook is tracked in #1210.
+
+---
+
 ## 注意事项
 
 1. **fqName 单前缀**：所有规则中的指标名已包含 `gocell_` 前缀。若部署时 Prometheus
