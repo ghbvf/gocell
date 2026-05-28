@@ -81,6 +81,10 @@ var locatorLayoutPrefixes = []string{
 // path-prefix literals and fs.WalkDir callsites. Any file outside this set
 // in kernel/metadata/** or kernel/governance/** that contains a flagged
 // shape fails the archtest.
+//
+// kernel/metadata/locator.go also exports path-classification helpers
+// (IsConventionalAssemblyPath, IsInExamplesSubtree) as legitimate funnel
+// exit points — these are intentionally inside the funnel allowlist.
 var locatorFunnelFiles = map[string]bool{
 	"locator.go":              true,
 	"locator_conventional.go": true,
@@ -134,7 +138,14 @@ var locatorConsumerPathTokens = []string{
 
 // locatorA5AllowedFiles names the module-relative source files that are
 // permanently allowlisted from the A5 consumer-path check. Each entry must
-// have a written rationale:
+// have a written rationale.
+//
+// Scope/allowlist principle: allowlist entries are **explicit exemptions**
+// for write-paths (layout generators) or IsConventional*-guarded paths
+// (files that emit layout tokens but are themselves guarded by a
+// conventional-mode predicate). Files outside the A5 scan scope (e.g.
+// testdata/, tools/) are simply not in the funnel's EXITING responsibility
+// domain; they are not added here. The two categories must not be mixed.
 //
 //   - cmd/gocell/app/scaffold.go: `gocell scaffold cell|slice` is a
 //     **write** path that intentionally produces the conventional
@@ -151,9 +162,18 @@ var locatorConsumerPathTokens = []string{
 //     isConventionalAssemblyPath guard so that Manifest-mode assemblies
 //     (assemblies/<id>/ absent) use path.Dir(asm.File)/main.go instead.
 //     See deriveAssembly comment for the full rationale.
+//
+//   - kernel/assembly/generator.go: the Generator is a **write** path that
+//     produces the conventional assembly scaffold output — both
+//     assemblies/<id>/assembly.yaml and cmd/<id>/run.go,main.go,app.go.
+//     "assemblies" and "cmd" here are the physical output directory names
+//     of the conventional scaffold layout, not discovery tokens consumed
+//     from Locator/MetadataSource output. Same rationale as scaffold.go
+//     (layout generator by definition, not a read/discovery consumer).
 var locatorA5AllowedFiles = map[string]bool{
 	"cmd/gocell/app/scaffold.go":         true,
 	"kernel/metadata/assembly_derive.go": true,
+	"kernel/assembly/generator.go":       true,
 }
 
 // locatorScanDirs returns the directories whose Go files are scanned by
@@ -170,11 +190,19 @@ func locatorScanDirs() []string {
 // locatorConsumerScanPatterns returns the Go package patterns for A5 (consumer-
 // path reverse funnel). These are the packages outside the Locator core that
 // must not reconstruct conventional layout paths via filepath.Join.
+//
+// kernel/assembly/ is included because the Generator writes output to
+// conventional layout paths (assemblies/<id>/ and cmd/<id>/). Write-path
+// files are allowlisted in locatorA5AllowedFiles (generator.go) with a
+// written rationale; any other file in kernel/assembly/ that uses a banned
+// token would indicate an unexpected read-path reconstruction and should
+// fail A5.
 func locatorConsumerScanPatterns() []string {
 	return []string{
 		"./kernel/governance/...",
 		"./cmd/gocell/...",
 		"./kernel/metadata/...",
+		"./kernel/assembly/...",
 	}
 }
 
@@ -344,6 +372,9 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *tes
 //   - Regex anchors (regexp.MustCompile(`^cells/`))
 //   - filepath.Join("<token>", ...) reconstructing a layout path
 //   - strings.Contains(_, "<token>/") substring scanning
+//   - strings.Replace / strings.ReplaceAll with a layout-token literal
+//     (e.g. strings.Replace(p, "cells/", "", 1))
+//   - strings.TrimPrefix(_, "<token>/") stripping a layout-token prefix
 //
 // Upstream Hard is a Go-language won't-do (sealed cross-package
 // interface with private constructor is structurally unreachable in
@@ -521,6 +552,111 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory(t *testing.T) {
 			return d
 		})
 	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.CONTAINS", containsDiags)
+
+	// Blind-spot #5: strings.Replace(_, "<token>/", ...) and
+	// strings.ReplaceAll(_, "<token>/", ...) — structural string mutation
+	// using a conventional-layout prefix as the old-value argument. Not
+	// caught by A2a (HasPrefix), A2b (==/!=), or blind-spots #1–#4.
+	// Uses EvaluateConstString to resolve the second argument.
+	replaceDiags := RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "strings" {
+						return
+					}
+					if sel.Sel.Name != "Replace" && sel.Sel.Name != "ReplaceAll" {
+						return
+					}
+					// Replace: strings.Replace(s, old, new, n) — old is arg[1].
+					// ReplaceAll: strings.ReplaceAll(s, old, new) — old is arg[1].
+					if len(call.Args) < 2 {
+						return
+					}
+					lit, ok := EvaluateConstString(p.TypesInfo, call.Args[1])
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutPrefixes {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(call.Pos()).Line,
+								Message: "blind-spot #5 (strings.Replace/ReplaceAll): " +
+									sel.Sel.Name + "(_, " + strconv.Quote(lit) + ", ...) " +
+									"mutates a conventional-layout prefix outside the Locator funnel",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.REPLACE", replaceDiags)
+
+	// Blind-spot #6: strings.TrimPrefix(_, "<token>/") — strips a
+	// conventional-layout prefix literal. Not caught by A2a (HasPrefix).
+	// Uses EvaluateConstString to resolve the second argument.
+	trimPrefixDiags := RunTyped(t, TypedOpts{Tests: false},
+		[]string{"./kernel/metadata/...", "./kernel/governance/..."},
+		func(p *Pass) []Diagnostic {
+			if p.TypesInfo == nil {
+				return nil
+			}
+			var d []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if locatorIsAllowedFile(rel) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return
+					}
+					ident, ok := sel.X.(*ast.Ident)
+					if !ok || ident.Name != "strings" || sel.Sel.Name != "TrimPrefix" {
+						return
+					}
+					if len(call.Args) < 2 {
+						return
+					}
+					lit, ok := EvaluateConstString(p.TypesInfo, call.Args[1])
+					if !ok {
+						return
+					}
+					for _, banned := range locatorLayoutPrefixes {
+						if lit == banned {
+							d = append(d, Diagnostic{
+								Rel:  rel,
+								Line: p.Fset.Position(call.Pos()).Line,
+								Message: "blind-spot #6 (strings.TrimPrefix): " +
+									"strings.TrimPrefix(_, " + strconv.Quote(lit) + ") " +
+									"strips a conventional-layout prefix outside the Locator funnel",
+							})
+							break
+						}
+					}
+				})
+			}
+			return d
+		})
+	Report(t, "LOCATOR-DISCOVERY-FUNNEL-01.BLINDSPOT.TRIMPREFIX", trimPrefixDiags)
 }
 
 // TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots asserts that

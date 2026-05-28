@@ -149,11 +149,21 @@ func TestLocatorManifest_E2E_ParserParse(t *testing.T) {
 		t.Errorf("Cells[\"invoice\"] missing; got keys: %v", cellKeys(pm))
 	}
 
-	// (b) Slices resolved with correct belongsToCell.
+	// (b) Slices resolved with correct belongsToCell and populated path fields.
 	for _, sl := range pm.Slices {
 		if sl.BelongsToCell != "invoice" {
 			t.Errorf("slice %q belongsToCell = %q, want \"invoice\"",
 				sl.ID, sl.BelongsToCell)
+		}
+		// T6: verify path fields are populated by the Locator-backed parser.
+		if sl.File == "" {
+			t.Errorf("slice %q File is empty; parser must set File from MetadataSource.Path", sl.ID)
+		}
+		if sl.Dir == "" {
+			t.Errorf("slice %q Dir is empty; parser must set Dir from path.Base(path.Dir(src.Path))", sl.ID)
+		}
+		if sl.CellDir != "invoice" {
+			t.Errorf("slice %q CellDir = %q, want \"invoice\"", sl.ID, sl.CellDir)
 		}
 	}
 }
@@ -212,12 +222,15 @@ func TestLocatorManifest_E2E_CellIDDerivation(t *testing.T) {
 		}
 		for _, s := range sources {
 			if s.Kind == SourceCell {
-				// CellID may be empty when the locator cannot derive it
-				// from a non-conventional path. Callers should read the
-				// cell.yaml `id` field or require slice.yaml to declare
+				// Non-conventional layout: the Locator cannot derive CellID
+				// from a path that does not match cells/<id>/cell.yaml.
+				// MetadataSource.CellID must be empty; callers must read
+				// the cell.yaml `id` field or require slice.yaml to declare
 				// belongsToCell explicitly (per MetadataSource.CellID godoc).
-				t.Logf("SourceCell found at %q CellID=%q (non-conventional layout)",
-					s.Path, s.CellID)
+				if s.CellID != "" {
+					t.Errorf("non-conventional layout source CellID = %q, want empty"+
+						" (only conventional walk can derive it)", s.CellID)
+				}
 				return
 			}
 		}

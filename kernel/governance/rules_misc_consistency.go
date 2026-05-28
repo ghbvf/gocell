@@ -361,9 +361,22 @@ func (v *Validator) checkReverseEmits(
 	return results
 }
 
+// newSliceRef note: when s.File is empty (e.g. the slice was constructed
+// without a Locator-populated path), ref.dir will be "". Callers of
+// scanSliceEmitTopics must skip such refs — passing dir="" would cause
+// path.Dir(path.Dir("")) to return "." and filepath.Join(root, ".") to
+// scan the entire project root.
 func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[string]struct{}, []ValidationResult) {
 	topics := map[string]struct{}{}
 	var results []ValidationResult
+
+	// Guard: an empty dir means the slice has no resolvable filesystem path
+	// (manifest mode with non-conventional layout, or a test-fixture slice
+	// whose File field was not populated). Scanning would fall back to the
+	// project root; skip silently instead.
+	if ref.dir == "" {
+		return topics, results
+	}
 
 	// Derive cellDir from the slice's directory (ref.dir is slash-separated,
 	// e.g. "cells/accesscore/slices/sessionlogin"). The cell directory is two

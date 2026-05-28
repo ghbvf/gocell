@@ -35,6 +35,11 @@ const (
 // internals. ParserOption and LocatorOption are interchangeable — you can
 // pass a LocatorOption directly or construct one via WithLocatorMode /
 // WithManifestPath.
+//
+// e.g.: metadata.NewParser(root, metadata.WithLocatorMode(metadata.LocatorManifest))
+//
+// Don't declare ParserOption-typed variables separately; use the LocatorOption
+// constructors (WithLocatorMode, WithManifestPath) directly.
 type ParserOption = LocatorOption
 
 // Parser loads and parses all YAML metadata from a project root via a Locator.
