@@ -401,33 +401,24 @@ func forbiddenAstListTypeAssertions(info *types.Info, fset *token.FileSet, file 
 			//       call — e.g. f(OtherSlice, i); the callee typically does
 			//       OtherSlice[i] internally, which is also pairing semantics.
 			// In both cases EachInChildren cannot replace the paired-index loop.
-			companionIndex := false
-			scanner.EachInSubtree[ast.IndexExpr](rs.Body, func(idx *ast.IndexExpr) {
-				if companionIndex {
-					return
-				}
+			_, companionIndex := scanner.FindFirstInSubtree[ast.IndexExpr](rs.Body, func(idx *ast.IndexExpr) bool {
 				idxId, ok := idx.Index.(*ast.Ident)
 				if !ok || idxId.Name != indexName {
-					return
+					return false
 				}
-				if exprRepr(idx.X) != rsXRepr {
-					companionIndex = true
-				}
+				return exprRepr(idx.X) != rsXRepr
 			})
 			if !companionIndex {
 				// (b) index variable passed as a bare argument to a call.
 				// identNameOf is used to avoid a raw TypeAssertExpr inside a
 				// for-range over []ast.Expr, which would self-trigger form (a).
-				scanner.EachInSubtree[ast.CallExpr](rs.Body, func(call *ast.CallExpr) {
-					if companionIndex {
-						return
-					}
+				_, companionIndex = scanner.FindFirstInSubtree[ast.CallExpr](rs.Body, func(call *ast.CallExpr) bool {
 					for _, arg := range call.Args {
 						if identNameOf(arg) == indexName {
-							companionIndex = true
-							return
+							return true
 						}
 					}
+					return false
 				})
 			}
 			if companionIndex {
@@ -1274,8 +1265,9 @@ func _(file *ast.File, other []ast.Decl) {
 // INVARIANT: SCANNER-FRAMEWORK-USAGE-02
 //
 // archtest *_test.go files at tools/archtest/<file>_test.go must not hand-roll
-// the closure+done/found sentinel idiom over scanner.EachInChildren or its
-// 040 façade archtest.EachInChildren to fake find-first-and-stop:
+// the closure+done/found sentinel idiom over either monitored AST walker —
+// scanner.EachInChildren (depth-1) or scanner.EachInSubtree (subtree-recursive),
+// nor their 040 archtest.* façades — to fake find-first-and-stop:
 //
 //	found := false
 //	scanner.EachInChildren[ast.KeyValueExpr](lit, func(kv *ast.KeyValueExpr) {
@@ -1283,36 +1275,58 @@ func _(file *ast.File, other []ast.Decl) {
 //		if match(kv) { found = true }  // ← same bool set to literal true
 //	})
 //
-// Use the typed funnel scanner.FindFirstChild[N] (or its façade
-// archtest.FindFirstChild[N]) instead — the early-return is implicit, there
-// is no caller-held flag, and the wrong N is a compile error. allowlist = 0:
-// the migration is 100% complete, so the live scan over the whole archtest
-// tree must return zero diagnostics; this is self-consistent with the
-// migration (rule GREEN ⟺ all sites migrated).
+//	found := false
+//	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+//		if found { return }            // ← same sentinel shape, subtree axis
+//		if match(call) { found = true }
+//	})
 //
-// Callee-identity recognition (single Hard path): monitoredEachInChildrenCallee
+// Use the typed find-first funnels instead:
+//
+//	depth-1   → scanner.FindFirstChild[N]    / archtest.FindFirstChild[N]
+//	subtree   → scanner.FindFirstInSubtree[N] / archtest.FindFirstInSubtree[N]
+//
+// In both, the early-return is implicit, there is no caller-held flag, and
+// the wrong N is a compile error via interface{*S; ast.Node}. allowlist = 0
+// on BOTH depth axes: the migration is 100% complete, so the live scan over
+// the whole archtest tree must return zero diagnostics; this is
+// self-consistent with the migration (rule GREEN ⟺ all sites migrated on
+// either axis). FINDFIRSTINSUBTREE-API-01 was the work-stream label for the
+// subtree-axis migration — its enforcement has been folded into this single
+// rule, not a sibling rule, because the detector logic (callback + sentinel
+// shape) is depth-agnostic; only the callee identity set differs.
+//
+// Callee-identity recognition (single Hard path): monitoredEachWalkerCallee
 // uses typeseval.ResolvePackageRef to resolve the post-generic-strip callee
 // (either *ast.SelectorExpr for qualified calls or *ast.Ident for same-package
-// bare calls / dot-import) to its declaring package. The target set is
-// {scannerPkgPath, archtestPkgPath}; both names are equivalent depth-1 walkers
-// (archtest.EachInChildren is a thin façade around scanner.EachInChildren) and
-// equally forbid the sentinel idiom. The Ident branch is the form produced by
+// bare calls / dot-import) to its declaring package. The target set is the
+// cross-product of {scannerPkgPath, archtestPkgPath} × {EachInChildren,
+// EachInSubtree}. All four (callee, depth) pairs are equivalent walker APIs
+// and equally forbid the sentinel idiom; archtest.* is a thin façade around
+// scanner.* on each axis. The Ident branch is the form produced by
 // tools/archtest/*_test.go themselves (package archtest internal callers).
 //
-// AI-robust 双向锁评级:
+// EachInSubtreeStopAt is intentionally OUT of scope (3-arg walker; callback
+// is in arg [2] not arg [1]). If a sentinel idiom over StopAt appears, extend
+// monitoredEachWalkerCallee + the callback-extraction logic accordingly.
 //
-//	下游 Hard: FindFirstChild — wrong N (interface vs *S) is a compile error
-//	  via interface{*S; ast.Node}.
-//	上游 Medium (= Go ceiling, terminal): archtest form-ban (allowlist 0).
+// AI-robust 双向锁评级 (统一应用于 EachInChildren + EachInSubtree 双轴):
+//
+//	下游 Hard: FindFirstChild / FindFirstInSubtree — wrong N (interface vs *S)
+//	  is a compile error via interface{*S; ast.Node}. predicate `func(N) bool`
+//	  is required by the typed signature — a forgotten return is itself a
+//	  compile error.
+//	上游 Medium (= Go ceiling, terminal): archtest form-ban (allowlist 0) +
+//	  BS1-BS3 reverse self-tests + BS4/BS5 handled by main detector (see below).
 //	  Cannot sealed-interface around "a user declares a bool"; EachInChildren
-//	  must stay callable for pure iteration. Highest grade reachable in Go
-//	  for this rule shape (structurally identical to PANIC-REGISTERED-01's
-//	  honest caveat in .claude/rules/gocell/ai-robust.md: "the enforcement
-//	  is archtest-bound, not compile-time ... the highest grade reachable in
-//	  Go for this rule shape"). No upstream-Hard path reachable.
-//	  FINDFIRSTINSUBTREE-API-01 is an orthogonal coverage axis
-//	  (subtree find-first), not this funnel's hardening path — do not
-//	  conflate.
+//	  and EachInSubtree must stay callable for pure iteration. Highest grade
+//	  reachable in Go for this rule shape — same form-uniqueness ceiling as
+//	  PANIC-REGISTERED-01 (typed marker funnel + archtest-bound enforcement,
+//	  no compile-time gate possible without sealing the underlying APIs that
+//	  must remain callable for pure iteration). No upstream-Hard path
+//	  reachable on EITHER depth axis (the Go-ceiling reasoning is
+//	  depth-independent); the terminal "won't-do" upgrade evaluation is
+//	  tracked at gh #1256 per ai-robust.md §"Funnel 双向锁评级" requirement.
 //	Fixture-live anti-drift (Hard, 040 Stage 1.8): both
 //	  TestScannerFrameworkUsage02 (live) and TestScannerFrameworkUsage02_Fixture
 //	  (typed fixtures under tools/archtest/internal/usage02fixtures/) load
@@ -1324,28 +1338,55 @@ func _(file *ast.File, other []ast.Decl) {
 //
 // Tool blind spots (godoc-declared scope of the chosen AST tooling —
 // scanner.EachInSubtree[ast.CallExpr/IfStmt/AssignStmt/Ident] + typed
-// callee resolution). Each has a reverse self-test in
-// TestScannerFrameworkUsage02_BlindSpotReverse asserting it does NOT occur
-// in production AST:
+// callee resolution). BS1/BS2/BS3 are true blind spots of the MAIN detector
+// (forbiddenClosureDoneSentinel) and are covered by the BS reverse detector
+// (closureDoneSentinelBlindSpots) plus
+// TestScannerFrameworkUsage02_BlindSpotReverse asserting they do NOT occur
+// in production AST. BS1/BS2/BS3 shapes are depth-agnostic — the same
+// detector and reverse self-test apply uniformly to both EachInChildren
+// and EachInSubtree axes:
 //
 //	BS1: sentinel set via a non-`true`-literal RHS that is still a boolean
 //	     (`done = ok`, `done = x == 1`) while used as `if done { return }`.
 //	BS2: early-return expressed through the ELSE branch
 //	     (`if !done { ... } else { return }`) instead of `if done { return }`.
 //	BS3: guard/assignment split such that the sentinel is initialized to false
-//	     before the EachInChildren call, the guard (`if <ident> { return }`)
+//	     before the monitored walker call, the guard (`if <ident> { return }`)
 //	     is inside the callback, but the `= true` assignment is OUTSIDE the
 //	     callback FuncLit entirely (e.g. `done = true` appears after the
-//	     EachInChildren call in the enclosing function body). This is a
-//	     scoping limitation, not a real evasion: a functional find-first
-//	     sentinel MUST set the flag from inside the iterating callback (the
-//	     flag value depends on iteration); assignment outside the callback
+//	     walker call in the enclosing function body). This is a scoping
+//	     limitation, not a real evasion: a functional find-first sentinel
+//	     MUST set the flag from inside the iterating callback (the flag
+//	     value depends on iteration); assignment outside the callback
 //	     cannot implement find-first and is therefore not a functional guard
 //	     shape. The BS3 reverse detector in closureDoneSentinelBlindSpots
 //	     actively checks for this split form and asserts it does not appear
 //	     in production; TestScannerFrameworkUsage02_BlindSpotForwardFixtures
 //	     documents that the MAIN detector (forbiddenClosureDoneSentinel) by
 //	     design returns 0 hits for the BS3 shape.
+//
+// Handled forms — caught by the MAIN detector itself, NOT blind spots
+// (listed here for completeness; no separate reverse self-test required
+// because the main detector covers them at TestScannerFrameworkUsage02
+// allowlist=0):
+//
+//	BS4: nested-walker form — outer EachInSubtree's callback contains an
+//	     inner monitored walker call whose own callback carries the sentinel.
+//	     Handled naturally by the top-level CallExpr walk in the main
+//	     detector: every monitored CallExpr in the file is examined,
+//	     including those lexically nested inside another walker's callback.
+//	     The BS4 fixture (bs4_scanner_eachinsubtree_nested_inner_sentinel.go)
+//	     anchors the dual-hit semantics (outer + inner both reported).
+//	BS5: helper-func-value form — the second argument is a named function
+//	     value (Ident or SelectorExpr resolving to a func), not an inline
+//	     FuncLit, so the sentinel (if any) lives in a separately-declared
+//	     function body that the depth-1 FindFirstChild[FuncLit] lookup
+//	     cannot reach. The main detector reports this as a hard violation
+//	     regardless of whether the helper body contains a sentinel — the
+//	     form is form-banned (allowlist 0) because it is structurally
+//	     incompatible with in-place sentinel detection and constitutes a
+//	     blind-spot evasion vector. Production count today is 0; the ban
+//	     is preventive.
 func TestScannerFrameworkUsage02(t *testing.T) {
 	var diags []scanner.Diagnostic
 	// Tests:true required — _test.go files are the scan target of USAGE-02.
@@ -1366,30 +1407,42 @@ func TestScannerFrameworkUsage02(t *testing.T) {
 	scanner.Report(t, "SCANNER-FRAMEWORK-USAGE-02", diags)
 }
 
-// monitoredEachInChildrenCallee reports whether call invokes one of the
-// monitored depth-1 walkers — i.e. EachInChildren declared in either
-// scannerPkgPath (legacy direct call from outside package archtest) or
-// archtestPkgPath (040 façade, callable both qualified from external packages
-// and bare from inside package archtest). Both forms are equivalent walkers
-// and equally forbid the closure+done sentinel idiom.
+// monitoredEachWalkerCallee reports whether call invokes one of the monitored
+// AST walkers — EachInChildren (depth-1) or EachInSubtree (subtree-recursive)
+// declared in either scannerPkgPath (legacy direct call from outside package
+// archtest) or archtestPkgPath (040 façade, callable both qualified from
+// external packages and bare from inside package archtest). Both depth axes
+// are equivalent walker APIs and equally forbid the closure+done sentinel
+// idiom — the typed find-first replacement is FindFirstChild (depth-1) or
+// FindFirstInSubtree (subtree), respectively.
 //
-// The callee expression has four legal AST shapes after stripping the
+// The callee expression has six legal AST shapes after stripping the
 // IndexExpr / IndexListExpr generic instantiation wrapper:
 //
 //	scanner.EachInChildren[...]    → *ast.SelectorExpr
 //	archtest.EachInChildren[...]   → *ast.SelectorExpr
 //	EachInChildren[...]            → *ast.Ident  (same-package bare or dot-import)
+//	scanner.EachInSubtree[...]     → *ast.SelectorExpr
+//	archtest.EachInSubtree[...]    → *ast.SelectorExpr
+//	EachInSubtree[...]             → *ast.Ident  (same-package bare or dot-import)
 //	(anything else)                → ignored
 //
 // Pre-typeseval the function applies a syntactic Name fast-path skip: if the
-// trailing identifier is not "EachInChildren", no further work is needed.
-// This is NOT a fallback — a typeseval miss never reaches an "accept on name"
-// branch; identity authority rests solely with typeseval.ResolvePackageRef,
-// which canonicalizes both Ident (including dot-import) and SelectorExpr to
-// (declaring-package path, exported name). A typeseval miss yields a false
-// negative (rule under-fires), never silent acceptance — the single Hard path
-// invariant declared for SCANNER-FRAMEWORK-USAGE-02.
-func monitoredEachInChildrenCallee(info *types.Info, call *ast.CallExpr) bool {
+// trailing identifier is neither "EachInChildren" nor "EachInSubtree", no
+// further work is needed. This is NOT a fallback — a typeseval miss never
+// reaches an "accept on name" branch; identity authority rests solely with
+// typeseval.ResolvePackageRef, which canonicalizes both Ident (including
+// dot-import) and SelectorExpr to (declaring-package path, exported name). A
+// typeseval miss yields a false negative (rule under-fires), never silent
+// acceptance — the single Hard path invariant declared for
+// SCANNER-FRAMEWORK-USAGE-02.
+//
+// EachInSubtreeStopAt is intentionally NOT monitored: its 3-arg shape
+// (root, stopAt FuncLit, callback FuncLit) places the callback in a different
+// argument position than EachInChildren/EachInSubtree (where the callback is
+// arg [1]). Folding it in would require argument-position-aware callback
+// extraction; the rule scope is the two 2-arg walkers.
+func monitoredEachWalkerCallee(info *types.Info, call *ast.CallExpr) bool {
 	base := call.Fun
 	switch idx := base.(type) {
 	case *ast.IndexExpr:
@@ -1399,21 +1452,46 @@ func monitoredEachInChildrenCallee(info *types.Info, call *ast.CallExpr) bool {
 	}
 	switch x := base.(type) {
 	case *ast.SelectorExpr:
-		if x.Sel == nil || x.Sel.Name != "EachInChildren" {
+		if x.Sel == nil || !isMonitoredWalkerName(x.Sel.Name) {
 			return false
 		}
 	case *ast.Ident:
-		if x.Name != "EachInChildren" {
+		if !isMonitoredWalkerName(x.Name) {
 			return false
 		}
 	default:
 		return false
 	}
 	path, name, ok := ResolvePackageRef(info, base)
-	if !ok || name != "EachInChildren" {
+	if !ok || !isMonitoredWalkerName(name) {
 		return false
 	}
 	return path == scannerPkgPath || path == archtestPkgPath
+}
+
+// monitoredWalkerNames is the single source of truth for the SCANNER-FRAMEWORK
+// -USAGE-02 monitored walker identifier set, shared by:
+//
+//   - isMonitoredWalkerName (syntactic fast-path skip + typed resolution branch
+//     in monitoredEachWalkerCallee);
+//   - TestScannerFrameworkUsage02_MonitoredCalleeArgShape (typed shape guard
+//     asserting every monitored walker has the 2-arg, callback-in-arg[1]
+//     shape forbiddenClosureDoneSentinel assumes).
+//
+// Adding a name here is sufficient to monitor that walker; the shape guard
+// fails if the new walker's *types.Signature does not match (e.g. a 3-arg
+// walker like EachInSubtreeStopAt would fail param-count assertion).
+var monitoredWalkerNames = map[string]struct{}{
+	"EachInChildren": {},
+	"EachInSubtree":  {},
+}
+
+// isMonitoredWalkerName reports whether n is one of the monitored walker
+// identifiers, factored out so the syntactic fast-path and the typed
+// resolution branch stay structurally identical.
+func isMonitoredWalkerName(n string) bool {
+	_, ok := monitoredWalkerNames[n]
+	return ok
 }
 
 // ifBodyHasDirectReturn reports whether ifStmt.Body has a ReturnStmt as a
@@ -1440,26 +1518,59 @@ func condIdentNames(cond ast.Expr) map[string]bool {
 	return names
 }
 
-// forbiddenClosureDoneSentinel flags scanner.EachInChildren or
-// archtest.EachInChildren callbacks whose body contains BOTH (a) an
-// early-return guard `if <sentinel> ... { return }` and (b)
-// `<sentinel> = true`, i.e. the hand-rolled find-first sentinel.
+// forbiddenClosureDoneSentinel flags scanner.EachInChildren / EachInSubtree
+// (and the matching archtest.* façades) callbacks whose body contains BOTH
+// (a) an early-return guard `if <sentinel> ... { return }` and (b)
+// `<sentinel> = true`, i.e. the hand-rolled find-first sentinel. It also
+// reports BS5 (helper-func-value form): a monitored walker call whose second
+// argument is NOT an inline FuncLit, which makes the sentinel undetectable
+// in-place and is therefore banned as an evasion shape (allowlist 0).
 func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !monitoredEachInChildrenCallee(info, call) {
+		if !monitoredEachWalkerCallee(info, call) {
 			return
 		}
-		// The callback is the sole FuncLit direct child of the call (depth-1);
-		// dogfood FindFirstChild rather than for-range over call.Args.
-		cb, _ := scanner.FindFirstChild[ast.FuncLit](call, func(*ast.FuncLit) bool { return true })
-		if cb == nil || cb.Body == nil {
+		// Callback anchored to arg[1] explicitly — the shape guard
+		// TestScannerFrameworkUsage02_MonitoredCalleeArgShape asserts every
+		// monitored walker has 2 params with arg[1] being the callback. The
+		// previous "first FuncLit direct child via FindFirstChild" form was
+		// implicit-position-by-traversal-order and broke under hypothetical
+		// arg[0]=FuncLit shapes; this anchors the position structurally.
+		cb, isInline := call.Args[1].(*ast.FuncLit)
+		if !isInline {
+			// BS5: monitored walker called with a non-inline callback (named
+			// function value). The sentinel — if any — is in a separately-
+			// declared function body invisible to this in-place extraction.
+			// Form-ban the call shape entirely; allowlist 0.
+			out = append(out, scanner.Diagnostic{
+				Rel:  rel,
+				Line: fset.Position(call.Pos()).Line,
+				Message: "BS5 helper-func-value form: monitored scanner/archtest " +
+					"walker (EachInChildren or EachInSubtree) called with a " +
+					"non-inline callback (named function value at arg[1]); use an " +
+					"inline `func(...) { ... }` so SCANNER-FRAMEWORK-USAGE-02 can " +
+					"detect any in-callback sentinel, or migrate to FindFirstChild / " +
+					"FindFirstInSubtree which carries the find-first contract in " +
+					"the API name. NOTE: this ban applies regardless of whether " +
+					"the helper currently contains a sentinel — the named-function " +
+					"form is preventively banned (allowlist=0) to close the " +
+					"blind-spot evasion vector at the call shape level, not the " +
+					"helper body content level",
+			})
+			return
+		}
+		if cb.Body == nil {
 			return
 		}
 
-		// (a) idents assigned a literal `true` inside the callback.
+		// (a) idents assigned a literal `true` inside the callback. Bounded
+		// by stopAtNestedFuncLit so nested FuncLit scopes (which are their
+		// own callback scopes — sentinels there belong to the inner scope,
+		// not the outer one we're examining) do not pollute assignedTrue.
+		// See F3 in PR #1252 round-1 Review A.
 		assignedTrue := map[string]bool{}
-		scanner.EachInSubtree[ast.AssignStmt](cb.Body, func(as *ast.AssignStmt) {
+		scanner.EachInSubtreeStopAt[ast.AssignStmt](cb.Body, stopAtNestedFuncLit, func(as *ast.AssignStmt) {
 			if len(as.Lhs) != len(as.Rhs) {
 				return
 			}
@@ -1477,28 +1588,31 @@ func forbiddenClosureDoneSentinel(info *types.Info, fset *token.FileSet, file *a
 			return
 		}
 
-		// (b) idents used as an early-return guard condition.
-		flagged := false
-		scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
-			if flagged || !ifBodyHasDirectReturn(ifStmt) {
-				return
+		// (b) idents used as an early-return guard condition. Same FuncLit
+		// boundary as (a) — find-first with boundary via the typed function
+		// choice matrix's third member (FindFirstInSubtreeStopAt).
+		_, flagged := scanner.FindFirstInSubtreeStopAt[ast.IfStmt](cb.Body, stopAtNestedFuncLit, func(ifStmt *ast.IfStmt) bool {
+			if !ifBodyHasDirectReturn(ifStmt) {
+				return false
 			}
 			for name := range condIdentNames(ifStmt.Cond) {
 				if assignedTrue[name] {
-					flagged = true
-					return
+					return true
 				}
 			}
+			return false
 		})
 		if flagged {
 			out = append(out, scanner.Diagnostic{
 				Rel:  rel,
 				Line: fset.Position(call.Pos()).Line,
-				Message: "closure+done/found sentinel over scanner.EachInChildren or " +
-					"archtest.EachInChildren is forbidden (SCANNER-FRAMEWORK-USAGE-02): " +
-					"use the typed funnel scanner.FindFirstChild[N] / " +
-					"archtest.FindFirstChild[N](root, predicate) instead — the " +
-					"early-return is implicit and there is no caller-held flag",
+				Message: "closure+done/found sentinel over scanner/archtest " +
+					"EachInChildren or EachInSubtree is forbidden " +
+					"(SCANNER-FRAMEWORK-USAGE-02): use the typed find-first " +
+					"funnel — FindFirstChild[N] (depth-1) or " +
+					"FindFirstInSubtree[N] (subtree) — `func(N) bool` " +
+					"predicate carries the early-return implicitly and there " +
+					"is no caller-held flag",
 			})
 		}
 	})
@@ -1565,11 +1679,26 @@ func TestScannerFrameworkUsage02_Fixture(t *testing.T) {
 		{"red_scanner_found_disjunct", 1},
 		{"red_archtest_done_sentinel", 1},
 		{"red_archtest_bare_done_sentinel", 1},
+		// EachInSubtree-axis fixtures (subtree depth axis; same detector).
+		{"red_scanner_eachinsubtree_done_sentinel", 1},
+		{"red_archtest_eachinsubtree_done_sentinel", 1},
+		{"red_scanner_eachinsubtree_bs5_helper", 1},
+		// BS4 nested-walker form: outer EachInSubtree's callback contains
+		// an inner monitored walker call with a sentinel. The top-level
+		// CallExpr walk examines each monitored CallExpr. AFTER F3 fix
+		// (stopAtNestedFuncLit on cb.Body scans), outer's callback body is
+		// scanned with the FuncLit boundary so inner's sentinel does NOT
+		// pollute outer's assignedTrue map; outer is correctly NOT flagged
+		// (its own body has no sentinel). Inner is flagged separately by
+		// the top-level CallExpr walk: 1 hit (inner only).
+		{"bs4_scanner_eachinsubtree_nested_inner_sentinel", 1},
 		{"green_scanner_findfirstchild", 0},
 		{"green_scanner_pure_iteration", 0},
 		{"green_scanner_eachinsubtree_existence", 0},
 		{"green_scanner_no_true_assign", 0},
 		{"green_archtest_findfirstchild", 0},
+		{"green_scanner_findfirstinsubtree", 0},
+		{"green_archtest_findfirstinsubtree", 0},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -1590,13 +1719,15 @@ func TestScannerFrameworkUsage02_Fixture(t *testing.T) {
 func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *ast.File, rel string) []scanner.Diagnostic {
 	var out []scanner.Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if !monitoredEachInChildrenCallee(info, call) {
+		if !monitoredEachWalkerCallee(info, call) {
 			return
 		}
-		// The callback is the sole FuncLit direct child of the call (depth-1);
-		// dogfood FindFirstChild rather than for-range over call.Args.
-		cb, _ := scanner.FindFirstChild[ast.FuncLit](call, func(*ast.FuncLit) bool { return true })
-		if cb == nil || cb.Body == nil {
+		// Callback anchored to arg[1] explicitly (same shape guard backing
+		// as the main detector — see forbiddenClosureDoneSentinel for
+		// rationale). Non-inline callback shapes (BS5) are reported by the
+		// main detector; reverse self-test skips them.
+		cb, isInline := call.Args[1].(*ast.FuncLit)
+		if !isInline || cb.Body == nil {
 			return
 		}
 
@@ -1609,8 +1740,12 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 		falseInit := map[string]bool{}
 		enclosing := enclosingFuncBody(file, call)
 
+		// Both collectors use stopAtNestedFuncLit so sibling FuncLit scopes
+		// (other closures in the enclosing function body) and any nested
+		// FuncLit inside cb.Body do not bleed sentinel candidates across
+		// scope boundaries (F3, PR #1252 round-1 Review A).
 		collectFalseInitAssign := func(scope ast.Node, requireBeforeCall bool) {
-			scanner.EachInSubtree[ast.AssignStmt](scope, func(as *ast.AssignStmt) {
+			scanner.EachInSubtreeStopAt[ast.AssignStmt](scope, stopAtNestedFuncLit, func(as *ast.AssignStmt) {
 				if requireBeforeCall && as.End() > call.Pos() {
 					return
 				}
@@ -1627,7 +1762,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 			})
 		}
 		collectFalseInitSpec := func(scope ast.Node, requireBeforeCall bool) {
-			scanner.EachInSubtree[ast.ValueSpec](scope, func(vs *ast.ValueSpec) {
+			scanner.EachInSubtreeStopAt[ast.ValueSpec](scope, stopAtNestedFuncLit, func(vs *ast.ValueSpec) {
 				if requireBeforeCall && vs.End() > call.Pos() {
 					return
 				}
@@ -1654,9 +1789,12 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 			return
 		}
 
+		// In-callback assignment scan: bounded by stopAtNestedFuncLit so a
+		// nested FuncLit inside cb.Body (its own scope) does not pollute
+		// outer callback's assignedTrue/assignedNonLiteral.
 		assignedTrue := map[string]bool{}
 		assignedNonLiteral := map[string]bool{}
-		scanner.EachInSubtree[ast.AssignStmt](cb.Body, func(as *ast.AssignStmt) {
+		scanner.EachInSubtreeStopAt[ast.AssignStmt](cb.Body, stopAtNestedFuncLit, func(as *ast.AssignStmt) {
 			if as.Tok != token.ASSIGN || len(as.Lhs) != len(as.Rhs) {
 				return
 			}
@@ -1681,9 +1819,11 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 		// limitation, not a real evasion. Emit a diagnostic so the reverse test
 		// keeps it absent from production.
 		if enclosing != nil {
-			// Collect guard idents in cb.Body with direct-return ifs.
+			// Collect guard idents in cb.Body with direct-return ifs; bounded
+			// by stopAtNestedFuncLit so a nested FuncLit's `if guard {return}`
+			// does not falsely contribute to cb.Body's guardIdents.
 			guardIdents := map[string]bool{}
-			scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
+			scanner.EachInSubtreeStopAt[ast.IfStmt](cb.Body, stopAtNestedFuncLit, func(ifStmt *ast.IfStmt) {
 				if !ifBodyHasDirectReturn(ifStmt) {
 					return
 				}
@@ -1693,13 +1833,16 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 					}
 				}
 			})
-			// Collect idents assigned `true` outside cb.Body in enclosing scope.
+			// Collect idents assigned `true` in enclosing scope, EXCLUDING
+			// any nested FuncLit body. stopAtNestedFuncLit replaces the prior
+			// hand-rolled position-exclusion `if as.Pos() >= cb.Body.Pos() &&
+			// as.End() <= cb.Body.End()` which only excluded cb.Body itself
+			// while still crediting sibling FuncLits in enclosing — a real
+			// blind spot if a sibling closure happened to set the same sentinel
+			// name. The new boundary excludes ALL nested FuncLit scopes
+			// (including cb.Body and any sibling FuncLit) uniformly.
 			assignedTrueOutside := map[string]bool{}
-			scanner.EachInSubtree[ast.AssignStmt](enclosing, func(as *ast.AssignStmt) {
-				// Skip assignments inside the callback itself.
-				if as.Pos() >= cb.Body.Pos() && as.End() <= cb.Body.End() {
-					return
-				}
+			scanner.EachInSubtreeStopAt[ast.AssignStmt](enclosing, stopAtNestedFuncLit, func(as *ast.AssignStmt) {
 				if as.Tok != token.ASSIGN || len(as.Lhs) != len(as.Rhs) {
 					return
 				}
@@ -1715,8 +1858,9 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 			})
 			for name := range guardIdents {
 				if assignedTrueOutside[name] && !assignedTrue[name] {
-					// Find the IfStmt line to report.
-					scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
+					// Find the IfStmt line to report; bounded same as the
+					// guardIdents collector for consistency.
+					scanner.EachInSubtreeStopAt[ast.IfStmt](cb.Body, stopAtNestedFuncLit, func(ifStmt *ast.IfStmt) {
 						if !ifBodyHasDirectReturn(ifStmt) {
 							return
 						}
@@ -1726,7 +1870,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 								Message: "BS3 blind-spot shape (guard ident \"" + name + "\" is used " +
 									"as if-return guard inside callback but `= true` is outside " +
 									"the callback — non-functional find-first, scoping limitation) " +
-									"in scanner/archtest.EachInChildren callback",
+									"in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 							})
 						}
 					})
@@ -1734,7 +1878,10 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 			}
 		}
 
-		scanner.EachInSubtree[ast.IfStmt](cb.Body, func(ifStmt *ast.IfStmt) {
+		// BS2/BS1 IfStmt scan over cb.Body bounded by stopAtNestedFuncLit so
+		// nested closure scopes (which are independent iteration contexts)
+		// do not surface as cb.Body's own blind spots.
+		scanner.EachInSubtreeStopAt[ast.IfStmt](cb.Body, stopAtNestedFuncLit, func(ifStmt *ast.IfStmt) {
 			conds := condIdentNames(ifStmt.Cond)
 			// BS2: the return guard is in the ELSE branch (the main detector
 			// only inspects ifStmt.Body), keyed on a literal-true sentinel.
@@ -1745,7 +1892,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 							out = append(out, scanner.Diagnostic{
 								Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 								Message: "BS2 blind-spot shape (else-branch return " +
-									"guard on a false-init sentinel) in scanner/archtest.EachInChildren callback",
+									"guard on a false-init sentinel) in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 							})
 						}
 					}
@@ -1762,7 +1909,7 @@ func closureDoneSentinelBlindSpots(info *types.Info, fset *token.FileSet, file *
 					out = append(out, scanner.Diagnostic{
 						Rel: rel, Line: fset.Position(ifStmt.Pos()).Line,
 						Message: "BS1 blind-spot shape (false-init sentinel set via " +
-							"non-true-literal RHS) in scanner/archtest.EachInChildren callback",
+							"non-true-literal RHS) in scanner/archtest walker (EachInChildren or EachInSubtree) callback",
 					})
 				}
 			}
@@ -1851,6 +1998,10 @@ func TestScannerFrameworkUsage02_BlindSpotForwardFixtures(t *testing.T) {
 		"bs1_scanner_nonliteral_rhs",
 		"bs2_scanner_else_guard",
 		"bs3_scanner_assign_outside",
+		// Subtree-axis BS1/BS2/BS3 variants (depth-agnostic shape).
+		"bs1_scanner_eachinsubtree_nonliteral_rhs",
+		"bs2_scanner_eachinsubtree_else_guard",
+		"bs3_scanner_eachinsubtree_assign_outside",
 	}
 	for _, name := range cases {
 		name := name
@@ -1861,5 +2012,94 @@ func TestScannerFrameworkUsage02_BlindSpotForwardFixtures(t *testing.T) {
 					"detector, got %d hits: %v", name, len(d), d)
 			}
 		})
+	}
+}
+
+// TestScannerFrameworkUsage02_MonitoredCalleeArgShape is a Medium archtest
+// guarding the structural assumption baked into forbiddenClosureDoneSentinel
+// AND monitoredEachWalkerCallee: the monitored walker has exactly 2
+// parameters and the second parameter is the callback (a function type).
+// The detector anchors the callback to call.Args[1] explicitly; that anchor
+// is correct only when the monitored walker has 2 params with the callback
+// in arg[1]. Adding a 3-arg walker (e.g. EachInSubtreeStopAt = (root,
+// stopAt, fn)) to monitoredWalkerNames would silently move the callback to
+// arg[2] — the detector would inspect the wrong arg and either miss
+// sentinels or hit BS5 spuriously.
+//
+// The guard enumerates monitoredWalkerNames (single source of truth) AND
+// monitoredEachWalkerCallee's accepted package set (scannerPkgPath +
+// archtestPkgPath), looking each {name, pkg} up via *types.Signature and
+// asserting param-count == 2 + second-param-is-func-type. Any drift (new
+// walker added with different shape, an existing walker's signature
+// changed, or the archtest façade diverging from scanner's signature) fails
+// this test at archtest time, before silent mis-detection ships.
+//
+// AI-Robust rating (per .claude/rules/gocell/ai-robust.md):
+//
+//	下游 Medium: typed *types.Signature shape assertion (typed function call
+//	  + structural property check, NOT string anchor / name convention).
+//	  Per ai-robust.md §"Soft → Hard 改造方向: 字符串锚点 → typed function
+//	  call" this upgrades the previously proposed Soft form
+//	  (`if isMonitoredWalkerName("EachInSubtreeStopAt") { t.Fatal(...) }`,
+//	  Review A round-1) into a structurally enumerated Medium guard. Coverage
+//	  spans BOTH packages monitoredEachWalkerCallee accepts (scannerPkgPath
+//	  + archtestPkgPath, F4 round-1 fix).
+//	上游 Hard: monitoredWalkerNames is the single source of truth used by
+//	  both isMonitoredWalkerName AND this test — Go compiler enforces no
+//	  drift between the production lookup and the test enumeration (any
+//	  bypass would have to be a syntactic divergence visible at compile time).
+//	  scannerPkgPath / archtestPkgPath are const string identifiers used by
+//	  monitoredEachWalkerCallee, also Go-compiler-enforced single source.
+func TestScannerFrameworkUsage02_MonitoredCalleeArgShape(t *testing.T) {
+	// expectation key: {pkg, name}. Both packages must be loaded and every
+	// monitored name must be seen in each.
+	type key struct{ pkg, name string }
+	want := make(map[key]bool, len(monitoredWalkerNames)*2)
+	for _, pkg := range []string{scannerPkgPath, archtestPkgPath} {
+		for n := range monitoredWalkerNames {
+			want[key{pkg: pkg, name: n}] = false
+		}
+	}
+	RunTyped(t, TypedOpts{Tests: false}, []string{scannerPkgPath, archtestPkgPath},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			pkg := p.Pkg.Path()
+			if pkg != scannerPkgPath && pkg != archtestPkgPath {
+				return nil
+			}
+			for name := range monitoredWalkerNames {
+				obj := p.Pkg.Scope().Lookup(name)
+				if obj == nil {
+					t.Errorf("%s.%s not declared in package scope (monitored name has no backing symbol)", pkg, name)
+					continue
+				}
+				want[key{pkg: pkg, name: name}] = true
+				sig, isSig := obj.Type().(*types.Signature)
+				if !isSig {
+					t.Errorf("%s.%s expected *types.Signature, got %T", pkg, name, obj.Type())
+					continue
+				}
+				if got := sig.Params().Len(); got != 2 {
+					t.Errorf("%s.%s: expected 2 parameters (root, callback) — the shape "+
+						"forbiddenClosureDoneSentinel assumes — got %d. If this is a new "+
+						"walker shape (e.g. EachInSubtreeStopAt with 3 params), it MUST NOT "+
+						"be added to monitoredWalkerNames; the callback-extraction logic "+
+						"(call.Args[1].(*ast.FuncLit) at call site) assumes the callback is in arg[1]",
+						pkg, name, got)
+					continue
+				}
+				if _, isFunc := sig.Params().At(1).Type().(*types.Signature); !isFunc {
+					t.Errorf("%s.%s: expected param[1] to be a function type "+
+						"(callback), got %s", pkg, name, sig.Params().At(1).Type())
+				}
+			}
+			return nil
+		})
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("%s.%s: package %s not loaded — RunTyped scope mismatch", k.pkg, k.name, k.pkg)
+		}
 	}
 }

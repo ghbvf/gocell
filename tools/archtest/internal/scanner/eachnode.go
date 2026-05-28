@@ -174,6 +174,14 @@ func FindFirstChild[S any, N interface {
 // Hard 范本 #1 "typed function choice for walk depth", alongside EachInSubtree
 // vs EachInChildren and EachInSubtreeStopAt).
 //
+// The closure-sentinel idiom over [EachInSubtree] (the recursive walker) —
+// `found := false; EachInSubtree(...){ if found { return }; ... found = true }`
+// — is banned by archtest SCANNER-FRAMEWORK-USAGE-02 (allowlist = 0),
+// alongside its depth-1 sibling over [EachInChildren]. Use FindFirstInSubtree
+// instead: the early-return is implicit, no caller-held flag, and picking the
+// wrong N is a compile error via the same `interface{*S; ast.Node}` constraint
+// as [EachInSubtree].
+//
 // # Implementation
 //
 // Uses [ast.Inspect] whose visitor's bool return halts descent into the
@@ -353,4 +361,89 @@ func (v *subtreeStopAtVisitor[N]) Visit(n ast.Node) ast.Visitor {
 		v.fn(typed)
 	}
 	return v
+}
+
+// FindFirstInSubtreeStopAt walks root's subtree like [FindFirstInSubtree],
+// returning the first node of kind N satisfying predicate, but stops
+// descending into any non-root node for which stopAt returns true. The
+// boundary node itself is NOT considered as a candidate even if its type
+// matches N (it is excluded along with its subtree, same semantics as
+// [EachInSubtreeStopAt]).
+//
+// FindFirstInSubtreeStopAt completes the typed function choice matrix —
+// {EachIn*, FindFirst*} × {Children, Subtree, SubtreeStopAt} — closing the
+// gap where boundary-aware find-first was previously unavailable. Picking
+// the wrong combination is a typed function name selection per ai-robust.md
+// AI-robust Hard 范本 #1 "typed function choice for walk depth"; archtest
+// authors needing "find-first respecting closure / scope boundary" should
+// reach for this API rather than falling back to manual sentinel idioms over
+// [EachInSubtreeStopAt] (which are banned by SCANNER-FRAMEWORK-USAGE-02).
+//
+// # Root handling
+//
+// root is ALWAYS evaluated regardless of stopAt — stopAt only applies to
+// non-root nodes. Same root-included semantics as [FindFirstInSubtree] and
+// [EachInSubtreeStopAt].
+//
+// # Nil root
+//
+// Returns (zero, false) silently (no-op).
+//
+// # Nil stopAt
+//
+// A nil stopAt is treated as the zero predicate (always false), making
+// FindFirstInSubtreeStopAt[N](root, nil, predicate) equivalent to
+// FindFirstInSubtree[N](root, predicate). Callers should prefer the simpler
+// FindFirstInSubtree in that case for clarity.
+//
+// # Nil predicate
+//
+// Panics on the first visited candidate — matches [FindFirstInSubtree]
+// fail-fast contract.
+//
+// ref: go/ast.Inspect — Go stdlib early-stop preorder traversal.
+func FindFirstInSubtreeStopAt[S any, N interface {
+	*S
+	ast.Node
+}](root ast.Node, stopAt func(ast.Node) bool, predicate func(N) bool) (N, bool) {
+	if root == nil {
+		var zero N
+		return zero, false
+	}
+	var match N
+	var found bool
+	// evaluate factors the typed-candidate + predicate-call branch out of
+	// the ast.Inspect visitor body so the visitor stays under the gocognit
+	// budget without sacrificing semantic clarity (atRoot vs descendant
+	// branches remain distinct in the visitor).
+	evaluate := func(n ast.Node) {
+		typed, ok := n.(N)
+		if !ok {
+			return
+		}
+		if predicate(typed) {
+			match, found = typed, true
+		}
+	}
+	atRoot := true
+	ast.Inspect(root, func(n ast.Node) bool {
+		// ast.Inspect contract: nil is the children-done sentinel; ignore
+		// silently. found short-circuits the entire walk after first match.
+		if n == nil || found {
+			return false
+		}
+		if atRoot {
+			// Root is ALWAYS entered regardless of stopAt (mirrors
+			// EachInSubtreeStopAt / FindFirstInSubtree root semantics).
+			atRoot = false
+			evaluate(n)
+			return !found
+		}
+		if stopAt != nil && stopAt(n) {
+			return false
+		}
+		evaluate(n)
+		return !found
+	})
+	return match, found
 }

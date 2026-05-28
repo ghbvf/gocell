@@ -555,25 +555,21 @@ func initReachesCheckNotNoop(p *Pass, init *ast.FuncDecl) bool {
 			continue
 		}
 		funcLitRanges := collectFuncLitRanges(fd.Body)
-		found := false
-		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-			if found {
-				return
-			}
+		_, found := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
 			if posInsideAnyRange(call.Pos(), funcLitRanges) {
-				return // CallExpr nested in unexecuted FuncLit — boundary skip
+				return false // CallExpr nested in unexecuted FuncLit — boundary skip
 			}
 			callee := resolveCallee(p, call.Fun)
 			if callee == nil {
-				return
+				return false
 			}
 			if callee.FullName() == kernelCellCheckNotNoopFullName {
-				found = true
-				return
+				return true
 			}
 			if next, ok := sameSrcByFunc[callee]; ok {
 				queue = append(queue, next)
 			}
+			return false
 		})
 		if found {
 			return true
@@ -889,18 +885,12 @@ func isReflectValueOfCall(p *Pass, call *ast.CallExpr) bool {
 func argSubtreeReferencesCheckNotNoop(p *Pass, args []ast.Expr) bool {
 	for _, arg := range args {
 		funcLitRanges := collectFuncLitRanges(arg)
-		hit := false
-		EachInSubtree[ast.Ident](arg, func(id *ast.Ident) {
-			if hit {
-				return
-			}
+		_, hit := FindFirstInSubtree[ast.Ident](arg, func(id *ast.Ident) bool {
 			if posInsideAnyRange(id.Pos(), funcLitRanges) {
-				return // Ident nested in FuncLit body — boundary skip
+				return false // Ident nested in FuncLit body — boundary skip
 			}
 			fn, _ := p.TypesInfo.Uses[id].(*types.Func)
-			if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
-				hit = true
-			}
+			return fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName
 		})
 		if hit {
 			return true
@@ -988,15 +978,9 @@ func TestNoAsyncCheckNotNoopInProduction(t *testing.T) {
 // expression in the go-stmt call chain) contains a CallExpr resolving to
 // kernel/outbox.CheckNotNoop.
 func goStmtCallsCheckNotNoop(p *Pass, gostmt *ast.GoStmt) bool {
-	hit := false
-	EachInSubtree[ast.CallExpr](gostmt, func(call *ast.CallExpr) {
-		if hit {
-			return
-		}
+	_, hit := FindFirstInSubtree[ast.CallExpr](gostmt, func(call *ast.CallExpr) bool {
 		fn := resolveCallee(p, call.Fun)
-		if fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName {
-			hit = true
-		}
+		return fn != nil && fn.FullName() == kernelCellCheckNotNoopFullName
 	})
 	return hit
 }

@@ -241,38 +241,31 @@ func checkModulesGenFile(t *testing.T, path, rel string) {
 // hasGeneratedCellModulesFunc returns true when the file contains a top-level
 // function declaration `func generatedCellModules() []CellModule`.
 func hasGeneratedCellModulesFunc(af *ast.File) bool {
-	found := false
-	EachInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) {
-		if found {
-			return
-		}
+	_, ok := FindFirstInSubtree[ast.FuncDecl](af, func(fn *ast.FuncDecl) bool {
 		if fn.Recv != nil {
-			return // skip methods
+			return false // skip methods
 		}
 		if fn.Name.Name != "generatedCellModules" {
-			return
+			return false
 		}
 		ft := fn.Type
 		// No parameters.
 		if ft.Params != nil && len(ft.Params.List) != 0 {
-			return
+			return false
 		}
 		// Returns exactly one result: []CellModule.
 		if ft.Results == nil || len(ft.Results.List) != 1 {
-			return
+			return false
 		}
 		result := ft.Results.List[0]
-		arr, ok := result.Type.(*ast.ArrayType)
-		if !ok || arr.Len != nil {
-			return
+		arr, isArr := result.Type.(*ast.ArrayType)
+		if !isArr || arr.Len != nil {
+			return false
 		}
-		id, ok := arr.Elt.(*ast.Ident)
-		if !ok || id.Name != "CellModule" {
-			return
-		}
-		found = true
+		id, isIdent := arr.Elt.(*ast.Ident)
+		return isIdent && id.Name == "CellModule"
 	})
-	return found
+	return ok
 }
 
 // loadAssemblyEntrypointDirs derives the set of assembly entrypoint directories

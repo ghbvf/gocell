@@ -79,20 +79,14 @@ func exprContainsSelectorName(expr ast.Expr, name string) bool {
 // an AuthzEpoch selector. This enforces that the epoch comparison uses strict
 // inequality (!=) rather than a weaker operator like > (Finding #2).
 func bodyContainsEpochInequality(body *ast.BlockStmt) bool {
-	found := false
-	scanner.EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
-		if found {
-			return
-		}
+	_, ok := scanner.FindFirstInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) bool {
 		if be.Op != gotoken.NEQ {
-			return
+			return false
 		}
 		// Either side of the != must reference .AuthzEpoch.
-		if exprContainsSelectorName(be.X, "AuthzEpoch") || exprContainsSelectorName(be.Y, "AuthzEpoch") {
-			found = true
-		}
+		return exprContainsSelectorName(be.X, "AuthzEpoch") || exprContainsSelectorName(be.Y, "AuthzEpoch")
 	})
-	return found
+	return ok
 }
 
 // TestSessionvalidateEpochCompare_01 enforces SESSIONVALIDATE-EPOCH-COMPARE-01:

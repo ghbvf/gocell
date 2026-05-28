@@ -107,18 +107,15 @@ func TestSessionvalidateEpochSource_RedFixtureDetected(t *testing.T) {
 // with Op==NEQ whose two operands together reference BOTH AuthzEpoch (live
 // user epoch) and AuthzEpochAtIssue (row provenance). Order is irrelevant.
 func bodyContainsRowEpochInequality(body *ast.BlockStmt) bool {
-	found := false
-	scanner.EachInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) {
-		if found || be.Op != gotoken.NEQ {
-			return
+	_, ok := scanner.FindFirstInSubtree[ast.BinaryExpr](body, func(be *ast.BinaryExpr) bool {
+		if be.Op != gotoken.NEQ {
+			return false
 		}
 		hasLive := exprContainsSelectorName(be.X, epochSourceLiveField) ||
 			exprContainsSelectorName(be.Y, epochSourceLiveField)
 		hasAtIssue := exprContainsSelectorName(be.X, epochSourceAtIssueField) ||
 			exprContainsSelectorName(be.Y, epochSourceAtIssueField)
-		if hasLive && hasAtIssue {
-			found = true
-		}
+		return hasLive && hasAtIssue
 	})
-	return found
+	return ok
 }

@@ -348,26 +348,17 @@ func taggroupObjectOf(info *types.Info, id *ast.Ident) types.Object {
 // are small, so the constant-factor cost is irrelevant; the API choice keeps
 // the rule honest about scanner usage.
 func bodyContainsRunTyped(p *Pass, body *ast.BlockStmt) (bool, int) {
-	var found bool
-	var line int
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		if found {
-			return
+	call, ok := FindFirstInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) bool {
+		pkgPath, name, resolved := ResolvePackageRef(p.TypesInfo, call.Fun)
+		if !resolved {
+			return false
 		}
-		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !ok {
-			return
-		}
-		if name != taggroupLoopRunTypedName {
-			return
-		}
-		if pkgPath != taggroupLoopArchtestPkg {
-			return
-		}
-		found = true
-		line = p.Fset.Position(call.Pos()).Line
+		return name == taggroupLoopRunTypedName && pkgPath == taggroupLoopArchtestPkg
 	})
-	return found, line
+	if !ok {
+		return false, 0
+	}
+	return true, p.Fset.Position(call.Pos()).Line
 }
 
 // isLiveTaggroupTarget restricts the live scan to tools/archtest/*_test.go

@@ -890,17 +890,14 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 	if err != nil {
 		return false
 	}
-	found := false
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-		if found || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
-			return
+	_, found := FindFirstInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) bool {
+		if fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
+			return false
 		}
 		if fd.Name.Name != "Init" {
-			return
+			return false
 		}
-		if ReceiverTypeName(fd.Recv.List[0].Type) == structName {
-			found = true
-		}
+		return ReceiverTypeName(fd.Recv.List[0].Type) == structName
 	})
 	return found
 }
@@ -1123,14 +1120,10 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 		return "", "", false
 	}
 	var foundID, foundTopic string
-	found := false
-	EachInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) {
-		if found {
-			return
-		}
+	_, found := FindFirstInSubtree[ast.CompositeLit](f, func(cl *ast.CompositeLit) bool {
 		sel, isSel := cl.Type.(*ast.SelectorExpr)
 		if !isSel || sel.Sel.Name != "ContractSpec" {
-			return
+			return false
 		}
 		EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 			key, isIdent := kv.Key.(*ast.Ident)
@@ -1152,7 +1145,7 @@ func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
 				foundTopic = unq
 			}
 		})
-		found = true
+		return true
 	})
 	if !found {
 		return "", "", false
@@ -1389,22 +1382,16 @@ func cellGenHasRouteGroup(genPath string) bool {
 		return false
 	}
 	_ = fset
-	found := false
-	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
-			return
+			return false
 		}
 		recv, ok := sel.X.(*ast.Ident)
 		if !ok {
-			return
+			return false
 		}
-		if recv.Name == "reg" && sel.Sel.Name == "RouteGroup" {
-			found = true
-		}
+		return recv.Name == "reg" && sel.Sel.Name == "RouteGroup"
 	})
 	return found
 }

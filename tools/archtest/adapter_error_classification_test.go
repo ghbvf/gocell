@@ -274,21 +274,15 @@ func classifierRoutesThroughWrapInfra(p *Pass, errcodePkgPath string) bool {
 }
 
 // funcBodyCallsWrapInfra reports whether body contains a call resolving to
-// errcodePkgPath.WrapInfra. EachInSubtree (recursive) is required because the
-// call is nested (inside an IfStmt/ReturnStmt); USAGE-02 monitors only the
-// depth-1 EachInChildren sentinel, not the subtree walk.
+// errcodePkgPath.WrapInfra. FindFirstInSubtree (subtree-recursive find-first)
+// is required because the call is nested (inside an IfStmt/ReturnStmt); the
+// typed predicate carries the early-stop implicitly.
 func funcBodyCallsWrapInfra(info *types.Info, body *ast.BlockStmt, errcodePkgPath string) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
-		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		if ok && pkgPath == errcodePkgPath && name == transientMarkerWriterFunc {
-			found = true
-		}
+	_, ok := FindFirstInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) bool {
+		pkgPath, name, found := ResolvePackageRef(info, call.Fun)
+		return found && pkgPath == errcodePkgPath && name == transientMarkerWriterFunc
 	})
-	return found
+	return ok
 }
 
 // enclosingFuncName returns the name of the top-level *ast.FuncDecl whose

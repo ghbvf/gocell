@@ -502,24 +502,18 @@ func secutilCallsValidateTLSEndpoint(src string) bool {
 	if err != nil {
 		return false
 	}
-	found := false
-	scanner.EachInSubtree[ast.CallExpr](f, func(ce *ast.CallExpr) {
-		if found {
-			return
+	_, ok := scanner.FindFirstInSubtree[ast.CallExpr](f, func(ce *ast.CallExpr) bool {
+		sel, isSel := ce.Fun.(*ast.SelectorExpr)
+		if !isSel {
+			return false
 		}
-		sel, ok := ce.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return
+		x, isIdent := sel.X.(*ast.Ident)
+		if !isIdent {
+			return false
 		}
-		x, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return
-		}
-		if x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint" {
-			found = true
-		}
+		return x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint"
 	})
-	return found
+	return ok
 }
 
 // TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly asserts the

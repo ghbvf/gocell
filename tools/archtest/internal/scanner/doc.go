@@ -28,25 +28,29 @@
 // # Choosing walk depth (iteration and find-first)
 //
 // Walk depth is a compile-time choice — picking the wrong API shows at the
-// call site, not in runtime AST drift. Five APIs across two axes (depth ×
-// iteration-vs-find-first) plus one boundary-aware variant:
+// call site, not in runtime AST drift. Six APIs forming a 2×3 matrix
+// {EachIn*, FindFirst*} × {Children, Subtree, SubtreeStopAt}:
 //
 //   - [EachInSubtree] / [FindFirstInSubtree]: recursive over the full
 //     sub-tree (root + every descendant). For "any FuncDecl in the file" /
 //     "any IfStmt anywhere in fn.Body" style rules — and the find-first
 //     sibling when the rule needs existence/first-match with implicit
 //     early-stop (closure-sentinel idiom is forbidden by
-//     SCANNER-FRAMEWORK-USAGE-02 subset extension).
+//     SCANNER-FRAMEWORK-USAGE-02, allowlist 0, covering both EachInSubtree
+//     and the depth-1 EachInChildren axis).
 //   - [EachInChildren] / [FindFirstChild]: depth-1 only. For "container's
 //     direct elements" — KeyValueExpr of CompositeLit, CaseClause of
 //     SwitchStmt.Body, CommClause of SelectStmt.Body, top-level Decl of
 //     *ast.File.
-//   - [EachInSubtreeStopAt]: recursive with a boundary predicate that prunes
-//     descent into matching non-root nodes (typical use: skip nested
-//     *ast.FuncLit so dead-closure call positions are excluded). Third
-//     depth-semantic member of the typed-function-choice Hard 范本 (see
-//     ai-robust.md §"Hard 范本目录" #1) alongside EachInSubtree /
-//     EachInChildren.
+//   - [EachInSubtreeStopAt] / [FindFirstInSubtreeStopAt]: recursive with a
+//     boundary predicate that prunes descent into matching non-root nodes
+//     (typical use: skip nested *ast.FuncLit so dead-closure call positions
+//     are excluded). Third depth-semantic member of the typed-function-choice
+//     Hard 范本 (see ai-robust.md §"Hard 范本目录" #1) alongside
+//     EachInSubtree / EachInChildren. The FindFirst variant completes the
+//     matrix, giving rule authors boundary-aware find-first without falling
+//     back to the banned EachInSubtreeStopAt+sentinel idiom (also covered
+//     by SCANNER-FRAMEWORK-USAGE-02).
 //
 // All silently no-op on nil root; callers need not guard. FindFirst* returns
 // (zero, false) on nil root.

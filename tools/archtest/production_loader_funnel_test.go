@@ -133,31 +133,24 @@ func funcDeclCallsBannedRealRepoLoader(f *ast.File, fd *ast.FuncDecl) bool {
 	if !funcBodyHasAllPatternLiteral(fd.Body) {
 		return false
 	}
-	var found bool
-	EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel == nil {
-			return
+			return false
 		}
 		switch sel.Sel.Name {
 		case "SharedResolver", "LoadPackages":
 		default:
-			return
+			return false
 		}
 		recv := exprToIdent(sel.X)
 		if recv == nil || recv.Name != "typeseval" {
-			return
+			return false
 		}
 		if len(call.Args) < 2 {
-			return
+			return false
 		}
-		if !firstArgResolvesToFindModuleRoot(f, call.Args[0]) {
-			return
-		}
-		found = true
+		return firstArgResolvesToFindModuleRoot(f, call.Args[0])
 	})
 	return found
 }
@@ -226,18 +219,11 @@ func callExprFunIsFindModuleRoot(e ast.Expr) bool {
 // in loadModule(t, root)) is matched against the caller's
 // `root := findModuleRoot(t)` assignment in the same file.
 func fileBindsIdentFromFindModuleRoot(f *ast.File, name string) bool {
-	var matched bool
-	EachInSubtree[ast.AssignStmt](f, func(as *ast.AssignStmt) {
-		if matched {
-			return
-		}
+	_, matched := FindFirstInSubtree[ast.AssignStmt](f, func(as *ast.AssignStmt) bool {
 		if !assignLhsHasIdentNamed(as, name) {
-			return
+			return false
 		}
-		if !assignRhsCallsFindModuleRoot(as) {
-			return
-		}
-		matched = true
+		return assignRhsCallsFindModuleRoot(as)
 	})
 	return matched
 }

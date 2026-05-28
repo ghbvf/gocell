@@ -546,26 +546,21 @@ func collectPGPoolParams(fn *ast.FuncDecl, info *types.Info) []string {
 // *types.Info.Uses resolving to a *types.Func with Pkg().Path() ending
 // /internal/pgexec AND Name() == "New".
 func bodyCallsPgexecNewWith(body *ast.BlockStmt, paramName string, info *types.Info) bool {
-	found := false
-	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	_, ok := FindFirstInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) bool {
 		fn := resolveCalleeFunc(call.Fun, info)
 		if fn == nil || fn.Name() != pgexecFactoryName {
-			return
+			return false
 		}
 		if fn.Pkg() == nil || !strings.HasSuffix(fn.Pkg().Path(), pgexecPkgSuffix) {
-			return
+			return false
 		}
 		if len(call.Args) == 0 {
-			return
+			return false
 		}
-		if arg, ok := call.Args[0].(*ast.Ident); ok && arg.Name == paramName {
-			found = true
-		}
+		arg, ok := call.Args[0].(*ast.Ident)
+		return ok && arg.Name == paramName
 	})
-	return found
+	return ok
 }
 
 // resolveCalleeFunc resolves a CallExpr's Fun to a *types.Func via TypesInfo.
