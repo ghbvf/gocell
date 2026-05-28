@@ -159,7 +159,7 @@ func (e *Executor) recoverObserverPanic(ctx context.Context, method string) {
 	if r := recover(); r != nil {
 		e.logger.WarnContext(ctx, "saga executor: observer call panicked, ignoring",
 			slog.String("method", method),
-			slog.String("panic", redaction.RedactString(fmt.Sprint(r))),
+			slog.Any("panic", redaction.RedactAny(r)),
 		)
 	}
 }
@@ -354,7 +354,7 @@ func (e *Executor) executeInner(
 				// visible and the panic value may carry headers / tokens.
 				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
 					slog.String("instance_id", string(inst.ID)),
-					slog.String("panic", redaction.RedactString(fmt.Sprint(r))),
+					slog.Any("panic", redaction.RedactAny(r)),
 				)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
 			}
@@ -435,7 +435,7 @@ func (e *Executor) RunWithHeartbeat(
 			if r := recover(); r != nil {
 				e.logger.WarnContext(hbCtx, "saga executor: heartbeat goroutine recovered from panic",
 					slog.String("instance_id", string(inst.ID)),
-					slog.Any("panic", r),
+					slog.Any("panic", redaction.RedactAny(r)),
 				)
 				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails
 			}

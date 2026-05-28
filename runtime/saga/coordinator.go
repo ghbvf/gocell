@@ -909,7 +909,7 @@ func (c *Coordinator) compensateOneStep(
 			slog.String("instance_id", string(ci.Instance.ID)),
 			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.String("step_name", string(step.Name)),
-			slog.Any("error", compensateErr))
+			slog.Any("error", redaction.RedactAny(compensateErr)))
 		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 			_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
 				Kind:     journal.KindStepCompensationFailed,
