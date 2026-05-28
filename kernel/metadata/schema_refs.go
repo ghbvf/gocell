@@ -34,6 +34,10 @@ type ResolvedSchemaRef struct {
 }
 
 // SchemaRefError reports a schema ref resolution failure.
+//
+// Kind is a free-form descriptive string used only in Error(); no caller
+// compares it. If a caller ever needs to switch on it, type it via the
+// string-typed concept funnel pattern — tracked in #1254.
 type SchemaRefError struct {
 	Field string
 	Ref   string
@@ -163,6 +167,9 @@ func sortedStringKeys(m map[string]string) []string {
 	return keys
 }
 
+// isWithinRoot mirrors kernel/governance.IsWithinRoot. The duplication is
+// forced by layering (kernel/metadata cannot import kernel/governance); keep
+// the two in sync. Extracting a shared helper is tracked in #1255.
 func isWithinRoot(root, target string) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {

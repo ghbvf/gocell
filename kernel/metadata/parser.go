@@ -41,6 +41,10 @@ const (
 //
 // Don't declare ParserOption-typed variables separately; use the LocatorOption
 // constructors (WithLocatorMode, WithManifestPath) directly.
+//
+// AI-robust: the line above is a Soft godoc convention (no type-system /
+// archtest guard). Upgrade-or-remove is tracked in #1253 — likely resolution
+// is dropping the alias so NewParser takes ...LocatorOption directly.
 type ParserOption = LocatorOption
 
 // Parser loads and parses all YAML metadata from a project root via a Locator.

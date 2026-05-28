@@ -18,9 +18,13 @@
 //      against the conventional layout tokens {cells/, contracts/, journeys/,
 //      assemblies/, examples/} are restricted to the locator's own files in
 //      kernel/metadata/locator*.go (plus two governance helper files for
-//      conventional-mode strict rules). The form catalog locks two AST
-//      shapes today (HasPrefix + == ) and uses EvaluateConstString (go/types
-//      constant folding) so that cross-package const references (e.g.
+//      conventional-mode strict rules). The scan scope is kernel/metadata/**,
+//      kernel/governance/**, AND cmd/gocell/** — the last added so the literal
+//      cannot escape into CLI consumer code (the gap that previously let
+//      journeyStatusCheck hold a bare strings.HasPrefix(_, "examples/") rather
+//      than route through metadata.IsInExamplesSubtree). The form catalog locks
+//      two AST shapes today (HasPrefix + == ) and uses EvaluateConstString
+//      (go/types constant folding) so that cross-package const references (e.g.
 //      const cellsPrefix = "cells/") cannot bypass the check.
 //      A reverse blind-spot self-check rejects const-eval bypass forms via
 //      negative tests.
@@ -248,7 +252,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness enforces that
 // strings.HasPrefix(_, lit) call shapes with a conventional-layout-prefix
 // literal as the second argument may only appear in the Locator's own
-// files inside kernel/metadata/** and kernel/governance/**.
+// files inside kernel/metadata/**, kernel/governance/**, and cmd/gocell/**.
 //
 // Uses EvaluateConstString (go/types constant folding) to resolve the second
 // argument so that cross-package const references such as:
@@ -261,7 +265,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/..."},
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."},
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -315,7 +319,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2a_HasPrefixFormUniqueness(t *testing.T) {
 // Blind spots documented in TestLOCATOR_DISCOVERY_FUNNEL_01_BlindSpotInventory
 // and A2_ConstEvalBypassBlindSpots.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A2b_EqualityComparisonFormUniqueness(t *testing.T) {
-	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/..."},
+	diags := RunTyped(t, TypedOpts{Tests: false}, []string{"./kernel/metadata/...", "./kernel/governance/...", "./cmd/gocell/..."},
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
