@@ -574,8 +574,9 @@ func (b *syncBuffer) String() string {
 // package-level consts per TEST-TIME-LITERAL-01. They satisfy Config.Validate
 // (all > 0, PollInterval > 0, LeaseDuration > 0).
 const (
-	subMsLease = 500 * time.Microsecond
-	subMsPoll  = 200 * time.Microsecond
+	subMsLease     = 500 * time.Microsecond
+	subMsPoll      = 200 * time.Microsecond
+	subMsHeartbeat = 100 * time.Microsecond // satisfies HeartbeatInterval*HeartbeatLeaseSafetyFactor < LeaseDuration
 )
 
 func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
@@ -584,7 +585,7 @@ func TestNewCoordinator_LeaderElect_RejectsSubMillisLease(t *testing.T) {
 		PollInterval:      subMsPoll,
 		ClaimBatchSize:    16,
 		LeaseDuration:     subMsLease,
-		HeartbeatInterval: 100 * time.Microsecond, // satisfies HeartbeatInterval*2 < LeaseDuration
+		HeartbeatInterval: subMsHeartbeat,
 	}
 	if err := subMsCfg.Validate(); err != nil {
 		t.Fatalf("precondition: sub-ms cfg must pass Config.Validate, got %v", err)

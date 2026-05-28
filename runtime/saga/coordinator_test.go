@@ -31,6 +31,10 @@ import (
 const (
 	// testNegativeDuration is used to test that negative PollInterval is rejected.
 	testNegativeDuration = -testtime.D1ms
+	// driveOneLeaseLostHB is the heartbeat interval used by the OutcomeLeaseLost
+	// driveOne test so the executor's heartbeat goroutine fires after the test's
+	// clk.Advance(testtime.D10ms) and observes the SetStale flag.
+	driveOneLeaseLostHB = 5 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -1766,7 +1770,7 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 			PollInterval:      testtime.D10ms,
 			ClaimBatchSize:    16,
 			LeaseDuration:     testtime.D60s,
-			HeartbeatInterval: 5 * time.Millisecond,
+			HeartbeatInterval: driveOneLeaseLostHB,
 		}))
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -1797,7 +1801,7 @@ func TestDriveOne_OutcomeLeaseLost_LogInfoNoTerminalWrite(t *testing.T) {
 	// discarded by the polling closure (double-consume race with buffered channel).
 	var driveErr error
 	var driveReturned bool
-	testwait.External(t, "driveOne-returned",
+	testwait.External(t, "drive-one-returned",
 		func() bool {
 			select {
 			case driveErr = <-driveErrCh:
