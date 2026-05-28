@@ -2,7 +2,9 @@ package mqtt
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/url"
 	"sync"
 	"time"
 
@@ -34,6 +36,22 @@ var (
 	_ lifecycle.ManagedResource = (*Connection)(nil)
 )
 
+// bootstrapOutcome carries the result of the first connection attempt from the
+// autopaho callback goroutine back to Open. Exactly one of `connected` or
+// `permErr` is set per outcome; the buffered(1) outcomeCh ensures the
+// receiving side observes exactly one outcome (additional Up/Error events
+// after the first one are observed via lastError / permanentErr fields and
+// reconnect metrics, not via outcomeCh).
+//
+// This single-channel design replaces the prior "connectedCh closed on
+// success / bootstrapErrCh sent on error" two-channel state machine which
+// suffered a `select` race where bootstrap-fatal errors could be silently
+// swallowed because `<-connectedCh` could win against `<-bootstrapErrCh`.
+type bootstrapOutcome struct {
+	connected bool
+	permErr   error // non-nil → bootstrap-fatal CONNACK or first-attempt permanent rejection
+}
+
 // Connection wraps an autopaho.ConnectionManager and exposes a GoCell adapter
 // lifecycle (healthz probe, structured errors, redaction-safe logging). autopaho
 // owns reconnection; this type only injects ReconnectBackoff and wires the three
@@ -52,17 +70,23 @@ type Connection struct {
 	phase        connPhase
 	closed       bool
 	lastError    string        // redacted; for slog diagnostics
-	connected    chan struct{} // closed when phaseConnected; recreated on down/perm
+	stateCh      chan struct{} // closed on every phase transition; recreated by the writer
 	permanentErr error         // set on classPermanentRetain; cleared on OnConnectionUp
 	closeCh      chan struct{} // closed once when Connection.Close() is called
 
-	// bootstrapErrCh receives the first bootstrap-fatal error so Open can
-	// return it instead of waiting for ctx to expire. Buffered(1) to prevent
-	// the goroutine from blocking.
-	bootstrapErrCh chan error
+	// outcomeCh receives the first bootstrap outcome (connected OR permErr).
+	// Buffered(1) so callbacks never block; only the first sender wins via a
+	// non-blocking select-default. Subsequent OnConnectionUp / OnConnectError
+	// events do NOT write to outcomeCh — they update state fields directly
+	// and broadcast via stateCh.
+	outcomeCh chan bootstrapOutcome
 
-	// firstUp tracks whether the first OnConnectionUp has fired.
-	// The very first successful connection is NOT counted as a reconnect.
+	// firstOutcomeSent guards outcomeCh against multiple bootstrap sends.
+	// Read/written under mu.
+	firstOutcomeSent bool
+
+	// firstUp tracks whether the first OnConnectionUp has fired (for reconnect
+	// metric: the very first successful connection is NOT counted as a reconnect).
 	firstUp bool
 }
 
@@ -79,9 +103,14 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 	}
 }
 
-// Open builds the autopaho ClientConfig, injects ReconnectBackoff, wires the
-// three callbacks, starts the manager, and blocks (bounded by ctx) until the
-// first connection comes up OR a fail-fast bootstrap error is received.
+// Open validates cfg, builds the autopaho ClientConfig, wires the three
+// callbacks, starts the manager, and blocks (bounded by ctx) until the first
+// connection comes up OR a bootstrap-fatal / first-attempt permanent error
+// is received.
+//
+// Validation: Open calls cfg.Validate() before any side effect. Callers do
+// not need to call Validate explicitly. Archtest MQTT-CONFIG-VALIDATE-FIRST-01
+// locks this gate.
 //
 // Bootstrap-fatal CONNACK reason codes (0x81/0x82/0x84/0x85/0x8A/0x95) and TLS
 // handshake errors cause Open to return a non-transient error immediately.
@@ -95,13 +124,16 @@ func WithConnectionCollector(c ConnectionCollector) ConnectionOption {
 // ref: autopaho/auto.go NewConnection
 func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOption) (*Connection, error) {
 	clock.MustHaveClock(clk, "mqtt.Open")
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 
 	c := &Connection{
-		cfg:            cfg,
-		clk:            clk,
-		connected:      make(chan struct{}),
-		closeCh:        make(chan struct{}),
-		bootstrapErrCh: make(chan error, 1),
+		cfg:       cfg,
+		clk:       clk,
+		stateCh:   make(chan struct{}),
+		closeCh:   make(chan struct{}),
+		outcomeCh: make(chan bootstrapOutcome, 1),
 	}
 	for _, o := range opts {
 		o(c)
@@ -129,9 +161,10 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 				cfg.Backoff.BaseDelay, cfg.Backoff.MaxDelay, n,
 			)
 		},
-		OnConnectionUp:   c.onConnectionUp,
-		OnConnectionDown: c.onConnectionDown,
-		OnConnectError:   c.onConnectError,
+		ConnectPacketBuilder: connectPacketBuilder(cfg),
+		OnConnectionUp:       c.onConnectionUp,
+		OnConnectionDown:     c.onConnectionDown,
+		OnConnectError:       c.onConnectError,
 		ClientConfig: paho.ClientConfig{
 			ClientID:           cfg.ClientID.String(),
 			OnServerDisconnect: c.onServerDisconnect,
@@ -145,7 +178,7 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 	}
 	c.cm = cm
 
-	// Block until first connection up, bootstrap fatal, or ctx canceled.
+	// Block until first outcome (connected or permErr) or ctx canceled.
 	if waitErr := c.waitFirstConnection(ctx); waitErr != nil {
 		// Best-effort shutdown of the manager; ignore error.
 		_ = cm.Disconnect(context.Background())
@@ -154,43 +187,87 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 	return c, nil
 }
 
-// waitFirstConnection blocks until phaseConnected, a bootstrap-fatal error,
-// or ctx cancellation. Cognitive complexity split from Open.
-func (c *Connection) waitFirstConnection(ctx context.Context) error {
-	c.mu.RLock()
-	connCh := c.connected
-	c.mu.RUnlock()
-
-	select {
-	case <-connCh:
+// connectPacketBuilder returns an autopaho ConnectPacketBuilder that injects
+// cfg.MaximumPacketSize into the CONNECT packet's Properties when non-zero.
+// Returns nil (no builder) when MaximumPacketSize is 0 so autopaho's default
+// CONNECT packet is used unchanged. Wiring this field closes C1 F12 — the
+// MaximumPacketSize Config field was previously declared but unused.
+func connectPacketBuilder(cfg Config) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
+	if cfg.MaximumPacketSize == 0 {
 		return nil
-	case err := <-c.bootstrapErrCh:
-		return err
+	}
+	maxSize := cfg.MaximumPacketSize
+	return func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+		if cp.Properties == nil {
+			cp.Properties = &paho.ConnectProperties{}
+		}
+		cp.Properties.MaximumPacketSize = &maxSize
+		return cp, nil
+	}
+}
+
+// waitFirstConnection blocks until the first bootstrapOutcome arrives on
+// outcomeCh, or ctx is canceled. Single-channel design eliminates the prior
+// `select` race between connectedCh and bootstrapErrCh.
+func (c *Connection) waitFirstConnection(ctx context.Context) error {
+	select {
+	case outcome := <-c.outcomeCh:
+		if outcome.permErr != nil {
+			return outcome.permErr
+		}
+		return nil
 	case <-ctx.Done():
-		// Context expired before first connection — transient from caller's view.
 		return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
 			"mqtt: context canceled before first connection", nil)
 	}
 }
 
+// emitFirstOutcome sends `o` to outcomeCh exactly once. Subsequent calls are
+// silent no-ops. Caller must NOT hold c.mu (this function acquires it).
+func (c *Connection) emitFirstOutcome(o bootstrapOutcome) {
+	c.mu.Lock()
+	if c.firstOutcomeSent {
+		c.mu.Unlock()
+		return
+	}
+	c.firstOutcomeSent = true
+	c.mu.Unlock()
+	// outcomeCh is buffered(1); we are the unique first sender, so this send
+	// never blocks. Use select-default as belt-and-suspenders.
+	select {
+	case c.outcomeCh <- o:
+	default:
+	}
+}
+
+// broadcastState closes the current stateCh and installs a fresh one. It is
+// the single place that recreates stateCh, ensuring every phase transition
+// wakes any WaitConnected waiters exactly once and re-arms for the next
+// transition. Caller MUST hold c.mu in write mode.
+func (c *Connection) broadcastStateLocked() {
+	ch := c.stateCh
+	c.stateCh = make(chan struct{})
+	close(ch)
+}
+
 // onConnectionUp is called by autopaho when a connection (or reconnection) is established.
-// It clears permanentErr, advances phase to phaseConnected, closes the current connected
-// chan (waking waiters), and — for reconnections — increments the collector metric.
-func (c *Connection) onConnectionUp(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+// It clears permanentErr, advances phase to phaseConnected, broadcasts the state change,
+// and — for reconnections — increments the collector metric. On the first up it also
+// emits the bootstrap "connected" outcome.
+func (c *Connection) onConnectionUp(_ *autopaho.ConnectionManager, _ *paho.Connack) {
 	c.mu.Lock()
 	c.permanentErr = nil
 	c.phase = phaseConnected
-	ch := c.connected
-	c.connected = make(chan struct{}) // pre-create for next down cycle
 	isReconnect := c.firstUp
 	c.firstUp = true
+	c.broadcastStateLocked()
 	c.mu.Unlock()
 
-	close(ch) // wake all waiters blocked on the old connected chan
-
-	if isReconnect {
-		// This is a reconnection (not the first connection). Record the metric.
-		// Use a background context so the metric write doesn't block on caller's ctx.
+	if !isReconnect {
+		c.emitFirstOutcome(bootstrapOutcome{connected: true})
+	} else {
+		// Reconnection (not the first connection). Record the metric using a
+		// background context so the metric write doesn't block on caller's ctx.
 		c.collector.RecordReconnect(context.Background())
 	}
 	slog.Info("mqtt: connection established",
@@ -204,8 +281,7 @@ func (c *Connection) onConnectionDown() bool {
 	c.mu.Lock()
 	closed := c.closed
 	c.phase = phaseDisconnected
-	// Swap connected chan so WaitConnected on the next connected phase waits correctly.
-	c.connected = make(chan struct{})
+	c.broadcastStateLocked()
 	c.mu.Unlock()
 
 	if closed {
@@ -220,8 +296,10 @@ func (c *Connection) onConnectionDown() bool {
 
 // onConnectError is called by autopaho whenever a connection attempt fails.
 // classifyConnackReason maps the error to a class:
-//   - classBootstrapFatal: send to bootstrapErrCh (once) and wake connected waiters.
-//   - classPermanentRetain: set permanentErr and wake connected waiters.
+//   - classBootstrapFatal: emit first-outcome with permErr (Open returns it).
+//   - classPermanentRetain: set permanentErr; if this is the first outcome,
+//     emit it so Open returns instead of waiting for a transient retry. Either
+//     way, broadcast state so WaitConnected waiters see the permErr.
 //   - classTransient: record lastError only.
 func (c *Connection) onConnectError(err error) {
 	class, code := classifyConnackReason(err)
@@ -229,29 +307,26 @@ func (c *Connection) onConnectError(err error) {
 
 	switch class {
 	case classBootstrapFatal:
+		permErr := buildConnackError(code, err,
+			"mqtt: connection rejected (fail-fast)")
 		slog.Error("mqtt: bootstrap-fatal connect error",
 			slog.String("clientID", c.cfg.ClientID.String()),
 			slog.String("code", string(code)),
 			slog.Any("error", redacted))
-		bootErr := errcode.New(errcode.KindInternal, code,
-			"mqtt: connection rejected (fail-fast)")
-		// Send once; non-blocking in case caller has already timed out.
-		select {
-		case c.bootstrapErrCh <- bootErr:
-		default:
-		}
-		// Wake any WaitConnected callers that may be blocked.
-		c.wakeWaitersWithPermanentErr(bootErr)
+		c.recordPermanentLocked(permErr)
+		c.emitFirstOutcome(bootstrapOutcome{permErr: permErr})
 
 	case classPermanentRetain:
+		permErr := buildConnackError(code, err,
+			"mqtt: connection rejected (permanent; retrying until operator fix)")
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
 			slog.String("clientID", c.cfg.ClientID.String()),
 			slog.String("code", string(code)),
 			slog.Any("error", redacted))
-		c.wakeWaitersWithPermanentErr(
-			errcode.New(errcode.KindInternal, code,
-				"mqtt: connection rejected (permanent; retrying until operator fix)"),
-		)
+		c.recordPermanentLocked(permErr)
+		// First-attempt permanent error: surface to Open as bootstrap outcome
+		// so the caller doesn't hang on the connect timeout budget.
+		c.emitFirstOutcome(bootstrapOutcome{permErr: permErr})
 
 	default: // classTransient
 		c.mu.Lock()
@@ -265,16 +340,35 @@ func (c *Connection) onConnectError(err error) {
 	}
 }
 
-// wakeWaitersWithPermanentErr sets permanentErr and closes the current connected
-// chan so WaitConnected returns the error.
-func (c *Connection) wakeWaitersWithPermanentErr(permErr error) {
+// recordPermanentLocked stores permErr into c.permanentErr and broadcasts the
+// state change so WaitConnected waiters can observe it.
+func (c *Connection) recordPermanentLocked(permErr error) {
 	c.mu.Lock()
 	c.permanentErr = permErr
-	ch := c.connected
-	c.connected = make(chan struct{}) // fresh chan for next potential recovery
+	c.broadcastStateLocked()
 	c.mu.Unlock()
+}
 
-	close(ch)
+// buildConnackError wraps a CONNACK rejection into an errcode.Error with
+// public reasonCode/reasonName details so operators get structured diagnostics
+// (C5 F9 — reason code/name visibility). The cause is preserved via WithCause
+// for errors.Is/As chains; redaction happens at logging boundaries (slog), not
+// here (errcode WithCause does not redact).
+func buildConnackError(code errcode.Code, cause error, message string) error {
+	opts := []errcode.Option{}
+	var connackErr *autopaho.ConnackError
+	if errors.As(cause, &connackErr) {
+		opts = append(opts, errcode.WithDetails(
+			errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
+			errcode.PublicString("reasonName", connackReasonName(connackErr.ReasonCode)),
+		))
+	}
+	if cause != nil {
+		opts = append(opts, errcode.WithInternal(
+			errcode.InternalAttr("_", redactErr(cause).Error()),
+		))
+	}
+	return errcode.New(errcode.KindInternal, code, message, opts...)
 }
 
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
@@ -329,7 +423,8 @@ func (c *Connection) Health(_ context.Context) error {
 
 // Close shuts down the connection idempotently, bounded by ctx.
 // Sets the closed flag and closes closeCh before calling cm.Disconnect so that
-// onConnectionDown returns false (stops retry).
+// onConnectionDown returns false (stops retry). After Close, any WaitConnected
+// caller is woken via broadcastStateLocked and observes the closed flag.
 func (c *Connection) Close(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -338,6 +433,7 @@ func (c *Connection) Close(ctx context.Context) error {
 	}
 	c.closed = true
 	close(c.closeCh)
+	c.broadcastStateLocked()
 	c.mu.Unlock()
 
 	return adapterutil.CloseWithDeadline(ctx, "mqtt", func() error {
@@ -360,18 +456,24 @@ func (c *Connection) Worker() worker.Worker {
 }
 
 // WaitConnected blocks until the connection phase is phaseConnected, a
-// permanent error is set, or ctx is canceled.
+// permanent error is set, Close is called, or ctx is canceled.
 //
-// Returns nil once connected, permanentErr if credentials are rejected,
-// or ctx.Err() on cancellation.
+// Returns nil once connected, ErrAdapterMQTTClosed if Close was invoked,
+// permanentErr on credentials/authorization rejection, or a wrapped errcode
+// carrying ctx.Err() on cancellation.
 func (c *Connection) WaitConnected(ctx context.Context) error {
 	for {
 		c.mu.RLock()
+		closed := c.closed
 		phase := c.phase
 		permErr := c.permanentErr
-		ch := c.connected
+		ch := c.stateCh
 		c.mu.RUnlock()
 
+		if closed {
+			return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+				"mqtt: connection is closed")
+		}
 		if permErr != nil {
 			return permErr
 		}
@@ -383,7 +485,8 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 		case <-ch:
 			// State changed; re-check at top of loop.
 		case <-ctx.Done():
-			return ctx.Err()
+			return errcode.WrapInfra(ErrAdapterMQTTConnectTimeout,
+				"mqtt: WaitConnected canceled", ctx.Err())
 		}
 	}
 }

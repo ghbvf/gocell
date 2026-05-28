@@ -126,7 +126,8 @@ func classifyConnackReason(err error) (connackClass, errcode.Code) {
 
 	switch connackErr.ReasonCode {
 	case 0x87, // NotAuthorized
-		0x86: // BadUserNameOrPassword
+		0x86, // BadUserNameOrPassword
+		0x8C: // BadAuthenticationMethod — broker rejects auth method itself; operator must fix client config.
 		return classPermanentRetain, ErrAdapterMQTTConnectPermanent
 
 	case 0x81, // MalformedPacket
@@ -141,6 +142,45 @@ func classifyConnackReason(err error) (connackClass, errcode.Code) {
 		// 0x88 ServerUnavailable, 0x97 QuotaExceeded, and all unrecognized codes.
 		return classTransient, ErrAdapterMQTTConnect
 	}
+}
+
+// connackReasonNames is the single source of MQTT v5 CONNACK reason code →
+// spec-defined name mapping (MQTT v5.0 §3.2.2.2 Connect Reason Code table).
+// Encoded as a const-literal map so message PII constraints are satisfied
+// (names are programmer-written, not runtime data).
+var connackReasonNames = map[byte]string{
+	0x00: "Success",
+	0x80: "UnspecifiedError",
+	0x81: "MalformedPacket",
+	0x82: "ProtocolError",
+	0x83: "ImplementationSpecificError",
+	0x84: "UnsupportedProtocolVersion",
+	0x85: "ClientIdentifierNotValid",
+	0x86: "BadUserNameOrPassword",
+	0x87: "NotAuthorized",
+	0x88: "ServerUnavailable",
+	0x89: "ServerBusy",
+	0x8A: "Banned",
+	0x8C: "BadAuthenticationMethod",
+	0x90: "TopicNameInvalid",
+	0x95: "PacketTooLarge",
+	0x97: "QuotaExceeded",
+	0x99: "PayloadFormatInvalid",
+	0x9A: "RetainNotSupported",
+	0x9B: "QoSNotSupported",
+	0x9C: "UseAnotherServer",
+	0x9D: "ServerMoved",
+	0x9F: "ConnectionRateExceeded",
+}
+
+// connackReasonName returns the spec name for an MQTT v5 CONNACK reason
+// code. Unknown codes return "Unknown" so operators can still match the
+// numeric reasonCode field.
+func connackReasonName(code byte) string {
+	if name, ok := connackReasonNames[code]; ok {
+		return name
+	}
+	return "Unknown"
 }
 
 // isTLSHandshakeError reports whether err (or any error in its chain) is a

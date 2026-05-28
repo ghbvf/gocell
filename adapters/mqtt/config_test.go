@@ -18,20 +18,33 @@ import (
 // is rejected.
 const configNegTimeout = -1 * time.Second
 
+// configKeepAliveOverflow is used in TestConfig_Validate_KeepAliveOverflow to
+// assert KeepAlive > uint16 max seconds (65535s) is rejected. Extracted to a
+// const per TEST-TIME-LITERAL-01.
+const configKeepAliveOverflow = time.Duration(65536) * time.Second
+
+// configNegSessionExpiry is used in TestConfig_Validate_SessionExpiryNegative
+// to assert that negative SessionExpiry is rejected. Extracted to a const
+// per TEST-TIME-LITERAL-01.
+const configNegSessionExpiry = -1 * time.Second
+
 // validClientID returns a ClientID for use in tests.
 func mustClientID(t *testing.T) ClientID {
 	t.Helper()
-	cid, err := ParseClientID("testcell", "pub")
+	cid, err := ParseEphemeralClientID("testcell", "pub")
 	require.NoError(t, err)
 	return cid
 }
 
-// validConfig returns a Config that passes Validate.
+// validConfig returns a Config that passes Validate. The broker uses a
+// loopback IP literal (127.0.0.1) so the secutil.ValidateTLSEndpoint
+// plaintext check accepts it — "localhost" is intentionally NOT accepted
+// because it is a DNS name.
 func validConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
 		ClientID:       mustClientID(t),
-		Brokers:        []string{"tcp://localhost:1883"},
+		Brokers:        []string{"tcp://127.0.0.1:1883"},
 		ConnectTimeout: testtime.D5s,
 		KeepAlive:      testtime.D30s,
 		Backoff: BackoffConfig{
@@ -150,7 +163,10 @@ func TestConfig_Validate_TLSSchemeWithTLSConfig(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
-// TestConfig_Validate_AllValidSchemes verifies all non-TLS scheme variants are accepted.
+// TestConfig_Validate_AllValidSchemes verifies all plaintext scheme variants
+// are accepted when the host is a loopback IP literal (dev/CI testcontainer
+// exception). The same schemes with non-loopback hosts are rejected by
+// TestConfig_Validate_PlaintextRemote_Rejected.
 func TestConfig_Validate_AllValidSchemes(t *testing.T) {
 	t.Parallel()
 	for _, scheme := range []string{"tcp", "mqtt", "ws"} {
@@ -158,10 +174,66 @@ func TestConfig_Validate_AllValidSchemes(t *testing.T) {
 		t.Run(scheme, func(t *testing.T) {
 			t.Parallel()
 			cfg := validConfig(t)
-			cfg.Brokers = []string{scheme + "://broker.example.com:1883"}
+			cfg.Brokers = []string{scheme + "://127.0.0.1:1883"}
 			require.NoError(t, cfg.Validate())
 		})
 	}
+}
+
+// TestConfig_Validate_PlaintextRemote_Rejected verifies that the plaintext
+// schemes (tcp/mqtt/ws) require a loopback host. Remote hosts are rejected
+// via pkg/secutil.ValidateTLSEndpoint (C1 F2 — fail-closed against
+// silent credential exposure over plaintext).
+func TestConfig_Validate_PlaintextRemote_Rejected(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		broker string
+	}{
+		{"tcp-remote-host", "tcp://broker.example.com:1883"},
+		{"mqtt-remote-host", "mqtt://broker.example.com:1883"},
+		{"ws-remote-host", "ws://broker.example.com:1883"},
+		{"tcp-localhost-dns-not-accepted", "tcp://localhost:1883"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validConfig(t)
+			cfg.Brokers = []string{tc.broker}
+			err := cfg.Validate()
+			require.Error(t, err, "broker=%s must be rejected", tc.broker)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+		})
+	}
+}
+
+// TestConfig_Validate_KeepAliveOverflow verifies KeepAlive >65535s is
+// rejected (uint16 wire field upper bound).
+func TestConfig_Validate_KeepAliveOverflow(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.KeepAlive = configKeepAliveOverflow
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+}
+
+// TestConfig_Validate_SessionExpiryNegative verifies negative SessionExpiry
+// is rejected.
+func TestConfig_Validate_SessionExpiryNegative(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.SessionExpiry = configNegSessionExpiry
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
 }
 
 // TestConfig_Validate_ZeroConnectTimeout verifies ConnectTimeout > 0.
@@ -298,14 +370,25 @@ func TestConfig_ParseBrokerURL_CredentialsRedacted(t *testing.T) {
 }
 
 // TestConfig_Validate_MultipleBrokersMixed verifies that one invalid broker
-// among valid ones fails validation.
+// among valid ones fails validation. The first broker uses a loopback host
+// so it passes; the second uses an unsupported scheme and fails.
 func TestConfig_Validate_MultipleBrokersMixed(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
-	cfg.Brokers = []string{"tcp://good:1883", "http://bad:1883"}
+	cfg.Brokers = []string{"tcp://127.0.0.1:1883", "http://bad:1883"}
 	err := cfg.Validate()
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+}
+
+// TestConfig_Validate_MaximumPacketSize_Accepted verifies that
+// MaximumPacketSize is preserved through Validate (wired into the CONNECT
+// packet via ConnectPacketBuilder at Open time; see connection.go).
+func TestConfig_Validate_MaximumPacketSize_Accepted(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.MaximumPacketSize = 1024 * 1024
+	require.NoError(t, cfg.Validate())
 }

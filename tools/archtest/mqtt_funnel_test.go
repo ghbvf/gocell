@@ -188,7 +188,8 @@ func mqttEnclosingFuncName(file *ast.File, pos token.Pos) string {
 
 // scanMQTTCompositeLitConstruction scans file for composite literals whose
 // type resolves (via go/types) to mqttTypeName inside mqttPkgPath. It reports
-// a diagnostic for every literal NOT enclosed in allowedFunc.
+// a diagnostic for every literal NOT enclosed in any function listed in
+// allowedFuncs (set semantics).
 //
 // Production files only (caller must skip *_test.go before calling).
 func scanMQTTCompositeLitConstruction(
@@ -197,7 +198,7 @@ func scanMQTTCompositeLitConstruction(
 	rel string,
 	info *types.Info,
 	mqttTypeName string,
-	allowedFunc string,
+	allowedFuncs []string,
 	ruleID string,
 ) []Diagnostic {
 	if info == nil {
@@ -234,19 +235,21 @@ func scanMQTTCompositeLitConstruction(
 			return
 		}
 
-		// Non-zero literal: must be enclosed in the allowedFunc.
+		// Non-zero literal: must be enclosed in one of the allowedFuncs.
 		fn := mqttEnclosingFuncName(file, lit.Pos())
-		if fn == allowedFunc {
-			return
+		for _, name := range allowedFuncs {
+			if fn == name {
+				return
+			}
 		}
 		pos := fset.Position(lit.Pos())
 		out = append(out, Diagnostic{
 			Rel:  rel,
 			Line: pos.Line,
 			Message: fmt.Sprintf(
-				"%s/A2: %s composite literal at %s:%d is not enclosed in %s — "+
+				"%s/A2: %s composite literal at %s:%d is not enclosed in any of %v — "+
 					"non-zero %s construction must go through the Parse factory",
-				ruleID, mqttTypeName, rel, pos.Line, allowedFunc, mqttTypeName,
+				ruleID, mqttTypeName, rel, pos.Line, allowedFuncs, mqttTypeName,
 			),
 		})
 	})
@@ -359,10 +362,16 @@ func TestMQTTClientIDNamespace01(t *testing.T) {
 					continue
 				}
 				// A2: construction allowlist — only meaningful inside adapters/mqtt.
+				// assembleClientID is the SOLE in-package site for non-zero
+				// ClientID literal construction. ParseEphemeralClientID and
+				// ParseStableClientID delegate to it; this gives a single
+				// composite-literal callsite to lock.
 				if p.Pkg.Path() == mqttPkgPath {
 					a2Diags = append(a2Diags, scanMQTTCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
-						"ClientID", "ParseClientID", ruleID,
+						"ClientID",
+						[]string{"assembleClientID"},
+						ruleID,
 					)...)
 				}
 				// A3: alias anywhere in the repo.
@@ -438,7 +447,9 @@ func TestMQTTTopicNamespace01(t *testing.T) {
 				if p.Pkg.Path() == mqttPkgPath {
 					a2Diags = append(a2Diags, scanMQTTCompositeLitConstruction(
 						p.Fset, f, rel, p.TypesInfo,
-						"TopicNamespace", "ParseTopicNamespace", ruleID,
+						"TopicNamespace",
+						[]string{"ParseTopicNamespace"},
+						ruleID,
 					)...)
 				}
 				a3Diags = append(a3Diags, scanMQTTTypeAliases(
@@ -609,9 +620,18 @@ func TestMQTTFunnel_BlindSpot_NoReflectNew(t *testing.T) {
 		"MQTT funnel blind-spot B1: production code calls reflect.New on mqtt sealed types")
 }
 
-// TestMQTTFunnel_BlindSpot_NoUnsafePtr (blind-spot B2) asserts no production
-// file inside adapters/mqtt imports the "unsafe" package. An unsafe.Pointer
-// cast could theoretically bypass the sealed-struct guarantee.
+// TestMQTTFunnel_BlindSpot_NoUnsafePtr (blind-spot B2) asserts that NO
+// production file in the entire repository imports both "unsafe" and the
+// adapters/mqtt package in a way that could construct a non-zero ClientID /
+// TopicNamespace via unsafe.Pointer cast. Earlier scope was just
+// `[]string{mqttPkgPath}` which only protected the adapter itself; external
+// packages could still mount the bypass (per C7 F11 review).
+//
+// Strategy:
+//  1. Scan all production packages reached by prodscan.PatternsExtended.
+//  2. For each file that imports "unsafe", record a diagnostic IF the same
+//     package also imports adapters/mqtt. Pure-unsafe usage unrelated to mqtt
+//     is out of scope here.
 func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -622,12 +642,28 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 	var diags []Diagnostic
 
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{mqttPkgPath},
+		prodscan.PatternsExtended(root),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
 			}
-			if p.Pkg.Path() != mqttPkgPath {
+			// First pass: does any file in this package import mqtt?
+			importsMQTT := false
+			for _, f := range p.Files {
+				for _, imp := range f.Imports {
+					if strings.Trim(imp.Path.Value, `"`) == mqttPkgPath {
+						importsMQTT = true
+						break
+					}
+				}
+				if importsMQTT {
+					break
+				}
+			}
+			// In-package mqtt files are also covered (Pkg().Path() == mqttPkgPath).
+			isMQTT := p.Pkg.Path() == mqttPkgPath
+
+			if !importsMQTT && !isMQTT {
 				return nil
 			}
 			for _, f := range p.Files {
@@ -643,8 +679,8 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 							Rel:  rel,
 							Line: pos.Line,
 							Message: fmt.Sprintf(
-								"MQTT funnel blind-spot B2: production file %s imports \"unsafe\" — "+
-									"unsafe.Pointer casts could bypass sealed-struct construction",
+								"MQTT funnel blind-spot B2: %s imports \"unsafe\" and also references adapters/mqtt — "+
+									"unsafe.Pointer casts to mqtt sealed types could bypass construction funnel",
 								rel,
 							),
 						})
@@ -656,7 +692,7 @@ func TestMQTTFunnel_BlindSpot_NoUnsafePtr(t *testing.T) {
 
 	_ = root // used via prodscan patterns above; kept to avoid unused var error
 	assert.Empty(t, diags,
-		"MQTT funnel blind-spot B2: adapters/mqtt production code imports unsafe package")
+		"MQTT funnel blind-spot B2: production code imports \"unsafe\" while referencing adapters/mqtt")
 }
 
 // TestMQTTFunnel_A2ScannerFires proves that scanMQTTCompositeLitConstruction
@@ -704,14 +740,14 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 				}
 				diags := scanMQTTCompositeLitConstruction(
 					p.Fset, f, rel, p.TypesInfo,
-					"ClientID", "ParseClientID", "MQTT-CLIENT-ID-NAMESPACE-01",
+					"ClientID", []string{"assembleClientID"}, "MQTT-CLIENT-ID-NAMESPACE-01",
 				)
-				// Count violations (sites outside allowedFunc) and count
-				// sites that passed (inside ParseClientID, not in diags).
+				// Count violations (sites outside allowedFuncs) and count
+				// sites that passed (inside assembleClientID, not in diags).
 				outsideCount += len(diags)
 
-				// Count non-zero composite literals inside ParseClientID using
-				// the inverse: scan all literals and subtract violations.
+				// Count non-zero composite literals inside assembleClientID
+				// using the inverse: scan all literals and subtract violations.
 				EachInSubtree[ast.CompositeLit](f, func(lit *ast.CompositeLit) {
 					if lit.Type == nil || len(lit.Elts) == 0 {
 						return
@@ -731,7 +767,7 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 						return
 					}
 					fn := mqttEnclosingFuncName(f, lit.Pos())
-					if fn == "ParseClientID" {
+					if fn == "assembleClientID" {
 						insideCount++
 					}
 				})
@@ -740,17 +776,75 @@ func TestMQTTFunnel_A2ScannerFires(t *testing.T) {
 		})
 
 	// The production adapters/mqtt package must have exactly zero violations
-	// (all ClientID{} non-zero literals are inside ParseClientID).
+	// (all non-zero ClientID literals are inside assembleClientID).
 	assert.Equal(t, 0, outsideCount,
-		"A2 scanner fires: production code has ClientID composite literals outside ParseClientID — "+
+		"A2 scanner fires: production code has ClientID composite literals outside assembleClientID — "+
 			"this means the A2 self-check correctly detects violations when they exist")
 
-	// The inside count must be ≥ 1: ParseClientID constructs at least one
+	// The inside count must be ≥ 1: assembleClientID constructs at least one
 	// non-zero ClientID{value: value} literal. If this fails, the scanner's
 	// type-resolution path is broken and cannot see any ClientID literals.
 	assert.GreaterOrEqual(t, insideCount, 1,
-		"A2 scanner must find ≥1 ClientID composite literal inside ParseClientID — "+
+		"A2 scanner must find ≥1 ClientID composite literal inside assembleClientID — "+
 			"if this fails, the go/types resolution path is silently broken")
+}
+
+// TestMQTTFunnel_A2ScannerFiresOnRedFixture proves the A2 scanner fires on a
+// genuine outside-allowedFuncs violation. The red fixture lives inside the
+// adapters/mqtt package itself behind the //go:build archtest_fixture tag —
+// only an in-package fixture can construct a non-zero ClientID literal because
+// the value field is unexported.
+//
+// This test loads the mqtt package WITH the archtest_fixture tag and asserts
+// the scanner reports ≥1 violation. Without it, a regression where the
+// scanner silently fails to identify outside literals would still pass
+// TestMQTTFunnel_A2ScannerFires (which only verifies the inside count).
+//
+// See adapters/mqtt/archtest_redfixture.go for the planted violation.
+func TestMQTTFunnel_A2ScannerFiresOnRedFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	const ruleID = "MQTT-CLIENT-ID-NAMESPACE-01"
+
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{mqttPkgPath},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != mqttPkgPath {
+				return nil
+			}
+			var out []Diagnostic
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				out = append(out, scanMQTTCompositeLitConstruction(
+					p.Fset, f, rel, p.TypesInfo,
+					"ClientID", []string{"assembleClientID"}, ruleID,
+				)...)
+			}
+			return out
+		})
+
+	require.NotEmpty(t, diags,
+		"A2 scanner must report ≥1 violation on the red fixture in archtest_redfixture.go — "+
+			"if this fails, the scanner is silently broken")
+
+	// Confirm the violation points at the red-fixture file specifically — guards
+	// against the scanner reporting an unrelated false positive that happens
+	// to satisfy "non-empty".
+	foundRedfixture := false
+	for _, d := range diags {
+		if strings.HasSuffix(d.Rel, "archtest_redfixture.go") {
+			foundRedfixture = true
+			break
+		}
+	}
+	assert.True(t, foundRedfixture,
+		"A2 scanner reported diagnostics but none from archtest_redfixture.go; got: %+v", diags)
 }
 
 // TestMQTTFunnel_NonVacuousness documents that the A1 test was confirmed

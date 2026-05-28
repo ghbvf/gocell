@@ -2,6 +2,7 @@ package mqtt_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -95,8 +97,10 @@ func (h *denyAuthHook) OnConnectAuthenticate(_ *mqttserver.Client, _ packets.Pac
 func (h *denyAuthHook) OnACLCheck(_ *mqttserver.Client, _ string, _ bool) bool { return true }
 
 // newValidConfig returns a minimal valid Config pointing at addr.
+// addr is expected to be a loopback "127.0.0.1:port" form so the
+// secutil.ValidateTLSEndpoint plaintext-broker check accepts it.
 func newValidConfig(addr string) mqtt.Config {
-	id, _ := mqtt.ParseClientID("testcell", "client")
+	id, _ := mqtt.ParseEphemeralClientID("testcell", "client")
 	return mqtt.Config{
 		ClientID:       id,
 		Brokers:        []string{fmt.Sprintf("tcp://%s", addr)},
@@ -161,7 +165,7 @@ func TestConnection_Close_IdempotentAndTerminal(t *testing.T) {
 // an unreachable address returns a transient error.
 func TestConnection_NeverConnected_TransientError(t *testing.T) {
 	clk := clock.Real()
-	id, _ := mqtt.ParseClientID("test", "never")
+	id, _ := mqtt.ParseEphemeralClientID("test", "never")
 	cfg := mqtt.Config{
 		ClientID:       id,
 		Brokers:        []string{"tcp://127.0.0.1:19999"}, // dead port
@@ -181,7 +185,9 @@ func TestConnection_NeverConnected_TransientError(t *testing.T) {
 }
 
 // TestConnection_DenyBroker_PermanentErrViaHealth tests that a deny-all broker
-// (0x87 NotAuthorized from mochi) sets permanentErr and Health is non-transient.
+// (0x87 NotAuthorized from mochi) sets permanentErr and Open surfaces it as
+// ErrAdapterMQTTConnectPermanent — proving the bootstrap outcome channel
+// routes first-attempt permanent rejection back to Open (C2 F4 + C5 F9).
 func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 	addr, stop := newEmbeddedBrokerWithDenyHook(t)
 	defer stop()
@@ -195,22 +201,19 @@ func TestConnection_DenyBroker_PermanentErrViaHealth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
 	defer cancel()
 
-	// Open should return a bootstrap-fatal or permanent error quickly since the
-	// broker denies the connection at the CONNACK level.
+	// Open must return ErrAdapterMQTTConnectPermanent — the bootstrap outcome
+	// path carries the CONNACK rejection back to the caller.
 	conn, err := mqtt.Open(ctx, clk, cfg)
-	if err != nil {
-		// The connection returned an error on first attempt — permanent/bootstrap.
-		return
-	}
-	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
-	// If Open returned a *Connection (manager started but perm err set), Health
-	// should surface a non-transient error.
-	hErr := conn.Health(context.Background())
-	require.Error(t, hErr)
+	require.Error(t, err, "deny-broker Open must return a permanent error")
+	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectPermanent)
+	require.Nil(t, conn, "Open returning a permanent error must not surface a Connection")
 }
 
-// TestConnection_WaitConnected_PermanentErrSurfaced verifies WaitConnected
-// returns when permanentErr is set after an auth-deny CONNACK.
+// TestConnection_WaitConnected_PermanentErrSurfaced verifies that when the
+// first connection attempt is denied, Open returns the permanent error
+// directly without falling back to ctx-deadline. The earlier shape that
+// allowed Open to succeed and require WaitConnected to surface the error
+// was the C2 F4 select-race bug; this test guards the fix.
 func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 	addr, stop := newEmbeddedBrokerWithDenyHook(t)
 	defer stop()
@@ -225,16 +228,19 @@ func TestConnection_WaitConnected_PermanentErrSurfaced(t *testing.T) {
 	defer cancel()
 
 	conn, err := mqtt.Open(ctx, clk, cfg)
-	if err != nil {
-		// bootstrap-fatal returned directly from Open — acceptable
-		return
-	}
-	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
+	require.Error(t, err, "deny-broker first attempt must fail-fast through Open")
+	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectPermanent)
+	require.Nil(t, conn)
+}
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), testtime.D2s)
-	defer waitCancel()
-	_ = conn.WaitConnected(waitCtx)
-	// Should have returned either an error (permanent) or ctx.Err.
+// assertErrCode asserts that err carries an *errcode.Error whose Code matches
+// want. Used by C2 F13 assertions to lock specific sentinel codes instead of
+// any-error early-returns.
+func assertErrCode(t *testing.T, err error, want errcode.Code) {
+	t.Helper()
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "expected *errcode.Error in chain, got %T: %v", err, err)
+	require.Equal(t, want, ec.Code, "errcode.Code = %s, want %s", ec.Code, want)
 }
 
 // TestConnection_ReconnectMetric_Counted verifies that RecordReconnect is

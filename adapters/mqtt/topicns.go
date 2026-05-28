@@ -14,6 +14,7 @@ const (
 	msgTopicOutsideNamespace    = "mqtt topic is outside the declared namespace"
 	msgSubscribeOutsideNS       = "mqtt subscribe filter head is outside the declared namespace"
 	msgInvalidWildcardPlacement = "mqtt subscribe filter has invalid wildcard placement (# must be at end, each level must be a lone token)"
+	msgPublishTopicWildcard     = "mqtt publish topic must not contain + or # wildcards"
 )
 
 // TopicNamespace is a validated topic prefix that scopes a cell's publish /
@@ -72,10 +73,26 @@ func ParseTopicNamespace(ns string) (TopicNamespace, error) {
 // String returns the namespace prefix string.
 func (n TopicNamespace) String() string { return n.value }
 
-// PublishOK reports whether topic falls under this namespace.
-// A topic is under the namespace if it equals the prefix exactly or starts
-// with prefix + "/". Returns ErrAdapterMQTTTopicOutsideNamespace on failure.
+// PublishOK reports whether topic is a valid publish target under this namespace.
+// MQTT v5.0 §3.3.2.1 forbids wildcards in publish topics; this check rejects any
+// "+" or "#" before the namespace prefix check. A topic without wildcards is
+// under the namespace if it equals the prefix exactly or starts with prefix + "/".
+//
+// Returns ErrAdapterMQTTInvalidSubscribeFilter when the topic contains a
+// wildcard (publish wildcards are a protocol error, not a namespace boundary
+// issue) and ErrAdapterMQTTTopicOutsideNamespace when the topic falls outside
+// the declared namespace.
 func (n TopicNamespace) PublishOK(topic string) error {
+	if strings.ContainsAny(topic, "+#") {
+		return errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			msgPublishTopicWildcard,
+			errcode.WithDetails(
+				errcode.PublicString("namespace", n.value),
+				errcode.PublicString("topic", topic),
+			),
+		)
+	}
 	if topic == n.value {
 		return nil
 	}

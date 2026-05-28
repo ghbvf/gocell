@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
 // validBrokerSchemes is the closed set of URL schemes accepted by autopaho.
@@ -28,15 +29,28 @@ var tlsRequiredSchemes = map[string]bool{
 	"wss":   true,
 }
 
+// maxKeepAliveDuration is the upper bound for KeepAlive — autopaho's
+// ClientConfig.KeepAlive is uint16 (seconds), so values >65535s would silently
+// wrap when converted. Validate rejects them.
+const maxKeepAliveDuration = time.Duration(65535) * time.Second
+
+// maxSessionExpiryDuration is the upper bound for SessionExpiry —
+// autopaho's ClientConfig.SessionExpiryInterval is uint32 (seconds), so
+// values >math.MaxUint32 seconds would silently wrap when converted.
+const maxSessionExpiryDuration = time.Duration(4294967295) * time.Second
+
 // Error message constants (MESSAGE-CONST-LITERAL-01: all messages are const literals).
 const (
-	msgConfigClientIDRequired = "mqtt: config ClientID required"
-	msgConfigNoBrokers        = "mqtt: config requires at least one broker"
-	msgConfigBadBrokerURL     = "mqtt: broker URL is invalid or uses an unsupported scheme"
-	msgConfigTLSRequired      = "mqtt: TLS config required for tls broker"
-	msgConfigConnectTimeout   = "mqtt: ConnectTimeout must be > 0"
-	msgConfigKeepAlive        = "mqtt: KeepAlive must be > 0"
-	msgConfigBackoffInvalid   = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
+	msgConfigClientIDRequired   = "mqtt: config ClientID required"
+	msgConfigNoBrokers          = "mqtt: config requires at least one broker"
+	msgConfigBadBrokerURL       = "mqtt: broker URL is invalid or uses an unsupported scheme"
+	msgConfigTLSRequired        = "mqtt: TLS config required for tls broker"
+	msgConfigPlaintextRemote    = "mqtt: plaintext broker scheme requires loopback host"
+	msgConfigConnectTimeout     = "mqtt: ConnectTimeout must be > 0"
+	msgConfigKeepAlive          = "mqtt: KeepAlive must be > 0"
+	msgConfigKeepAliveOverflow  = "mqtt: KeepAlive exceeds uint16 seconds (65535s)"
+	msgConfigSessionExpiryRange = "mqtt: SessionExpiry must be >= 0 and <= uint32 max seconds"
+	msgConfigBackoffInvalid     = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
 )
 
 // AuthConfig holds optional MQTT broker authentication credentials.
@@ -52,28 +66,32 @@ type BackoffConfig struct {
 }
 
 // Config holds all configuration required to construct an MQTT connection.
-// Populate via struct literal; call Validate before passing to Open.
+// Populate via struct literal; Open will call Validate before constructing
+// the underlying autopaho ClientConfig — callers do not need to call Validate
+// explicitly (but may, e.g. in CLI flag binding paths).
 //
 // Zero values are invalid for most fields — Validate reports all failures with
 // typed errcode details so callers can surface them in structured logs without
 // PII leaking into messages (MESSAGE-CONST-LITERAL-01).
 type Config struct {
 	ClientID          ClientID      // sealed type from clientid.go; zero value invalid
-	Brokers           []string      // e.g. "tcp://host:1883", "tls://host:8883"
+	Brokers           []string      // e.g. "tcp://127.0.0.1:1883", "tls://broker.example.com:8883"
 	TLS               *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
 	SessionExpiry     time.Duration // 0 = clean session
 	Auth              AuthConfig
 	Backoff           BackoffConfig
-	MaximumPacketSize uint32        // 0 = broker default
+	MaximumPacketSize uint32        // 0 = broker default; non-zero is wired into the CONNECT packet
 	ConnectTimeout    time.Duration // per-attempt; must be > 0
-	KeepAlive         time.Duration // must be > 0
+	KeepAlive         time.Duration // > 0, <= 65535s (uint16 wire field)
 }
 
 // Validate checks all fields for internal consistency and returns the first
 // validation error encountered. Each error carries ErrAdapterMQTTInvalidConfig
 // with relevant public details so the caller can surface structured diagnostics.
 //
-// Callers must call Validate before passing Config to Open.
+// Open calls Validate automatically; callers do not need to invoke it directly.
+// The MQTT-CONFIG-VALIDATE-FIRST-01 archtest locks the Open-side form so the
+// gate cannot be silently removed.
 //
 // Cognitive-complexity budget: split into validateBrokers + validateTimings +
 // validateBackoff helpers to stay ≤ 15 per function.
@@ -91,6 +109,11 @@ func (c Config) Validate() error {
 }
 
 // validateBrokers checks the Brokers slice and each individual broker URL.
+// Plaintext schemes (tcp/mqtt/ws) require a loopback host — enforced via
+// pkg/secutil.ValidateTLSEndpoint which is the single source of truth for
+// "is this remote endpoint TLS-secured?" across all adapters (redis / s3 /
+// oidc / vault / mqtt). TLS schemes (tls/ssl/mqtts/wss) are accepted for any
+// host but require c.TLS != nil.
 func (c Config) validateBrokers() error {
 	if len(c.Brokers) == 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigNoBrokers)
@@ -103,6 +126,15 @@ func (c Config) validateBrokers() error {
 		}
 		if tlsRequiredSchemes[u.Scheme] {
 			needsTLS = true
+			continue
+		}
+		// Plaintext scheme — require loopback host via secutil shared validator.
+		// secutil accepts bare "host:port" (validateBareHostPort path) and
+		// rejects non-loopback hosts.
+		if secErr := secutil.ValidateTLSEndpoint(u.Host); secErr != nil {
+			return errcode.Wrap(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
+				msgConfigPlaintextRemote, secErr,
+				errcode.WithDetails(errcode.PublicString("broker", redactConnectURL(raw))))
 		}
 	}
 	if needsTLS && c.TLS == nil {
@@ -111,7 +143,9 @@ func (c Config) validateBrokers() error {
 	return nil
 }
 
-// validateTimings checks ConnectTimeout and KeepAlive.
+// validateTimings checks ConnectTimeout, KeepAlive, and SessionExpiry. The
+// KeepAlive/SessionExpiry upper bounds correspond to the uint16/uint32 wire
+// fields in autopaho.ClientConfig — exceeding them would silently wrap.
 func (c Config) validateTimings() error {
 	if c.ConnectTimeout <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigConnectTimeout,
@@ -120,6 +154,20 @@ func (c Config) validateTimings() error {
 	if c.KeepAlive <= 0 {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAlive,
 			errcode.WithDetails(errcode.PublicDuration("keepAlive", c.KeepAlive)))
+	}
+	if c.KeepAlive > maxKeepAliveDuration {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigKeepAliveOverflow,
+			errcode.WithDetails(
+				errcode.PublicDuration("keepAlive", c.KeepAlive),
+				errcode.PublicDuration("max", maxKeepAliveDuration),
+			))
+	}
+	if c.SessionExpiry < 0 || c.SessionExpiry > maxSessionExpiryDuration {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigSessionExpiryRange,
+			errcode.WithDetails(
+				errcode.PublicDuration("sessionExpiry", c.SessionExpiry),
+				errcode.PublicDuration("max", maxSessionExpiryDuration),
+			))
 	}
 	return nil
 }

@@ -8,19 +8,20 @@ import (
 
 // redactConnectURL strips credentials from a broker URL for logging.
 //
-// When the URL is parseable by net/url, url.URL.Redacted() replaces the
-// userinfo with "xxxxx" in accordance with net/url's built-in credential
-// masking. For unparseable input, falls back to pkg/redaction.RedactString
-// so free-form `key=value` sensitive substrings are still masked.
+// Two-layer compose (fail-closed): url.URL.Redacted() handles structural
+// userinfo (e.g. "tcp://user:pass@host"), then pkg/redaction.RedactString
+// handles free-form `key=value` sensitive substrings in query/fragment that
+// net/url leaves intact (e.g. "?token=abc"). The compose is idempotent —
+// both layers always run regardless of whether userinfo is present.
 //
-// ref: net/url.URL.Redacted() — golang/go src/net/url/url.go
+// ref: net/url.URL.Redacted() — golang/go src/net/url/url.go (userinfo only)
 // ref: pkg/redaction single-source sensitivity list
 func redactConnectURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err == nil && u.User != nil {
-		return u.Redacted()
+	s := raw
+	if u, err := url.Parse(raw); err == nil && u.User != nil {
+		s = u.Redacted()
 	}
-	return redaction.RedactString(raw)
+	return redaction.RedactString(s)
 }
 
 // redactErr routes an error's text through pkg/redaction.RedactError (single source).
