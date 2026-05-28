@@ -833,3 +833,50 @@ func TestHTTPTransportColumns(t *testing.T) {
 		})
 	}
 }
+
+// TestJourneyStatusCheck_ExamplesExemption verifies that journeys whose file
+// path is under examples/ are exempt from the platform status-board requirement.
+// This test also exercises the metadata.IsInExamplesSubtree funnel path (T2).
+func TestJourneyStatusCheck_ExamplesExemption(t *testing.T) {
+	cases := []struct {
+		name        string
+		file        string
+		statusCount map[string]int
+		wantNil     bool // expect nil (no findings)
+	}{
+		{
+			name:        "examples journey with 0 status entries → exempt, no findings",
+			file:        "examples/foo/journeys/J-onboard.yaml",
+			statusCount: map[string]int{},
+			wantNil:     true,
+		},
+		{
+			name:        "platform journey with 0 status entries → finding",
+			file:        "journeys/J-onboard.yaml",
+			statusCount: map[string]int{},
+			wantNil:     false,
+		},
+		{
+			name:        "platform journey with exactly 1 entry → no finding",
+			file:        "journeys/J-onboard.yaml",
+			statusCount: map[string]int{"J-onboard": 1},
+			wantNil:     true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jm := &metadata.JourneyMeta{
+				ID:   "J-onboard",
+				File: tc.file,
+			}
+			results := journeyStatusCheck(jm, tc.statusCount)
+			if tc.wantNil && len(results) != 0 {
+				t.Errorf("expected nil results for file %q, got %d: %v", tc.file, len(results), results)
+			}
+			if !tc.wantNil && len(results) == 0 {
+				t.Errorf("expected non-nil results for file %q, got nil", tc.file)
+			}
+		})
+	}
+}

@@ -576,7 +576,7 @@ func journeyReadinessFor(
 // readiness tracking. Same posture as validateADV01 (rules_misc_advisory.go)
 // and CONTRACT-CONSISTENCY-EMIT-01.
 func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []governance.ValidationResult {
-	if strings.HasPrefix(jm.File, "examples/") {
+	if metadata.IsInExamplesSubtree(jm.File) {
 		return nil
 	}
 	count := statusCount[jm.ID]

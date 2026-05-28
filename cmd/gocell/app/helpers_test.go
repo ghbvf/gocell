@@ -2,6 +2,8 @@ package app
 
 import (
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -51,10 +53,10 @@ func TestBuildLocatorOptions(t *testing.T) {
 			wantOptCount: 2,
 		},
 		{
-			name:         "conventional + manifest path → 2 opts",
-			layout:       "conventional",
-			manifest:     "some/manifest.yaml",
-			wantOptCount: 2,
+			name:     "conventional + manifest path → error (manifest has no effect)",
+			layout:   "conventional",
+			manifest: "some/manifest.yaml",
+			wantErr:  "--manifest has no effect with --layout=conventional",
 		},
 		{
 			name:    "invalid layout → error",
@@ -231,4 +233,154 @@ func TestAddLocatorFlags(t *testing.T) {
 			t.Errorf("error %q does not contain %q", err.Error(), want)
 		}
 	})
+}
+
+// TestFindRootFrom verifies that findRootFrom walks up from a starting directory
+// and recognizes go.mod, go.work, and .gocell/manifest.yaml as project root markers.
+func TestFindRootFrom(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(base string) string // returns starting dir
+		wantRel string                   // expected root relative to base; "" means base itself
+		wantErr string                   // non-empty → expect error containing this substring
+	}{
+		{
+			name: "only go.mod → root found",
+			setup: func(base string) string {
+				if err := os.WriteFile(filepath.Join(base, "go.mod"), []byte("module example.com/m\n"), 0o600); err != nil {
+					t.Fatalf("WriteFile go.mod: %v", err)
+				}
+				return base
+			},
+			wantRel: ".",
+		},
+		{
+			name: "only go.work → root found",
+			setup: func(base string) string {
+				if err := os.WriteFile(filepath.Join(base, "go.work"), []byte("go 1.22\n"), 0o600); err != nil {
+					t.Fatalf("WriteFile go.work: %v", err)
+				}
+				return base
+			},
+			wantRel: ".",
+		},
+		{
+			name: "only .gocell/manifest.yaml → root found",
+			setup: func(base string) string {
+				if err := os.MkdirAll(filepath.Join(base, ".gocell"), 0o750); err != nil {
+					t.Fatalf("MkdirAll .gocell: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(base, ".gocell", "manifest.yaml"), []byte("version: v1\n"), 0o600); err != nil {
+					t.Fatalf("WriteFile manifest.yaml: %v", err)
+				}
+				return base
+			},
+			wantRel: ".",
+		},
+		{
+			name: "nested: lower go.mod found before upper go.work",
+			setup: func(base string) string {
+				// base/  has go.work
+				// base/sub/ has go.mod  ← nearest wins
+				if err := os.WriteFile(filepath.Join(base, "go.work"), []byte("go 1.22\n"), 0o600); err != nil {
+					t.Fatalf("WriteFile go.work: %v", err)
+				}
+				sub := filepath.Join(base, "sub")
+				if err := os.MkdirAll(sub, 0o750); err != nil {
+					t.Fatalf("MkdirAll sub: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(sub, "go.mod"), []byte("module example.com/sub\n"), 0o600); err != nil {
+					t.Fatalf("WriteFile sub/go.mod: %v", err)
+				}
+				return sub
+			},
+			wantRel: "sub",
+		},
+		{
+			name: "no marker anywhere → error with new message",
+			setup: func(base string) string {
+				return base
+			},
+			wantErr: "no project root marker",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			startDir := tc.setup(base)
+
+			got, err := findRootFrom(startDir)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			wantAbs := filepath.Join(base, tc.wantRel)
+			if tc.wantRel == "." {
+				wantAbs = base
+			}
+			if got != wantAbs {
+				t.Errorf("findRootFrom(%q) = %q, want %q", startDir, got, wantAbs)
+			}
+		})
+	}
+}
+
+// TestBuildLocatorOptions_ConventionalPlusManifest verifies that combining
+// --layout=conventional with a non-empty --manifest is rejected.
+func TestBuildLocatorOptions_ConventionalPlusManifest(t *testing.T) {
+	cases := []struct {
+		name     string
+		layout   string
+		manifest string
+		wantErr  string
+	}{
+		{
+			name:     "conventional + manifest path → error",
+			layout:   "conventional",
+			manifest: "some/manifest.yaml",
+			wantErr:  "--manifest has no effect with --layout=conventional",
+		},
+		{
+			name:     "auto + manifest → no error",
+			layout:   "auto",
+			manifest: "some/manifest.yaml",
+		},
+		{
+			name:     "manifest + manifest → no error",
+			layout:   "manifest",
+			manifest: "some/manifest.yaml",
+		},
+		{
+			name:     "conventional + empty manifest → no error",
+			layout:   "conventional",
+			manifest: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildLocatorOptions(tc.layout, tc.manifest)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
 }
