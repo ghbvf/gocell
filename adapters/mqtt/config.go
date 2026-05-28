@@ -47,6 +47,7 @@ const (
 	msgConfigNoBrokers                = "mqtt: config requires at least one broker"
 	msgConfigBadBrokerURL             = "mqtt: broker URL is invalid or uses an unsupported scheme"
 	msgConfigTLSRequired              = "mqtt: TLS config required for tls broker"
+	msgConfigTLSInsecureSkipVerify    = "mqtt: TLS InsecureSkipVerify is forbidden (certificate verification must not be disabled)"
 	msgConfigPlaintextRemote          = "mqtt: plaintext broker scheme requires loopback host"
 	msgConfigConnectTimeout           = "mqtt: ConnectTimeout must be > 0"
 	msgConfigKeepAlive                = "mqtt: KeepAlive must be > 0"
@@ -184,6 +185,13 @@ func (c Config) validateBrokers() error {
 	}
 	if needsTLS && c.TLS == nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSRequired)
+	}
+	// Fail-closed: a TLS config that disables certificate verification is never
+	// acceptable, regardless of scheme. InsecureSkipVerify would let a MITM
+	// present any certificate; reject it at construction rather than shipping a
+	// silently-insecure broker connection.
+	if c.TLS != nil && c.TLS.InsecureSkipVerify {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSInsecureSkipVerify)
 	}
 	return nil
 }

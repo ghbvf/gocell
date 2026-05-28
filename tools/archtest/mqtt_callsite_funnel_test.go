@@ -88,6 +88,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -422,13 +423,14 @@ func TestMQTTPublishCallsiteFunnel_A3_PublishableTopicFieldFreeze(t *testing.T) 
 // publishableTopic (which is unexported and inaccessible from here).
 func TestMQTTPublishCallsiteFunnel_A3_ExportedTypesShape(t *testing.T) {
 	t.Parallel()
-	// Confirm that the sealed-struct pattern is consistent across the package:
-	// TopicNamespace and ClientID still have their single unexported "value" field.
-	// (publishableTopic's shape is checked via go/types in A3 above.)
-	import_mqtt_pkg := mqtt.TopicNamespace{}
-	_ = import_mqtt_pkg // force import
-	// Intentionally no reflect on publishableTopic — it is unexported.
-	// The A3 go/types check above covers it.
+	// Real reflect assertions (not a no-op): the exported sibling sealed structs
+	// must each keep exactly one unexported "value string" field. assertMQTT-
+	// SealedSingleValueField (mqtt_funnel_test.go, same package) fails the test
+	// on any drift (field export, rename, type change, extra field, or reversion
+	// to a string newtype). publishableTopic itself is unexported and checked via
+	// go/types in TestMQTTPublishCallsiteFunnel_A3_PublishableTopicFieldFreeze.
+	assertMQTTSealedSingleValueField(t, "TopicNamespace", reflect.TypeOf(mqtt.TopicNamespace{}))
+	assertMQTTSealedSingleValueField(t, "ClientID", reflect.TypeOf(mqtt.ClientID{}))
 }
 
 // ─── A4: method-value blind-spot reverse self-check ──────────────────────────
@@ -631,7 +633,7 @@ func TestMQTTPublishCallsiteFunnel_A6_BlindSpot_NoReflectMethodByName(t *testing
 					continue
 				}
 				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-					if !isMethodByNamePublishCall(call) {
+					if !isMethodByNamePublishCall(p.TypesInfo, call) {
 						return
 					}
 					pos := p.Fset.Position(call.Pos())
@@ -944,13 +946,41 @@ func f(v reflect.Value) { v.MethodByName("Publish") }
 	f := mqttParseSnippet(t, src)
 	var fired bool
 	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
-		if isMethodByNamePublishCall(call) {
+		if isMethodByNamePublishCall(nil, call) { // nil info → literal fallback path
 			fired = true
 		}
 	})
 	assert.True(t, fired,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A6: isMethodByNamePublishCall did not fire on a "+
-			"known MethodByName(\"Publish\") call — the detector is broken (A6 would pass vacuously)")
+			"known MethodByName(\"Publish\") literal call — the detector is broken (A6 would pass vacuously)")
+}
+
+// TestMQTTPublishCallsiteFunnel_A6_ScannerNonVacuous_ConstFolded proves the
+// const-eval path: a `const m = "Publish"; v.MethodByName(m)` form (which a
+// literal-only scanner would MISS) is detected once type info resolves the
+// const. This is the exact blind spot the A6 upgrade closes.
+func TestMQTTPublishCallsiteFunnel_A6_ScannerNonVacuous_ConstFolded(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+const pubMethod = "Publish"
+type hasMethod interface{ MethodByName(string) any }
+func f(v hasMethod) { v.MethodByName(pubMethod) }
+`
+	f, info := mqttTypeCheckSnippet(t, src)
+	var firedConst, firedLiteralOnly bool
+	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		if isMethodByNamePublishCall(info, call) {
+			firedConst = true
+		}
+		if isMethodByNamePublishCall(nil, call) { // literal-only path must NOT fire on a const arg
+			firedLiteralOnly = true
+		}
+	})
+	assert.True(t, firedConst,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A6: const-folded MethodByName(const) not detected with type info — "+
+			"the EvaluateConstString upgrade is broken")
+	assert.False(t, firedLiteralOnly,
+		"sanity: the literal-only fallback must NOT match a const Ident arg (proves the const path is what catches it)")
 }
 
 // TestMQTTPublishCallsiteFunnel_A7_ScannerNonVacuous proves the alias-form
@@ -998,15 +1028,23 @@ func f(t struct{ topic string }) { t.topic = "y" }
 // ─── Shared predicates / helpers for the blind-spot scanners ──────────────────
 
 // isMethodByNamePublishCall reports whether call is `_.MethodByName("Publish")`.
-// Pure AST (conservative over-approximation: any MethodByName("Publish")).
-// Shared by A6 and its non-vacuous self-check so both exercise one predicate.
-func isMethodByNamePublishCall(call *ast.CallExpr) bool {
+// The first argument is resolved via EvaluateConstString when type info is
+// available, so a const-folded form (`const m = "Publish"; v.MethodByName(m)`)
+// is caught too — not just a bare string literal. When info is nil (the
+// pure-AST non-vacuous snippet path), it falls back to a literal check.
+// Shared by A6 and its non-vacuous self-checks so all exercise one predicate.
+func isMethodByNamePublishCall(info *types.Info, call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil || sel.Sel.Name != "MethodByName" {
 		return false
 	}
 	if len(call.Args) < 1 {
 		return false
+	}
+	if info != nil {
+		if val, ok := EvaluateConstString(info, call.Args[0]); ok {
+			return val == publishMethodName
+		}
 	}
 	lit, isLit := call.Args[0].(*ast.BasicLit)
 	if !isLit {
@@ -1047,6 +1085,25 @@ func mqttParseSnippet(t *testing.T, src string) *ast.File {
 	f, err := parser.ParseFile(token.NewFileSet(), "snippet.go", src, 0)
 	require.NoError(t, err, "parse in-memory snippet for non-vacuous self-check")
 	return f
+}
+
+// mqttTypeCheckSnippet parses + type-checks an in-memory Go source string and
+// returns the file plus populated *types.Info, for const-eval based non-vacuity
+// proofs. The snippet MUST NOT import any package (no Importer is configured).
+func mqttTypeCheckSnippet(t *testing.T, src string) (*ast.File, *types.Info) {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "snippet.go", src, 0)
+	require.NoError(t, err, "parse in-memory snippet for type-checked self-check")
+	info := &types.Info{
+		Types: map[ast.Expr]types.TypeAndValue{},
+		Defs:  map[*ast.Ident]types.Object{},
+		Uses:  map[*ast.Ident]types.Object{},
+	}
+	conf := types.Config{} // no Importer — snippet must be import-free
+	_, err = conf.Check("x", fset, []*ast.File{f}, info)
+	require.NoError(t, err, "type-check in-memory snippet (must have no external imports)")
+	return f, info
 }
 
 // ─── Compile-time import guard ────────────────────────────────────────────────

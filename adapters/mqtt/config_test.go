@@ -164,13 +164,27 @@ func TestConfig_Validate_TLSSchemeWithoutTLSConfig(t *testing.T) {
 }
 
 // TestConfig_Validate_TLSSchemeWithTLSConfig verifies that tls brokers succeed
-// when a TLS config is provided.
+// when a verifying TLS config is provided.
 func TestConfig_Validate_TLSSchemeWithTLSConfig(t *testing.T) {
 	t.Parallel()
 	cfg := validConfig(t)
 	cfg.Brokers = []string{"tls://broker.example.com:8883"}
-	cfg.TLS = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test only
+	cfg.TLS = &tls.Config{MinVersion: tls.VersionTLS12} // verifying config (no InsecureSkipVerify)
 	require.NoError(t, cfg.Validate())
+}
+
+// TestConfig_Validate_TLSInsecureSkipVerify_Rejected verifies that a TLS config
+// with InsecureSkipVerify=true is rejected fail-closed, regardless of scheme.
+func TestConfig_Validate_TLSInsecureSkipVerify_Rejected(t *testing.T) {
+	t.Parallel()
+	cfg := validConfig(t)
+	cfg.Brokers = []string{"tls://broker.example.com:8883"}
+	cfg.TLS = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // negative test: asserts this is rejected
+	err := cfg.Validate()
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
 }
 
 // TestConfig_Validate_AllValidSchemes verifies all plaintext scheme variants

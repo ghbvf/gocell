@@ -5,11 +5,15 @@ package mqtt
 import (
 	"context"
 	"errors"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	dockercontainer "github.com/moby/moby/api/types/container"
+	dockernet "github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -211,8 +215,8 @@ func TestIntegration_PublisherTrueReconnect(t *testing.T) {
 		t.Fatalf("ParseEphemeralClientID: %v", err)
 	}
 	cfg := Config{
-		ClientID: cid,
-		Brokers:  []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
+		ClientID:       cid,
+		Brokers:        []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
 		ConnectTimeout: testtime.D5s,
 		KeepAlive:      testtime.D10s,
 		Backoff: BackoffConfig{
@@ -279,9 +283,24 @@ func TestIntegration_PublisherTrueReconnect(t *testing.T) {
 
 // startDedicatedMosquittoContainer starts an eclipse-mosquitto container for
 // exclusive use by TestIntegration_PublisherTrueReconnect (stop/start lifecycle).
+//
+// The 1883 container port is bound to a FIXED host port via PortBindings rather
+// than the default random ephemeral mapping. This is essential for the reconnect
+// test: a Stop()/Start() restart re-publishes the container's ports, and with a
+// random mapping Docker assigns a NEW host port on restart — leaving the broker
+// URL captured here stale, so autopaho keeps dialing the dead old port and
+// WaitConnected times out. Pinning the host port keeps the endpoint stable
+// across restart so reconnection can actually succeed.
 func startDedicatedMosquittoContainer(t *testing.T) (string, testcontainers.Container, error) {
 	t.Helper()
 	ctx := context.Background()
+
+	hostPort, err := freeLoopbackTCPPort()
+	if err != nil {
+		return "", nil, err
+	}
+	hostPortStr := strconv.Itoa(hostPort)
+
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        testutil.MosquittoImage,
@@ -293,6 +312,13 @@ func startDedicatedMosquittoContainer(t *testing.T) (string, testcontainers.Cont
 					FileMode:          0o644,
 				},
 			},
+			HostConfigModifier: func(hc *dockercontainer.HostConfig) {
+				hc.PortBindings = dockernet.PortMap{
+					dockernet.MustParsePort("1883/tcp"): []dockernet.PortBinding{
+						{HostPort: hostPortStr},
+					},
+				}
+			},
 			WaitingFor: wait.ForListeningPort("1883/tcp").
 				WithStartupTimeout(testtime.D30s),
 		},
@@ -301,16 +327,24 @@ func startDedicatedMosquittoContainer(t *testing.T) (string, testcontainers.Cont
 	if err != nil {
 		return "", nil, err
 	}
-	host, err := container.Host(ctx)
-	if err != nil {
-		_ = container.Terminate(ctx)
-		return "", nil, err
-	}
-	port, err := container.MappedPort(ctx, "1883/tcp")
-	if err != nil {
-		_ = container.Terminate(ctx)
-		return "", nil, err
-	}
-	url := "tcp://" + host + ":" + port.Port()
+	// Endpoint is the pinned host port, stable across Stop()/Start().
+	url := "tcp://127.0.0.1:" + hostPortStr
 	return url, container, nil
+}
+
+// freeLoopbackTCPPort allocates and immediately releases a loopback TCP port,
+// returning its number for use as a fixed container host-port binding. The
+// close-then-rebind window is small and test-binary-scoped (no external
+// competitor for a loopback ephemeral port within one `go test` run) — the same
+// idiom the in-process mochi broker tests use.
+func freeLoopbackTCPPort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if cerr := ln.Close(); cerr != nil {
+		return 0, cerr
+	}
+	return port, nil
 }

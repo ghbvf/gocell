@@ -180,6 +180,17 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 			"mqtt: cellID is required for provider publisher collector")
 	}
 
+	// Register the three metrics with all-or-nothing semantics: if a later
+	// registration fails (e.g. a duplicate metric name), roll back the ones
+	// already registered so the provider is not left holding a partial set.
+	var registered []metrics.Collector
+	rollback := func(wrapErr error) error {
+		for _, c := range registered {
+			_ = p.Unregister(c)
+		}
+		return wrapErr
+	}
+
 	publishTotal, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_total",
 		Help: "Total number of MQTT publish attempts that completed successfully (broker PUBACK received). " +
@@ -187,9 +198,10 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish total counter", err)
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish total counter", err))
 	}
+	registered = append(registered, publishTotal)
 
 	publishFailed, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_failed_total",
@@ -200,9 +212,10 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish failed counter", err)
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish failed counter", err))
 	}
+	registered = append(registered, publishFailed)
 
 	ackDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name: "mqtt_publish_ack_duration_seconds",
@@ -213,9 +226,11 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		Buckets:    ackDurationBuckets,
 	})
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish ack duration histogram", err)
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish ack duration histogram", err))
 	}
+	// ackDuration is the last registration — nothing after it can fail, so it
+	// need not be appended to the rollback set.
 
 	return &providerPublisherCollector{
 		cellID:        cellID,

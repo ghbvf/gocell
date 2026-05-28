@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -150,43 +152,62 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	start := p.clk.Now()
 	resp, err := p.conn.Publish(publishCtx, t, payload, publishOpts{QoS: 1, Retain: false})
 	if err != nil {
-		reason := classifyPublishErr(publishCtx, err)
-		p.collector.RecordPublishFailure(ctx, reason)
-		return wrapPublishErr(err)
+		return p.handlePublishError(ctx, publishCtx, resp, err)
 	}
 
-	// Inspect PUBACK reason code. The outer guard (ReasonCode != 0x00) means
-	// classifyPubackReason never returns the empty Success code here, so no
-	// `code != ""` check is needed — only 0x10 NoMatchingSubscribers is the
-	// non-error case to skip.
-	if resp != nil && resp.ReasonCode != 0x00 {
-		code, kind := classifyPubackReason(resp.ReasonCode)
-		if code != ErrAdapterMQTTPublishNoSubscribers {
-			// Rejected / RateLimited / NotAuthorized / PayloadFormatInvalid path —
-			// record failure + return wrapped error.
-			reason := pubackReasonToMetric(code)
-			p.collector.RecordPublishFailure(ctx, reason)
-			return errcode.New(kind, code,
-				"mqtt: broker returned non-success PUBACK reason code",
-				errcode.WithDetails(
-					errcode.PublicInt("reasonCode", int(resp.ReasonCode)),
-					errcode.PublicString("reasonName", pubackReasonName(resp.ReasonCode)),
-				))
-		}
-		// 0x10 NoMatchingSubscribers is informational: count as success, but warn
-		// for operator visibility (device-not-yet-online scenario). topic is the
-		// operator's actionable field here; it may carry device/tenant identifiers
-		// in IoT deployments — configure slog handler redaction if that is a
-		// concern for the target sink.
-		if resp.ReasonCode == 0x10 {
-			slog.Warn("mqtt: publish succeeded with no matching subscribers",
-				slog.String("client_id", p.conn.cfg.ClientID.String()),
-				slog.String("topic", t.String()))
-		}
+	// Success path. paho returns a nil error ONLY for PUBACK reason codes < 0x80
+	// (paho/client.go:923): 0x00 Success and 0x10 NoMatchingSubscribers. Reason
+	// codes >= 0x80 (rejected / not-authorized / quota / payload-format) arrive
+	// via the error branch above — handlePublishError classifies them. 0x10 is
+	// informational: counted as success with an operator warning.
+	//
+	// topic is the operator's actionable field here; it may carry device/tenant
+	// identifiers in IoT deployments — configure slog handler redaction if that
+	// is a concern for the target sink.
+	if resp != nil && resp.ReasonCode == 0x10 {
+		slog.Warn("mqtt: publish succeeded with no matching subscribers",
+			slog.String("client_id", p.conn.cfg.ClientID.String()),
+			slog.String("topic", t.String()))
 	}
-
 	p.collector.RecordPublishSuccess(ctx, p.clk.Since(start))
 	return nil
+}
+
+// handlePublishError classifies the non-nil error returned by Connection.Publish.
+// paho multiplexes three distinct failure shapes through this single error, and
+// each must map to a different errcode/metric:
+//
+//  1. Broker-rejected PUBACK (reason >= 0x80): paho returns BOTH a non-nil resp
+//     (with resp.ReasonCode set) AND a non-nil error (paho/client.go:923). This
+//     is the ONLY path on which the broker's reason code reaches us — it is NOT
+//     surfaced via a nil-error resp — so classifyPubackReason MUST be driven from
+//     here, not from the success branch.
+//  2. Adapter-closed (resp == nil, err is ErrAdapterMQTTClosed): preserve the
+//     closed semantics rather than flattening to a generic publish failure.
+//  3. Deadline / cancel / transport (resp == nil): classifyPublishErr +
+//     wrapPublishErr distinguish caller-ctx cancel, adapter PublishTimeout, and
+//     generic transport errors.
+func (p *Publisher) handlePublishError(ctx, publishCtx context.Context, resp *paho.PublishResponse, err error) error {
+	// (1) Broker-rejected PUBACK reason code (>= 0x80).
+	if resp != nil && resp.ReasonCode >= 0x80 {
+		code, kind := classifyPubackReason(resp.ReasonCode)
+		p.collector.RecordPublishFailure(ctx, pubackReasonToMetric(code))
+		return errcode.New(kind, code,
+			"mqtt: broker returned non-success PUBACK reason code",
+			errcode.WithDetails(
+				errcode.PublicInt("reasonCode", int(resp.ReasonCode)),
+				errcode.PublicString("reasonName", pubackReasonName(resp.ReasonCode)),
+			))
+	}
+	// (2) Adapter closed — preserve the closed errcode rather than wrapping it.
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == ErrAdapterMQTTClosed {
+		p.collector.RecordPublishFailure(ctx, PublishFailureClosed)
+		return err
+	}
+	// (3) Deadline / cancel / transport.
+	p.collector.RecordPublishFailure(ctx, classifyPublishErr(ctx, publishCtx, err))
+	return wrapPublishErr(ctx, publishCtx, err)
 }
 
 // Close drains in-flight publishes and marks the publisher closed. It does NOT
@@ -214,9 +235,21 @@ func (p *Publisher) Close(ctx context.Context) error {
 	}
 }
 
-// classifyPublishErr maps a transport-level error from autopaho into a
-// PublishFailureReason metric label.
-func classifyPublishErr(publishCtx context.Context, err error) PublishFailureReason {
+// classifyPublishErr maps a non-PUBACK error into a PublishFailureReason metric
+// label, distinguishing the caller's own context from the adapter-derived
+// PublishTimeout child context:
+//
+//   - callerCtx already done (deadline or cancel) → context_canceled: the caller
+//     drove the abort, not the adapter's budget.
+//   - only the adapter PublishTimeout child fired (callerCtx alive) → puback_timeout.
+//   - neither ctx involved → publish_error (transport).
+//
+// When Config.PublishTimeout == 0, publishCtx == callerCtx, so the first branch
+// owns every deadline/cancel and puback_timeout is never (mis)reported.
+func classifyPublishErr(callerCtx, publishCtx context.Context, err error) PublishFailureReason {
+	if callerCtx.Err() != nil {
+		return PublishFailureContextCanceled
+	}
 	if publishCtx.Err() == context.DeadlineExceeded {
 		return PublishFailurePubAckTimeout
 	}
@@ -226,16 +259,21 @@ func classifyPublishErr(publishCtx context.Context, err error) PublishFailureRea
 	return PublishFailurePublishError
 }
 
-// wrapPublishErr wraps an autopaho transport error into an errcode.
-// Distinguishes PUBACK timeout, context-cancel, and generic publish failure.
-func wrapPublishErr(err error) error {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPubAckTimeout,
-			"mqtt: PUBACK timeout", err)
-	}
-	if errors.Is(err, context.Canceled) {
+// wrapPublishErr wraps a non-PUBACK error into an errcode, mirroring
+// classifyPublishErr's caller-vs-adapter-timeout distinction so the returned
+// errcode and the recorded metric reason always agree:
+//
+//   - caller ctx canceled/expired → ErrAdapterMQTTPublishCanceled
+//   - adapter PublishTimeout budget exhausted → ErrAdapterMQTTPubAckTimeout
+//   - generic transport failure → ErrAdapterMQTTPublishFailed
+func wrapPublishErr(callerCtx, publishCtx context.Context, err error) error {
+	if callerCtx.Err() != nil {
 		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
-			"mqtt: publish context canceled", err)
+			"mqtt: publish canceled by caller context", err)
+	}
+	if publishCtx.Err() == context.DeadlineExceeded {
+		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPubAckTimeout,
+			"mqtt: PUBACK timeout (adapter PublishTimeout budget exceeded)", err)
 	}
 	return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishFailed,
 		"mqtt: publish failed", err)

@@ -438,22 +438,25 @@ func TestClassifyPublishErr(t *testing.T) {
 	wrapCanceled := fmt.Errorf("wrap: %w", context.Canceled)
 	wrapDeadline := fmt.Errorf("wrap: %w", context.DeadlineExceeded)
 
+	// Cases distinguish the caller's own ctx from the adapter PublishTimeout child:
+	// caller-driven abort → context_canceled; only-adapter-timeout → puback_timeout.
 	tests := []struct {
-		name string
-		ctx  context.Context
-		err  error
-		want PublishFailureReason
+		name       string
+		callerCtx  context.Context
+		publishCtx context.Context
+		err        error
+		want       PublishFailureReason
 	}{
-		{"deadline-ctx-maps-puback-timeout", deadlineCtx, errors.New("transport"), PublishFailurePubAckTimeout},
-		{"canceled-err-maps-context-canceled", canceledCtx, wrapCanceled, PublishFailureContextCanceled},
-		{"deadline-err-without-deadline-ctx", bg, wrapDeadline, PublishFailureContextCanceled},
-		{"generic-transport-err", bg, errors.New("connection reset"), PublishFailurePublishError},
+		{"adapter-timeout-only", bg, deadlineCtx, errors.New("transport"), PublishFailurePubAckTimeout},
+		{"caller-canceled", canceledCtx, canceledCtx, wrapCanceled, PublishFailureContextCanceled},
+		{"caller-deadline", deadlineCtx, deadlineCtx, wrapDeadline, PublishFailureContextCanceled},
+		{"generic-transport-err", bg, bg, errors.New("connection reset"), PublishFailurePublishError},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := classifyPublishErr(tc.ctx, tc.err)
+			got := classifyPublishErr(tc.callerCtx, tc.publishCtx, tc.err)
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -461,20 +464,31 @@ func TestClassifyPublishErr(t *testing.T) {
 
 func TestWrapPublishErr(t *testing.T) {
 	t.Parallel()
+
+	deadlineCtx, dcancel := context.WithTimeout(context.Background(), 0)
+	defer dcancel()
+	<-deadlineCtx.Done()
+	canceledCtx, ccancel := context.WithCancel(context.Background())
+	ccancel()
+	<-canceledCtx.Done()
+	bg := context.Background()
+
 	tests := []struct {
-		name     string
-		err      error
-		wantCode errcode.Code
+		name       string
+		callerCtx  context.Context
+		publishCtx context.Context
+		err        error
+		wantCode   errcode.Code
 	}{
-		{"deadline-exceeded", fmt.Errorf("wrap: %w", context.DeadlineExceeded), ErrAdapterMQTTPubAckTimeout},
-		{"canceled", fmt.Errorf("wrap: %w", context.Canceled), ErrAdapterMQTTPublishCanceled},
-		{"generic", errors.New("connection reset by peer"), ErrAdapterMQTTPublishFailed},
+		{"caller-canceled", canceledCtx, canceledCtx, fmt.Errorf("wrap: %w", context.Canceled), ErrAdapterMQTTPublishCanceled},
+		{"adapter-timeout-only", bg, deadlineCtx, errors.New("transport"), ErrAdapterMQTTPubAckTimeout},
+		{"generic", bg, bg, errors.New("connection reset by peer"), ErrAdapterMQTTPublishFailed},
 	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := wrapPublishErr(tc.err)
+			err := wrapPublishErr(tc.callerCtx, tc.publishCtx, tc.err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
 			assert.Equal(t, tc.wantCode, ec.Code)
@@ -634,6 +648,87 @@ func startBrokerWithHook(t *testing.T, h mqttserver.Hook) (addr string, stop fun
 	}, testtime.D2s, testtime.D10ms)
 
 	return addr, func() { _ = srv.Close() }
+}
+
+// rejectingPubAckHook returns a broker-rejection PUBACK reason code (>= 0x80)
+// for every QoS-1 PUBLISH. mochi builds a PUBACK carrying that code, which paho
+// surfaces via the ERROR return of Publish (paho/client.go:923) — NOT via a
+// nil-error response. This is the real path on which broker reason codes reach
+// the adapter; the test below uses it to prove Publisher.Publish routes those
+// errors through classifyPubackReason rather than collapsing them to a generic
+// publish failure.
+type rejectingPubAckHook struct {
+	mqttserver.HookBase
+	code byte
+}
+
+func (h *rejectingPubAckHook) ID() string           { return "rejecting-puback" }
+func (h *rejectingPubAckHook) Provides(b byte) bool { return b == mqttserver.OnPublish }
+
+func (h *rejectingPubAckHook) OnPublish(_ *mqttserver.Client, pk mqttpackets.Packet) (mqttpackets.Packet, error) {
+	if pk.FixedHeader.Qos > 0 {
+		return pk, mqttpackets.Code{Code: h.code, Reason: "rejected by test hook"}
+	}
+	return pk, nil
+}
+
+// TestPublisher_Publish_BrokerRejectedPUBACK_RealPath is the recurrence guard for
+// the dead-classifyPubackReason bug: paho returns reason codes >= 0x80 via the
+// error channel, so a naive `if err != nil { wrapPublishErr }` would collapse
+// every broker rejection into ErrAdapterMQTTPublishFailed and never reach
+// classifyPubackReason. This test drives a real broker that returns each
+// rejection reason and asserts the DEDICATED errcode + metric reason surface —
+// exercising the integrated paho path, not classifyPubackReason in isolation.
+func TestPublisher_Publish_BrokerRejectedPUBACK_RealPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		code       byte
+		wantCode   errcode.Code
+		wantReason PublishFailureReason
+	}{
+		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishNotAuthorized, PublishFailureNotAuthorized},
+		{"quota-exceeded-0x97", 0x97, ErrAdapterMQTTPublishRateLimited, PublishFailureRateLimited},
+		{"payload-format-invalid-0x99", 0x99, ErrAdapterMQTTPublishPayloadFormatInvalid, PublishFailurePayloadFormatInvalid},
+		{"unspecified-0x80", 0x80, ErrAdapterMQTTPublishRejected, PublishFailureRejected},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			addr, stop := startBrokerWithHook(t, &rejectingPubAckHook{code: tc.code})
+			defer stop()
+
+			clk := clock.Real()
+			cfg := newInternalConfig(addr)
+			ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+			defer cancel()
+
+			conn, err := Open(ctx, clk, cfg)
+			require.NoError(t, err)
+			defer conn.Close(context.Background()) //nolint:errcheck // test cleanup
+
+			ns, err := ParseTopicNamespace("test")
+			require.NoError(t, err)
+			spy := &spyCollector{}
+			pub, err := NewPublisher(clk, conn, ns, WithPublisherCollector(spy))
+			require.NoError(t, err)
+			defer pub.Close(context.Background()) //nolint:errcheck // test cleanup
+
+			err = pub.Publish(ctx, "test/rejected", []byte("payload"))
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, tc.wantCode, ec.Code,
+				"broker PUBACK 0x%02x must surface its dedicated errcode via classifyPubackReason, not generic", tc.code)
+
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
+			assert.Equal(t, 1, spy.failureCount)
+			assert.Equal(t, tc.wantReason, spy.lastFailureReason)
+			assert.Equal(t, 0, spy.successCount)
+		})
+	}
 }
 
 // startBrokerWithNoSubscribersHook starts a broker that always returns PUBACK
