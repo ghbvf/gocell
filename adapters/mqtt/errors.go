@@ -99,6 +99,22 @@ const (
 	// rate-limited or its message quota is exhausted. Callers should back off
 	// and retry after a delay.
 	ErrAdapterMQTTPublishRateLimited errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_RATE_LIMITED"
+
+	// ErrAdapterMQTTPublishCanceled signals that a publish call was canceled
+	// because the caller's context was canceled before the broker responded.
+	ErrAdapterMQTTPublishCanceled errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_CANCELED"
+
+	// ErrAdapterMQTTPublishFailed signals a transport-level publish failure (the
+	// underlying autopaho returned a non-context error and not a PUBACK reason
+	// code). Distinct from ErrAdapterMQTTConnect which is connection-side, and
+	// from ErrAdapterMQTTPubAckTimeout / PublishRejected which are PUBACK-side.
+	ErrAdapterMQTTPublishFailed errcode.Code = "ERR_ADAPTER_MQTT_PUBLISH_FAILED"
+
+	// ErrAdapterMQTTPublisherCloseTimeout signals that Publisher.Close exceeded
+	// its drain budget waiting for in-flight publishes to complete. Distinct from
+	// ErrAdapterMQTTPubAckTimeout (single-publish PUBACK timeout) — Close timeout
+	// indicates one or more goroutines are stuck.
+	ErrAdapterMQTTPublisherCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_PUBLISHER_CLOSE_TIMEOUT"
 )
 
 // connackClass classifies an OnConnectError into one of three categories.
@@ -214,11 +230,11 @@ func connackReasonName(code byte) string {
 //
 // Reason-code → (code, kind) mapping (ref: MQTT v5.0 spec §3.4.2.1):
 //
-//	0x00 Success                  → ("", KindInternal)               — Ack path, unused by error handler
+//	0x00 Success                  → ("", KindInternal)               — Ack path; caller MUST guard ReasonCode != 0x00 before calling
 //	0x10 NoMatchingSubscribers    → (ErrAdapterMQTTPublishNoSubscribers, KindUnavailable)
 //	0x80 UnspecifiedError         → (ErrAdapterMQTTPublishRejected,     KindInternal)
 //	0x83 ImplementationSpecific   → (ErrAdapterMQTTPublishRejected,     KindInternal)
-//	0x87 NotAuthorized            → (ErrAdapterMQTTPublishRejected,     KindInternal)
+//	0x87 NotAuthorized            → (ErrAdapterMQTTPublishRejected,     KindUnavailable) — retryable; operator fixes ACL
 //	0x90 TopicNameInvalid         → (ErrAdapterMQTTPublishRejected,     KindInvalid)
 //	0x97 QuotaExceeded            → (ErrAdapterMQTTPublishRateLimited,  KindUnavailable)
 //	0x99 PayloadFormatInvalid     → (ErrAdapterMQTTPayloadTooLarge,     KindInvalid)
@@ -227,7 +243,7 @@ func connackReasonName(code byte) string {
 // ref: MQTT v5.0 spec §3.4.2.1 PUBACK Reason Code table
 func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
 	switch code {
-	case 0x00: // Success
+	case 0x00: // Success — Ack path; caller MUST guard ReasonCode != 0x00 before calling
 		return "", errcode.KindInternal
 	case 0x10: // No Matching Subscribers
 		return ErrAdapterMQTTPublishNoSubscribers, errcode.KindUnavailable
@@ -235,8 +251,8 @@ func classifyPubackReason(code byte) (errcode.Code, errcode.Kind) {
 		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
 	case 0x83: // Implementation Specific Error
 		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
-	case 0x87: // Not Authorized
-		return ErrAdapterMQTTPublishRejected, errcode.KindInternal
+	case 0x87: // Not Authorized — retryable after operator fixes ACL (aligned with CONNACK 0x87 classPermanentRetain)
+		return ErrAdapterMQTTPublishRejected, errcode.KindUnavailable
 	case 0x90: // Topic Name Invalid
 		return ErrAdapterMQTTPublishRejected, errcode.KindInvalid
 	case 0x97: // Quota Exceeded

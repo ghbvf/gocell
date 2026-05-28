@@ -97,6 +97,10 @@ const (
 // becomes the "cell" label value (registration-time enumerated set, NOT derived
 // from request context — per observability.md HTTP metrics cell-label convention).
 //
+// Implementations MUST bind the "cell" label at construction time, NOT
+// from request ctx — per observability.md §HTTP Metrics cell Label
+// (cell = registration-time enumerated owner dimension).
+//
 // Implementations must be safe for concurrent use.
 type PublisherCollector interface {
 	// RecordPublishSuccess increments the success counter and observes the

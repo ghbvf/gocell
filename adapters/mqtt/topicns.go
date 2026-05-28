@@ -105,7 +105,7 @@ func (n TopicNamespace) PublishOK(topic string) error {
 		return errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			msgZeroNamespaceReceiver,
-			errcode.WithDetails(errcode.PublicString(detailKeyTopic, topic)),
+			errcode.WithInternal(errcode.InternalAttr(detailKeyTopic, topic)),
 		)
 	}
 	if topic == "" {
@@ -121,8 +121,8 @@ func (n TopicNamespace) PublishOK(topic string) error {
 			msgPublishTopicWildcard,
 			errcode.WithDetails(
 				errcode.PublicString(detailKeyNamespace, n.value),
-				errcode.PublicString(detailKeyTopic, topic),
 			),
+			errcode.WithInternal(errcode.InternalAttr(detailKeyTopic, topic)),
 		)
 	}
 	if topic == n.value {
@@ -136,8 +136,8 @@ func (n TopicNamespace) PublishOK(topic string) error {
 		msgTopicOutsideNamespace,
 		errcode.WithDetails(
 			errcode.PublicString(detailKeyNamespace, n.value),
-			errcode.PublicString(detailKeyTopic, topic),
 		),
+		errcode.WithInternal(errcode.InternalAttr(detailKeyTopic, topic)),
 	)
 }
 
@@ -156,7 +156,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 		return errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			msgZeroNamespaceReceiver,
-			errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+			errcode.WithInternal(errcode.InternalAttr(detailKeyFilter, filter)),
 		)
 	}
 	if filter == "" {
@@ -175,7 +175,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 				return errcode.New(
 					errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 					msgInvalidWildcardPlacement,
-					errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+					errcode.WithInternal(errcode.InternalAttr(detailKeyFilter, filter)),
 				)
 			}
 			continue
@@ -188,7 +188,7 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 			return errcode.New(
 				errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 				msgInvalidWildcardPlacement,
-				errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+				errcode.WithInternal(errcode.InternalAttr(detailKeyFilter, filter)),
 			)
 		}
 	}
@@ -206,8 +206,8 @@ func (n TopicNamespace) SubscribeOK(filter string) error {
 		msgSubscribeOutsideNS,
 		errcode.WithDetails(
 			errcode.PublicString(detailKeyNamespace, n.value),
-			errcode.PublicString(detailKeyFilter, filter),
 		),
+		errcode.WithInternal(errcode.InternalAttr(detailKeyFilter, filter)),
 	)
 }
 

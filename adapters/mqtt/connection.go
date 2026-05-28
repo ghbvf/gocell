@@ -349,19 +349,43 @@ func (c *Connection) recordPermanentLocked(permErr error) {
 	c.mu.Unlock()
 }
 
+// isAuthRelatedConnackCode reports whether a CONNACK reason code is
+// auth-related (bad credentials or unauthorized). For these codes, the
+// human-readable reason name is moved to the Internal channel so it does
+// not help an attacker enumerate "credentials wrong vs authz missing".
+func isAuthRelatedConnackCode(code byte) bool {
+	return code == 0x86 || code == 0x87 || code == 0x8C
+}
+
 // buildConnackError wraps a CONNACK rejection into an errcode.Error with
-// public reasonCode/reasonName details so operators get structured diagnostics
-// (C5 F9 — reason code/name visibility). The cause is preserved via WithCause
-// for errors.Is/As chains; redaction happens at logging boundaries (slog), not
-// here (errcode WithCause does not redact).
+// structured diagnostics (C5 F9 — reason code/name visibility). For auth-related
+// reason codes (0x86/0x87/0x8C) the reason name is moved to the Internal channel
+// so it does not aid attacker enumeration of "credentials wrong vs authz missing";
+// only the numeric reasonCode is kept on wire. For all other codes, reasonName
+// stays in Public details for operator diagnostics.
+// The cause is preserved via WithCause for errors.Is/As chains; redaction
+// happens at logging boundaries (slog), not here.
 func buildConnackError(code errcode.Code, cause error, message string) error {
 	opts := []errcode.Option{}
 	var connackErr *autopaho.ConnackError
 	if errors.As(cause, &connackErr) {
-		opts = append(opts, errcode.WithDetails(
-			errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
-			errcode.PublicString("reasonName", connackReasonName(connackErr.ReasonCode)),
-		))
+		if isAuthRelatedConnackCode(connackErr.ReasonCode) {
+			// Auth-related: keep only numeric code on wire; move name to Internal.
+			opts = append(opts,
+				errcode.WithDetails(
+					errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
+				),
+				errcode.WithInternal(
+					errcode.InternalAttr("reasonName", connackReasonName(connackErr.ReasonCode)),
+				),
+			)
+		} else {
+			// Non-auth: both code and name are safe for operator diagnostics on wire.
+			opts = append(opts, errcode.WithDetails(
+				errcode.PublicInt("reasonCode", int(connackErr.ReasonCode)),
+				errcode.PublicString("reasonName", connackReasonName(connackErr.ReasonCode)),
+			))
+		}
 	}
 	if cause != nil {
 		opts = append(opts, errcode.WithInternal(

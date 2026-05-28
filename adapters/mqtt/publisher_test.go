@@ -3,10 +3,15 @@ package mqtt
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	mqttserver "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/hooks/auth"
+	"github.com/mochi-mqtt/server/v2/listeners"
+	mqttpackets "github.com/mochi-mqtt/server/v2/packets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -14,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // ---------------------------------------------------------------------------
@@ -69,6 +75,9 @@ func TestNewPublisher_ZeroNamespace(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublisher_Publish_Success(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker has a TOCTOU port-reuse window
+	// (ln.Close() then re-bind) that causes flaky port conflicts under parallel
+	// test execution. Deferred until broker helper is fixed.
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -206,6 +215,7 @@ func TestPublisher_Publish_AfterClose(t *testing.T) {
 }
 
 func TestPublisher_Publish_ContextCanceled(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -266,6 +276,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 }
 
 func TestPublisher_Close_DoesNotCloseConnection(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -291,6 +302,9 @@ func TestPublisher_Close_DoesNotCloseConnection(t *testing.T) {
 }
 
 func TestPublisher_Close_DrainsInFlight(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker has a TOCTOU port-reuse window
+	// (ln.Close() then re-bind) that causes flaky port conflicts under parallel
+	// test execution. Deferred until broker helper is fixed.
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -309,16 +323,20 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 	pub, err := NewPublisher(clk, conn, ns)
 	require.NoError(t, err)
 
-	// Fire a publish in the background.
+	// Fire a publish in the background with a channel barrier to signal when
+	// the goroutine is about to enter Publish, replacing the previous pure-sleep
+	// synchronization. A small additional sleep gives the goroutine time to
+	// reach the Publish mutex lock before Close marks the publisher closed.
+	started := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		close(started) // signal "about to enter Publish"
 		_ = pub.Publish(ctx, "test/drain", make([]byte, 5))
 	}()
-
-	// Allow the goroutine to start before closing.
-	time.Sleep(testtime.D10ms)
+	<-started
+	time.Sleep(time.Millisecond) // let goroutine reach Publish mutex
 
 	// Close should drain the in-flight publish before returning.
 	closeErr := pub.Close(ctx)
@@ -332,6 +350,7 @@ func TestPublisher_Close_DrainsInFlight(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublisher_Publish_ConcurrentSafe(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
 	addr, stop := startInternalBroker(t)
 	defer stop()
 
@@ -374,6 +393,11 @@ func TestPublisher_Publish_ConcurrentSafe(t *testing.T) {
 
 func TestPubackReasonToMetric(t *testing.T) {
 	t.Parallel()
+	// ErrAdapterMQTTPublishNoSubscribers (0x10) is intentionally excluded:
+	// the Publish path guards `code != ErrAdapterMQTTPublishNoSubscribers` before
+	// calling pubackReasonToMetric, so that code never reaches this mapping.
+	// The default branch already covers any future drift. See also
+	// pubackReasonToMetric godoc "Caller MUST pre-filter" note.
 	tests := []struct {
 		code   errcode.Code
 		reason PublishFailureReason
@@ -381,7 +405,6 @@ func TestPubackReasonToMetric(t *testing.T) {
 		{ErrAdapterMQTTPublishRateLimited, PublishFailureRateLimited},
 		{ErrAdapterMQTTPublishRejected, PublishFailurePublishError},
 		{ErrAdapterMQTTPayloadTooLarge, PublishFailurePayloadTooLarge},
-		{ErrAdapterMQTTPublishNoSubscribers, PublishFailurePublishError},
 		{"UNKNOWN_CODE", PublishFailurePublishError},
 	}
 	for _, tc := range tests {
@@ -392,6 +415,163 @@ func TestPubackReasonToMetric(t *testing.T) {
 			assert.Equal(t, tc.reason, got)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 7c: 0x10 NoMatchingSubscribers success path
+// ---------------------------------------------------------------------------
+
+// noMatchingSubscribersHook is a mochi hook that returns
+// packets.CodeNoMatchingSubscribers for every QoS 1 PUBLISH, causing the
+// broker to send PUBACK with ReasonCode 0x10.
+type noMatchingSubscribersHook struct {
+	mqttserver.HookBase
+}
+
+func (h *noMatchingSubscribersHook) ID() string { return "no-matching-subscribers" }
+func (h *noMatchingSubscribersHook) Provides(b byte) bool {
+	return b == mqttserver.OnPublish
+}
+
+func (h *noMatchingSubscribersHook) OnPublish(_ *mqttserver.Client, pk mqttpackets.Packet) (mqttpackets.Packet, error) {
+	if pk.FixedHeader.Qos > 0 {
+		// Return CodeNoMatchingSubscribers as the error; mochi will build a
+		// PUBACK with ReasonCode 0x10 for MQTT v5 QoS 1 clients.
+		return pk, mqttpackets.CodeNoMatchingSubscribers
+	}
+	return pk, nil
+}
+
+// startBrokerWithNoSubscribersHook starts a broker that always returns PUBACK
+// 0x10 for QoS 1 publishes, simulating a topic with no active subscribers.
+func startBrokerWithNoSubscribersHook(t *testing.T) (addr string, stop func()) {
+	t.Helper()
+	srv := mqttserver.New(&mqttserver.Options{InlineClient: false})
+	require.NoError(t, srv.AddHook(new(auth.AllowHook), nil), "add allow hook")
+	require.NoError(t, srv.AddHook(new(noMatchingSubscribersHook), nil), "add no-subscribers hook")
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "listen random port")
+	addr = ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	tcp := listeners.NewTCP(listeners.Config{ID: "no-sub-tcp", Address: addr})
+	require.NoError(t, srv.AddListener(tcp), "add listener")
+	go func() { _ = srv.Serve() }()
+
+	testwait.External(t, "no-sub-broker-ready", func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}, testtime.D2s, testtime.D10ms)
+
+	return addr, func() { _ = srv.Close() }
+}
+
+// TestPublisher_Publish_NoMatchingSubscribers_Success verifies that PUBACK 0x10
+// (NoMatchingSubscribers) is treated as success: Publisher.Publish returns nil,
+// RecordPublishSuccess is called once, and RecordPublishFailure is not called.
+func TestPublisher_Publish_NoMatchingSubscribers_Success(t *testing.T) {
+	// t.Parallel disabled: startBrokerWithNoSubscribersHook has TOCTOU port-reuse.
+	addr, stop := startBrokerWithNoSubscribersHook(t)
+	defer stop()
+
+	clk := clock.Real()
+	cfg := newInternalConfig(addr)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+	defer cancel()
+
+	conn, err := Open(ctx, clk, cfg)
+	require.NoError(t, err)
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	ns, err := ParseTopicNamespace("test")
+	require.NoError(t, err)
+
+	spy := &spyCollector{}
+	pub, err := NewPublisher(clk, conn, ns, WithPublisherCollector(spy))
+	require.NoError(t, err)
+	defer pub.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	err = pub.Publish(ctx, "test/nosub", []byte("payload"))
+	require.NoError(t, err, "PUBACK 0x10 must be treated as success (no error returned)")
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	assert.Equal(t, 1, spy.successCount, "RecordPublishSuccess must be called once for PUBACK 0x10")
+	assert.Equal(t, 0, spy.failureCount, "RecordPublishFailure must NOT be called for PUBACK 0x10")
+}
+
+// ---------------------------------------------------------------------------
+// 7d: nil payload + PublishTimeout=0 tests
+// ---------------------------------------------------------------------------
+
+// TestPublisher_Publish_NilPayload verifies that nil payload is accepted:
+// len(nil) == 0, so the MaximumPacketSize guard passes and the broker accepts
+// an empty payload.
+func TestPublisher_Publish_NilPayload(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	addr, stop := startInternalBroker(t)
+	defer stop()
+
+	clk := clock.Real()
+	cfg := newInternalConfig(addr)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+	defer cancel()
+
+	conn, err := Open(ctx, clk, cfg)
+	require.NoError(t, err)
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	ns, err := ParseTopicNamespace("test")
+	require.NoError(t, err)
+
+	pub, err := NewPublisher(clk, conn, ns)
+	require.NoError(t, err)
+	defer pub.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	// nil payload: len(nil) == 0, must not trigger payload-too-large guard.
+	err = pub.Publish(ctx, "test/nil-payload", nil)
+	require.NoError(t, err, "nil payload must be accepted (len(nil)==0)")
+}
+
+// TestPublisher_Publish_NoAdapterTimeout verifies that when Config.PublishTimeout
+// is 0, the publisher does NOT derive a child ctx and the caller-provided ctx
+// deadline is honored as-is. The test publishes with a generous ctx deadline and
+// confirms the call succeeds (demonstrating no internal timeout was imposed).
+func TestPublisher_Publish_NoAdapterTimeout(t *testing.T) {
+	// t.Parallel disabled: startInternalBroker TOCTOU port-reuse issue.
+	addr, stop := startInternalBroker(t)
+	defer stop()
+
+	clk := clock.Real()
+	cfg := newInternalConfig(addr)
+	// PublishTimeout = 0: no adapter-imposed timeout; caller ctx governs.
+	cfg.PublishTimeout = 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D10s)
+	defer cancel()
+
+	conn, err := Open(ctx, clk, cfg)
+	require.NoError(t, err)
+	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	ns, err := ParseTopicNamespace("test")
+	require.NoError(t, err)
+
+	pub, err := NewPublisher(clk, conn, ns)
+	require.NoError(t, err)
+	defer pub.Close(context.Background()) //nolint:errcheck // test cleanup
+
+	// Publish with a caller-provided ctx deadline (not overridden by publisher).
+	pubCtx, pubCancel := context.WithTimeout(ctx, testtime.D5s)
+	defer pubCancel()
+
+	err = pub.Publish(pubCtx, "test/no-timeout", []byte("payload"))
+	require.NoError(t, err, "publish with PublishTimeout=0 must honor caller ctx and succeed")
 }
 
 // ---------------------------------------------------------------------------

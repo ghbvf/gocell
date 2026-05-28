@@ -145,6 +145,9 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTPublishNoSubscribers,
 		ErrAdapterMQTTPublishRejected,
 		ErrAdapterMQTTPublishRateLimited,
+		ErrAdapterMQTTPublishCanceled,
+		ErrAdapterMQTTPublishFailed,
+		ErrAdapterMQTTPublisherCloseTimeout,
 	}
 	for _, c := range codes {
 		if c == "" {
@@ -172,8 +175,8 @@ func TestClassifyPubackReason(t *testing.T) {
 		{"unspecified-error-0x80", 0x80, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
 		// 0x83 Implementation specific error
 		{"implementation-specific-0x83", 0x83, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
-		// 0x87 Not authorized
-		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishRejected, errcode.KindInternal},
+		// 0x87 Not authorized — retryable (KindUnavailable, aligned with CONNACK 0x87 classPermanentRetain)
+		{"not-authorized-0x87", 0x87, ErrAdapterMQTTPublishRejected, errcode.KindUnavailable},
 		// 0x90 Topic Name invalid
 		{"topic-name-invalid-0x90", 0x90, ErrAdapterMQTTPublishRejected, errcode.KindInvalid},
 		// 0x97 Quota exceeded / rate limited

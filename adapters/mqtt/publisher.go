@@ -3,6 +3,7 @@ package mqtt
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,11 +86,20 @@ func NewPublisher(clk clock.Clock, conn *Connection, ns TopicNamespace, opts ...
 
 // Publish satisfies outbox.Publisher. It validates topic against the publisher's
 // TopicNamespace via Mint, derives a child ctx with PublishTimeout if non-zero,
-// calls Connection.Publish (QoS 1 by default), and classifies the response.
+// calls Connection.Publish, and classifies the response.
+//
+// QoS 1 is used for every publish (caller cannot override).
+//
+// PublishTimeout: when Config.PublishTimeout > 0, a child ctx with that deadline
+// is derived; when 0, the caller-provided ctx is honored as-is.
+//
+// PUBACK 0x10 (NoMatchingSubscribers) is treated as success — counted in
+// mqtt_publish_total and ack_duration, with an additional slog.Warn for operator
+// visibility. No error is returned.
 //
 // Records:
 //   - PublishFailure{reason} on every failure path
-//   - PublishSuccess(ackDuration) on successful PUBACK
+//   - PublishSuccess(ackDuration) on successful PUBACK (including 0x10)
 func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) error {
 	p.mu.Lock()
 	if p.closed.Load() {
@@ -152,7 +162,12 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 					errcode.PublicString("reasonName", pubackReasonName(resp.ReasonCode)),
 				))
 		}
-		// 0x10 NoMatchingSubscribers is informational: count as success.
+		// 0x10 NoMatchingSubscribers is informational: count as success, but warn
+		// for operator visibility (device-not-yet-online scenario).
+		if resp.ReasonCode == 0x10 {
+			slog.Warn("mqtt: publish succeeded with no matching subscribers",
+				slog.String("topic", t.String()))
+		}
 	}
 
 	p.collector.RecordPublishSuccess(ctx, p.clk.Since(start))
@@ -179,7 +194,7 @@ func (p *Publisher) Close(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPubAckTimeout,
+		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublisherCloseTimeout,
 			"mqtt: publisher Close timed out waiting for in-flight publishes", ctx.Err())
 	}
 }
@@ -197,22 +212,26 @@ func classifyPublishErr(publishCtx context.Context, err error) PublishFailureRea
 }
 
 // wrapPublishErr wraps an autopaho transport error into an errcode.
-// Distinguishes context-cancel/timeout from generic publish failure.
+// Distinguishes PUBACK timeout, context-cancel, and generic publish failure.
 func wrapPublishErr(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPubAckTimeout,
 			"mqtt: PUBACK timeout", err)
 	}
 	if errors.Is(err, context.Canceled) {
-		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTConnect,
+		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
 			"mqtt: publish context canceled", err)
 	}
-	return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTConnect,
+	return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishFailed,
 		"mqtt: publish failed", err)
 }
 
 // pubackReasonToMetric maps an errcode.Code (from classifyPubackReason) to a
 // PublishFailureReason metric label.
+//
+// Caller MUST pre-filter ErrAdapterMQTTPublishNoSubscribers — that code is
+// treated as success path (0x10 NoMatchingSubscribers) and never reaches this
+// mapping. The default branch covers any future drift.
 func pubackReasonToMetric(code errcode.Code) PublishFailureReason {
 	switch code {
 	case ErrAdapterMQTTPublishRateLimited:

@@ -86,13 +86,20 @@ type BackoffConfig struct {
 // typed errcode details so callers can surface them in structured logs without
 // PII leaking into messages (MESSAGE-CONST-LITERAL-01).
 type Config struct {
-	ClientID          ClientID      // sealed type from clientid.go; zero value invalid
-	Brokers           []string      // e.g. "tcp://127.0.0.1:1883", "tls://broker.example.com:8883"
-	TLS               *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
-	SessionExpiry     time.Duration // 0 = clean session
-	Auth              AuthConfig
-	Backoff           BackoffConfig
-	MaximumPacketSize uint32        // 0 = broker default; non-zero is wired into the CONNECT packet
+	ClientID      ClientID      // sealed type from clientid.go; zero value invalid
+	Brokers       []string      // e.g. "tcp://127.0.0.1:1883", "tls://broker.example.com:8883"
+	TLS           *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
+	SessionExpiry time.Duration // 0 = clean session
+	Auth          AuthConfig
+	Backoff       BackoffConfig
+	// MaximumPacketSize controls both the INBOUND limit advertised to the broker
+	// (via CONNECT packet Properties) AND the OUTBOUND client-side guard in
+	// Publisher.Publish (payloads exceeding this size return
+	// ErrAdapterMQTTPayloadTooLarge immediately without network round-trip).
+	//
+	// 0 = no client-declared limit (broker default applies) AND no outbound
+	// guard in Publisher.
+	MaximumPacketSize uint32
 	ConnectTimeout    time.Duration // per-attempt; must be > 0
 	KeepAlive         time.Duration // > 0, <= 65535s (uint16 wire field)
 	// PublishTimeout caps the wall-clock time for a single Publish call (per-
