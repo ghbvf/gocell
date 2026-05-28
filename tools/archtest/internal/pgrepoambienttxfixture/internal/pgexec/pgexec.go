@@ -4,7 +4,8 @@
 // mirroring the production form at adapters/postgres/internal/pgexec.
 // Parent fixture packages hold pgexec.PGExecutor (interface) and obtain
 // instances via pgexec.New(pool); ExecDirect is a top-level function (not a
-// method), mirroring the production Hard form.
+// method) whose first argument is a pgrepoapproved.Approval token, mirroring
+// the production call-bound Hard form.
 package pgexec
 
 import (
@@ -13,24 +14,25 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
 )
 
-// PGExecutor mirrors the production interface (Exec / Query / QueryRow).
+// PGExecutor mirrors the production sealed interface (Exec / Query / QueryRow
+// + an unexported marker method so external packages cannot implement it).
 // ExecDirect is intentionally NOT a method — it is the top-level function
-// pgexec.ExecDirect(e, ctx, sql, args...), closing the subset-interface
-// bypass vector. R3 archtest checks the callsite identity via callee
-// resolution, not receiver type.
+// pgexec.ExecDirect(approval, e, ctx, sql, args...), closing the
+// subset-interface bypass vector. R3 archtest checks the callsite identity via
+// callee resolution, not receiver type.
 type PGExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	sealPGExecutor()
 }
 
-// pgExecutor is the sanctioned holder of *pgxpool.Pool. Two gates keep this
-// file out of the production R1 scan: (1) the //go:build archtest_fixture
-// tag keeps it out of the production module scan entirely; (2) the filename
-// is pgexec.go (not _repo.go / _store.go) so R1's file-extension filter
-// would also exempt it if it were ever loaded under production patterns.
+// pgExecutor is the sanctioned holder of *pgxpool.Pool and the only PGExecutor
+// implementation.
 type pgExecutor struct {
 	pool *pgxpool.Pool
 }
@@ -40,6 +42,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return e.pool.Exec(ctx, sql, args...)
@@ -53,10 +57,11 @@ func (e *pgExecutor) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 	return e.pool.QueryRow(ctx, sql, args...)
 }
 
-// ExecDirect mirrors the production top-level function. R3 archtest checks
-// callee identity (Pkg().Path() ending /internal/pgexec AND Name() ==
-// "ExecDirect"), not method receiver.
-func ExecDirect(e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+// ExecDirect mirrors the production top-level function: first argument is a
+// pgrepoapproved.Approval token (call-bound authorization), the rest forward
+// to the pool. R3 archtest checks callee identity (Pkg().Path() ending
+// /internal/pgexec AND Name() == "ExecDirect") plus arg[0] form.
+func ExecDirect(_ pgrepoapproved.Approval, e PGExecutor, ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	impl, ok := e.(*pgExecutor)
 	if !ok {
 		return pgconn.CommandTag{}, nil

@@ -53,6 +53,7 @@ type PGExecutor interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	AcquireTx(ctx context.Context) (tx pgx.Tx, owned bool, err error)
+	sealPGExecutor()
 }
 
 // pgExecutor is the unexported impl; outside this package the only way to
@@ -73,6 +74,8 @@ type pgExecutor struct {
 func New(pool *pgxpool.Pool) PGExecutor {
 	return &pgExecutor{pool: pool}
 }
+
+func (*pgExecutor) sealPGExecutor() {}
 
 func (e *pgExecutor) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if tx, ok := persistence.TxFromContext[pgx.Tx](ctx); ok {
