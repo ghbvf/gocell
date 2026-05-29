@@ -442,6 +442,7 @@ for the saga coordinator (same semantics as the `*_repo_ready` cell probes).
 A saga instance progresses through the following status values (iota+1 constants in
 `kernel/saga`):
 
+<!-- gocell:generated:saga-status-table — DO NOT EDIT (regen: gocell generate saga-coverage) -->
 | Status | Value | Phase | Terminal? |
 |---|---|---|---|
 | `Pending` | 1 | Not yet started | No |
@@ -452,6 +453,7 @@ A saga instance progresses through the following status values (iota+1 constants
 | `Compensated` | 6 | Rollback completed cleanly | Yes |
 | `Expired` | 7 | Overall timeout elapsed | Yes |
 | `CompensationFailed` | 8 | Rollback itself encountered a step failure | Yes |
+<!-- /gocell:generated:saga-status-table -->
 
 `saga_coordinator_ready` is a **Coordinator daemon-level probe** — it reports whether the
 leader election is established and the heartbeat tick is healthy. It is **not** a per-instance

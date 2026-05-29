@@ -11,9 +11,9 @@ var generateCellSpec = codegenSpec[cellgen.Result]{
 	AllFlagDesc:     "generate for every cell with goStructName set",
 	PluralNoun:      "cell scaffolds",
 	SourceArtifacts: "cell.yaml/slice.yaml",
-	Generate: func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only string) (cellgen.Result, error) {
+	Generate: func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only, modulePath string) (cellgen.Result, error) {
 		return cellgen.Generate(root, p, cellgen.Options{
-			DryRun: dryRun, Verify: verify, OnlyCell: only,
+			DryRun: dryRun, Verify: verify, OnlyCell: only, ModulePath: modulePath,
 		})
 	},
 }

@@ -76,12 +76,48 @@ func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 	cp.Endpoints.Subscribers = append([]string(nil), c.Endpoints.Subscribers...)
 	cp.Endpoints.Invokers = append([]string(nil), c.Endpoints.Invokers...)
 	cp.Endpoints.Readers = append([]string(nil), c.Endpoints.Readers...)
+	// Deep copy the transport-subtree pointers so a returned ContractMeta cannot
+	// alias-mutate the registry's backing entry. GRPCTransportMeta is all scalar
+	// (struct copy suffices); HTTPTransportMeta carries maps that need their own copy.
+	if c.Endpoints.GRPC != nil {
+		g := *c.Endpoints.GRPC
+		cp.Endpoints.GRPC = &g
+	}
+	if c.Endpoints.HTTP != nil {
+		h := *c.Endpoints.HTTP
+		h.PathParams = copyParamSchemaMap(c.Endpoints.HTTP.PathParams)
+		h.QueryParams = copyParamSchemaMap(c.Endpoints.HTTP.QueryParams)
+		h.Responses = copyHTTPResponseMap(c.Endpoints.HTTP.Responses)
+		cp.Endpoints.HTTP = &h
+	}
 	// Deep copy Replayable pointer.
 	if c.Replayable != nil {
 		v := *c.Replayable
 		cp.Replayable = &v
 	}
 	return &cp
+}
+
+func copyParamSchemaMap(src map[string]metadata.ParamSchema) map[string]metadata.ParamSchema {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]metadata.ParamSchema, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func copyHTTPResponseMap(src map[int]metadata.HTTPResponseMeta) map[int]metadata.HTTPResponseMeta {
+	if src == nil {
+		return nil
+	}
+	out := make(map[int]metadata.HTTPResponseMeta, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // Provider returns the provider actor ID for a contract.
@@ -103,6 +139,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 		return c.Endpoints.Handler, nil
 	case "projection":
 		return c.Endpoints.Provider, nil
+	case "grpc":
+		return c.Endpoints.Server, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
@@ -111,8 +149,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 }
 
 // Consumers returns the consumer actor IDs for a contract.
-// For http: clients, event: subscribers, command: invokers, projection: readers.
-// Returns an error if the contract is not found or the kind is unknown.
+// For http: clients, event: subscribers, command: invokers, projection: readers,
+// grpc: clients. Returns an error if the contract is not found or kind is unknown.
 func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
 	if c == nil {
@@ -129,6 +167,8 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 		return append([]string(nil), c.Endpoints.Invokers...), nil
 	case "projection":
 		return append([]string(nil), c.Endpoints.Readers...), nil
+	case "grpc":
+		return append([]string(nil), c.Endpoints.Clients...), nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",

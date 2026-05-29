@@ -74,7 +74,7 @@ func runAdapterReturnsDeclaredTypes(t *testing.T, root string) {
 		t.Fatalf("%s: gather adapter files: %v", adapterReturnsDeclaredRule, err)
 	}
 
-	modulePath, err := readModulePathFromRoot(root)
+	modulePath, err := moduleImportPath(root)
 	if err != nil {
 		t.Fatalf("%s: read module path: %v", adapterReturnsDeclaredRule, err)
 	}
@@ -91,9 +91,9 @@ func TestAdapterReturnsDeclaredTypes_GoodFixture(t *testing.T) {
 	archDir := findArchTestDir(t)
 	root := filepath.Join(archDir, "testdata", "adapter_returns", "good")
 	// The fixture uses the real module path for import resolution; we pass the
-	// real module root so readModulePathFromRoot works correctly.
+	// real module root so moduleImportPath works correctly.
 	realRoot := findModuleRoot(t)
-	modulePath, err := readModulePathFromRoot(realRoot)
+	modulePath, err := moduleImportPath(realRoot)
 	if err != nil {
 		t.Fatalf("read module path: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestAdapterReturnsDeclaredTypes_BadFixture(t *testing.T) {
 	archDir := findArchTestDir(t)
 	root := filepath.Join(archDir, "testdata", "adapter_returns", "bad")
 	realRoot := findModuleRoot(t)
-	modulePath, err := readModulePathFromRoot(realRoot)
+	modulePath, err := moduleImportPath(realRoot)
 	if err != nil {
 		t.Fatalf("read module path: %v", err)
 	}
@@ -553,12 +553,6 @@ func extractMethodPrefix(typeName string) string {
 		}
 	}
 	return ""
-}
-
-// readModulePathFromRoot reads the module path from go.mod at root.
-// Delegates to moduleImportPath (module_root.go) — single-source parse logic.
-func readModulePathFromRoot(root string) (string, error) {
-	return moduleImportPath(root)
 }
 
 // sortedStatuses returns a sorted slice of statuses from the declared set.

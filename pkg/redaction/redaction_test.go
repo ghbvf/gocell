@@ -510,10 +510,24 @@ func TestIsSensitiveKey(t *testing.T) {
 		{"x_hub_signature_256", true},
 		{"x-hub-signature-256", true},
 		{"x-hub-signature-1", true},
+		// session identifier — snake / dash / camel / lower (issue #1229)
+		{"session_id", true},
+		{"session-id", true},
+		{"sessionId", true},
+		{"sessionid", true},
 		// case insensitivity
 		{"PASSWORD", true},
 		{"API_KEY", true},
 		{"Authorization", true},
+		// dotted namespace keys — sensitive leaf segment makes whole key sensitive
+		{"gocell.principal.session_id", true},
+		{"db.password", true},
+		{"otel.connection_string", true},
+		// dotted namespace keys with non-sensitive segments stay false
+		{"gocell.principal.actor_id", false},
+		{"gocell.principal.subject_id", false},
+		{"gocell.principal.tenant_id", false},
+		{"gocell.event.occurred_at_unix_nano", false},
 		// non-sensitive
 		{"orderID", false},
 		{"cell.id", false},

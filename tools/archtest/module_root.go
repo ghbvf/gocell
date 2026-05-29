@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // lookupModuleRoot walks up from the process's cwd to locate the directory
@@ -43,22 +44,13 @@ func findModuleRoot(t *testing.T) string {
 	return root
 }
 
-// moduleImportPath parses the "module" directive from root/go.mod and returns
-// the declared import path (e.g. "github.com/ghbvf/gocell"). It is the
-// production-code module-path source for [RunTypedProduction], which must hand
-// the path to typeseval.LoadProductionPackages so the <module>/generated/
-// prefix can be computed. Hardcoding the path would silently mis-filter on a
-// module rename or /v2 bump, so it is always read from go.mod.
+// moduleImportPath returns the declared import path (e.g. "github.com/ghbvf/gocell")
+// from root/go.mod. It is the production-code module-path source for
+// [RunTypedProduction], which must hand the path to
+// typeseval.LoadProductionPackages so the <module>/generated/ prefix can be
+// computed. Hardcoding the path would silently mis-filter on a module rename or
+// /v2 bump, so it is always read from go.mod — via gomodutil.ReadModulePath, the
+// single shared parser used by codegen, scaffold, the CLI, and archtest.
 func moduleImportPath(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Clean(filepath.Join(root, "go.mod")))
-	if err != nil {
-		return "", fmt.Errorf("read go.mod: %w", err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module")), nil
-		}
-	}
-	return "", fmt.Errorf("go.mod at %s has no module directive", root)
+	return gomodutil.ReadModulePath(root)
 }

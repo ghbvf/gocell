@@ -14,6 +14,7 @@ import (
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	projectionrebuild "github.com/ghbvf/gocell/generated/contracts/http/order/internalapi/projection-rebuild/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -30,7 +31,7 @@ func makeCreatedEntry(t *testing.T, id, status string) outbox.Entry {
 	payload := ordercreated.Payload{ID: id, Item: "widget", Status: status}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-created.v1", b)
 }
 
 func TestRebuildPost_Returns200_WithReportShape(t *testing.T) {

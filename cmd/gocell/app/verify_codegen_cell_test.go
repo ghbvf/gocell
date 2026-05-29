@@ -21,7 +21,7 @@ func preRenderCell(t *testing.T, root string) {
 	if err != nil {
 		t.Fatalf("pre-render metadata parse: %v", err)
 	}
-	if _, err := cellgen.Generate(root, project, cellgen.Options{Verify: false}); err != nil {
+	if _, err := cellgen.Generate(root, project, cellgen.Options{Verify: false, ModulePath: "github.com/ghbvf/gocell"}); err != nil {
 		t.Fatalf("pre-render generateAll: %v", err)
 	}
 }

@@ -45,7 +45,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, dto.TopicSessionRevoked, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicSessionRevoked, ow.entries[0].EventType())
 }
 
 func TestService_WithTxManager(t *testing.T) {

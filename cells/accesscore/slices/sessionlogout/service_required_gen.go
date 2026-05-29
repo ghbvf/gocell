@@ -23,5 +23,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"sessionlogout: TxRunner required; use WithTxManager")
 	}
+	if validation.IsNilInterface(s.clk) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"sessionlogout.NewService: clock.Clock required")
+	}
 	return nil
 }

@@ -148,7 +148,6 @@ modules:
 
 | 限制 | 影响 | 解锁条件 |
 |------|------|---------|
-| Codegen 的 module path 仍硬编码 `github.com/ghbvf/gocell/...` | `gocell generate` 在外部 repo 生成的 import 路径不对 | M2 #1083 |
 | archtest 不能 import 进外部仓库做 nightly 守卫 | 外部仓库自定 invariant 需自己写 | M3 #1084 |
 | `CellModule` 接口在 `cmd/` 包内私有 | 外部仓库无法 wire 进 corebundle | M4 #1085 |
 | 没有 starter repo template | 上面步骤全手抄 | M11 #1092 |

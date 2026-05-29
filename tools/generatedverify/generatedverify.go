@@ -5,7 +5,9 @@ package generatedverify
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
+	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -239,7 +242,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	// to what `gocell generate cell --all` would write — drift detection
 	// then works as a stale-content check + missing-file check + reverse
 	// enumeration check, all from the same single source of truth.
-	cellgenArtifacts, err := expectedCellgenArtifacts(root, project)
+	cellgenArtifacts, err := expectedCellgenArtifacts(root, module, project)
 	if err != nil {
 		return nil, fmt.Errorf("expected cellgen artifacts: %w", err)
 	}
@@ -251,7 +254,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	// `codegen: false` in contract.yaml to opt out). Reuse
 	// contractgen.RenderContractArtifacts so the manifest stays byte-identical
 	// to what `gocell generate contract --all` would write.
-	contractgenArtifacts, err := expectedContractgenArtifacts(root, project)
+	contractgenArtifacts, err := expectedContractgenArtifacts(root, module, project)
 	if err != nil {
 		return nil, fmt.Errorf("expected contractgen artifacts: %w", err)
 	}
@@ -267,6 +270,19 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	}
 	artifacts = append(artifacts, requiredDepsArtifacts...)
 
+	// SAGA-STATUS-FANOUT-COVERAGE-01: terminal_coverage_gen.go. Unlike every
+	// other generator above, this artifact is NOT project-metadata-derived — it
+	// is rendered from the compiled-in saga.Status / journal.EventKind const
+	// sets and lands at a fixed gocell-platform path. It is therefore emitted
+	// only when its target package directory is present in the project tree
+	// (see expectedSagaCoverageArtifacts), so the synthetic generatedverify
+	// fixtures and downstream consumer projects do not see a phantom artifact.
+	sagaCoverageArtifacts, err := expectedSagaCoverageArtifacts(root)
+	if err != nil {
+		return nil, fmt.Errorf("expected saga coverage artifacts: %w", err)
+	}
+	artifacts = append(artifacts, sagaCoverageArtifacts...)
+
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
 	}
@@ -279,7 +295,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 // one Artifact per produced file. Cells without GoStructName are not
 // opted into codegen and contribute nothing to the manifest — matching
 // the cellgen.Generate() skip semantics.
-func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+func expectedCellgenArtifacts(root, modulePath string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	cellIDs := make([]string, 0, len(project.Cells))
 	for id, c := range project.Cells {
 		if c.GoStructName.IsZero() {
@@ -291,7 +307,7 @@ func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Art
 
 	artifacts := make([]Artifact, 0, len(cellIDs)*2)
 	for _, id := range cellIDs {
-		cellPaths, err := cellgen.RenderCellArtifacts(root, project, id)
+		cellPaths, err := cellgen.RenderCellArtifacts(root, project, id, modulePath)
 		if err != nil {
 			return nil, fmt.Errorf("cellgen artifacts for %q: %w", id, err)
 		}
@@ -342,7 +358,7 @@ func expectedRequiredDepsArtifacts(root string) ([]Artifact, error) {
 // renders the would-be content via contractgen and emits one Artifact per
 // produced file. Contracts with codegen=false are not opted in and
 // contribute nothing — matching the contractgen.Generate() skip semantics.
-func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+func expectedContractgenArtifacts(root, modulePath string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	contractIDs := make([]string, 0, len(project.Contracts))
 	for id, c := range project.Contracts {
 		if !c.Codegen {
@@ -354,7 +370,7 @@ func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([
 
 	artifacts := make([]Artifact, 0, len(contractIDs)*3)
 	for _, id := range contractIDs {
-		ca, err := contractgen.RenderContractArtifacts(root, project, id)
+		ca, err := contractgen.RenderContractArtifacts(root, project, id, modulePath)
 		if err != nil {
 			return nil, fmt.Errorf("contractgen artifacts for %q: %w", id, err)
 		}
@@ -368,6 +384,54 @@ func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([
 		}
 	}
 	return artifacts, nil
+}
+
+// sagaCoveragePkgDirRel is the package directory that owns the generated
+// terminal_coverage_gen.go; its presence in the project tree is the predicate
+// that gates the saga-coverage manifest entry.
+const sagaCoveragePkgDirRel = "kernel/saga/sagajournaltest"
+
+// sagaCoverageGenRel is the committed generated file governed by
+// SAGA-STATUS-FANOUT-COVERAGE-01.
+const sagaCoverageGenRel = "kernel/saga/sagajournaltest/terminal_coverage_gen.go"
+
+// expectedSagaCoverageArtifacts derives the manifest entry for the
+// SAGA-STATUS-FANOUT-COVERAGE-01 generated file (terminal_coverage_gen.go).
+//
+// Unlike the cellgen / contractgen / requireddepsgen generators, this artifact
+// is not derived from project metadata: its content is rendered by
+// sagacoveragegen.Render() from the compiled-in saga.Status / journal.EventKind
+// const sets, and it targets a fixed gocell-platform path. To keep
+// ExpectedArtifacts honest for projects that are NOT the gocell platform repo
+// (the synthetic generatedverify fixtures, and any downstream module that
+// imports gocell as a library), the entry is emitted only when the target
+// package directory exists in the project tree — that filesystem fact is itself
+// a project input. Within the gocell repo the directory always exists
+// (conformance.go et al. live there), so the gen file is byte-locked at PR time
+// here (via gocell verify generated) in addition to the nightly archtest
+// SAGA-STATUS-FANOUT-COVERAGE-01/GOLDEN check. Listing it here is also what
+// lets the reverse-enumeration pass accept the committed, header-carrying gen
+// file instead of flagging it as an orphan.
+func expectedSagaCoverageArtifacts(root string) ([]Artifact, error) {
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(sagaCoveragePkgDirRel)))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil // package absent (fixtures / downstream) — nothing to expect.
+	case err != nil:
+		return nil, fmt.Errorf("stat %s: %w", sagaCoveragePkgDirRel, err)
+	case !info.IsDir():
+		return nil, nil
+	}
+	art, err := sagacoveragegen.Render()
+	if err != nil {
+		return nil, fmt.Errorf("render saga coverage artifacts: %w", err)
+	}
+	return []Artifact{{
+		AssemblyID: "",
+		Kind:       "saga-coverage-gen",
+		Path:       sagaCoverageGenRel,
+		Content:    art.TerminalCoverageGo,
+	}}, nil
 }
 
 // AssemblyEntrypointPath returns the metadata-derived generated entrypoint path

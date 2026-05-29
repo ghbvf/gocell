@@ -178,7 +178,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	go func() {
 		_ = eb.Subscribe(subCtx, e2eSub, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			var p configEntryUpsertedBusinessPayload
-			err := json.Unmarshal(e.Payload, &p)
+			err := json.Unmarshal(e.Payload(), &p)
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
 			recvMu.Unlock()
@@ -315,7 +315,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	recvMu.Lock()
 	for i, r := range recvs {
 		t.Logf("recv[%d]: parsed=%v payload=%+v entry.EventType=%q entry.ID=%q",
-			i, r.parsed, r.payload, r.entry.EventType, r.entry.ID)
+			i, r.parsed, r.payload, r.entry.EventType(), r.entry.ID())
 	}
 	recvMu.Unlock()
 

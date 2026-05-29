@@ -23,6 +23,10 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: TxRunner required; use WithTxManager")
 	}
+	if validation.IsNilInterface(s.clk) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"setup.NewService: clock.Clock required")
+	}
 	if validation.IsNilInterface(s.setupLock) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"setup: setupLock required; use WithSetupLock — PG callers wire accesspg.NewBundle(pool, txm, clk).SetupLock(), memstore callers wire accesscore.NoopSetupLock{}")

@@ -323,7 +323,7 @@ func (cb *ConsumerBase) AttachObserver(o ConsumerObserver) error {
 // Wrap returns an EntryHandler that wraps the given business handler with
 // two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
-// The idempotency key is constructed as "{sub.ConsumerGroup}:{entry.ID}",
+// The idempotency key is constructed as "{sub.ConsumerGroup}:{entry.id}",
 // ensuring cross-cell fanout correctness: each cell's ConsumerGroup forms a
 // separate namespace so ClaimDone in one cell does not silence another.
 //
@@ -362,14 +362,14 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 	consumerGroup := sub.ConsumerGroup
 	cellID := sub.CellID
 	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
-		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.ID)
+		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.id)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
 		if cb.config.ClaimPolicy == ClaimPolicyFailOpen {
 			state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 			if err != nil {
 				logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, proceeding without receipt (fail-open)",
-					slog.String(logKeyEventID, entry.ID),
+					slog.String(logKeyEventID, entry.id),
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.Any("error", err))
@@ -382,7 +382,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberH
 		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey, consumerGroup)
 		if err != nil {
 			logWithContext(ctx, slog.LevelError, "outbox: idempotency claim exhausted, requeuing (fail-closed)",
-				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
@@ -437,7 +437,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			}
 			delay := min(base+jitter, cb.config.MaxRetryDelay)
 			logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",
-				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("attempt", attempt+1),
@@ -485,13 +485,13 @@ func (cb *ConsumerBase) handleClaimState(
 	switch state {
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic))
 		return Ack(), nil
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic),
 			slog.Duration("backoff", delay))
 		t := cb.clk.NewTimerAt(cb.clk.Now().Add(delay))
@@ -540,7 +540,7 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 	}
 	delay := ExponentialDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 	logWithContext(ctx, slog.LevelWarn, "outbox: transient error, retrying",
-		slog.String(logKeyEventID, entry.ID),
+		slog.String(logKeyEventID, entry.id),
 		slog.String(logKeyTopic, topic),
 		slog.Int("attempt", attempt+1),
 		slog.Int("max_retries", cb.config.RetryCount),
@@ -591,7 +591,7 @@ func (cb *ConsumerBase) retryLoop(
 
 		if isPermanentRejection(lastResult) {
 			logWithContext(ctx, slog.LevelError, "outbox: handler rejected entry, routing to DLX",
-				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyEventID, entry.id),
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
@@ -630,7 +630,7 @@ func (cb *ConsumerBase) retryLoop(
 	// Upgraded from LevelWarn to LevelError: retry-exhausted routes to DLX
 	// (correctness-affecting) per observability.md §slog 日志级别.
 	logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
-		slog.String(logKeyEventID, entry.ID),
+		slog.String(logKeyEventID, entry.id),
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
@@ -708,7 +708,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	// Subscriber will call Settlement.Release on Requeue disposition.
 	if leaseLost.Load() && result.Disposition == DispositionAck {
 		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyEventID, entry.id),
 			slog.String(logKeyTopic, topic))
 		return HandleResult{
 			Disposition:         DispositionRequeue,
@@ -745,13 +745,13 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 			if err := receipt.Extend(extendCtx, cb.config.LeaseTTL); err != nil {
 				if errors.Is(err, idempotency.ErrLeaseExpired) {
 					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, canceling handler",
-						slog.String(logKeyEventID, entry.ID),
+						slog.String(logKeyEventID, entry.id),
 						slog.String(logKeyTopic, topic))
 					onLeaseLost()
 					return
 				}
 				logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",
-					slog.String(logKeyEventID, entry.ID),
+					slog.String(logKeyEventID, entry.id),
 					slog.String(logKeyTopic, topic),
 					slog.Any("error", err))
 			}

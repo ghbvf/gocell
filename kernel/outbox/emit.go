@@ -4,16 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
-// Emit marshals payload to JSON, wraps it in an Entry with a fresh ID and the
-// given topic, and delegates to emitter.Emit.
+// Emit marshals payload to JSON and constructs + emits an Entry for the given
+// topic via NewEntry (the sole sealed constructor) and emitter.Emit.
 //
 // Replaces the hand-written "json.Marshal → Entry{} → Emit" pattern at producer
 // call sites: one line instead of four, and the signature mechanically rules
-// out silent marshal-error drops (_, _ := json.Marshal). The helper is
-// transport-only — callers remain responsible for any surrounding transaction
-// or atomicity scope their persistence path requires.
+// out silent marshal-error drops (_, _ := json.Marshal). clk is the mandatory
+// positional clock dependency threaded into NewEntry (which stamps
+// createdAt/occurredAt and injects observability + principal from ctx). The
+// helper is transport-only — callers remain responsible for any surrounding
+// transaction or atomicity scope their persistence path requires.
 //
 // Error contract: Emit does not log on failure. Callers MUST either return the
 // error (so the surrounding HTTP handler / consumer / runPersist path logs it
@@ -24,21 +28,16 @@ import (
 // ref: ThreeDotsLabs/watermill components/cqrs/marshaler.go — typed struct at
 // publisher, reflection-based marshal at call site. GoCell keeps the helper
 // minimal (no CQRS command/event taxonomy, no header shim); callers that need
-// Metadata / AggregateID / FailurePolicy construct the Entry by hand and call
-// emitter.Emit directly.
-func Emit[T any](ctx context.Context, emitter Emitter, topic string, payload T) error {
+// AggregateID / Metadata / FailurePolicy call NewEntry directly with the
+// corresponding EntryOption and then emitter.Emit.
+func Emit[T any](ctx context.Context, clk clock.Clock, emitter Emitter, topic string, payload T) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("outbox.Emit(%s): marshal payload: %w", topic, err)
 	}
-	id, err := NewEntryID()
+	entry, err := NewEntry(clk, ctx, topic, data)
 	if err != nil {
-		return fmt.Errorf("outbox.Emit(%s): new entry id: %w", topic, err)
-	}
-	entry := Entry{
-		ID:        id,
-		EventType: topic,
-		Payload:   data,
+		return fmt.Errorf("outbox.Emit(%s): %w", topic, err)
 	}
 	if err := emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("outbox.Emit(%s): %w", topic, err)

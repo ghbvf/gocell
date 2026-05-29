@@ -607,18 +607,24 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	got := make(chan map[string]string, 1)
 	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
 
-	sub := &invokeOnceSubscriber{entry: outbox.Entry{
-		ID:        "evt-context-1",
-		EventType: "test.context",
-		// PR-A11 FU1: observability fields moved from Metadata into the
-		// typed Observability struct; SubscriberWithMiddleware restores via
-		// entry.Observability.RestoreToContext, not via Metadata merge.
+	// PR-A11 FU1: observability fields live in the typed Observability struct;
+	// SubscriberWithMiddleware restores via entry.Observability.RestoreToContext,
+	// not via Metadata merge. The entry is rebuilt through the sanctioned
+	// EntryScan reconstruction funnel (Entry is sealed, issue #1229) so the test
+	// can seed Observability directly.
+	ctxEntry, err := outbox.EntryScan{
+		ID:         "evt-context-1",
+		EventType:  "test.context",
+		Payload:    []byte("{}"),
+		OccurredAt: clock.Real().Now().UTC(),
 		Observability: outbox.ObservabilityMetadata{
 			RequestID:     "req-ctx-1",
 			CorrelationID: "corr-ctx-1",
 			TraceID:       "trace-ctx-1",
 		},
-	}}
+	}.ToEntry()
+	require.NoError(t, err)
+	sub := &invokeOnceSubscriber{entry: ctxEntry}
 
 	healthLn := newLocalListener(t)
 	b := New(

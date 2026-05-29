@@ -397,8 +397,8 @@ func TestPGOutboxStore_ClaimPending_ReturnsEntries(t *testing.T) {
 	entries, err := store.ClaimPending(context.Background(), 10)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
-	assert.Equal(t, "e-1", entries[0].ID)
-	assert.Equal(t, "e-2", entries[1].ID)
+	assert.Equal(t, "e-1", entries[0].ID())
+	assert.Equal(t, "e-2", entries[1].ID())
 	assert.Equal(t, 0, entries[0].Attempts)
 	assert.Equal(t, 1, entries[1].Attempts)
 }
@@ -430,12 +430,14 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	// Simulate NULL metadata (JSON null bytes) and NULL observability.
 	row := mockRowData{
 		values: []any{
-			e.ID, e.AggregateID, e.AggregateType, e.EventType,
-			e.Topic, e.Payload,
+			e.ID(), e.AggregateID(), e.AggregateType(), e.EventType(),
+			e.Topic(), e.Payload(),
 			[]byte("null"), // JSON null metadata
-			e.CreatedAt, e.Attempts,
-			[]byte(nil), // NULL observability
-			uuid.New(),  // lease_id
+			e.CreatedAt(), e.Attempts,
+			[]byte(nil),    // NULL observability
+			uuid.New(),     // lease_id
+			[]byte(`{}`),   // principal
+			e.OccurredAt(), // occurred_at
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -445,8 +447,8 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	// null bytes → len > 0 but json.Unmarshal("null") sets metadata to nil
-	assert.Nil(t, entries[0].Metadata)
-	assert.True(t, entries[0].Observability.IsZero())
+	assert.Nil(t, entries[0].Metadata())
+	assert.True(t, entries[0].Observability().IsZero())
 }
 
 func TestPGOutboxStore_ClaimPending_BeginError(t *testing.T) {
@@ -488,12 +490,14 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 	e := makeRelayEntry("e-bad-meta", "order.created", 0)
 	row := mockRowData{
 		values: []any{
-			e.ID, e.AggregateID, e.AggregateType, e.EventType,
-			e.Topic, e.Payload,
+			e.ID(), e.AggregateID(), e.AggregateType(), e.EventType(),
+			e.Topic(), e.Payload(),
 			[]byte(`{invalid-json`),
-			e.CreatedAt, e.Attempts,
-			[]byte(nil), // NULL observability
-			uuid.New(),  // lease_id
+			e.CreatedAt(), e.Attempts,
+			[]byte(nil),    // NULL observability
+			uuid.New(),     // lease_id
+			[]byte(`{}`),   // principal
+			e.OccurredAt(), // occurred_at
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -503,7 +507,7 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 	entries, err := store.ClaimPending(context.Background(), 10)
 	require.NoError(t, err, "invalid metadata JSON must not fail ClaimPending")
 	require.Len(t, entries, 1)
-	assert.Nil(t, entries[0].Metadata)
+	assert.Nil(t, entries[0].Metadata())
 }
 
 func TestPGOutboxStore_ClaimPending_RowsIterError(t *testing.T) {

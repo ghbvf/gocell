@@ -1,7 +1,9 @@
 // invariants:
 //   - INVARIANT: KERNEL-CLOCK-LEAF-FALLBACK-01
 //   - INVARIANT: KERNEL-CLOCK-RESET-RELATIVE-PROD-01
-//   - INVARIANT: PROD-CLOCK-INJECTION-01
+//   - INVARIANT: PROD-CLOCK-INJECTION-01 (control-plane hosts: runtime/command/
+//   - kernel/reconcile/; the kernel/reconcile host realizes
+//     RECONCILE-LOOP-CLOCK-CARVEOUT-01)
 //   - INVARIANT: CLOCK-POSITIONAL-INJECTION-01
 //
 // Package archtest — clock injection invariants.
@@ -465,16 +467,54 @@ var forbiddenTimeFns = map[string]string{
 //
 // Extension policy (HARD form-uniqueness): the only way to add a new
 // (method, callee) pair is a deliberate code change here PLUS adding the
-// method to runtime/command/lifecycle.go controlPlaneClock. A new method on
-// controlPlaneClock without an entry here is a violation for every time.*
-// call it makes (the method exists but exactSanctionedTimeCalls lookup
-// returns ""); a new entry here without a matching method does nothing
-// (no FuncDecl position binds to it). Both halves are required.
+// method to a controlPlaneClock type in a sanctioned host package (see
+// controlPlaneClockHosts: runtime/command/lifecycle.go or
+// kernel/reconcile/loop.go). A new method on controlPlaneClock without an entry
+// here is a violation for every time.* call it makes (the method exists but
+// exactSanctionedTimeCalls lookup returns ""); a new entry here without a
+// matching method does nothing (no FuncDecl position binds to it). Both halves
+// are required.
+//
+// The map is keyed by method name only (not package): each sanctioned host
+// declares the subset it uses (runtime/command: newTicker + newProbeTimer;
+// kernel/reconcile: newProbeTimer + newRequeueTimer + now). A host need not
+// declare every method, but any method it declares MUST appear here.
 //
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
 var exactSanctionedTimeCalls = map[string]string{
-	"newTicker":     "NewTicker",
-	"newProbeTimer": "NewTimer",
+	"newTicker":       "NewTicker", // runtime/command: SweeperLifecycle ticker
+	"newProbeTimer":   "NewTimer",  // runtime/command + kernel/reconcile: startup probe
+	"newRequeueTimer": "NewTimer",  // kernel/reconcile: delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
+	"now":             "Now",       // kernel/reconcile: reconcile-duration measurement
+}
+
+// controlPlaneClockHosts lists the packages sanctioned to host a sealed,
+// package-private controlPlaneClock type (the real-only control-plane scheduling
+// clock). Gate (a) of clockControlPlaneAllowedMethods restricts the carve-out to
+// these paths so no other package can claim it by reusing the type name; each
+// member declares its OWN unexported controlPlaneClock.
+//
+// Members (trailing "/" = directory prefix):
+//   - runtime/command/  — SweeperLifecycle (PROD-CLOCK-INJECTION-01 origin).
+//   - kernel/reconcile/ — reconcile.Loop (RECONCILE-LOOP-CLOCK-CARVEOUT-01).
+//
+// AI-robust grade unchanged: Medium (permanent ceiling) — see
+// clockControlPlaneAllowedMethods. Adding a host is a deliberate, reviewable
+// change here; the per-host seal is the package-private type name + gate (c).
+var controlPlaneClockHosts = []string{
+	"runtime/command/",
+	"kernel/reconcile/",
+}
+
+// hasControlPlaneClockHostPrefix reports whether rel is under a sanctioned
+// control-plane host package (gate (a)).
+func hasControlPlaneClockHostPrefix(rel string) bool {
+	for _, h := range controlPlaneClockHosts {
+		if strings.HasPrefix(rel, h) {
+			return true
+		}
+	}
+	return false
 }
 
 // clockControlPlaneAllowedMethods returns the map of FuncDecl name-positions
@@ -483,11 +523,12 @@ var exactSanctionedTimeCalls = map[string]string{
 //
 // A FuncDecl is a candidate if and only if ALL of:
 //
-//	(a) rel is under "runtime/command/" — this package gate prevents any other
-//	    package from claiming to host a "controlPlaneClock" method; the type is
-//	    package-private (unexported) so only code in runtime/command can declare
-//	    methods on it. This is the structural "seal" that replaces the old
-//	    hand-maintained allowlist map.
+//	(a) rel is under a sanctioned control-plane host package
+//	    (controlPlaneClockHosts: "runtime/command/" or "kernel/reconcile/") —
+//	    this package gate prevents any other package from claiming to host a
+//	    "controlPlaneClock" method; the type is package-private (unexported) so
+//	    only code in a host package can declare methods on it. This is the
+//	    structural "seal" that replaces the old hand-maintained allowlist map.
 //
 //	(b) fd.Recv != nil — it is a method, not a free function.
 //
@@ -528,10 +569,12 @@ var exactSanctionedTimeCalls = map[string]string{
 //     Reverse self-check: control_plane_exempt_func_closure_violates fixture
 //     asserts that time.* inside a closure of an exempt method is still flagged.
 //  2. A method named controlPlaneClock from an entirely different package would
-//     satisfy (b)+(c) without gate (a). Gate (a) prevents this by requiring
-//     the file's module-relative path to be under runtime/command/.
+//     satisfy (b)+(c) without gate (a). Gate (a) prevents this by requiring the
+//     file's module-relative path to be under a sanctioned host package
+//     (controlPlaneClockHosts: runtime/command/ or kernel/reconcile/).
 //     Reverse self-check: control_plane_wrong_path_violates fixture has a struct
-//     named controlPlaneClock with a method outside runtime/command/ → still flagged.
+//     named controlPlaneClock with a method outside any host → still flagged.
+//     GREEN self-check for the kernel/reconcile host: control_plane_reconcile_passes.
 //  3. An unexported method on a different struct inside runtime/command/ with
 //     the name "controlPlaneClock" is not a legitimate bypass because (c) checks
 //     the *receiver type name*, not the method name. A struct named "otherClock"
@@ -552,8 +595,9 @@ var exactSanctionedTimeCalls = map[string]string{
 // ref: PROD-CLOCK-INJECTION-01
 func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel string) map[string]string {
 	out := map[string]string{}
-	// Gate (a): only runtime/command/ files can host controlPlaneClock methods.
-	if !strings.HasPrefix(rel, "runtime/command/") {
+	// Gate (a): only sanctioned control-plane host packages may host
+	// controlPlaneClock methods (see controlPlaneClockHosts).
+	if !hasControlPlaneClockHostPrefix(rel) {
 		return out
 	}
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {

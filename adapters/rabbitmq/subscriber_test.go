@@ -31,11 +31,7 @@ const (
 // entry ID is replaced by the given id string. Used to test the entry.ID guard.
 func makeDeliveryBodyWithID(t *testing.T, id string) []byte {
 	t.Helper()
-	entry := outbox.Entry{
-		ID:        id,
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	}
+	entry := mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID(id))
 	return makeDeliveryBody(t, entry)
 }
 
@@ -252,11 +248,7 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-commit-fail-1",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-commit-fail-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 10, Body: body}
 
 	subDone := make(chan error, 1)
@@ -314,11 +306,7 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-commit-ok-1",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-commit-ok-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 11, Body: body}
 
 	subDone := make(chan error, 1)
@@ -393,11 +381,7 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 
 	// Enqueue 10 deliveries before starting subscriber so they're all ready.
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, outbox.Entry{
-			ID:        fmt.Sprintf("evt-concurrent-%d", i),
-			EventType: "test.concurrent",
-			Payload:   []byte(`{}`),
-		})
+		body := makeDeliveryBody(t, mustNewEntry(t, "test.concurrent", []byte(`{}`), outbox.WithID(fmt.Sprintf("evt-concurrent-%d", i))))
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
@@ -458,11 +442,7 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 	defer cancel()
 
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, outbox.Entry{
-			ID:        fmt.Sprintf("evt-safety-%d", i),
-			EventType: "test.safety",
-			Payload:   []byte(`{}`),
-		})
+		body := makeDeliveryBody(t, mustNewEntry(t, "test.safety", []byte(`{}`), outbox.WithID(fmt.Sprintf("evt-safety-%d", i))))
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
@@ -541,11 +521,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	}()
 
 	// Enqueue a delivery so at least one goroutine runs.
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-leak-1",
-		EventType: "test.leak",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.leak", []byte(`{}`), outbox.WithID("evt-leak-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	// Wait for the delivery to be processed.
@@ -613,11 +589,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	}
 
 	// Inject a delivery so the handler goroutine starts (localWg.Add(1)).
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "f3-cancel-1",
-		EventType: "f3.cancel",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "f3.cancel", []byte(`{}`), outbox.WithID("f3-cancel-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	// Use a ctx that will be canceled shortly — much less than the 30 s ceiling.
@@ -692,11 +664,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 		return outbox.Ack()
 	}
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "f3-nodeadline-1",
-		EventType: "f3.nodeadline",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "f3.nodeadline", []byte(`{}`), outbox.WithID("f3-nodeadline-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	// Background context: no deadline, so subscribeOnce will attach a 30 s ceiling.
@@ -761,7 +729,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 
 	handled := make(chan string, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handled <- e.ID
+		handled <- e.ID()
 		return outbox.Ack()
 	}
 
@@ -830,11 +798,7 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-commit-nack-fail",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-commit-nack-fail")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 20, Body: body}
 
 	subDone := make(chan error, 1)
@@ -899,11 +863,7 @@ func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-release-before-nack",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-release-before-nack")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 30, Body: body}
 
 	subDone := make(chan error, 1)
@@ -969,11 +929,7 @@ func TestDispatchAck_AckFail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-ack-fail",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-ack-fail")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 21, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1030,15 +986,15 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Build a valid v1 envelope (passes unmarshal and ID length guards) but
-	// with a reserved metadata key — entry.Validate() will reject it.
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-reserved-meta",
-		EventType: "test.event",
-		Topic:     "test.topic",
-		Payload:   []byte(`{}`),
-		Metadata:  map[string]string{"trace_id": "abc"}, // reserved key → Validate fails
-	})
+	// Build a well-formed v1 wire envelope (passes unmarshal shape + ID length
+	// guards) but carrying a reserved metadata key. outbox.NewEntry cannot
+	// produce such an entry (Entry.Validate rejects reserved metadata keys), so
+	// the envelope is hand-crafted here; the consumer's Validate step then
+	// rejects it and processDelivery must NACK without requeue.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	body := []byte(`{"schemaVersion":"v1","id":"evt-reserved-meta","eventType":"test.event",` +
+		`"topic":"test.topic","payload":{},"metadata":{"trace_id":"abc"},` +
+		`"occurredAt":"` + now + `","createdAt":"` + now + `"}`)
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 50, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1092,11 +1048,7 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-reject-nack-fail",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-reject-nack-fail")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 51, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1149,11 +1101,7 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-unknown-disp-nack-fail",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-unknown-disp-nack-fail")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 52, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1206,11 +1154,7 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-release-fail",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-release-fail")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 22, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1294,11 +1238,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-ack-err-spy",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-ack-err-spy")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 30, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1354,11 +1294,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-reject-nack-err-spy",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-reject-nack-err-spy")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 31, Body: body}
 
 	subDone := make(chan error, 1)
@@ -1416,11 +1352,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "evt-requeue-nack-err-spy",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-requeue-nack-err-spy")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 32, Body: body}
 
 	subDone := make(chan error, 1)

@@ -37,6 +37,7 @@ func scaffoldAssembly(root string, args []string) error {
 	team := fs.String("team", "", "owner team (required)")
 	role := fs.String("role", "", "owner role, e.g. maintainer (required)")
 	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
+	modulePath := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateAssemblyUsage)
 	layout, manifestPath := addLocatorFlags(fs)
@@ -54,9 +55,9 @@ func scaffoldAssembly(root string, args []string) error {
 		return fmt.Errorf("scaffold assembly: %w", err)
 	}
 
-	mod, err := readModule(root)
+	mod, err := resolveModule(root, *modulePath)
 	if err != nil {
-		return fmt.Errorf("scaffold assembly: read module path: %w", err)
+		return fmt.Errorf("scaffold assembly: resolve module path: %w", err)
 	}
 
 	project, err := metadata.NewParser(root, locatorOpts...).Parse()

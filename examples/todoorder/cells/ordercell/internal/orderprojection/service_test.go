@@ -16,6 +16,7 @@ import (
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -30,7 +31,7 @@ func makeCreatedEntry(t *testing.T, id, status string) outbox.Entry {
 	payload := ordercreated.Payload{ID: id, Item: "widget", Status: status}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-created.v1", b)
 }
 
 func makeStatusChangedEntry(t *testing.T, id string) outbox.Entry {
@@ -38,7 +39,7 @@ func makeStatusChangedEntry(t *testing.T, id string) outbox.Entry {
 	payload := orderstatuschanged.Payload{ID: id, OldStatus: domain.StatusPending, NewStatus: domain.StatusConfirmed}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-sc-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-status-changed.v1", b)
 }
 
 func TestHandleOrderCreated_AddsToPendingBucket(t *testing.T) {
@@ -88,7 +89,7 @@ func TestHandleOrderCreated_DecodeError_RejectsWithPermanentError(t *testing.T) 
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	entry := outbox.Entry{ID: "bad-entry", Payload: []byte("not-json")}
+	entry := outboxtest.NewEntry("event.order-created.v1", []byte("not-json"))
 	result := svc.HandleOrderCreated(ctx, entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -105,7 +106,7 @@ func TestHandleOrderStatusChanged_DecodeError_RejectsWithPermanentError(t *testi
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	entry := outbox.Entry{ID: "bad-sc-entry", Payload: []byte("not-json")}
+	entry := outboxtest.NewEntry("event.order-status-changed.v1", []byte("not-json"))
 	result := svc.HandleOrderStatusChanged(ctx, entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -279,7 +280,7 @@ func makeCreatedEntryPartial(t *testing.T, id, status, item string) outbox.Entry
 	payload := ordercreated.Payload{ID: id, Item: item, Status: status}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-partial-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-created.v1", b)
 }
 
 // makeStatusChangedEntryPartial builds an order-status-changed outbox entry with
@@ -289,7 +290,7 @@ func makeStatusChangedEntryPartial(t *testing.T, id, oldStatus, newStatus string
 	payload := orderstatuschanged.Payload{ID: id, OldStatus: oldStatus, NewStatus: newStatus}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-sc-partial-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-status-changed.v1", b)
 }
 
 // TestHandleOrderCreated_MissingRequiredFields verifies that order-created payloads

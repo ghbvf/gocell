@@ -342,15 +342,17 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	if validate == nil {
 		t.Fatalf("OUTBOX-PAYLOAD-SIZE-01-B: cannot locate (Entry).Validate in %s", src)
 	}
-	// Look specifically for a `len(e.Payload) > MaxPayloadBytes` (or `>=`)
+	// Look specifically for a `len(e.payload) > MaxPayloadBytes` (or `>=`)
 	// comparison. Merely importing / shadowing the const is not enough — it
 	// must drive an actual size check, otherwise the cap is decorative
 	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
+	// NOTE: the Entry payload field is unexported (`payload`) since issue #1229
+	// sealed Entry construction; the in-package Validate reads the lowercase field.
 	_, compared := FindFirstInSubtree[ast.BinaryExpr](validate.Body, func(bin *ast.BinaryExpr) bool {
 		if bin.Op != token.GTR && bin.Op != token.GEQ {
 			return false
 		}
-		// LHS must be `len(e.Payload)` (or `len(<recv>.Payload)`).
+		// LHS must be `len(e.payload)` (or `len(<recv>.payload)`).
 		lenCall, ok := bin.X.(*ast.CallExpr)
 		if !ok || len(lenCall.Args) != 1 {
 			return false
@@ -360,7 +362,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 			return false
 		}
 		sel, ok := lenCall.Args[0].(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Payload" {
+		if !ok || sel.Sel.Name != "payload" {
 			return false
 		}
 		// RHS must reference MaxPayloadBytes by name.
@@ -370,7 +372,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	if !compared {
 		t.Errorf(
 			"OUTBOX-PAYLOAD-SIZE-01-B: (Entry).Validate body must contain a "+
-				"`len(<recv>.Payload) > %s` comparison (or >=). A bare reference "+
+				"`len(<recv>.payload) > %s` comparison (or >=). A bare reference "+
 				"such as `_ = %s` is not sufficient — the comparison is the cap.",
 			constName, constName,
 		)

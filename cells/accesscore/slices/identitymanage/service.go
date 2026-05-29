@@ -305,7 +305,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
-		if err := outbox.Emit(txCtx, s.emitter, TopicUserCreated, eventPayload); err != nil {
+		if err := outbox.Emit(txCtx, s.clock, s.emitter, TopicUserCreated, eventPayload); err != nil {
 			return err
 		}
 		return nil
@@ -489,7 +489,7 @@ func (s *Service) applyUserUpdateTx(
 		}
 		u = refetched
 	}
-	if err := outbox.Emit(txCtx, s.emitter, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, TopicUserUpdated, dto.UserUpdatedEvent{UserID: input.ID, ActorID: actor}); err != nil {
 		return nil, err
 	}
 	return u, nil
@@ -612,7 +612,7 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
-		if err := outbox.Emit(txCtx, s.emitter, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
+		if err := outbox.Emit(txCtx, s.clock, s.emitter, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
 		}
 		return nil
@@ -685,7 +685,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.LockUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		return outbox.Emit(txCtx, s.emitter, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.clock, s.emitter, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor})
 	})
 }
 
@@ -751,7 +751,7 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err := s.authzmutator.ApplyInTx(ctx, txCtx, id, authzmutate.ActivateUser{}, now); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		return outbox.Emit(txCtx, s.emitter, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
+		return outbox.Emit(txCtx, s.clock, s.emitter, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor})
 	}); err != nil {
 		return err
 	}

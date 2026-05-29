@@ -1,0 +1,3 @@
+module fixturetest/prod_clock_injection/control_plane_reconcile_passes
+
+go 1.22

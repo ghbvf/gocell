@@ -38,7 +38,7 @@ func TestWriterEmitter_EmitDelegatesToWriter(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, writer.entries, 1)
-	assert.Equal(t, entry.ID, writer.entries[0].ID)
+	assert.Equal(t, entry.id, writer.entries[0].id)
 }
 
 func TestDirectEmitter_ConstructRejectsNilPublisher(t *testing.T) {
@@ -53,21 +53,21 @@ func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 
 	entry := validEntry("direct-emitter")
-	entry.Topic = "direct.topic.v1"
-	entry.EventType = "direct.event.v1"
+	entry.topic = "direct.topic.v1"
+	entry.eventType = "direct.event.v1"
 
 	err = emitter.Emit(context.Background(), entry)
 
 	require.NoError(t, err)
 	require.Len(t, publisher.calls, 1)
-	assert.Equal(t, entry.Topic, publisher.calls[0].topic)
+	assert.Equal(t, entry.topic, publisher.calls[0].topic)
 
-	got, err := UnmarshalEnvelope(entry.Topic, publisher.calls[0].payload)
+	got, err := UnmarshalEnvelope(entry.topic, publisher.calls[0].payload)
 	require.NoError(t, err)
-	assert.Equal(t, entry.ID, got.ID)
-	assert.Equal(t, entry.EventType, got.EventType)
-	assert.Equal(t, entry.Topic, got.Topic)
-	assert.Equal(t, string(entry.Payload), string(got.Payload))
+	assert.Equal(t, entry.id, got.id)
+	assert.Equal(t, entry.eventType, got.eventType)
+	assert.Equal(t, entry.topic, got.topic)
+	assert.Equal(t, string(entry.payload), string(got.payload))
 }
 
 func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
@@ -200,7 +200,7 @@ func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
 			require.NoError(t, err)
 
 			entry := validEntry("policy-test-" + tc.name)
-			entry.FailurePolicy = tc.entryPolicy
+			entry.failurePolicy = tc.entryPolicy
 
 			got := emitter.Emit(context.Background(), entry)
 			if tc.wantErr {
@@ -243,7 +243,7 @@ func TestDirectEmitter_FailOpenCounterIncrement(t *testing.T) {
 	require.NoError(t, err)
 
 	entry := validEntry("counter-test")
-	entry.Topic = "test.topic.v1"
+	entry.topic = "test.topic.v1"
 
 	require.NoError(t, emitter.Emit(context.Background(), entry))
 	require.NoError(t, emitter.Emit(context.Background(), entry))
@@ -264,7 +264,7 @@ func TestDirectEmitter_FailClosedCounterNotIncremented(t *testing.T) {
 	require.NoError(t, err)
 
 	entry := validEntry("counter-not-inc-test")
-	entry.Topic = "test.topic.v1"
+	entry.topic = "test.topic.v1"
 
 	got := emitter.Emit(context.Background(), entry)
 	require.Error(t, got, "fail-closed must return publish error")
@@ -545,12 +545,12 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 	assert.NoError(t, checkErr)
 }
 
-// TestDirectEmitter_InjectsObservabilityFromContext verifies that DirectEmitter.Emit
-// populates entry.Observability from the context before publishing, mirroring the
-// behavior of Postgres OutboxWriter.Write (adapters/postgres/outbox_writer.go:60-61).
-// Trace correlation across async boundaries is broken when DirectEmitter silently
-// drops request_id / trace_id — this test pins the fix.
-func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
+// TestDirectEmitter_CarriesObservabilityToWire verifies that observability
+// identity injected by NewEntry from its construction context (the single
+// injection trust boundary, issue #1229) survives DirectEmitter.Emit onto the
+// v1 wire envelope. Trace correlation across async boundaries is broken when
+// request_id / trace_id are dropped — this test pins the end-to-end flow.
+func TestDirectEmitter_CarriesObservabilityToWire(t *testing.T) {
 	const wantRequestID = "req-abc123"
 	const wantTraceID = "aabbccddeeff00112233445566778899" // 32 lowercase hex chars
 
@@ -562,20 +562,21 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
-	entry := validEntry("obs-inject-test")
-	entry.Topic = "test.event.v1"
-	entry.EventType = "test.event.v1"
+	// NewEntry injects observability from the construction ctx.
+	entry, err := NewEntry(clock.Real(), ctx, "test.event.v1", []byte("{}"),
+		WithTopic("test.event.v1"))
+	require.NoError(t, err)
 
-	require.NoError(t, emitter.Emit(ctx, entry))
+	require.NoError(t, emitter.Emit(context.Background(), entry))
 	require.Len(t, publisher.calls, 1, "publish must be attempted")
 
 	// Decode the published envelope and inspect the entry it carries.
-	got, err := UnmarshalEnvelope(entry.Topic, publisher.calls[0].payload)
+	got, err := UnmarshalEnvelope(entry.topic, publisher.calls[0].payload)
 	require.NoError(t, err)
-	assert.Equal(t, wantRequestID, string(got.Observability.RequestID),
-		"DirectEmitter must inject request_id from ctx into entry.Observability")
-	assert.Equal(t, wantTraceID, string(got.Observability.TraceID),
-		"DirectEmitter must inject trace_id from ctx into entry.Observability")
+	assert.Equal(t, wantRequestID, string(got.observability.RequestID),
+		"NewEntry-injected request_id must survive Emit onto the wire")
+	assert.Equal(t, wantTraceID, string(got.observability.TraceID),
+		"NewEntry-injected trace_id must survive Emit onto the wire")
 }
 
 // TestNewDirectEmitter_WithLoggerNilFallsBackToDefault verifies that

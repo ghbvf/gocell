@@ -76,9 +76,8 @@ func (r *Recorder) Emit(_ context.Context, entry outbox.Entry) error {
 	return nil
 }
 
-// Entries returns a deep copy of captured entries in Emit order; mutating the
-// returned slice, including each entry's Payload and Metadata fields, does not
-// affect the Recorder.
+// Entries returns captured entries in Emit order. Entries are immutable values
+// (see deepCopyEntry).
 func (r *Recorder) Entries() []outbox.Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,14 +89,13 @@ func (r *Recorder) Entries() []outbox.Entry {
 }
 
 // EntriesByType returns entries whose EventType equals the given value, in
-// Emit order. Returns a deep copy; mutating the returned slice, including each
-// entry's Payload and Metadata fields, does not affect the Recorder.
+// Emit order. Entries are immutable values (see deepCopyEntry).
 func (r *Recorder) EntriesByType(eventType string) []outbox.Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]outbox.Entry, 0, len(r.entries))
 	for _, e := range r.entries {
-		if e.EventType == eventType {
+		if e.EventType() == eventType {
 			out = append(out, deepCopyEntry(e))
 		}
 	}
@@ -111,20 +109,11 @@ func (r *Recorder) Reset() {
 	r.entries = nil
 }
 
-// deepCopyEntry returns a copy of e where the Payload and Metadata reference
-// fields are independently allocated. nil Payload and nil Metadata are
-// preserved as nil.
+// deepCopyEntry returns a copy of e. Since issue #1229 sealed Entry, the value
+// is immutable-by-construction: there are no exported mutable fields, Metadata()
+// returns a defensive clone, and Payload() aliases a read-only slice. A plain
+// struct copy therefore fully isolates the Recorder from caller mutation —
+// independent Payload/Metadata allocation is no longer required.
 func deepCopyEntry(e outbox.Entry) outbox.Entry {
-	out := e
-	if e.Payload != nil {
-		out.Payload = make([]byte, len(e.Payload))
-		copy(out.Payload, e.Payload)
-	}
-	if e.Metadata != nil {
-		out.Metadata = make(map[string]string, len(e.Metadata))
-		for k, v := range e.Metadata {
-			out.Metadata[k] = v
-		}
-	}
-	return out
+	return e
 }

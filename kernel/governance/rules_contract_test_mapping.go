@@ -6,9 +6,14 @@ package governance
 //
 //	与 ADV-06 同形态双向校验：方向 A (contract → slice) + 方向 B (slice → contract).
 //
-//	Direction A (contract → slice): every active HTTP platform contract must be
-//	referenced by at least one slice in its server cell (endpoints.server) via a
-//	verify.contract entry with the ".serve" role suffix: "contract.<contractID>.serve".
+//	Direction A (contract → slice): every active serve-style platform contract
+//	must be referenced by at least one slice in its server cell
+//	(endpoints.server) via a verify.contract entry with the ".serve" role
+//	suffix: "contract.<contractID>.serve". Serve-style kinds are those whose
+//	role set includes RoleServe (http and grpc — both provider/server contracts
+//	using endpoints.server), derived from cellvocab.ValidRolesForKind via
+//	isServeRoleKind so adding a future serve-style kind extends coverage
+//	automatically without editing this rule.
 //
 //	Direction B (slice → contract): when a slice declares "contract.<id>.serve" in
 //	verify.contract, the referenced contract must satisfy ALL of the following.
@@ -17,9 +22,10 @@ package governance
 //	  1. The contract must exist in v.project.Contracts. A dangling .serve
 //	     entry (typo, removed contract, or unmerged change) was previously
 //	     silent — review F4 closed it.
-//	  2. The contract's kind must be "http". Event contracts handled by ADV-06
-//	     should not appear in a .serve entry; this catches a slice declaring a
-//	     subscribe contract under the wrong role.
+//	  2. The contract's kind must be serve-style (http or grpc). Event contracts
+//	     are handled by ADV-06 (endpoints.subscribers) and must not appear in a
+//	     .serve entry; this catches a slice declaring a subscribe contract under
+//	     the wrong role.
 //	  3. The contract's lifecycle must be "active". A slice declaring serve
 //	     coverage for a deprecated / experimental contract signals stale or
 //	     out-of-order migration; the entry should be removed or the lifecycle
@@ -32,18 +38,19 @@ package governance
 //	     invert the allowed dependency arrow.
 //	  5. The contract's endpoints.server must equal the slice's belongsToCell.
 //	     Mismatch means the slice claims coverage for a contract it does not own.
+//	     gRPC mirrors http here: both carry the provider in endpoints.server.
 //
-//	This is the HTTP-serve direction complement of ADV-06 (which checks the
+//	This is the serve-side direction complement of ADV-06 (which checks the
 //	event-subscribe direction). Both rules close the same gap from opposite
-//	contract kinds: a contract that is declared active but is not covered by
+//	role families: a contract that is declared active but is not covered by
 //	any test declaration in the implementing slice is undetectable as
 //	drift-prone at the metadata governance layer.
 //
 // Exemptions (same policy as JOURNEY-CONTRACT-EXISTENCE-01):
 //   - contracts under examples/  — example projects manage their own closure
 //   - lifecycle != "active"      — experimental/deprecated do not require coverage
-//   - kind != "http"             — event contracts handled by ADV-06;
-//     projection/command/query by future targeted rules
+//   - non-serve-style kind       — event contracts handled by ADV-06;
+//     projection/command by future targeted rules
 //
 // AI-robust grade: Medium.
 //
@@ -53,20 +60,23 @@ package governance
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 const examplesPathPrefix = "examples/"
 
 // validateCONTRACTENDPOINTTESTMAPPING01 runs the bidirectional check:
-//   - Direction A (contract → slice): every active HTTP contract has at least
-//     one slice in its server cell declaring "contract.<id>.serve".
+//   - Direction A (contract → slice): every active serve-style (http/grpc)
+//     contract has at least one slice in its server cell declaring
+//     "contract.<id>.serve".
 //   - Direction B (slice → contract): every slice verify.contract entry of the
-//     form "contract.<id>.serve" refers to an active HTTP contract whose
-//     endpoints.server equals the slice's belongsToCell.
+//     form "contract.<id>.serve" refers to an active serve-style (http/grpc)
+//     contract whose endpoints.server equals the slice's belongsToCell.
 //
 // Algorithm mirrors ADV-06 (see rules_misc_advisory.go lines 177-182).
 func (v *Validator) validateCONTRACTENDPOINTTESTMAPPING01() []ValidationResult {
@@ -76,13 +86,14 @@ func (v *Validator) validateCONTRACTENDPOINTTESTMAPPING01() []ValidationResult {
 	return results
 }
 
-// ctmContractToSlice implements direction A: for each active HTTP platform
-// contract, verify at least one slice in its server cell declares the serve entry.
-// Reports error with candidate slice paths (up to 3) to aid the developer.
+// ctmContractToSlice implements direction A: for each active serve-style
+// platform contract, verify at least one slice in its server cell declares the
+// serve entry. Reports error with candidate slice paths (up to 3) to aid the
+// developer.
 func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if !isActiveHTTPPlatformContract(c) {
+		if !isActiveServeStylePlatformContract(c) {
 			continue
 		}
 		if cellServes[c.Endpoints.Server][c.ID] {
@@ -94,9 +105,9 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 			contractFile(c),
 			"id",
 			fmt.Sprintf(
-				"active HTTP contract %q (server cell: %s) is not referenced by any slice "+
+				"active %s contract %q (server cell: %s) is not referenced by any slice "+
 					"verify.contract entry with .serve role%s",
-				c.ID, c.Endpoints.Server, candidateHint,
+				c.Kind, c.ID, c.Endpoints.Server, candidateHint,
 			),
 			fmt.Sprintf(
 				"add \"contract.%s.serve\" to a slice in cell %q under verify.contract, "+
@@ -112,7 +123,7 @@ func (v *Validator) ctmContractToSlice(cellServes map[string]map[string]bool) []
 // of the form "contract.<id>.serve", every predicate in the 5-step contract
 // check (existence, kind=http, lifecycle=active, examples arrow, server match)
 // must hold; each failure emits a distinct diagnostic via a dedicated helper.
-// The previous monolithic form used !isActiveHTTPPlatformContract(c) as a
+// The previous monolithic form used !isActiveServeStylePlatformContract(c) as a
 // "skip" filter for direction B, silently passing dangling references,
 // role/lifecycle drift, and platform-slice-serving-examples-contract cases
 // (review F4); the per-check helpers below were extracted to keep cognitive
@@ -148,7 +159,7 @@ func (v *Validator) ctmEvaluateServeEntry(s *metadata.SliceMeta, i int, entry st
 	if r := v.ctmCheckContractExists(s, c, fieldPath, entry, contractID); r != nil {
 		return r
 	}
-	if r := v.ctmCheckKindHTTP(s, c, fieldPath, entry, contractID); r != nil {
+	if r := v.ctmCheckKindServeStyle(s, c, fieldPath, entry, contractID); r != nil {
 		return r
 	}
 	if r := v.ctmCheckLifecycleActive(s, c, fieldPath, entry, contractID); r != nil {
@@ -181,23 +192,25 @@ func (v *Validator) ctmCheckContractExists(
 	return &r
 }
 
-// ctmCheckKindHTTP is direction B step 2: .serve role is HTTP-only;
-// event contracts use ADV-06 (endpoints.subscribers).
-func (v *Validator) ctmCheckKindHTTP(
+// ctmCheckKindServeStyle is direction B step 2: the .serve role applies to
+// serve-style (provider/server) contracts only — http and grpc, both carrying
+// the provider in endpoints.server. Event contracts use ADV-06
+// (endpoints.subscribers); projection/command use their own role mappings.
+func (v *Validator) ctmCheckKindServeStyle(
 	s *metadata.SliceMeta, c *metadata.ContractMeta,
 	fieldPath, entry, contractID string,
 ) *ValidationResult {
-	if c.Kind == "http" {
+	if isServeRoleKind(c.Kind) {
 		return nil
 	}
 	r := v.newError(
 		codeCONTRACTENDPOINTTESTMAPPING01, IssueMismatch,
 		sliceFile(s), fieldPath,
 		fmt.Sprintf(
-			"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\")",
+			"slice %q declares verify.contract %q (.serve role) but contract %q kind is %q (must be \"http\" or \"grpc\")",
 			s.ID, entry, contractID, c.Kind,
 		),
-		"remove this entry; event contracts use ADV-06 (endpoints.subscribers) not .serve",
+		"remove this entry; .serve is for http/grpc provider contracts — event contracts use ADV-06 (endpoints.subscribers)",
 	)
 	return &r
 }
@@ -300,15 +313,26 @@ func (v *Validator) buildCandidateSliceHint(ownerCell string) string {
 	return fmt.Sprintf("; candidate slices: %s, +%d more", strings.Join(shown, ", "), extra)
 }
 
-// isActiveHTTPPlatformContract reports whether a contract is subject to
+// isServeRoleKind reports whether contracts of the given kind use the
+// serve/call role pair — i.e. request/response provider contracts whose
+// provider lives in endpoints.server (http and grpc today). Derived from
+// cellvocab.ValidRolesForKind so that introducing a future kind with RoleServe
+// automatically extends .serve coverage without editing this rule, keeping the
+// CONTRACT-ENDPOINT-TEST-MAPPING-01 role-family definition single-sourced with
+// the contract vocabulary.
+func isServeRoleKind(kind string) bool {
+	return slices.Contains(cellvocab.ValidRolesForKind(cellvocab.ContractKind(kind)), cellvocab.RoleServe)
+}
+
+// isActiveServeStylePlatformContract reports whether a contract is subject to
 // CONTRACT-ENDPOINT-TEST-MAPPING-01 coverage requirements. All three
 // conditions must hold:
-//   - kind == "http"
+//   - serve-style kind (http or grpc; see isServeRoleKind)
 //   - lifecycle == "active"
 //   - File does not start with "examples/" (platform-scope only)
-func isActiveHTTPPlatformContract(c *metadata.ContractMeta) bool {
+func isActiveServeStylePlatformContract(c *metadata.ContractMeta) bool {
 	return c != nil &&
-		c.Kind == "http" &&
+		isServeRoleKind(c.Kind) &&
 		c.Lifecycle == "active" &&
 		!strings.HasPrefix(c.File, examplesPathPrefix)
 }

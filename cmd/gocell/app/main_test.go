@@ -54,7 +54,7 @@ func TestPrintUsage(t *testing.T) {
 	for _, notWant := range []string{
 		"assembly --id=<assemblyID>",
 		"metrics-schema --id=<assemblyID>",
-		"generated [--module=<module>]",
+		"generated [--module-path=<module>]",
 	} {
 		if strings.Contains(out, notWant) {
 			t.Fatalf("PrintUsage() must not hand-list verb sub-types (%q); "+

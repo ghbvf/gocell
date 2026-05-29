@@ -113,7 +113,7 @@ MUST NOT 被任何工具或流程违反：
 
 ### III. Contract 边界纪律
 
-L1+ Cell 之间的所有交互 MUST 通过 Contract。四种 Contract
+L1+ Cell 之间的所有交互 MUST 通过 Contract。五种 Contract
 kind 及其合法角色：
 
 | Kind | 提供方字段 | 消费方字段 | 提供方角色 | 消费方角色 |
@@ -122,6 +122,7 @@ kind 及其合法角色：
 | `event` | `publisher` | `subscribers` | publish | subscribe |
 | `command` | `handler` | `invokers` | handle | invoke |
 | `projection` | `provider` | `readers` | provide | read |
+| `grpc` | `server` | `clients` | serve | call |
 
 **生命周期**：`draft → active → deprecated`，单向不可逆。
 已 deprecated 的契约 MUST NOT 被新代码引用（除非附带

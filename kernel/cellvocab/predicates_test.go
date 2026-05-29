@@ -17,6 +17,7 @@ func TestValidRolesForKind(t *testing.T) {
 		{cellvocab.ContractEvent, []cellvocab.ContractRole{cellvocab.RolePublish, cellvocab.RoleSubscribe}},
 		{cellvocab.ContractCommand, []cellvocab.ContractRole{cellvocab.RoleHandle, cellvocab.RoleInvoke}},
 		{cellvocab.ContractProjection, []cellvocab.ContractRole{cellvocab.RoleProvide, cellvocab.RoleRead}},
+		{cellvocab.ContractGRPC, []cellvocab.ContractRole{cellvocab.RoleServe, cellvocab.RoleCall}},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {

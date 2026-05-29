@@ -149,15 +149,22 @@ func (p *fakePublisher) Captured() []publishCall {
 // ---------------------------------------------------------------------------
 
 func makeEntry(id, eventType string) outbox.ClaimedEntry {
+	now := time.Now()
+	entry, err := kout.EntryScan{
+		ID:            id,
+		AggregateID:   "agg-" + id,
+		AggregateType: "test",
+		EventType:     eventType,
+		Topic:         eventType,
+		Payload:       []byte(`{"id":"` + id + `"}`),
+		CreatedAt:     now,
+		OccurredAt:    now,
+	}.ToEntry()
+	if err != nil {
+		panic("makeEntry: " + err.Error())
+	}
 	return outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:            id,
-			AggregateID:   "agg-" + id,
-			AggregateType: "test",
-			EventType:     eventType,
-			Payload:       []byte(`{"id":"` + id + `"}`),
-			CreatedAt:     time.Now(),
-		},
+		Entry:    entry,
 		Attempts: 0,
 	}
 }
@@ -262,9 +269,9 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	require.Len(t, captured, 3)
 	entryDecoded, err := kout.UnmarshalEnvelope("", captured[0].payload)
 	require.NoError(t, err)
-	assert.NotEmpty(t, entryDecoded.ID)
-	assert.NotEmpty(t, entryDecoded.EventType)
-	assert.True(t, len(entryDecoded.Payload) > 0)
+	assert.NotEmpty(t, entryDecoded.ID())
+	assert.NotEmpty(t, entryDecoded.EventType())
+	assert.True(t, len(entryDecoded.Payload()) > 0)
 }
 
 func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
@@ -301,13 +308,17 @@ func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
 func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 	// Seed entry already at MaxAttempts-1 attempts so one more failure dead-letters it.
+	dyingNow := time.Now()
+	dyingEntry, _ := kout.EntryScan{
+		ID:         "e-dying",
+		EventType:  "order.created",
+		Topic:      "order.created",
+		Payload:    []byte(`{}`),
+		CreatedAt:  dyingNow,
+		OccurredAt: dyingNow,
+	}.ToEntry()
 	entry := outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:        "e-dying",
-			EventType: "order.created",
-			Payload:   []byte(`{}`),
-			CreatedAt: time.Now(),
-		},
+		Entry:    dyingEntry,
 		Attempts: 2, // MaxAttempts=3 → newAttempts=3 >= max → dead
 	}
 	store.Seed(entry)
@@ -523,7 +534,7 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	claimed, err := store.ClaimPending(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	_, err = store.MarkPublished(ctx, claimed[0].ID, claimed[0].LeaseID)
+	_, err = store.MarkPublished(ctx, claimed[0].ID(), claimed[0].LeaseID)
 	require.NoError(t, err)
 
 	// Verify it is published.
@@ -554,7 +565,7 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	claimed, err := store.ClaimPending(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	_, err = store.MarkPublished(ctx, claimed[0].ID, claimed[0].LeaseID)
+	_, err = store.MarkPublished(ctx, claimed[0].ID(), claimed[0].LeaseID)
 	require.NoError(t, err)
 
 	// retention=1ns so the just-published entry is immediately past cutoff
@@ -578,16 +589,19 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 
 func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	store := outboxtest.NewFakeStore()
+	envNow := time.Now()
+	envKEntry, _ := kout.EntryScan{
+		ID:            "env-test",
+		AggregateID:   "agg-1",
+		AggregateType: "order",
+		EventType:     "order.created",
+		Topic:         "orders.v1",
+		Payload:       []byte(`{"amount":42}`),
+		CreatedAt:     envNow,
+		OccurredAt:    envNow,
+	}.ToEntry()
 	entry := outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:            "env-test",
-			AggregateID:   "agg-1",
-			AggregateType: "order",
-			EventType:     "order.created",
-			Topic:         "orders.v1",
-			Payload:       []byte(`{"amount":42}`),
-			CreatedAt:     time.Now(),
-		},
+		Entry:    envKEntry,
 		Attempts: 0,
 	}
 	store.Seed(entry)
@@ -609,11 +623,11 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	// decode the captured wire payload via the public UnmarshalEnvelope funnel.
 	entryDecoded, err := kout.UnmarshalEnvelope("", captured[0].payload)
 	require.NoError(t, err)
-	assert.Equal(t, "env-test", entryDecoded.ID)
-	assert.Equal(t, "agg-1", entryDecoded.AggregateID)
-	assert.Equal(t, "order", entryDecoded.AggregateType)
-	assert.Equal(t, "order.created", entryDecoded.EventType)
-	assert.JSONEq(t, `{"amount":42}`, string(entryDecoded.Payload))
+	assert.Equal(t, "env-test", entryDecoded.ID())
+	assert.Equal(t, "agg-1", entryDecoded.AggregateID())
+	assert.Equal(t, "order", entryDecoded.AggregateType())
+	assert.Equal(t, "order.created", entryDecoded.EventType())
+	assert.JSONEq(t, `{"amount":42}`, string(entryDecoded.Payload()))
 }
 
 func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {
@@ -817,14 +831,16 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 	//   2. fakePublisher fails the publish,
 	//   3. handleFailedEntry routes to MarkRetry,
 	//   4. our wrapper returns updated=false → must count as lost, not retried.
-	store.Seed(outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:        "00000000-0000-4000-8000-000000000001",
-			EventType: "test.event",
-			Topic:     "t",
-			Payload:   []byte(`{}`),
-		},
-	})
+	lostNow := time.Now()
+	lostEntry, _ := kout.EntryScan{
+		ID:         "00000000-0000-4000-8000-000000000001",
+		EventType:  "test.event",
+		Topic:      "t",
+		Payload:    []byte(`{}`),
+		CreatedAt:  lostNow,
+		OccurredAt: lostNow,
+	}.ToEntry()
+	store.Seed(outbox.ClaimedEntry{Entry: lostEntry})
 
 	mc := &testCollector{}
 	cfg := fastCfg()

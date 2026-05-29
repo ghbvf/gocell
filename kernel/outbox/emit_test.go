@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -43,7 +44,7 @@ func TestEmit_SuccessMarshalsAndDelegates(t *testing.T) {
 	cap := &captureEmitter{}
 	payload := sampleEvent{ID: "abc", Name: "demo"}
 
-	if err := outbox.Emit(context.Background(), cap, topic, payload); err != nil {
+	if err := outbox.Emit(context.Background(), clock.Real(), cap, topic, payload); err != nil {
 		t.Fatalf("Emit returned error: %v", err)
 	}
 
@@ -51,14 +52,14 @@ func TestEmit_SuccessMarshalsAndDelegates(t *testing.T) {
 		t.Fatalf("expected 1 captured entry, got %d", got)
 	}
 	entry := cap.entries[0]
-	if entry.EventType != topic {
-		t.Fatalf("EventType = %q, want %q", entry.EventType, topic)
+	if entry.EventType() != topic {
+		t.Fatalf("EventType = %q, want %q", entry.EventType(), topic)
 	}
-	if !strings.HasPrefix(entry.ID, outbox.EntryIDPrefix) {
-		t.Fatalf("Entry.ID = %q, expected evt- prefix", entry.ID)
+	if !strings.HasPrefix(entry.ID(), outbox.EntryIDPrefix) {
+		t.Fatalf("Entry.ID = %q, expected evt- prefix", entry.ID())
 	}
 	var round sampleEvent
-	if err := json.Unmarshal(entry.Payload, &round); err != nil {
+	if err := json.Unmarshal(entry.Payload(), &round); err != nil {
 		t.Fatalf("payload unmarshal: %v", err)
 	}
 	if round != payload {
@@ -72,7 +73,7 @@ func TestEmit_MarshalErrorWrapsAndDoesNotEmit(t *testing.T) {
 	const topic = "event.sample.v1"
 	cap := &captureEmitter{}
 
-	err := outbox.Emit(context.Background(), cap, topic, unmarshalableEvent{})
+	err := outbox.Emit(context.Background(), clock.Real(), cap, topic, unmarshalableEvent{})
 	if err == nil {
 		t.Fatal("expected marshal error, got nil")
 	}
@@ -94,7 +95,7 @@ func TestEmit_EmitterErrorWraps(t *testing.T) {
 	sentinel := errors.New("broker unavailable")
 	cap := &captureEmitter{err: sentinel}
 
-	err := outbox.Emit(context.Background(), cap, topic, sampleEvent{ID: "x"})
+	err := outbox.Emit(context.Background(), clock.Real(), cap, topic, sampleEvent{ID: "x"})
 	if err == nil {
 		t.Fatal("expected emitter error, got nil")
 	}

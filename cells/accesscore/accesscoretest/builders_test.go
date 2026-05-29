@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -394,9 +395,5 @@ func makeConfigUpsertedEntry(key string, version int) outbox.Entry {
 	if err != nil {
 		panic("makeConfigUpsertedEntry: json.Marshal failed: " + err.Error())
 	}
-	return outbox.Entry{
-		ID:        "entry-" + key,
-		EventType: configreceive.TopicConfigEntryUpserted,
-		Payload:   payload,
-	}
+	return outboxtest.NewEntry(configreceive.TopicConfigEntryUpserted, payload)
 }

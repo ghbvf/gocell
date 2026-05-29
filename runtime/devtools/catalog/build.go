@@ -431,6 +431,8 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 		return c.Endpoints.Invokers
 	case "projection":
 		return c.Endpoints.Readers
+	case "grpc":
+		return c.Endpoints.Clients
 	default:
 		return nil
 	}

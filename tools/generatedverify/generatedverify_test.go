@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 )
 
 const fixtureModule = "example.com/generatedfixture"
@@ -35,6 +36,44 @@ func TestExpectedArtifactsDerivesManifestFromMetadata(t *testing.T) {
 	assert.Contains(t, string(artifacts[0].Content), "runFixture")
 	assert.Contains(t, string(artifacts[1].Content), "assemblyId: fixture")
 	assert.Contains(t, string(artifacts[2].Content), "entrypoint: cmd/fixture/main.go")
+}
+
+// TestExpectedArtifactsGatesSagaCoverageOnPackagePresence proves the
+// non-metadata-derived SAGA-STATUS-FANOUT-COVERAGE-01 entry
+// (terminal_coverage_gen.go) is emitted only when its target package directory
+// is present in the project tree: absent for the bare fixture (so the synthetic
+// fixtures and downstream consumer modules see no phantom artifact), present
+// once the directory exists — with content byte-identical to
+// sagacoveragegen.Render().
+func TestExpectedArtifactsGatesSagaCoverageOnPackagePresence(t *testing.T) {
+	root, project := newGeneratedFixture(t)
+
+	// Absent: the bare fixture has no kernel/saga/sagajournaltest package.
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+	assert.NotContains(t, artifactKinds(artifacts), "saga-coverage-gen",
+		"saga-coverage artifact must be omitted when the target package is absent")
+
+	// Present: materialize the target file (and thus its package directory); the
+	// gate now opens and the entry appears with rendered content.
+	writeFile(t, root, sagaCoverageGenRel, []byte("// placeholder\n"))
+	artifacts, err = ExpectedArtifacts(t.Context(), root, fixtureModule, project)
+	require.NoError(t, err)
+
+	var got *Artifact
+	for i := range artifacts {
+		if artifacts[i].Kind == "saga-coverage-gen" {
+			got = &artifacts[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "saga-coverage artifact must be emitted once the package directory exists")
+	assert.Equal(t, sagaCoverageGenRel, got.Path)
+
+	want, err := sagacoveragegen.Render()
+	require.NoError(t, err)
+	assert.Equal(t, want.TerminalCoverageGo, got.Content,
+		"saga-coverage artifact content must be byte-identical to sagacoveragegen.Render()")
 }
 
 func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {

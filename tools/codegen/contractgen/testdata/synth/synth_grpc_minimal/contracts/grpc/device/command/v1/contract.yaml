@@ -1,0 +1,12 @@
+id: grpc.device.command.v1
+kind: grpc
+ownerCell: devicecell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: devicecell
+  grpc:
+    service: device.command.v1.DeviceCommandService
+    method: IssueCommand
+    proto: contracts/grpc/device/command/v1/device_command.proto
+codegen: true

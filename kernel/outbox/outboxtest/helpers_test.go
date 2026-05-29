@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
@@ -31,22 +32,22 @@ func TestTestTopic_UniquePerTest(t *testing.T) {
 func TestNewEntry_ValidFields(t *testing.T) {
 	entry := NewEntry("my.topic", []byte(`{"k":"v"}`))
 
-	if entry.ID == "" {
+	if entry.ID() == "" {
 		t.Fatal("NewEntry ID must not be empty")
 	}
-	if !strings.HasPrefix(entry.ID, "evt-") {
-		t.Fatalf("NewEntry ID should start with 'evt-', got %q", entry.ID)
+	if !strings.HasPrefix(entry.ID(), "evt-") {
+		t.Fatalf("NewEntry ID should start with 'evt-', got %q", entry.ID())
 	}
-	if entry.Topic != "my.topic" {
-		t.Fatalf("want topic 'my.topic', got %q", entry.Topic)
+	if entry.Topic() != "my.topic" {
+		t.Fatalf("want topic 'my.topic', got %q", entry.Topic())
 	}
-	if entry.EventType != "my.topic" {
-		t.Fatalf("want EventType 'my.topic', got %q", entry.EventType)
+	if entry.EventType() != "my.topic" {
+		t.Fatalf("want EventType 'my.topic', got %q", entry.EventType())
 	}
-	if string(entry.Payload) != `{"k":"v"}` {
-		t.Fatalf("payload mismatch: %q", entry.Payload)
+	if string(entry.Payload()) != `{"k":"v"}` {
+		t.Fatalf("payload mismatch: %q", entry.Payload())
 	}
-	if entry.CreatedAt.IsZero() {
+	if entry.CreatedAt().IsZero() {
 		t.Fatal("CreatedAt must not be zero")
 	}
 }
@@ -54,7 +55,7 @@ func TestNewEntry_ValidFields(t *testing.T) {
 func TestNewEntry_UniqueIDs(t *testing.T) {
 	e1 := NewEntry("t", []byte(`{}`))
 	e2 := NewEntry("t", []byte(`{}`))
-	if e1.ID == e2.ID {
+	if e1.ID() == e2.ID() {
 		t.Fatal("NewEntry should generate unique IDs")
 	}
 }
@@ -70,27 +71,29 @@ func TestNewEntryWithMetadata(t *testing.T) {
 	md := map[string]string{"order_id": "abc"}
 	entry := NewEntryWithMetadata("t", []byte(`{}`), md)
 
-	if entry.Metadata == nil {
+	if entry.Metadata() == nil {
 		t.Fatal("Metadata must not be nil")
 	}
-	if entry.Metadata["order_id"] != "abc" {
-		t.Fatalf("want order_id 'abc', got %q", entry.Metadata["order_id"])
+	if entry.Metadata()["order_id"] != "abc" {
+		t.Fatalf("want order_id 'abc', got %q", entry.Metadata()["order_id"])
 	}
 }
 
 // TestNewEntry_ReservedMetadataRejected pins the contract that
 // trace_id / request_id / correlation_id / span_id / traceparent /
-// tracestate must not appear in entry.Metadata. The reserved-key check
-// is part of outbox.Entry.Validate (see kernel/outbox/outbox.go
-// reservedMetadataKeySet) — producers must use Entry.Observability.
+// tracestate must not appear in entry.Metadata. Since issue #1229 sealed
+// Entry, the reserved-key check (kernel/outbox.reservedMetadataKeySet) runs
+// inside outbox.NewEntry's Validate at construction time — so a reserved key
+// makes NewEntry itself return an error; producers must use Entry.Observability.
 func TestNewEntry_ReservedMetadataRejected(t *testing.T) {
 	for _, key := range []string{
 		"trace_id", "traceparent", "trace_state", "tracestate",
 		"span_id", "request_id", "correlation_id",
 	} {
-		entry := NewEntryWithMetadata("t", []byte(`{}`), map[string]string{key: "abc"})
-		if err := entry.Validate(); err == nil {
-			t.Fatalf("Validate must reject reserved metadata key %q, got nil", key)
+		_, err := outbox.NewEntry(clock.Real(), context.Background(), "t", []byte(`{}`),
+			outbox.WithTopic("t"), outbox.WithMetadata(map[string]string{key: "abc"}))
+		if err == nil {
+			t.Fatalf("NewEntry must reject reserved metadata key %q, got nil", key)
 		}
 	}
 }
@@ -318,12 +321,10 @@ func (f *fakePubSub) readyChannel() chan struct{} {
 }
 
 func (f *fakePubSub) Publish(_ context.Context, topic string, payload []byte) error {
-	entry := outbox.Entry{
-		ID:        "fake-" + topic,
-		EventType: topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
-	}
+	// NewEntry (the sealed producer constructor, via the outboxtest helper)
+	// auto-generates a unique ID and stamps createdAt/occurredAt; the collector
+	// tests only count entries, so the synthetic ID is irrelevant.
+	entry := NewEntry(topic, payload)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, ch := range f.subs {

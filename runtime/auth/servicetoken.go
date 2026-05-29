@@ -319,6 +319,13 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 
 	cfg.metrics.recordServiceVerify(r.Context(), "success", "ok")
 	ctx := WithPrincipal(r.Context(), p)
+	// Producer-side principal bridge — identical to the JWT path
+	// (middleware.go). Without this, an outbox.Entry produced downstream on a
+	// service-token-authenticated request (e.g. /internal/v1/access/roles/assign)
+	// would carry an empty Principal across the async boundary. Service principals
+	// express identity via CallerCellID (Subject is empty), so injectPrincipalCtxKeys
+	// stamps actor_id = CallerCellID; subject_id / session_id stay unset (no source).
+	ctx = injectPrincipalCtxKeys(ctx, p)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

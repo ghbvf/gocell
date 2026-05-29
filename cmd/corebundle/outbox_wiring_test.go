@@ -243,12 +243,10 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 
 	// Publish exactly 1 event wrapped in a v1 envelope so the bus envelope
 	// schema check (fail-closed, P1-14 A1/A2) accepts it.
-	entry := outbox.Entry{
-		ID:        "e2e-fanout-1",
-		EventType: topic,
-		Topic:     topic,
-		Payload:   []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`),
-	}
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(), topic,
+		[]byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`),
+		outbox.WithID("e2e-fanout-1"), outbox.WithTopic(topic))
+	require.NoError(t, err)
 	envelope, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err, "MarshalEnvelope must not fail")
 	require.NoError(t, eb.Publish(ctx, topic, envelope))

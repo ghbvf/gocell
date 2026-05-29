@@ -20,9 +20,27 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
+
+// mustScan reconstructs a sealed outbox.Entry from an EntryScan, defaulting the
+// timestamps so plain {ID,EventType,Payload} scans validate. Tests that assert
+// on specific timestamps (CreatedAt fallback, OccurredAt mapping) build the
+// EntryScan with explicit times and must NOT route through this defaulting path.
+func mustScan(t *testing.T, s outbox.EntryScan) outbox.Entry {
+	t.Helper()
+	if s.OccurredAt.IsZero() {
+		s.OccurredAt = time.Now().UTC()
+	}
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = s.OccurredAt
+	}
+	e, err := s.ToEntry()
+	require.NoError(t, err)
+	return e
+}
 
 type failingStore struct {
 	ledger.Store
@@ -156,11 +174,11 @@ func TestActorExtraction(t *testing.T) {
 			require.NoError(t, err)
 			svc := newService(t, tc.spec, store, p)
 
-			entry := outbox.Entry{
+			entry := mustScan(t, outbox.EntryScan{
 				ID:        "evt-" + tc.name,
 				EventType: "event.test.v1",
 				Payload:   mustJSON(t, tc.payload),
-			}
+			})
 			result := svc.HandleEvent(context.Background(), entry)
 			if tc.wantAck {
 				assert.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -183,11 +201,11 @@ func TestService_HandleEvent_InvalidJSON_Reject(t *testing.T) {
 	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
 	svc := newService(t, spec, store, p)
 
-	entry := outbox.Entry{
+	entry := mustScan(t, outbox.EntryScan{
 		ID:        "evt-bad-json",
 		EventType: "event.user.created.v1",
 		Payload:   []byte("{invalid json}"),
-	}
+	})
 	result := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	var permErr *outbox.PermanentError
@@ -202,11 +220,11 @@ func TestService_HandleEvent_AppendFails_Requeue(t *testing.T) {
 	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
 	svc := newService(t, spec, &failingStore{Store: realStore, err: sentinel}, p)
 
-	entry := outbox.Entry{
+	entry := mustScan(t, outbox.EntryScan{
 		ID:        "evt-fail",
 		EventType: "event.user.created.v1",
 		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
-	}
+	})
 	result := svc.HandleEvent(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
 	assert.ErrorIs(t, result.Err, sentinel)
@@ -258,11 +276,11 @@ func TestService_HandleEvent_AppendFails_Classified(t *testing.T) {
 			spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
 			svc := newService(t, spec, &failingStore{Store: realStore, err: tc.storeErr}, p)
 
-			entry := outbox.Entry{
+			entry := mustScan(t, outbox.EntryScan{
 				ID:        "evt-cls",
 				EventType: "event.user.created.v1",
 				Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
-			}
+			})
 			result := svc.HandleEvent(context.Background(), entry)
 			assert.Equal(t, tc.wantDisp, result.Disposition)
 
@@ -283,11 +301,11 @@ func TestService_HandleEvent_DuplicateReplay_Ack(t *testing.T) {
 	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
 	svc := newService(t, spec, realStore, p)
 
-	entry := outbox.Entry{
+	entry := mustScan(t, outbox.EntryScan{
 		ID:        "evt-dup",
 		EventType: "event.user.created.v1",
 		Payload:   mustJSON(t, map[string]any{"userId": "usr-1", "actorId": "admin-1"}),
-	}
+	})
 
 	first := svc.HandleEvent(context.Background(), entry)
 	require.Equal(t, outbox.DispositionAck, first.Disposition, "first append must succeed")
@@ -312,11 +330,11 @@ func TestService_HandleEvent_Happy(t *testing.T) {
 	spec := newSpec(t, "auditappendsession", appender.ActorAcceptUserFallback)
 	svc := newService(t, spec, store, p, appender.WithEmitter(outbox.WrapEmitterForCell(rec)))
 
-	entry := outbox.Entry{
+	entry := mustScan(t, outbox.EntryScan{
 		ID:        "evt-happy",
 		EventType: "event.session.created.v1",
 		Payload:   mustJSON(t, map[string]any{"actorId": "user-1", "userId": "user-1"}),
-	}
+	})
 	result := svc.HandleEvent(context.Background(), entry)
 	require.Equal(t, outbox.DispositionAck, result.Disposition)
 
@@ -325,6 +343,53 @@ func TestService_HandleEvent_Happy(t *testing.T) {
 	assert.EqualValues(t, 1, tail.EntryCount)
 	require.Len(t, rec.emitted, 1, "L2 OutboxFact: one outbox.Emit per Append")
 	assert.Equal(t, "event.audit.appended.v1", rec.emitted[0].topic)
+}
+
+// TestHandleEvent_PrincipalFieldMapping verifies the #1229 B8 invariant: the
+// Principal family (subject/tenant/session) and Observability.CorrelationID
+// carried on the outbox envelope map onto the orthogonal ledger.Entry columns,
+// OccurredAt is propagated, and ActorID is still sourced from the DOMAIN payload
+// (actorId), NOT from the request-context principal. Distinct columns, distinct
+// authoritative sources.
+func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+	svc := newService(t, spec, cap, p)
+
+	occ := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	e, err := outbox.EntryScan{
+		ID:         "evt-princ",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1", "userId": "usr-1"}),
+		OccurredAt: occ,
+		CreatedAt:  occ,
+		Principal: outbox.PrincipalMetadata{
+			SubjectID: idutil.SafeID("subj-1"),
+			TenantID:  idutil.SafeID("tenant-1"),
+			SessionID: idutil.SafeID("sess-1"),
+		},
+		Observability: outbox.ObservabilityMetadata{CorrelationID: idutil.SafeID("corr-1")},
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result := svc.HandleEvent(context.Background(), e)
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"HandleEvent must Ack a valid entry; err=%v", result.Err)
+	require.Len(t, cap.appended, 1, "must have appended exactly one ledger entry")
+
+	got := cap.appended[0]
+	assert.Equal(t, "subj-1", got.SubjectID, "SubjectID must map from Principal.SubjectID")
+	assert.Equal(t, "tenant-1", got.TenantID, "TenantID must map from Principal.TenantID")
+	assert.Equal(t, "sess-1", got.SessionID, "SessionID must map from Principal.SessionID")
+	assert.Equal(t, "corr-1", got.CorrelationID,
+		"CorrelationID must map from Observability.CorrelationID")
+	assert.True(t, got.OccurredAt.Equal(occ), "OccurredAt must propagate from entry.OccurredAt()")
+	// B8: actor stays the domain payload actor, NOT the request-context subject.
+	assert.Equal(t, "actor-1", got.ActorID,
+		"ActorID must be sourced from the payload actor, not the principal subject")
 }
 
 // recordingEmitter captures every Emit call. Implements outbox.Emitter.
@@ -338,7 +403,7 @@ type emittedRecord struct {
 }
 
 func (r *recordingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
-	r.emitted = append(r.emitted, emittedRecord{topic: entry.EventType, payload: entry.Payload})
+	r.emitted = append(r.emitted, emittedRecord{topic: entry.EventType(), payload: entry.Payload()})
 	return nil
 }
 
@@ -387,12 +452,17 @@ func TestHandleEvent_UsesEntryCreatedAt(t *testing.T) {
 	fc.Advance(testtime.D10min)
 
 	t1 := epoch // original event creation time, before clock advance
-	entry := outbox.Entry{
-		ID:        "evt-created-at",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
-		CreatedAt: t1,
-	}
+	// Build directly via EntryScan (not mustScan) so CreatedAt is pinned to t1
+	// rather than defaulted: tsForLedger reads CreatedAt and the assertion below
+	// requires Timestamp == t1. OccurredAt is also t1 (non-zero, validates).
+	entry, err := outbox.EntryScan{
+		ID:         "evt-created-at",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		CreatedAt:  t1,
+		OccurredAt: t1,
+	}.ToEntry()
+	require.NoError(t, err)
 
 	svc, _ := newServiceWithLogBuf(t, spec, cap, p, fc)
 	result := svc.HandleEvent(context.Background(), entry)
@@ -425,12 +495,16 @@ func TestHandleEvent_ZeroCreatedAt_FallbackToClk_LogsWarn(t *testing.T) {
 	epoch := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	fc := clockmock.New(epoch)
 
-	entry := outbox.Entry{
-		ID:        "evt-zero-created-at",
-		EventType: "event.user.created.v1",
-		Payload:   mustJSON(t, map[string]any{"actorId": "actor-1"}),
-		// CreatedAt intentionally zero
-	}
+	// Build directly via EntryScan (not mustScan) so CreatedAt stays ZERO,
+	// exercising the tsForLedger fallback (zero CreatedAt → Warn + clk.Now()).
+	// OccurredAt must be non-zero for ToEntry validation, so it carries epoch.
+	entry, err := outbox.EntryScan{
+		ID:         "evt-zero-created-at",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		OccurredAt: epoch, // non-zero; CreatedAt left zero to trigger fallback
+	}.ToEntry()
+	require.NoError(t, err)
 
 	svc, buf := newServiceWithLogBuf(t, spec, cap, p, fc)
 	result := svc.HandleEvent(context.Background(), entry)

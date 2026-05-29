@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -17,17 +18,19 @@ func TestRecordingWriter_AppendsEntriesOnSuccess(t *testing.T) {
 	t.Parallel()
 	w := &RecordingWriter{}
 
-	e1 := outbox.Entry{ID: "evt-1", EventType: "topic.a", Payload: []byte(`{"k":"v1"}`)}
-	e2 := outbox.Entry{ID: "evt-2", EventType: "topic.b", Payload: []byte(`{"k":"v2"}`)}
+	e1, err := outbox.NewEntry(clock.Real(), context.Background(), "topic.a", []byte(`{"k":"v1"}`), outbox.WithID("evt-1"))
+	require.NoError(t, err)
+	e2, err := outbox.NewEntry(clock.Real(), context.Background(), "topic.b", []byte(`{"k":"v2"}`), outbox.WithID("evt-2"))
+	require.NoError(t, err)
 
 	require.NoError(t, w.Write(context.Background(), e1))
 	require.NoError(t, w.Write(context.Background(), e2))
 
 	require.Len(t, w.Entries, 2)
-	assert.Equal(t, "evt-1", w.Entries[0].ID)
-	assert.Equal(t, "topic.a", w.Entries[0].EventType)
-	assert.Equal(t, "evt-2", w.Entries[1].ID)
-	assert.Equal(t, "topic.b", w.Entries[1].EventType)
+	assert.Equal(t, "evt-1", w.Entries[0].ID())
+	assert.Equal(t, "topic.a", w.Entries[0].EventType())
+	assert.Equal(t, "evt-2", w.Entries[1].ID())
+	assert.Equal(t, "topic.b", w.Entries[1].EventType())
 }
 
 // TestRecordingWriter_ErrFieldShortCircuitsWrite verifies that when Err is
@@ -39,7 +42,9 @@ func TestRecordingWriter_ErrFieldShortCircuitsWrite(t *testing.T) {
 	injected := errors.New("simulated outbox failure")
 	w := &RecordingWriter{Err: injected}
 
-	err := w.Write(context.Background(), outbox.Entry{ID: "evt-x", EventType: "topic.x"})
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(), "topic.x", []byte(`{}`), outbox.WithID("evt-x"))
+	require.NoError(t, err)
+	err = w.Write(context.Background(), entry)
 
 	assert.ErrorIs(t, err, injected)
 	assert.Empty(t, w.Entries, "Err must short-circuit before appending")

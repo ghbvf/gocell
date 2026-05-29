@@ -70,6 +70,7 @@ generate:
 	go run ./cmd/gocell generate contract --all
 	go run ./cmd/gocell generate required-deps --all
 	go run ./cmd/gocell generate shared-schema --all
+	go run ./cmd/gocell generate saga-coverage
 	go generate ./cmd/corebundle/
 
 cover:
