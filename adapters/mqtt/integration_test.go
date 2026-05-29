@@ -535,16 +535,19 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 		cancel1()
 		t.Fatalf("NewSubscriber 1: %v", err)
 	}
-	subCtx1, subCancel1 := context.WithCancel(ctx1)
+	// sub1.Subscribe runs under ctx1 directly: canceling ctx1 (below) both drops
+	// the autopaho manager (unclean disconnect → session retained) AND unblocks
+	// this Subscribe call. No separate sub-ctx is needed — a derived cancel that
+	// is only invoked on the timeout path would leak on the happy path (govet
+	// lostcancel).
 	go func() {
-		_ = sub1.Subscribe(subCtx1, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		_ = sub1.Subscribe(ctx1, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.Ack(), nil
 		})
 	}()
 	select {
 	case <-sub1.Ready(subscription):
 	case <-time.After(testtime.D10s):
-		subCancel1()
 		cancel1()
 		t.Fatal("phase-1 subscribe not ready")
 	}
