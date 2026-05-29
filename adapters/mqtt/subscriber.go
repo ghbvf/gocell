@@ -39,6 +39,14 @@ const (
 	// stopIntakeInflightPollInterval.
 	stopIntakeInflightPollInterval = 20 * time.Millisecond
 
+	// defaultMaxConcurrentHandlers bounds how many deliveries are processed
+	// concurrently. paho calls OnPublishReceived synchronously on a single
+	// inbound-dispatch goroutine, so makeReceive hands each delivery to a bounded
+	// worker pool — otherwise one slow/blocked handler stalls intake for the whole
+	// connection. The bound doubles as back-pressure: when saturated, the callback
+	// blocks (the broker's Receive Maximum bounds in-flight unacked QoS1 anyway).
+	defaultMaxConcurrentHandlers = 16
+
 	// defaultSubscriberQoS is the MQTT QoS used for SUBSCRIBE when SubscriberConfig
 	// leaves QoS unset. QoS 1 (at-least-once) pairs with the publisher's QoS 1 and
 	// the manual-ack idempotency model.
@@ -73,6 +81,14 @@ type SubscriberConfig struct {
 	// StopIntakeDrainTimeout is the total upper bound for StopIntake to wait for
 	// in-flight handler goroutines to settle. 0 → 30s.
 	StopIntakeDrainTimeout time.Duration
+
+	// MaxConcurrentHandlers bounds how many received deliveries are processed
+	// concurrently (handler goroutines). 0 → 16. Each delivery is handed to a
+	// bounded worker pool so a slow handler does not stall the autopaho inbound
+	// dispatch loop. Keep ≤ the broker/client MQTT v5 Receive Maximum (the
+	// in-flight unacked QoS1 bound) so the pool, not the broker window, is the
+	// effective concurrency ceiling.
+	MaxConcurrentHandlers int
 }
 
 // setDefaults populates zero-valued fields with safe defaults.
@@ -88,6 +104,9 @@ func (sc *SubscriberConfig) setDefaults() {
 	}
 	if sc.StopIntakeDrainTimeout <= 0 {
 		sc.StopIntakeDrainTimeout = defaultStopIntakeDrainTimeout
+	}
+	if sc.MaxConcurrentHandlers <= 0 {
+		sc.MaxConcurrentHandlers = defaultMaxConcurrentHandlers
 	}
 }
 
@@ -127,6 +146,13 @@ type Subscriber struct {
 	// Wait" panic). Mirrors adapters/rabbitmq's inflight-counter poll-drain
 	// (waitInflightDrain).
 	inflight atomic.Int64
+
+	// workerSem is a bounded semaphore (cap = config.MaxConcurrentHandlers).
+	// makeReceive acquires a slot before spawning a per-delivery handler
+	// goroutine, so a slow/blocked handler bounds — never stalls — the autopaho
+	// inbound dispatch loop (paho calls OnPublishReceived synchronously on one
+	// goroutine). When saturated, acquire blocks (intended back-pressure).
+	workerSem chan struct{}
 
 	// closeCh is closed by Close to signal all blocked Subscribe calls to return.
 	closeCh   chan struct{}
@@ -203,6 +229,7 @@ func NewSubscriber(
 		closeCh:      make(chan struct{}),
 		stopIntakeCh: make(chan struct{}),
 		readyChans:   make(map[string]chan struct{}),
+		workerSem:    make(chan struct{}, config.MaxConcurrentHandlers),
 	}
 	for _, o := range opts {
 		o(s)
@@ -317,22 +344,31 @@ func (s *Subscriber) trackCancel(cancel func()) {
 // rather than processed during shutdown.
 func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.SubscriberHandler) receiveHandler {
 	return func(ctx context.Context, pb *paho.Publish) {
-		// Count this delivery in-flight BEFORE the stopIntakeCh check so the
-		// StopIntake poll-drain can never read a zero count while a delivery is
-		// mid-flight: inflight is incremented, then decremented via defer, around
-		// the drop decision. This ordering invariant is what lets an atomic
-		// counter replace sync.WaitGroup (whose Add-after-Wait would panic).
+		// Count this delivery in-flight at entry (before any drop / queue decision)
+		// so the StopIntake poll-drain can never read a zero count while a delivery
+		// is mid-flight. The decrement is owned by exactly one path: an inline drop
+		// here, or the worker goroutine's defer.
 		s.inflight.Add(1)
-		defer s.inflight.Add(-1)
 		select {
 		case <-s.stopIntakeCh:
 			// Intake stopped: do not process or ack. Leaving the message unacked
 			// lets the broker redeliver after session resume / reconnect.
-			slog.Info("mqtt: intake stopped, dropping delivery for redelivery",
-				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-				slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
+			s.inflight.Add(-1)
+			s.logIntakeStoppedDrop(pb)
 			return
 		default:
+		}
+		// Hand the delivery to a bounded worker pool so a slow/blocked handler does
+		// not stall the autopaho inbound dispatch loop (paho calls OnPublishReceived
+		// synchronously on a single goroutine). Acquiring a slot blocks when the
+		// pool is saturated — intended back-pressure — but must not outlive
+		// shutdown, so the acquire races stopIntakeCh.
+		select {
+		case s.workerSem <- struct{}{}:
+		case <-s.stopIntakeCh:
+			s.inflight.Add(-1)
+			s.logIntakeStoppedDrop(pb)
+			return
 		}
 		// Prefer the connection-supplied ctx (subscription-scoped); fall back to
 		// subCtx if the read loop hands a nil ctx.
@@ -340,8 +376,22 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 		if deliveryCtx == nil {
 			deliveryCtx = subCtx
 		}
-		s.processDelivery(deliveryCtx, pb, handler)
+		go func() {
+			defer func() {
+				<-s.workerSem
+				s.inflight.Add(-1)
+			}()
+			s.processDelivery(deliveryCtx, pb, handler)
+		}()
 	}
+}
+
+// logIntakeStoppedDrop records that a delivery was dropped (left unacked for
+// broker redelivery) because StopIntake has fired.
+func (s *Subscriber) logIntakeStoppedDrop(pb *paho.Publish) {
+	slog.Info("mqtt: intake stopped, dropping delivery for redelivery",
+		slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+		slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 }
 
 // processDelivery decodes the wire envelope and dispatches to the handler.
@@ -353,10 +403,14 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, handler outbox.SubscriberHandler) {
 	entry, err := outbox.UnmarshalEnvelope(pb.Topic, pb.Payload)
 	if err != nil {
+		// Classify the poison with a stable code (ERR_ADAPTER_MQTT_UNMARSHAL_ENVELOPE)
+		// so operators can grep it; the handler is never invoked for poison.
+		poisonErr := errcode.Wrap(errcode.KindInvalid, ErrAdapterMQTTUnmarshalEnvelope,
+			"mqtt: unmarshal envelope failed", err)
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unmarshal envelope failed, acking poison message (PR-4 will route to $dead)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
-			slog.Any("error", err))
+			slog.Any("error", poisonErr))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnmarshal)
 		// ackPoison logs its own ack failure. The unmarshal path has no Settlement
 		// or SettlementObservers to notify (the handler was never invoked); if the

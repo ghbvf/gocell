@@ -332,10 +332,13 @@ const sharedSubPrefix = "$share/"
 // ref: adapters/mqtt/topicns.go Mint/publishableTopic
 func (n TopicNamespace) MintFilter(consumerGroup, filter string) (subscribableFilter, error) {
 	if consumerGroup == "" {
+		// filter is a topic pattern (may embed identifiers) → Internal channel
+		// only, consistent with SubscribeOK; the message alone is sufficient for
+		// the 4xx client.
 		return subscribableFilter{}, errcode.New(
 			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 			msgEmptyConsumerGroup,
-			errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+			errcode.WithInternal(errcode.InternalAttr(detailKeyFilter, filter)),
 		)
 	}
 	if !isValidConsumerGroup(consumerGroup) {

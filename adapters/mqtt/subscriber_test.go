@@ -802,3 +802,54 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Concurrent dispatch (F3-design fix): a slow handler must not block intake
+// ---------------------------------------------------------------------------
+
+// TestSubscriber_ConcurrentDispatch_SlowHandlerDoesNotBlock proves the bounded
+// worker pool decouples handler latency from intake: while a "slow" handler is
+// blocked, a subsequently-delivered "fast" message still completes. Before the
+// fix, processDelivery ran synchronously in paho's single inbound-dispatch
+// goroutine, so the slow handler would have stalled all further deliveries.
+func TestSubscriber_ConcurrentDispatch_SlowHandlerDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	addr, stop := startInternalBroker(t)
+	defer stop()
+	sub, conn := newTestSubscriber(t, addr, nil)
+
+	const slowPayload = `{"k":"slow"}`
+	block := make(chan struct{})
+	var slowEntered, fastDone atomic.Bool
+	t.Cleanup(func() {
+		select {
+		case <-block:
+		default:
+			close(block) // unblock the stuck handler so the goroutine is not leaked
+		}
+	})
+
+	subscription := newSubscription("test/conc/+", "conc-cg-"+uuid.NewString())
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		if string(entry.Payload) == slowPayload {
+			slowEntered.Store(true)
+			<-block // block until released
+		} else {
+			fastDone.Store(true)
+		}
+		return outbox.Ack(), nil
+	})
+	defer cancel()
+
+	// Deliver the slow message first; wait until its handler is actually in-flight.
+	slowTopic := "test/conc/" + uuid.NewString()
+	publishTo(t, conn, slowTopic, newSubEnvelope(t, slowTopic, []byte(slowPayload)))
+	testwait.External(t, "slow-handler-entered", slowEntered.Load, testtime.D5s, testtime.D10ms)
+
+	// Deliver the fast message; it must complete WHILE the slow handler is blocked.
+	fastTopic := "test/conc/" + uuid.NewString()
+	publishTo(t, conn, fastTopic, newSubEnvelope(t, fastTopic, []byte(`{"k":"fast"}`)))
+	testwait.External(t, "fast-handler-done-while-slow-blocked", fastDone.Load, testtime.D5s, testtime.D10ms)
+
+	assert.True(t, slowEntered.Load(), "slow handler must still be in-flight (proving concurrency, not serialization)")
+}
