@@ -194,10 +194,7 @@ func (p *Publisher) handlePublishError(ctx, publishCtx context.Context, resp *pa
 		p.collector.RecordPublishFailure(ctx, pubackReasonToMetric(code))
 		return errcode.New(kind, code,
 			"mqtt: broker returned non-success PUBACK reason code",
-			errcode.WithDetails(
-				errcode.PublicInt("reasonCode", int(resp.ReasonCode)),
-				errcode.PublicString("reasonName", pubackReasonName(resp.ReasonCode)),
-			))
+			reasonDetailOptions(int(resp.ReasonCode), pubackReasonName(resp.ReasonCode), isAuthRelatedPubackCode(resp.ReasonCode))...)
 	}
 	// (2) Adapter closed — preserve the closed errcode rather than wrapping it.
 	var ec *errcode.Error

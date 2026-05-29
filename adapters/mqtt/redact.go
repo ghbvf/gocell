@@ -2,9 +2,46 @@ package mqtt
 
 import (
 	"net/url"
+	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
+
+// maxTopicLogLen caps the rune length of a broker-delivered topic before it is
+// written to a log line. A hostile producer could craft an arbitrarily long
+// topic; capping bounds log-line size independent of the redaction pass.
+const maxTopicLogLen = 256
+
+// safeTopicForLog sanitizes a broker-delivered (untrusted) MQTT topic before it
+// is logged. pb.Topic is wire bytes the broker forwards verbatim; unlike
+// entry.Topic (which UnmarshalEnvelope validates via idutil.SafeID), the raw
+// topic on the intake-stop drop / unmarshal-poison / ackPoison paths is never
+// validated. Logging it directly is a CWE-117 log-injection sink: a CR/LF or
+// ANSI escape embedded in the topic could forge log lines or corrupt terminal
+// output.
+//
+// Two-layer fail-closed (mirrors the redact.go redactConnectURL compose):
+//  1. strip control characters (CR, LF, tab, ANSI ESC, other non-printables) so
+//     no line break / escape sequence survives into the log;
+//  2. route the residue through pkg/redaction.RedactString so any sensitive
+//     key=value substring in the topic is masked (single-source sensitivity
+//     list), then cap to maxTopicLogLen runes.
+//
+// ref: pkg/redaction single-source sensitivity list; idutil.SafeID rationale.
+func safeTopicForLog(topic string) string {
+	stripped := strings.Map(func(r rune) rune {
+		if r == unicode.ReplacementChar {
+			return -1
+		}
+		if unicode.IsControl(r) || !strconv.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, topic)
+	return redaction.TruncateString(redaction.RedactString(stripped), maxTopicLogLen)
+}
 
 // redactConnectURL strips credentials from a broker URL for logging.
 //
@@ -36,6 +73,12 @@ func redactErr(err error) error {
 // redactPayloadForLog routes payload bytes through pkg/redaction.RedactPayload.
 // Sensitive JSON field values are replaced with "<REDACTED>"; malformed JSON
 // is entirely replaced (fail-closed).
+//
+// Reserved for the PR-4 $dead/<topic> capture path. It MUST NOT be used to log
+// payloads on the hot receive path: the receive path (processDelivery /
+// dispatchDisposition / ackPoison) deliberately omits the payload from logs, so
+// no payload bytes — redacted or not — reach the log backend during normal
+// consumption.
 //
 // ref: pkg/redaction.RedactPayload
 func redactPayloadForLog(p []byte) []byte {

@@ -344,3 +344,7 @@ type fakeCollector struct {
 }
 
 func (f *fakeCollector) RecordReconnect(_ context.Context) { f.count.Add(1) }
+
+// RecordSubscribeFailure satisfies the ConnectionCollector interface (added by
+// PR-3 review fix F7). This fake only counts reconnects, so it is a no-op here.
+func (f *fakeCollector) RecordSubscribeFailure(_ context.Context, _ mqtt.SubscribeFailureReason) {}

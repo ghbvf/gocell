@@ -152,6 +152,12 @@ func TestErrorCodes_DeclaredAsErrcodeCodes(t *testing.T) {
 		ErrAdapterMQTTPublishCanceled,
 		ErrAdapterMQTTPublishFailed,
 		ErrAdapterMQTTPublisherCloseTimeout,
+		// PR-3 additions
+		ErrAdapterMQTTSubscribe,
+		ErrAdapterMQTTSubscribeNotAuthorized,
+		ErrAdapterMQTTSharedSubsUnsupported,
+		ErrAdapterMQTTSubscribeRateLimited,
+		ErrAdapterMQTTUnmarshalEnvelope,
 	}
 	for _, c := range codes {
 		if c == "" {
@@ -205,6 +211,70 @@ func TestClassifyPubackReason(t *testing.T) {
 			}
 			if gotKind != tc.wantKind {
 				t.Errorf("classifyPubackReason(0x%02x) kind = %v, want %v", tc.code, gotKind, tc.wantKind)
+			}
+		})
+	}
+}
+
+func TestClassifySubackReason(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		code     byte
+		wantCode errcode.Code
+		wantKind errcode.Kind
+	}{
+		{"unspecified-0x80", 0x80, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"not-authorized-0x87", 0x87, ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal},
+		{"topic-filter-invalid-0x8F", 0x8F, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"quota-exceeded-0x97", 0x97, ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable},
+		{"shared-subs-unsupported-0x9E", 0x9E, ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal},
+		{"sub-ids-unsupported-0xA1", 0xA1, ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal},
+		{"wildcard-subs-unsupported-0xA2", 0xA2, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"unknown-error-0x83", 0x83, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"unknown-error-0xFF", 0xFF, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotCode, gotKind := classifySubackReason(tc.code)
+			if gotCode != tc.wantCode {
+				t.Errorf("classifySubackReason(0x%02x) code = %q, want %q", tc.code, gotCode, tc.wantCode)
+			}
+			if gotKind != tc.wantKind {
+				t.Errorf("classifySubackReason(0x%02x) kind = %v, want %v", tc.code, gotKind, tc.wantKind)
+			}
+		})
+	}
+}
+
+func TestSubackReasonName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		code byte
+		want string
+	}{
+		{0x00, "GrantedQoS0"},
+		{0x01, "GrantedQoS1"},
+		{0x02, "GrantedQoS2"},
+		{0x80, "UnspecifiedError"},
+		{0x87, "NotAuthorized"},
+		{0x8F, "TopicFilterInvalid"},
+		{0x97, "QuotaExceeded"},
+		{0x9E, "SharedSubscriptionsNotSupported"},
+		{0xA1, "SubscriptionIdentifiersNotSupported"},
+		{0xA2, "WildcardSubscriptionsNotSupported"},
+		{0x7F, "Unknown"},
+		{0xFD, "Unknown"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(fmt.Sprintf("0x%02x", tc.code), func(t *testing.T) {
+			t.Parallel()
+			got := subackReasonName(tc.code)
+			if got != tc.want {
+				t.Errorf("subackReasonName(0x%02x) = %q, want %q", tc.code, got, tc.want)
 			}
 		})
 	}

@@ -41,7 +41,7 @@ func sharedBrokerURL(t *testing.T) string {
 	t.Helper()
 	testutil.RequireDocker(t)
 	sharedBrokerOnce.Do(func() {
-		sharedBrokerURLValue, sharedBrokerShutdown, sharedBrokerStartErr = startMosquittoContainer()
+		sharedBrokerURLValue, sharedBrokerShutdown, sharedBrokerStartErr = startMosquittoContainer(t)
 	})
 	if sharedBrokerStartErr != nil {
 		t.Fatalf("mqtt: shared broker start: %v", sharedBrokerStartErr)
@@ -51,10 +51,14 @@ func sharedBrokerURL(t *testing.T) string {
 
 // startMosquittoContainer brings up an eclipse-mosquitto v2.0 MQTT broker with
 // anonymous auth. The conf file is mounted in-memory via ContainerFile so no
-// host filesystem access is required.
+// host filesystem access is required. t is taken so RequireDocker can gate the
+// container start in this function (INTEGRATION-GUARD-01), even though
+// sharedBrokerURL also calls it for the cross-helper path.
 //
 // ref: adapters/otel/integration_test.go (GenericContainer + ContainerFile pattern)
-func startMosquittoContainer() (string, func(), error) {
+func startMosquittoContainer(t *testing.T) (string, func(), error) {
+	t.Helper()
+	testutil.RequireDocker(t) // INTEGRATION-GUARD: fail-fast/skip before starting a testcontainer
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{

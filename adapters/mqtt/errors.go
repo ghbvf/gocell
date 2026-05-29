@@ -143,7 +143,114 @@ const (
 	// ErrAdapterMQTTPubAckTimeout (single-publish PUBACK timeout) — Close timeout
 	// indicates one or more goroutines are stuck.
 	ErrAdapterMQTTPublisherCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_PUBLISHER_CLOSE_TIMEOUT"
+
+	// ErrAdapterMQTTSubscriberCloseTimeout signals that Subscriber.StopIntake
+	// exceeded its drain budget waiting for in-flight handler goroutines to
+	// settle. Distinct from ErrAdapterMQTTClosed (which means the adapter is
+	// already shut down) — a drain timeout means the subscriber is still draining
+	// but one or more handlers did not finish within StopIntakeDrainTimeout.
+	// Mirrors ErrAdapterMQTTPublisherCloseTimeout on the publish side.
+	ErrAdapterMQTTSubscriberCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIBER_CLOSE_TIMEOUT"
+
+	// ErrAdapterMQTTSubscribe signals a generic SUBSCRIBE failure: the broker
+	// returned a SUBACK reason byte >= 0x80 that is not covered by a more
+	// specific code (or the underlying transport call failed). Classified
+	// KindInternal — a fail-fast condition that requires operator / config
+	// intervention rather than blind retry.
+	ErrAdapterMQTTSubscribe errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIBE"
+
+	// ErrAdapterMQTTSubscribeNotAuthorized signals that the broker returned
+	// SUBACK reason code 0x87 (Not Authorized): the subscriber's ACL does not
+	// permit subscribing to the requested filter. Classified KindInternal
+	// (fail-fast) — a broker-side ACL misconfiguration that retrying cannot
+	// resolve; an operator must fix the ACL.
+	ErrAdapterMQTTSubscribeNotAuthorized errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIBE_NOT_AUTHORIZED"
+
+	// ErrAdapterMQTTSharedSubsUnsupported signals that the broker returned SUBACK
+	// reason code 0x9E (Shared Subscriptions Not Supported). GoCell's subscriber
+	// uses MQTT v5 shared subscriptions ("$share/...") for consumer-group
+	// semantics; a broker that does not support them is a deployment
+	// misconfiguration. Classified KindInternal (fail-fast).
+	ErrAdapterMQTTSharedSubsUnsupported errcode.Code = "ERR_ADAPTER_MQTT_SHARED_SUBS_UNSUPPORTED"
+
+	// ErrAdapterMQTTSubscribeRateLimited signals that the broker returned SUBACK
+	// reason code 0x97 (Quota Exceeded): the subscription quota is exhausted.
+	// Classified KindUnavailable (transient) — the subscriber should back off
+	// and retry.
+	ErrAdapterMQTTSubscribeRateLimited errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIBE_RATE_LIMITED"
+
+	// ErrAdapterMQTTUnmarshalEnvelope signals that a received PUBLISH payload
+	// could not be decoded into the expected event envelope. Used by the
+	// subscriber to classify poison messages: the bytes are permanently
+	// undecodable, so the message must be dead-lettered rather than retried.
+	ErrAdapterMQTTUnmarshalEnvelope errcode.Code = "ERR_ADAPTER_MQTT_UNMARSHAL_ENVELOPE"
+
+	// ErrAdapterMQTTAck signals a manual-acknowledgement failure on the receive
+	// path: either no delivering client is available to ack through, or the
+	// broker rejected the manual PUBACK. Distinct from ErrAdapterMQTTSubscribe (a
+	// SUBSCRIBE/SUBACK failure) — ack is a separate operational domain
+	// (post-delivery settlement) and must be classified independently for
+	// operator alerting / metrics. Classified KindUnavailable (transient): the
+	// message will be redelivered and the idempotency key guards reprocessing.
+	ErrAdapterMQTTAck errcode.Code = "ERR_ADAPTER_MQTT_ACK"
+
+	// ErrAdapterMQTTSubscriptionIDsUnsupported signals that the broker returned
+	// SUBACK reason code 0xA1 (Subscription Identifiers Not Supported). GoCell's
+	// subscriber routes each delivered PUBLISH to its originating subscription via
+	// the MQTT v5 Subscription Identifier; a broker that does not support them
+	// cannot disambiguate overlapping consumer-group subscriptions on one
+	// connection, so this is a fail-fast deployment misconfiguration
+	// (KindInternal).
+	ErrAdapterMQTTSubscriptionIDsUnsupported errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIPTION_IDS_UNSUPPORTED"
 )
+
+// reasonDetailKeyCode / reasonDetailKeyName are the public/internal detail keys
+// carrying an MQTT reason code and its spec name.
+const (
+	reasonDetailKeyCode = "reasonCode"
+	reasonDetailKeyName = "reasonName"
+)
+
+// reasonDetailOptions is the single funnel for constructing errcode details that
+// carry an MQTT reason code + its spec name (CONNACK / SUBACK / PUBACK error
+// builders all route through it). For auth-related reason codes the
+// human-readable name is moved to the Internal channel (server-log only) so it
+// does not help an attacker enumerate "credentials wrong vs authz missing"; only
+// the numeric reasonCode stays in Public details. For non-auth codes both are
+// Public for operator diagnostics.
+//
+// archtest REASON-NAME-REDACTION-01 bans PublicString("reasonName", …) anywhere
+// in adapters/mqtt outside this function, so the auth-redaction decision cannot
+// be re-introduced (or forgotten) per-packet.
+func reasonDetailOptions(reasonCode int, reasonName string, isAuth bool) []errcode.Option {
+	if isAuth {
+		return []errcode.Option{
+			errcode.WithDetails(errcode.PublicInt(reasonDetailKeyCode, reasonCode)),
+			errcode.WithInternal(errcode.InternalAttr(reasonDetailKeyName, reasonName)),
+		}
+	}
+	return []errcode.Option{
+		errcode.WithDetails(
+			errcode.PublicInt(reasonDetailKeyCode, reasonCode),
+			errcode.PublicString(reasonDetailKeyName, reasonName),
+		),
+	}
+}
+
+// isAuthRelatedSubackCode reports whether a SUBACK reason code is auth-related.
+// The only auth-related SUBACK code is 0x87 (Not Authorized); its reason name is
+// moved to the Internal channel by reasonDetailOptions (parallel to the CONNACK
+// auth-code redaction in isAuthRelatedConnackCode).
+func isAuthRelatedSubackCode(code byte) bool {
+	return code == 0x87
+}
+
+// isAuthRelatedPubackCode reports whether a PUBACK reason code is auth-related.
+// The only auth-related PUBACK code is 0x87 (Not Authorized); its reason name is
+// moved to the Internal channel by reasonDetailOptions.
+func isAuthRelatedPubackCode(code byte) bool {
+	return code == 0x87
+}
 
 // connackClass classifies an OnConnectError into one of three categories.
 // The classification drives autopaho reconnect behavior and the readyz probe.
@@ -313,6 +420,77 @@ var pubackReasonNames = map[byte]string{
 // reasonCode field in structured logs.
 func pubackReasonName(code byte) string {
 	if name, ok := pubackReasonNames[code]; ok {
+		return name
+	}
+	return "Unknown"
+}
+
+// classifySubackReason maps an MQTT v5 SUBACK reason code (byte) to the
+// corresponding errcode.Code and errcode.Kind. It mirrors classifyPubackReason
+// but covers the SUBACK reason-code table (MQTT v5.0 §3.9.3).
+//
+// Reason-code → (code, kind) mapping:
+//
+//	0x80 UnspecifiedError                  → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
+//	0x87 NotAuthorized                     → (ErrAdapterMQTTSubscribeNotAuthorized, KindInternal)   — ACL config; fail-fast
+//	0x8F TopicFilterInvalid                → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
+//	0x97 QuotaExceeded                     → (ErrAdapterMQTTSubscribeRateLimited,  KindUnavailable) — transient
+//	0x9E SharedSubsNotSupported            → (ErrAdapterMQTTSharedSubsUnsupported,      KindInternal) — fail-fast
+//	0xA1 SubscriptionIdsNotSupported       → (ErrAdapterMQTTSubscriptionIDsUnsupported, KindInternal) — fail-fast (sub-id routing required)
+//	0xA2 WildcardSubsNotSupported          → (ErrAdapterMQTTSubscribe,                  KindInternal) — fail-fast
+//	default (>= 0x80)                       → (ErrAdapterMQTTSubscribe,             KindInternal)
+//
+// Reason bytes < 0x80 are granted-QoS success values (0x00/0x01/0x02); the caller
+// MUST guard reason >= 0x80 before invoking this function (parallel to
+// classifyPubackReason's 0x00 contract).
+//
+// ref: MQTT v5.0 spec §3.9.3 Subscribe Reason Code table
+func classifySubackReason(code byte) (errcode.Code, errcode.Kind) {
+	switch code {
+	case 0x80: // Unspecified Error
+		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	case 0x87: // Not Authorized — ACL config; fail-fast
+		return ErrAdapterMQTTSubscribeNotAuthorized, errcode.KindInternal
+	case 0x8F: // Topic Filter Invalid
+		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	case 0x97: // Quota Exceeded — transient, retry
+		return ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable
+	case 0x9E: // Shared Subscriptions Not Supported
+		return ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal
+	case 0xA1: // Subscription Identifiers Not Supported — fail-fast (sub-id routing is required)
+		return ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal
+	case 0xA2: // Wildcard Subscriptions Not Supported
+		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	default:
+		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	}
+}
+
+// subackReasonNames is the single source of MQTT v5 SUBACK reason code →
+// spec-defined name mapping (MQTT v5.0 §3.9.3 Subscribe Reason Code table).
+// Distinct from connackReasonNames / pubackReasonNames / disconnectReasonNames —
+// the packets share some numeric codes with different meanings. Granted-QoS
+// success values (0x00/0x01/0x02) are enumerated so diagnostics can render them.
+var subackReasonNames = map[byte]string{
+	0x00: "GrantedQoS0",
+	0x01: "GrantedQoS1",
+	0x02: "GrantedQoS2",
+	0x80: "UnspecifiedError",
+	0x83: "ImplementationSpecificError",
+	0x87: "NotAuthorized",
+	0x8F: "TopicFilterInvalid",
+	0x91: "PacketIdentifierInUse",
+	0x97: "QuotaExceeded",
+	0x9E: "SharedSubscriptionsNotSupported",
+	0xA1: "SubscriptionIdentifiersNotSupported",
+	0xA2: "WildcardSubscriptionsNotSupported",
+}
+
+// subackReasonName returns the spec name for an MQTT v5 SUBACK reason code.
+// Unknown codes return "Unknown" so operators can still match the numeric
+// reasonCode field in structured logs.
+func subackReasonName(code byte) string {
+	if name, ok := subackReasonNames[code]; ok {
 		return name
 	}
 	return "Unknown"
