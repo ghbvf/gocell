@@ -1,10 +1,10 @@
 // Package command is a RED fixture for PROD-CLOCK-INJECTION-01 #1136 review F2.
 //
-// It asserts that the (method, callee) exact-pair carve-out rejects a
+// It asserts that the (host, method, callee) exact-triple carve-out rejects a
 // sanctioned controlPlaneClock method that calls the WRONG time.* function.
 // Under the receiver-type-only form, time.Sleep inside controlPlaneClock.newTicker
-// would have been exempted; the (method, callee) pair form rejects it because
-// exactSanctionedTimeCalls["newTicker"] == "NewTicker" != "Sleep".
+// would have been exempted; the host-scoped table rejects it because the
+// runtime/command "newTicker" callee is "NewTicker", not "Sleep".
 package command
 
 import "time"

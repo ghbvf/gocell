@@ -1,12 +1,13 @@
 // Package reconcile is GoCell's L4 desired-state convergence harness, a
 // level-triggered control loop modeled on Kubernetes controller-runtime's
-// Reconciler. It is delivered across stacked PRs: PR-A2 lands the minimal core
+// Reconciler. It is delivered across stacked PRs: PR-A2 landed the minimal core
 // documented below (the Reconciler interface, Request / Result, and the
-// PermanentError classifier); the scheduling Loop — transplanted from
-// runtime/command.SweeperLifecycle — lands in PR-A3 and is NOT present at this
-// commit. Comments here describe how each type is consumed by that Loop to pin
-// its contract; any Loop runtime behavior they mention refers to the PR-A3
-// component, not to anything in this commit.
+// PermanentError classifier); PR-A3 landed the scheduling Loop — transplanted
+// from runtime/command.SweeperLifecycle — which is present from that commit on.
+// Comments here describe how each type is consumed by the Loop to pin its
+// contract. Later PRs refine scheduling (PR-A5 adds a rate-limited delaying
+// queue + dirty dedup) and construction (PR-A7 privatizes the Loop constructor
+// behind a Builder); see the design ADR for the staged plan.
 //
 // # When to use
 //
