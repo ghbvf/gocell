@@ -462,13 +462,11 @@ func isRedactedCreation(info *types.Info, expr ast.Expr, tv types.TypeAndValue) 
 // skip — the only sanctioned creation site is literally the funnel body's source
 // range, so a rename can never silently re-open it (guard 3 also fails on rename).
 func funnelBodyRange(p *Pass) (lo, hi token.Pos, found bool) {
-	for _, f := range p.Files {
-		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-			if fd.Body != nil && fd.Name.Name == healthRedactedErrorMsgFunnelFuncName {
-				lo, hi, found = fd.Body.Pos(), fd.Body.End(), true
-			}
-		})
-	}
+	WalkFuncDecls(p, func(ctx FuncDeclContext) {
+		if ctx.Func.Name.Name == healthRedactedErrorMsgFunnelFuncName {
+			lo, hi, found = ctx.Func.Body.Pos(), ctx.Func.Body.End(), true
+		}
+	})
 	return lo, hi, found
 }
 
@@ -566,15 +564,13 @@ func TestHealthRedactedErrorMsgFunnelBodyRedacts(t *testing.T) {
 				return nil
 			}
 			var ds []Diagnostic
-			for _, f := range p.Files {
-				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-					if fd.Body == nil || fd.Name.Name != healthRedactedErrorMsgFunnelFuncName {
-						return
-					}
-					checked = true
-					ds = append(ds, funnelBodyRedactViolations(p, f, fd.Body)...)
-				})
-			}
+			WalkFuncDecls(p, func(ctx FuncDeclContext) {
+				if ctx.Func.Name.Name != healthRedactedErrorMsgFunnelFuncName {
+					return
+				}
+				checked = true
+				ds = append(ds, funnelBodyRedactViolations(p, ctx.File, ctx.Func.Body)...)
+			})
 			return ds
 		})
 
@@ -616,8 +612,7 @@ func argIsRedactString(info *types.Info, call *ast.CallExpr) bool {
 	if !ok {
 		return false
 	}
-	pkgPath, name, ok := ResolvePackageRef(info, inner.Fun)
-	return ok && pkgPath == redactionPkgPath && name == redactStringFuncName
+	return IsCallToPkgFunc(info, inner, redactionPkgPath, redactStringFuncName)
 }
 
 // TestHealthRedactedErrorMsgFieldTyped enforces guard 2 (linchpin).

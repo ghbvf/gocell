@@ -597,11 +597,7 @@ func scanErrorsAsNetSubtypeNarrow(p *Pass, allowlist map[string]map[string]struc
 // stdlib errors.As. Robust to import aliases (`stderrors "errors"`) and dot
 // imports.
 func isErrorsAsCall(info *types.Info, call *ast.CallExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-	if !ok {
-		return false
-	}
-	return pkgPath == "errors" && name == "As"
+	return IsCallToPkgFunc(info, call, "errors", "As")
 }
 
 // isAddressOfNetErrorIdent reports whether expr is `&<ident>` and ident's
