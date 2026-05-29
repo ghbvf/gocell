@@ -18,8 +18,11 @@ const selectCheckpointSQL = `SELECT offset_seq FROM projection_checkpoints WHERE
 
 // upsertCheckpointSQL advances the committed offset. The owner column is
 // DELIBERATELY ABSENT from both the column list and the SET clause: v1 reserves
-// it for v1.1 multi-pod pessimistic claim but never reads or writes it (ADR §Q5).
-// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 statically guards this.
+// it for v1.1 multi-pod pessimistic claim and never WRITES it (reading owner is
+// harmless and not guarded; ADR §Q5). Because the write omits owner, its NOT NULL
+// constraint is satisfied solely by the column's empty-string default (asserted
+// at startup by schema_guard.verifyDefaults).
+// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 statically guards the write omission.
 const upsertCheckpointSQL = `INSERT INTO projection_checkpoints (cell_id, projection_id, offset_seq, updated_at)
 VALUES ($1, $2, $3, NOW())
 ON CONFLICT (cell_id, projection_id)

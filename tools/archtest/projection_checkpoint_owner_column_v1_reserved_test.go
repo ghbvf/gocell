@@ -34,12 +34,15 @@
 //
 // # Blind spots (forms the BasicLit scan cannot see)
 //
-//   - B1. Dynamic SQL construction: an owner write assembled via string
-//     concatenation (`"... " + ownerCol`) or fmt.Sprintf would not be a single
-//     literal and would escape the scan. Reverse check
-//     TestProjectionCheckpointOwnerColumnV1Reserved01_ReverseBlindSpot_NoDynamicSQL
-//     asserts no production string `+` expression in adapters/postgres mentions
-//     projection_checkpoints (the table SQL must stay a static literal).
+//   - B1. Dynamic SQL construction: an owner write assembled at runtime rather
+//     than as one static literal would escape the main BasicLit scan. Reverse
+//     check ..._ReverseBlindSpot_NoDynamicSQL asserts no production code in
+//     adapters/postgres builds projection_checkpoints SQL via any AST-recognizable
+//     dynamic form — string `+` concatenation, fmt.Sprintf / fmt.Fprintf,
+//     strings.Join, or *.WriteString (strings.Builder / bytes.Buffer). Residual:
+//     a table name sourced from a non-literal variable (e.g. a const threaded
+//     through %s) is unreachable by an AST-only scan; v1 uses static const SQL
+//     only, and PG-REPO-AMBIENT-TX-01 + code review cover that tail.
 //
 //   - B2. Reads of owner (SELECT … owner FROM projection_checkpoints): out of
 //     scope by design. Reading the reserved column yields the harmless empty
@@ -58,6 +61,7 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"regexp"
 	"strings"
@@ -98,7 +102,7 @@ func ownerColumnWriteDiags(p *Pass) []Diagnostic {
 				Rel:  rel,
 				Line: p.Fset.Position(lit.Pos()).Line,
 				Message: "INSERT/UPDATE on projection_checkpoints references the reserved owner " +
-					"column; v1 must not read or write owner (ADR §Q5). Remove owner from the " +
+					"column; v1 must not write owner (ADR §Q5; reading it is harmless/unguarded). Remove owner from the " +
 					"write path — it is provisioned for v1.1 pessimistic claim only.",
 			})
 		})
@@ -155,41 +159,118 @@ func TestProjectionCheckpointOwnerColumnV1Reserved01_RedFixture(t *testing.T) {
 func TestProjectionCheckpointOwnerColumnV1Reserved01_ReverseBlindSpot_NoDynamicSQL(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+	const msg = "B1 blind spot: projection_checkpoints SQL assembled dynamically " +
+		"(`+` concatenation / fmt.Sprintf|Fprintf / strings.Join / *.WriteString); " +
+		"keep it a single static literal so the owner-column scan stays effective"
 	diags := Run(t, DirsScope(root, []string{"adapters/postgres"}), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)
+			// String `+` concatenation.
 			EachInSubtree[ast.BinaryExpr](f, func(be *ast.BinaryExpr) {
-				if be.Op != token.ADD {
-					return
+				if be.Op == token.ADD && nodeMentionsCheckpointTable(be) {
+					out = append(out, Diagnostic{Rel: rel, Line: p.Fset.Position(be.Pos()).Line, Message: msg})
 				}
-				if !binaryExprMentionsCheckpointTable(be) {
-					return
+			})
+			// fmt.Sprintf/Fprintf, strings.Join, *.WriteString builder calls.
+			EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+				if isDynamicSQLBuilderCall(call) && callArgsMentionCheckpointTable(call) {
+					out = append(out, Diagnostic{Rel: rel, Line: p.Fset.Position(call.Pos()).Line, Message: msg})
 				}
-				out = append(out, Diagnostic{
-					Rel:  rel,
-					Line: p.Fset.Position(be.Pos()).Line,
-					Message: "B1 blind spot: projection_checkpoints SQL assembled via string " +
-						"concatenation; keep it a static literal so the owner-column scan stays effective",
-				})
 			})
 		}
 		return out
 	})
 	assert.Empty(t, diags,
 		"B1 reverse: projection_checkpoints SQL must be a single static string literal, "+
-			"not built via `+` concatenation")
+			"not built via dynamic construction")
 }
 
-// binaryExprMentionsCheckpointTable reports whether any string literal in be's
-// subtree contains the projection_checkpoints table name.
-func binaryExprMentionsCheckpointTable(be *ast.BinaryExpr) bool {
+// nodeMentionsCheckpointTable reports whether any string literal in n's subtree
+// contains the projection_checkpoints table name.
+func nodeMentionsCheckpointTable(n ast.Node) bool {
 	found := false
-	EachInSubtree[ast.BasicLit](be, func(lit *ast.BasicLit) {
+	EachInSubtree[ast.BasicLit](n, func(lit *ast.BasicLit) {
 		if v, ok := StringLitValue(lit); ok &&
 			strings.Contains(strings.ToUpper(v), strings.ToUpper(projectionCheckpointsTable)) {
 			found = true
 		}
 	})
 	return found
+}
+
+// isDynamicSQLBuilderCall reports whether call is one of the AST-recognizable
+// dynamic string-builder forms: fmt.Sprintf / fmt.Fprintf / strings.Join, or any
+// method named WriteString (strings.Builder / bytes.Buffer). Matched by selector
+// name only (no type resolution) — a deliberately broad net for the reverse check.
+func isDynamicSQLBuilderCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "WriteString":
+		return true
+	case "Sprintf", "Fprintf":
+		x, ok := sel.X.(*ast.Ident)
+		return ok && x.Name == "fmt"
+	case "Join":
+		x, ok := sel.X.(*ast.Ident)
+		return ok && x.Name == "strings"
+	}
+	return false
+}
+
+// callArgsMentionCheckpointTable reports whether any argument subtree of call
+// contains a string literal naming the projection_checkpoints table.
+func callArgsMentionCheckpointTable(call *ast.CallExpr) bool {
+	for _, arg := range call.Args {
+		if nodeMentionsCheckpointTable(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestProjectionCheckpointOwnerColumnV1Reserved01_DynamicSQLDetectorFires proves
+// the B1 reverse-check detector is NOT vacuous: it must fire on every dynamic
+// construction form the godoc claims to cover (fmt.Sprintf, strings.Join,
+// *.WriteString, and `+`). Without this, the reverse self-check would pass
+// trivially because production happens to contain zero dynamic forms — a
+// detector regression (e.g. a typo in isDynamicSQLBuilderCall) would go unnoticed.
+func TestProjectionCheckpointOwnerColumnV1Reserved01_DynamicSQLDetectorFires(t *testing.T) {
+	t.Parallel()
+	const src = `package x
+
+import (
+	"fmt"
+	"strings"
+)
+
+func a() string { return fmt.Sprintf("INSERT INTO projection_checkpoints (owner) VALUES (%s)", "v") }
+func b() string {
+	return strings.Join([]string{"UPDATE projection_checkpoints SET owner =", "v"}, " ")
+}
+func c(sb *strings.Builder) { sb.WriteString("INSERT INTO projection_checkpoints (owner) VALUES ('')") }
+func d() string            { return "INSERT INTO projection_checkpoints (" + "owner)" }
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x.go", src, 0)
+	require.NoError(t, err)
+
+	var dynamicCalls, concatExprs int
+	ast.Inspect(file, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isDynamicSQLBuilderCall(call) && callArgsMentionCheckpointTable(call) {
+			dynamicCalls++
+		}
+		if be, ok := n.(*ast.BinaryExpr); ok && be.Op == token.ADD && nodeMentionsCheckpointTable(be) {
+			concatExprs++
+		}
+		return true
+	})
+
+	assert.Equal(t, 3, dynamicCalls,
+		"detector must fire on fmt.Sprintf + strings.Join + *.WriteString building projection_checkpoints SQL")
+	assert.GreaterOrEqual(t, concatExprs, 1,
+		"detector must fire on `+` concatenation building projection_checkpoints SQL")
 }

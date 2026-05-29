@@ -11,8 +11,8 @@
 package projectioncheckpointownerfixture
 
 // badUpsertSQL ILLEGALLY references the reserved owner column in a
-// projection_checkpoints INSERT write path. v1 must never read or write owner
-// (ADR §Q5). PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 must fire here.
+// projection_checkpoints INSERT write path. v1 must never WRITE owner (ADR §Q5;
+// reads are harmless). PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 must fire here.
 const badUpsertSQL = `INSERT INTO projection_checkpoints (cell_id, projection_id, offset_seq, owner)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (cell_id, projection_id)

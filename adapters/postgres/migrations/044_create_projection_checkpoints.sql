@@ -12,11 +12,15 @@
 --     omits offset_seq well-defined, though the adapter always writes it.
 --   - owner TEXT NOT NULL DEFAULT '' is RESERVED for v1.1 multi-pod pessimistic
 --     claim (ADR §Q5, ref AxonFramework token_entry.owner). v1 is single-pod and
---     NEVER reads or writes this column — the INSERT/UPDATE write path omits it
---     entirely, statically guarded by archtest
---     PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01. Pre-provisioning the
---     column means v1.1 claim needs no migration. Multi-pod safety in v1 is the
---     responsibility of upper-layer leader election (ADR threat matrix row 7).
+--     never WRITES this column — the INSERT/UPDATE write path omits it entirely,
+--     statically guarded (write-scoped) by archtest
+--     PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01. Reading owner is harmless
+--     (returns the empty default) and is not forbidden. Because the write path
+--     omits owner, its NOT NULL constraint is satisfied solely by this DEFAULT ''
+--     — a load-bearing default asserted at startup by schema_guard.verifyDefaults.
+--     Pre-provisioning the column means v1.1 claim needs no migration. Multi-pod
+--     safety in v1 is the responsibility of upper-layer leader election (ADR
+--     threat matrix row 7).
 --   - updated_at TIMESTAMPTZ is set by the adapter via SQL NOW() on every write;
 --     it is an ops-visibility column (last advance time), not a correctness input.
 --     It has no dedicated index by design: the table cardinality is O(projections)
