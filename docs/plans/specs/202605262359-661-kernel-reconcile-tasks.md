@@ -194,7 +194,7 @@
   - 估算：200 LoC
 - [ ] **T18** [P] [PR-A5] `kernel/reconcile/recovery_test.go`：
   - `TestRecovery_PanicConvertsToError`：reconciler panic 被 catch + 转 error
-  - `TestRecovery_PanicMetricRecorded`：panic 计入 reconcile_total{result="panic"}
+  - `TestRecovery_PanicMetricRecorded`：recovered panic 计入 reconcile_total{result="transient"}（对齐 FR-009「panic → transient error」+ FR-010 四标签集 success/transient/permanent/skipped；**不**新增 result="panic" 第 5 标签）
   - `TestRecovery_OtherEntityNotAffected`：单 entity panic 不影响其他 entity 串行处理
   - 估算：250 LoC
 
@@ -215,11 +215,11 @@
 
 ## Phase 4: Leader Election（B5）
 
-### PR-A6 — feat: LeaderElector interface + Redis 实现 + PG advisory lock 实现 + archtest frozen
+### PR-A6 — feat: LeaderElector + epoch fencing（FencedWriter）+ Redis/PG 实现 + archtest frozen
 
-**Goal**: 在 kernel/ 声明接口；adapters/{redis,postgres} 各提供一个实现；接口字段 frozen。
+**Goal**: 在 kernel/ 声明 `LeaderElector` 接口（含单调 `Epoch` fencing token）+ `FencedRepository`/`FencedWriter` seam；adapters/{redis,postgres} 各提供一个 leader 实现；接口字段 frozen。**leader election 非 fencing**（client-go 明示），跨副本正确性靠 epoch 写路径 CAS + 消费方幂等（见 ADR §4.3/§4.4），不靠 lease 本身。
 
-**Independent Test**: 在 fake adapter 实现 LeaderElector：两个 Loop 实例并起，验证只一个调 Reconcile；leader 实例 ctx cancel 后 follower 在 LeaseDuration + 1s 内接管。
+**Independent Test**: 在 fake adapter 实现 LeaderElector：两个 Loop 实例并起，**稳态下**只一个调 Reconcile；leader ctx cancel 后 follower 在 LeaseDuration + 1s 内接管。**Fencing real-failure-injection**：旧 leader 以 `Epoch=N` 的 in-flight 写在 follower 以 `Epoch=N+1` 接管后重放，断言写路径 CAS 拒绝 stale-epoch 写、设备无重复命令。
 
 #### Tests for PR-A6 (TDD)
 
@@ -240,8 +240,13 @@
 
 - [ ] **T24** [PR-A6] `kernel/reconcile/leader.go`：
   - `type LeaderElector interface { AcquireLease / ReleaseLease / RenewLease }`
-  - `type LeaseToken struct { ReconcilerID string; AcquiredAt time.Time; ExpiresAt time.Time; HolderID string }`
-  - 估算：150 LoC（接口 + 类型 + 文档）
+  - `type LeaseToken struct { ReconcilerID string; HolderID string; Epoch uint64; AcquiredAt time.Time; ExpiresAt time.Time }`（`Epoch` = 单调 fencing token，每次换持有者 +1）
+  - `Loop` 从 lease 派生 lease-scoped ctx + lease 丢失瞬间 cancel（中断 in-flight Reconcile，best-effort 收窄窗口）
+  - 估算：180 LoC（接口 + 类型 + lost-lease ctx 接缝 + 文档）
+- [ ] **T24b** [PR-A6] `kernel/reconcile/fenced.go`：`FencedRepository` / `FencedWriter` seam
+  - `Loop` 给每次 `Reconcile` 注入 epoch-bound `FencedWriter`（reconciler 唯一写面，sealed 构造）
+  - 写路径 CAS：拒 `incoming_epoch < 资源已见最高 epoch`（Kleppmann monotonic fencing，**非** outbox UUID identity-fencing）
+  - 估算：220 LoC
 - [ ] **T25** [PR-A6] `adapters/redis/reconcile_leader.go`：
   - SETNX + EXPIRE 实现 + 续约 goroutine
   - 复用 adapters/redis Cache 命名空间约定（cell-namespaced key）
@@ -251,11 +256,15 @@
   - 续约通过 transaction-scoped lock + heartbeat goroutine
   - 估算：250 LoC
 - [ ] **T27** [PR-A6] `tools/archtest/reconcile_leader_interface_frozen_test.go`：
-  - `RECONCILE-LEADER-INTERFACE-FROZEN-01`：reflect 锁 LeaderElector 三方法
+  - `RECONCILE-LEADER-INTERFACE-FROZEN-01`：reflect 锁 LeaderElector 三方法 + `LeaseToken.Epoch` 字段
   - `RECONCILE-LEADER-IMPL-FUNNEL-01`：消费方使用 LeaderElector 必经 Builder（不可裸构造 Loop）
-  - 估算：100 LoC
+  - `RECONCILE-FENCED-WRITE-FUNNEL-01`：L4 reconciler 写必经 epoch-bound `FencedWriter`（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = callsite allowlist），绕过 fencing CAS 在 type system 不可表达
+  - 估算：160 LoC
+- [ ] **T27b** [PR-A6] `kernel/reconcile/reconciletest/conformance.go` 扩 fencing：
+  - `RunFencingConformance`：real-failure-injection——epoch=N 写在 epoch=N+1 接管后重放，断言 CAS 拒绝 + 无重复命令（对齐 `outboxtest` / `celltest.RunRepoReadinessConformance` 形态）
+  - 估算：120 LoC
 
-**Checkpoint A6**: leader 流转可测；2 个 adapter 通过 conformance
+**Checkpoint A6**: leader 流转可测；2 个 adapter 通过 conformance；**fencing real-failure-injection 通过**（stale-epoch 写被拒、无重复命令）；明确 leader election ≠ fencing
 
 ---
 

@@ -18,7 +18,8 @@
 **Primary Dependencies**: 标准库 + `pkg/errcode` + `pkg/validation` + `kernel/metautil`（kernel 层依赖收口）
 **Storage**:
 - Reconciler 状态：消费方自管（pkicell/mdmcell DB schema）
-- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（pg_try_advisory_lock）
+- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（pg_try_advisory_lock）；lease store 维护单调 `Epoch`（fencing token）
+- Fencing：消费方写经 epoch-bound `FencedWriter`，资源行记「已见最高 epoch」+ CAS 拒 stale（leader election 非 fencing，见 ADR §4.3）
 **Testing**:
 - table-driven test 覆盖率 kernel/ ≥ 90% / 其余 ≥ 80%（CLAUDE.md）
 - `reconciletest.ConformanceFactory` 收口（kernel/command/commandtest 同形态）
@@ -76,10 +77,11 @@ kernel/
 │   ├── trigger.go                       # Trigger interface + TickerTrigger + ChannelTrigger
 │   ├── backoff.go                       # 指数退避（baseDelay=5ms / maxDelay=1000s）
 │   ├── builder.go                       # New(reconciler).WithTrigger(...).Build() 最小 DSL
-│   ├── leader.go                        # LeaderElector interface + LeaseToken
+│   ├── leader.go                        # LeaderElector interface + LeaseToken（含单调 Epoch fencing token）
+│   ├── fenced.go                        # FencedRepository / FencedWriter（epoch-bound 写面 + CAS，PR-A6）
 │   ├── metrics.go                       # 4 个 metric wiring（counter/histogram/gauge）
 │   └── reconciletest/                   # conformance harness
-│       ├── conformance.go               # ReconcilerFactory + 跑遍 leader/RequeueAfter/Permanent
+│       ├── conformance.go               # ReconcilerFactory + 跑遍 leader/RequeueAfter/Permanent/fencing
 │       └── fake.go                      # 测试 fake（fake LeaderElector + fake Trigger）
 │
 ├── command/                             # 现有；改 Sweeper 实现 Reconciler 接口
@@ -106,6 +108,7 @@ tools/archtest/
 ├── reconcile_result_fields_frozen_test.go     # 新增（PR-A2）
 ├── reconcile_loop_clock_carveout_test.go      # 新增（PR-A4）
 ├── reconcile_leader_interface_frozen_test.go  # 新增（PR-A6）
+├── reconcile_fenced_write_funnel_test.go       # 新增（PR-A6：RECONCILE-FENCED-WRITE-FUNNEL-01）
 └── reconcile_builder_funnel_test.go           # 新增（PR-A7）
 
 .claude/rules/gocell/
@@ -136,7 +139,7 @@ docs/architecture/
 | A3 | feat: Loop 调度骨架（从 SweeperLifecycle 平移）+ metrics 4 件 | 1400 | A2 | `kernel/reconcile/{loop,metrics}.go` + tests | **B3** |
 | A4 | feat: Trigger interface + TickerTrigger + ChannelTrigger + Loop clock carve-out archtest | 1000 | A3 | `kernel/reconcile/{trigger}.go` + tests + 1 archtest | **B4**（与 A5 并行）|
 | A5 | feat: Backoff（指数退避）+ panic recovery + 错误分类 transient/permanent | 900 | A2 | `kernel/reconcile/{backoff,recovery}.go` + tests | **B4**（与 A4 并行）|
-| A6 | feat: LeaderElector interface + Redis 实现 + PG advisory lock 实现 + archtest frozen | 1500 | A3 | `kernel/reconcile/leader.go` + `adapters/{redis,postgres}/reconcile_leader.go` + tests + 1 archtest | **B5** |
+| A6 | feat: LeaderElector（含单调 Epoch fencing token）+ FencedWriter 写路径 CAS + Redis/PG 实现 + archtest frozen + fencing conformance | 1900 | A3 | `kernel/reconcile/{leader,fenced}.go` + `adapters/{redis,postgres}/reconcile_leader.go` + tests + 2 archtest（leader frozen + fenced-write funnel）| **B5** |
 | A7 | feat: Builder DSL + reconciletest.ConformanceFactory + funnel archtest | 1100 | A4/A5/A6 | `kernel/reconcile/{builder}.go` + `kernel/reconcile/reconciletest/{conformance,fake}.go` + 1 archtest | **B6** |
 | A8 | refactor: kernel/command.Sweeper 实现 reconcile.Reconciler + runtime/command/lifecycle.go 删除 | 1200 | A7 | `kernel/command/sweeper.go` + `runtime/command/lifecycle.go`（删）+ tests + archtest 名字 frozen 改写 | **B7** |
 | A9 | refactor: examples/iotdevice 切换到 kernel/reconcile.Loop 端到端验证 | 800 | A8 | `examples/iotdevice/cells/devicecell/cell.go` + e2e tests | **B7**（与 A8 同批次，并行可能） |
@@ -263,7 +266,7 @@ B1 (PR-A1) ────────────────────┐
 | controller-runtime 在 trigger 前接口大改 | 对标失效，PR-A2/A3 设计要调 | 本计划锁定 controller-runtime 当前形态作为对标快照（ref hash 在 PR-A1 ADR 中固定）；调整成本接受 |
 | LeaderElector 在 Redis/PG 之外有新需求（如 etcd） | adapter 层需扩展 | 接口设计抽象到 LeaseToken 中立形态，扩 adapter 不改 kernel；扩 adapter 时再开新 issue |
 | examples/iotdevice 迁移破坏端到端 | PR-A9 阻塞 | 在 PR-A9 前先在 fake adapter 里跑过 conformance；PR-A9 单独 e2e test 守 |
-| 单 PR 接近 2000 行（A6） | review 压力大 | A6 内 redis/PG 实现可分两个 sub-commit（同 PR），让 reviewer 按 file 分段 review |
+| 单 PR 超 2000 行（A6：leader + epoch fencing + 2 adapter + conformance） | review 压力大 | A6 内分三段 sub-commit（同 PR）：①LeaderElector + Epoch ②FencedWriter/CAS + funnel archtest ③redis/PG adapter；让 reviewer 按段 review；fencing 必须与 leader 同 PR（否则留「lease 即 fencing」错觉窗口）|
 
 ---
 
