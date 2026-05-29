@@ -144,6 +144,14 @@ const (
 	// indicates one or more goroutines are stuck.
 	ErrAdapterMQTTPublisherCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_PUBLISHER_CLOSE_TIMEOUT"
 
+	// ErrAdapterMQTTSubscriberCloseTimeout signals that Subscriber.StopIntake
+	// exceeded its drain budget waiting for in-flight handler goroutines to
+	// settle. Distinct from ErrAdapterMQTTClosed (which means the adapter is
+	// already shut down) — a drain timeout means the subscriber is still draining
+	// but one or more handlers did not finish within StopIntakeDrainTimeout.
+	// Mirrors ErrAdapterMQTTPublisherCloseTimeout on the publish side.
+	ErrAdapterMQTTSubscriberCloseTimeout errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIBER_CLOSE_TIMEOUT"
+
 	// ErrAdapterMQTTSubscribe signals a generic SUBSCRIBE failure: the broker
 	// returned a SUBACK reason byte >= 0x80 that is not covered by a more
 	// specific code (or the underlying transport call failed). Classified

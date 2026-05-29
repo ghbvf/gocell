@@ -62,7 +62,7 @@ type bootstrapOutcome struct {
 // ref: adapters/rabbitmq/connection.go reconnect wrap pattern.
 type Connection struct {
 	cfg       Config
-	clk       clock.Clock         // reserved for clock-based health timeouts (used from PR-3)
+	clk       clock.Clock         // reserved for clock-based health timeouts; not yet wired (the Subscriber holds its own clk)
 	collector ConnectionCollector // optional; nil → no-op
 
 	cm *autopaho.ConnectionManager
@@ -351,11 +351,12 @@ func (c *Connection) resubscribeAll() {
 		// Reconnect recovery is connection-scoped, not subscription-scoped, so a
 		// background ctx is used for the resubscribe round-trip (autopaho's
 		// per-call PacketTimeout still bounds it).
-		if err := c.sendSubscribe(context.Background(), route.filter, route.qos); err != nil {
+		if reason, err := c.sendSubscribe(context.Background(), route.filter, route.qos); err != nil {
 			slog.Warn("mqtt: resubscribe after reconnect failed; will retry on next reconnect",
 				slog.String("client_id", c.cfg.ClientID.String()),
 				slog.String("filter", route.filter.String()),
 				slog.Any("error", redactErr(err)))
+			c.collector.RecordSubscribeFailure(context.Background(), reason)
 		}
 	}
 }
@@ -608,15 +609,24 @@ func topicFilterMatches(filter, topic string) bool {
 // returned SUBACK reasons: any reason byte >= 0x80 is mapped via
 // classifySubackReason into an errcode error. It does NOT touch the route
 // registry (callers own registration).
-func (c *Connection) sendSubscribe(ctx context.Context, f subscribableFilter, qos byte) error {
+//
+// On failure it returns the matching SubscribeFailureReason so callers can
+// record mqtt_subscribe_failed_total without re-introspecting the error:
+// subscribeReasonTransport for a wire-level Subscribe failure, or
+// subscribeReasonSubackReject for a SUBACK reason byte >= 0x80. The returned
+// reason is meaningless when err is nil.
+func (c *Connection) sendSubscribe(ctx context.Context, f subscribableFilter, qos byte) (SubscribeFailureReason, error) {
 	suback, err := c.cm.Subscribe(ctx, &paho.Subscribe{
 		Subscriptions: []paho.SubscribeOptions{{Topic: f.wireFilter, QoS: qos}},
 	})
 	if err != nil {
-		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
+		return subscribeReasonTransport, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
 			"mqtt: subscribe request failed", err)
 	}
-	return subackError(suback)
+	if subErr := subackError(suback); subErr != nil {
+		return subscribeReasonSubackReject, subErr
+	}
+	return "", nil
 }
 
 // subackError inspects a SUBACK's reason bytes and returns a classified error
@@ -647,8 +657,11 @@ func subackError(suback *paho.Suback) error {
 // against the caller's TopicNamespace via TopicNamespace.MintFilter.
 //
 // On success it returns a cancel closure that deregisters the route and sends an
-// UNSUBSCRIBE for the filter's wire form. The cancel closure is idempotent-safe
-// to call once; calling Close also unsubscribes all routes.
+// UNSUBSCRIBE for the filter's wire form. The cancel closure is idempotent: it
+// wraps its body in a sync.Once so repeated calls (e.g. Subscriber.Subscribe's
+// own `defer cancel()` on clean ctx-cancel exit AND the same func tracked for
+// StopIntake/Close) run the deregister + UNSUBSCRIBE exactly once. Calling Close
+// also unsubscribes all routes.
 //
 // On SUBACK rejection (reason byte >= 0x80) or transport failure, the route is
 // deregistered and a classified error is returned.
@@ -677,21 +690,25 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 	}
 	c.registerRoute(route)
 
-	if subErr := c.sendSubscribe(ctx, f, qos); subErr != nil {
+	if reason, subErr := c.sendSubscribe(ctx, f, qos); subErr != nil {
 		c.deregisterRoute(f.wireFilter)
+		c.collector.RecordSubscribeFailure(ctx, reason)
 		return nil, subErr
 	}
 
+	var cancelOnce sync.Once
 	cancel = func() {
-		c.deregisterRoute(f.wireFilter)
-		if _, unsubErr := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{
-			Topics: []string{f.wireFilter},
-		}); unsubErr != nil {
-			slog.Warn("mqtt: unsubscribe on cancel failed",
-				slog.String("client_id", c.cfg.ClientID.String()),
-				slog.String("filter", f.String()),
-				slog.Any("error", redactErr(unsubErr)))
-		}
+		cancelOnce.Do(func() {
+			c.deregisterRoute(f.wireFilter)
+			if _, unsubErr := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{
+				Topics: []string{f.wireFilter},
+			}); unsubErr != nil {
+				slog.Warn("mqtt: unsubscribe on cancel failed",
+					slog.String("client_id", c.cfg.ClientID.String()),
+					slog.String("filter", f.String()),
+					slog.Any("error", redactErr(unsubErr)))
+			}
+		})
 	}
 	return cancel, nil
 }
@@ -874,3 +891,5 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 type noopCollector struct{}
 
 func (noopCollector) RecordReconnect(_ context.Context) {}
+
+func (noopCollector) RecordSubscribeFailure(_ context.Context, _ SubscribeFailureReason) {}

@@ -8,33 +8,58 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// SubscribeFailureReason classifies why a receive-path SUBSCRIBE failed (initial
+// SUBACK rejection or reconnect re-arm failure). The set is closed; callers
+// (alerting rules, log queries) can rely on the literals being stable across
+// releases. Mirrors PublishFailureReason / ConsumeFailureReason.
+type SubscribeFailureReason string
+
+const (
+	// subscribeReasonSubackReject means the broker returned a SUBACK reason byte
+	// >= 0x80 (e.g. NotAuthorized 0x87, TopicFilterInvalid 0x8F, SharedSubs
+	// unsupported 0x9E). The route stays registered so a later reconnect retries.
+	subscribeReasonSubackReject SubscribeFailureReason = "suback_reject"
+	// subscribeReasonTransport means the SUBSCRIBE wire call itself failed
+	// (transport-level error from autopaho, not a SUBACK reason byte).
+	subscribeReasonTransport SubscribeFailureReason = "transport"
+)
+
 // ConnectionCollector records MQTT connection-level metrics.
 // Implementations must be safe for concurrent use.
 type ConnectionCollector interface {
 	// RecordReconnect increments the reconnect counter for this collector's cell.
 	RecordReconnect(ctx context.Context)
+	// RecordSubscribeFailure increments the subscribe-failure counter for the
+	// given reason. Implementations MUST NOT panic on any reason value; the
+	// closed set is enforced by the call site, not the collector.
+	RecordSubscribeFailure(ctx context.Context, reason SubscribeFailureReason)
 }
 
 // providerConnectionCollector implements ConnectionCollector via a provider-
 // neutral metrics.Provider. Wired at the composition root.
 //
-// Metric:
+// Metrics:
 //
-//	mqtt_reconnect_total (counter, labels: cell)
+//	mqtt_reconnect_total        (counter, labels: cell)
+//	mqtt_subscribe_failed_total (counter, labels: cell, reason)
 //
 // ref: adapters/rabbitmq/publisher_metrics.go — same inject-at-construction pattern.
 type providerConnectionCollector struct {
-	cellID    string
-	reconnect metrics.CounterVec
+	cellID        string
+	reconnect     metrics.CounterVec
+	subscribeFail metrics.CounterVec
 }
 
 var _ ConnectionCollector = (*providerConnectionCollector)(nil)
 
-// NewProviderConnectionCollector registers mqtt_reconnect_total on p and
-// returns a ConnectionCollector bound to cellID. cellID becomes the "cell" label.
+// NewProviderConnectionCollector registers mqtt_reconnect_total and
+// mqtt_subscribe_failed_total on p and returns a ConnectionCollector bound to
+// cellID. cellID becomes the "cell" label.
 //
 // Returns error when p is nil, cellID is empty, or the Provider reports
-// registration failure (e.g. duplicate metric names).
+// registration failure (e.g. duplicate metric names). Registration is
+// all-or-nothing: a later failure rolls back the metric already registered so
+// the provider is not left holding a partial set.
 func NewProviderConnectionCollector(p metrics.Provider, cellID string) (ConnectionCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -44,21 +69,54 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
 			"mqtt: cellID is required for provider connection collector")
 	}
+
+	var registered []metrics.Collector
+	rollback := func(wrapErr error) error {
+		for _, c := range registered {
+			_ = p.Unregister(c)
+		}
+		return wrapErr
+	}
+
 	reconnect, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "mqtt_reconnect_total",
 		Help:       "Total MQTT reconnect events observed by the adapter, by cell.",
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register reconnect counter", err)
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register reconnect counter", err))
 	}
-	return &providerConnectionCollector{cellID: cellID, reconnect: reconnect}, nil
+	registered = append(registered, reconnect)
+
+	subscribeFail, err := p.CounterVec(metrics.CounterOpts{
+		Name: "mqtt_subscribe_failed_total",
+		Help: "Total number of receive-path SUBSCRIBE failures (initial SUBACK rejection or reconnect re-arm), " +
+			"classified by reason. reason ∈ {suback_reject, transport} — closed set; alerting rules can rely on " +
+			"the literals. Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell", "reason"},
+	})
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register subscribe failed counter", err))
+	}
+	// subscribeFail is the last registration — nothing after it can fail.
+
+	return &providerConnectionCollector{
+		cellID:        cellID,
+		reconnect:     reconnect,
+		subscribeFail: subscribeFail,
+	}, nil
 }
 
 // RecordReconnect increments mqtt_reconnect_total{cell=c.cellID}.
 func (c *providerConnectionCollector) RecordReconnect(ctx context.Context) {
 	c.reconnect.With(metrics.Labels{"cell": c.cellID}).Inc(ctx)
+}
+
+// RecordSubscribeFailure increments mqtt_subscribe_failed_total{cell, reason}.
+func (c *providerConnectionCollector) RecordSubscribeFailure(ctx context.Context, reason SubscribeFailureReason) {
+	c.subscribeFail.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
 }
 
 // PublishFailureReason classifies why a Publish() call failed. The set is
@@ -280,6 +338,14 @@ const (
 	// (lease expired / idempotency backend error). The message is left unacked so
 	// another holder retries.
 	consumeReasonCommitFailed ConsumeFailureReason = "commit_failed"
+	// consumeReasonAckFailed means Settlement.Commit SUCCEEDED but the subsequent
+	// broker ack failed. This is the dangerous redeliver case: the idempotency key
+	// (ClaimDone) is already committed, so the redelivered message is guarded
+	// against reprocessing, but the broker will redeliver until the ack lands.
+	// Distinct from commit_failed — the commit half succeeded, only the ack half
+	// failed — so alerting can tell apart "lease/idempotency backend trouble"
+	// (commit_failed) from "broker ack path trouble" (ack_failed).
+	consumeReasonAckFailed ConsumeFailureReason = "ack_failed"
 	// consumeReasonUnknownDisposition means the handler returned a zero / invalid
 	// Disposition. Treated as Requeue (left unacked) defensively.
 	consumeReasonUnknownDisposition ConsumeFailureReason = "unknown_disposition"
@@ -380,7 +446,7 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 	consumeFailed, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_consume_failed_total",
 		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
-			"reason ∈ {unmarshal, reject, requeue, commit_failed, unknown_disposition} — closed set; " +
+			"reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; " +
 			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
 		LabelNames: []string{"cell", "reason"},
 	})

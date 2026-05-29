@@ -18,7 +18,13 @@ const (
 	msgEmptyTopic               = "mqtt publish topic must not be empty (MQTT v5 §4.7.3)"
 	msgEmptyFilter              = "mqtt subscribe filter must not be empty"
 	msgEmptyConsumerGroup       = "mqtt subscribe consumer group must not be empty (shared subscription requires a group)"
-	msgZeroNamespaceReceiver    = "mqtt topic namespace receiver is zero-value; construct via ParseTopicNamespace"
+	msgInvalidConsumerGroup     = "mqtt subscribe consumer group must match ^[a-z0-9_-]+$ " +
+		"(no /, +, #, $, or whitespace — they would inject extra levels or wildcards into the $share wire filter)"
+	msgZeroNamespaceReceiver = "mqtt topic namespace receiver is zero-value; construct via ParseTopicNamespace"
+
+	// detailKeyConsumerGroup is the public-detail key for an invalid consumer
+	// group surfaced in errcode.PublicDetail.
+	detailKeyConsumerGroup = "consumerGroup"
 
 	// detailKeyNamespace / detailKeyTopic / detailKeyFilter are extracted
 	// per go-standards.md "同义字符串重复 ≥ 3 次抽常量". These are public-
@@ -245,6 +251,17 @@ func isValidNSLevel(lvl string) bool {
 	return true
 }
 
+// isValidConsumerGroup reports whether a shared-subscription consumer group
+// matches ^[a-z0-9_-]+$. The wire filter is "$share/{group}/{filter}", so a
+// group containing "/", "+", "#", "$", or whitespace would inject extra topic
+// levels or wildcards into the SUBSCRIBE packet. ConsumerGroup is
+// internally-sourced (cell metadata), so this is defense-in-depth; it shares the
+// same alphabet as namespace levels (lowercase alnum + "_" + "-"), matching how
+// cell / consumer-group IDs look (e.g. "ready-cg-<uuid>").
+func isValidConsumerGroup(group string) bool {
+	return isValidNSLevel(group)
+}
+
 // publishableTopic carries a topic string that has been validated against a
 // TopicNamespace via PublishOK. Package-unexported and constructed exclusively
 // by TopicNamespace.Mint — the only way to obtain a publishableTopic is to
@@ -321,6 +338,13 @@ func (n TopicNamespace) MintFilter(consumerGroup, filter string) (subscribableFi
 			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
 			msgEmptyConsumerGroup,
 			errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+		)
+	}
+	if !isValidConsumerGroup(consumerGroup) {
+		return subscribableFilter{}, errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			msgInvalidConsumerGroup,
+			errcode.WithDetails(errcode.PublicString(detailKeyConsumerGroup, consumerGroup)),
 		)
 	}
 	if err := n.SubscribeOK(filter); err != nil {

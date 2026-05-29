@@ -72,7 +72,8 @@ func TestProviderConnectionCollector_RecordReconnect_CounterLabel(t *testing.T) 
 }
 
 // TestProviderConnectionCollector_RegistersExpectedLabelNames pins the label
-// schema: only "cell".
+// schema: mqtt_reconnect_total {cell} and mqtt_subscribe_failed_total
+// {cell, reason}.
 func TestProviderConnectionCollector_RegistersExpectedLabelNames(t *testing.T) {
 	t.Parallel()
 	spy := newConnSpyProvider()
@@ -80,9 +81,43 @@ func TestProviderConnectionCollector_RegistersExpectedLabelNames(t *testing.T) {
 	require.NoError(t, err)
 
 	regs := spy.registrations()
-	require.Len(t, regs, 1)
+	require.Len(t, regs, 2)
 	assert.Equal(t, "mqtt_reconnect_total", regs[0].Name)
 	assert.Equal(t, []string{"cell"}, regs[0].LabelNames)
+	assert.Equal(t, "mqtt_subscribe_failed_total", regs[1].Name)
+	assert.Equal(t, []string{"cell", "reason"}, regs[1].LabelNames)
+}
+
+// TestProviderConnectionCollector_RecordSubscribeFailure verifies both reason
+// consts increment mqtt_subscribe_failed_total with the correct reason label.
+func TestProviderConnectionCollector_RecordSubscribeFailure(t *testing.T) {
+	t.Parallel()
+	allReasons := []SubscribeFailureReason{
+		subscribeReasonSubackReject,
+		subscribeReasonTransport,
+	}
+	for _, reason := range allReasons {
+		reason := reason
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			spy := newConnSpyProvider()
+			col, err := NewProviderConnectionCollector(spy, "testcell")
+			require.NoError(t, err)
+
+			col.RecordSubscribeFailure(context.Background(), reason)
+
+			ops := spy.ops()
+			var found bool
+			for _, op := range ops {
+				if op.name == "mqtt_subscribe_failed_total" && op.op == "Inc" {
+					assert.Equal(t, "testcell", op.labels["cell"])
+					assert.Equal(t, string(reason), op.labels["reason"])
+					found = true
+				}
+			}
+			assert.True(t, found, "mqtt_subscribe_failed_total Inc not found for reason %s", reason)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +507,7 @@ func TestProviderSubscriberCollector_RecordConsumeSuccess(t *testing.T) {
 	assert.True(t, foundDuration, "mqtt_consume_duration_seconds Observe not found")
 }
 
-// TestProviderSubscriberCollector_RecordConsumeFailure verifies all 5 reason
+// TestProviderSubscriberCollector_RecordConsumeFailure verifies all 6 reason
 // consts increment mqtt_consume_failed_total with the correct reason label.
 func TestProviderSubscriberCollector_RecordConsumeFailure(t *testing.T) {
 	t.Parallel()

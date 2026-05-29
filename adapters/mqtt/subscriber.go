@@ -51,6 +51,9 @@ const (
 // they cannot block intake forever.
 type SubscriberConfig struct {
 	// QoS is the MQTT QoS requested in the SUBSCRIBE packet. 0 → defaults to 1.
+	// Only QoS 0 and 1 are supported; QoS 2 is NOT supported by the manual-ack
+	// idempotency model (the adapter relies on at-least-once + idempotency keys,
+	// not the QoS-2 exactly-once handshake). QoS 0 is forced to 1 by setDefaults.
 	QoS byte
 
 	// SettlementTimeout bounds each Settlement.Commit / Release call. 0 → 5s.
@@ -109,6 +112,13 @@ type Subscriber struct {
 
 	wg     sync.WaitGroup
 	closed atomic.Bool
+
+	// inflight tracks the number of in-flight delivery goroutines for
+	// observability only. wg is the actual drain primitive (sync.WaitGroup has no
+	// readable counter), so inflight is incremented/decremented alongside
+	// wg.Add(1)/wg.Done() purely so the drain-timeout Warn can report the residual
+	// handler count.
+	inflight atomic.Int64
 
 	// closeCh is closed by Close to signal all blocked Subscribe calls to return.
 	closeCh   chan struct{}
@@ -184,6 +194,11 @@ func NewSubscriber(
 // broker-side topology to pre-declare (no exchanges / queues), so Setup is a
 // pure validation gate: it returns the SubscribeOK error if sub.Topic is not a
 // valid filter under the namespace, else nil.
+//
+// Setup validates ONLY the namespace boundary (and wildcard placement) of the
+// filter; it does NOT validate the consumer group. The consumer-group
+// requirement (non-empty + charset) is enforced later at Subscribe time via
+// MintFilter, which composes the "$share/{group}/{filter}" wire form.
 func (s *Subscriber) Setup(_ context.Context, sub outbox.Subscription) error {
 	return s.ns.SubscribeOK(sub.Topic)
 }
@@ -278,12 +293,16 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 			// lets the broker redeliver after session resume / reconnect.
 			slog.Info("mqtt: intake stopped, dropping delivery for redelivery",
 				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-				slog.String(logKeyTopic, pb.Topic))
+				slog.String(logKeyTopic, safeTopicForLog(pb.Topic)))
 			return
 		default:
 		}
 		s.wg.Add(1)
-		defer s.wg.Done()
+		s.inflight.Add(1)
+		defer func() {
+			s.inflight.Add(-1)
+			s.wg.Done()
+		}()
 		// Prefer the connection-supplied ctx (subscription-scoped); fall back to
 		// subCtx if the read loop hands a nil ctx.
 		deliveryCtx := ctx
@@ -305,7 +324,7 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unmarshal envelope failed, acking poison message (PR-4 will route to $dead)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, pb.Topic),
+			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.Any("error", err))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnmarshal)
 		s.ackPoison(ctx, pb, "unmarshal")
@@ -386,7 +405,7 @@ func (s *Subscriber) dispatchAck(ctx context.Context, pb *paho.Publish, settleme
 			slog.String(logKeyTopic, entry.Topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.Any("error", ackErr))
-		s.collector.RecordConsumeFailure(ctx, consumeReasonCommitFailed)
+		s.collector.RecordConsumeFailure(ctx, consumeReasonAckFailed)
 		return
 	}
 	s.collector.RecordConsumeSuccess(ctx, s.clk.Since(start))
@@ -399,7 +418,7 @@ func (s *Subscriber) ackPoison(ctx context.Context, pb *paho.Publish, reason str
 	if ackErr := s.conn.ack(pb); ackErr != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: ack of poison message failed",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, pb.Topic),
+			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.String("reason", reason),
 			slog.Any("error", ackErr))
 	}
@@ -450,8 +469,9 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 	case <-drainTimer.C():
 		slog.Warn("mqtt: StopIntake drain timeout, returning fail-closed",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.Duration("budget", s.config.StopIntakeDrainTimeout))
-		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+			slog.Duration("budget", s.config.StopIntakeDrainTimeout),
+			slog.Int64("residual", s.inflight.Load()))
+		return errcode.New(errcode.KindInternal, ErrAdapterMQTTSubscriberCloseTimeout,
 			"mqtt: StopIntake drain budget exceeded")
 	case <-ctx.Done():
 		return ctx.Err()
