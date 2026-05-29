@@ -157,6 +157,25 @@ readyz 各字段归属：
 
 详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
 
+## Outbox Wire Envelope 三族字段（sealed construction）
+
+`kernel/outbox.Entry` 跨 async 边界携带**三族正交身份**，命名空间物理隔离，禁止互串：
+
+| 族 | 载体字段 | 来源 | 消费侧 | 出站脱敏 |
+|----|---------|------|--------|---------|
+| **Observability**（trace/request/correlation） | `Entry.observability ObservabilityMetadata` | `NewEntry` 从 ctx 注入 | `SubscriberWithMiddleware` 自动 `RestoreToContext` | span attr 走 `safeStringAttr` |
+| **Principal**（actor/subject/tenant/session） | `Entry.principal PrincipalMetadata` | `NewEntry` 从 ctx 注入（生产桥 `runtime/auth` 认证后写 `ctxkeys`） | 同上自动还原 | `gocell.principal.session_id` 命中 `IsSensitiveKey` mask；actor/subject/tenant opaque 明文 |
+| **业务 Metadata** | `Entry.metadata map[string]string` | producer 经 `WithMetadata` | handler 读 `entry.Metadata()`（clone） | `RedactPayload` 不覆盖（结构化 KV，非 payload） |
+
+约束（**sealed construction**，issue #1229，权威记录见 ADR `202605281200-1042`）：
+
+- `Entry` 全字段 unexported；唯一构造路径 `outbox.NewEntry(clk, ctx, eventType, payload, opts...)`（producer）/ `UnmarshalEnvelope`（wire）/ `EntryScan.ToEntry`（storage 重建）。包外 populated `outbox.Entry{...}` 字面量编译不可表达（type-system Hard，`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`）。
+- Observability + Principal **只由 `NewEntry` 从 ctx 注入**（单一信任边界，无 producer-facing inject API）；producer 不可经 `Metadata` 伪造身份键（`ReservedMetadataKeys` 12 key + `Entry.Validate` fail-fast）。
+- `OccurredAt`（producer 域事件时间）mandatory（`Validate` 拒零值），`NewEntry` stamp，`WithOccurredAt` 注入 domain 时间；与 `CreatedAt`（store/seal 时间）语义分层。
+- wire schema：Principal `omitempty`（additive），OccurredAt required；`PrincipalMetadata` 4 字段 `idutil.SafeID`，由 `SAFEID-WIREMESSAGE-USAGE-01` + `PRINCIPAL-SEALED-FIELD-FROZEN-01` 冻结。
+
+audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extractActor`），非 `entry.Principal().ActorID`——actor 是被审计动作的执行者（login 期 `session.created` 无 auth principal 时仍可用），Principal 族是正交的 request-context。详见 ADR §Amendment 2026-05-29 "actor 来源决议"。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：
