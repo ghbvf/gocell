@@ -649,14 +649,20 @@ func mutateContractSliceField(v reflect.Value) {
 }
 
 func mutateContractPointerField(v reflect.Value) {
-	if v.Type() != reflect.TypeFor[*bool]() {
-		return
+	switch v.Type() {
+	case reflect.TypeFor[*bool]():
+		b := true
+		if !v.IsNil() {
+			b = !v.Elem().Bool()
+		}
+		v.Set(reflect.ValueOf(&b))
+	case reflect.TypeFor[*metadata.SagaMeta]():
+		// Saga is fingerprinted (saga steps/outputs drive generated code);
+		// set it non-nil so the mutation flips the structural fingerprint.
+		v.Set(reflect.ValueOf(&metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{{Name: "step", Output: "out.schema.json"}},
+		}))
 	}
-	b := true
-	if !v.IsNil() {
-		b = !v.Elem().Bool()
-	}
-	v.Set(reflect.ValueOf(&b))
 }
 
 func mutateContractStructField(v reflect.Value, fieldName string) {
