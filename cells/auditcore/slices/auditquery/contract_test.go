@@ -111,15 +111,19 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 // policy (issue #1229 §4 + review F6/F7c). It is the regression lock for two
 // invariants the DTO must hold simultaneously:
 //
-//   - PRESENT: subjectId is surfaced; occurredAt is surfaced at RFC3339Nano
-//     (sub-second) precision — RFC3339 truncation would drop chain-relevant
-//     resolution (F6).
+//   - PRESENT: subjectId and correlationId are surfaced; occurredAt is surfaced
+//     at RFC3339Nano (sub-second) precision — RFC3339 truncation would drop
+//     chain-relevant resolution (F6). correlationId is an opaque cross-cell
+//     observability id (NOT in pkg/redaction's sensitive-key set), so it is
+//     safe to project (issue #1219).
 //   - ABSENT: sessionId and tenantId never appear on the wire, by VALUE or by
 //     KEY, even when the underlying ledger.Entry carries them. sessionId is a
 //     credential-adjacent token (pkg/redaction sensitive-key set); tenantId has
-//     no exposure surface (cross-tenant isolation by absence). Asserting on the
+//     no producer source on develop (multi-tenancy epic #1296). Asserting on the
 //     raw JSON (not the typed DTO) is deliberate: a future PR that adds the
-//     fields to ResponseDataItem would compile-pass but fail here.
+//     fields to ResponseDataItem would compile-pass but fail here. The audit-domain
+//     codegen funnel (contractgen) is the upstream Hard backstop: it rejects any
+//     sensitive-key field name in an audit wire-out schema at generation time.
 func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
@@ -128,11 +132,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	occurred := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
 	h := newContractQueryHandler(&ledger.Entry{
 		ID: "ae-proj", EventID: "evt-proj", EventType: "event.test.v1",
-		ActorID:    "usr-actor",
-		SubjectID:  "sub-of-record",
-		TenantID:   "tenant-must-not-leak",
-		SessionID:  "session-must-not-leak",
-		OccurredAt: occurred,
+		ActorID:       "usr-actor",
+		SubjectID:     "sub-of-record",
+		TenantID:      "tenant-must-not-leak",
+		SessionID:     "session-must-not-leak",
+		CorrelationID: "corr-id-123",
+		OccurredAt:    occurred,
 		Timestamp:  time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
 		Payload:    []byte(`{"key":"value"}`),
 	})
@@ -145,11 +150,12 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// PRESENT — subjectId surfaced.
+	// PRESENT — subjectId + correlationId surfaced.
 	var resp struct {
 		Data []struct {
-			SubjectID  string `json:"subjectId"`
-			OccurredAt string `json:"occurredAt"`
+			SubjectID     string `json:"subjectId"`
+			CorrelationID string `json:"correlationId"`
+			OccurredAt    string `json:"occurredAt"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
@@ -160,6 +166,9 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	}
 	if resp.Data[0].SubjectID != "sub-of-record" {
 		t.Errorf("subjectId = %q, want %q", resp.Data[0].SubjectID, "sub-of-record")
+	}
+	if resp.Data[0].CorrelationID != "corr-id-123" {
+		t.Errorf("correlationId = %q, want %q", resp.Data[0].CorrelationID, "corr-id-123")
 	}
 	// PRESENT — occurredAt at nanosecond precision (F6).
 	if want := occurred.Format(time.RFC3339Nano); resp.Data[0].OccurredAt != want {
