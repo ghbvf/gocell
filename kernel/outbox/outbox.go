@@ -972,7 +972,8 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 
 // SubscribeEntry is the entry point for callers that hold an EntryHandler
 // (e.g. eventrouter.Router). It applies the full pipeline:
-// business middleware chain → ConsumerBase.Wrap → observability restore → inner Subscribe.
+// business middleware chain → ConsumerBase.Wrap → observability/principal
+// restore → inner Subscribe.
 //
 // The business middleware chain is applied via slices.Backward(s.middleware):
 // middleware[0] is the outermost layer (first to wrap, last to return) and

@@ -220,8 +220,9 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 // caller's original-slice index, used only to produce ergonomic error
 // messages when many entries are in flight.
 //
-// Observability injection happened upfront in WriteBatch so failure paths
-// here carry the request's trace identity (B2-A-04).
+// Observability and principal injection happened at NewEntry construction time,
+// so persisted rows carry the request trace identity and actor/subject/session
+// envelope metadata without any writer-time mutation.
 func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any, error) {
 	metadata, err := json.Marshal(e.Metadata())
 	if err != nil {
