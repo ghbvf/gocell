@@ -159,8 +159,11 @@ func TenantIDFrom(ctx context.Context) (string, bool) {
 
 // WithSessionID returns a new context carrying the session identifier (the
 // authenticated session the request was made under). It is credential-adjacent:
-// kernel/outbox masks gocell.principal.session_id on the wire (IsSensitiveKey),
-// so it never leaves the process in cleartext.
+// it travels in cleartext in the outbox wire envelope (Principal.sessionId is a
+// plain envelope field), and is masked only when surfaced as a telemetry span
+// attribute — the key gocell.principal.session_id hits IsSensitiveKey in
+// adapters/otel/span.go::safeStringAttr, so it does not leak into the trace
+// backend. The wire/broker path itself carries it verbatim.
 func WithSessionID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionID, id)
 }

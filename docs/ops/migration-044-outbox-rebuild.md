@@ -3,10 +3,15 @@
 `044_outbox_entries_principal.sql` is a **destructive forward** migration: it
 `TRUNCATE`s `outbox_entries` and adds two `NOT NULL` columns (`principal jsonb`,
 `occurred_at timestamptz`) for the sealed-construction principal-injection wire
-envelope (#1229). `NOT NULL` without a default cannot be back-filled on existing
-rows in PostgreSQL, and GoCell ships only itself (no rolling-deploy
-compatibility — see CLAUDE.md "不考虑向后兼容"), so a one-shot
-TRUNCATE + schema upgrade is the correct pattern (mirrors `043_audit_entries_v2`).
+envelope (#1229). PostgreSQL itself *can* add a nullable column, or one with a
+default, and `SET NOT NULL` after a back-fill — the blocker is semantic, not
+engine: a single-step `ADD COLUMN ... NOT NULL` (no default) cannot apply to
+non-empty rows, and there is no trustworthy business source for `principal` /
+`occurred_at` on rows written before the envelope carried them (a synthetic
+default would be fabricated audit identity / event time). GoCell ships only
+itself (no rolling-deploy compatibility — see CLAUDE.md "不考虑向后兼容"), so a
+one-shot TRUNCATE + schema upgrade is the correct pattern (mirrors
+`043_audit_entries_v2`).
 
 The SQL header carries the canonical step list; this runbook is its discoverable
 ops home and adds the two caveats that the SQL comment does not spell out: the
@@ -46,9 +51,14 @@ side** beyond the DB-row count.
      `terminationGracePeriodSeconds` per `docs/ops/graceful-shutdown-k8s.md` so
      SIGKILL does not truncate the drain.
    - Requeued / unacked deliveries return to the broker queue, **not** to
-     `outbox_entries`, so they survive the TRUNCATE independently. Confirm the
-     broker queues are empty (or accept redelivery after the rebuild) before
-     proceeding.
+     `outbox_entries`, so they survive the TRUNCATE independently — which is
+     exactly why the broker queues **MUST be fully drained before cutover, not
+     after.** A message published before this migration carries the old wire
+     envelope with no `occurred_at`; once the new code is live, redelivering it
+     fails `UnmarshalEnvelope` → `Entry.Validate` (missing occurredAt) and the
+     message is rejected to the DLX — lost, not silently accepted. Confirm the
+     broker queues are empty before proceeding; **do not** rely on post-rebuild
+     redelivery.
 
 4. **Confirm all relay instances are stopped** so no row re-enters `claiming`
    between the check and `goose up`.
