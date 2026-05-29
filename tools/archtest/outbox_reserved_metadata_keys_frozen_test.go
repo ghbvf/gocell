@@ -14,16 +14,25 @@
 // that test: a deny-by-default golden whose want-set is an INDEPENDENT witness.
 //
 // AI-robust rating (per .claude/rules/gocell/ai-robust.md §Hard 范本目录
-// "reflect 字段冻结" / "codegen funnel + golden"):
+// "codegen funnel + golden" — the golden-comparison half). Mechanism note: this
+// is a DIRECT imported-var golden comparison (read outbox.ReservedMetadataKeys
+// as an ordinary exported []string and slices.Equal it against the hardcoded
+// want-set). It does NOT use reflect — the target is a plain string slice, not a
+// struct whose fields/tags need reflective inspection. (Contrast the sibling
+// PRINCIPAL-SEALED-FIELD-FROZEN-01, which DOES use reflect because it freezes a
+// struct's field-name/tag/type set.)
 //
-//   - Hard (downstream): the reflect read of the production exported var compared
-//     against a hardcoded want-set leaves no single-sided add/drop undetected at
-//     PR time. An author cannot change the production set without this test going
-//     red, and cannot make the test pass without consciously editing the golden.
+//   - Hard (downstream): the direct imported-var read of the production exported
+//     set compared against a hardcoded want-set leaves no single-sided add/drop
+//     undetected at PR time. An author cannot change the production set without
+//     this test going red, and cannot make the test pass without consciously
+//     editing the golden.
 //   - Medium (upstream) = Go permanent ceiling: ReservedMetadataKeys is a
 //     package-level `var []string`; any in-package edit can mutate it and Go
-//     cannot make that "unexpressible". This is the SAME ceiling as
-//     PRINCIPAL-SEALED-FIELD-FROZEN-01 (reflect freeze of a package-level type).
+//     cannot make that "unexpressible". This is the SAME Go ceiling as
+//     PRINCIPAL-SEALED-FIELD-FROZEN-01 (a package-level symbol a sibling golden
+//     pins; the shared trait is "package-level", not the reflect vs direct-read
+//     mechanism).
 //     Following that precedent we do NOT open a tracking issue — there is no
 //     low-cost Hard upgrade path for a package-var golden — but the ceiling is
 //     named here explicitly so it is not a silent carryover.
@@ -37,7 +46,7 @@
 //
 // Tool blind spots (per AI-robust §载体决策原则 "强制盲区自检"):
 //
-//   - reflect/value read sees the slice CONTENTS but not whether validateMetadata
+//   - the direct value read sees the slice CONTENTS but not whether validateMetadata
 //     actually consults the set. "key in list but not enforced" is covered by the
 //     behavioral witness kernel/outbox.TestEntry_Validate_RejectsReservedMetadataKeys
 //     (which ranges over its OWN hardcoded want-set after FP1), not here.

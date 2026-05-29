@@ -197,7 +197,7 @@ fail-fast 拒绝。
 | `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`（新增，as-built） | reflect 反向自检：`outbox.Entry` 全字段 unexported（外部 populated 字面量编译不可表达 = type-system Hard 上游）；getter read surface 完整；SoleReconstructionSurface 子检查锁「唯一产出 Entry 的导出 func = NewEntry+UnmarshalEnvelope，唯一 mirror = EntryScan」。**只封闭「字面量伪造」向量**（见 §Amendment 2026-05-29 round-2）。 | Hard 上游（type-system，**仅字面量向量**） | PR-A2 |
 | `OUTBOX-RECONSTRUCTION-CALLER-01`（新增，round-2） | caller-allowlist：`UnmarshalEnvelope` / `EntryScan.ToEntry` 生产引用点（call+value，go/types 解析）⊆ {storage adapter / wire+consumer 解码 / store conformance helper}。封闭「reconstruction 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
 | `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`（新增，round-2） | caller-allowlist：principal ctxkeys setter（`WithActorID/SubjectID/TenantID/SessionID`）生产引用点 ⊆ {auth 请求桥 `runtime/auth/middleware.go` / consumer `RestoreToContext`}。封闭「ctx-注入 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
-| `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（新增，FP1） | reflect 读 `outbox.ReservedMetadataKeys` 与 hardcoded want-set（11 key）双向 exact 比对（缺/多即红）+ negative-control 反向自检。取代旧自指 tautology（`TestEntry_Validate_RejectsReservedMetadataKeys` range 生产 slice 本身，检测不到「少一个 key」——FP1 同步改为独立 want-set 的行为见证）；落实原 godoc 自称却不存在的 `reservedMetadataKeyMembership invariant test`。 | Hard 下游 + Medium 上游（package-var Go ceiling，同 `PRINCIPAL-SEALED-FIELD-FROZEN-01`，不另开 issue） | FP1 |
+| `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（新增，FP1） | **直接 import** 读 `outbox.ReservedMetadataKeys`（普通 exported `[]string`，非 reflect）与 hardcoded want-set（11 key）golden 值比对，双向 exact（缺/多即红）+ negative-control 反向自检。取代旧自指 tautology（`TestEntry_Validate_RejectsReservedMetadataKeys` range 生产 slice 本身，检测不到「少一个 key」——FP1 同步改为独立 want-set 的行为见证）；落实原 godoc 自称却不存在的 `reservedMetadataKeyMembership invariant test`。 | Hard 下游 + Medium 上游（package-var Go ceiling，同 `PRINCIPAL-SEALED-FIELD-FROZEN-01`，不另开 issue） | FP1 |
 
 > **F28（FP1）**：conformance helper `kernel/outbox/outboxtest/helpers.go::wrapV1Envelope` 原手搓平行 `wireMsg` struct 镜像生产 `wireMessage`，已改为直接走 `outbox.NewEntry + outbox.MarshalEnvelope`（删平行 struct）。单一真值源后 wire-schema drift **结构上不可能**，无需新增 drift-guard archtest。
 
@@ -550,7 +550,7 @@ PR #1272 合并后六维度 review 发现本 ADR §5 与实现漂移 + 两处 ph
    `reservedMetadataKeyMembership invariant test` 守护，但该测试全仓不存在；且
    `TestEntry_Validate_RejectsReservedMetadataKeys` range 生产 slice 本身（自指 tautology，
    检测不到「少一个 key」）。FP1 新增 archtest `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`
-   （reflect 读生产 var vs hardcoded want-set 双向比对 + negative-control 反向自检），并把行为
+   （直接 import 读生产 var vs hardcoded want-set 的 golden 值比对，非 reflect；+ negative-control 反向自检），并把行为
    测试改为独立 want-set 见证。godoc 改指向真 archtest ID。
 
 3. **F28 — wrapV1Envelope 单源化**：conformance helper 原手搓平行 `wireMsg` struct 镜像生产
