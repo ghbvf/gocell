@@ -364,6 +364,9 @@ func TestExecute_RetryExhausted_WarnLogged(t *testing.T) {
 	if _, ok := entry["error"]; !ok {
 		t.Error("log entry missing structured error field")
 	}
+	if entry["lease_id"] != "lease-warn" {
+		t.Errorf("log lease_id = %v, want %q", entry["lease_id"], "lease-warn")
+	}
 }
 
 // --- Execute per-step timeout → Expired (clock-driven, C3/F3) ---
@@ -732,7 +735,7 @@ func TestCompensate_Success(t *testing.T) {
 		},
 	}
 
-	err = exec.Compensate(context.Background(), newTestInstance(), step, []byte(`{"state":1}`))
+	err = exec.Compensate(context.Background(), newTestInstance(), "lease-comp-success", step, []byte(`{"state":1}`))
 	if err != nil {
 		t.Errorf("Compensate returned error: %v", err)
 	}
@@ -759,7 +762,7 @@ func TestCompensate_Failure(t *testing.T) {
 		},
 	}
 
-	err = exec.Compensate(context.Background(), newTestInstance(), step, nil)
+	err = exec.Compensate(context.Background(), newTestInstance(), "lease-comp-fail", step, nil)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("Compensate = %v, want %v", err, wantErr)
 	}
@@ -780,7 +783,7 @@ func TestCompensate_NilCompensate_ReturnsNil(t *testing.T) {
 		Compensate: nil,
 	}
 
-	err = exec.Compensate(context.Background(), newTestInstance(), step, nil)
+	err = exec.Compensate(context.Background(), newTestInstance(), "lease-comp-nil", step, nil)
 	if err != nil {
 		t.Errorf("Compensate with nil func = %v, want nil", err)
 	}
@@ -803,7 +806,7 @@ func TestCompensate_Panic_ConvertedToError(t *testing.T) {
 		},
 	}
 
-	err = exec.Compensate(context.Background(), newTestInstance(), step, nil)
+	err = exec.Compensate(context.Background(), newTestInstance(), "lease-comp-panic", step, nil)
 	if err == nil {
 		t.Error("expected error from panic in Compensate, got nil")
 	}
@@ -836,7 +839,7 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 		},
 	}
 
-	err = exec.Compensate(context.Background(), newTestInstance(), step, nil)
+	err = exec.Compensate(context.Background(), newTestInstance(), "lease-comp-timeout", step, nil)
 	if err != nil {
 		t.Errorf("Compensate with small step timeout returned error: %v", err)
 	}
@@ -845,6 +848,71 @@ func TestCompensate_IgnoresStepTimeout(t *testing.T) {
 	default:
 		t.Error("Compensate func not reached")
 	}
+}
+
+// TestCompensate_LeaseIDLogged asserts both compensation log lines carry the
+// lease_id field (the coordinator's fencing token), so an operator can
+// correlate a compensation log entry back to the ClaimPending cycle that drove
+// it. Mirrors TestExecute_RetryExhausted_WarnLogged's slog-capture pattern.
+// Covers issue #1211 acceptance: Info "compensating step" + Warn "compensate
+// failed" must both include slog.String("lease_id", string(leaseID)).
+func TestCompensate_LeaseIDLogged(t *testing.T) {
+	t.Parallel()
+	const leaseID = idutil.SafeID("lease-comp-logged")
+
+	t.Run("success logs lease_id on Info", func(t *testing.T) {
+		t.Parallel()
+		fc := clockmock.New(time.Now())
+		hb := &alwaysOKHeartbeater{}
+		buf := sloghelper.NewSyncBuffer()
+		logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		exec, err := NewExecutor(hb, fc, WithLogger(logger))
+		if err != nil {
+			t.Fatal(err)
+		}
+		step := ksaga.Step{
+			Name:       "step-log-success",
+			Run:        func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) { return nil, nil },
+			Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error { return nil },
+		}
+		if err := exec.Compensate(context.Background(), newTestInstance(), leaseID, step, nil); err != nil {
+			t.Fatalf("Compensate returned error: %v", err)
+		}
+		entry := sloghelper.FindLogEntry(buf.String(), "compensating step")
+		if entry == nil {
+			t.Fatal("expected an INFO log about compensating step")
+		}
+		if entry["lease_id"] != string(leaseID) {
+			t.Errorf("log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
+		}
+	})
+
+	t.Run("failure logs lease_id on Warn", func(t *testing.T) {
+		t.Parallel()
+		fc := clockmock.New(time.Now())
+		hb := &alwaysOKHeartbeater{}
+		buf := sloghelper.NewSyncBuffer()
+		logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		exec, err := NewExecutor(hb, fc, WithLogger(logger))
+		if err != nil {
+			t.Fatal(err)
+		}
+		step := ksaga.Step{
+			Name:       "step-log-fail",
+			Run:        func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) { return nil, nil },
+			Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error { return errors.New("boom") },
+		}
+		if err := exec.Compensate(context.Background(), newTestInstance(), leaseID, step, nil); err == nil {
+			t.Fatal("expected Compensate to return the compensate error")
+		}
+		entry := sloghelper.FindLogEntry(buf.String(), "compensate failed")
+		if entry == nil {
+			t.Fatal("expected a WARN log about compensate failed")
+		}
+		if entry["lease_id"] != string(leaseID) {
+			t.Errorf("log lease_id = %v, want %q", entry["lease_id"], string(leaseID))
+		}
+	})
 }
 
 // TestSafeRun_PanicValueRedactedInInternalAttr asserts that a panic value

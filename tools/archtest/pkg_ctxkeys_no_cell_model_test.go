@@ -128,6 +128,7 @@ var allowedPkgCtxkeysValueDeclNames = map[string]struct{}{
 	"traceParent":   {},
 	"requestID":     {},
 	"realIP":        {},
+	"peerIdentity":  {}, // WM-32: mTLS peer X.509 identity (networking, not cell-model)
 	// Principal family (issue #1229) — request-scoped OAuth/OIDC identity const
 	// keys; see allowedPkgCtxkeysKeyStringValues for the rationale.
 	"actorID":   {},
@@ -149,6 +150,8 @@ var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 	"WithSpanID": {}, "SpanIDFrom": {},
 	"WithRequestID": {}, "RequestIDFrom": {},
 	"WithRealIP": {}, "RealIPFrom": {},
+	// WM-32: mTLS peer X.509 identity injected by runtime/http/middleware.MTLS.
+	"WithPeerIdentity": {}, "PeerIdentityFrom": {},
 	// Principal family (issue #1229) — request-scoped OAuth/OIDC identity
 	// accessor pairs; see allowedPkgCtxkeysKeyStringValues for the rationale.
 	"WithActorID": {}, "ActorIDFrom": {},
@@ -161,7 +164,8 @@ var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 // declarations in pkg/ctxkeys/ production .go files. Only the unexported
 // ctxKey alias is permitted.
 var allowedPkgCtxkeysTypeNames = map[string]struct{}{
-	"ctxKey": {},
+	"ctxKey":       {},
+	"PeerIdentity": {}, // WM-32: curated mTLS peer X.509 subset (Subject/DNSNames/URIs)
 }
 
 // allowedPkgCtxkeysKeyStringValues is the golden allowlist of string-literal
@@ -175,6 +179,7 @@ var allowedPkgCtxkeysKeyStringValues = map[string]struct{}{
 	"traceparent":    {},
 	"request_id":     {},
 	"real_ip":        {},
+	"peer_identity":  {}, // WM-32: mTLS peer X.509 identity (networking, not cell-model)
 	// Principal family (issue #1229): request-scoped OAuth/OIDC identity, set by
 	// runtime/auth middleware at the request trust boundary and read by
 	// kernel/outbox.ContextPrincipal at NewEntry time. Same category as

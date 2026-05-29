@@ -2,10 +2,11 @@ package saga
 
 // leader_elect.go — distlock-based leader election for the Coordinator (PR-05,
 // #964). The gate is injected into the existing tick loop (tickOnce) rather
-// than a wrapper struct: SAGA-JOURNAL-HOLDER-SEAL-01 forbids any struct other
-// than Coordinator from holding a journal.Journal, and journal access must stay
-// inside Coordinator. The only new state is an optional distlock.Locker field;
-// all gate logic lives here.
+// than a wrapper struct: post-#1209 SAGA-JOURNAL-HOLDER-SEAL-01 lets only the
+// Coordinator hold the journal.JournalCore field and bans the Heartbeat-bearing
+// journal.Journal / journal.Heartbeater as a field anywhere in runtime/saga, so
+// journal access must stay inside Coordinator. The only new state is an optional
+// distlock.Locker field; all gate logic lives here.
 
 import (
 	"context"
@@ -103,10 +104,16 @@ func (c *Coordinator) acquireLead(ctx context.Context, ci journal.ClaimedInstanc
 	}
 	return func() {
 		if rerr := lock.Release(); rerr != nil {
+			// lock_key names the distlock efficiency lock; lease_id is the journal
+			// fencing token (ci.LeaseID) of the ClaimPending cycle this drive ran
+			// under. They are distinct leases (see package doc) — lease_id is logged
+			// purely for claim-cycle correlation, consistent with every other
+			// per-instance saga log, not because the distlock is fenced by it.
 			c.logger.WarnContext(ctx, "saga: distlock release failed",
 				slog.String("instance_id", string(ci.Instance.ID)),
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("lock_key", key),
+				slog.String("lease_id", string(ci.LeaseID)),
 				slog.Any("error", rerr))
 		}
 	}, true
@@ -125,9 +132,13 @@ func (c *Coordinator) logLeaderSkip(ctx context.Context, ci journal.ClaimedInsta
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		level = slog.LevelDebug
 	}
+	// lease_id is the journal fencing token (ci.LeaseID); lock_key is the
+	// distlock identity — distinct leases (see package doc / acquireLead). lease_id
+	// is logged for claim-cycle correlation, uniform with all per-instance logs.
 	c.logger.Log(ctx, level, "saga: leader-elect skip (lock not acquired)",
 		slog.String("instance_id", string(ci.Instance.ID)),
 		slog.String("definition_id", string(ci.Instance.DefinitionID)),
 		slog.String("lock_key", key),
+		slog.String("lease_id", string(ci.LeaseID)),
 		slog.Any("error", err))
 }

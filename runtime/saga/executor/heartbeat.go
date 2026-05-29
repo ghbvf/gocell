@@ -10,11 +10,21 @@ import (
 )
 
 // Heartbeater extends a saga instance's lease by calling Heartbeat periodically.
-// The interface matches the journal.Journal.Heartbeat signature exactly so that
-// journal implementations satisfy it without importing this package.
+// The interface matches kernel/saga/journal.Heartbeater (and the Heartbeat
+// method on the full journal.Journal) exactly, so any journal implementation
+// satisfies it structurally without this package importing journal.
+//
+// This is deliberately a SEPARATE declaration from journal.Heartbeater, not an
+// alias or re-use: kernel/ cannot depend on runtime/, and this package must
+// never import kernel/saga/journal (below), so the two structurally-identical
+// interfaces are an intentional layering artifact. journal.Heartbeater exists
+// only to compose the full journal.Journal; this one is the executor's own
+// dependency surface.
 //
 // INVARIANT: executor never imports kernel/saga/journal — it uses this narrow
-// interface instead (SAGA-JOURNAL-HOLDER-SEAL-01).
+// interface instead. Enforced by the saga-executor-no-journal-import depguard
+// rule in .golangci.yml (path-level import ban) and complemented by
+// SAGA-JOURNAL-HOLDER-SEAL-01 (no journal.* field may be persisted here either).
 //
 // Caller contract: the Executor stops the heartbeat loop when ok=false is
 // returned; implementations should guarantee that ok=false is idempotent
