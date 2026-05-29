@@ -65,6 +65,10 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		if err := buildEventSpec(spec, rootDir, contract, contractDir); err != nil {
 			return nil, err
 		}
+	case "grpc":
+		if err := buildGRPCSpec(spec, contract); err != nil {
+			return nil, err
+		}
 	case "command", "projection":
 		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
 		// not yet have dedicated generators. buildContractSpec accepts them so that
@@ -579,6 +583,42 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 		HandlerMethod:     handlerMethod,
 		Replayable:        replayable,
 		DeliverySemantics: contract.DeliverySemantics,
+	}
+	return nil
+}
+
+// buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
+// placeholder server-interface generator. No schema or proto file is read: the
+// PR-2 stub uses []byte for request/response, so the proto path is metadata
+// only (rendered into a doc comment). The fail-closed guards below mirror
+// buildHTTPSpec's nil-endpoint check.
+//
+// Streaming is fail-closed: a non-unary streamingType is rejected rather than
+// emitting a misleading unary []byte placeholder. PR 10 adds streaming codegen
+// and lifts this restriction. Empty streamingType is the unary default.
+func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error {
+	g := contract.Endpoints.GRPC
+	if g == nil {
+		return fmt.Errorf("contractgen build: contract %q is kind=grpc but has no endpoints.grpc block", contract.ID)
+	}
+	if g.Service == "" {
+		return fmt.Errorf("contractgen build: contract %q grpc block requires service", contract.ID)
+	}
+	if g.Method == "" {
+		return fmt.Errorf("contractgen build: contract %q grpc block requires method", contract.ID)
+	}
+	if g.StreamingType != "" && g.StreamingType != "unary" {
+		return fmt.Errorf(
+			"contractgen build: contract %q grpc streamingType %q codegen deferred to PR 10 (only unary supported in the placeholder stub)",
+			contract.ID, g.StreamingType)
+	}
+
+	spec.GRPC = &GRPCEndpointSpec{
+		InterfaceName: "Server",
+		MethodName:    g.Method,
+		ServiceFQN:    g.Service,
+		StreamingType: g.StreamingType,
+		ProtoPath:     g.Proto,
 	}
 	return nil
 }
