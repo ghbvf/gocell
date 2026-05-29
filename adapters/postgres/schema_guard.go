@@ -20,7 +20,11 @@ import (
 // Append here when a new table is introduced by a migration file so that
 // schema_guard documentation stays in sync with the embedded SQL.
 //
-//   - outbox_entries     (001)  transactional outbox for event relay
+//   - outbox_entries     (001/044)  transactional outbox for event relay
+//                                 + 044_outbox_entries_principal.sql TRUNCATE+rebuild
+//                                   adding principal (jsonb) + occurred_at (timestamptz)
+//                                   NOT NULL columns for the sealed-construction
+//                                   principal-injection wire envelope (#1229).
 //   - config_entries     (004)  cell configuration key-value store
 //   - config_versions    (004)  immutable configuration version history
 //   - refresh_tokens     (007)  append-only refresh token lineage
