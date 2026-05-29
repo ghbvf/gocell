@@ -141,6 +141,11 @@ func use() {
 type T struct{}
 func (T) New() int { return 0 }
 func use(v T) { _ = v.New() }`
+	// NOTE: Go forbids generic methods ("method must have no type parameters"),
+	// so an IndexExpr over a *method* selector (val.Method[T]()) cannot occur in
+	// real source — the method→false path is covered by the non-generic
+	// "method-call-not-pkg-func" case below; unwrapCallee's IndexExpr branch is
+	// exercised by the package-level generic funcs (Foo[int] / Pair[int,string]).
 
 	cases := []struct {
 		name    string
@@ -302,5 +307,32 @@ func TestWalkFuncDecls_NilSafe(t *testing.T) {
 	WalkFuncDecls([]*ast.File{nil}, nil, nil, nil, func(FuncDeclContext) { called = true })
 	if called {
 		t.Error("nil/empty input must not invoke fn")
+	}
+	// nil fn with real FuncDecls must not panic (engine guards fn == nil).
+	f, fset := parseOnly(t, "package p\nfunc x() {}")
+	WalkFuncDecls([]*ast.File{f}, nil, fset, nil, nil)
+}
+
+// TestUnwrapCallee directly exercises the generic-unwrap helper, including the
+// default→nil branch (a parenthesized callee, which IsCallToPkgFunc then treats
+// as a non-match — mirroring the donor unwrapCalleeForResolve semantics).
+func TestUnwrapCallee(t *testing.T) {
+	t.Parallel()
+	mustExpr := func(s string) ast.Expr {
+		e, err := parser.ParseExpr(s)
+		if err != nil {
+			t.Fatalf("parse %q: %v", s, err)
+		}
+		return e
+	}
+	nonNil := []string{"pkg.Foo", "Foo", "pkg.Foo[int]", "pkg.Foo[int, string]"}
+	for _, s := range nonNil {
+		if unwrapCallee(mustExpr(s)) == nil {
+			t.Errorf("unwrapCallee(%q) = nil, want non-nil", s)
+		}
+	}
+	// default branch: ParenExpr (and any other shape) is not unwrapped → nil.
+	if got := unwrapCallee(mustExpr("(pkg.Foo)")); got != nil {
+		t.Errorf("unwrapCallee parenthesized callee = %T, want nil (default branch)", got)
 	}
 }

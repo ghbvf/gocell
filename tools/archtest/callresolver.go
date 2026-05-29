@@ -62,7 +62,9 @@ func WalkFuncDeclsAST(files []*ast.File, fset *token.FileSet, rel func(*ast.File
 //
 // info must come from the same packages.Load result that produced call —
 // guaranteed when info is pass.TypesInfo. Returns false for method calls (use
-// [ResolveMethodCall]), nil info, or nil call.
+// [ResolveMethodCall]), nil info, or nil call. In particular, a nil info
+// yields false, so this is safe to call from an AST-only WalkFuncDeclsAST
+// callback where ctx.Info == nil (it will simply never match).
 func IsCallToPkgFunc(info *types.Info, call *ast.CallExpr, pkgPath, name string) bool {
 	return callresolver.IsCallToPkgFunc(info, call, pkgPath, name)
 }

@@ -30,6 +30,10 @@ type FuncDeclContext struct {
 	File *ast.File
 	Func *ast.FuncDecl
 	Info *types.Info // nil in AST-only mode
+	// Fset is the caller-supplied FileSet. It is non-nil whenever the caller
+	// supplied one (archtest.WalkFuncDecls passes p.Fset); a callback that
+	// reads ctx.Fset.Position(...) must therefore only be used with a walker
+	// that was given a non-nil FileSet.
 	Fset *token.FileSet
 	Rel  string
 }
@@ -55,6 +59,9 @@ func WalkFuncDecls(
 	rel func(*ast.File) string,
 	fn func(FuncDeclContext),
 ) {
+	if fn == nil {
+		return
+	}
 	for _, f := range files {
 		if f == nil {
 			continue

@@ -371,6 +371,21 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 			// so it is not banned here. FuncDeclContext (the *types.TypeName
 			// struct-literal ref) is banned alongside the funcs, mirroring how
 			// scanner.ImportBan is banned as a TypeName.
+			//
+			// Only DIRECT internal-pkg refs trip this: the façade alias
+			// `archtest.FuncDeclContext = callresolver.FuncDeclContext` used
+			// inside package archtest resolves (via types.Info.Uses) to
+			// archtestPkgPath, NOT callresolverPkgPath, so same-package façade
+			// use (e.g. a `FuncDeclContext{...}` literal in an archtest rule) is
+			// intentionally NOT flagged — that is the sanctioned path.
+			//
+			// AI-robust grade: Medium (extends the existing PASS-FUNNEL-RESOLVE-01
+			// Medium funnel with more symbols — NOT a new funnel). Downstream:
+			// type-aware ResolvePackageRef + red-fixture per-symbol lock.
+			// Upstream: Go's internal-import visibility ceiling (a sibling
+			// *_test.go in package archtest CAN import internal/callresolver), the
+			// same permanent ceiling documented for the typeseval-helper ban
+			// above — no low-cost Hard path exists, so no new gh-issue is opened.
 			callresolverPkgPath: {
 				"WalkFuncDecls":   true,
 				"IsCallToPkgFunc": true,

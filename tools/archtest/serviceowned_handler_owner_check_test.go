@@ -1242,6 +1242,15 @@ func calleeIdentName(ref ast.Expr) string {
 // explicit generic type arguments so the underlying SelectorExpr / Ident can
 // be passed to ResolvePackageRef.
 //
+// NOTE: callresolver.IsCallToPkgFunc folds the unwrap+resolve+(pkg,name)-compare
+// shape, and the errcode-ctor sites here were migrated to it. This local copy is
+// deliberately RETAINED — the ownership/BFS sites (isOwnershipMismatchCall,
+// fileCallsAuthCheckOwnerFromEntries) need the *unwrapped ast.Expr* itself (to
+// feed calleeIdentName for intra-file call-graph naming), not the bool that
+// IsCallToPkgFunc returns, and callresolver.unwrapCallee is unexported. The
+// duplicated 4-line switch is the accepted cost of keeping that expr-returning
+// helper local rather than widening the façade.
+//
 // IndexExpr handles single-type-arg generic dispatch (`CheckOwner[T](...)`,
 // the only currently-instantiable form for `CheckOwner[T any]`). IndexListExpr
 // is defensive coverage for future multi-type-arg signatures (e.g.

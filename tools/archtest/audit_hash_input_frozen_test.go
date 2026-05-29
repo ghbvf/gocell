@@ -175,6 +175,12 @@ func runAuditHashInputA2Rule(p *Pass) []Diagnostic {
 // a same-named method on another type is not exempt). IsCallToPkgFunc is
 // alias-proof: handles `hmac.New`, `h.New` after `import h "crypto/hmac"`, and
 // `New` after `import . "crypto/hmac"`.
+//
+// HasReceiver (via scanner.ReceiverTypeName) also matches generic receivers
+// `Protocol[T]`. Protocol is non-generic today, so this is a no-op; if Protocol
+// ever becomes generic, re-confirm the exemption still scopes to the intended
+// ComputeHash method (the broadening only ever *exempts* more, never detects
+// less, so it cannot cause a missed hmac.New violation on a non-Protocol type).
 func scanFuncBodyForHmacViolations(ctx FuncDeclContext) []Diagnostic {
 	sanctioned := ctx.Func.Name != nil && ctx.Func.Name.Name == "ComputeHash" &&
 		HasReceiver(ctx.Func, "Protocol")
