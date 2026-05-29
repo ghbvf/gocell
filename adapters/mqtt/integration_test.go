@@ -4,6 +4,7 @@ package mqtt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -395,7 +396,12 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 			}
 
 			settlement := &recordingSettlement{}
-			filter := "itest/disp/+"
+			// Per-subtest topic prefix makes each subtest's filter disjoint, so
+			// shared-subscription fanout cannot deliver one subtest's PUBLISH to
+			// another (mirrors the unit DispositionMatrix fix). Consumer group is
+			// still unique per subtest as a second layer of isolation.
+			prefix := "itest/disp/" + tc.name
+			filter := prefix + "/+"
 			subscription := itestSubscription(filter, "disp-"+tc.name+"-"+uuid.NewString())
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -410,7 +416,7 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 				t.Fatal("subscribe not ready")
 			}
 
-			topic := "itest/disp/" + uuid.NewString()
+			topic := prefix + "/" + uuid.NewString()
 			itestPublish(t, conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
 
 			deadline := time.Now().Add(10 * time.Second)
@@ -543,12 +549,22 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSubscriber 2: %v", err)
 	}
-	var received atomic.Int64
+	// Count ONLY offline-tagged deliveries (payload {"seq":<int>}). The fresh
+	// online probe below carries {"seq":"online"} and is deliberately NOT
+	// counted: counting it would make the test tautological — it would pass even
+	// if ZERO offline-queued messages were redelivered, which is exactly the
+	// "clean=false 离线消息补投" criterion under test (Plan §3.4).
+	var offlineReceived atomic.Int64
+	var onlineReceived atomic.Int64
 	subCtx2, subCancel2 := context.WithCancel(ctx2)
 	defer subCancel2()
 	go func() {
-		_ = sub2.Subscribe(subCtx2, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			received.Add(1)
+		_ = sub2.Subscribe(subCtx2, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			if isOfflineTaggedPayload(entry.Payload) {
+				offlineReceived.Add(1)
+			} else {
+				onlineReceived.Add(1)
+			}
 			return outbox.Ack(), nil
 		})
 	}()
@@ -558,21 +574,47 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 		t.Fatal("phase-2 subscribe not ready")
 	}
 
-	// Also publish a fresh online message to confirm post-resume delivery works
-	// regardless of whether mosquitto queued the offline ones for the shared sub.
+	// Publish a fresh online message AFTER resume. This is a liveness sanity
+	// signal only (proves the resumed subscription delivers at all); it is not
+	// part of the success criterion and is not counted toward offlineReceived.
 	itestPublish(t, conn2, filter, itestEnvelope(t, filter, []byte(`{"seq":"online"}`)))
 
+	// HARD assertion: at least one OFFLINE-queued message must be redelivered to
+	// the resumed persistent session. This can go RED if offline redelivery
+	// breaks — it is NOT skipped on the offline-redelivery criterion.
+	//
+	// Residual gap: mosquitto's exact offline-queue depth for shared
+	// subscriptions can vary by version, so we require >= 1 of the 3 offline
+	// messages rather than all 3. The session-resumed + at-least-one-redelivered
+	// invariant is the deterministic core of "clean=false 离线消息补投".
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if received.Load() >= 1 {
+		if offlineReceived.Load() >= 1 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond) //archtest:allow:test-sleep poll-loop: real broker delivery latency
 	}
-	if received.Load() < 1 {
-		t.Skip("broker did not deliver any message to the resumed shared subscription; " +
-			"mosquitto shared-subscription offline queueing is broker-version-dependent")
+	if offlineReceived.Load() < 1 {
+		t.Fatalf("no offline-queued message was redelivered to the resumed persistent session "+
+			"(offline=%d online=%d); clean=false offline redelivery is broken",
+			offlineReceived.Load(), onlineReceived.Load())
 	}
+}
+
+// isOfflineTaggedPayload reports whether an envelope payload is one of the
+// offline-published messages (payload {"seq":<int>}). The post-resume online
+// probe carries {"seq":"online"} (a JSON string), which fails the numeric
+// decode and is therefore NOT treated as an offline message. This lets
+// TestIntegration_Subscriber_SessionRecovery count offline redelivery distinctly
+// from the online liveness probe.
+func isOfflineTaggedPayload(payload []byte) bool {
+	var probe struct {
+		Seq *int `json:"seq"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return false
+	}
+	return probe.Seq != nil
 }
 
 // TestIntegration_Subscriber_ClientIDConflict verifies that a second connection
@@ -629,8 +671,11 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 
 	// conn1 should transition out of the healthy phase: the broker DISCONNECT /
 	// TCP close drives OnConnectionDown → phaseDisconnected, then autopaho retries
-	// (and may steal the session back, oscillating). We assert that within the
-	// window conn1 was observed non-healthy at least once.
+	// (and may steal the session back, oscillating). MQTT v5 session-takeover
+	// (DISCONNECT 0x8E on a same-clientId reconnect) is spec-MANDATED, so this is
+	// a HARD assertion: conn1 MUST be observed non-healthy within the window. It
+	// is NOT skipped — a broker that never evicts the first session is a real
+	// regression this test exists to catch.
 	observedUnhealthy := false
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -641,8 +686,8 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 		time.Sleep(50 * time.Millisecond) //archtest:allow:test-sleep poll-loop: wait for broker session-takeover disconnect
 	}
 	if !observedUnhealthy {
-		t.Skip("did not observe conn1 transition to unhealthy after clientId takeover; " +
-			"broker eviction + autopaho reconnect oscillation is timing-dependent")
+		t.Fatalf("conn1 never transitioned to unhealthy after a same-clientId reconnect; " +
+			"MQTT v5 session takeover (DISCONNECT 0x8E) did not occur — broker eviction is broken")
 	}
 }
 

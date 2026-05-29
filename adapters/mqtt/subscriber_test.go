@@ -610,7 +610,126 @@ func TestSubscriber_MetricsEmission(t *testing.T) {
 		return f >= 1
 	}, testtime.D5s, testtime.D10ms)
 
-	success, failure, _ := coll.snapshot()
-	assert.GreaterOrEqual(t, success, 1, "at least one consume success")
-	assert.GreaterOrEqual(t, failure, 1, "at least one consume failure")
+	// Unique consumer group + unique topics under test/metrics/<uuid> make this
+	// subscription's delivery set disjoint from every other parallel subtest, so
+	// exact counts are safe: exactly one success (the acked envelope) and exactly
+	// one failure (the poison payload). Exact (not GreaterOrEqual) catches a
+	// double-delivery / double-record bug that >=1 would silently pass.
+	success, failure, lastReason := coll.snapshot()
+	assert.Equal(t, 1, success, "exactly one consume success")
+	assert.Equal(t, 1, failure, "exactly one consume failure")
+	assert.Equal(t, consumeReasonUnmarshal, lastReason, "the single failure is the poison unmarshal")
+}
+
+// ---------------------------------------------------------------------------
+// dispatchAck branches: commit-success-then-ack-FAIL, commit-FAIL
+// ---------------------------------------------------------------------------
+
+// TestSubscriber_DispatchAck_AckFailsAfterCommit drives the post-commit ack
+// failure branch (subscriber.go dispatchAck): Settlement.Commit SUCCEEDS but
+// the subsequent broker ack FAILS. This is the dangerous-redeliver case and
+// must record consumeReasonAckFailed (NOT consumeReasonCommitFailed), with the
+// commit half observed and NO success recorded.
+//
+// White-box: a Subscriber bound to the real broker cannot fail the ack
+// (onPublishReceived overwrites ackClient with the live delivering client on
+// every PUBLISH), so we call dispatchAck directly against a Connection whose
+// ackClient is a failing fakeAcker.
+func TestSubscriber_DispatchAck_AckFailsAfterCommit(t *testing.T) {
+	t.Parallel()
+	coll := newRecordingSubCollector()
+	sub := newDispatchAckSubscriber(t, errors.New("broker gone"), coll)
+
+	settlement := &recordingSettlement{} // commitErr nil → Commit succeeds
+	pb, entry := dispatchAckEntry("test/ackfail/x")
+	sub.dispatchAck(context.Background(), pb, settlement, entry, time.Now())
+
+	success, failure, lastReason := coll.snapshot()
+	commit, release := settlement.counts()
+	assert.Equal(t, 1, commit, "Settlement.Commit must be called (and succeed) before broker ack")
+	assert.Equal(t, 0, release, "ack failure after a SUCCESSFUL commit must NOT release the claim")
+	assert.Equal(t, 0, success, "ack failure must NOT record consume success")
+	assert.Equal(t, 1, failure, "exactly one failure recorded")
+	assert.Equal(t, consumeReasonAckFailed, lastReason,
+		"post-commit ack failure must record ack_failed, NOT commit_failed")
+}
+
+// TestSubscriber_DispatchAck_CommitFails drives the commit-failure branch
+// (subscriber.go dispatchAck): Settlement.Commit FAILS (lease expired), so the
+// message is left unacked, the claim is Released, and consumeReasonCommitFailed
+// is recorded. The broker ack must NOT be attempted (success stays 0).
+func TestSubscriber_DispatchAck_CommitFails(t *testing.T) {
+	t.Parallel()
+	coll := newRecordingSubCollector()
+	// ackClient would succeed if reached — proving the ack is never attempted
+	// because Commit fails first.
+	sub := newDispatchAckSubscriber(t, nil, coll)
+
+	settlement := &recordingSettlement{commitErr: errors.New("lease expired")}
+	pb, entry := dispatchAckEntry("test/commitfail/x")
+	sub.dispatchAck(context.Background(), pb, settlement, entry, time.Now())
+
+	success, failure, lastReason := coll.snapshot()
+	commit, release := settlement.counts()
+	assert.Equal(t, 1, commit, "Settlement.Commit must be attempted")
+	assert.Equal(t, 1, release, "commit failure must Release the claim for another holder")
+	assert.Equal(t, 0, success, "commit failure must NOT record consume success (message left unacked)")
+	assert.Equal(t, 1, failure, "exactly one failure recorded")
+	assert.Equal(t, consumeReasonCommitFailed, lastReason,
+		"commit failure must record commit_failed")
+}
+
+// ---------------------------------------------------------------------------
+// StopIntake drain timeout (returns ErrAdapterMQTTSubscriberCloseTimeout)
+// ---------------------------------------------------------------------------
+
+// TestSubscriber_StopIntake_DrainTimeout verifies that when an in-flight
+// handler does not finish within StopIntakeDrainTimeout, StopIntake returns an
+// *errcode.Error with code ErrAdapterMQTTSubscriberCloseTimeout (NOT
+// ErrAdapterMQTTClosed). A blocked handler keeps wg / inflight > 0 so the drain
+// timer fires, exercising the residual-count Warn path.
+func TestSubscriber_StopIntake_DrainTimeout(t *testing.T) {
+	t.Parallel()
+	addr, stop := startInternalBroker(t)
+	defer stop()
+	sub, conn := newTestSubscriber(t, addr, nil)
+	// Tighten the drain budget so the timeout fires fast; per-call timeout small
+	// so UNSUBSCRIBE during StopIntake does not dominate the wait.
+	sub.config.StopIntakeDrainTimeout = testtime.D50ms
+	sub.config.StopIntakePerCallTimeout = testtime.D50ms
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// Unblock the stuck handler at cleanup so the in-flight goroutine is not
+	// leaked past the test.
+	t.Cleanup(func() { close(release) })
+
+	subscription := newSubscription("test/draintimeout/+", "draintimeout-cg-"+uuid.NewString())
+	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		once.Do(func() { close(entered) })
+		<-release // blocks until cleanup; keeps inflight > 0 past the drain budget
+		return outbox.Ack(), nil
+	})
+	defer cancel()
+
+	topic := "test/draintimeout/" + uuid.NewString()
+	publishTo(t, conn, topic, newSubEnvelope(t, topic, []byte(`{"k":"v"}`)))
+
+	// Synchronize on "handler entered" so the in-flight count is real before
+	// StopIntake samples the drain.
+	select {
+	case <-entered:
+	case <-time.After(testtime.D5s):
+		t.Fatal("handler never entered")
+	}
+
+	stopCtx, c := context.WithTimeout(context.Background(), testtime.D5s)
+	defer c()
+	err := sub.StopIntake(stopCtx)
+	require.Error(t, err, "StopIntake must return a drain-timeout error with the handler stuck")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTSubscriberCloseTimeout, ec.Code,
+		"drain timeout must be ErrAdapterMQTTSubscriberCloseTimeout, not ErrAdapterMQTTClosed")
 }
