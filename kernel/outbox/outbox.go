@@ -46,9 +46,20 @@ const (
 // session identity, and Entry.Validate rejects entries that try to forge them
 // via the producer-owned Metadata namespace.
 //
-// The list is exhaustive — these are the only keys the kernel bridges map in
-// either direction. Adding a new bridge field requires extending this list
-// (caught by reservedMetadataKeyMembership invariant test).
+// The list is exhaustive — these are the keys the kernel's observability/trace
+// and principal bridges reserve. Note that not every reserved key round-trips
+// through ctx: span_id / trace_state / tracestate have no ObservabilityMetadata
+// field today, but are reserved for namespace hygiene as members of the W3C
+// trace-context family the bridge owns. Adding a new bridge key requires
+// extending this list (frozen by archtest OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01
+// against an independent want-set; each key's rejection is exercised by
+// TestEntry_Validate_RejectsReservedMetadataKeys).
+//
+// occurred_at is deliberately NOT reserved: it belongs to neither bridge family.
+// It is a domain event-time scalar carried by its own dedicated sealed Entry
+// field (occurredAt), so a producer's Metadata["occurred_at"] is inert against
+// the real field — reserving it would be a category error, not defense. See ADR
+// 202605281200-1042 §5.
 var ReservedMetadataKeys = []string{
 	"trace_id",
 	"traceparent",
@@ -349,8 +360,10 @@ func WithAggregateType(t string) EntryOption { return func(e *Entry) { e.aggrega
 func WithTopic(t string) EntryOption { return func(e *Entry) { e.topic = t } }
 
 // WithMetadata sets business metadata. The map is cloned so later caller-side
-// mutation cannot reach the sealed entry state. Reserved keys are rejected by
-// Validate.
+// mutation cannot reach the sealed entry state. Reserved keys (ReservedMetadataKeys)
+// are rejected by Validate. Note: "occurred_at" is NOT reserved, but writing it
+// here is inert against the domain event time — use WithOccurredAt to override
+// Entry.OccurredAt.
 func WithMetadata(m map[string]string) EntryOption {
 	return func(e *Entry) {
 		if m == nil {
