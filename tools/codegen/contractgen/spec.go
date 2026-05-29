@@ -10,7 +10,7 @@ type ContractGenSpec struct {
 	PackagePath string
 	// ContractID is the full contract id, e.g. "http.order.create.v1".
 	ContractID string
-	// Kind is "http" or "event".
+	// Kind is one of "http", "event", "command", "projection", "grpc".
 	Kind string
 	// SourceFile is the repo-relative path of the contract.yaml that drove
 	// generation, e.g. "examples/todoorder/contracts/http/order/create/v1/contract.yaml".
@@ -30,6 +30,10 @@ type ContractGenSpec struct {
 	Endpoint *httpEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
+	// GRPC is non-nil when Kind == "grpc". It drives the placeholder server
+	// interface emitted into iface_gen.go. Request/response are []byte until
+	// PR 6 wires the proto-generated message types.
+	GRPC *GRPCEndpointSpec
 	// RequestSchemaJSON is the raw JSON content of the request schema file,
 	// compacted to a single line (no extra whitespace).
 	// Non-empty only when Kind=="http" and the contract declares schemaRefs.request.
@@ -279,6 +283,39 @@ type EventEndpointSpec struct {
 	Replayable bool
 	// DeliverySemantics is the declared delivery guarantee, e.g. "at-least-once".
 	DeliverySemantics string
+}
+
+// GRPCEndpointSpec holds gRPC-specific endpoint information for the placeholder
+// server-interface generator. It mirrors EventEndpointSpec's role: the builder
+// projects metadata.GRPCTransportMeta into this codegen-local value type, and
+// iface.tmpl reads it to emit the server interface.
+//
+// This is the contractgen IR type — distinct from kernel/contractspec's
+// GRPCEndpointSpec, which is the runtime registration descriptor. They share no
+// definition because the codegen IR carries Go-identifier-shaped fields
+// (InterfaceName, MethodName) the runtime descriptor has no use for.
+//
+// Until PR 6 the request/response are []byte placeholders (no proto dependency);
+// the GRPC-CODEGEN-NO-PROTO-DEP-01 invariant locks that no protobuf/grpc import
+// reaches the rendered stub.
+type GRPCEndpointSpec struct {
+	// InterfaceName is the Go identifier for the generated server interface,
+	// e.g. "Server". Held as a field (not a literal in the template) so the
+	// naming convention has a single source the test can assert.
+	InterfaceName string
+	// MethodName is the RPC method name from contract.yaml endpoints.grpc.method,
+	// e.g. "IssueCommand". Used verbatim as the Go method name on the interface.
+	MethodName string
+	// ServiceFQN is the proto fully-qualified service name from
+	// endpoints.grpc.service, e.g. "device.command.v1.DeviceCommandService".
+	// Rendered into the interface doc comment only (no code dependency).
+	ServiceFQN string
+	// StreamingType is the declared streaming pattern (always unary/empty in
+	// PR 2 — buildGRPCSpec rejects non-unary; PR 10 lifts the restriction).
+	StreamingType string
+	// ProtoPath is the contracts-relative .proto path from endpoints.grpc.proto.
+	// Rendered into the interface doc comment only; the file is not read.
+	ProtoPath string
 }
 
 // ParamSpec describes a single HTTP path or query parameter.

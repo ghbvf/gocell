@@ -35,7 +35,7 @@
 **Actor**: `pkicell.rotation` slice 维护者（winmdm Stage 1, 2027 Q1）
 
 **Plain Language**:
-作为 `pkicell` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己保证多副本下单实例。
+作为 `pkicell` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己跑 leader election；但我**必须**保证 `Reconcile` 幂等——leader election 不是 fencing 保证，跨副本残余并发由框架 epoch fencing CAS + 我的幂等兜底（见 ADR §4.3/§4.4）。
 
 **Why this priority**: 证书过期等同生产中断。L4 收敛是 winmdm 上线的必要前提，pkicell 是最先落地的消费方。
 
@@ -53,7 +53,7 @@
 **Actor**: `mdmcell.command` slice 维护者（winmdm Stage 2, 2027 Q2-Q3）
 
 **Plain Language**:
-作为 `mdmcell.command` 的维护者，我希望声明一个 reconciler，扫描所有 Status ∈ {Pending, Sent} 且 `now > sentAt + SendToCompleteTimeout` 的命令；reconciler 触发重发逻辑。多副本部署时，**框架保证单实例扫描**，避免重复发命令到设备。
+作为 `mdmcell.command` 的维护者，我希望声明一个 reconciler，扫描所有 Status ∈ {Pending, Sent} 且 `now > sentAt + SendToCompleteTimeout` 的命令；reconciler 触发重发逻辑。多副本部署时，框架用 leader election（best-effort 收窄）+ epoch fencing CAS（结构兜底）+ reconciler 幂等，把重复命令收敛到 at-most-once-effective；**leader election 本身不是 fencing 保证**（client-go 明示「does not guarantee that only one client is acting as a leader」，见 ADR §4）。
 
 **Why this priority**: 命令丢失会直接影响 MDM 的 SLO（device 收到管理命令的成功率）。leader-elect 是 hard 依赖。
 
@@ -61,8 +61,9 @@
 
 **Acceptance Scenarios**:
 1. **Given** 两个 reconciler 实例 + 同一 reconciler ID，**When** 同时 Start，**Then** 只有获得 lease 的实例调用 Reconcile，另一个 `awaitProbe` 等待
-2. **Given** leader 实例进程崩溃，**When** LeaseDuration（默认 15s）后，**Then** follower 接管，扫描周期对齐 LeaseDuration（不并发也不长期空窗）
-3. **Given** leader 释放 lease（graceful shutdown），**When** stop 完成，**Then** follower 即时接管（< 1s），无空窗
+2. **Given** leader 实例进程崩溃，**When** LeaseDuration（默认 15s）后，**Then** follower 接管，扫描周期对齐 LeaseDuration（接管后单 leader 稳态；流转瞬间的残余并发由 epoch fencing + 幂等兜底，**不**声称零并发）
+3. **Given** leader 释放 lease（graceful shutdown），**When** stop 完成，**Then** follower 即时接管（< 1s），无长期空窗
+4. **Given** 旧 leader L1 在 `Reconcile(X)` 中途 STW 暂停 + lease 过期、L2 以 `Epoch+1` 接管并写 X，**When** L1 苏醒后以旧 `Epoch` 重放写 X，**Then** 写路径 CAS 拒绝 stale-epoch 写、设备**不**收到重复命令（fencing real-failure-injection conformance）
 
 ---
 
@@ -106,7 +107,7 @@
 - **Reconcile panic**：框架 recover → 转 transient error → 走退避路径；不让单个 entity 的 panic 影响其他 entity
 - **Loop 关闭中 Reconcile 在跑**：StopTimeout 内等待，超时强制 cancel ctx；reconciler 必须响应 ctx.Done()
 - **Reconcile 阻塞超长（> 单 tick interval）**：单 entity 串行（不并发同 ID）；多 entity 按 MaxConcurrentReconciles 并发；超长被 ctx deadline 切断
-- **leader 流转期的双扫描**：lease lock 走 Redis SETNX 或 PG advisory lock，幂等保护（claim/commit/release 三阶段）
+- **leader 流转期的双扫描/双写**：lease lock（Redis SETNX / PG advisory lock）只 best-effort 收窄并发窗口——leader election **非 fencing**（client-go 明示）。正确性由 monotonic-epoch 写路径 CAS（拒 `incoming_epoch < 已见最高` 的 stale 写）+ reconciler 幂等兜底（见 ADR §4.3/§4.4）；Loop 须在 lease 丢失瞬间 cancel lease-scoped ctx 收窄窗口
 - **空非终态集合**：scan 返回 0 行 → 跳过本轮，不触发 RequeueAfter（避免无意义自循环）
 - **RequeueAfter = 0**：等价于"按 default tick interval"重入，不立即重试
 - **死信 entity 复活**：reconciler 内部可重置状态把 PermanentError 实体重新激活，由消费方负责（框架不提供 unmark API）
@@ -127,7 +128,9 @@
 
 **FR-005 (Trigger 抽象)**: 框架 MUST 提供 `Trigger` 接口（替代 controller-runtime `Source`），最小实现 `TickerTrigger(interval time.Duration)`；选配 `ChannelTrigger(<-chan Request)` 用于 outbox 事件唤醒。
 
-**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG advisory lock 两个实现。
+**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG advisory lock 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
+
+**FR-006b (FencedRepository 写路径 CAS)**: 框架 MUST 提供 `FencedRepository`/`FencedWriter` seam——`Loop` 给每次 `Reconcile` 注入 epoch-bound 写句柄，reconciler 唯一写面经此 handle，写路径 CAS 拒绝 `incoming_epoch < 资源已见最高 epoch` 的 stale 写（Kleppmann monotonic fencing，**非** `kernel/outbox` 的 UUID identity-fencing）。绕过在 type system 不可表达（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite）。受 §6 trigger gate 封存（A6 设计，不今天建）。
 
 **FR-007 (并发度控制)**: 框架 MUST 支持 `MaxConcurrentReconciles int` 选项；同一 EntityID 串行（防止重入），不同 EntityID 按上限并发。default = 1。
 
@@ -145,7 +148,7 @@
 
 **FR-012 (archtest 守卫)**: 框架的接口冻结 MUST 走 archtest（接口签名 + Result/Request 字段集 frozen + Loop carve-out 等同 `PROD-CLOCK-INJECTION-01`）；`COMMAND-PROJECTION-EXPLICIT-01` MUST 同步扩 kind 枚举。
 
-**FR-013 (conformance harness)**: 框架 MUST 提供 `reconciletest.ConformanceFactory` 复用 `kernel/command/commandtest.QueueFactory` 形态，让消费方一次跑过所有契约（leader 流转 / RequeueAfter / PermanentError / panic recovery）。
+**FR-013 (conformance harness)**: 框架 MUST 提供 `reconciletest.ConformanceFactory` 复用 `kernel/command/commandtest.QueueFactory` 形态，让消费方一次跑过所有契约（leader 流转 / RequeueAfter / PermanentError / panic recovery / **fencing：stale-epoch 写被 CAS 拒、无重复命令**，real-failure-injection）。
 
 ### Key Entities
 
@@ -154,7 +157,8 @@
 - **Result**: reconciler 返回给框架的调度提示；仅包含 RequeueAfter time.Duration（不带 Requeue bool 或 Priority）
 - **Loop**: 框架的调度环；持有 reconciler + trigger + leader + backoff 配置；生命周期挂在 cell registrar
 - **Trigger**: 触发源；最小实现 TickerTrigger；选配 ChannelTrigger
-- **LeaderElector**: 单实例保证接口；adapter 层有 Redis / PG advisory lock 实现
+- **LeaderElector**: best-effort 单 leader 选举接口（**非 fencing**，含单调 `Epoch` token）；adapter 层有 Redis / PG advisory lock 实现
+- **FencedWriter**: epoch-bound 写句柄；reconciler 唯一写面，写路径 CAS 拒 stale-epoch（跨副本正确性闭环，见 ADR §4.3）
 - **PermanentError**: 错误 marker，告诉框架"不要重试，记录到死信 metric"
 
 ---

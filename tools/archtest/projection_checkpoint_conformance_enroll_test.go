@@ -56,7 +56,7 @@
 //     concrete type is unresolvable and enrollment is not credited. Authors must
 //     pass a concretely-typed constructor call or := variable.
 //
-// ref: tools/archtest/saga_journal_conformance_enrollment_test.go (same pattern)
+// ref: tools/archtest/saga_invariants_test.go §SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (same pattern)
 // ref: tools/archtest/cell_repo_readyz_probe_test.go (per-impl enrollment precedent)
 // ref: docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §3
 package archtest
