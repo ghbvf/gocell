@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // TestRenderInlineContractYAML_EmitsCodegenFalse asserts that
@@ -90,5 +92,38 @@ func TestRenderInlineContractYAML_EmitsCodegenFalse(t *testing.T) {
 			"The standalone scaffold path must explicitly opt draft contracts out "+
 			"of the K#09 codegen=true parser funnel default.\n"+
 			"output was:\n%s", codegenValue, out)
+	}
+}
+
+// TestRenderInlineContractYAML_GRPCDraft asserts the kind=grpc branch renders a
+// draft that parses into a ContractMeta with the endpoints.grpc subtree
+// populated (service/method/proto) and server/clients set — the standalone
+// draft is codegen=false so it has no dependency on grpc codegen (PR 2/6).
+func TestRenderInlineContractYAML_GRPCDraft(t *testing.T) {
+	t.Parallel()
+
+	out, err := renderInlineContractYAML("grpc.demo.ping.v1", "grpc", "democell")
+	if err != nil {
+		t.Fatalf("renderInlineContractYAML: %v", err)
+	}
+
+	var cm metadata.ContractMeta
+	if err := yaml.Unmarshal(out, &cm); err != nil {
+		t.Fatalf("yaml.Unmarshal grpc draft: %v\noutput was:\n%s", err, out)
+	}
+	if cm.Kind != "grpc" {
+		t.Fatalf("kind = %q, want grpc", cm.Kind)
+	}
+	if cm.Endpoints.Server != "democell" {
+		t.Errorf("endpoints.server = %q, want democell (grpc provider mirrors http server)", cm.Endpoints.Server)
+	}
+	if cm.Endpoints.GRPC == nil {
+		t.Fatalf("endpoints.grpc subtree is nil; grpc draft must emit it\noutput was:\n%s", out)
+	}
+	if cm.Endpoints.GRPC.Service == "" || cm.Endpoints.GRPC.Method == "" || cm.Endpoints.GRPC.Proto == "" {
+		t.Errorf("endpoints.grpc must have service/method/proto, got %+v", cm.Endpoints.GRPC)
+	}
+	if cm.Endpoints.GRPC.Auth.Public {
+		t.Error("grpc draft must default to auth.public=false (secure default)")
 	}
 }

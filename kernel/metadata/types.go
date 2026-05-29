@@ -208,7 +208,7 @@ type WaiverMeta struct {
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
 	ID               string `yaml:"id"`
-	Kind             string `yaml:"kind"` // http|event|command|projection
+	Kind             string `yaml:"kind"` // http|event|command|projection|grpc
 	OwnerCell        string `yaml:"ownerCell"`
 	ConsistencyLevel string `yaml:"consistencyLevel"`
 	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
@@ -256,6 +256,9 @@ func (c *ContractMeta) ProviderEndpoint() string {
 		return c.Endpoints.Handler
 	case "projection":
 		return c.Endpoints.Provider
+	case "grpc":
+		// gRPC mirrors http: provider is endpoints.server.
+		return c.Endpoints.Server
 	default:
 		return ""
 	}
@@ -264,10 +267,13 @@ func (c *ContractMeta) ProviderEndpoint() string {
 // EndpointsMeta holds the kind-specific endpoint fields for a Contract.
 // Only the fields relevant to the contract's Kind are populated.
 type EndpointsMeta struct {
-	// HTTP
+	// HTTP (also reused by gRPC: provider=server, consumers=clients)
 	Server  string             `yaml:"server,omitempty"`
 	Clients []string           `yaml:"clients,omitempty"`
 	HTTP    *HTTPTransportMeta `yaml:"http,omitempty"`
+	// gRPC transport subtree (parallel to HTTP); server/clients above carry
+	// the provider/consumer cells.
+	GRPC *GRPCTransportMeta `yaml:"grpc,omitempty"`
 	// Event
 	Publisher        string   `yaml:"publisher,omitempty"`
 	ActorSubscribers []string `yaml:"actorSubscribers,omitempty"`
