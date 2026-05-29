@@ -391,3 +391,278 @@ func (h *pubSpyHistogram) Observe(_ context.Context, val float64) {
 		name: h.name, op: "Observe", labels: h.labels, value: val,
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Subscriber metrics tests (PR-3)
+// ---------------------------------------------------------------------------
+
+// Compile-time interface check.
+var _ SubscriberCollector = (*providerSubscriberCollector)(nil)
+
+// TestNewProviderSubscriberCollector_NilProvider verifies nil provider returns
+// an errcode.Error (KindInternal).
+func TestNewProviderSubscriberCollector_NilProvider(t *testing.T) {
+	t.Parallel()
+	_, err := NewProviderSubscriberCollector(nil, "testcell")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindInternal, ec.Kind)
+}
+
+// TestNewProviderSubscriberCollector_EmptyCellID verifies empty cellID returns
+// an errcode.Error (KindInternal).
+func TestNewProviderSubscriberCollector_EmptyCellID(t *testing.T) {
+	t.Parallel()
+	_, err := NewProviderSubscriberCollector(metrics.NopProvider{}, "")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindInternal, ec.Kind)
+}
+
+// TestNewProviderSubscriberCollector_Registration verifies happy-path returns a
+// non-nil collector with no error.
+func TestNewProviderSubscriberCollector_Registration(t *testing.T) {
+	t.Parallel()
+	col, err := NewProviderSubscriberCollector(metrics.NopProvider{}, "testcell")
+	require.NoError(t, err)
+	require.NotNil(t, col)
+}
+
+// TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack verifies that
+// a Provider returning an error from a later registration rolls back the metrics
+// already registered (all-or-nothing semantics) and wraps the error.
+func TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack(t *testing.T) {
+	t.Parallel()
+	// Fail on the histogram (3rd registration) so both counters were registered
+	// and must be unregistered.
+	spy := &subRollbackProvider{failHistogram: true}
+	_, err := NewProviderSubscriberCollector(spy, "testcell")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, 2, spy.unregisterCount, "both counters must be rolled back on histogram failure")
+}
+
+// TestProviderSubscriberCollector_RecordConsumeSuccess verifies success
+// increments mqtt_consume_total and observes mqtt_consume_duration_seconds.
+func TestProviderSubscriberCollector_RecordConsumeSuccess(t *testing.T) {
+	t.Parallel()
+	spy := newSubSpyProvider()
+	col, err := NewProviderSubscriberCollector(spy, "testcell")
+	require.NoError(t, err)
+
+	col.RecordConsumeSuccess(context.Background(), testtime.D25ms)
+
+	ops := spy.ops()
+	var foundTotal, foundDuration bool
+	for _, op := range ops {
+		switch {
+		case op.name == "mqtt_consume_total" && op.op == "Inc":
+			assert.Equal(t, "testcell", op.labels["cell"])
+			foundTotal = true
+		case op.name == "mqtt_consume_duration_seconds" && op.op == "Observe":
+			assert.Equal(t, "testcell", op.labels["cell"])
+			assert.InDelta(t, 0.025, op.value, 1e-9)
+			foundDuration = true
+		}
+	}
+	assert.True(t, foundTotal, "mqtt_consume_total Inc not found")
+	assert.True(t, foundDuration, "mqtt_consume_duration_seconds Observe not found")
+}
+
+// TestProviderSubscriberCollector_RecordConsumeFailure verifies all 5 reason
+// consts increment mqtt_consume_failed_total with the correct reason label.
+func TestProviderSubscriberCollector_RecordConsumeFailure(t *testing.T) {
+	t.Parallel()
+	allReasons := []ConsumeFailureReason{
+		consumeReasonUnmarshal,
+		consumeReasonReject,
+		consumeReasonRequeue,
+		consumeReasonCommitFailed,
+		consumeReasonUnknownDisposition,
+	}
+	for _, reason := range allReasons {
+		reason := reason
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			spy := newSubSpyProvider()
+			col, err := NewProviderSubscriberCollector(spy, "testcell")
+			require.NoError(t, err)
+
+			col.RecordConsumeFailure(context.Background(), reason)
+
+			ops := spy.ops()
+			var found bool
+			for _, op := range ops {
+				if op.name == "mqtt_consume_failed_total" && op.op == "Inc" {
+					assert.Equal(t, "testcell", op.labels["cell"])
+					assert.Equal(t, string(reason), op.labels["reason"])
+					found = true
+				}
+			}
+			assert.True(t, found, "mqtt_consume_failed_total Inc not found for reason %s", reason)
+		})
+	}
+}
+
+// TestProviderSubscriberCollector_RegistersExpectedLabelNames pins the label
+// schema: consume_total {cell}, consume_failed {cell, reason}, duration {cell}.
+func TestProviderSubscriberCollector_RegistersExpectedLabelNames(t *testing.T) {
+	t.Parallel()
+	spy := newSubSpyProvider()
+	_, err := NewProviderSubscriberCollector(spy, "testcell")
+	require.NoError(t, err)
+
+	require.Len(t, spy.counterRegs, 2)
+	assert.Equal(t, "mqtt_consume_total", spy.counterRegs[0].Name)
+	assert.Equal(t, []string{"cell"}, spy.counterRegs[0].LabelNames)
+	assert.Equal(t, "mqtt_consume_failed_total", spy.counterRegs[1].Name)
+	assert.Equal(t, []string{"cell", "reason"}, spy.counterRegs[1].LabelNames)
+	require.Len(t, spy.histogramRegs, 1)
+	assert.Equal(t, "mqtt_consume_duration_seconds", spy.histogramRegs[0].Name)
+	assert.Equal(t, []string{"cell"}, spy.histogramRegs[0].LabelNames)
+}
+
+// TestNoopSubscriberCollector_Methods verifies NoopSubscriberCollector does not panic.
+func TestNoopSubscriberCollector_Methods(t *testing.T) {
+	t.Parallel()
+	col := NoopSubscriberCollector{}
+	assert.NotPanics(t, func() {
+		col.RecordConsumeSuccess(context.Background(), testtime.D10ms)
+		col.RecordConsumeFailure(context.Background(), consumeReasonUnmarshal)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Subscriber test doubles
+// ---------------------------------------------------------------------------
+
+// subRollbackProvider registers the two counters successfully then fails the
+// histogram, recording how many Unregister calls the rollback issues.
+type subRollbackProvider struct {
+	failHistogram   bool
+	counterCount    int
+	unregisterCount int
+}
+
+func (p *subRollbackProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counterCount++
+	return &subSpyCounterVec{name: opts.Name, labelNames: opts.LabelNames}, nil
+}
+
+func (p *subRollbackProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	if p.failHistogram {
+		return nil, errors.New("duplicate histogram")
+	}
+	return nil, errors.New("subRollbackProvider: unexpected HistogramVec")
+}
+
+func (p *subRollbackProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
+}
+
+func (p *subRollbackProvider) Unregister(_ metrics.Collector) error {
+	p.unregisterCount++
+	return nil
+}
+
+type subSpyRecord struct {
+	name   string
+	op     string
+	labels metrics.Labels
+	value  float64
+}
+
+type subSpyProvider struct {
+	counterRegs   []metrics.CounterOpts
+	histogramRegs []metrics.HistogramOpts
+	records       []subSpyRecord
+}
+
+func newSubSpyProvider() *subSpyProvider { return &subSpyProvider{} }
+
+func (p *subSpyProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counterRegs = append(p.counterRegs, opts)
+	return &subSpyCounterVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
+}
+
+func (p *subSpyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	p.histogramRegs = append(p.histogramRegs, opts)
+	return &subSpyHistogramVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
+}
+
+func (p *subSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
+}
+
+func (p *subSpyProvider) Unregister(_ metrics.Collector) error { return nil }
+
+func (p *subSpyProvider) ops() []subSpyRecord {
+	out := make([]subSpyRecord, len(p.records))
+	copy(out, p.records)
+	return out
+}
+
+type subSpyCounterVec struct {
+	parent     *subSpyProvider
+	name       string
+	labelNames []string
+}
+
+func (v *subSpyCounterVec) Registered() bool { return true }
+
+func (v *subSpyCounterVec) With(l metrics.Labels) metrics.Counter {
+	metrics.MustValidateLabels(v.labelNames, l)
+	return &subSpyCounter{parent: v.parent, name: v.name, labels: l}
+}
+
+type subSpyCounter struct {
+	parent *subSpyProvider
+	name   string
+	labels metrics.Labels
+}
+
+func (c *subSpyCounter) Inc(_ context.Context) {
+	if c.parent == nil {
+		return
+	}
+	c.parent.records = append(c.parent.records, subSpyRecord{
+		name: c.name, op: "Inc", labels: c.labels, value: 1,
+	})
+}
+
+func (c *subSpyCounter) Add(_ context.Context, d float64) {
+	if c.parent == nil {
+		return
+	}
+	c.parent.records = append(c.parent.records, subSpyRecord{
+		name: c.name, op: "Add", labels: c.labels, value: d,
+	})
+}
+
+type subSpyHistogramVec struct {
+	parent     *subSpyProvider
+	name       string
+	labelNames []string
+}
+
+func (v *subSpyHistogramVec) Registered() bool { return true }
+
+func (v *subSpyHistogramVec) With(l metrics.Labels) metrics.Histogram {
+	metrics.MustValidateLabels(v.labelNames, l)
+	return &subSpyHistogram{parent: v.parent, name: v.name, labels: l}
+}
+
+type subSpyHistogram struct {
+	parent *subSpyProvider
+	name   string
+	labels metrics.Labels
+}
+
+func (h *subSpyHistogram) Observe(_ context.Context, val float64) {
+	h.parent.records = append(h.parent.records, subSpyRecord{
+		name: h.name, op: "Observe", labels: h.labels, value: val,
+	})
+}

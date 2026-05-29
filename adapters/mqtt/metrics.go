@@ -252,3 +252,176 @@ func (c *providerPublisherCollector) RecordPublishSuccess(ctx context.Context, a
 func (c *providerPublisherCollector) RecordPublishFailure(ctx context.Context, reason PublishFailureReason) {
 	c.publishFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
 }
+
+// ---------------------------------------------------------------------------
+// Subscriber metrics (PR-3)
+// ---------------------------------------------------------------------------
+
+// ConsumeFailureReason classifies why a received MQTT message did not result in
+// a successful Ack. The set is closed; callers (alerting rules, log queries) can
+// rely on the literals being stable across releases. Mirrors PublishFailureReason.
+type ConsumeFailureReason string
+
+const (
+	// consumeReasonUnmarshal means the received PUBLISH payload could not be
+	// decoded into the v1 outbox wire envelope (poison message). The message is
+	// acked-as-consumed so it cannot block intake forever; PR-4 will route to
+	// $dead/<topic> before the ack.
+	consumeReasonUnmarshal ConsumeFailureReason = "unmarshal"
+	// consumeReasonReject means the handler returned DispositionReject (permanent
+	// failure). The message is acked-as-poison; PR-4 adds the $dead/<topic>
+	// publish before the ack.
+	consumeReasonReject ConsumeFailureReason = "reject"
+	// consumeReasonRequeue means the handler returned DispositionRequeue (transient
+	// failure). The message is left unacked so the broker redelivers on session
+	// resume / reconnect.
+	consumeReasonRequeue ConsumeFailureReason = "requeue"
+	// consumeReasonCommitFailed means Settlement.Commit failed on the Ack path
+	// (lease expired / idempotency backend error). The message is left unacked so
+	// another holder retries.
+	consumeReasonCommitFailed ConsumeFailureReason = "commit_failed"
+	// consumeReasonUnknownDisposition means the handler returned a zero / invalid
+	// Disposition. Treated as Requeue (left unacked) defensively.
+	consumeReasonUnknownDisposition ConsumeFailureReason = "unknown_disposition"
+)
+
+// SubscriberCollector observes subscriber-side metrics. Construction-time cellID
+// becomes the "cell" label value (registration-time enumerated set, NOT derived
+// from request context — per observability.md HTTP metrics cell-label convention).
+//
+// Implementations MUST bind the "cell" label at construction time, NOT from
+// request ctx. Implementations must be safe for concurrent use.
+type SubscriberCollector interface {
+	// RecordConsumeSuccess increments the success counter and observes the
+	// end-to-end handler+commit duration for a successfully acked message.
+	RecordConsumeSuccess(ctx context.Context, dur time.Duration)
+	// RecordConsumeFailure increments the failure counter for the given reason.
+	// Implementations MUST NOT panic on any reason value; the closed set is
+	// enforced by the call site, not the collector.
+	RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason)
+}
+
+// NoopSubscriberCollector is the default collector used when no observability is
+// wired. Method bodies intentionally empty — registration cost is zero and
+// metric absence is documented behavior, not a fault.
+type NoopSubscriberCollector struct{}
+
+// RecordConsumeSuccess is a no-op.
+func (NoopSubscriberCollector) RecordConsumeSuccess(_ context.Context, _ time.Duration) { /* no-op */ }
+
+// RecordConsumeFailure is a no-op.
+func (NoopSubscriberCollector) RecordConsumeFailure(_ context.Context, _ ConsumeFailureReason) { /* no-op */
+}
+
+// Compile-time interface check.
+var _ SubscriberCollector = NoopSubscriberCollector{}
+
+// providerSubscriberCollector implements SubscriberCollector via a provider-
+// neutral metrics.Provider. Wired at the composition root.
+//
+// Metrics (subsystem=mqtt):
+//
+//	mqtt_consume_total              (counter,   labels: cell)
+//	mqtt_consume_failed_total       (counter,   labels: cell, reason)
+//	mqtt_consume_duration_seconds   (histogram, labels: cell; buckets 1ms–10s)
+//
+// ref: adapters/mqtt/metrics.go providerPublisherCollector — same inject-at-
+// construction + all-or-nothing registration pattern.
+type providerSubscriberCollector struct {
+	cellID        string
+	consumeTotal  metrics.CounterVec
+	consumeFailed metrics.CounterVec
+	consumeDur    metrics.HistogramVec
+}
+
+var _ SubscriberCollector = (*providerSubscriberCollector)(nil)
+
+// consumeDurationBuckets covers MQTT consume handler+commit times from 1 ms to
+// 10 s, reusing the publish ack bucket choice (network-latency-oriented set).
+var consumeDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
+// NewProviderSubscriberCollector registers 3 metrics on p and returns a
+// SubscriberCollector bound to cellID. cellID becomes the "cell" label value.
+//
+// Returns an error when p is nil, cellID is empty, or the Provider reports a
+// registration failure (e.g. duplicate metric names). Registration is
+// all-or-nothing: a later failure rolls back the metrics already registered so
+// the provider is not left holding a partial set.
+func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (SubscriberCollector, error) {
+	if p == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: metrics.Provider is required")
+	}
+	if cellID == "" {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: cellID is required for provider subscriber collector")
+	}
+
+	var registered []metrics.Collector
+	rollback := func(wrapErr error) error {
+		for _, c := range registered {
+			_ = p.Unregister(c)
+		}
+		return wrapErr
+	}
+
+	consumeTotal, err := p.CounterVec(metrics.CounterOpts{
+		Name: "mqtt_consume_total",
+		Help: "Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). " +
+			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+		LabelNames: []string{"cell"},
+	})
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume total counter", err))
+	}
+	registered = append(registered, consumeTotal)
+
+	consumeFailed, err := p.CounterVec(metrics.CounterOpts{
+		Name: "mqtt_consume_failed_total",
+		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
+			"reason ∈ {unmarshal, reject, requeue, commit_failed, unknown_disposition} — closed set; " +
+			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell", "reason"},
+	})
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume failed counter", err))
+	}
+	registered = append(registered, consumeFailed)
+
+	consumeDur, err := p.HistogramVec(metrics.HistogramOpts{
+		Name: "mqtt_consume_duration_seconds",
+		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
+			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
+			"Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell"},
+		Buckets:    consumeDurationBuckets,
+	})
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume duration histogram", err))
+	}
+	// consumeDur is the last registration — nothing after it can fail, so it need
+	// not be appended to the rollback set.
+
+	return &providerSubscriberCollector{
+		cellID:        cellID,
+		consumeTotal:  consumeTotal,
+		consumeFailed: consumeFailed,
+		consumeDur:    consumeDur,
+	}, nil
+}
+
+// RecordConsumeSuccess increments mqtt_consume_total{cell} and observes
+// mqtt_consume_duration_seconds{cell} = dur.Seconds().
+func (c *providerSubscriberCollector) RecordConsumeSuccess(ctx context.Context, dur time.Duration) {
+	c.consumeTotal.With(metrics.Labels{"cell": c.cellID}).Inc(ctx)
+	c.consumeDur.With(metrics.Labels{"cell": c.cellID}).Observe(ctx, dur.Seconds())
+}
+
+// RecordConsumeFailure increments mqtt_consume_failed_total{cell, reason}.
+// mqtt_consume_total is NOT incremented — failure is not counted as success.
+func (c *providerSubscriberCollector) RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason) {
+	c.consumeFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
+}
