@@ -1054,8 +1054,7 @@ func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnost
 // expected inside the funnel and is treated as a B2 violation if present
 // (would still be flagged via the otherCalls / notFoundCalls accounting).
 func isErrCodeNewCall(typesInfo *types.Info, call *ast.CallExpr) bool {
-	pkg, name, ok := resolveErrcodeCtor(typesInfo, call)
-	return ok && pkg == serviceOwnedErrcodePkg && name == "New"
+	return IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "New")
 }
 
 // isErrCodeNewOrWrapCall reports whether call resolves via go/types to
@@ -1068,23 +1067,8 @@ func isErrCodeNewCall(typesInfo *types.Info, call *ast.CallExpr) bool {
 // Detection requires SSA dataflow analysis; tracked at gh #1199 alongside
 // the SSA callgraph upgrade.
 func isErrCodeNewOrWrapCall(typesInfo *types.Info, call *ast.CallExpr) bool {
-	pkg, name, ok := resolveErrcodeCtor(typesInfo, call)
-	if !ok || pkg != serviceOwnedErrcodePkg {
-		return false
-	}
-	return name == "New" || name == "Wrap"
-}
-
-// resolveErrcodeCtor resolves a call's callee through go/types and returns
-// the package path and symbol name. Bare-Ident (dot-import) and SelectorExpr
-// (qualified) and IndexExpr (explicit generic, defensive) shapes all
-// resolve correctly.
-func resolveErrcodeCtor(typesInfo *types.Info, call *ast.CallExpr) (pkgPath, name string, ok bool) {
-	ref := unwrapCalleeForResolve(call.Fun)
-	if ref == nil {
-		return "", "", false
-	}
-	return ResolvePackageRef(typesInfo, ref)
+	return IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "New") ||
+		IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "Wrap")
 }
 
 // isKindNotFoundArg reports whether arg evaluates to errcode.KindNotFound,
