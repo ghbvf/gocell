@@ -112,7 +112,7 @@ func (c *Config) validate() error {
 		// V5: fail-closed — neither plaintext nor TLS configured — caller error.
 		if !hasCert && !hasKey && !hasCA {
 			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev-only) "+
+				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
 					"or supply CertPEM+KeyPEM for TLS")
 		}
 
