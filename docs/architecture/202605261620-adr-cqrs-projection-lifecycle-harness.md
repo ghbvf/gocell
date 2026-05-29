@@ -210,19 +210,24 @@ Key takeaways driving the decisions:
 ### Q5 — multi-pod concurrency for one projection → **A** (v1 single-pod; reserve `owner` column)
 
 - **Options.** A: v1 single-pod (leader election handled by the upper layer
-  `cmd/corebundle`); the schema reserves an `owner TEXT` column but never reads
-  or writes it. B: v1 built-in pessimistic claim (owner column + advisory lock).
+  `cmd/corebundle`); the schema reserves an `owner TEXT` column that v1 never
+  **writes** (and currently does not read). B: v1 built-in pessimistic claim
+  (owner column + advisory lock).
 - **Argument.** A is the lowest-complexity safe v1. The PG checkpoint schema
   (PR-02) includes `owner TEXT NOT NULL DEFAULT ''` (ref: Axon
-  `token_entry.owner`), but v1 INSERT/UPDATE paths **must not touch it** — this
-  is **to be** statically guarded by `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01`,
-  landing in **PR-02 together with the PG adapter that introduces the column**.
-  Until PR-02 merges there is no checkpoint write path at all (this PR is the
-  skeleton), so the constraint has nothing to guard yet; the row-7 boundary rests
-  on the documented limitation + PR-02 review until the archtest exists. Multi-pod
-  safety in v1 is the responsibility of upper-layer leader election. v1.1
-  implements pessimistic claim on the existing `owner` column — zero migration
-  cost.
+  `token_entry.owner`), but v1 INSERT/UPDATE **write** paths **must not touch
+  it** — statically guarded by `PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01`
+  (landed in PR-02 with the PG adapter: an AST scan rejecting `owner` in any
+  INSERT/UPDATE on `projection_checkpoints`). The guard is **write-scoped** by
+  design: writing a stale `owner` would seed dirty claim state, whereas *reading*
+  `owner` returns the empty default and is harmless — so reads are deliberately
+  not forbidden, leaving the v1.1 claim path free to read the column. Because the
+  v1 upsert omits `owner`, the NOT NULL constraint is satisfied solely by the
+  `DEFAULT ''`; that load-bearing default is asserted at startup by
+  `schema_guard.verifyDefaults` (a dropped default would otherwise fail the first
+  write). Multi-pod safety in v1 is the responsibility of upper-layer leader
+  election. v1.1 implements pessimistic claim on the existing `owner` column —
+  zero migration cost.
 - **Decision.** A. **Explicit v1 boundary:** v1 runs single-pod; running two
   pods consuming the same projection without external leader election is
   **unsafe in v1** (both would advance the same checkpoint). This is a documented
@@ -340,7 +345,7 @@ verified by the listed PR).
 | 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring in PR-04 — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04 (#1176)** |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
-| 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved but unread/unwritten; multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest; documented v1 limitation (Q5) |
+| 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved, **write-guarded** (reads harmless/unused); multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest (write-scoped, landed); `schema_guard.verifyDefaults` asserts the load-bearing `owner DEFAULT ''`; documented v1 limitation (Q5) |
 
 ## 7. AI-robust ratings
 

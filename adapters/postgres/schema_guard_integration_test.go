@@ -798,6 +798,39 @@ func TestVerifyExpectedShape_DetectsNullableColumn(t *testing.T) {
 		"details must contain dimension=column_nullability; got %v", ec.Details)
 }
 
+// TestVerifyExpectedShape_DetectsMissingColumnDefault verifies that dropping the
+// DEFAULT on a load-bearing column (projection_checkpoints.owner, omitted by the
+// v1 upsert) causes VerifyExpectedShape to return ErrAdapterPGSchemaShape with
+// dimension="column_default". This is the F1 guard: the write path relies on the
+// default to satisfy NOT NULL, so its drift must be caught at startup.
+func TestVerifyExpectedShape_DetectsMissingColumnDefault(t *testing.T) {
+	pool := emptyPool(t)
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_shape_default")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Positive baseline: the migrated schema satisfies the default registry.
+	require.NoError(t, VerifyExpectedShape(ctx, pool),
+		"VerifyExpectedShape must pass on the migrated schema (owner DEFAULT '' present)")
+
+	// Drift: drop the owner default. The v1 upsert omits owner, so this would
+	// make the first SaveOffset fail at write time on a NOT NULL violation.
+	_, execErr := pool.DB().Exec(ctx, `ALTER TABLE projection_checkpoints ALTER COLUMN owner DROP DEFAULT`)
+	require.NoError(t, execErr, "DROP DEFAULT must succeed")
+
+	err = VerifyExpectedShape(ctx, pool)
+	require.Error(t, err, "VerifyExpectedShape must detect a dropped load-bearing column default")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, ErrAdapterPGSchemaShape, ec.Code, "error code must be ErrAdapterPGSchemaShape")
+	assert.Equal(t, "column_default", extractDimensionDetail(ec),
+		"details must contain dimension=column_default; got %v", ec.Details)
+}
+
 // TestVerifyExpectedShape_DetectsMissingCheckConstraint verifies that dropping
 // a CHECK constraint causes VerifyExpectedShape to return ErrAdapterPGSchemaShape
 // with dimension="check".

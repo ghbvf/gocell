@@ -8,11 +8,14 @@
 //   - Monotonically advancing saves are reflected immediately
 //   - Keys are isolated (different (cellID, projectionID) pairs do not interfere)
 //   - Re-saving the same offset is idempotent
+//   - A backward write (lower offset) is accepted, not rejected (caller responsibility #1)
 //
 // The helper does NOT exercise transaction semantics (ambient-tx binding is the
-// responsibility of each adapter's own integration test). PG adapter (PR-02)
-// passes a tx-wrapping store to this funnel and exercises commit/rollback
-// separately.
+// responsibility of each adapter's own integration test). The PG adapter (PR-02)
+// invokes this funnel directly on a real *postgres.ProjectionCheckpointStore;
+// bare-ctx calls route through the pool (each statement auto-commits), and tx
+// atomicity (commit/rollback) is exercised separately in the adapter's own
+// integration tests.
 //
 // stdlib-only: no external test frameworks are imported.
 package projectiontest
@@ -24,7 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
-// RunCheckpointConformance runs the five canonical conformance sub-tests against
+// RunCheckpointConformance runs the six canonical conformance sub-tests against
 // store. Each sub-test uses a distinct (cellID, projectionID) key to prevent
 // ordering-dependent interference on a shared store instance.
 //
@@ -72,6 +75,10 @@ func RunCheckpointConformance(t *testing.T, store projection.CheckpointStore) {
 	t.Run("IdempotentReSave", func(t *testing.T) {
 		t.Parallel()
 		checkIdempotentReSave(t, store)
+	})
+	t.Run("BackwardWriteAccepted", func(t *testing.T) {
+		t.Parallel()
+		checkBackwardWrite(t, store)
 	})
 }
 
@@ -144,6 +151,30 @@ func checkIsolationEntry(t *testing.T, store projection.CheckpointStore, ctx con
 	}
 	if got != want {
 		t.Errorf("LoadOffset(%s/%s) = %d, want %d", cellID, projID, got, want)
+	}
+}
+
+// checkBackwardWrite asserts the store accepts a lower offset after a higher one
+// (no "reject-if-lower" guard). Deduplication is the Coordinator's job (the
+// pos <= checkpoint skip in applyOne), so the store must overwrite
+// unconditionally — see caller-responsibility #1 below. This guards against a
+// future implementation adding a monotonicity CHECK that the other monotonic-
+// advance sub-test would not catch (it only writes ascending values).
+func checkBackwardWrite(t *testing.T, store projection.CheckpointStore) {
+	t.Helper()
+	ctx := context.Background()
+	if err := store.SaveOffset(ctx, "cell-back", "proj-back", 9); err != nil {
+		t.Fatalf("SaveOffset(9): %v", err)
+	}
+	if err := store.SaveOffset(ctx, "cell-back", "proj-back", 3); err != nil {
+		t.Fatalf("SaveOffset(3) backward write must be accepted, not rejected: %v", err)
+	}
+	got, err := store.LoadOffset(ctx, "cell-back", "proj-back")
+	if err != nil {
+		t.Fatalf("LoadOffset: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("after backward Save(3): LoadOffset = %d, want 3 (unconditional overwrite)", got)
 	}
 }
 

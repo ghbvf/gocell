@@ -51,6 +51,9 @@ import (
 //   - saga_events        (040)  append-only saga event log
 //                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
 //                                 + saga_events_kind_range, saga_events_version_positive CHECK
+//   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
+//                                 + PK(cell_id, projection_id)
+//                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -218,6 +221,9 @@ func VerifyExpectedShape(ctx context.Context, pool *Pool) error {
 	if err := verifyColumns(ctx, pool); err != nil {
 		return err
 	}
+	if err := verifyDefaults(ctx, pool); err != nil {
+		return err
+	}
 	if err := verifyForbiddenColumns(ctx, pool); err != nil {
 		return err
 	}
@@ -263,6 +269,19 @@ type expectedColumn struct {
 type expectedPK struct {
 	Table   string
 	Columns []string
+}
+
+// expectedDefault asserts a column's DEFAULT expression (as rendered by
+// pg_get_expr). Only LOAD-BEARING defaults are registered: defaults a write
+// path relies on by OMITTING the column from its INSERT. Most columns have
+// defaults that are mere conveniences (the writer always supplies the value);
+// those are NOT registered here. Default is the exact pg_get_expr rendering of
+// the column's DEFAULT clause (an empty-string text default renders as the SQL
+// empty literal cast to text).
+type expectedDefault struct {
+	Table   string
+	Column  string
+	Default string
 }
 
 // expectedFK describes a foreign key constraint.
@@ -443,6 +462,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// projection_checkpoints (045_create_projection_checkpoints.sql) — CQRS projection
+	// harness consumed-offset store. owner is reserved for v1.1 multi-pod claim and is
+	// NOT written by the v1 adapter (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01).
+	{Table: "projection_checkpoints", Column: "cell_id", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "projection_id", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
+	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -469,6 +496,19 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_instances", Columns: []string{"id"}},
 	// saga_events: composite PK (instance_id, version) (040_create_saga_tables.sql).
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
+	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
+	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
+}
+
+// expectedDefaults is the load-bearing column-default registry. Only defaults a
+// write path relies upon by omitting the column are registered here.
+var expectedDefaults = []expectedDefault{
+	// projection_checkpoints.owner (045) — the v1 upsert OMITS owner (forbidden by
+	// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01), so the column's NOT NULL
+	// constraint is only satisfiable via this DEFAULT ''. A dropped/changed default
+	// would make the first SaveOffset fail at write time; asserting it here surfaces
+	// the drift at startup (readyz) instead.
+	{Table: "projection_checkpoints", Column: "owner", Default: "''::text"},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.
@@ -669,6 +709,47 @@ func verifyColumns(ctx context.Context, pool *Pool) error {
 					errcode.PublicString("column", ec.Column),
 				),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got not_null=%v want %v", gotNotNull, ec.NotNull))),
+			)
+		}
+	}
+	return nil
+}
+
+// verifyDefaults checks each entry in expectedDefaults against the column's
+// actual DEFAULT expression (pg_get_expr). The LEFT JOIN + COALESCE renders a
+// missing default as the empty string, which never equals a registered
+// non-empty default expression — so a dropped default is reported as a
+// mismatch. verifyColumns runs first in VerifyExpectedShape, so a registered
+// column is guaranteed to exist here (a genuine missing column fails earlier).
+func verifyDefaults(ctx context.Context, pool *Pool) error {
+	const q = `
+	SELECT COALESCE(pg_get_expr(d.adbin, d.adrelid), '')
+	  FROM pg_attribute a
+	  JOIN pg_class c ON c.oid = a.attrelid
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+	 WHERE n.nspname = current_schema()
+	   AND c.relname = $1
+	   AND a.attname = $2
+	   AND a.attnum > 0
+	   AND NOT a.attisdropped`
+
+	for _, ed := range expectedDefaults {
+		var gotDefault string
+		if err := pool.inner.QueryRow(ctx, q, ed.Table, ed.Column).Scan(&gotDefault); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+				"schema_guard: query column default", err)
+		}
+		if gotDefault != ed.Default {
+			return errcode.New(
+				errcode.KindInternal, ErrAdapterPGSchemaShape,
+				"schema_guard: column default mismatch",
+				errcode.WithDetails(
+					errcode.PublicString("dimension", "column_default"),
+					errcode.PublicString("table", ed.Table),
+					errcode.PublicString("column", ed.Column),
+				),
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got %q want %q", gotDefault, ed.Default))),
 			)
 		}
 	}
