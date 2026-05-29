@@ -63,6 +63,12 @@ func NewProjectionCheckpointStore(pool *pgxpool.Pool) (*ProjectionCheckpointStor
 // LoadOffset returns the committed offset for (cellID, projectionID), or 0 if no
 // row exists yet (cold start). It runs within the ambient transaction when ctx
 // carries one.
+//
+// cellID and projectionID are opaque caller-owned UTF-8 keys stored verbatim as
+// the TEXT primary key; the no-dash projectionID convention is the caller's
+// (cellgen's) responsibility, not validated here. On query failure the error
+// carries cell_id/projection_id as server-only internal detail so ops can locate
+// the failing projection from slog without exposing the keys on the wire.
 func (s *ProjectionCheckpointStore) LoadOffset(ctx context.Context, cellID, projectionID string) (int64, error) {
 	var offset int64
 	err := s.db.QueryRow(ctx, selectCheckpointSQL, cellID, projectionID).Scan(&offset)
@@ -71,7 +77,11 @@ func (s *ProjectionCheckpointStore) LoadOffset(ctx context.Context, cellID, proj
 	}
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"projection checkpoint store: load offset", err)
+			"projection checkpoint store: load offset", err,
+			errcode.WithInternal(
+				errcode.InternalAttr("cell_id", cellID),
+				errcode.InternalAttr("projection_id", projectionID),
+			))
 	}
 	return offset, nil
 }
@@ -79,10 +89,16 @@ func (s *ProjectionCheckpointStore) LoadOffset(ctx context.Context, cellID, proj
 // SaveOffset advances the projection's committed offset, upserting on the
 // (cell_id, projection_id) primary key. It runs within the ambient transaction
 // when ctx carries one (the exactly-once path); the owner column is never written.
+// On failure the error carries cell_id/projection_id as server-only internal
+// detail for ops correlation.
 func (s *ProjectionCheckpointStore) SaveOffset(ctx context.Context, cellID, projectionID string, offset int64) error {
 	if _, err := s.db.Exec(ctx, upsertCheckpointSQL, cellID, projectionID, offset); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
-			"projection checkpoint store: save offset", err)
+			"projection checkpoint store: save offset", err,
+			errcode.WithInternal(
+				errcode.InternalAttr("cell_id", cellID),
+				errcode.InternalAttr("projection_id", projectionID),
+			))
 	}
 	return nil
 }

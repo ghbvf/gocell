@@ -107,10 +107,14 @@ func TestProjectionCheckpointStore_RollbackIsAtomicWithSiblingWrite(t *testing.T
 		// The sibling business write must join the SAME ambient tx — use the
 		// tx from ctx (pool.DB().Exec would open its own connection and
 		// auto-commit, defeating the atomicity this test asserts).
+		//
+		// require.True (not `return err`) is deliberate: a missing ambient tx is a
+		// harness precondition failure, not the rollback this test forces. Returning
+		// an error here would still satisfy require.ErrorIs(runErr, sentinel)? No —
+		// it would NOT (different error), but a future refactor could make it a
+		// false pass by also returning sentinel. Fail-fast here removes that risk.
 		tx, ok := persistence.TxFromContext[pgx.Tx](txCtx)
-		if !ok {
-			return errors.New("expected ambient tx in context")
-		}
+		require.True(t, ok, "ambient tx must be present in RunInTx callback ctx")
 		if _, e := tx.Exec(txCtx, `INSERT INTO cp_atomicity_probe (id) VALUES (1)`); e != nil {
 			return e
 		}

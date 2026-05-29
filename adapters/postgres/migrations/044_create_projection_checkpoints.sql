@@ -19,6 +19,9 @@
 --     responsibility of upper-layer leader election (ADR threat matrix row 7).
 --   - updated_at TIMESTAMPTZ is set by the adapter via SQL NOW() on every write;
 --     it is an ops-visibility column (last advance time), not a correctness input.
+--     It has no dedicated index by design: the table cardinality is O(projections)
+--     (one row per cell/projection), so a staleness query
+--     (updated_at < NOW() - interval) is a cheap full scan — no index needed.
 --
 -- No CONCURRENTLY here; this is a new table with no concurrent reads at migration
 -- time, so regular CREATE statements are safe and avoid the no-transaction requirement.

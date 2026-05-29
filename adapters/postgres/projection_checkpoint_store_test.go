@@ -131,10 +131,14 @@ func (m *mockCheckpointTx) Exec(_ context.Context, sql string, args ...any) (pgc
 }
 
 func (m *mockCheckpointTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
-	if m.row != nil {
-		m.row.sql = sql
-		m.row.args = args
+	if m.row == nil {
+		// Safe fallback so a test that exercises Exec-only (m.row unset) but is
+		// later extended to also call QueryRow gets a deterministic cold-start
+		// row instead of a nil-pointer panic on Scan.
+		return &mockCheckpointRow{scanErr: pgx.ErrNoRows}
 	}
+	m.row.sql = sql
+	m.row.args = args
 	return m.row
 }
 
