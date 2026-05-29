@@ -209,11 +209,13 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 
 		select {
 		case <-graceDone:
-			// Clean drain completed — goroutine has already exited.
-		case <-s.serveDone:
-			// Serve already returned — GracefulStop will return immediately;
-			// drain graceDone to unblock the goroutine and avoid a leak.
-			<-graceDone
+			// Clean drain completed — goroutine has already exited. If Serve had
+			// already returned independently (Serve error or a prior stop),
+			// GracefulStop returns promptly on the already-stopping server, so
+			// this case still fires without delay. We deliberately do NOT select
+			// on serveDone: serveDone closes early in GracefulStop (listeners
+			// shut before pending RPCs drain), so a serveDone case would let a
+			// stuck RPC block <-graceDone while bypassing the ctx budget below.
 		case <-ctx.Done():
 			// Budget exceeded; hard stop unblocks GracefulStop.
 			s.grpcServer.Stop()
