@@ -196,6 +196,47 @@ func TestContractRegistry_ByKind_DeepCopiesGRPC(t *testing.T) {
 		"ByKind must deep-copy GRPCTransportMeta; backing entry was alias-mutated")
 }
 
+// TestContractRegistry_ByKind_DeepCopiesHTTP asserts that a returned http
+// ContractMeta carries independent HTTPTransportMeta + its maps — mutating the
+// returned copy's transport fields/maps must not alias the backing entry.
+func TestContractRegistry_ByKind_DeepCopiesHTTP(t *testing.T) {
+	reqd := true
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http-x-y-v1": {
+				ID:   "http-x-y-v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server: metadatatest.CellIDAccessCore,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:      "GET",
+						Path:        "/api/v1/x/{id}",
+						PathParams:  map[string]metadata.ParamSchema{"id": {Type: "string", Required: &reqd}},
+						QueryParams: map[string]metadata.ParamSchema{"limit": {Type: "integer"}},
+						Responses:   map[int]metadata.HTTPResponseMeta{404: {Description: "not found", SchemaRef: "err.json"}},
+					},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	first := reg.ByKind("http")
+	require.Len(t, first, 1)
+	require.NotNil(t, first[0].Endpoints.HTTP)
+	first[0].Endpoints.HTTP.Method = "MUTATED"
+	first[0].Endpoints.HTTP.PathParams["id"] = metadata.ParamSchema{Type: "MUTATED"}
+	first[0].Endpoints.HTTP.QueryParams["limit"] = metadata.ParamSchema{Type: "MUTATED"}
+	first[0].Endpoints.HTTP.Responses[404] = metadata.HTTPResponseMeta{Description: "MUTATED"}
+
+	second := reg.ByKind("http")
+	require.Len(t, second, 1)
+	require.NotNil(t, second[0].Endpoints.HTTP)
+	assert.Equal(t, "GET", second[0].Endpoints.HTTP.Method, "Method must be deep-copied")
+	assert.Equal(t, "string", second[0].Endpoints.HTTP.PathParams["id"].Type, "PathParams map must be deep-copied")
+	assert.Equal(t, "integer", second[0].Endpoints.HTTP.QueryParams["limit"].Type, "QueryParams map must be deep-copied")
+	assert.Equal(t, "not found", second[0].Endpoints.HTTP.Responses[404].Description, "Responses map must be deep-copied")
+}
+
 func TestContractRegistry_Provider(t *testing.T) {
 	tests := []struct {
 		name       string
