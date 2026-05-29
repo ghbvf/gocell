@@ -1204,6 +1204,25 @@ func collectReceiverEmitTopics(
 
 func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
 	var results []ValidationResult
+	// Sealed-construction form (issue #1229): `entry, err := outbox.NewEntry(
+	// clk, ctx, eventType, payload, opts...)`. Multi-value assignment (Lhs has
+	// the entry var + err, Rhs has the single call). Bind the entry var to the
+	// constructor's 3rd positional arg (the eventType/topic) when it resolves to
+	// a const/literal; a dynamic eventType clears any prior binding.
+	if len(stmt.Lhs) >= 1 && len(stmt.Rhs) == 1 {
+		if call, isCall := stmt.Rhs[0].(*ast.CallExpr); isCall && isOutboxNewEntryCall(call) {
+			if lhsIdent, ok := stmt.Lhs[0].(*ast.Ident); ok {
+				if len(call.Args) >= 3 {
+					if topic, resolved := resolveTopicExpr(call.Args[2], ctx.pkgConsts, ctx.fileConsts); resolved {
+						state.entryTopics[lhsIdent.Name] = []string{topic}
+						return results
+					}
+				}
+				delete(state.entryTopics, lhsIdent.Name)
+				return results
+			}
+		}
+	}
 	for i, lhs := range stmt.Lhs {
 		lhsIdent, ok := lhs.(*ast.Ident)
 		if !ok || i >= len(stmt.Rhs) {
@@ -1476,6 +1495,21 @@ func isDynamicExpr(expr ast.Expr) bool {
 func isOutboxEmitCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Emit" {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == "outbox"
+}
+
+// isOutboxNewEntryCall returns true if the call is outbox.NewEntry(...).
+// Since the sealed-construction change (issue #1229), producers build entries
+// via outbox.NewEntry(clk, ctx, eventType, payload, opts...) instead of an
+// outbox.Entry{EventType: TOPIC} composite literal, so the receiver-emit topic
+// scan must trace this constructor's 3rd positional arg (the eventType) as the
+// emitted topic.
+func isOutboxNewEntryCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "NewEntry" {
 		return false
 	}
 	ident, ok := sel.X.(*ast.Ident)
