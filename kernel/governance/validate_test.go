@@ -2144,6 +2144,191 @@ func TestFMT07(t *testing.T) {
 	}
 }
 
+// --- FMT-37: gRPC transport metadata (endpoints.grpc) ---
+
+func TestFMT37(t *testing.T) {
+	const validProto = "contracts/grpc/access/session/verify/v1/session_verify.proto"
+	// grpcContract returns a fresh grpc ContractMeta with the given transport
+	// block; nil mutator leaves the block fully valid.
+	grpcContract := func(mutate func(*metadata.GRPCTransportMeta)) *metadata.ContractMeta {
+		g := &metadata.GRPCTransportMeta{
+			Service: "access.session.v1.SessionVerifyService",
+			Method:  "Verify",
+			Proto:   validProto,
+		}
+		if mutate != nil {
+			mutate(g)
+		}
+		return &metadata.ContractMeta{
+			ID:               "grpc.access.session.verify.v1",
+			Kind:             "grpc",
+			OwnerCell:        metadatatest.CellIDAccessCore,
+			ConsistencyLevel: "L1",
+			Lifecycle:        "active",
+			Endpoints: metadata.EndpointsMeta{
+				Server:  metadatatest.CellIDAccessCore,
+				Clients: []string{metadatatest.CellIDSvcB},
+				GRPC:    g,
+			},
+			File: "contracts/grpc/access/session/verify/v1/contract.yaml",
+		}
+	}
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+		wantIssue IssueType
+		// wantField, when set, pins the single finding's Field path so a
+		// cross-branch fire or a Field mislabel (count + IssueType preserved) is
+		// caught. Only meaningful for single-finding cases; left empty for the
+		// vacuous-pass and multi-finding cases where no single Field applies.
+		wantField string
+	}{
+		{
+			name:      "no grpc contracts — vacuous pass",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "full valid grpc block (with streamingType)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.StreamingType = "server-stream"
+				})
+			},
+			wantCount: 0,
+		},
+		{
+			name: "explicit unary streamingType accepted",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					// "unary" is a real enum member, distinct from the omitted
+					// default — both must be accepted (see GRPCStreamingTypeEnum).
+					g.StreamingType = "unary"
+				})
+			},
+			wantCount: 0,
+		},
+		{
+			name: "minimal valid grpc block (streamingType omitted)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(nil)
+			},
+			wantCount: 0,
+		},
+		{
+			name: "grpc kind missing endpoints.grpc block",
+			setup: func(pm *metadata.ProjectMeta) {
+				c := grpcContract(nil)
+				c.Endpoints.GRPC = nil
+				pm.Contracts["grpc.access.session.verify.v1"] = c
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.grpc",
+		},
+		{
+			name: "grpc missing service",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.Service = ""
+				})
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.grpc.service",
+		},
+		{
+			name: "grpc missing method",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.Method = ""
+				})
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.grpc.method",
+		},
+		{
+			name: "grpc missing proto",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.Proto = ""
+				})
+			},
+			wantCount: 1,
+			wantIssue: IssueRequired,
+			wantField: "endpoints.grpc.proto",
+		},
+		{
+			name: "grpc proto outside contracts/grpc rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.Proto = "proto/session_verify.proto"
+				})
+			},
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.grpc.proto",
+		},
+		{
+			name: "grpc invalid streamingType rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.StreamingType = "duplex"
+				})
+			},
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.grpc.streamingType",
+		},
+		{
+			name: "non-grpc contract declaring endpoints.grpc rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				// http.auth.login.v1 is a valid http contract in validProject();
+				// graft a grpc block onto it — FMT-37 must reject the foreign block.
+				pm.Contracts["http.auth.login.v1"].Endpoints.GRPC = &metadata.GRPCTransportMeta{
+					Service: "x.v1.S", Method: "M", Proto: validProto,
+				}
+			},
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+			wantField: "endpoints.grpc",
+		},
+		{
+			name: "multiple missing fields → one finding each",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = grpcContract(func(g *metadata.GRPCTransportMeta) {
+					g.Service, g.Method, g.Proto = "", "", ""
+				})
+			},
+			wantCount: 3,
+			wantIssue: IssueRequired,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "", clock.Real())
+			got := findByCode(val.validateFMT37(), "FMT-37")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				if tt.wantIssue != "" {
+					assert.Equal(t, tt.wantIssue, r.IssueType)
+				}
+			}
+			// Pin the Field path for single-finding cases so a branch that fires
+			// with the wrong Field (count + IssueType intact) is caught.
+			if tt.wantField != "" {
+				require.Len(t, got, 1)
+				assert.Equal(t, tt.wantField, got[0].Field)
+			}
+		})
+	}
+}
+
 // --- FMT-08: contract kind matches ID prefix ---
 
 func TestFMT08(t *testing.T) {

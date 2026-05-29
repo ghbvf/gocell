@@ -87,6 +87,16 @@ func (s ContractSpec) Validate() error {
 		return fmt.Errorf("contractspec.ContractSpec: Transport must not be empty")
 	}
 
+	// Cross-field exclusivity for the grpc transport block: the GRPC subtree is
+	// the only field group introduced after the original http/event split, so
+	// the foreign-block rejection lives here at the dispatch point (one guard
+	// covers http, event, command, projection, and unknown kinds) rather than
+	// being duplicated into each non-grpc validator. validateGRPC itself rejects
+	// the inverse leakage (http Method/Path or event Topic on a grpc spec).
+	if s.Kind != cellvocab.ContractGRPC && s.GRPC != nil {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: %s kind must not carry a GRPC block", s.ID, s.Kind)
+	}
+
 	switch s.Kind {
 	case cellvocab.ContractHTTP:
 		return s.validateHTTP()
@@ -159,6 +169,22 @@ func (s ContractSpec) validateGRPC() error {
 	}
 	if s.GRPC.Method == "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Method", s.ID)
+	}
+	if s.GRPC.Proto == "" {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Proto", s.ID)
+	}
+	if !strings.HasPrefix(s.GRPC.Proto, metadata.GRPCProtoPathPrefix) {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc Proto %q must be rooted under %q",
+			s.ID, s.GRPC.Proto, metadata.GRPCProtoPathPrefix)
+	}
+	// StreamingType is optional; empty is the unary default. When present it must
+	// be one of metadata.GRPCStreamingTypeEnum — the same single source the
+	// contract.schema.json enum and governance FMT-37 consume, so the three
+	// validation surfaces never disagree.
+	if s.GRPC.StreamingType != "" && !metadata.IsKnownGRPCStreamingType(s.GRPC.StreamingType) {
+		return fmt.Errorf(
+			"contractspec.ContractSpec[%s]: grpc StreamingType %q not recognized (unary|server-stream|client-stream|bidi, or omit for unary)",
+			s.ID, s.GRPC.StreamingType)
 	}
 	if s.Method != "" || s.Path != "" || s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Method/Path or event Topic", s.ID)
