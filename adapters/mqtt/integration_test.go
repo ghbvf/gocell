@@ -552,7 +552,10 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	// conn1.Close (that unsubscribes-all). Canceling ctx1 tears down the manager,
 	// leaving the persistent session + subscription on the broker.
 	cancel1()
-	time.Sleep(testtime.D1s) //archtest:allow:test-sleep teardown-settle: wall-clock must elapse for the broker to observe the unclean TCP drop before offline publish (no client-side signal to poll)
+	// archtest:allow:test-sleep teardown-settle: wall-clock must elapse for the
+	// broker to observe the unclean TCP drop before the offline publish; there is
+	// no client-side signal to poll on (the manager is already gone).
+	time.Sleep(testtime.D1s) //archtest:allow:test-sleep teardown-settle
 
 	// Publish while offline. On some brokers/timings the persistent session +
 	// $share subscription offline-queue these and redeliver on resume; this is
@@ -745,6 +748,7 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 // across restart so reconnection can actually succeed.
 func startDedicatedMosquittoContainer(t *testing.T) (string, testcontainers.Container, error) {
 	t.Helper()
+	testutil.RequireDocker(t) // INTEGRATION-GUARD: fail-fast/skip before starting a testcontainer
 	ctx := context.Background()
 
 	hostPort, err := freeLoopbackTCPPort()
