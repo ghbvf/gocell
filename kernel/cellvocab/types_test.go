@@ -79,6 +79,7 @@ func TestContractKindValues(t *testing.T) {
 	assert.Equal(t, cellvocab.ContractKind("command"), cellvocab.ContractCommand)
 	assert.Equal(t, cellvocab.ContractKind("projection"), cellvocab.ContractProjection)
 	assert.Equal(t, cellvocab.ContractKind("grpc"), cellvocab.ContractGRPC)
+	assert.Equal(t, cellvocab.ContractKind("saga"), cellvocab.ContractSaga)
 }
 
 func TestContractRoleValues(t *testing.T) {
@@ -90,6 +91,7 @@ func TestContractRoleValues(t *testing.T) {
 	assert.Equal(t, cellvocab.ContractRole("invoke"), cellvocab.RoleInvoke)
 	assert.Equal(t, cellvocab.ContractRole("provide"), cellvocab.RoleProvide)
 	assert.Equal(t, cellvocab.ContractRole("read"), cellvocab.RoleRead)
+	assert.Equal(t, cellvocab.ContractRole("orchestrate"), cellvocab.RoleOrchestrate)
 }
 
 func TestContractLifecycleValues(t *testing.T) {
@@ -155,6 +157,7 @@ func TestParseContractKindRoundTrip(t *testing.T) {
 		{"command", cellvocab.ContractCommand},
 		{"projection", cellvocab.ContractProjection},
 		{"grpc", cellvocab.ContractGRPC},
+		{"saga", cellvocab.ContractSaga},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -203,6 +206,7 @@ func TestParseContractRoleRoundTrip(t *testing.T) {
 		{"invoke", cellvocab.RoleInvoke},
 		{"provide", cellvocab.RoleProvide},
 		{"read", cellvocab.RoleRead},
+		{"orchestrate", cellvocab.RoleOrchestrate},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

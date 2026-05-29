@@ -98,6 +98,15 @@ func ContractSchemaRefs(c *ContractMeta) []ContractSchemaRef {
 			})
 		}
 	}
+	if c.Saga != nil {
+		for i, st := range c.Saga.Steps {
+			refs = append(refs, ContractSchemaRef{
+				Field: fmt.Sprintf("saga.steps[%d].output", i),
+				Ref:   st.Output,
+				Scope: SchemaRefScopeContractDir,
+			})
+		}
+	}
 	return refs
 }
 

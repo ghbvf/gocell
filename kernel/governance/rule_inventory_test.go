@@ -122,6 +122,16 @@ func goldenRuleIDs() []string {
 		// (rules_projection_consistency.go)
 		"PROJECTION-CONSISTENCY-01",
 
+		// SAGA — saga contract format (rules_saga.go)
+		"SAGA-CONTRACT-BLOCK-PRESENT-01",
+		"SAGA-CONTRACT-STEPS-NONEMPTY-01",
+		"SAGA-CONTRACT-STEP-NAME-VALID-01",
+		"SAGA-CONTRACT-STEP-NAME-UNIQUE-01",
+		"SAGA-CONTRACT-STEP-SCHEMA-REF-01",
+		"SAGA-CONTRACT-COMPENSATION-ORDER-01",
+		"SAGA-CONTRACT-CONSISTENCY-L3-01",
+		"SAGA-CONTRACT-RETRY-TIMEOUT-01",
+
 		// REF — reference integrity (rules_ref.go for REF-01..11, 13..17;
 		// REF-12 was relocated to rules_fmt.go in PR-FUNNEL-03 because it is
 		// I/O-flavored — pairs with FMT cluster's disk-format rules).

@@ -74,11 +74,13 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 	}
 }
 
-// TestContractSpec_CommandProjection_Validate verifies that command and
-// projection kinds pass Validate when ID/Kind/Transport are populated; the
-// kind-specific validation surface is intentionally minimal until future
-// PRs add command/projection transports.
-func TestContractSpec_CommandProjection_Validate(t *testing.T) {
+// TestContractSpec_CommandProjectionSaga_Validate verifies that command,
+// projection, and saga kinds pass Validate when ID/Kind/Transport are
+// populated; the kind-specific validation surface is intentionally minimal
+// until future PRs add command/projection transports. Saga is orchestrated
+// via the runtime Coordinator (kernel/saga), not a wire transport, but the
+// kind-agnostic Transport check on line 86 still applies.
+func TestContractSpec_CommandProjectionSaga_Validate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
@@ -89,6 +91,9 @@ func TestContractSpec_CommandProjection_Validate(t *testing.T) {
 		}},
 		{"projection kind no extra fields", contractspec.ContractSpec{
 			ID: "projection.access.users.v1", Kind: cellvocab.ContractProjection, Transport: "internal",
+		}},
+		{"saga kind with transport passes", contractspec.ContractSpec{
+			ID: "saga.order.checkout.v1", Kind: cellvocab.ContractSaga, Transport: "internal",
 		}},
 	}
 	for _, tc := range cases {

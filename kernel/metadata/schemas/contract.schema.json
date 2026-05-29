@@ -10,12 +10,12 @@
     "id": {
       "type": "string",
       "description": "Unique contract identifier in the form {kind}.{domain-path}.{version}.",
-      "pattern": "^(http|event|command|projection|webhook|grpc)\\..+\\.v[0-9]+$"
+      "pattern": "^(http|event|command|projection|webhook|grpc|saga)\\..+\\.v[0-9]+$"
     },
     "kind": {
       "type": "string",
       "description": "Contract kind that determines the endpoint structure.",
-      "enum": ["http", "event", "command", "projection", "webhook", "grpc"]
+      "enum": ["http", "event", "command", "projection", "webhook", "grpc", "saga"]
     },
     "ownerCell": {
       "type": "string",
@@ -117,9 +117,79 @@
       "format": "date",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "description": "Date the contract entered the deprecated lifecycle stage (YYYY-MM-DD). Required when lifecycle=deprecated. Enforced by FMT-23."
+    },
+    "saga": {
+      "type": "object",
+      "description": "Orchestration definition for kind=saga. Steps run in order; each step's typed Run input is the previous step's output (the first step takes no typed input). contractgen derives typed step I/O structs + an Impl interface + BuildDefinition/Register.",
+      "required": ["steps"],
+      "additionalProperties": false,
+      "properties": {
+        "timeout": {
+          "type": "string",
+          "description": "Saga-wide deadline as a Go duration string (e.g. \"30s\"). Empty means no saga-level ceiling."
+        },
+        "compensationOrder": {
+          "type": "string",
+          "enum": ["reverse"],
+          "default": "reverse",
+          "description": "Rollback walk order. Only \"reverse\" is supported (the runtime compensates committed steps in reverse)."
+        },
+        "retries": { "$ref": "#/$defs/sagaRetry" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Forward steps in execution order.",
+          "items": {
+            "type": "object",
+            "required": ["name", "output"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-zA-Z][a-zA-Z0-9]*$",
+                "description": "Step name; must be a valid SafeID and unique within the saga."
+              },
+              "output": {
+                "type": "string",
+                "description": "Contract-relative path to the JSON Schema describing this step's success payload (becomes the next step's typed input)."
+              },
+              "timeout": {
+                "type": "string",
+                "description": "Per-step deadline as a Go duration string. Empty inherits the saga timeout."
+              },
+              "retries": { "$ref": "#/$defs/sagaRetry" },
+              "compensate": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this step is rolled back during the Compensating phase. Default true; set false for terminal / non-reversible steps."
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
+    "sagaRetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declarative form of kernel/saga.RetryPolicy. Zero/empty fields inherit.",
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total Run invocations including the first. 0 means inherit from the saga-level or runtime default."
+        },
+        "baseInterval": {
+          "type": "string",
+          "description": "First backoff base as a Go duration string (e.g. \"100ms\")."
+        },
+        "maxInterval": {
+          "type": "string",
+          "description": "Backoff cap as a Go duration string."
+        }
+      }
+    },
     "paramSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -600,6 +670,32 @@
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "saga" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["saga"],
+        "properties": {
+          "consistencyLevel": {
+            "const": "L3",
+            "description": "Saga contracts are L3 (WorkflowEventual): the orchestration drives cross-cell steps to eventual consistency."
+          },
+          "endpoints": {
+            "type": "object",
+            "required": ["server"],
+            "additionalProperties": false,
+            "properties": {
+              "server": {
+                "type": "string",
+                "description": "The cell that owns and orchestrates this saga (provider). Saga has no consumer endpoints."
               }
             }
           }

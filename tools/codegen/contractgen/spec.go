@@ -10,7 +10,8 @@ type ContractGenSpec struct {
 	PackagePath string
 	// ContractID is the full contract id, e.g. "http.order.create.v1".
 	ContractID string
-	// Kind is one of "http", "event", "command", "projection", "grpc".
+	// Kind is one of the closed set: "http", "event", "command", "projection",
+	// "webhook", "grpc", "saga".
 	Kind string
 	// SourceFile is the repo-relative path of the contract.yaml that drove
 	// generation, e.g. "examples/todoorder/contracts/http/order/create/v1/contract.yaml".
@@ -30,6 +31,10 @@ type ContractGenSpec struct {
 	Endpoint *httpEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
+	// Saga is non-nil when Kind == "saga". It drives saga.tmpl (the typed
+	// Impl interface + BuildDefinition/Register); the step output DTOs it
+	// references are emitted into DTOs (rendered by types.tmpl) like any kind.
+	Saga *SagaSpec
 	// GRPC is non-nil when Kind == "grpc". It drives the placeholder server
 	// interface emitted into iface_gen.go. Request/response are []byte until
 	// PR 6 wires the proto-generated message types.
@@ -283,6 +288,62 @@ type EventEndpointSpec struct {
 	Replayable bool
 	// DeliverySemantics is the declared delivery guarantee, e.g. "at-least-once".
 	DeliverySemantics string
+}
+
+// SagaSpec holds saga-specific generation data (Kind=="saga" only). It drives
+// saga.tmpl, which emits the typed Impl interface + BuildDefinition/Register
+// that adapt impl methods to kernel/saga's untyped StepFunc/CompensateFunc.
+type SagaSpec struct {
+	// DefinitionID is the contract id, used as the saga.Definition.ID const,
+	// e.g. "saga.orderfulfillment.v1".
+	DefinitionID string
+	// TimeoutExpr is the Go duration expression for the saga-wide Timeout, e.g.
+	// "30 * time.Second". Empty means the field is omitted (zero => no ceiling).
+	TimeoutExpr string
+	// RetryPolicy is the saga-wide default retry policy; nil means omit.
+	RetryPolicy *RetryPolicySpec
+	// CompensationOrder is the validated compensation walk order; always
+	// "reverse" today (informational — the runtime owns the reverse walk).
+	CompensationOrder string
+	// NeedsTime reports whether any duration expr is present, so saga.tmpl
+	// imports the time package only when used.
+	NeedsTime bool
+	// Steps are the forward steps in execution order.
+	Steps []SagaStepSpec
+}
+
+// SagaStepSpec is one generated saga step. InputGoType is the previous step's
+// OutputGoType ("" when IsFirst — the first step takes no typed input because
+// the runtime feeds nil prevState to step 0).
+type SagaStepSpec struct {
+	// Name is the raw SafeID step name literal, e.g. "reserveInventory".
+	Name string
+	// GoName is goPascalCase(Name), e.g. "ReserveInventory".
+	GoName string
+	// OutputGoType is the typed output struct name, goPascalCase(Name)+"Output".
+	OutputGoType string
+	// InputGoType is the previous step's OutputGoType; empty when IsFirst.
+	InputGoType string
+	// IsFirst marks step 0 (its Run takes no typed input).
+	IsFirst bool
+	// HasCompensate is true when the step declares compensation (default true);
+	// only then is a Compensate method emitted on Impl + a non-nil
+	// saga.Step.Compensate wired.
+	HasCompensate bool
+	// TimeoutExpr is the Go duration expression for the per-step Timeout; empty
+	// means omit (inherit Definition.Timeout).
+	TimeoutExpr string
+	// RetryPolicy overrides the saga-wide policy for this step; nil means omit.
+	RetryPolicy *RetryPolicySpec
+}
+
+// RetryPolicySpec is the generation form of kernel/saga.RetryPolicy. Empty
+// interval exprs / zero MaxAttempts are omitted from the emitted literal so the
+// zero value (inherit) is preserved.
+type RetryPolicySpec struct {
+	MaxAttempts      int
+	BaseIntervalExpr string
+	MaxIntervalExpr  string
 }
 
 // GRPCEndpointSpec holds gRPC-specific endpoint information for the placeholder

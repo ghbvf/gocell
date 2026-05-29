@@ -221,7 +221,7 @@ type WaiverMeta struct {
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
 	ID               string `yaml:"id"`
-	Kind             string `yaml:"kind"` // http|event|command|projection|webhook|grpc
+	Kind             string `yaml:"kind"` // http|event|command|projection|webhook|grpc|saga
 	OwnerCell        string `yaml:"ownerCell"`
 	ConsistencyLevel string `yaml:"consistencyLevel"`
 	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
@@ -231,12 +231,18 @@ type ContractMeta struct {
 	// domain.TopicX); dynamic expressions (fmt.Sprintf, variables) are rejected
 	// by CONTRACT-CONSISTENCY-EMIT-01. Validated bidirectionally against
 	// outbox.Emit call sites in cells/<ownerCell>/slices/**/service.go.
-	Triggers          []string       `yaml:"triggers,omitempty"`
-	Endpoints         EndpointsMeta  `yaml:"endpoints"`
-	SchemaRefs        SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
-	Replayable        *bool          `yaml:"replayable,omitempty"`
-	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
-	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
+	Triggers   []string       `yaml:"triggers,omitempty"`
+	Endpoints  EndpointsMeta  `yaml:"endpoints"`
+	SchemaRefs SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
+	// Saga carries the orchestration definition for kind=saga contracts (steps,
+	// timeout, compensationOrder). Nil for all other kinds. Parsed under strict
+	// KnownFields decode; the declarative mirror lives in
+	// schemas/contract.schema.json. contractgen derives typed step I/O structs +
+	// an Impl interface + BuildDefinition/Register from it (PR-07).
+	Saga              *SagaMeta `yaml:"saga,omitempty"`
+	Replayable        *bool     `yaml:"replayable,omitempty"`
+	IdempotencyKey    string    `yaml:"idempotencyKey,omitempty"`
+	DeliverySemantics string    `yaml:"deliverySemantics,omitempty"`
 	// Codegen opts the contract into `gocell generate contract` output.
 	// When true, contractgen produces types_gen.go / iface_gen.go (and
 	// handler_gen.go for kind=http) under generated/contracts/<kind>/<...>/v<N>/.
@@ -295,6 +301,9 @@ func (c *ContractMeta) ProviderEndpoint() string {
 		return c.OwnerCell
 	case "grpc":
 		// gRPC mirrors http: provider is endpoints.server.
+		return c.Endpoints.Server
+	case "saga":
+		// Saga's provider is the orchestrating cell in endpoints.server.
 		return c.Endpoints.Server
 	default:
 		return ""
@@ -396,6 +405,49 @@ type WebhookInboundMeta struct {
 	// ^[a-z][a-z0-9_-]{0,63}$ (aligns with runtime kernel/webhook
 	// sourceIDPattern, maxLen 64).
 	SourceID string `yaml:"sourceID"`
+}
+
+// SagaMeta is the orchestration block of a kind=saga contract.yaml. Steps run
+// in slice order; each step's typed Run input is the previous step's output.
+// The first step takes no typed input — the runtime feeds nil prevState. There
+// is no saga-launch input payload in v1: the orchestrating cell loads the
+// saga's initial business context by looking up domain state keyed by the
+// enrolled Instance.ID (the correlation id).
+type SagaMeta struct {
+	// Timeout is the saga-wide deadline as a Go duration string (e.g. "30s").
+	// Empty means no saga-level ceiling (per-step timeouts still apply).
+	Timeout string `yaml:"timeout,omitempty"`
+	// CompensationOrder selects the rollback walk. v1 limitation: only "reverse"
+	// is supported (empty is treated as "reverse"); any other value is rejected
+	// by governance SAGA-CONTRACT-COMPENSATION-ORDER-01. Forward/custom orders
+	// are not yet modeled.
+	CompensationOrder string `yaml:"compensationOrder,omitempty"`
+	// Retries is the saga-wide default retry policy; each step inherits it
+	// unless the step sets its own.
+	Retries *SagaRetryMeta `yaml:"retries,omitempty"`
+	// Steps lists the forward steps in execution order; must be non-empty.
+	Steps []SagaStepMeta `yaml:"steps"`
+}
+
+// SagaStepMeta is one step inside a SagaMeta. Name must be a valid idutil.SafeID
+// and unique within the saga. Output references a JSON Schema (contract-relative)
+// describing this step's success payload — which becomes the next step's typed
+// input. Compensate defaults to true (the step is rolled back during the
+// Compensating phase); set false for terminal / non-reversible steps.
+type SagaStepMeta struct {
+	Name       string         `yaml:"name"`
+	Output     string         `yaml:"output"`
+	Timeout    string         `yaml:"timeout,omitempty"`
+	Retries    *SagaRetryMeta `yaml:"retries,omitempty"`
+	Compensate *bool          `yaml:"compensate,omitempty"`
+}
+
+// SagaRetryMeta is the declarative form of kernel/saga.RetryPolicy. Intervals
+// are Go duration strings (e.g. "100ms"). Zero / empty fields inherit.
+type SagaRetryMeta struct {
+	MaxAttempts  int    `yaml:"maxAttempts,omitempty"`
+	BaseInterval string `yaml:"baseInterval,omitempty"`
+	MaxInterval  string `yaml:"maxInterval,omitempty"`
 }
 
 // JourneyMeta maps to journeys/J-*.yaml.

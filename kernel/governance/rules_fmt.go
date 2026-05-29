@@ -47,26 +47,24 @@ var (
 		string(cellvocab.CellTypeEdge):    true,
 		string(cellvocab.CellTypeSupport): true,
 	}
-	validRoles = map[string]bool{
-		string(cellvocab.RoleServe):           true,
-		string(cellvocab.RoleCall):            true,
-		string(cellvocab.RolePublish):         true,
-		string(cellvocab.RoleSubscribe):       true,
-		string(cellvocab.RoleHandle):          true,
-		string(cellvocab.RoleInvoke):          true,
-		string(cellvocab.RoleProvide):         true,
-		string(cellvocab.RoleRead):            true,
-		string(cellvocab.RoleWebhookReceive):  true,
-		string(cellvocab.RoleWebhookDispatch): true,
-	}
-	validKinds = map[string]bool{
-		string(cellvocab.ContractHTTP):       true,
-		string(cellvocab.ContractEvent):      true,
-		string(cellvocab.ContractCommand):    true,
-		string(cellvocab.ContractProjection): true,
-		string(cellvocab.ContractWebhook):    true,
-		string(cellvocab.ContractGRPC):       true,
-	}
+	// validRoles / validKinds derive from the cellvocab single source so the
+	// accepted sets cannot drift from the typed consts, the schema enums
+	// (byte-locked by TestSchemaConstantsMatchSchemaLiterals), or the parser —
+	// new kinds/roles (saga, webhook, …) flow through automatically.
+	validRoles = func() map[string]bool {
+		m := make(map[string]bool, len(cellvocab.AllContractRoles()))
+		for _, r := range cellvocab.AllContractRoles() {
+			m[string(r)] = true
+		}
+		return m
+	}()
+	validKinds = func() map[string]bool {
+		m := make(map[string]bool, len(cellvocab.AllContractKinds()))
+		for _, k := range cellvocab.AllContractKinds() {
+			m[string(k)] = true
+		}
+		return m
+	}()
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
 		"POST":   true,
@@ -293,6 +291,9 @@ func (v *Validator) validateFMT06() []ValidationResult {
 }
 
 // validateFMT07 checks that the contract provider endpoint is populated based on kind.
+// kind=saga shares the "endpoints.server" anchor with kind=grpc: both kinds declare
+// their provider cell in endpoints.server (the saga coordinator is the server-side
+// provider that orchestrates the workflow).
 func (v *Validator) validateFMT07() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -314,7 +315,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				// derived fields populated after parse time and cannot be the
 				// canonical provider field for FMT-07.
 				field = "ownerCell"
-			case cellvocab.ContractGRPC:
+			case cellvocab.ContractGRPC, cellvocab.ContractSaga:
 				field = "endpoints.server"
 			default:
 				field = "endpoints"
@@ -331,17 +332,31 @@ func (v *Validator) validateFMT07() []ValidationResult {
 	return results
 }
 
-// validateFMT09 checks that contract.kind is one of {http, event, command, projection, grpc}.
+// allKindNames returns a comma-separated list of all valid contract kinds,
+// derived from cellvocab.AllContractKinds() so the message can never drift.
+func allKindNames() string {
+	kinds := cellvocab.AllContractKinds()
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = string(k)
+	}
+	return strings.Join(names, ", ")
+}
+
+// validateFMT09 checks that contract.kind is one of the valid kinds defined in cellvocab.
+// The accepted set is derived from cellvocab.AllContractKinds() so the message never drifts
+// from the actual accepted set.
 func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
+	kindList := allKindNames()
 	for _, c := range v.project.Contracts {
 		if !validKinds[c.Kind] {
 			results = append(results, v.newError(
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, webhook, or grpc)", c.ID, c.Kind),
-				"set kind to http, event, command, projection, webhook, or grpc",
+				fmt.Sprintf("contract %q kind %q is not valid (must be one of: %s)", c.ID, c.Kind, kindList),
+				fmt.Sprintf("set kind to one of: %s", kindList),
 			))
 		}
 	}

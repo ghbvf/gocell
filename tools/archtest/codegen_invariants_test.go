@@ -277,6 +277,7 @@ func TestCodegenGates_NegativeFixtures(t *testing.T) {
 //   - generated/<kind>/<...>/v<N>/types_gen.go must exist
 //   - generated/<kind>/<...>/v<N>/iface_gen.go must exist
 //   - generated/<kind>/<...>/v<N>/handler_gen.go must exist (kind=http only)
+//   - generated/<kind>/<...>/v<N>/saga_gen.go must exist (kind=saga only)
 func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -301,6 +302,9 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "iface_gen.go"), contract.ID)
 		if contract.Kind == "http" {
 			requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "handler_gen.go"), contract.ID)
+		}
+		if contract.Kind == "saga" {
+			requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "saga_gen.go"), contract.ID)
 		}
 	}
 }

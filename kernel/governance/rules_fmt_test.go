@@ -1672,3 +1672,101 @@ func TestFMT36_NilCell(t *testing.T) {
 		t.Fatalf("FMT-36: expected 0 findings for nil cell, got: %v", matches)
 	}
 }
+
+// ---- FMT-07 saga fan-out + FMT-09 kind list --------------------------------
+
+// TestFMT07_SagaMissingServer verifies that a kind=saga contract with an empty
+// endpoints.server triggers a FMT-07 error with Field == "endpoints.server".
+// Task 3 requirement: the existing TestFMT07 in validate_test.go only asserts
+// Len/Severity; this test adds the Field assertion for the saga arm.
+func TestFMT07_SagaMissingServer(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"saga.order.checkout.v1": {
+				ID:               "saga.order.checkout.v1",
+				Kind:             "saga",
+				ConsistencyLevel: "L3",
+				Lifecycle:        "active",
+				// Endpoints.Server deliberately empty → FMT-07 must fire.
+				Endpoints: metadata.EndpointsMeta{},
+				Dir:       "contracts/saga/order/checkout/v1",
+				File:      "contracts/saga/order/checkout/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	v := NewValidator(project, "", clock.Real())
+	got := findByCode(v.validateFMT07(), codeFMT07)
+	if len(got) != 1 {
+		t.Fatalf("FMT-07 saga: expected 1 finding, got %d: %v", len(got), got)
+	}
+	if got[0].Field != "endpoints.server" {
+		t.Errorf("FMT-07 saga: expected Field=endpoints.server, got %q", got[0].Field)
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("FMT-07 saga: expected SeverityError, got %v", got[0].Severity)
+	}
+}
+
+// TestFMT07_SagaWithServer verifies that a kind=saga contract with a populated
+// endpoints.server does NOT trigger FMT-07.
+func TestFMT07_SagaWithServer(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"saga.order.checkout.v1": {
+				ID:               "saga.order.checkout.v1",
+				Kind:             "saga",
+				ConsistencyLevel: "L3",
+				Lifecycle:        "active",
+				Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDTestCell},
+				Dir:              "contracts/saga/order/checkout/v1",
+				File:             "contracts/saga/order/checkout/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	v := NewValidator(project, "", clock.Real())
+	got := findByCode(v.validateFMT07(), codeFMT07)
+	if len(got) != 0 {
+		t.Fatalf("FMT-07 saga: expected 0 findings for populated server, got %d: %v", len(got), got)
+	}
+}
+
+// TestFMT09_InvalidKindEnumeratesSaga verifies that FMT-09's error message for
+// an out-of-set kind includes "saga" (derived from cellvocab.AllContractKinds).
+func TestFMT09_InvalidKindEnumeratesSaga(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"websocket.test.v1": {
+				ID:               "websocket.test.v1",
+				Kind:             "websocket",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDTestCell},
+				Dir:              "contracts/websocket/test/v1",
+				File:             "contracts/websocket/test/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	v := NewValidator(project, "", clock.Real())
+	got := findByCode(v.validateFMT09(), codeFMT09)
+	if len(got) != 1 {
+		t.Fatalf("FMT-09: expected 1 finding for invalid kind, got %d: %v", len(got), got)
+	}
+	if !strings.Contains(got[0].Message, "saga") {
+		t.Errorf("FMT-09: message should enumerate 'saga' (derived from AllContractKinds), got: %s", got[0].Message)
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("FMT-09: expected SeverityError, got %v", got[0].Severity)
+	}
+}

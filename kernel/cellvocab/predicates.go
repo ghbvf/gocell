@@ -8,6 +8,7 @@ package cellvocab
 //	projection: provide, read
 //	webhook:    webhook-receive, webhook-dispatch
 //	grpc:       serve, call
+//	saga:       orchestrate
 //
 // An unknown or future kind returns nil (fail-open); callers must check for nil
 // before ranging and must not treat nil as "kind is valid with no roles".
@@ -25,17 +26,20 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 		return []ContractRole{RoleWebhookReceive, RoleWebhookDispatch}
 	case ContractGRPC:
 		return []ContractRole{RoleServe, RoleCall}
+	case ContractSaga:
+		return []ContractRole{RoleOrchestrate}
 	default:
 		return nil
 	}
 }
 
 // IsProviderRole returns true if role is a provider-side role
-// (serve, publish, handle, provide, webhook-dispatch). webhook-dispatch is the
-// outbound side — the cell produces/pushes webhooks to an external target.
+// (serve, publish, handle, provide, orchestrate, webhook-dispatch). orchestrate
+// is the saga provider; webhook-dispatch is the outbound side — the cell
+// produces/pushes webhooks to an external target.
 func IsProviderRole(role ContractRole) bool {
 	switch role {
-	case RoleServe, RolePublish, RoleHandle, RoleProvide, RoleWebhookDispatch:
+	case RoleServe, RolePublish, RoleHandle, RoleProvide, RoleOrchestrate, RoleWebhookDispatch:
 		return true
 	default:
 		return false

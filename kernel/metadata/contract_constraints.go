@@ -43,6 +43,16 @@ const (
 	// identifier shape (uppercase first letter, ASCII letters + digits).
 	// Mirrors schemas/cell.schema.json properties.goStructName.pattern.
 	GoStructNamePattern = `^[A-Z][A-Za-z0-9]*$`
+	// SagaStepNamePattern restricts saga.steps[].name to a Go-identifier-safe
+	// camelCase token (letters + digits, leading letter). It is STRICTER than a
+	// generic SafeID because the step name flows through contractgen's
+	// goPascalCase into generated Go identifiers (Run<Name> / <Name>Output); a
+	// '.', ':' or '/' would emit uncompilable Go. Single source for the saga
+	// step-name shape: schemas/contract.schema.json saga.steps[].name.pattern is
+	// byte-locked to this const by TestSchemaConstantsMatchSchemaLiterals, and
+	// kernel/governance SAGA-CONTRACT-STEP-NAME-VALID-01 compiles it (replacing
+	// the prior hand-duplicated literal).
+	SagaStepNamePattern = `^[a-zA-Z][a-zA-Z0-9]*$`
 )
 
 // DeployTemplateEnum lists the canonical values accepted for

@@ -1,0 +1,128 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+{{- if .Saga.NeedsTime}}
+	"time"
+{{- end}}
+
+	"github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
+)
+
+// DefinitionID is the saga.Definition.ID for {{.ContractID}}. Enroll instances
+// under this id; Register/BuildDefinition stamp it onto the built Definition.
+const DefinitionID idutil.SafeID = {{printf "%q" .Saga.DefinitionID}}
+
+// Impl is the typed business interface the orchestrating cell implements for
+// {{.ContractID}}. Per kernel/saga's StepFunc contract, each step receives the
+// previous step's output; a step exposes a Compensate method only when it
+// declares compensation. BuildDefinition adapts these to the untyped
+// saga.StepFunc / saga.CompensateFunc via JSON (un)marshal of the step outputs.
+//
+// The first step takes no typed input — the runtime feeds nil prevState to step
+// 0. There is no saga-launch input payload in v1; the orchestrating cell loads
+// the saga's initial business context by looking up domain state keyed by
+// inst.ID (the correlation id chosen when the instance was enrolled). Later
+// steps thread state forward via their typed outputs.
+type Impl interface {
+{{- range .Saga.Steps}}
+{{- if .IsFirst}}
+	Run{{.GoName}}(ctx context.Context, inst *saga.Instance) ({{.OutputGoType}}, error)
+{{- else}}
+	Run{{.GoName}}(ctx context.Context, inst *saga.Instance, in {{.InputGoType}}) ({{.OutputGoType}}, error)
+{{- end}}
+{{- if .HasCompensate}}
+	Compensate{{.GoName}}(ctx context.Context, inst *saga.Instance, out {{.OutputGoType}}) error
+{{- end}}
+{{- end}}
+}
+
+// BuildDefinition wires impl into the kernel saga.Definition for {{.ContractID}}.
+// Compose multiple sagas with saga.NewInMemoryRegistry(a.BuildDefinition(x), ...).
+//
+// A nil impl (untyped or typed-nil) is a programmer error: the step closures
+// below capture impl and would otherwise nil-deref only when a step runs. Since
+// BuildDefinition returns no error (its result feeds variadic NewInMemoryRegistry),
+// it fails fast with a panic here — register-time, not execution-time. Use
+// Register for the error-returning single-saga path.
+func BuildDefinition(impl Impl) *saga.Definition {
+	if validation.IsNilInterface(impl) {
+		panic(panicregister.Approved("saga-build-definition-nil-impl",
+			errcode.Assertion("saga %s BuildDefinition: impl must not be nil", string(DefinitionID))))
+	}
+	return &saga.Definition{
+		ID: DefinitionID,
+{{- if .Saga.TimeoutExpr}}
+		Timeout: {{.Saga.TimeoutExpr}},
+{{- end}}
+{{- if .Saga.RetryPolicy}}
+		RetryPolicy: {{template "sagaRetry" .Saga.RetryPolicy}},
+{{- end}}
+		Steps: []saga.Step{
+{{- range .Saga.Steps}}
+			{
+				Name: {{printf "%q" .Name}},
+{{- if .TimeoutExpr}}
+				Timeout: {{.TimeoutExpr}},
+{{- end}}
+{{- if .RetryPolicy}}
+				RetryPolicy: {{template "sagaRetry" .RetryPolicy}},
+{{- end}}
+				Run: func(ctx context.Context, inst *saga.Instance, prevState []byte) ([]byte, error) {
+{{- if .IsFirst}}
+					out, err := impl.Run{{.GoName}}(ctx, inst)
+{{- else}}
+					var in {{.InputGoType}}
+					if err := json.Unmarshal(prevState, &in); err != nil {
+						return nil, fmt.Errorf("unmarshal prevState: %w", err)
+					}
+					out, err := impl.Run{{.GoName}}(ctx, inst, in)
+{{- end}}
+					if err != nil {
+						return nil, err
+					}
+					b, err := json.Marshal(out)
+					if err != nil {
+						return nil, fmt.Errorf("marshal output: %w", err)
+					}
+					return b, nil
+				},
+{{- if .HasCompensate}}
+				Compensate: func(ctx context.Context, inst *saga.Instance, committedState []byte) error {
+					var out {{.OutputGoType}}
+					if err := json.Unmarshal(committedState, &out); err != nil {
+						return fmt.Errorf("unmarshal committedState: %w", err)
+					}
+					return impl.Compensate{{.GoName}}(ctx, inst, out)
+				},
+{{- end}}
+			},
+{{- end}}
+		},
+	}
+}
+
+// Register is the single-saga convenience: use it when {{.ContractID}} is the
+// only saga in your registry. It returns a saga.InMemoryRegistry holding this
+// one definition (which runs Definition.Validate). For a registry that hosts
+// multiple sagas, call BuildDefinition here and pass the result to
+// saga.NewInMemoryRegistry alongside the other definitions instead.
+func Register(impl Impl) (*saga.InMemoryRegistry, error) {
+	if validation.IsNilInterface(impl) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga register: impl must not be nil")
+	}
+	return saga.NewInMemoryRegistry(BuildDefinition(impl))
+}
+
+{{- define "sagaRetry" -}}
+saga.RetryPolicy{ {{- if .MaxAttempts}}MaxAttempts: {{.MaxAttempts}},{{end}}{{if .BaseIntervalExpr}} BaseInterval: {{.BaseIntervalExpr}},{{end}}{{if .MaxIntervalExpr}} MaxInterval: {{.MaxIntervalExpr}},{{end}} }
+{{- end}}

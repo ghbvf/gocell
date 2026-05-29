@@ -331,6 +331,32 @@ func TestSourceFingerprint_ResponseSchemaFileContentChange(t *testing.T) {
 	assert.NotEqual(t, baseline, got, "changing response schema file content must change fingerprint")
 }
 
+// TestSourceFingerprint_SagaOutputSchemaFileContentChange verifies that
+// modifying the content of a saga step's output schema file (without changing
+// its path) changes the fingerprint. This is the schema-content half of the
+// REF-12 / fingerprint coverage that ContractSchemaRefs now exposes for saga
+// step outputs (the structural ref-path half is already covered by the
+// canonicalEncode recursion into *SagaMeta exercised by AnyFieldChange).
+func TestSourceFingerprint_SagaOutputSchemaFileContentChange(t *testing.T) {
+	root := t.TempDir()
+	contractDir := filepath.Join(root, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	schemaPath := filepath.Join(contractDir, "reserve.output.schema.json")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version":1}`), 0o644))
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
+	p.Contracts["http.auth.login.v1"].Saga = &metadata.SagaMeta{
+		Steps: []metadata.SagaStepMeta{{Name: "reserve", Output: "reserve.output.schema.json"}},
+	}
+
+	baseline := computeFingerprintWithRoot(t, p, root)
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version":2}`), 0o644))
+	got := computeFingerprintWithRoot(t, p, root)
+
+	assert.NotEqual(t, baseline, got, "changing saga step output schema file content must change fingerprint")
+}
+
 func TestSourceFingerprint_ResponseSchemaMissingFileFailsLoudly(t *testing.T) {
 	root := t.TempDir()
 	p := fingerprintProject()
@@ -704,11 +730,15 @@ func mutateContractPointerField(v reflect.Value) {
 		v.Set(reflect.ValueOf(&b))
 		return
 	}
-	// Pointer-to-struct (e.g. *WebhookSignatureMeta, *WebhookPayloadMeta):
-	// toggle the nil state. canonicalEncode emits "N" for nil and "P{...}" for
-	// non-nil, so flipping nil↔non-nil always changes the fingerprint — which is
-	// all this exhaustive structural test asserts. New pointer-to-struct fields
-	// on ContractMeta are thus covered without per-field updates here.
+	// Pointer-to-struct (e.g. *metadata.SagaMeta, *WebhookSignatureMeta,
+	// *WebhookPayloadMeta): toggle the nil state. canonicalEncode emits "N" for
+	// nil and "P{...}" for non-nil, so flipping nil↔non-nil always changes the
+	// fingerprint — which is all this exhaustive structural test asserts. New
+	// pointer-to-struct fields on ContractMeta are thus covered without per-field
+	// updates here. (The generic toggle creates an empty &SagaMeta{} with no
+	// steps, so it never routes through the schema-content resolver; the
+	// saga-output schema-content hashing path is covered separately by
+	// TestSourceFingerprint_SagaOutputSchemaFileContentChange.)
 	if v.Type().Elem().Kind() == reflect.Struct {
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))

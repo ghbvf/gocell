@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 )
@@ -100,6 +101,49 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 		require.True(t, ok, "grpc proto.pattern is not a string: %T", leaf)
 		require.Equal(t, "^"+metadata.GRPCProtoPathPrefix, got,
 			"schemas/contract.schema.json grpc proto.pattern drifted from metadata.GRPCProtoPathPrefix")
+	})
+
+	// contract.schema.json kind enum is byte-locked to cellvocab.AllContractKinds().
+	// Both the schema and governance validKinds derive from the same ordered slice,
+	// so drift in either direction is caught here at test time.
+	t.Run("contract.schema.json#kindEnum", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaStringSlice(t, "contract.schema.json",
+			[]string{"properties", "kind", "enum"})
+		want := make([]string, 0, len(cellvocab.AllContractKinds()))
+		for _, k := range cellvocab.AllContractKinds() {
+			want = append(want, string(k))
+		}
+		require.True(t, reflect.DeepEqual(want, got),
+			"schemas/contract.schema.json kind enum drifted from cellvocab.AllContractKinds: schema=%v want=%v",
+			got, want)
+	})
+
+	// slice.schema.json contractUsages role enum is byte-locked to
+	// cellvocab.AllContractRoles(). Drift means schema validation and governance
+	// accept different role strings.
+	t.Run("slice.schema.json#roleEnum", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaStringSlice(t, "slice.schema.json",
+			[]string{"properties", "contractUsages", "items", "properties", "role", "enum"})
+		want := make([]string, 0, len(cellvocab.AllContractRoles()))
+		for _, r := range cellvocab.AllContractRoles() {
+			want = append(want, string(r))
+		}
+		require.True(t, reflect.DeepEqual(want, got),
+			"schemas/slice.schema.json contractUsages role enum drifted from cellvocab.AllContractRoles: schema=%v want=%v",
+			got, want)
+	})
+
+	// contract.schema.json saga step-name pattern is byte-locked to
+	// metadata.SagaStepNamePattern. The pattern lives at the top-level saga
+	// properties block (properties.saga.properties.steps.items.properties.name.pattern).
+	t.Run("contract.schema.json#SagaStepNamePattern", func(t *testing.T) {
+		t.Parallel()
+		got := readSchemaString(t, "contract.schema.json",
+			[]string{"properties", "saga", "properties", "steps", "items", "properties", "name", "pattern"})
+		require.Equal(t, metadata.SagaStepNamePattern, got,
+			"schemas/contract.schema.json saga step name pattern drifted from metadata.SagaStepNamePattern")
 	})
 }
 

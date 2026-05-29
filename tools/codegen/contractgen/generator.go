@@ -101,7 +101,7 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 // dry-run/write/verify branches × per-artifact emit (types / iface / handler /
 // spec / subscription). Splitting would only push the same matrix into helpers.
 //
-//nolint:gocognit // structural orchestration; see godoc above.
+//nolint:gocognit,cyclop // structural orchestration; see godoc above.
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -172,6 +172,15 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		subPath := filepath.Join(pkgDir, "subscription_gen.go")
 		errPfxSub := "contractgen generate: render subscription " + contractID
 		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
+			return err
+		}
+	}
+
+	// saga_gen.go — only for kind=saga (typed Impl + BuildDefinition/Register).
+	if spec.Kind == "saga" {
+		sagaPath := filepath.Join(pkgDir, "saga_gen.go")
+		errPfxSaga := "contractgen generate: render saga " + contractID
+		if err := renderWriteContract(root, "saga.tmpl", spec, sagaPath, opts, res, errPfxSaga); err != nil {
 			return err
 		}
 	}
@@ -337,6 +346,25 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
+	}
+
+	// saga_gen.go — only for kind=saga.
+	if spec.Kind == "saga" {
+		sagaPath := filepath.Join(pkgDir, "saga_gen.go")
+		sagaContent, err := codegen.Render(modulePath, codegen.RenderOptions{
+			TemplateName: "saga.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     sagaPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q saga: %w", contractID, err)
+		}
+		sagaRel, err := relFromRoot(root, sagaPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: sagaRel, Content: sagaContent})
 	}
 
 	return out, nil
