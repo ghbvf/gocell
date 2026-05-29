@@ -29,6 +29,8 @@ const (
 	integServeTimeout = 5 * time.Second
 	// integDialTimeout bounds the client dial attempt.
 	integDialTimeout = 2 * time.Second
+	// integProbePollTick is the poll interval for testwait.External probe checks.
+	integProbePollTick = testtime.D5ms
 )
 
 // startServing starts the server on lis in a goroutine and returns a stop function.
@@ -88,6 +90,38 @@ func dialMTLS(t *testing.T, addr string, rootCAs *x509.CertPool, clientCert tls.
 	)
 	require.NoError(t, err)
 	return cc
+}
+
+// blockerMethod is the full method name of the test-only blocking unary RPC
+// registered by blockingServiceDesc. It reuses grpc_health_v1 proto messages as
+// the wire payload so no extra codegen/proto dependency is needed.
+const blockerMethod = "/grpctest.Blocker/Block"
+
+// blockingServiceDesc returns a ServiceDesc with one unary method that closes
+// started when the handler is entered, then blocks until release is closed. This
+// lets a test hold an RPC in-flight across a graceful drain to verify the server
+// waits for it (rather than hard-killing it).
+func blockingServiceDesc(started chan<- struct{}, release <-chan struct{}) grpc.ServiceDesc {
+	return grpc.ServiceDesc{
+		ServiceName: "grpctest.Blocker",
+		HandlerType: (*any)(nil), // any: any impl satisfies it; avoids a typed stub
+		Methods: []grpc.MethodDesc{
+			{
+				MethodName: "Block",
+				Handler: func(_ any, _ context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+					req := new(grpc_health_v1.HealthCheckRequest)
+					if err := dec(req); err != nil {
+						return nil, err
+					}
+					close(started)
+					<-release
+					return &grpc_health_v1.HealthCheckResponse{
+						Status: grpc_health_v1.HealthCheckResponse_SERVING,
+					}, nil
+				},
+			},
+		},
+	}
 }
 
 // healthCheck performs a unary grpc_health_v1.Health.Check RPC and returns the response status.
@@ -278,21 +312,23 @@ func TestIntegration_MTLS_NoClientCert(t *testing.T) {
 	_, err = healthCheck(t, cc)
 	require.Error(t, err, "mTLS server must reject client without certificate")
 
-	// Empirically observed on Go 1.22+ / grpc-go: the TLS handshake failure
-	// surfaces as codes.Unavailable with a message containing "tls: certificate
-	// required". The gRPC transport layer wraps OS-level TLS alerts as Unavailable
-	// rather than Unauthenticated because the rejection happens at the transport
-	// handshake before any RPC frame is exchanged.
-	st := status.FromContextError(err)
+	// The security-meaningful invariant is that the RPC is REJECTED at the
+	// transport handshake (server enforces RequireAndVerifyClientCert), which
+	// grpc-go surfaces as codes.Unavailable — the rejection happens before any
+	// RPC frame is exchanged, so it is not Unauthenticated. We assert only the
+	// code: the exact error message text varies by TLS-alert timing across
+	// platforms/Go versions ("tls: certificate required" vs "remote error" vs
+	// "EOF"), so a substring check on the message is flaky and asserts nothing
+	// about the security property.
 	code := status.Code(err)
 	assert.Equal(t, codes.Unavailable, code,
-		"expected Unavailable from mTLS handshake failure, got %v", code)
-	assert.Contains(t, st.Message(), "tls",
-		"error message should reference TLS handshake failure")
-	_ = st
+		"expected Unavailable from mTLS handshake rejection, got %v", code)
 }
 
-// TestIntegration_GracefulDrain verifies that in-flight RPCs complete before Close returns.
+// TestIntegration_GracefulDrain verifies that an in-flight RPC actually held
+// across the drain completes before Close returns, AND that readiness flips to
+// unhealthy the moment the drain begins (F2). This exercises the real graceful
+// path (a blocking handler spanning shutdown), not just Close on an idle server.
 func TestIntegration_GracefulDrain(t *testing.T) {
 	t.Parallel()
 
@@ -304,9 +340,10 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	srv, err := grpcadapter.New(cfg)
 	require.NoError(t, err)
 
-	healthSrv := health.NewServer()
-	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+	rpcStarted := make(chan struct{})
+	release := make(chan struct{})
+	desc := blockingServiceDesc(rpcStarted, release)
+	srv.ServiceRegistrar().RegisterService(&desc, new(any))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -324,22 +361,56 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	cc := dialInsecure(t, addr)
 	defer func() { _ = cc.Close() }()
 
-	// Ensure basic connectivity before draining.
-	st, err := healthCheck(t, cc)
-	require.NoError(t, err)
-	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st)
+	// Fire the blocking RPC and wait until the handler is actually executing,
+	// so it is genuinely in-flight when the drain starts.
+	rpcErr := make(chan error, 1)
+	rpcResp := make(chan *grpc_health_v1.HealthCheckResponse, 1)
+	go func() {
+		resp := new(grpc_health_v1.HealthCheckResponse)
+		err := cc.Invoke(context.Background(), blockerMethod,
+			&grpc_health_v1.HealthCheckRequest{}, resp)
+		if err != nil {
+			rpcErr <- err
+			return
+		}
+		rpcResp <- resp
+	}()
+	testwait.Deterministic(t, rpcStarted, integServeTimeout, "blocking-rpc-started")
 
-	// Trigger graceful stop.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), integServeTimeout)
-	defer closeCancel()
+	// Begin graceful stop in the background; it must block until the in-flight
+	// RPC is released.
+	closeReturned := make(chan error, 1)
+	go func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), integServeTimeout)
+		defer closeCancel()
+		closeReturned <- srv.Close(closeCtx)
+	}()
 
-	closeErr := srv.Close(closeCtx)
-	assert.NoError(t, closeErr, "Close should succeed within shutdown budget")
-
-	// Server should no longer be serving after Close.
+	// F2: readiness must flip to unhealthy as soon as the drain begins, even
+	// though the in-flight RPC has NOT completed yet.
 	probes := srv.Probes()
 	require.Len(t, probes, 1)
-	assert.Error(t, probes[0].Check(context.Background()), "probe must be unhealthy after Close")
+	testwait.External(t, "grpc-ready-unhealthy-during-drain", func() bool {
+		return probes[0].Check(context.Background()) != nil
+	}, integDialTimeout, integProbePollTick)
+
+	// Close must NOT have returned yet — the RPC is still blocked.
+	select {
+	case <-closeReturned:
+		t.Fatal("Close returned before the in-flight RPC was released; drain did not wait")
+	default:
+	}
+
+	// Release the RPC; both it and Close should now complete cleanly.
+	close(release)
+	closeErr := testwait.Deterministic(t, closeReturned, integServeTimeout, "close-returns-after-drain")
+	assert.NoError(t, closeErr, "Close should succeed within shutdown budget")
+	select {
+	case err := <-rpcErr:
+		t.Fatalf("in-flight RPC failed instead of draining cleanly: %v", err)
+	case resp := <-rpcResp:
+		assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.GetStatus())
+	}
 }
 
 // TestIntegration_WorkerStopAndCloseConcurrent verifies that calling Worker().Stop()

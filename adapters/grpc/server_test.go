@@ -24,6 +24,9 @@ const (
 	// testCloseWatchdog is the time.After deadline in TestClose_ContextTimeoutForcesHardStop
 	// used to detect a hung Close. Large enough to survive any scheduler jitter.
 	testCloseWatchdog = testtime.SelectShutdown
+
+	// negativeShutdownTimeout exercises the V1c validation reject path.
+	negativeShutdownTimeout = -1 * time.Second
 )
 
 // ─── Config.applyDefaults ────────────────────────────────────────────────────
@@ -55,6 +58,61 @@ func TestConfig_Validate_V1_AddrRequired(t *testing.T) {
 
 	cfg := grpcadapter.Config{
 		Addr: "", // V1: missing
+		TLS: grpcadapter.TLSConfig{
+			CertPEM: chain.serverCertPEM,
+			KeyPEM:  chain.serverKeyPEM,
+		},
+	}
+	_, err := grpcadapter.New(cfg)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, grpcadapter.ErrAdapterGRPCConfigInvalid, ec.Code)
+}
+
+// TestConfig_Validate_V1b_AddrMalformed verifies a syntactically invalid Addr is
+// rejected at config time (ErrAdapterGRPCConfigInvalid) rather than surfacing
+// later from net.Listen as an infrastructure error.
+func TestConfig_Validate_V1b_AddrMalformed(t *testing.T) {
+	t.Parallel()
+	chain := genIntegChain(t)
+
+	cases := []struct {
+		name string
+		addr string
+	}{
+		{name: "no_colon", addr: "localhost"},
+		{name: "too_many_colons", addr: "a:b:c:d"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := grpcadapter.Config{
+				Addr: tc.addr,
+				TLS: grpcadapter.TLSConfig{
+					CertPEM: chain.serverCertPEM,
+					KeyPEM:  chain.serverKeyPEM,
+				},
+			}
+			_, err := grpcadapter.New(cfg)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, grpcadapter.ErrAdapterGRPCConfigInvalid, ec.Code)
+		})
+	}
+}
+
+// TestConfig_Validate_V1c_NegativeShutdownTimeout verifies a negative
+// ShutdownTimeout is rejected (it would silently degrade every graceful stop
+// into a hard Stop). Zero stays valid (applyDefaults fills the default).
+func TestConfig_Validate_V1c_NegativeShutdownTimeout(t *testing.T) {
+	t.Parallel()
+	chain := genIntegChain(t)
+
+	cfg := grpcadapter.Config{
+		Addr:            "127.0.0.1:0",
+		ShutdownTimeout: negativeShutdownTimeout,
 		TLS: grpcadapter.TLSConfig{
 			CertPEM: chain.serverCertPEM,
 			KeyPEM:  chain.serverKeyPEM,

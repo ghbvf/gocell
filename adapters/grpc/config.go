@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"net"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -26,6 +27,15 @@ const (
 type TLSConfig struct {
 	// AllowInsecure enables plaintext (no TLS). Explicit dev-only opt-in.
 	// Must not be combined with CertPEM, KeyPEM, or ClientCAPEM.
+	//
+	// The listen address is deliberately NOT restricted to loopback when
+	// AllowInsecure is set. Binding plaintext on a non-loopback address (e.g.
+	// 0.0.0.0) is a legitimate production posture behind a service-mesh sidecar
+	// that terminates mTLS at the pod boundary and forwards cleartext over the
+	// loopback-equivalent pod network. The fail-closed guarantee here is solely
+	// the explicit opt-in: plaintext is impossible unless the operator sets this
+	// flag (Config.validate V5 rejects the zero value). A loopback-only check
+	// would break the sidecar topology and is intentionally omitted.
 	AllowInsecure bool
 
 	// CertPEM is the PEM-encoded server leaf certificate. Required for TLS/mTLS.
@@ -65,6 +75,24 @@ func (c *Config) validate() error {
 	if c.Addr == "" {
 		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Addr is required; set Config.Addr to a listen address (e.g. \":9000\")")
+	}
+
+	// V1b: Addr must be syntactically valid host:port — caller error. Classify
+	// the malformed-address failure here at config time rather than letting it
+	// surface later from net.Listen as an infrastructure (ErrAdapterGRPCListen)
+	// error, which would mislead operators about the failure domain.
+	if _, _, err := net.SplitHostPort(c.Addr); err != nil {
+		return errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: Addr is not a valid host:port", err)
+	}
+
+	// V1c: ShutdownTimeout must not be negative — caller error. A negative
+	// budget would make the drain ctx expire immediately, silently degrading
+	// every graceful stop into a hard Stop(). Zero is valid (applyDefaults fills
+	// the 30s default); only an explicit negative is rejected.
+	if c.ShutdownTimeout < 0 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
+			"grpc: ShutdownTimeout must not be negative; leave it zero for the default or set a positive duration")
 	}
 
 	hasCert := len(c.TLS.CertPEM) > 0

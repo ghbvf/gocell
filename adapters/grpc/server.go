@@ -174,13 +174,25 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 			return nil
 		}
 		if err != nil {
+			// Serve exited abnormally (not via Stop/GracefulStop). Log at Error
+			// with structured context, mirroring the net.Listen failure path, so
+			// operators see the cause even when the returned errcode is unwrapped
+			// upstream. The raw addr stays in InternalAttr (server-side only).
+			slog.Error("grpc: Serve returned unexpectedly",
+				slog.String("addr", s.cfg.Addr),
+				slog.Any("error", err))
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCServe,
-				"grpc: Serve returned unexpectedly", err)
+				"grpc: Serve returned unexpectedly", err,
+				errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
 		}
 		return nil
 
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
+		// Detach from the canceled ctx's deadline but keep its values (trace,
+		// request IDs): the drain budget is owned by cfg.ShutdownTimeout, not by
+		// the already-canceled parent. Mirrors the runtime/websocket Hub
+		// external-cancel shutdown pattern.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.ShutdownTimeout)
 		defer cancel()
 		if err := s.gracefulStop(shutdownCtx); err != nil {
 			slog.Warn("grpc: graceful stop exceeded shutdown budget; server force-stopped",
@@ -201,6 +213,13 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 func (s *Server) gracefulStop(ctx context.Context) error {
 	var stopErr error
 	s.stopOnce.Do(func() {
+		// Flip readiness to unhealthy BEFORE draining: GracefulStop stops
+		// accepting new RPCs immediately, so the grpc_ready probe must report
+		// not-serving the moment shutdown begins (lets a load balancer drain
+		// this instance promptly instead of routing to a server that rejects
+		// new streams). Drain of in-flight RPCs then proceeds below.
+		s.serving.Store(false)
+
 		graceDone := make(chan struct{})
 		go func() {
 			s.grpcServer.GracefulStop()
@@ -224,7 +243,6 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 			<-graceDone
 			stopErr = ctx.Err()
 		}
-		s.serving.Store(false)
 	})
 	return stopErr
 }
