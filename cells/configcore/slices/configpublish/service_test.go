@@ -252,7 +252,7 @@ func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, ver.Version)
 	require.Len(t, writer.Entries, 1)
-	assert.Equal(t, domain.TopicConfigVersionPublished, writer.Entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigVersionPublished, writer.Entries[0].EventType())
 }
 
 // TestPublishVersion_CallsTxRunnerRunInTxOnce asserts that Publish wraps both
@@ -496,8 +496,8 @@ func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
 	// Find the entry-upserted entry.
 	var upsertedPayload []byte
 	for _, e := range writer.Entries {
-		if e.EventType == domain.TopicConfigEntryUpserted {
-			upsertedPayload = e.Payload
+		if e.EventType() == domain.TopicConfigEntryUpserted {
+			upsertedPayload = e.Payload()
 			break
 		}
 	}

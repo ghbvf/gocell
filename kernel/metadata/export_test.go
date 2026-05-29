@@ -10,3 +10,7 @@ var ExportedDeriveEventSubscribers = deriveEventSubscribers
 // ExportedApplyAssemblyDerivations exposes the unexported applyAssemblyDerivations
 // function for use in package metadata_test test files.
 var ExportedApplyAssemblyDerivations = applyAssemblyDerivations
+
+// ExportedDeriveWebhookEndpoints exposes the unexported deriveWebhookEndpoints
+// function for use in package metadata_test test files (added by PR-2 webhook impl).
+var ExportedDeriveWebhookEndpoints = deriveWebhookEndpoints

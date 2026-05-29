@@ -6,6 +6,7 @@ package cellvocab
 //	event:      publish, subscribe
 //	command:    handle, invoke
 //	projection: provide, read
+//	webhook:    webhook-receive, webhook-dispatch
 //	grpc:       serve, call
 //	saga:       orchestrate
 //
@@ -21,6 +22,8 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 		return []ContractRole{RoleHandle, RoleInvoke}
 	case ContractProjection:
 		return []ContractRole{RoleProvide, RoleRead}
+	case ContractWebhook:
+		return []ContractRole{RoleWebhookReceive, RoleWebhookDispatch}
 	case ContractGRPC:
 		return []ContractRole{RoleServe, RoleCall}
 	case ContractSaga:
@@ -31,10 +34,12 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 }
 
 // IsProviderRole returns true if role is a provider-side role
-// (serve, publish, handle, provide, orchestrate).
+// (serve, publish, handle, provide, orchestrate, webhook-dispatch). orchestrate
+// is the saga provider; webhook-dispatch is the outbound side — the cell
+// produces/pushes webhooks to an external target.
 func IsProviderRole(role ContractRole) bool {
 	switch role {
-	case RoleServe, RolePublish, RoleHandle, RoleProvide, RoleOrchestrate:
+	case RoleServe, RolePublish, RoleHandle, RoleProvide, RoleOrchestrate, RoleWebhookDispatch:
 		return true
 	default:
 		return false
@@ -42,10 +47,11 @@ func IsProviderRole(role ContractRole) bool {
 }
 
 // IsConsumerRole returns true if role is a consumer-side role
-// (call, subscribe, invoke, read).
+// (call, subscribe, invoke, read, webhook-receive). webhook-receive is the
+// inbound side — the cell consumes webhooks delivered by an external source.
 func IsConsumerRole(role ContractRole) bool {
 	switch role {
-	case RoleCall, RoleSubscribe, RoleInvoke, RoleRead:
+	case RoleCall, RoleSubscribe, RoleInvoke, RoleRead, RoleWebhookReceive:
 		return true
 	default:
 		return false

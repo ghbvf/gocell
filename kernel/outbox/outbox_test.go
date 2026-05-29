@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -269,19 +270,19 @@ func TestSubscriberInterface(t *testing.T) {
 
 func TestEntryFields(t *testing.T) {
 	e := Entry{
-		ID:            "1",
-		AggregateID:   "a",
-		AggregateType: "order",
-		EventType:     "created",
-		Payload:       []byte("{}"),
-		CreatedAt:     time.Now(),
+		id:            "1",
+		aggregateID:   "a",
+		aggregateType: "order",
+		eventType:     "created",
+		payload:       []byte("{}"),
+		createdAt:     time.Now(),
 	}
-	assert.NotEmpty(t, e.ID)
-	assert.NotEmpty(t, e.AggregateID)
-	assert.NotEmpty(t, e.AggregateType)
-	assert.NotEmpty(t, e.EventType)
-	assert.NotEmpty(t, e.Payload)
-	assert.False(t, e.CreatedAt.IsZero())
+	assert.NotEmpty(t, e.id)
+	assert.NotEmpty(t, e.aggregateID)
+	assert.NotEmpty(t, e.aggregateType)
+	assert.NotEmpty(t, e.eventType)
+	assert.NotEmpty(t, e.payload)
+	assert.False(t, e.createdAt.IsZero())
 }
 
 // --- SubscriberWithMiddleware Tests ---
@@ -411,7 +412,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	middleware := func(sub Subscription, next EntryHandler) EntryHandler {
 		middlewareTopic = sub.Topic
 		return func(ctx context.Context, e Entry) HandleResult {
-			e.Metadata = map[string]string{"wrapped": "true"}
+			e.metadata = map[string]string{"wrapped": "true"}
 			return next(ctx, e)
 		}
 	}
@@ -430,10 +431,10 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	assert.Equal(t, "orders.created", middlewareTopic)
 
 	// Call captured handler to verify middleware was applied.
-	res, _ := inner.capturedHandler(context.Background(), Entry{ID: "evt-1"})
+	res, _ := inner.capturedHandler(context.Background(), Entry{id: "evt-1"})
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Equal(t, "evt-1", receivedEntry.ID)
-	assert.Equal(t, "true", receivedEntry.Metadata["wrapped"])
+	assert.Equal(t, "evt-1", receivedEntry.id)
+	assert.Equal(t, "true", receivedEntry.metadata["wrapped"])
 }
 
 func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) {
@@ -593,23 +594,23 @@ func TestEntry_RoutingTopic(t *testing.T) {
 		{
 			name: "Topic set — returns Topic",
 			entry: Entry{
-				EventType: "order.created",
-				Topic:     "orders.v2",
+				eventType: "order.created",
+				topic:     "orders.v2",
 			},
 			wantTopic: "orders.v2",
 		},
 		{
 			name: "Topic empty — falls back to EventType",
 			entry: Entry{
-				EventType: "order.created",
-				Topic:     "",
+				eventType: "order.created",
+				topic:     "",
 			},
 			wantTopic: "order.created",
 		},
 		{
 			name: "Topic zero value (not set) — falls back to EventType",
 			entry: Entry{
-				EventType: "session.created",
+				eventType: "session.created",
 			},
 			wantTopic: "session.created",
 		},
@@ -725,29 +726,29 @@ func TestEntry_Validate(t *testing.T) {
 	}{
 		{
 			name:    "valid with Topic",
-			entry:   Entry{ID: "evt-1", Topic: "t", Payload: []byte("{}")},
+			entry:   Entry{id: "evt-1", topic: "t", payload: []byte("{}"), occurredAt: time.Now()},
 			wantErr: false,
 		},
 		{
 			name:    "valid with EventType fallback",
-			entry:   Entry{ID: "evt-2", EventType: "e", Payload: []byte("{}")},
+			entry:   Entry{id: "evt-2", eventType: "e", payload: []byte("{}"), occurredAt: time.Now()},
 			wantErr: false,
 		},
 		{
 			name:    "missing ID",
-			entry:   Entry{Topic: "t", Payload: []byte("{}")},
+			entry:   Entry{topic: "t", payload: []byte("{}")},
 			wantErr: true,
 			errMsg:  "missing ID",
 		},
 		{
 			name:    "missing topic and EventType",
-			entry:   Entry{ID: "evt-3", Payload: []byte("{}")},
+			entry:   Entry{id: "evt-3", payload: []byte("{}")},
 			wantErr: true,
 			errMsg:  "missing topic",
 		},
 		{
 			name:    "missing payload",
-			entry:   Entry{ID: "evt-4", Topic: "t"},
+			entry:   Entry{id: "evt-4", topic: "t"},
 			wantErr: true,
 			errMsg:  "missing payload",
 		},
@@ -764,8 +765,8 @@ func TestEntry_Validate(t *testing.T) {
 			// reach the persistence layer.
 			name: "invalid Observability propagates",
 			entry: Entry{
-				ID: "evt-obs", Topic: "t", Payload: []byte("{}"),
-				Observability: ObservabilityMetadata{TraceID: "trace; DROP TABLE"},
+				id: "evt-obs", topic: "t", payload: []byte("{}"), occurredAt: time.Now(),
+				observability: ObservabilityMetadata{TraceID: "trace; DROP TABLE"},
 			},
 			wantErr: true,
 			errMsg:  "unsafe characters",
@@ -827,7 +828,12 @@ func (r *sequentialRecorder) Write(_ context.Context, entry Entry) error {
 var _ Writer = (*sequentialRecorder)(nil)
 
 func validEntry(id string) Entry {
-	return Entry{ID: id, Topic: "test.topic", Payload: []byte("{}")}
+	e, err := NewEntry(clock.Real(), context.Background(), "test.topic", []byte("{}"),
+		WithID(id), WithTopic("test.topic"))
+	if err != nil {
+		panic(err)
+	}
+	return e
 }
 
 func TestWriteBatchFallback_EmptySlice(t *testing.T) {
@@ -845,7 +851,7 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 	w := &batchRecorder{}
 	entries := []Entry{
 		validEntry("e1"),
-		{ID: "e2", Payload: []byte("{}")}, // missing topic
+		{id: "e2", payload: []byte("{}")}, // missing topic
 		validEntry("e3"),
 	}
 
@@ -939,10 +945,10 @@ func TestHandleResult_Fields(t *testing.T) {
 // --- Metadata Validation Tests (META-SIZE-01) ---
 
 func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	e.Metadata = make(map[string]string)
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
+	e.metadata = make(map[string]string)
 	for i := range metautil.MaxMetadataKeys + 1 {
-		e.Metadata[fmt.Sprintf("key-%d", i)] = "v"
+		e.metadata[fmt.Sprintf("key-%d", i)] = "v"
 	}
 	err := e.Validate()
 	assert.Error(t, err)
@@ -950,9 +956,9 @@ func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	longKey := strings.Repeat("k", metautil.MaxMetadataKeyLen+1)
-	e.Metadata = map[string]string{longKey: "v"}
+	e.metadata = map[string]string{longKey: "v"}
 	err := e.Validate()
 	assert.Error(t, err)
 	var ecErrKeyLen *errcode.Error
@@ -961,9 +967,9 @@ func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	longVal := strings.Repeat("v", metautil.MaxMetadataValueLen+1)
-	e.Metadata = map[string]string{"k": longVal}
+	e.metadata = map[string]string{"k": longVal}
 	err := e.Validate()
 	assert.Error(t, err)
 	var ecErrValLen *errcode.Error
@@ -972,12 +978,12 @@ func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	e.Metadata = make(map[string]string)
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
+	e.metadata = make(map[string]string)
 	// Fill with entries that individually fit but exceed total.
 	val := strings.Repeat("x", metautil.MaxMetadataValueLen)
 	for i := range (metautil.MaxMetadataTotalSize / metautil.MaxMetadataValueLen) + 2 {
-		e.Metadata[fmt.Sprintf("k%d", i)] = val
+		e.metadata[fmt.Sprintf("k%d", i)] = val
 	}
 	err := e.Validate()
 	assert.Error(t, err)
@@ -985,10 +991,10 @@ func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
 }
 
 func TestEntry_Validate_MetadataWithinLimits(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	// Producer-owned domain keys only — observability IDs (trace_id, request_id,
 	// ...) live in Entry.Observability, not here.
-	e.Metadata = map[string]string{"order_id": "abc123", "tenant": "t-456"}
+	e.metadata = map[string]string{"order_id": "abc123", "tenant": "t-456"}
 	assert.NoError(t, e.Validate())
 }
 
@@ -996,10 +1002,11 @@ func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
 	for _, k := range ReservedMetadataKeys {
 		t.Run(k, func(t *testing.T) {
 			e := Entry{
-				ID:        "test",
-				EventType: "test.event",
-				Payload:   []byte(`{}`),
-				Metadata:  map[string]string{k: "v"},
+				id:         "test",
+				eventType:  "test.event",
+				payload:    []byte(`{}`),
+				metadata:   map[string]string{k: "v"},
+				occurredAt: time.Now(),
 			}
 			err := e.Validate()
 			require.Error(t, err)
@@ -1012,13 +1019,13 @@ func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
 }
 
 func TestEntry_Validate_NilMetadata_OK(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	assert.NoError(t, e.Validate())
 }
 
 func TestEntry_Validate_EmptyMetadata_OK(t *testing.T) {
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	e.Metadata = map[string]string{}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
+	e.metadata = map[string]string{}
 	assert.NoError(t, e.Validate())
 }
 
@@ -1033,10 +1040,10 @@ func TestValidateMetadata_Constants(t *testing.T) {
 func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
 	// len() returns byte count, not rune count. A 3-byte CJK character
 	// "中" (U+4E2D) counts as 3 bytes toward the key/value limits.
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	cjkKey := strings.Repeat("中", metautil.MaxMetadataKeyLen/3) // each char is 3 bytes
 	assert.Less(t, len(cjkKey), metautil.MaxMetadataKeyLen+1, "should fit within byte limit")
-	e.Metadata = map[string]string{cjkKey: "value"}
+	e.metadata = map[string]string{cjkKey: "value"}
 	assert.NoError(t, e.Validate(), "multi-byte key within byte limit should pass")
 }
 
@@ -1044,9 +1051,9 @@ func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
 
 func TestEntry_Validate_PayloadByteLimit_Exceeds(t *testing.T) {
 	e := Entry{
-		ID:        "test",
-		EventType: "test.event",
-		Payload:   make([]byte, MaxPayloadBytes+1),
+		id:        "test",
+		eventType: "test.event",
+		payload:   make([]byte, MaxPayloadBytes+1),
 	}
 	err := e.Validate()
 	require.Error(t, err)
@@ -1056,9 +1063,10 @@ func TestEntry_Validate_PayloadByteLimit_Exceeds(t *testing.T) {
 
 func TestEntry_Validate_PayloadAtExactBoundary(t *testing.T) {
 	e := Entry{
-		ID:        "test",
-		EventType: "test.event",
-		Payload:   make([]byte, MaxPayloadBytes),
+		id:         "test",
+		eventType:  "test.event",
+		payload:    make([]byte, MaxPayloadBytes),
+		occurredAt: time.Now(),
 	}
 	assert.NoError(t, e.Validate(), "payload at exactly MaxPayloadBytes must be valid")
 }
@@ -1072,23 +1080,23 @@ func TestPayloadConstantsAlign(t *testing.T) {
 
 func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	// Exactly metautil.MaxMetadataKeys keys should pass.
-	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	e.Metadata = make(map[string]string)
+	e := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
+	e.metadata = make(map[string]string)
 	for i := range metautil.MaxMetadataKeys {
-		e.Metadata[fmt.Sprintf("k%02d", i)] = "v"
+		e.metadata[fmt.Sprintf("k%02d", i)] = "v"
 	}
 	assert.NoError(t, e.Validate(), "exactly metautil.MaxMetadataKeys should be valid")
 
 	// Exactly metautil.MaxMetadataKeyLen key should pass.
-	e2 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e2 := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	exactKey := strings.Repeat("k", metautil.MaxMetadataKeyLen)
-	e2.Metadata = map[string]string{exactKey: "v"}
+	e2.metadata = map[string]string{exactKey: "v"}
 	assert.NoError(t, e2.Validate(), "key at exactly metautil.MaxMetadataKeyLen should be valid")
 
 	// Exactly metautil.MaxMetadataValueLen value should pass.
-	e3 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e3 := Entry{id: "test", eventType: "test.event", payload: []byte(`{}`), occurredAt: time.Now()}
 	exactVal := strings.Repeat("v", metautil.MaxMetadataValueLen)
-	e3.Metadata = map[string]string{"k": exactVal}
+	e3.metadata = map[string]string{"k": exactVal}
 	assert.NoError(t, e3.Validate(), "value at exactly metautil.MaxMetadataValueLen should be valid")
 }
 
@@ -1249,7 +1257,7 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 		Disposition:         DispositionAck,
 		SettlementObservers: []SettlementObserver{spy1, panicObserver, spy3},
 	}
-	entry := Entry{ID: "test-panic-entry", Topic: "event.test.v1"}
+	entry := Entry{id: "test-panic-entry", topic: "event.test.v1"}
 
 	// Verify NotifySettlement does not re-panic.
 	defer func() {
@@ -1278,7 +1286,7 @@ func TestNotifySettlement_NoObservers_NoOp(t *testing.T) {
 	}()
 	NotifySettlement(context.Background(),
 		Ack(),
-		Entry{ID: "evt-noop", Topic: "t"},
+		Entry{id: "evt-noop", topic: "t"},
 		DispositionAck, SettlementResultSuccess, nil)
 }
 
@@ -1298,7 +1306,7 @@ func TestNotifySettlement_NilObserverInList_Skipped(t *testing.T) {
 	}
 
 	NotifySettlement(context.Background(), result,
-		Entry{ID: "evt-nil-obs", Topic: "t"},
+		Entry{id: "evt-nil-obs", topic: "t"},
 		DispositionAck, SettlementResultSuccess, nil)
 
 	assert.Equal(t, 1, called, "non-nil observer must run exactly once; nil entries skipped")

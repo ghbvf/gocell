@@ -32,7 +32,7 @@ type ContractSpec struct {
 	ID string
 
 	// Kind is one of ContractHTTP | ContractEvent | ContractCommand |
-	// ContractProjection | ContractGRPC | ContractSaga.
+	// ContractProjection | ContractWebhook | ContractGRPC | ContractSaga.
 	Kind cellvocab.ContractKind
 
 	// Transport names the wire protocol: "http" for Kind=="http", "grpc" for
@@ -104,14 +104,14 @@ func (s ContractSpec) Validate() error {
 		return s.validateEvent()
 	case cellvocab.ContractGRPC:
 		return s.validateGRPC()
-	case cellvocab.ContractCommand, cellvocab.ContractProjection, cellvocab.ContractSaga:
+	case cellvocab.ContractCommand, cellvocab.ContractProjection, cellvocab.ContractWebhook, cellvocab.ContractSaga:
 		// Allowed but no additional kind-specific validation beyond the
-		// kind-agnostic ID/Kind/Transport checks above — command/projection
-		// transports are future PRs; saga is orchestrated via the runtime
+		// kind-agnostic ID/Kind/Transport checks above — command/projection/
+		// webhook transports are future PRs; saga is orchestrated via the runtime
 		// Coordinator (kernel/saga), not a wire transport.
 		return nil
 	default:
-		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|grpc|saga)", s.Kind)
+		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|webhook|grpc|saga)", s.Kind)
 	}
 }
 

@@ -414,7 +414,7 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 }
 
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
-// closed set (http | event | saga | command | projection) returns an error.
+// closed set (http | event | command | projection | webhook | grpc | saga) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
@@ -695,6 +695,46 @@ func TestRender_Golden_Synth_Saga(t *testing.T) {
 	}
 }
 
+// TestRender_Golden_Synth_GRPC tests the grpc placeholder-stub fixture. A
+// kind=grpc contract emits the universal types_gen.go (near-empty: no JSON-schema
+// DTOs — proto is the schema, deferred to PR 6) + iface_gen.go (the []byte
+// placeholder Server interface). No handler/spec/subscription artifacts.
+func TestRender_Golden_Synth_GRPC(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_grpc_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["grpc.device.command.v1"]
+	if contract == nil {
+		t.Fatal("grpc.device.command.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
+			if err != nil {
+				t.Fatalf("buildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_grpc_minimal", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
 // TestBuildContractSpec_Saga asserts the saga IR: step output DTOs, the
 // chained input types (step N input = step N-1 output; step 0 has none), and
 // per-step compensate derivation (createShipment opts out with compensate:false).
@@ -948,6 +988,43 @@ func TestRenderSaga_RejectsNonSagaContract(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not saga") {
 		t.Errorf("error should mention 'not saga': %v", err)
+	}
+}
+
+// TestSagaGen_NilImplGuards pins F7: the generated Register / BuildDefinition
+// fail fast on a nil impl (typed OR untyped — validation.IsNilInterface) at
+// registration time, instead of deferring the nil-deref to step execution.
+// Register returns an error (error-first); BuildDefinition has no error return
+// (its result feeds variadic NewInMemoryRegistry), so it fails fast via the
+// panicregister funnel. This is an explicit guard against a future -update
+// silently stripping the checks from the golden.
+func TestSagaGen_NilImplGuards(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{
+				{Name: "reserveInventory", Output: "reserve-inventory.output.schema.json"},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind, PackageName: "orderfulfillment"}
+	if err := buildSagaSpec(spec, root, c, contractDir); err != nil {
+		t.Fatalf("buildSagaSpec: %v", err)
+	}
+	out := string(renderFile(t, spec, "saga_gen.go"))
+	// Both Register and BuildDefinition guard impl via the typed-nil-safe helper.
+	if n := strings.Count(out, "validation.IsNilInterface(impl)"); n != 2 {
+		t.Errorf("expected 2 validation.IsNilInterface(impl) guards (Register + BuildDefinition), got %d:\n%s", n, out)
+	}
+	// Register fails fast with an error (error-first path).
+	if !strings.Contains(out, `"saga register: impl must not be nil"`) {
+		t.Errorf("Register must return a nil-impl error:\n%s", out)
+	}
+	// BuildDefinition fails fast via the panicregister funnel (no error return).
+	if !strings.Contains(out, `panicregister.Approved("saga-build-definition-nil-impl"`) {
+		t.Errorf("BuildDefinition must fail-fast on nil impl via the panicregister funnel:\n%s", out)
 	}
 }
 

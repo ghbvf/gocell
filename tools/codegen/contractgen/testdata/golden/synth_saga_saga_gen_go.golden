@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // DefinitionID is the saga.Definition.ID for saga.orderfulfillment.v1. Enroll instances
@@ -38,7 +41,17 @@ type Impl interface {
 
 // BuildDefinition wires impl into the kernel saga.Definition for saga.orderfulfillment.v1.
 // Compose multiple sagas with saga.NewInMemoryRegistry(a.BuildDefinition(x), ...).
+//
+// A nil impl (untyped or typed-nil) is a programmer error: the step closures
+// below capture impl and would otherwise nil-deref only when a step runs. Since
+// BuildDefinition returns no error (its result feeds variadic NewInMemoryRegistry),
+// it fails fast with a panic here — register-time, not execution-time. Use
+// Register for the error-returning single-saga path.
 func BuildDefinition(impl Impl) *saga.Definition {
+	if validation.IsNilInterface(impl) {
+		panic(panicregister.Approved("saga-build-definition-nil-impl",
+			errcode.Assertion("saga %s BuildDefinition: impl must not be nil", string(DefinitionID))))
+	}
 	return &saga.Definition{
 		ID:          DefinitionID,
 		Timeout:     30 * time.Second,
@@ -120,5 +133,9 @@ func BuildDefinition(impl Impl) *saga.Definition {
 // multiple sagas, call BuildDefinition here and pass the result to
 // saga.NewInMemoryRegistry alongside the other definitions instead.
 func Register(impl Impl) (*saga.InMemoryRegistry, error) {
+	if validation.IsNilInterface(impl) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"saga register: impl must not be nil")
+	}
 	return saga.NewInMemoryRegistry(BuildDefinition(impl))
 }

@@ -71,6 +71,12 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 // (`isHealthzProbe()` unexported) can be implemented by ctxSafeProbe. The
 // ctx-racing logic needs clock.Clock for the late-outcome watcher; clock is
 // a leaf so no cycle.
+//
+// KERNEL-WEBHOOK-01 PR-2 (#1265) registers `webhook`: the kernel/webhook pure
+// HMAC signer/verifier kernel (PR-1 #1251) imports only clock (replay-window
+// timing). webhook→clock is the sole kernel→kernel edge; clock is a leaf so no
+// cycle. (kernel/projection from the W10 projection PRs is still unregistered —
+// tracked separately, intentionally not added here.)
 var allowedKernelEdges = map[string][]string{
 	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
 	"auth":          {"cell"},
@@ -96,6 +102,7 @@ var allowedKernelEdges = map[string][]string{
 	"registry":      {"metadata"},
 	"saga":          {"clock", "fsm", "healthz"},
 	"verify":        {"metadata"},
+	"webhook":       {"clock"},
 	"worker":        nil,
 	"wrapper":       {"contractspec", "ctxkeys", "outbox"},
 }

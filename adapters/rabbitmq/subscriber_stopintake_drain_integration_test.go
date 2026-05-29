@@ -92,12 +92,7 @@ func TestIntegration_StopIntakeDrainsPrefetchedMessages(t *testing.T) {
 
 	// Publish all messages.
 	for i := range numMsgs {
-		entry := outbox.Entry{
-			ID:        "stopintake-drain-evt-" + intToASCII(i),
-			EventType: "test.stopintake.drain",
-			Payload:   []byte(`{"i":` + intToASCII(i) + `}`),
-			CreatedAt: time.Now().UTC(),
-		}
+		entry := mustNewEntry(t, "test.stopintake.drain", []byte(`{"i":`+intToASCII(i)+`}`), outbox.WithID("stopintake-drain-evt-"+intToASCII(i)), outbox.WithCreatedAt(time.Now().UTC()))
 		payload, err := outbox.MarshalEnvelope(entry)
 		require.NoError(t, err, "marshal envelope")
 		require.NoError(t, pub.Publish(subCtx, topic, payload), "publish")

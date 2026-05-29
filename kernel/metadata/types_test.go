@@ -528,6 +528,29 @@ func TestContractMeta_ProviderEndpoint(t *testing.T) {
 		},
 		{"unknown kind returns empty", metadata.ContractMeta{Kind: "websocket"}, ""},
 		{"empty kind returns empty", metadata.ContractMeta{}, ""},
+		{
+			"webhook with ownerCell returns ownerCell",
+			metadata.ContractMeta{Kind: "webhook", OwnerCell: metadatatest.NewCellID("paymentcore")},
+			metadatatest.NewCellID("paymentcore"),
+		},
+		{
+			"webhook without ownerCell returns empty",
+			metadata.ContractMeta{Kind: "webhook"},
+			"",
+		},
+		{
+			"webhook inbound with ownerCell returns ownerCell (not from Receivers)",
+			metadata.ContractMeta{
+				Kind:      "webhook",
+				Direction: "inbound",
+				OwnerCell: metadatatest.NewCellID("paymentcore"),
+				Endpoints: metadata.EndpointsMeta{
+					Inbound:   &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+					Receivers: []string{metadatatest.NewCellID("othercell")},
+				},
+			},
+			metadatatest.NewCellID("paymentcore"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

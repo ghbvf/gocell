@@ -414,9 +414,9 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 //
 // r.subscriber.SubscribeEntry orchestrates the full business pipeline:
 // business middleware chain → ConsumerBase.Wrap (EntryHandler→SubscriberHandler
-// conversion) → observability restore → Inner.Subscribe. The business handler
-// stored in handlerConfig.handler is an EntryHandler and flows directly into
-// this pipeline without any lifting ceremony.
+// conversion) → observability/principal restore → Inner.Subscribe. The business
+// handler stored in handlerConfig.handler is an EntryHandler and flows directly
+// into this pipeline without any lifting ceremony.
 //
 // The recover() path scrubs the panic value through pkg/redaction.RedactString
 // and forwards a fixed sentinel error (errSubscriptionPanicked) so a panic value

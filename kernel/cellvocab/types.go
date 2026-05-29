@@ -29,6 +29,7 @@ const (
 	ContractEvent      ContractKind = "event"
 	ContractCommand    ContractKind = "command"
 	ContractProjection ContractKind = "projection"
+	ContractWebhook    ContractKind = "webhook"
 	ContractGRPC       ContractKind = "grpc"
 	ContractSaga       ContractKind = "saga"
 )
@@ -49,6 +50,21 @@ const (
 	// the saga definition (declares the contract via endpoints.server). Saga has
 	// no consumer-side role — participation is one orchestrating cell per saga.
 	RoleOrchestrate ContractRole = "orchestrate"
+	// Webhook roles: a cell either receives inbound webhooks (consumer-side) or
+	// dispatches outbound webhooks (provider-side). See ValidRolesForKind.
+	RoleWebhookReceive  ContractRole = "webhook-receive"
+	RoleWebhookDispatch ContractRole = "webhook-dispatch"
+)
+
+// WebhookDirection is the flow direction of a kind=webhook contract: inbound
+// (external → cell, receiver-side) or outbound (cell → external, dispatcher-side).
+// Single source shared by kernel/metadata (parser webhook derivation) and
+// kernel/governance (FMT-38), so the direction string never drifts across layers.
+type WebhookDirection string
+
+const (
+	DirectionInbound  WebhookDirection = "inbound"
+	DirectionOutbound WebhookDirection = "outbound"
 )
 
 // allContractKinds is the canonical ordered set of ContractKind values. It is
@@ -59,7 +75,7 @@ const (
 // cellvocab round-trip test), so this slice, the typed consts, the parser, the
 // schema literal, and governance cannot drift apart.
 var allContractKinds = []ContractKind{
-	ContractHTTP, ContractEvent, ContractCommand, ContractProjection, ContractGRPC, ContractSaga,
+	ContractHTTP, ContractEvent, ContractCommand, ContractProjection, ContractWebhook, ContractGRPC, ContractSaga,
 }
 
 // allContractRoles is the canonical ordered set of ContractRole values. Single
@@ -69,6 +85,7 @@ var allContractKinds = []ContractKind{
 var allContractRoles = []ContractRole{
 	RoleServe, RoleCall, RolePublish, RoleSubscribe, RoleHandle,
 	RoleInvoke, RoleProvide, RoleRead, RoleOrchestrate,
+	RoleWebhookReceive, RoleWebhookDispatch,
 }
 
 // AllContractKinds returns a copy of the canonical ordered ContractKind set.
@@ -129,6 +146,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractCommand, nil
 	case "projection":
 		return ContractProjection, nil
+	case "webhook":
+		return ContractWebhook, nil
 	case "grpc":
 		return ContractGRPC, nil
 	case "saga":
@@ -162,6 +181,10 @@ func ParseContractRole(s string) (ContractRole, error) {
 		return RoleRead, nil
 	case "orchestrate":
 		return RoleOrchestrate, nil
+	case "webhook-receive":
+		return RoleWebhookReceive, nil
+	case "webhook-dispatch":
+		return RoleWebhookDispatch, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",

@@ -108,6 +108,7 @@ const (
 	wireMessageType        = "wireMessage"
 	wireMessageExportedOld = "WireMessage"
 	observabilityType      = "ObservabilityMetadata"
+	principalType          = "PrincipalMetadata"
 )
 
 // safeIDExemptFields lists, per guarded type, the exported fields that are
@@ -127,11 +128,18 @@ var safeIDExemptFields = map[string]map[string]string{
 		"Payload":       "json.RawMessage business payload bytes",
 		"Metadata":      "map[string]string business metadata (validated separately by validateMetadata)",
 		"Observability": "nested ObservabilityMetadata struct, walked recursively",
+		"Principal":     "nested PrincipalMetadata struct, walked recursively (issue #1229)",
+		"OccurredAt":    "time.Time producer-domain event time, not ID-shaped (issue #1229)",
 		"CreatedAt":     "time.Time, not ID-shaped",
 	},
 	observabilityType: {
 		"TraceParent": "W3C 55-byte fixed-format string with its own validator (validTraceParent)",
 	},
+	// PrincipalMetadata's four fields (ActorID/SubjectID/TenantID/SessionID) are
+	// all idutil.SafeID — no carve-out needed; registering the type here makes
+	// the walk verify each field is SafeID-typed (deny-by-default), the same way
+	// ObservabilityMetadata is walked. (issue #1229)
+	principalType: {},
 }
 
 // safeIDBlindSpotAllowlist lists OTHER named structs in kernel/outbox that
@@ -142,6 +150,13 @@ var safeIDExemptFields = map[string]map[string]string{
 // entry point.
 var safeIDBlindSpotAllowlist = map[string]struct{}{
 	"Entry": {},
+	// EntryScan is the storage-adapter reconstruction funnel (issue #1229): it
+	// carries exported string ID-shaped scan-target fields populated from DB
+	// columns, then ToEntry() runs full Entry.Validate (SafeID enforcement). It
+	// has NO wire role — wireMessage remains the only json.Unmarshal envelope —
+	// so it is not a parallel wire decode entry point. Same category as Entry
+	// (post-validation in-memory representation), reviewer-judged not-a-wire-decoder.
+	"EntryScan": {},
 }
 
 // wireMessageCanonicalFields is the canonical field set wireMessage MUST
@@ -158,6 +173,8 @@ var wireMessageCanonicalFields = []string{
 	"Payload",
 	"Metadata",
 	"Observability",
+	"Principal",
+	"OccurredAt",
 	"CreatedAt",
 }
 

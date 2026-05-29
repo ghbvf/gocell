@@ -312,7 +312,7 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 
 	require.Len(t, ow.entries, 1)
 	var payload map[string]any
-	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(ow.entries[0].Payload(), &payload))
 	assert.NotContains(t, payload, "value", "metadata-only event must not contain value field")
 	assert.NotContains(t, payload, "sensitive", "state-sync events must not expose sensitive classification")
 	assert.Equal(t, "db.password", payload["key"])
@@ -332,7 +332,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
-	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[0].EventType())
 }
 
 func TestService_WithTxManager(t *testing.T) {

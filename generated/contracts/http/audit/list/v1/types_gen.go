@@ -39,6 +39,9 @@ type ResponseDataItem struct {
 	EventID   string `json:"eventId"`
 	EventType string `json:"eventType"`
 	ActorID   string `json:"actorId"`
+	SubjectID string `json:"subjectId,omitempty"`
+	// format: date-time
+	OccurredAt string `json:"occurredAt,omitempty"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
 	Payload   any    `json:"payload,omitempty"`

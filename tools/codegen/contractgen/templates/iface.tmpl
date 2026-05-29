@@ -25,4 +25,21 @@ import "context"
 type Service interface {
 	{{.Endpoint.HandlerMethod}}(ctx context.Context, req *Request) ({{.Endpoint.HandlerMethod}}ResponseObject, error)
 }
+{{- else if eq .Kind "grpc"}}
+
+import "context"
+
+// {{.GRPC.InterfaceName}} is the placeholder gRPC business interface that the
+// {{.ContractID}} server cell must implement.
+//
+// Request and response are []byte placeholders: PR 2 introduces the codegen
+// branch before the proto toolchain lands, so no google.golang.org/protobuf or
+// google.golang.org/grpc dependency is pulled in here. PR 6 replaces []byte
+// with the proto-generated message types for service {{.GRPC.ServiceFQN}}
+// (proto: {{.GRPC.ProtoPath}}).
+//
+// ref: grpc/grpc-go protoc-gen-go-grpc {Service}Server interface
+type {{.GRPC.InterfaceName}} interface {
+	{{.GRPC.MethodName}}(ctx context.Context, req []byte) ([]byte, error)
+}
 {{- end}}

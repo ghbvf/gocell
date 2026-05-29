@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -69,16 +70,19 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // runs through the same Emitter + TxRunner code path.
 type Service struct {
 	repo     domain.OrderRepository    `gocell:"required"`
-	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"orderconfirm: TxRunner required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"orderconfirm: TxRunner required"`               //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk      clock.Clock               `gocell:"required" gocellErr:"orderconfirm.NewService: clock.Clock required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.CellEmitter
 	logger   *slog.Logger
 }
 
 // NewService creates an order-confirm Service. Returns an error if any required
 // dependency is nil (repo, txRunner).
-func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "orderconfirm.NewService")
 	s := &Service{
 		repo:    repo,
+		clk:     clk,
 		emitter: outbox.DemoCellEmitter(),
 		logger:  logger,
 	}
@@ -133,7 +137,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 
 	// Build outbox entry before tx (marshal errors should not roll back)
 	changedAt := time.Now().UTC()
-	entry, err := s.buildStatusChangedEntry(order.ID, oldStatus, order.Status, changedAt)
+	entry, err := s.buildStatusChangedEntry(ctx, order.ID, oldStatus, order.Status, changedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +156,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 
 	s.logger.Info("order-confirm: event emitted",
 		slog.String("order_id", order.ID),
-		slog.String("entry_id", entry.ID),
+		slog.String("entry_id", entry.ID()),
 		slog.String("topic", entry.RoutingTopic()),
 		slog.String("old_status", oldStatus),
 		slog.String("new_status", order.Status),
@@ -200,22 +204,23 @@ func (s *Service) confirm409(orderID, currentStatus string) confirmv1.Confirm409
 	}
 }
 
-func (s *Service) buildStatusChangedEntry(id, oldStatus, newStatus string, changedAt time.Time) (outbox.Entry, error) {
+func (s *Service) buildStatusChangedEntry(ctx context.Context, id, oldStatus, newStatus string, changedAt time.Time) (outbox.Entry, error) {
 	payload, err := json.Marshal(toStatusChangedEvent(id, oldStatus, newStatus, changedAt))
 	if err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-confirm: marshal event: %w", err)
 	}
-	entry := outbox.Entry{
-		ID:            outbox.MustNewEntryID(),
-		AggregateID:   id,
-		AggregateType: "order",
-		EventType:     TopicOrderStatusChanged,
-		Topic:         TopicOrderStatusChanged,
-		Payload:       payload,
-		CreatedAt:     changedAt,
-	}
-	if err := entry.Validate(); err != nil {
-		return outbox.Entry{}, fmt.Errorf("order-confirm: invalid outbox entry: %w", err)
+	// changedAt is the producer-domain event time: stamp it as both OccurredAt
+	// (domain event time) and CreatedAt (outbox row time) so the domain timestamp
+	// is preserved instead of the construction-time clock.Now().
+	entry, err := outbox.NewEntry(s.clk, ctx, TopicOrderStatusChanged, payload,
+		outbox.WithAggregateID(id),
+		outbox.WithAggregateType("order"),
+		outbox.WithTopic(TopicOrderStatusChanged),
+		outbox.WithOccurredAt(changedAt),
+		outbox.WithCreatedAt(changedAt),
+	)
+	if err != nil {
+		return outbox.Entry{}, fmt.Errorf("order-confirm: build outbox entry: %w", err)
 	}
 	return entry, nil
 }

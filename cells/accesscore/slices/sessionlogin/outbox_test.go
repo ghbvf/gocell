@@ -126,7 +126,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, dto.TopicSessionCreated, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicSessionCreated, ow.entries[0].EventType())
 }
 
 func TestService_WithTxManager(t *testing.T) {

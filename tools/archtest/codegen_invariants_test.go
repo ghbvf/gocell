@@ -287,6 +287,15 @@ func TestCodegenContractGen01_OptedInHasGen(t *testing.T) {
 		if !contract.Codegen {
 			continue // not opted into codegen
 		}
+		if contract.Kind == "webhook" {
+			// webhook contracts emit ZERO contractgen artifacts by design:
+			// registration derives via cellgen from slice.yaml using
+			// kernel/webhook spec literals (see contractgen generator.go webhook
+			// branch). codegen:true only selects the contract for
+			// Generate(ScopeAll); there is no per-contract generated package, so
+			// the types_gen.go / iface_gen.go requirement does not apply.
+			continue
+		}
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
 
 		requireRealGeneratedFile(t, root, filepath.Join(pkgDir, "types_gen.go"), contract.ID)

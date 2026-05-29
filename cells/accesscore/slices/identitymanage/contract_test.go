@@ -359,8 +359,8 @@ func TestEventUserCreatedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Create must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
@@ -386,8 +386,8 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Lock must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
@@ -412,8 +412,8 @@ func TestEventUserUpdatedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Update must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 }
 
@@ -436,8 +436,8 @@ func TestEventUserDeletedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Delete must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 }
 
@@ -471,8 +471,8 @@ func TestEventUserUnlockedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Unlock must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{}`))
 }
 

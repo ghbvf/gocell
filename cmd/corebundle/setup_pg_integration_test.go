@@ -694,7 +694,7 @@ func TestSessionLogin_OutboxFailureRollsBackPGRows(t *testing.T) {
 	require.Greater(t, len(calls), adminWriteCount,
 		"login attempt must have triggered an additional Write call after admin provisioning")
 	failedCall := calls[adminWriteCount]
-	assert.Equal(t, "event.session.created.v1", failedCall.EventType,
+	assert.Equal(t, "event.session.created.v1", failedCall.EventType(),
 		"the failing Write must be the session.created emit (not admin provisioning or another path)")
 
 	var sessionsAfter, rtAfter int

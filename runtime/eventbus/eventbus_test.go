@@ -40,11 +40,17 @@ const busEventually10x = 10 * testtime.EventuallyShort
 // envelope schema check introduced in P1-14 (A1/A2).
 func makeTestEnvelope(t testing.TB, topic string, payload []byte, id string) []byte {
 	t.Helper()
-	entry := outbox.Entry{
-		ID:        id,
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
+	now := clock.Real().Now()
+	entry, err := outbox.EntryScan{
+		ID:         id,
+		EventType:  topic,
+		Topic:      topic,
+		Payload:    payload,
+		CreatedAt:  now,
+		OccurredAt: now,
+	}.ToEntry()
+	if err != nil {
+		t.Fatalf("makeTestEnvelope ToEntry: %v", err)
 	}
 	b, err := outbox.MarshalEnvelope(entry)
 	if err != nil {
@@ -100,14 +106,15 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 		"topic": "test.envelope.topic",
 		"payload": {"action":"created","key":"k1","value":"v1"},
 		"metadata": {"source":"test"},
-		"createdAt": "2026-04-18T00:00:00Z"
+		"createdAt": "2026-04-18T00:00:00Z",
+		"occurredAt": "2026-04-18T00:00:00Z"
 	}`)
 	require.NoError(t, bus.Publish(context.Background(), "test.envelope.topic", envelope))
 
 	testwait.External(t, "eventbus-envelope-unwrapped", func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return got.ID != ""
+		return got.ID() != ""
 	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
@@ -116,14 +123,14 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	// The subscriber must see the UNWRAPPED business payload, not the envelope.
-	assert.JSONEq(t, `{"action":"created","key":"k1","value":"v1"}`, string(got.Payload),
+	assert.JSONEq(t, `{"action":"created","key":"k1","value":"v1"}`, string(got.Payload()),
 		"subscriber must receive business payload after envelope unwrap")
 	// Envelope metadata fields must be preserved on the Entry for observability.
-	assert.Equal(t, "ent-123", got.ID)
-	assert.Equal(t, "agg-1", got.AggregateID)
-	assert.Equal(t, "config", got.AggregateType)
-	assert.Equal(t, "test.envelope.topic", got.EventType)
-	assert.Equal(t, map[string]string{"source": "test"}, got.Metadata)
+	assert.Equal(t, "ent-123", got.ID())
+	assert.Equal(t, "agg-1", got.AggregateID())
+	assert.Equal(t, "config", got.AggregateType())
+	assert.Equal(t, "test.envelope.topic", got.EventType())
+	assert.Equal(t, map[string]string{"source": "test"}, got.Metadata())
 }
 
 // TestPublish_InvalidEnvelope_Rejected verifies the P1-14 follow-up
@@ -217,8 +224,8 @@ func TestPublishSubscribe(t *testing.T) {
 
 	mu.Lock()
 	assert.Len(t, received, 2)
-	assert.Equal(t, []byte(`{"key":"value"}`), received[0].Payload)
-	assert.Equal(t, []byte(`{"key":"value2"}`), received[1].Payload)
+	assert.Equal(t, []byte(`{"key":"value"}`), received[0].Payload())
+	assert.Equal(t, []byte(`{"key":"value2"}`), received[1].Payload())
 	mu.Unlock()
 }
 
@@ -1208,7 +1215,7 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 
 	select {
 	case e := <-received:
-		assert.Equal(t, topic, e.Topic, "received entry topic must match published topic")
+		assert.Equal(t, topic, e.Topic(), "received entry topic must match published topic")
 	case <-time.After(testtime.D2s):
 		t.Fatal("message not received after StopIntake — bus must remain functional")
 	}
@@ -1605,7 +1612,11 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 		cancel: cancelSub,
 		done:   make(chan struct{}),
 	}
-	filler := outbox.Entry{ID: "filler", EventType: "drop.broadcast.v1", Topic: "drop.broadcast.v1"}
+	now := clock.Real().Now()
+	filler, _ := outbox.EntryScan{
+		ID: "filler", EventType: "drop.broadcast.v1", Topic: "drop.broadcast.v1",
+		Payload: []byte(`{}`), CreatedAt: now, OccurredAt: now,
+	}.ToEntry()
 	sub.ch <- filler // pre-fill to capacity
 
 	bus.mu.Lock()
@@ -1618,14 +1629,18 @@ func TestBroadcast_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
 
 	// Build and publish the entry-under-test.
-	entry := outbox.Entry{
+	dropNow := clock.Real().Now()
+	dropEntry, err := outbox.EntryScan{
 		ID:          "evt-broadcast-drop-2",
 		AggregateID: "agg-bcast-002",
 		EventType:   "drop.broadcast.v1",
 		Topic:       "drop.broadcast.v1",
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
-	}
-	env, err := outbox.MarshalEnvelope(entry)
+		CreatedAt:   dropNow,
+		OccurredAt:  dropNow,
+	}.ToEntry()
+	require.NoError(t, err, "build drop entry")
+	env, err := outbox.MarshalEnvelope(dropEntry)
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), "drop.broadcast.v1", env))
 
@@ -1675,7 +1690,11 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 		cancel: cancelSub,
 		done:   make(chan struct{}),
 	}
-	filler := outbox.Entry{ID: "filler", EventType: "drop.roundrobin.v1", Topic: "drop.roundrobin.v1"}
+	rrNow := clock.Real().Now()
+	filler, _ := outbox.EntryScan{
+		ID: "filler", EventType: "drop.roundrobin.v1", Topic: "drop.roundrobin.v1",
+		Payload: []byte(`{}`), CreatedAt: rrNow, OccurredAt: rrNow,
+	}.ToEntry()
 	sub.ch <- filler
 
 	bus.mu.Lock()
@@ -1687,14 +1706,18 @@ func TestRoundRobin_BufferFull_LogsErrorWithContextualFields(t *testing.T) {
 	// Sentinel marker embedded in the payload — must NOT appear in any log attr.
 	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
 
-	entry := outbox.Entry{
+	rrDropNow := clock.Real().Now()
+	rrDropEntry, err := outbox.EntryScan{
 		ID:          "evt-rr-drop-2",
 		AggregateID: "agg-rr-002",
 		EventType:   "drop.roundrobin.v1",
 		Topic:       "drop.roundrobin.v1",
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
-	}
-	env, err := outbox.MarshalEnvelope(entry)
+		CreatedAt:   rrDropNow,
+		OccurredAt:  rrDropNow,
+	}.ToEntry()
+	require.NoError(t, err, "build rrDrop entry")
+	env, err := outbox.MarshalEnvelope(rrDropEntry)
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), "drop.roundrobin.v1", env))
 
@@ -1755,14 +1778,18 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	// Sentinel marker embedded in the payload — must NOT appear in any log attr.
 	const payloadMarker = "SECRET_PAYLOAD_MARKER_DO_NOT_LOG"
 
-	entry := outbox.Entry{
+	exhaustNow := clock.Real().Now()
+	exhaustEntry, err := outbox.EntryScan{
 		ID:          "evt-exhaust-1",
 		AggregateID: "agg-exhaust-001",
 		EventType:   topic,
 		Topic:       topic,
 		Payload:     []byte(`{"sentinel":"` + payloadMarker + `"}`),
-	}
-	env, err := outbox.MarshalEnvelope(entry)
+		CreatedAt:   exhaustNow,
+		OccurredAt:  exhaustNow,
+	}.ToEntry()
+	require.NoError(t, err, "build exhaust entry")
+	env, err := outbox.MarshalEnvelope(exhaustEntry)
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), topic, env))
 

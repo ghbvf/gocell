@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // errSubscribeUnexpectedFmt is the format string used by helpers that report
@@ -74,23 +77,26 @@ func TestTopic(t *testing.T) string {
 	return fmt.Sprintf("test-%s-%s", t.Name(), hex.EncodeToString(b))
 }
 
-// NewEntry creates a valid Entry with a unique ID for testing.
+// NewEntry creates a valid Entry with a unique ID for testing via the sealed
+// producer constructor outbox.NewEntry (which auto-generates a unique ID,
+// stamps createdAt/occurredAt from the clock, and validates). It panics on
+// construction error — the inputs here are always valid, so an error signals a
+// test-helper bug.
 func NewEntry(topic string, payload []byte) outbox.Entry {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return outbox.Entry{
-		ID:        "evt-" + hex.EncodeToString(b),
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload, outbox.WithTopic(topic))
+	if err != nil {
+		panic(panicregister.Approved("outboxtest-new-entry", errcode.Assertion("outboxtest.NewEntry(%s): %v", topic, err)))
 	}
+	return e
 }
 
 // NewEntryWithMetadata creates a valid Entry with metadata.
 func NewEntryWithMetadata(topic string, payload []byte, metadata map[string]string) outbox.Entry {
-	e := NewEntry(topic, payload)
-	e.Metadata = metadata
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload,
+		outbox.WithTopic(topic), outbox.WithMetadata(metadata))
+	if err != nil {
+		panic(panicregister.Approved("outboxtest-new-entry-metadata", errcode.Assertion("outboxtest.NewEntryWithMetadata(%s): %v", topic, err)))
+	}
 	return e
 }
 
@@ -422,6 +428,7 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		EventType     string          `json:"eventType"`
 		Topic         string          `json:"topic"`
 		Payload       json.RawMessage `json:"payload"`
+		OccurredAt    string          `json:"occurredAt"`
 		CreatedAt     string          `json:"createdAt"`
 	}
 	msg := wireMsg{
@@ -430,7 +437,10 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		EventType:     topic,
 		Topic:         topic,
 		Payload:       json.RawMessage(payload),
-		CreatedAt:     "2024-01-01T00:00:00Z",
+		// occurredAt is required since issue #1229 (Entry.Validate rejects zero);
+		// UnmarshalEnvelope would reject an envelope without it.
+		OccurredAt: "2024-01-01T00:00:00Z",
+		CreatedAt:  "2024-01-01T00:00:00Z",
 	}
 	out, err := json.Marshal(msg)
 	if err != nil {

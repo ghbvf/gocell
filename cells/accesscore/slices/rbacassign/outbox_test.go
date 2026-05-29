@@ -84,14 +84,14 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 
 	// Exactly one outbox entry.
 	require.Len(t, ow.Entries, 1)
-	assert.Equal(t, dto.TopicRoleAssigned, ow.Entries[0].EventType)
+	assert.Equal(t, dto.TopicRoleAssigned, ow.Entries[0].EventType())
 	// eventId must be derived by the emitter (UUID v4); used by downstream
 	// consumers as the idempotency key "{ConsumerGroup}:{entry.ID}".
-	assert.NotEmpty(t, ow.Entries[0].ID, "emitter must derive a non-empty eventId")
+	assert.NotEmpty(t, ow.Entries[0].ID(), "emitter must derive a non-empty eventId")
 
 	// Payload unmarshal.
 	var evt dto.RoleChangedEvent
-	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload, &evt))
+	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload(), &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
 	assert.Equal(t, dto.ActionAssigned, evt.Action)
@@ -120,11 +120,11 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, ow.Entries, 1)
-	assert.Equal(t, dto.TopicRoleRevoked, ow.Entries[0].EventType)
-	assert.NotEmpty(t, ow.Entries[0].ID, "emitter must derive a non-empty eventId")
+	assert.Equal(t, dto.TopicRoleRevoked, ow.Entries[0].EventType())
+	assert.NotEmpty(t, ow.Entries[0].ID(), "emitter must derive a non-empty eventId")
 
 	var evt dto.RoleChangedEvent
-	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload, &evt))
+	require.NoError(t, json.Unmarshal(ow.Entries[0].Payload(), &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
 	assert.Equal(t, dto.ActionRevoked, evt.Action)

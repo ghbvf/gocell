@@ -51,6 +51,12 @@ type CellGenSpec struct {
 	// Subscriptions holds the per-slice event subscriptions. Each entry
 	// emits one reg.Subscribe() call (and one specEvent... var declaration).
 	Subscriptions []SubscriptionGenSpec
+	// WebhookReceivers holds the per-slice inbound webhook registrations.
+	// Each entry emits one reg.RegisterWebhookReceiver() call.
+	WebhookReceivers []WebhookReceiverGenSpec
+	// WebhookDispatches holds the per-slice outbound webhook registrations.
+	// Each entry emits one reg.RegisterWebhookDispatch() call.
+	WebhookDispatches []WebhookDispatchGenSpec
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.
@@ -109,6 +115,34 @@ type SubscriptionGenSpec struct {
 	// SubscriptionAlias is the import alias used in cell_gen.go for SubscriptionPackage
 	// (e.g. "sub0", "sub1") to avoid package name collisions between multiple v1 packages.
 	SubscriptionAlias string
+}
+
+// WebhookReceiverGenSpec describes one reg.RegisterWebhookReceiver() call.
+type WebhookReceiverGenSpec struct {
+	// ContractID is the webhook contract id, e.g. "webhook.stripe.payment-events.v1".
+	ContractID string
+	// SliceID identifies the slice owning the handler — the primary sort key so
+	// output ordering is deterministic even when one contract is wired by more
+	// than one slice (mirrors SubscriptionGenSpec).
+	SliceID string
+	// SourceID is the secret-isolation key (slice.yaml contractUsages.sourceID).
+	SourceID string
+	// HandlerExpr is the dotted handler reference, e.g. "c.stripeSvc.HandleStripeEvent".
+	HandlerExpr string
+}
+
+// WebhookDispatchGenSpec describes one reg.RegisterWebhookDispatch() call.
+type WebhookDispatchGenSpec struct {
+	// ContractID is the webhook contract id, e.g. "webhook.shopify.orders.v1".
+	ContractID string
+	// SliceID identifies the slice owning the selector — the primary sort key so
+	// output ordering is deterministic even when one contract is wired by more
+	// than one slice (mirrors SubscriptionGenSpec).
+	SliceID string
+	// SourceID is the signing-secret source (slice.yaml contractUsages.sourceID).
+	SourceID string
+	// SelectorExpr is the dotted selector reference, e.g. "c.shopifySvc.ShopifyTarget".
+	SelectorExpr string
 }
 
 // SliceGenSpec is the rendering input for slice.tmpl. It declares the

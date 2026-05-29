@@ -25,7 +25,9 @@
 //	event     |      ✔       |      ✔       |       —        |     ✔       |          ✔          |     —
 //	command   |      ✔       |      ✔       |       —        |     —       |          —          |     —
 //	projection|      ✔       |      ✔       |       —        |     —       |          —          |     —
+//	grpc      |      ✔       |      ✔       |       —        |     —       |          —          |     —
 //	saga      |      ✔       |   ✔ (empty)  |       —        |     —       |          —          |     ✔
+//	webhook   |      —       |      —       |       —        |     —       |          —          |     —
 //
 // # types_gen.go (every contract kind)
 //
@@ -60,9 +62,15 @@
 // faults), in which case the generated handler falls back to
 // pkg/httputil.WriteError(err) and derives the response status from
 // errcode.Kind. For event contracts the signature is
-// `Handle{Topic}(ctx, *Payload) error`. For kind=saga, iface_gen.go is
-// intentionally empty (just the package clause) — the typed business interface
-// is the Impl interface emitted in saga_gen.go, not a Service here.
+// `Handle{Topic}(ctx, *Payload) error`. For grpc contracts the signature is
+// the PLACEHOLDER `{Method}(ctx, []byte) ([]byte, error)` on a `Server`
+// interface — request/response stay []byte (no proto dependency) until PR 6
+// wires the proto-generated message types. types_gen.go carries no DTOs for
+// grpc (proto is the schema, deferred); GRPC-CODEGEN-NO-PROTO-DEP-01
+// (grpc_no_proto_dep_test.go) locks the no-proto/grpc-import property. For
+// kind=saga, iface_gen.go is intentionally empty (just the package clause) —
+// the typed business interface is the Impl interface emitted in saga_gen.go,
+// not a Service here.
 //
 // # handler_gen.go (kind=http only)
 //

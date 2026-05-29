@@ -145,7 +145,10 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 		slog.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
 			slog.String("topic", topic),
 			slog.Any("error", unmarshalErr))
-		b.appendDeadLetter(topic, outbox.Entry{Topic: topic}, unmarshalErr)
+		// Entry construction failed: record a dead letter keyed by topic only.
+		// We cannot fabricate an Entry (sealed construction, issue #1229), so
+		// we record the raw-bytes dead letter via the topic+error path.
+		b.appendRawDeadLetter(topic, unmarshalErr)
 		return unmarshalErr
 	}
 
@@ -176,9 +179,9 @@ func (b *InMemoryEventBus) broadcast(topic string, gs *groupState, entry outbox.
 		default:
 			slog.Error("eventbus: subscriber buffer full, message dropped",
 				slog.String("topic", topic),
-				slog.String("entry_id", entry.ID),
-				slog.String("aggregate_id", entry.AggregateID),
-				slog.String("event_type", entry.EventType),
+				slog.String("entry_id", entry.ID()),
+				slog.String("aggregate_id", entry.AggregateID()),
+				slog.String("event_type", entry.EventType()),
 			)
 		}
 	}
@@ -195,9 +198,9 @@ func (b *InMemoryEventBus) roundRobin(topic, group string, gs *groupState, entry
 		slog.Error("eventbus: subscriber buffer full, message dropped",
 			slog.String("topic", topic),
 			slog.String("consumer_group", group),
-			slog.String("entry_id", entry.ID),
-			slog.String("aggregate_id", entry.AggregateID),
-			slog.String("event_type", entry.EventType),
+			slog.String("entry_id", entry.ID()),
+			slog.String("aggregate_id", entry.AggregateID()),
+			slog.String("event_type", entry.EventType()),
 		)
 	}
 }
@@ -438,9 +441,9 @@ func (b *InMemoryEventBus) notifyRetryExhausted(
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, err)
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
-		slog.String("entry_id", entry.ID),
-		slog.String("aggregate_id", entry.AggregateID),
-		slog.String("event_type", entry.EventType),
+		slog.String("entry_id", entry.ID()),
+		slog.String("aggregate_id", entry.AggregateID()),
+		slog.String("event_type", entry.EventType()),
 		slog.Any("error", err),
 	)
 }
@@ -460,15 +463,15 @@ func (b *InMemoryEventBus) processResult(
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if settlement != nil {
-			if commitErr := commitSettlement(ctx, settlement, topic, entry.ID); commitErr != nil {
+			if commitErr := commitSettlement(ctx, settlement, topic, entry.ID()); commitErr != nil {
 				// Mirror rabbitmq.dispatchAck: Commit failure (lease lost,
 				// token mismatch, backend error) MUST NOT be silently
 				// promoted to success. Treat as transient → retry path.
 				slog.Warn("eventbus: settlement commit failed, downgrading Ack to Requeue",
 					slog.String("topic", topic),
-					slog.String("entry_id", entry.ID),
+					slog.String("entry_id", entry.ID()),
 					slog.Any("error", commitErr))
-				releaseSettlement(ctx, settlement, topic, entry.ID)
+				releaseSettlement(ctx, settlement, topic, entry.ID())
 				if finalAttempt {
 					return false, commitErr
 				}
@@ -480,11 +483,11 @@ func (b *InMemoryEventBus) processResult(
 		return true, nil
 	case outbox.DispositionReject:
 		if settlement != nil {
-			releaseSettlement(ctx, settlement, topic, entry.ID)
+			releaseSettlement(ctx, settlement, topic, entry.ID())
 		}
 		slog.Warn("eventbus: handler rejected message, routing to dead letter",
 			slog.String("topic", topic),
-			slog.String("entry_id", entry.ID),
+			slog.String("entry_id", entry.ID()),
 			slog.Any("error", res.Err),
 		)
 		b.appendDeadLetter(topic, entry, res.Err)
@@ -512,7 +515,7 @@ func (b *InMemoryEventBus) handleRequeue(
 	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
-		releaseSettlement(ctx, settlement, topic, entry.ID)
+		releaseSettlement(ctx, settlement, topic, entry.ID())
 	}
 	if finalAttempt {
 		return false, res.Err
@@ -540,14 +543,14 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
-		releaseSettlement(ctx, settlement, topic, entry.ID)
+		releaseSettlement(ctx, settlement, topic, entry.ID())
 	}
 	if finalAttempt {
 		slog.Error("eventbus: invalid disposition, retry budget exhausted",
 			slog.String("topic", topic),
-			slog.String("entry_id", entry.ID),
-			slog.String("aggregate_id", entry.AggregateID),
-			slog.String("event_type", entry.EventType),
+			slog.String("entry_id", entry.ID()),
+			slog.String("aggregate_id", entry.AggregateID()),
+			slog.String("event_type", entry.EventType()),
 			slog.String("disposition", res.Disposition.String()),
 			slog.Int("attempt", attempt+1),
 		)
@@ -556,9 +559,9 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 	delay := retryDelay(attempt)
 	slog.Error("eventbus: invalid disposition, treating as requeue",
 		slog.String("topic", topic),
-		slog.String("entry_id", entry.ID),
-		slog.String("aggregate_id", entry.AggregateID),
-		slog.String("event_type", entry.EventType),
+		slog.String("entry_id", entry.ID()),
+		slog.String("aggregate_id", entry.AggregateID()),
+		slog.String("event_type", entry.EventType()),
 		slog.String("disposition", res.Disposition.String()),
 		slog.Int("attempt", attempt+1),
 		slog.Duration("retry_delay", delay),
@@ -596,6 +599,18 @@ func (b *InMemoryEventBus) appendDeadLetter(topic string, entry outbox.Entry, er
 	b.deadLetters = append(b.deadLetters, DeadLetter{
 		Topic:   topic,
 		Entry:   entry,
+		LastErr: err,
+	})
+	b.deadLettersMu.Unlock()
+}
+
+// appendRawDeadLetter records a dead-letter for a payload that could not be
+// decoded into an Entry (unmarshal failure path). The Entry field is a
+// zero-value outbox.Entry because the sealed constructor could not be invoked.
+func (b *InMemoryEventBus) appendRawDeadLetter(topic string, err error) {
+	b.deadLettersMu.Lock()
+	b.deadLetters = append(b.deadLetters, DeadLetter{
+		Topic:   topic,
 		LastErr: err,
 	})
 	b.deadLettersMu.Unlock()

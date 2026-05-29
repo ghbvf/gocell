@@ -308,7 +308,7 @@ type DemoCell struct {
 func TestResolveSliceField_ExplicitFieldWins(t *testing.T) {
 	t.Parallel()
 	idx := indexFromSessionlogout(t)
-	got, err := idx.resolveSliceField("rbacSessionConsumer", "accesscore", "sessionlogout")
+	got, err := idx.resolveSliceField("rbacSessionConsumer", "accesscore", "sessionlogout", roleSubscribe)
 	if err != nil {
 		t.Fatalf("explicit field must resolve without error: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestResolveSliceField_ExplicitFieldWins(t *testing.T) {
 func TestResolveSliceField_AmbiguousWithoutField_Errors(t *testing.T) {
 	t.Parallel()
 	idx := indexFromSessionlogout(t)
-	_, err := idx.resolveSliceField("", "accesscore", "sessionlogout")
+	_, err := idx.resolveSliceField("", "accesscore", "sessionlogout", roleSubscribe)
 	if err == nil {
 		t.Fatal("expected ambiguity error, got nil")
 	}
@@ -355,7 +355,7 @@ type DemoCell struct {
 		t.Fatalf("IndexCellStructFields: %v", err)
 	}
 	// subscribing slice is "subs" but field: points at otherSvc (*other.Service).
-	_, err = idx.resolveSliceField("otherSvc", "demo", "subs")
+	_, err = idx.resolveSliceField("otherSvc", "demo", "subs", roleSubscribe)
 	if err == nil {
 		t.Fatal("expected error when field: points to a different slice's package, got nil")
 	}
@@ -371,7 +371,7 @@ type DemoCell struct {
 func TestResolveSliceField_ExplicitFieldNotDeclared_Errors(t *testing.T) {
 	t.Parallel()
 	idx := idxOf(map[string]string{"subs": "subsSvc"})
-	_, err := idx.resolveSliceField("ghostField", "demo", "subs")
+	_, err := idx.resolveSliceField("ghostField", "demo", "subs", roleSubscribe)
 	if err == nil {
 		t.Fatal("expected error when field: names no declared cell-struct field, got nil")
 	}

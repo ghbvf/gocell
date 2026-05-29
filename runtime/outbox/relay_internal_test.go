@@ -54,8 +54,15 @@ func (s *minimalStore) seedPending(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	past := time.Now().Add(relayStaleAge)
+	entry, err := kout.EntryScan{
+		ID: id, EventType: "ev", Topic: "ev", Payload: []byte(`{}`),
+		CreatedAt: past, OccurredAt: past,
+	}.ToEntry()
+	if err != nil {
+		panic("relay_internal_test.go seedPending: " + err.Error())
+	}
 	s.rows[id] = &minimalRow{
-		entry:  kout.Entry{ID: id, EventType: "ev", Payload: []byte(`{}`), CreatedAt: past},
+		entry:  entry,
 		status: "pending",
 	}
 }
@@ -358,9 +365,13 @@ func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
 		clock:   clock.Real(),
 	}
 
+	staleEntry, _ := kout.EntryScan{
+		ID: "e-stale", EventType: "ev", Topic: "t", Payload: []byte(`{}`),
+		CreatedAt: time.Now(), OccurredAt: time.Now(),
+	}.ToEntry()
 	res := publishResult{
 		entry: ClaimedEntry{
-			Entry:    kout.Entry{ID: "e-stale", EventType: "ev", Topic: "t"},
+			Entry:    staleEntry,
 			Attempts: 1,
 			LeaseID:  uuid.NewString(),
 		},
@@ -410,9 +421,13 @@ func TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished(t *test
 		clock:   clock.Real(),
 	}
 
+	publishStaleEntry, _ := kout.EntryScan{
+		ID: "e-publish-stale", EventType: "ev", Topic: "t", Payload: []byte(`{}`),
+		CreatedAt: time.Now(), OccurredAt: time.Now(),
+	}.ToEntry()
 	results := []publishResult{{
 		entry: ClaimedEntry{
-			Entry:    kout.Entry{ID: "e-publish-stale", EventType: "ev", Topic: "t"},
+			Entry:    publishStaleEntry,
 			Attempts: 1,
 			LeaseID:  uuid.NewString(),
 		},
@@ -437,9 +452,13 @@ func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
 		clock:   clock.Real(),
 	}
 
+	staleDeadEntry, _ := kout.EntryScan{
+		ID: "e-stale-dead", EventType: "ev", Topic: "t", Payload: []byte(`{}`),
+		CreatedAt: time.Now(), OccurredAt: time.Now(),
+	}.ToEntry()
 	res := publishResult{
 		entry: ClaimedEntry{
-			Entry:    kout.Entry{ID: "e-stale-dead", EventType: "ev", Topic: "t"},
+			Entry:    staleDeadEntry,
 			Attempts: 2, // newAttempts=3 == MaxAttempts → MarkDead branch
 			LeaseID:  uuid.NewString(),
 		},

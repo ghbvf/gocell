@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
@@ -861,4 +862,67 @@ func TestMatchPathTemplate(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestAuthMiddleware_InjectsPrincipalCtxKeys verifies the producer-side ctx
+// bridge: after successful auth, the principal ctxkeys are populated so a
+// downstream outbox.NewEntry carries the principal across the async boundary.
+// actor_id == subject (no "act" impersonation claim on develop), session_id is
+// the "sid" claim, and tenant_id stays unset (auth.Principal has no tenant).
+func TestAuthMiddleware_InjectsPrincipalCtxKeys(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-alice", SessionID: "sess-42", Roles: []string{"admin"}},
+	}
+	var gotActor, gotSubject, gotSession, gotTenant string
+	var actorOK, subjectOK, sessionOK, tenantOK bool
+	handler := AuthMiddleware(clock.Real(), verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		gotActor, actorOK = ctxkeys.ActorIDFrom(ctx)
+		gotSubject, subjectOK = ctxkeys.SubjectIDFrom(ctx)
+		gotSession, sessionOK = ctxkeys.SessionIDFrom(ctx)
+		gotTenant, tenantOK = ctxkeys.TenantIDFrom(ctx)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, subjectOK)
+	assert.Equal(t, "usr-alice", gotSubject)
+	assert.True(t, actorOK)
+	assert.Equal(t, "usr-alice", gotActor, "actor_id equals subject when no act claim exists")
+	assert.True(t, sessionOK)
+	assert.Equal(t, "sess-42", gotSession)
+	assert.False(t, tenantOK, "tenant_id has no source on develop and must stay unset")
+	assert.Empty(t, gotTenant)
+}
+
+// TestAuthMiddleware_InjectsPrincipalCtxKeys_NoSessionOmitsSessionKey verifies
+// that an empty "sid" claim leaves the session_id ctxkey unset (only non-empty
+// values are written).
+func TestAuthMiddleware_InjectsPrincipalCtxKeys_NoSessionOmitsSessionKey(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bob"}, // no SessionID
+	}
+	var gotSession string
+	var sessionOK, subjectOK bool
+	handler := AuthMiddleware(clock.Real(), verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		gotSession, sessionOK = ctxkeys.SessionIDFrom(ctx)
+		_, subjectOK = ctxkeys.SubjectIDFrom(ctx)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, subjectOK, "subject_id is always present for a JWT principal")
+	assert.False(t, sessionOK, "empty sid claim must leave session_id unset")
+	assert.Empty(t, gotSession)
 }

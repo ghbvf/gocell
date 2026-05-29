@@ -99,7 +99,7 @@ func newService(
 		opts = append(opts, setup.WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, w))))
 	}
 	opts = append(opts, extraOpts...)
-	svc, err := setup.NewService(prov, discardLogger(), opts...)
+	svc, err := setup.NewService(clock.Real(), prov, discardLogger(), opts...)
 	require.NoError(t, err)
 	return svc
 }
@@ -133,7 +133,7 @@ var _ ports.SetupLockAcquirer = (*recordingSetupLock)(nil)
 // --- NewService validation ------------------------------------------------
 
 func TestNewService_NilProvisioner_Error(t *testing.T) {
-	_, err := setup.NewService(nil, discardLogger())
+	_, err := setup.NewService(clock.Real(), nil, discardLogger())
 	require.Error(t, err)
 }
 
@@ -141,7 +141,7 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 // provisioner nil check must return errcode (KindInternal+ErrCellInvalidConfig),
 // not a bare fmt.Errorf. Wiring failure is operator error → 5xx, not client 4xx.
 func TestNewService_NilProvisioner_ReturnsErrcode(t *testing.T) {
-	_, err := setup.NewService(nil, discardLogger())
+	_, err := setup.NewService(clock.Real(), nil, discardLogger())
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "provisioner nil check must return errcode.Error")
@@ -151,7 +151,7 @@ func TestNewService_NilProvisioner_ReturnsErrcode(t *testing.T) {
 func TestNewService_NilLogger_Error(t *testing.T) {
 	prov, _ := adminprovision.NewProvisioner(mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
-	_, err := setup.NewService(prov, nil)
+	_, err := setup.NewService(clock.Real(), prov, nil)
 	require.Error(t, err)
 }
 
@@ -162,7 +162,7 @@ func TestNewService_NilLogger_ReturnsErrcode(t *testing.T) {
 	prov, err := adminprovision.NewProvisioner(mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
 	require.NoError(t, err)
-	_, err = setup.NewService(prov, nil)
+	_, err = setup.NewService(clock.Real(), prov, nil)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec, "logger nil check must return errcode.Error")
@@ -173,7 +173,7 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	prov, err := adminprovision.NewProvisioner(mem.NewStore(clock.Real()).UserRepository(), mem.NewStore(clock.Real()).RoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
 	require.NoError(t, err)
-	_, err = setup.NewService(prov, discardLogger() /* no WithTxManager */)
+	_, err = setup.NewService(clock.Real(), prov, discardLogger() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -231,9 +231,9 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 
 	// Verify event emitted
 	require.Len(t, w.entries, 1, "one user.created event expected")
-	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
+	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType())
 	var payload map[string]any
-	require.NoError(t, json.Unmarshal(w.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(w.entries[0].Payload(), &payload))
 	assert.Equal(t, out.ID, payload["userId"])
 	assert.Equal(t, "root", payload["username"])
 
@@ -344,7 +344,7 @@ func TestNewService_NilSetupLock_ReturnsErrcode(t *testing.T) {
 		clock.Real(),
 	)
 	require.NoError(t, err)
-	_, err = setup.NewService(prov, discardLogger(),
+	_, err = setup.NewService(clock.Real(), prov, discardLogger(),
 		setup.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		// No WithSetupLock — triggers the mandatory-dep fail-fast.
 	)
@@ -541,7 +541,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 	require.NoError(t, err)
 
 	svc, err := setup.NewService(
-		prov, discardLogger(),
+		clock.Real(), prov, discardLogger(),
 		// Store-paired TxRunner: RunInTx holds store.mu for the entire closure.
 		// This is the wiring that cmd/corebundle/access_module.go must supply
 		// so that concurrent first-admin setup requests are serialized.

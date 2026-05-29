@@ -105,46 +105,61 @@ func NewService(
 func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	logPrefix := slicePrefix(s.spec.name) // e.g. "auditappend-user"
 
-	if !json.Valid(entry.Payload) {
+	if !json.Valid(entry.Payload()) {
 		s.logger.Warn(logPrefix+": invalid JSON payload",
-			slog.String("event_id", entry.ID),
-			slog.String("event_type", entry.EventType))
+			slog.String("event_id", entry.ID()),
+			slog.String("event_type", entry.EventType()))
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: invalid JSON payload",
 				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
-	actorID, ok := extractActor(entry.Payload, s.spec.mode)
+	// actor_id is the audited action's actor as declared by the producer in the
+	// event payload (extractActor). This is the authoritative domain source and
+	// works even when there is no authenticated request principal in ctx — e.g.
+	// session.created emitted DURING login, before any auth context exists.
+	// The Principal family below (subject/tenant/session/correlation) is the
+	// orthogonal request-context carried on the outbox envelope; it is additive
+	// (empty when the producing action had no authenticated principal) and does
+	// NOT replace the domain actor. Distinct columns, distinct authoritative
+	// sources — not a dual-source for one field. (issue #1229 B8)
+	actorID, ok := extractActor(entry.Payload(), s.spec.mode)
 	if !ok {
 		s.logger.Warn(logPrefix+": actor missing — rejecting event",
-			slog.String("event_id", entry.ID),
-			slog.String("event_type", entry.EventType))
+			slog.String("event_id", entry.ID()),
+			slog.String("event_type", entry.EventType()))
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: event payload missing required actor identity",
 				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
 	}
 
+	principal := entry.Principal()
 	e := &ledger.Entry{
-		ID:        auditEntryIDPrefix + uuid.NewString(),
-		EventID:   entry.ID,
-		EventType: entry.EventType,
-		ActorID:   actorID,
-		Timestamp: tsForLedger(entry, s.clk, s.logger, s.spec.name),
-		Payload:   entry.Payload,
+		ID:            auditEntryIDPrefix + uuid.NewString(),
+		EventID:       entry.ID(),
+		EventType:     entry.EventType(),
+		ActorID:       actorID,
+		SubjectID:     string(principal.SubjectID),
+		TenantID:      string(principal.TenantID),
+		SessionID:     string(principal.SessionID),
+		CorrelationID: string(entry.Observability().CorrelationID),
+		OccurredAt:    entry.OccurredAt(),
+		Timestamp:     tsForLedger(entry, s.clk, s.logger, s.spec.name),
+		Payload:       entry.Payload(),
 	}
 
 	appendedEvent := dto.AuditAppendedEvent{
 		AuditEntryID: e.ID,
-		EventType:    entry.EventType,
+		EventType:    entry.EventType(),
 	}
 
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.store.Append(txCtx, e); err != nil {
 			return err
 		}
-		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditAppended, appendedEvent)
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicAuditAppended, appendedEvent)
 	}); err != nil {
 		// Idempotent replay: the ledger already holds this entry (same
 		// content/EventID fingerprint), e.g. outbox redelivery or a parallel
@@ -155,14 +170,14 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		var dup *errcode.Error
 		if errors.As(err, &dup) && dup.Code == errcode.ErrAuditLedgerAlreadyExists {
 			s.logger.Info(logPrefix+": entry already appended (idempotent replay)",
-				slog.String("event_id", entry.ID),
-				slog.String("event_type", entry.EventType))
+				slog.String("event_id", entry.ID()),
+				slog.String("event_type", entry.EventType()))
 			return outbox.Ack()
 		}
 		s.logger.Error(logPrefix+": failed to persist entry",
 			slog.Any("error", err),
-			slog.String("event_id", entry.ID),
-			slog.String("event_type", entry.EventType))
+			slog.String("event_id", entry.ID()),
+			slog.String("event_type", entry.EventType()))
 		// Disposition 收口 (ADAPTER-ERROR-CLASSIFICATION-TRANSIENT-01):
 		// adapter classifiers now mark retry-safe failures via
 		// errcode.WrapInfra. A positively-transient error Requeues. A
@@ -180,23 +195,25 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 
 	s.logger.Info("audit entry appended",
 		slog.String("entry_id", e.ID),
-		slog.String("event_type", entry.EventType),
+		slog.String("event_type", entry.EventType()),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
 }
 
-// tsForLedger picks the audit entry timestamp source. Prefers outbox.Entry.CreatedAt
-// (original event production time) over clock.Now() (consume time) so the audit ledger
-// reflects when the business event happened, not when this consumer processed it.
-// Zero CreatedAt is defensive fallback — outbox publishers always populate it, but
-// we guard against unintended zero-value injection.
+// tsForLedger picks the audit entry Timestamp (ledger persistence / HMAC time)
+// source. It prefers outbox.Entry.CreatedAt (the outbox seal time) over
+// clock.Now() (consume time) so the audit row's time anchor reflects when the
+// business event was sealed, not when this consumer processed it. The domain
+// event time is carried separately in ledger.Entry.OccurredAt (= entry.OccurredAt()).
+// Since NewEntry always stamps createdAt, the zero-value branch is defensive and
+// should not fire in practice.
 func tsForLedger(entry outbox.Entry, clk clock.Clock, logger *slog.Logger, slice string) time.Time {
-	if entry.CreatedAt.IsZero() {
+	if entry.CreatedAt().IsZero() {
 		logger.Warn("audit append: outbox.Entry.CreatedAt is zero — falling back to clk.Now()",
-			slog.String("slice", slice), slog.String("event_id", entry.ID))
+			slog.String("slice", slice), slog.String("event_id", entry.ID()))
 		return clk.Now()
 	}
-	return entry.CreatedAt
+	return entry.CreatedAt()
 }
 
 // slicePrefix turns "auditappenduser" into "auditappend-user". The kebab

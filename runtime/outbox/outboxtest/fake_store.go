@@ -114,7 +114,7 @@ func (s *FakeStore) Seed(entries ...outbox.ClaimedEntry) {
 			status:   kout.StatePending,
 			attempts: ce.Attempts,
 		}
-		s.rows[ce.ID] = row
+		s.rows[ce.ID()] = row
 	}
 	s.notifyLocked()
 }
@@ -158,7 +158,7 @@ func (s *FakeStore) snapshotLocked() []FakeRow {
 		out = append(out, fr)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Entry.ID < out[j].Entry.ID
+		return out[i].Entry.ID() < out[j].Entry.ID()
 	})
 	return out
 }
@@ -227,14 +227,14 @@ func (s *FakeStore) ClaimPending(_ context.Context, batchSize int) ([]outbox.Cla
 		ri, rj := candidates[i], candidates[j]
 		switch {
 		case ri.nextRetryAt == nil && rj.nextRetryAt == nil:
-			return ri.entry.CreatedAt.Before(rj.entry.CreatedAt)
+			return ri.entry.CreatedAt().Before(rj.entry.CreatedAt())
 		case ri.nextRetryAt == nil:
 			return true
 		case rj.nextRetryAt == nil:
 			return false
 		default:
 			if ri.nextRetryAt.Equal(*rj.nextRetryAt) {
-				return ri.entry.CreatedAt.Before(rj.entry.CreatedAt)
+				return ri.entry.CreatedAt().Before(rj.entry.CreatedAt())
 			}
 			return ri.nextRetryAt.Before(*rj.nextRetryAt)
 		}

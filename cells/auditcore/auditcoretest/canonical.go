@@ -1,9 +1,10 @@
 package auditcoretest
 
 import (
+	"context"
 	"encoding/json"
-	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -30,9 +31,11 @@ type sessionCreatedPayload struct {
 // literal "evt-j-auditlogintrail" so that multi-entry chain tests remain
 // valid.
 //
-// CreatedAt is time.Now().UTC() at call time; the ledger MemStore assigns
-// its own store-level Timestamp from the injected clock, so the entry
-// CreatedAt is informational only for test assertions.
+// createdAt/occurredAt are stamped by outbox.NewEntry from clock.Real() at call
+// time; the ledger MemStore assigns its own store-level Timestamp from the
+// injected clock, so the entry times are informational only for test assertions.
+// The deterministic ID "evt-{sessionID}" is pinned via outbox.WithID so each
+// scenario gets a unique idempotency key.
 //
 // ref: contracts/event/session/created/v1/payload.schema.json (sessionId + userId required).
 // ref: cells/accesscore/internal/dto/session_events.go SessionCreatedEvent (same field names).
@@ -46,10 +49,10 @@ func NewSessionCreatedEntry(sessionID, userID string) outbox.Entry {
 		// Unreachable in practice; kept to satisfy compiler.
 		panic("auditcoretest: NewSessionCreatedEntry: json.Marshal failed: " + err.Error())
 	}
-	return outbox.Entry{
-		ID:        "evt-" + sessionID,
-		EventType: "event.session.created.v1",
-		Payload:   payload,
-		CreatedAt: time.Now().UTC(),
+	e, err := outbox.NewEntry(clock.Real(), context.Background(),
+		"event.session.created.v1", payload, outbox.WithID("evt-"+sessionID))
+	if err != nil {
+		panic("auditcoretest: NewSessionCreatedEntry: " + err.Error())
 	}
+	return e
 }

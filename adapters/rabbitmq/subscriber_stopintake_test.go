@@ -68,11 +68,7 @@ func TestStopIntake_DrainSurvivesParentCtxCancel(t *testing.T) {
 
 	// Pre-load deliveries before Subscribe starts.
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, outbox.Entry{
-			ID:        fmt.Sprintf("drain-detached-%d", i),
-			EventType: "drain.detached",
-			Payload:   []byte(`{}`),
-		})
+		body := makeDeliveryBody(t, mustNewEntry(t, "drain.detached", []byte(`{}`), outbox.WithID(fmt.Sprintf("drain-detached-%d", i))))
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
@@ -174,11 +170,7 @@ func TestStopIntake_WaitsForInflightAck(t *testing.T) {
 		DLXExchange: "inflight-wait.dlx",
 	})
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "inflight-wait-1",
-		EventType: "inflight.wait",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "inflight.wait", []byte(`{}`), outbox.WithID("inflight-wait-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	subCtx, subCancel := context.WithCancel(context.Background())
@@ -275,11 +267,7 @@ func TestStopIntake_DrainTimeoutReturnsCloseTimeout(t *testing.T) {
 		StopIntakeDrainTimeout: stopIntakeDrainTimeoutBudget, // slightly longer than drainRemaining timer
 	})
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "drain-timeout-1",
-		EventType: "drain.timeout",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "drain.timeout", []byte(`{}`), outbox.WithID("drain-timeout-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	subCtx, subCancel := context.WithCancel(context.Background())
@@ -360,11 +348,7 @@ func TestStopIntake_OuterCtxCancel_DoesNotAbortDrain(t *testing.T) {
 		StopIntakeDrainTimeout: testtime.D5s, // generous drain budget
 	})
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "drain-outer-cancel-1",
-		EventType: "drain.outer.cancel",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "drain.outer.cancel", []byte(`{}`), outbox.WithID("drain-outer-cancel-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	subCtx, subCancel := context.WithCancel(context.Background())

@@ -44,14 +44,14 @@ func TestNewSessionCreatedEntryShape(t *testing.T) {
 
 	entry := auditcoretest.NewSessionCreatedEntry("sess-abc", "usr-xyz")
 
-	require.Equal(t, "event.session.created.v1", entry.EventType)
-	require.NotEmpty(t, entry.ID)
+	require.Equal(t, "event.session.created.v1", entry.EventType())
+	require.NotEmpty(t, entry.ID())
 
 	var payload struct {
 		SessionID string `json:"sessionId"`
 		UserID    string `json:"userId"`
 	}
-	require.NoError(t, json.Unmarshal(entry.Payload, &payload), "payload must be valid JSON")
+	require.NoError(t, json.Unmarshal(entry.Payload(), &payload), "payload must be valid JSON")
 	require.Equal(t, "sess-abc", payload.SessionID)
 	require.Equal(t, "usr-xyz", payload.UserID)
 }

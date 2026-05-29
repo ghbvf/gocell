@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -52,16 +54,27 @@ const (
 // for each test subcase. Called at the START of each subcase.
 type StoreFactory func(t *testing.T, seed []outbox.ClaimedEntry) outbox.Store
 
+// mustEntry builds a sealed kout.Entry from an EntryScan, panicking on error.
+// For test-seed use only — it is a programmer error to pass an invalid scan.
+func mustEntry(s kout.EntryScan) kout.Entry {
+	e, err := s.ToEntry()
+	if err != nil {
+		panic(panicregister.Approved("outboxtest-must-entry", errcode.Assertion("outboxtest.mustEntry: %v", err)))
+	}
+	return e
+}
+
 // newEntry creates a ClaimedEntry with sensible defaults for seeding.
 func newEntry(id string, attempts int) outbox.ClaimedEntry {
 	return outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:        id,
-			EventType: testEventType,
-			Topic:     testEventType,
-			Payload:   []byte(`{"data":"test"}`),
-			CreatedAt: time.Now(),
-		},
+		Entry: mustEntry(kout.EntryScan{
+			ID:         id,
+			EventType:  testEventType,
+			Topic:      testEventType,
+			Payload:    []byte(`{"data":"test"}`),
+			CreatedAt:  time.Now(),
+			OccurredAt: time.Now(),
+		}),
 		Attempts: attempts,
 	}
 }
@@ -69,13 +82,14 @@ func newEntry(id string, attempts int) outbox.ClaimedEntry {
 // newEntryAt creates a ClaimedEntry with explicit CreatedAt for ordering tests.
 func newEntryAt(id string, createdAt time.Time) outbox.ClaimedEntry {
 	return outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:        id,
-			EventType: testEventType,
-			Topic:     testEventType,
-			Payload:   []byte(`{"data":"test"}`),
-			CreatedAt: createdAt,
-		},
+		Entry: mustEntry(kout.EntryScan{
+			ID:         id,
+			EventType:  testEventType,
+			Topic:      testEventType,
+			Payload:    []byte(`{"data":"test"}`),
+			CreatedAt:  createdAt,
+			OccurredAt: createdAt,
+		}),
 		Attempts: 0,
 	}
 }
@@ -174,9 +188,9 @@ func conformClaimPendingSecondCall(t *testing.T, factory StoreFactory) {
 	if len(second) != 1 {
 		t.Fatalf("expected 1 from second call, got %d", len(second))
 	}
-	firstIDs := map[string]bool{first[0].ID: true, first[1].ID: true}
-	if firstIDs[second[0].ID] {
-		t.Errorf("duplicate claim: %s appeared in both calls", second[0].ID)
+	firstIDs := map[string]bool{first[0].ID(): true, first[1].ID(): true}
+	if firstIDs[second[0].ID()] {
+		t.Errorf("duplicate claim: %s appeared in both calls", second[0].ID())
 	}
 }
 
@@ -210,10 +224,10 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 	seen := make(map[string]bool)
 	for batch := range resultsCh {
 		for _, e := range batch {
-			if seen[e.ID] {
-				t.Errorf("duplicate claim for entry %s", e.ID)
+			if seen[e.ID()] {
+				t.Errorf("duplicate claim for entry %s", e.ID())
 			}
-			seen[e.ID] = true
+			seen[e.ID()] = true
 		}
 	}
 }
@@ -639,7 +653,7 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 		if len(claimed) != 1 {
 			t.Fatalf("ClaimPending(1): expected 1 entry, got %d", len(claimed))
 		}
-		_, _ = store.MarkPublished(ctx, ce.ID, claimed[0].LeaseID)
+		_, _ = store.MarkPublished(ctx, ce.ID(), claimed[0].LeaseID)
 	}
 
 	cutoff := time.Now().Add(time.Hour)
@@ -743,7 +757,7 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	// of its published_at. ClaimPending returns entries sorted by
 	// (next_retry_at NULLS FIRST, created_at ASC), so claimed[0] is e1 (oldest).
 	firstEntry := claimed[0]
-	if _, err := store.MarkPublished(ctx, firstEntry.ID, firstEntry.LeaseID); err != nil {
+	if _, err := store.MarkPublished(ctx, firstEntry.ID(), firstEntry.LeaseID); err != nil {
 		t.Fatalf("MarkPublished(first): %v", err)
 	}
 	// t_first_upper is recorded AFTER the first MarkPublished returns. The
@@ -753,8 +767,8 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 
 	// Publish the remaining entries.
 	for _, ce := range claimed[1:] {
-		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
-			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
+		if _, err := store.MarkPublished(ctx, ce.ID(), ce.LeaseID); err != nil {
+			t.Fatalf("MarkPublished(%s): %v", ce.ID(), err)
 		}
 	}
 
@@ -852,11 +866,11 @@ func conformCountPendingExcludesFutureRetry(t *testing.T, factory StoreFactory) 
 		if err != nil || len(claimed) != 1 {
 			t.Fatalf("ClaimPending single: err=%v len=%d", err, len(claimed))
 		}
-		if claimed[0].ID == idCPExclE3 {
+		if claimed[0].ID() == idCPExclE3 {
 			e3LeaseID = claimed[0].LeaseID
 		} else {
 			// Release e1/e2 back to pending via MarkRetry with past next_retry_at.
-			_, _ = store.MarkRetry(ctx, claimed[0].ID, claimed[0].LeaseID, 0, now.Add(-time.Second), "reset")
+			_, _ = store.MarkRetry(ctx, claimed[0].ID(), claimed[0].LeaseID, 0, now.Add(-time.Second), "reset")
 		}
 	}
 	if e3LeaseID == "" {
@@ -940,8 +954,8 @@ func conformCountPendingAfterPublish(t *testing.T, factory StoreFactory) {
 		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 	for _, ce := range claimed {
-		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
-			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
+		if _, err := store.MarkPublished(ctx, ce.ID(), ce.LeaseID); err != nil {
+			t.Fatalf("MarkPublished(%s): %v", ce.ID(), err)
 		}
 	}
 

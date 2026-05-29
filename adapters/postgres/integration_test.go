@@ -314,18 +314,19 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 
 	t.Run("write_in_tx", func(t *testing.T) {
 		entryID := uuid.New().String()
-		entry := outbox.Entry{
+		// Producer-owned domain metadata only. Observability/principal IDs belong
+		// in the typed Entry.Observability/Principal fields — Entry.Validate rejects
+		// ReservedMetadataKeys to keep the namespace boundary honest.
+		entry := mustScanEntry(outbox.EntryScan{
 			ID:            entryID,
 			AggregateID:   "agg-1",
 			AggregateType: "test_aggregate",
 			EventType:     "test.created",
 			Payload:       []byte(`{"key":"value"}`),
-			// Producer-owned domain metadata only. Observability IDs (trace_id,
-			// request_id, ...) belong in Entry.Observability — Entry.Validate
-			// rejects ReservedMetadataKeys to keep the namespace boundary honest.
-			Metadata:  map[string]string{"source": "integration-test"},
-			CreatedAt: time.Now(),
-		}
+			Metadata:      map[string]string{"source": "integration-test"},
+			CreatedAt:     time.Now(),
+			OccurredAt:    time.Now(),
+		})
 
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {
 			return writer.Write(txCtx, entry)
@@ -345,13 +346,15 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 	})
 
 	t.Run("write_without_tx_returns_error", func(t *testing.T) {
-		entry := outbox.Entry{
+		entry := mustScanEntry(outbox.EntryScan{
 			ID:            uuid.New().String(),
 			AggregateID:   "agg-2",
 			AggregateType: "test_aggregate",
 			EventType:     "test.created",
 			Payload:       []byte(`{}`),
-		}
+			CreatedAt:     time.Now(),
+			OccurredAt:    time.Now(),
+		})
 
 		err := writer.Write(ctx, entry)
 		require.Error(t, err, "writing outbox entry without a tx should fail")
@@ -364,13 +367,15 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 
 	t.Run("write_rolled_back_in_failed_tx", func(t *testing.T) {
 		entryID := uuid.New().String()
-		entry := outbox.Entry{
+		entry := mustScanEntry(outbox.EntryScan{
 			ID:            entryID,
 			AggregateID:   "agg-3",
 			AggregateType: "test_aggregate",
 			EventType:     "test.failed",
 			Payload:       []byte(`{}`),
-		}
+			CreatedAt:     time.Now(),
+			OccurredAt:    time.Now(),
+		})
 
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {
 			if writeErr := writer.Write(txCtx, entry); writeErr != nil {

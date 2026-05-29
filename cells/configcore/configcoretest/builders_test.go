@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -48,7 +49,7 @@ func TestBuildWriteServiceSmoke(t *testing.T) {
 
 		entries := rec.Entries()
 		require.Len(t, entries, 1)
-		assert.Equal(t, domain.TopicConfigEntryUpserted, entries[0].EventType)
+		assert.Equal(t, domain.TopicConfigEntryUpserted, entries[0].EventType())
 
 		// returned repo handle observes the same state.
 		snap, err := repo.Snapshot(context.Background())
@@ -75,11 +76,7 @@ func TestBuildSubscribeServiceSmoke(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		entry := outbox.Entry{
-			ID:        "test-entry-001",
-			EventType: domain.TopicConfigEntryUpserted,
-			Payload:   payload,
-		}
+		entry := outboxtest.NewEntry(domain.TopicConfigEntryUpserted, payload)
 
 		result := svc.HandleEntryUpserted(context.Background(), entry)
 		assert.Equal(t, outbox.DispositionAck, result.Disposition)

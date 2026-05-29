@@ -525,7 +525,7 @@ func (s *Service) mintAndPersistSession(
 		}
 		return loginOutcome{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
-	if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
 		SessionID: sess.ID,
 		UserID:    user.ID,
 	}); err != nil {
@@ -607,7 +607,7 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, sess *session.S
 			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 		}
 		refreshWire = wire
-		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
+		if err := outbox.Emit(txCtx, s.clock, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
 			SessionID: sess.ID,
 			UserID:    userID,
 		}); err != nil {
