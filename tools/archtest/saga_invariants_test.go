@@ -3938,10 +3938,24 @@ const sagaInvariantsConsolidatedRule = "SAGA-INVARIANTS-FILE-CONSOLIDATED-01"
 // sagaConsolidatedFile is the single sanctioned home for saga-theme invariants.
 const sagaConsolidatedFile = "saga_invariants_test.go"
 
+// sagaConsolidatedFileMinIDs is the floor for the non-vacuous guard: the
+// consolidated file must declare at least this many SAGA-* IDs, else a
+// rename/empty/scan-regression would let TestSagaInvariantsConsolidated pass
+// vacuously. 3 is the structural floor (well below the actual 9 declared today).
+const sagaConsolidatedFileMinIDs = 3
+
 // sagaInvariantHeaderRE matches a saga-theme INVARIANT declaration in any comment
 // form ("// INVARIANT: SAGA-…" or the list-continuation "//   - INVARIANT: SAGA-…").
 // Capture group 1 is the full ID. Anchored on the "INVARIANT:" keyword so plain
 // string literals mentioning a SAGA- token do not match (blind-spot B2 scope).
+//
+// The "INVARIANT:" keyword is reserved for *declarations* (per ai-robust.md
+// §"archtest 文件命名"): a cross-reference to a saga rule from another file uses
+// "// ref: SAGA-…" or the bare ID, never "// INVARIANT: SAGA-…". So a non-
+// consolidated file carrying "INVARIANT: SAGA-…" — even as prose — is by
+// definition a misplaced declaration and is intentionally flagged, not a false
+// positive. (Prose examples that write "SAGA-…" with the U+2026 ellipsis after
+// the dash do not capture: the `[A-Z0-9-]+` class stops at the non-ASCII rune.)
 var sagaInvariantHeaderRE = regexp.MustCompile(`INVARIANT:\s+(SAGA-[A-Z0-9-]+)`)
 
 // sagaThemeHit is one saga INVARIANT declaration: its ID and 1-based line.
@@ -3968,7 +3982,9 @@ func scanSagaInvariantDecls(files []ContentContext) map[string][]sagaThemeHit {
 
 // sagaConsolidationDiags is the pure detection core: any saga INVARIANT ID
 // declared in a file other than sagaConsolidatedFile is a violation. relOf maps
-// a basename to its module-relative path for the Diagnostic location.
+// a basename to its module-relative path for the Diagnostic location; callers
+// build it from the same file set as byFile, so every offending base resolves
+// (a missing entry would surface as an empty Rel, never a silent drop).
 func sagaConsolidationDiags(byFile map[string][]sagaThemeHit, relOf map[string]string) []Diagnostic {
 	var diags []Diagnostic
 	bases := make([]string, 0, len(byFile))
@@ -3986,16 +4002,18 @@ func sagaConsolidationDiags(byFile map[string][]sagaThemeHit, relOf map[string]s
 				Line: hit.line,
 				Message: fmt.Sprintf(
 					"saga-theme invariant %s declared in %s — saga invariants must be consolidated into %s "+
-						"(per .claude/rules/gocell/ai-robust.md §\"archtest 文件命名\"; move it there)",
-					hit.id, base, sagaConsolidatedFile),
+						"(per .claude/rules/gocell/ai-robust.md §\"archtest 文件命名\"; move it to %s)",
+					hit.id, base, sagaConsolidatedFile, sagaConsolidatedFile),
 			})
 		}
 	}
 	return diags
 }
 
-// loadArchtestTestFiles loads every top-level (non-recursive) *_test.go under
-// tools/archtest as raw content, via the sanctioned scope reader (no os.ReadFile).
+// loadArchtestTestFiles loads only the top-level (directly under tools/archtest/)
+// *_test.go files as raw content, via the sanctioned scope reader (no os.ReadFile).
+// The underlying DirsScope walk is recursive; the MatchRels Dir predicate filters
+// the result to the top-level files, excluding internal/ and testdata/ subtrees.
 func loadArchtestTestFiles(t *testing.T, root string) []ContentContext {
 	t.Helper()
 	sc := DirsScope(root, []string{"tools/archtest"}, IncludeTests(), MatchRels(func(rel string) bool {
@@ -4022,9 +4040,9 @@ func TestSagaInvariantsConsolidated(t *testing.T) {
 
 	// Floor guard (non-vacuous): the consolidated file must itself carry the saga
 	// theme, or a rename/empty would let the rule pass vacuously.
-	require.GreaterOrEqual(t, len(byFile[sagaConsolidatedFile]), 3,
-		"%s: %s declares <3 saga INVARIANT IDs — consolidation file missing/renamed or scan broken",
-		sagaInvariantsConsolidatedRule, sagaConsolidatedFile)
+	require.GreaterOrEqual(t, len(byFile[sagaConsolidatedFile]), sagaConsolidatedFileMinIDs,
+		"%s: %s declares <%d saga INVARIANT IDs — consolidation file missing/renamed or scan broken",
+		sagaInvariantsConsolidatedRule, sagaConsolidatedFile, sagaConsolidatedFileMinIDs)
 
 	Report(t, sagaInvariantsConsolidatedRule, sagaConsolidationDiags(byFile, relOf))
 }
@@ -4088,6 +4106,9 @@ func TestSagaInvariantsConsolidated_REDFixture(t *testing.T) {
 	}
 	diags := sagaConsolidationDiags(strayed, relOf)
 	require.NotEmpty(t, diags, "a saga invariant outside the consolidated file must fire the rule")
+	// Exactly one diag: the consolidated-file hit must be suppressed, only the
+	// stray ID reported — guards against a regression that diags the home file.
+	require.Len(t, diags, 1, "only the stray file's invariant should be reported; consolidated-file hits must be suppressed")
 	for _, d := range diags {
 		assert.NotZero(t, d.Line, "diagnostic must carry a non-zero Line")
 		assert.Equal(t, "tools/archtest/saga_stray_test.go", d.Rel, "diagnostic must point at the stray file")
