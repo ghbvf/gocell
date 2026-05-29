@@ -95,6 +95,7 @@ var reconstructionFunnelAllowlist = map[string]map[string]struct{}{
 	"kernel/outbox.UnmarshalEnvelope": {
 		"runtime/eventbus/eventbus.go":    {}, // EventBus inbound decode → subscriber dispatch
 		"adapters/rabbitmq/subscriber.go": {}, // AMQP delivery decode
+		"adapters/mqtt/subscriber.go":     {}, // MQTT PUBLISH delivery decode (processDelivery)
 	},
 	// Storage-reconstruction funnel: persisted DB row → sealed Entry.
 	"(kernel/outbox.EntryScan).ToEntry": {

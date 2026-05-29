@@ -4,6 +4,7 @@ package mqtt
 
 import (
 	"context"
+	"testing"
 
 	"github.com/eclipse/paho.golang/paho"
 
@@ -63,9 +64,9 @@ type testingT interface {
 }
 
 // dispatchAckEntry returns a benign entry + publish pair for dispatchAck tests.
-func dispatchAckEntry(topic string) (*paho.Publish, outbox.Entry) {
+func dispatchAckEntry(t testing.TB, topic string) (*paho.Publish, outbox.Entry) {
 	return &paho.Publish{Topic: topic, QoS: 1},
-		outbox.Entry{ID: "evt-dispatch-ack", EventType: "test.event", Topic: topic, Payload: []byte(`{}`)}
+		mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-dispatch-ack"), outbox.WithTopic(topic))
 }
 
 // ackHandler is a trivial SubscriberHandler that always Acks with no settlement.

@@ -340,13 +340,7 @@ func itestSubscription(topic, group string) outbox.Subscription {
 // itestEnvelope marshals a valid v1 outbox envelope.
 func itestEnvelope(t *testing.T, topic string, payload []byte) []byte {
 	t.Helper()
-	entry := outbox.Entry{
-		ID:        uuid.NewString(),
-		EventType: "itest.event",
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Unix(0, 0),
-	}
+	entry := mustNewEntry(t, "itest.event", payload, outbox.WithID(uuid.NewString()), outbox.WithTopic(topic))
 	raw, err := outbox.MarshalEnvelope(entry)
 	if err != nil {
 		t.Fatalf("MarshalEnvelope: %v", err)
@@ -596,7 +590,7 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	defer subCancel2()
 	go func() {
 		_ = sub2.Subscribe(subCtx2, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			if isOfflineTaggedPayload(entry.Payload) {
+			if isOfflineTaggedPayload(entry.Payload()) {
 				offlineReceived.Add(1)
 			} else {
 				onlineReceived.Add(1)

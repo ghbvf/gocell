@@ -3,8 +3,26 @@ package mqtt
 import (
 	"context"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
+
+// mustNewEntry builds a sealed outbox.Entry via the producer constructor
+// (outbox.Entry is sealed-construction since #1229 — struct literals no longer
+// compile). Mirrors adapters/rabbitmq's test helper. NewEntry stamps
+// createdAt / occurredAt from the clock; tests override identity via WithID /
+// WithTopic.
+func mustNewEntry(t testing.TB, eventType string, payload []byte, opts ...outbox.EntryOption) outbox.Entry {
+	t.Helper()
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), eventType, payload, opts...)
+	if err != nil {
+		t.Fatalf("outbox.NewEntry: %v", err)
+	}
+	return e
+}
 
 // This file has NO build tag so the shared subscriber test doubles compile into
 // BOTH the unit (!integration) and integration test binaries. The disposition /

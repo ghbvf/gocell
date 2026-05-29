@@ -440,8 +440,8 @@ func (s *Subscriber) dispatchDisposition(
 		// Permanent failure: ack-as-poison (PR-4 adds $dead publish first).
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, acking poison (PR-4 will route to $dead)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, entry.Topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, entry.Topic()),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
 		s.releaseSettlement(ctx, settlement, entry, "reject")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonReject)
@@ -455,8 +455,8 @@ func (s *Subscriber) dispatchDisposition(
 		// claim so redelivery can re-enter the Claim cycle cleanly.
 		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: handler requeued entry, leaving unacked for broker redelivery",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, entry.Topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, entry.Topic()),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
 		s.releaseSettlement(ctx, settlement, entry, "requeue")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonRequeue)
@@ -465,8 +465,8 @@ func (s *Subscriber) dispatchDisposition(
 		// Zero / invalid Disposition: treat as Requeue (leave unacked) + Release.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unknown disposition, leaving unacked (treated as requeue)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, entry.Topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, entry.Topic()),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.String("disposition", res.Disposition.String()))
 		s.releaseSettlement(ctx, settlement, entry, "unknown")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnknownDisposition)
@@ -489,8 +489,8 @@ func (s *Subscriber) dispatchAck(
 		if commitErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "mqtt: settlement commit failed (lease may have expired); leaving unacked",
 				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-				slog.String(logKeyTopic, entry.Topic),
-				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyTopic, entry.Topic()),
+				slog.String(logKeyEventID, entry.ID()),
 				slog.Any("error", commitErr))
 			s.releaseSettlement(ctx, settlement, entry, "commit_failed")
 			s.collector.RecordConsumeFailure(ctx, consumeReasonCommitFailed)
@@ -505,8 +505,8 @@ func (s *Subscriber) dispatchAck(
 		// redelivered, but the idempotency key (ClaimDone) prevents reprocessing.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: ack failed after commit; will redeliver (idempotency guards reprocess)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, entry.Topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, entry.Topic()),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", ackErr))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonAckFailed)
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultAckFailed, ackErr)
@@ -546,8 +546,8 @@ func (s *Subscriber) releaseSettlement(ctx context.Context, settlement outbox.Se
 	if relErr := settlement.Release(rctx); relErr != nil {
 		slog.LogAttrs(rctx, slog.LevelError, "mqtt: settlement release failed",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyTopic, entry.Topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, entry.Topic()),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.String("reason", reason),
 			slog.Any("error", relErr))
 	}

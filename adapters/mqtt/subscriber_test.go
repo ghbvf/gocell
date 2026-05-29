@@ -31,13 +31,7 @@ import (
 // payload so the subscriber's UnmarshalEnvelope succeeds.
 func newSubEnvelope(t *testing.T, topic string, payload []byte) []byte {
 	t.Helper()
-	entry := outbox.Entry{
-		ID:        uuid.NewString(),
-		EventType: "test.event",
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Unix(0, 0),
-	}
+	entry := mustNewEntry(t, "test.event", payload, outbox.WithID(uuid.NewString()), outbox.WithTopic(topic))
 	raw, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 	return raw
@@ -423,7 +417,7 @@ func TestSubscriber_CompetingConsumers_ShareDistributes(t *testing.T) {
 	mkHandler := func(counter *atomic.Int64) outbox.SubscriberHandler {
 		return func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			counter.Add(1)
-			if _, loaded := seen.LoadOrStore(string(entry.Payload), struct{}{}); loaded {
+			if _, loaded := seen.LoadOrStore(string(entry.Payload()), struct{}{}); loaded {
 				dup.Add(1)
 			}
 			return outbox.Ack(), nil
@@ -641,7 +635,7 @@ func TestSubscriber_DispatchAck_AckFailsAfterCommit(t *testing.T) {
 	sub := newDispatchAckSubscriber(t, errors.New("broker gone"), coll)
 
 	settlement := &recordingSettlement{} // commitErr nil → Commit succeeds
-	pb, entry := dispatchAckEntry("test/ackfail/x")
+	pb, entry := dispatchAckEntry(t, "test/ackfail/x")
 	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
@@ -666,7 +660,7 @@ func TestSubscriber_DispatchAck_CommitFails(t *testing.T) {
 	sub := newDispatchAckSubscriber(t, nil, coll)
 
 	settlement := &recordingSettlement{commitErr: errors.New("lease expired")}
-	pb, entry := dispatchAckEntry("test/commitfail/x")
+	pb, entry := dispatchAckEntry(t, "test/commitfail/x")
 	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
@@ -793,7 +787,7 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 				Disposition:         tc.disp,
 				SettlementObservers: []outbox.SettlementObserver{obs},
 			}
-			pb, entry := dispatchAckEntry("test/notify/" + tc.name)
+			pb, entry := dispatchAckEntry(t, "test/notify/"+tc.name)
 			sub.dispatchDisposition(context.Background(), pb, res, &recordingSettlement{}, entry, time.Now())
 
 			require.Equal(t, 1, count, "SettlementObserver must fire exactly once")
@@ -831,7 +825,7 @@ func TestSubscriber_ConcurrentDispatch_SlowHandlerDoesNotBlock(t *testing.T) {
 
 	subscription := newSubscription("test/conc/+", "conc-cg-"+uuid.NewString())
 	cancel := startSubscribe(t, sub, subscription, func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		if string(entry.Payload) == slowPayload {
+		if string(entry.Payload()) == slowPayload {
 			slowEntered.Store(true)
 			<-block // block until released
 		} else {
