@@ -863,10 +863,11 @@ endpoints:
   server: {{.OwnerCell}}
   clients: []
   grpc:
-    service: {{.OwnerCell}}.v1.RenameService
-    method: RenameMethod
+    # TODO: replace the placeholders below with the real proto service/method/path.
+    service: {{.OwnerCell}}.v1.ExampleService
+    method: ExampleMethod
     streamingType: unary
-    proto: contracts/grpc/{{.OwnerCell}}/v1/rename.proto
+    proto: contracts/grpc/{{.OwnerCell}}/v1/example.proto
     auth:
       public: false
 {{- end}}

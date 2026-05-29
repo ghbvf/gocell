@@ -68,7 +68,9 @@ type GRPCEndpointSpec struct {
 	Method        string // proto method name, e.g. "IssueCommand"
 	StreamingType string // unary | server-stream | client-stream | bidi (empty → unary)
 	Proto         string // contracts-relative .proto path
-	ProtoPackage  string // proto `package` declaration (codegen, PR 6)
+	// ProtoPackage is the proto `package` declaration (e.g. "device.command.v1").
+	// Populated by codegen in PR 6; empty in PR 1–5 and must not be relied upon.
+	ProtoPackage string
 }
 
 // Validate returns an error if the spec is malformed. Validation is separate

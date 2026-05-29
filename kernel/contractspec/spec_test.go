@@ -111,7 +111,7 @@ func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
 		wantErr bool
 	}{
 		{"happy — full grpc spec", contractspec.ContractSpec{
-			ID: "grpc.device.command.v1.IssueCommand", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
 			GRPC: &contractspec.GRPCEndpointSpec{
 				Service: "device.command.v1.DeviceCommandService", Method: "IssueCommand",
 			},
@@ -155,7 +155,7 @@ func TestContractSpec_GRPCInfo(t *testing.T) {
 	t.Parallel()
 	grpcSpec := &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"}
 	withGRPC := contractspec.ContractSpec{
-		ID: "grpc.x.y.v1.M", Kind: cellvocab.ContractGRPC, Transport: "grpc", GRPC: grpcSpec,
+		ID: "grpc.x.y.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc", GRPC: grpcSpec,
 	}
 	if got := withGRPC.GRPCInfo(); got != grpcSpec {
 		t.Fatalf("GRPCInfo() = %v, want %v", got, grpcSpec)

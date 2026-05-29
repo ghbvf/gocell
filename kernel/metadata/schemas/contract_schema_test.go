@@ -553,6 +553,16 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			expectValid: true,
 		},
 		{
+			name: "auth public true accepted",
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"method": "IssueCommand",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"auth": {"public": true}
+			}`,
+			expectValid: true,
+		},
+		{
 			name:        "missing service rejected",
 			grpcBlock:   `{"method": "IssueCommand", "proto": "contracts/grpc/x/v1/x.proto"}`,
 			expectValid: false,

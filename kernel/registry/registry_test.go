@@ -166,6 +166,36 @@ func TestContractRegistry_ByOwner(t *testing.T) {
 	}
 }
 
+// TestContractRegistry_ByKind_DeepCopiesGRPC asserts that a ContractMeta
+// returned by ByKind carries an independent GRPCTransportMeta — mutating the
+// returned copy must not alias-mutate the registry's backing entry.
+func TestContractRegistry_ByKind_DeepCopiesGRPC(t *testing.T) {
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc-x-y-v1": {
+				ID:   "grpc-x-y-v1",
+				Kind: "grpc",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDAuditCore},
+					GRPC:    &metadata.GRPCTransportMeta{Service: "x.v1.S", Method: "M", Proto: "contracts/grpc/x/v1/x.proto"},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	first := reg.ByKind("grpc")
+	require.Len(t, first, 1)
+	require.NotNil(t, first[0].Endpoints.GRPC)
+	first[0].Endpoints.GRPC.Service = "MUTATED"
+
+	second := reg.ByKind("grpc")
+	require.Len(t, second, 1)
+	require.NotNil(t, second[0].Endpoints.GRPC)
+	assert.Equal(t, "x.v1.S", second[0].Endpoints.GRPC.Service,
+		"ByKind must deep-copy GRPCTransportMeta; backing entry was alias-mutated")
+}
+
 func TestContractRegistry_Provider(t *testing.T) {
 	tests := []struct {
 		name       string

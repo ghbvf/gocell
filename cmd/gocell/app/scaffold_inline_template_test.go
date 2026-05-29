@@ -123,4 +123,7 @@ func TestRenderInlineContractYAML_GRPCDraft(t *testing.T) {
 	if cm.Endpoints.GRPC.Service == "" || cm.Endpoints.GRPC.Method == "" || cm.Endpoints.GRPC.Proto == "" {
 		t.Errorf("endpoints.grpc must have service/method/proto, got %+v", cm.Endpoints.GRPC)
 	}
+	if cm.Endpoints.GRPC.Auth.Public {
+		t.Error("grpc draft must default to auth.public=false (secure default)")
+	}
 }
