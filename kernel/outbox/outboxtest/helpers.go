@@ -15,6 +15,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 )
 
 // errSubscribeUnexpectedFmt is the format string used by helpers that report
@@ -83,7 +85,7 @@ func TestTopic(t *testing.T) string {
 func NewEntry(topic string, payload []byte) outbox.Entry {
 	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload, outbox.WithTopic(topic))
 	if err != nil {
-		panic(fmt.Sprintf("outboxtest.NewEntry(%s): %v", topic, err))
+		panic(panicregister.Approved("outboxtest-new-entry", errcode.Assertion("outboxtest.NewEntry(%s): %v", topic, err)))
 	}
 	return e
 }
@@ -93,7 +95,7 @@ func NewEntryWithMetadata(topic string, payload []byte, metadata map[string]stri
 	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload,
 		outbox.WithTopic(topic), outbox.WithMetadata(metadata))
 	if err != nil {
-		panic(fmt.Sprintf("outboxtest.NewEntryWithMetadata(%s): %v", topic, err))
+		panic(panicregister.Approved("outboxtest-new-entry-metadata", errcode.Assertion("outboxtest.NewEntryWithMetadata(%s): %v", topic, err)))
 	}
 	return e
 }

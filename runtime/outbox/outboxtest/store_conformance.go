@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -57,7 +59,7 @@ type StoreFactory func(t *testing.T, seed []outbox.ClaimedEntry) outbox.Store
 func mustEntry(s kout.EntryScan) kout.Entry {
 	e, err := s.ToEntry()
 	if err != nil {
-		panic("outboxtest.mustEntry: " + err.Error())
+		panic(panicregister.Approved("outboxtest-must-entry", errcode.Assertion("outboxtest.mustEntry: %v", err)))
 	}
 	return e
 }
