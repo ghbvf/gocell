@@ -38,25 +38,35 @@ func TestFakeStore_ConformanceSuite(t *testing.T) {
 func TestFakeStore_SeedSnapshot(t *testing.T) {
 	s := outboxtest.NewFakeStore()
 
+	mustScan := func(s kout.EntryScan) kout.Entry {
+		e, err := s.ToEntry()
+		if err != nil {
+			t.Fatalf("fake_store_test mustScan: %v", err)
+		}
+		return e
+	}
+	now := time.Now()
 	entries := []outbox.ClaimedEntry{
 		{
-			Entry: kout.Entry{
-				ID:        "row-a",
-				EventType: "ev.a",
-				Topic:     "ev.a",
-				Payload:   []byte(`{"k":"v"}`),
-				CreatedAt: time.Now(),
-			},
+			Entry: mustScan(kout.EntryScan{
+				ID:         "row-a",
+				EventType:  "ev.a",
+				Topic:      "ev.a",
+				Payload:    []byte(`{"k":"v"}`),
+				CreatedAt:  now,
+				OccurredAt: now,
+			}),
 			Attempts: 1,
 		},
 		{
-			Entry: kout.Entry{
-				ID:        "row-b",
-				EventType: "ev.b",
-				Topic:     "ev.b",
-				Payload:   []byte(`{"k":"w"}`),
-				CreatedAt: time.Now(),
-			},
+			Entry: mustScan(kout.EntryScan{
+				ID:         "row-b",
+				EventType:  "ev.b",
+				Topic:      "ev.b",
+				Payload:    []byte(`{"k":"w"}`),
+				CreatedAt:  now,
+				OccurredAt: now,
+			}),
 			Attempts: 0,
 		},
 	}
@@ -68,17 +78,17 @@ func TestFakeStore_SeedSnapshot(t *testing.T) {
 	}
 
 	// Snapshot is sorted by ID.
-	if snap[0].Entry.ID != "row-a" {
-		t.Errorf("expected first row ID=row-a, got %s", snap[0].Entry.ID)
+	if snap[0].Entry.ID() != "row-a" {
+		t.Errorf("expected first row ID=row-a, got %s", snap[0].Entry.ID())
 	}
-	if snap[1].Entry.ID != "row-b" {
-		t.Errorf("expected second row ID=row-b, got %s", snap[1].Entry.ID)
+	if snap[1].Entry.ID() != "row-b" {
+		t.Errorf("expected second row ID=row-b, got %s", snap[1].Entry.ID())
 	}
 
 	// Default status is pending.
 	for _, row := range snap {
 		if row.Status != kout.StatePending {
-			t.Errorf("row %s: expected status=pending, got %s", row.Entry.ID, row.Status)
+			t.Errorf("row %s: expected status=pending, got %s", row.Entry.ID(), row.Status)
 		}
 	}
 }
@@ -89,15 +99,18 @@ func TestFakeStore_WithClock(t *testing.T) {
 	s := outboxtest.NewFakeStore()
 	s.WithClock(func() time.Time { return base })
 
-	s.Seed(outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID:        "clk-1",
-			EventType: "ev.clk",
-			Topic:     "ev.clk",
-			Payload:   []byte(`{"x":1}`),
-			CreatedAt: base,
-		},
-	})
+	clkEntry, err := kout.EntryScan{
+		ID:         "clk-1",
+		EventType:  "ev.clk",
+		Topic:      "ev.clk",
+		Payload:    []byte(`{"x":1}`),
+		CreatedAt:  base,
+		OccurredAt: base,
+	}.ToEntry()
+	if err != nil {
+		t.Fatalf("fake_store_test WithClock seed: %v", err)
+	}
+	s.Seed(outbox.ClaimedEntry{Entry: clkEntry})
 
 	ctx := context.Background()
 	_, _ = s.ClaimPending(ctx, 10)
@@ -141,14 +154,11 @@ func TestFakeStore_WithClock(t *testing.T) {
 func TestFakeStore_SeedOverwrite(t *testing.T) {
 	s := outboxtest.NewFakeStore()
 
-	s.Seed(outbox.ClaimedEntry{
-		Entry:    kout.Entry{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{}`), CreatedAt: time.Now()},
-		Attempts: 0,
-	})
-	s.Seed(outbox.ClaimedEntry{
-		Entry:    kout.Entry{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{"overwrite":true}`), CreatedAt: time.Now()},
-		Attempts: 3,
-	})
+	ow1Now := time.Now()
+	ow1a, _ := kout.EntryScan{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{}`), CreatedAt: ow1Now, OccurredAt: ow1Now}.ToEntry()
+	ow1b, _ := kout.EntryScan{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{"overwrite":true}`), CreatedAt: ow1Now, OccurredAt: ow1Now}.ToEntry()
+	s.Seed(outbox.ClaimedEntry{Entry: ow1a, Attempts: 0})
+	s.Seed(outbox.ClaimedEntry{Entry: ow1b, Attempts: 3})
 
 	snap := s.Snapshot()
 	if len(snap) != 1 {
@@ -164,19 +174,19 @@ func TestFakeStore_SeedOverwrite(t *testing.T) {
 // blocking on any state change.
 func TestFakeStore_WaitFor_ImmediateSatisfaction(t *testing.T) {
 	s := outboxtest.NewFakeStore()
-	s.Seed(outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID: "wf-immediate", EventType: "ev", Topic: "ev",
-			Payload: []byte(`{}`), CreatedAt: time.Now(),
-		},
-	})
+	wfNow := time.Now()
+	wfEntry, _ := kout.EntryScan{
+		ID: "wf-immediate", EventType: "ev", Topic: "ev",
+		Payload: []byte(`{}`), CreatedAt: wfNow, OccurredAt: wfNow,
+	}.ToEntry()
+	s.Seed(outbox.ClaimedEntry{Entry: wfEntry})
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	start := time.Now()
 	err := s.WaitFor(ctx, func(snap []outboxtest.FakeRow) bool {
-		return len(snap) == 1 && snap[0].Entry.ID == "wf-immediate"
+		return len(snap) == 1 && snap[0].Entry.ID() == "wf-immediate"
 	})
 	elapsed := time.Since(start)
 
@@ -193,12 +203,12 @@ func TestFakeStore_WaitFor_ImmediateSatisfaction(t *testing.T) {
 // (MarkPublished here) is called from another goroutine.
 func TestFakeStore_WaitFor_WakesOnMutation(t *testing.T) {
 	s := outboxtest.NewFakeStore()
-	s.Seed(outbox.ClaimedEntry{
-		Entry: kout.Entry{
-			ID: "wf-wake", EventType: "ev", Topic: "ev",
-			Payload: []byte(`{}`), CreatedAt: time.Now(),
-		},
-	})
+	wakeNow := time.Now()
+	wakeEntry, _ := kout.EntryScan{
+		ID: "wf-wake", EventType: "ev", Topic: "ev",
+		Payload: []byte(`{}`), CreatedAt: wakeNow, OccurredAt: wakeNow,
+	}.ToEntry()
+	s.Seed(outbox.ClaimedEntry{Entry: wakeEntry})
 
 	// Claim so MarkPublished can transition claiming → published.
 	claimed, err := s.ClaimPending(context.Background(), 1)
@@ -269,15 +279,16 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 	// Seed 5 rows with ascending CreatedAt so ClaimPending visits them in known order.
 	ids := []string{"e-1", "e-2", "e-3", "e-4", "e-5"}
 	for i, id := range ids {
-		s.Seed(outbox.ClaimedEntry{
-			Entry: kout.Entry{
-				ID:        id,
-				EventType: "test",
-				Topic:     "test",
-				Payload:   []byte(`{}`),
-				CreatedAt: base.Add(time.Duration(i) * time.Second),
-			},
-		})
+		ts := base.Add(time.Duration(i) * time.Second)
+		e, _ := kout.EntryScan{
+			ID:         id,
+			EventType:  "test",
+			Topic:      "test",
+			Payload:    []byte(`{}`),
+			CreatedAt:  ts,
+			OccurredAt: ts,
+		}.ToEntry()
+		s.Seed(outbox.ClaimedEntry{Entry: e})
 	}
 
 	// Claim each one at a time, advancing the clock between calls so each
@@ -287,7 +298,7 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ClaimPending: %v", err)
 		}
-		if len(claimed) != 1 || claimed[0].ID != id {
+		if len(claimed) != 1 || claimed[0].ID() != id {
 			t.Fatalf("ClaimPending got %v, want single %s", claimed, id)
 		}
 		nowVal = nowVal.Add(time.Second)
@@ -311,9 +322,9 @@ func TestFakeStore_ReclaimStale_DeterministicBatchSelection(t *testing.T) {
 	for _, row := range s.Snapshot() {
 		switch row.Status {
 		case kout.StatePending:
-			reclaimed = append(reclaimed, row.Entry.ID)
+			reclaimed = append(reclaimed, row.Entry.ID())
 		case kout.StateClaiming:
-			stillClaiming = append(stillClaiming, row.Entry.ID)
+			stillClaiming = append(stillClaiming, row.Entry.ID())
 		}
 	}
 	wantReclaimed := []string{"e-1", "e-2"}

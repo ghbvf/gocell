@@ -161,13 +161,17 @@ func getQueueDepth(t *testing.T, mgmtURL, queueName string) int {
 // accepts them. Returns on first error.
 func publishMessages(ctx context.Context, pub *rabbitmq.Publisher, topic string, count int) error {
 	for i := 0; i < count; i++ {
-		entry := outbox.Entry{
-			ID:            uuid.New().String(),
-			AggregateID:   fmt.Sprintf("agg-%d", i),
-			AggregateType: "shutdown-e2e",
-			EventType:     topic,
-			Payload:       []byte(fmt.Sprintf(`{"seq":%d}`, i)),
-			CreatedAt:     time.Now().UTC(),
+		now := time.Now().UTC()
+		entry, err := outbox.NewEntry(clock.Real(), ctx, topic,
+			[]byte(fmt.Sprintf(`{"seq":%d}`, i)),
+			outbox.WithID(uuid.New().String()),
+			outbox.WithAggregateID(fmt.Sprintf("agg-%d", i)),
+			outbox.WithAggregateType("shutdown-e2e"),
+			outbox.WithCreatedAt(now),
+			outbox.WithOccurredAt(now),
+		)
+		if err != nil {
+			return fmt.Errorf("new entry %d: %w", i, err)
 		}
 		payload, err := outbox.MarshalEnvelope(entry)
 		if err != nil {

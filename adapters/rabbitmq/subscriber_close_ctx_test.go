@@ -105,11 +105,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 
 	// Enqueue deliveries before starting Subscribe.
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, outbox.Entry{
-			ID:        "f6-e2e-" + string(rune('a'+i)),
-			EventType: "f6.ack.order",
-			Payload:   []byte(`{}`),
-		})
+		body := makeDeliveryBody(t, mustNewEntry(t, "f6.ack.order", []byte(`{}`), outbox.WithID("f6-e2e-" + string(rune('a'+i)))))
 		atCh.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
@@ -213,11 +209,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 
 	sub := newSubNoShutdown(conn, "close-deadline-queue", "close-deadline.dlx")
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "close-deadline-1",
-		EventType: "close.deadline",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "close.deadline", []byte(`{}`), outbox.WithID("close-deadline-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -317,11 +309,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 
 	sub := newSubNoShutdown(conn, "graceful-queue", "graceful.dlx")
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "graceful-1",
-		EventType: "graceful.test",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "graceful.test", []byte(`{}`), outbox.WithID("graceful-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,11 +367,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 
 	sub := newSubNoShutdown(conn, "inflight-complete-queue", "inflight-complete.dlx")
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "inflight-1",
-		EventType: "inflight.test",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "inflight.test", []byte(`{}`), outbox.WithID("inflight-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -427,11 +411,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 
 	sub := newSubNoShutdown(conn, "nodeadline-queue", "nodeadline.dlx")
 
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "nodeadline-1",
-		EventType: "nodeadline.test",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "nodeadline.test", []byte(`{}`), outbox.WithID("nodeadline-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx, cancel := context.WithCancel(context.Background())

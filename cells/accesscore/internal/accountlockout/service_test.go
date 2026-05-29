@@ -373,9 +373,9 @@ func TestService_RecordFailure_TriggersLock(t *testing.T) {
 	assert.Equal(t, 1, repo.bumpEpochCalls, "epoch bumped on auto-lock")
 	entries := emitter.snapshot()
 	require.Len(t, entries, 1, "exactly one event emitted")
-	assert.Equal(t, dto.TopicUserLocked, entries[0].EventType)
+	assert.Equal(t, dto.TopicUserLocked, entries[0].EventType())
 	var payload dto.UserLockedEvent
-	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(entries[0].Payload(), &payload))
 	assert.Equal(t, seed.ID, payload.UserID)
 	assert.Equal(t, SystemActorID, payload.ActorID, "ActorID must be %q for auto-lock", SystemActorID)
 	assert.Equal(t, 1, metrics.count("threshold_locked"), "lock metric incremented")
@@ -476,9 +476,9 @@ func TestService_TryLazyUnlock_TTLElapsed(t *testing.T) {
 	// F27: TryLazyUnlock must emit event.user.unlocked.v1 on successful unlock.
 	entries := emitter.snapshot()
 	require.Len(t, entries, 1, "exactly one event emitted on lazy unlock")
-	assert.Equal(t, dto.TopicUserUnlocked, entries[0].EventType)
+	assert.Equal(t, dto.TopicUserUnlocked, entries[0].EventType())
 	var payload dto.UserUnlockedEvent
-	require.NoError(t, json.Unmarshal(entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(entries[0].Payload(), &payload))
 	assert.Equal(t, seed.ID, payload.UserID)
 	assert.Equal(t, SystemActorID, payload.ActorID, "ActorID must be %q for auto-unlock", SystemActorID)
 

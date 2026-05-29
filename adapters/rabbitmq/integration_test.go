@@ -198,15 +198,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Prepare an outbox.Entry as the message payload, wrapped in a v1 wire
 	// envelope so the subscriber's unmarshalDelivery (fail-closed since P1-14)
 	// accepts it.
-	entry := outbox.Entry{
-		ID:            "evt-001",
-		AggregateID:   "agg-001",
-		AggregateType: "test",
-		EventType:     "test.created",
-		Payload:       []byte(`{"foo":"bar"}`),
-		CreatedAt:     time.Now().UTC(),
-		Metadata:      map[string]string{"source": "integration-test"},
-	}
+	entry := mustNewEntry(t, "test.created", []byte(`{"foo":"bar"}`), outbox.WithID("evt-001"), outbox.WithAggregateID("agg-001"), outbox.WithAggregateType("test"), outbox.WithMetadata(map[string]string{"source": "integration-test"}), outbox.WithCreatedAt(time.Now().UTC()))
 
 	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err, "marshal envelope")
@@ -218,10 +210,10 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Wait for the message.
 	select {
 	case got := <-received:
-		assert.Equal(t, entry.ID, got.ID, "event ID should match")
-		assert.Equal(t, entry.AggregateID, got.AggregateID, "aggregate ID should match")
-		assert.Equal(t, entry.EventType, got.EventType, "event type should match")
-		assert.JSONEq(t, `{"foo":"bar"}`, string(got.Payload), "payload should match")
+		assert.Equal(t, entry.ID(), got.ID(), "event ID should match")
+		assert.Equal(t, entry.AggregateID(), got.AggregateID(), "aggregate ID should match")
+		assert.Equal(t, entry.EventType(), got.EventType(), "event type should match")
+		assert.JSONEq(t, `{"foo":"bar"}`, string(got.Payload()), "payload should match")
 	case <-subCtx.Done():
 		t.Fatal("timed out waiting for message")
 	}
@@ -240,12 +232,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 	pub := NewPublisher(clock.Real(), conn)
 	topic := "test.integration.publish-only"
 
-	entry := outbox.Entry{
-		ID:        "evt-publish-only",
-		EventType: "test.published",
-		Payload:   []byte(`{"status":"ok"}`),
-		CreatedAt: time.Now().UTC(),
-	}
+	entry := mustNewEntry(t, "test.published", []byte(`{"status":"ok"}`), outbox.WithID("evt-publish-only"), outbox.WithCreatedAt(time.Now().UTC()))
 
 	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
@@ -330,12 +317,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 	// --- Publish a message ---
-	entry := outbox.Entry{
-		ID:        "evt-retry-e2e-001",
-		EventType: "test.retry.transient",
-		Payload:   []byte(`{"retry":"e2e"}`),
-		CreatedAt: time.Now().UTC(),
-	}
+	entry := mustNewEntry(t, "test.retry.transient", []byte(`{"retry":"e2e"}`), outbox.WithID("evt-retry-e2e-001"), outbox.WithCreatedAt(time.Now().UTC()))
 	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 
@@ -369,10 +351,10 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	}, testtime.D15s, testtime.D200ms,
 		"message should appear in DLQ after retry exhaustion — handler called %d times", callCount.Load())
 
-	assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
-	assert.JSONEq(t, `{"retry":"e2e"}`, string(dlEntry.Payload))
+	assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID(), "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"retry":"e2e"}`, string(dlEntry.Payload()))
 	t.Logf("ConsumerBase retry e2e verified: message %s routed to DLQ after %d handler calls",
-		dlEntry.ID, callCount.Load())
+		dlEntry.ID(), callCount.Load())
 
 	// Handler should have been called RetryCount times.
 	assert.GreaterOrEqual(t, callCount.Load(), int32(2),

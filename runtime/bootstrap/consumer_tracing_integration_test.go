@@ -158,20 +158,19 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	// Publish one entry on the topic and await handler invocation.
 	// The bus requires a v1 wire envelope, built via outbox.MarshalEnvelope.
 	bodyPayload, _ := json.Marshal(map[string]string{"hello": "world"})
-	envelope, err := outbox.MarshalEnvelope(outbox.Entry{
-		ID:        "integration-evt-1",
-		EventType: "integration.test",
-		Topic:     spec.Topic,
-		Payload:   bodyPayload,
-		CreatedAt: time.Now(),
-	})
+	publishEntry, err := outbox.NewEntry(clock.Real(), context.Background(), "integration.test", bodyPayload,
+		outbox.WithID("integration-evt-1"),
+		outbox.WithTopic(spec.Topic),
+		outbox.WithCreatedAt(time.Now()))
+	require.NoError(t, err)
+	envelope, err := outbox.MarshalEnvelope(publishEntry)
 	require.NoError(t, err)
 	err = bus.Publish(ctx, spec.Topic, envelope)
 	require.NoError(t, err)
 
 	select {
 	case got := <-cellImpl.calls:
-		assert.Equal(t, "integration-evt-1", got.ID)
+		assert.Equal(t, "integration-evt-1", got.ID())
 	case <-time.After(testtime.D2s):
 		t.Fatal("consumer handler was never invoked within 2s")
 	}

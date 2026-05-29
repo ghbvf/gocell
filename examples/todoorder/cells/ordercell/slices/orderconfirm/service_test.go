@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -69,7 +70,7 @@ func seedOrder(t testing.TB, repo *mem.OrderRepository) string {
 
 func newTestService(t testing.TB, repo domain.OrderRepository, writer *recordingWriter, txRunner *stubTxRunner) *Service {
 	t.Helper()
-	svc, err := NewService(repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(mustEmitter(t, writer)),
 		WithTxManager(persistence.WrapForCell(txRunner)),
 	)
@@ -102,13 +103,13 @@ func TestService_Confirm_Success(t *testing.T) {
 	// Verify exactly one outbox entry emitted
 	require.Len(t, writer.entries, 1)
 	entry := writer.entries[0]
-	assert.Equal(t, orderID, entry.AggregateID)
-	assert.Equal(t, "order", entry.AggregateType)
-	assert.Equal(t, TopicOrderStatusChanged, entry.EventType)
+	assert.Equal(t, orderID, entry.AggregateID())
+	assert.Equal(t, "order", entry.AggregateType())
+	assert.Equal(t, TopicOrderStatusChanged, entry.EventType())
 	assert.Equal(t, TopicOrderStatusChanged, entry.RoutingTopic())
-	assert.Contains(t, string(entry.Payload), `"oldStatus":"pending"`)
-	assert.Contains(t, string(entry.Payload), `"newStatus":"confirmed"`)
-	assert.Contains(t, string(entry.Payload), orderID)
+	assert.Contains(t, string(entry.Payload()), `"oldStatus":"pending"`)
+	assert.Contains(t, string(entry.Payload()), `"newStatus":"confirmed"`)
+	assert.Contains(t, string(entry.Payload()), orderID)
 
 	// Verify tx was used
 	assert.Equal(t, 1, txRunner.calls)
@@ -305,7 +306,7 @@ func TestNewService_NilDep(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewService(tt.repo, slog.Default(), tt.opts...)
+			_, err := NewService(clock.Real(), tt.repo, slog.Default(), tt.opts...)
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)

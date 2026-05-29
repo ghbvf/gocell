@@ -25,7 +25,7 @@ import (
 
 // mustNewService is a test-only construction helper that panics on error.
 func mustNewService(sessionStore session.Store, refreshStore refresh.Store, logger *slog.Logger, opts ...Option) *Service {
-	s, err := NewService(sessionStore, refreshStore, logger, opts...)
+	s, err := NewService(clock.Real(), sessionStore, refreshStore, logger, opts...)
 	if err != nil {
 		panic("mustNewService: " + err.Error())
 	}
@@ -59,7 +59,7 @@ func newTestService(t testing.TB) (*Service, session.Store) {
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	store := testutil.RealSessionRepo(t)
 	refreshStore := newLogoutRefreshStore()
-	_, err := NewService(store, refreshStore, slog.Default() /* no WithTxManager */)
+	_, err := NewService(clock.Real(), store, refreshStore, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -79,14 +79,14 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
 				var typedNil *session.MemStore
-				return NewService(typedNil, refreshStore, slog.Default())
+				return NewService(clock.Real(), typedNil, refreshStore, slog.Default())
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(store, typedNil, slog.Default())
+				return NewService(clock.Real(), store, typedNil, slog.Default())
 			},
 		},
 	}

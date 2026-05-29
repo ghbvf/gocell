@@ -204,15 +204,14 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 			Value:   "atomic-value",
 			Version: 1,
 		}
-		outboxEntry := outbox.Entry{
-			ID:            outbox.MustNewEntryID(),
-			AggregateID:   entry.ID,
-			AggregateType: "config_entry",
-			EventType:     domain.TopicConfigEntryUpserted,
-			Payload:       []byte(`{"key":"integration.atomic.key","value":"atomic-value","version":1}`),
-		}
+		outboxEntry, err := outbox.NewEntry(clock.Real(), ctx, domain.TopicConfigEntryUpserted,
+			[]byte(`{"key":"integration.atomic.key","value":"atomic-value","version":1}`),
+			outbox.WithAggregateID(entry.ID),
+			outbox.WithAggregateType("config_entry"),
+		)
+		require.NoError(t, err)
 
-		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+		err = txMgr.RunInTx(ctx, func(txCtx context.Context) error {
 			if err := repo.Create(txCtx, entry); err != nil {
 				return err
 			}

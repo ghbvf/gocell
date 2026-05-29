@@ -106,7 +106,7 @@ func TestEventDeviceRegisteredV1Publish(t *testing.T) {
 	// Unwrap here to validate against the business-payload contract schema.
 	entry, err := outbox.UnmarshalEnvelope(pub.calls[0].topic, pub.calls[0].payload)
 	require.NoError(t, err, "published payload must be a valid v1 envelope")
-	c.ValidatePayload(t, entry.Payload)
+	c.ValidatePayload(t, entry.Payload())
 	c.MustRejectPayload(t, []byte(`{"id":"d-1"}`))
 	// Headers validation skipped: devicecell uses publisher.Publish directly
 	// (L4, no outbox.Entry per KG-07), so event_id is not emitted at transport level.

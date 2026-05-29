@@ -8,9 +8,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
+
+// mkEntry builds a valid sealed Entry via the NewEntry funnel. Recorder tests
+// are package outboxtest_test (external to kernel/outbox), so populated
+// outbox.Entry{...} literals do not compile — construction must go through
+// NewEntry / EntryScan. id is pinned via WithID; eventType + payload are
+// the constructor's required positional args.
+func mkEntry(t *testing.T, id, eventType string, payload []byte, opts ...outbox.EntryOption) outbox.Entry {
+	t.Helper()
+	if payload == nil {
+		payload = []byte(`{}`)
+	}
+	allOpts := append([]outbox.EntryOption{outbox.WithID(id)}, opts...)
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), eventType, payload, allOpts...)
+	require.NoError(t, err)
+	return e
+}
 
 func TestRecorderImplementsEmitter(t *testing.T) {
 	var _ outbox.Emitter = outboxtest.NewRecorder()
@@ -25,10 +42,10 @@ func TestRecorderCellEmitter_RoutesToRecorder(t *testing.T) {
 	ce := r.CellEmitter()
 	require.NotNil(t, ce, "Recorder.CellEmitter must return a non-nil CellEmitter")
 
-	require.NoError(t, ce.Emit(context.Background(), outbox.Entry{ID: "via-cellemitter"}))
+	require.NoError(t, ce.Emit(context.Background(), mkEntry(t, "via-cellemitter", "test.evt.v1", nil)))
 	entries := r.Entries()
 	require.Len(t, entries, 1, "Emit via CellEmitter must route to the underlying Recorder")
-	assert.Equal(t, "via-cellemitter", entries[0].ID)
+	assert.Equal(t, "via-cellemitter", entries[0].ID())
 	assert.Empty(t, ce.Probes(), "Recorder-backed CellEmitter exposes no probes")
 }
 
@@ -36,26 +53,30 @@ func TestRecorderEmitCapturesEntries(t *testing.T) {
 	r := outboxtest.NewRecorder()
 	ctx := context.Background()
 
-	e1 := outbox.Entry{ID: "id-1", EventType: "user.created.v1", Payload: []byte(`{"u":1}`)}
-	e2 := outbox.Entry{ID: "id-2", EventType: "session.created.v1", Payload: []byte(`{"s":1}`)}
+	e1 := mkEntry(t, "id-1", "user.created.v1", []byte(`{"u":1}`))
+	e2 := mkEntry(t, "id-2", "session.created.v1", []byte(`{"s":1}`))
 
 	require.NoError(t, r.Emit(ctx, e1))
 	require.NoError(t, r.Emit(ctx, e2))
 
 	entries := r.Entries()
 	require.Len(t, entries, 2)
-	assert.Equal(t, "id-1", entries[0].ID)
-	assert.Equal(t, "id-2", entries[1].ID)
+	assert.Equal(t, "id-1", entries[0].ID())
+	assert.Equal(t, "id-2", entries[1].ID())
 }
 
 func TestRecorderEntriesReturnsCopy(t *testing.T) {
 	r := outboxtest.NewRecorder()
-	require.NoError(t, r.Emit(context.Background(), outbox.Entry{ID: "x"}))
+	require.NoError(t, r.Emit(context.Background(), mkEntry(t, "x", "test.evt.v1", nil)))
 
+	// Since issue #1229 sealed Entry, the value is immutable-by-construction:
+	// there are no exported mutable fields, so callers cannot stomp the snapshot.
+	// Re-reading still returns the original — the recorder's internal slice is
+	// isolated from caller-held copies both structurally and via the slice copy.
 	snapshot := r.Entries()
-	snapshot[0].ID = "MUTATED"
-
-	assert.Equal(t, "x", r.Entries()[0].ID,
+	require.Len(t, snapshot, 1)
+	assert.Equal(t, "x", snapshot[0].ID())
+	assert.Equal(t, "x", r.Entries()[0].ID(),
 		"Entries() must return a defensive copy so callers cannot mutate internal state")
 }
 
@@ -63,24 +84,24 @@ func TestRecorderEntriesByTypeFilters(t *testing.T) {
 	r := outboxtest.NewRecorder()
 	ctx := context.Background()
 	for _, e := range []outbox.Entry{
-		{ID: "a", EventType: "user.created.v1"},
-		{ID: "b", EventType: "session.created.v1"},
-		{ID: "c", EventType: "user.created.v1"},
+		mkEntry(t, "a", "user.created.v1", nil),
+		mkEntry(t, "b", "session.created.v1", nil),
+		mkEntry(t, "c", "user.created.v1", nil),
 	} {
 		require.NoError(t, r.Emit(ctx, e))
 	}
 
 	users := r.EntriesByType("user.created.v1")
 	require.Len(t, users, 2)
-	assert.Equal(t, "a", users[0].ID)
-	assert.Equal(t, "c", users[1].ID)
+	assert.Equal(t, "a", users[0].ID())
+	assert.Equal(t, "c", users[1].ID())
 
 	assert.Empty(t, r.EntriesByType("nonexistent.v1"))
 }
 
 func TestRecorderReset(t *testing.T) {
 	r := outboxtest.NewRecorder()
-	require.NoError(t, r.Emit(context.Background(), outbox.Entry{ID: "x"}))
+	require.NoError(t, r.Emit(context.Background(), mkEntry(t, "x", "test.evt.v1", nil)))
 	require.Len(t, r.Entries(), 1)
 
 	r.Reset()
@@ -96,13 +117,14 @@ func TestRecorderConcurrentEmit(t *testing.T) {
 
 	const writers = 8
 	const perWriter = 100
+	entry := mkEntry(t, "x", "test.evt.v1", nil)
 	var wg sync.WaitGroup
 	wg.Add(writers)
 	for i := 0; i < writers; i++ {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < perWriter; j++ {
-				_ = r.Emit(ctx, outbox.Entry{ID: "x"})
+				_ = r.Emit(ctx, entry)
 			}
 		}()
 	}
@@ -126,6 +148,9 @@ func TestRecorderConcurrentMixedReadWrite(t *testing.T) {
 		perOp     = 50
 	)
 
+	entry := mkEntry(t, "w", "user.created.v1", []byte(`{"id":1}`),
+		outbox.WithMetadata(map[string]string{"k": "v"}))
+
 	var wg sync.WaitGroup
 	wg.Add(writers + readers + resetters)
 
@@ -133,12 +158,7 @@ func TestRecorderConcurrentMixedReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < perOp; j++ {
-				_ = r.Emit(ctx, outbox.Entry{
-					ID:        "w",
-					EventType: "user.created.v1",
-					Payload:   []byte(`{"id":1}`),
-					Metadata:  map[string]string{"k": "v"},
-				})
+				_ = r.Emit(ctx, entry)
 			}
 		}()
 	}
@@ -167,35 +187,33 @@ func TestRecorderConcurrentMixedReadWrite(t *testing.T) {
 	// detector is the actual verification target; PASS without -race is trivial.
 }
 
-// TestRecorderEntriesByTypeDefensiveCopy asserts that mutating the slice
-// returned by EntriesByType — including Payload bytes and Metadata map entries
-// — does not affect the Recorder's internal state.
+// TestRecorderEntriesByTypeDefensiveCopy asserts that the entries returned by
+// EntriesByType are isolated from caller mutation. Since issue #1229 sealed
+// Entry, the scalar fields are immutable-by-construction (no exported setters),
+// so the only mutable surface is the Metadata() map — which Entry.Metadata()
+// defensively clones on every call. Mutating that clone must not affect a fresh
+// re-read of the Recorder's internal state.
 func TestRecorderEntriesByTypeDefensiveCopy(t *testing.T) {
 	r := outboxtest.NewRecorder()
 	ctx := context.Background()
 
-	original := outbox.Entry{
-		ID:        "orig",
-		EventType: "user.created.v1",
-		Payload:   []byte(`{"u":1}`),
-		Metadata:  map[string]string{"key": "original"},
-	}
+	original := mkEntry(t, "orig", "user.created.v1", []byte(`{"u":1}`),
+		outbox.WithMetadata(map[string]string{"key": "original"}))
 	require.NoError(t, r.Emit(ctx, original))
 
-	// First call — mutate the returned copy aggressively.
+	// First call — mutate the per-call Metadata clone aggressively.
 	snap := r.EntriesByType("user.created.v1")
 	require.Len(t, snap, 1)
 
-	snap[0].ID = "MUTATED_ID"
-	snap[0].Payload[0] = 0xFF
-	snap[0].Metadata["key"] = "mutated"
-	snap[0].Metadata["newkey"] = "extra"
+	md := snap[0].Metadata()
+	md["key"] = "mutated"
+	md["newkey"] = "extra"
 
 	// Second call — Recorder internal state must be pristine.
 	clean := r.EntriesByType("user.created.v1")
 	require.Len(t, clean, 1, "internal entries must not be removed by mutation")
-	assert.Equal(t, "orig", clean[0].ID, "ID must not be mutated via returned copy")
-	assert.Equal(t, []byte(`{"u":1}`), clean[0].Payload, "Payload must not be mutated via returned copy")
-	assert.Equal(t, map[string]string{"key": "original"}, clean[0].Metadata,
-		"Metadata must not be mutated via returned copy")
+	assert.Equal(t, "orig", clean[0].ID(), "ID is immutable-by-construction")
+	assert.Equal(t, []byte(`{"u":1}`), clean[0].Payload(), "Payload must not be mutated via returned copy")
+	assert.Equal(t, map[string]string{"key": "original"}, clean[0].Metadata(),
+		"Metadata() must return a defensive clone so caller mutation is isolated")
 }

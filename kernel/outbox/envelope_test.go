@@ -15,11 +15,11 @@ import (
 
 func TestMarshalEnvelope_StampsSchemaVersionV1(t *testing.T) {
 	entry := Entry{
-		ID:        "stamp-id-1",
-		EventType: "test.event.v1",
-		Topic:     "test.event.v1",
-		Payload:   []byte(`{"key":"value"}`),
-		CreatedAt: time.Now(),
+		id:        "stamp-id-1",
+		eventType: "test.event.v1",
+		topic:     "test.event.v1",
+		payload:   []byte(`{"key":"value"}`),
+		createdAt: time.Now(),
 	}
 
 	raw, err := MarshalEnvelope(entry)
@@ -36,33 +36,34 @@ func TestMarshalEnvelope_StampsSchemaVersionV1(t *testing.T) {
 func TestUnmarshalEnvelope_V1Success(t *testing.T) {
 	now := time.Date(2026, 4, 23, 12, 30, 0, 0, time.UTC)
 	entry := Entry{
-		ID:            "v1-id-1",
-		AggregateID:   "agg-100",
-		AggregateType: "Order",
-		EventType:     "order.created.v1",
-		Topic:         "order.created.v1",
-		Payload:       []byte(`{"orderId":"o-1","amount":99}`),
+		id:            "v1-id-1",
+		aggregateID:   "agg-100",
+		aggregateType: "Order",
+		eventType:     "order.created.v1",
+		topic:         "order.created.v1",
+		payload:       []byte(`{"orderId":"o-1","amount":99}`),
 		// PR246-FU1 reserved keys (trace_id/request_id/...) belong in Observability, not Metadata.
-		Metadata:      map[string]string{"source": "test"},
-		Observability: ObservabilityMetadata{TraceID: "abc123"},
-		CreatedAt:     now,
+		metadata:      map[string]string{"source": "test"},
+		observability: ObservabilityMetadata{TraceID: "abc123"},
+		createdAt:     now,
+		occurredAt:    now,
 	}
 
 	raw, err := MarshalEnvelope(entry)
 	require.NoError(t, err)
 
-	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	got, err := UnmarshalEnvelope(entry.topic, raw)
 	require.NoError(t, err)
 
-	assert.Equal(t, entry.ID, got.ID)
-	assert.Equal(t, entry.AggregateID, got.AggregateID)
-	assert.Equal(t, entry.AggregateType, got.AggregateType)
-	assert.Equal(t, entry.EventType, got.EventType)
-	assert.Equal(t, entry.Topic, got.Topic)
-	assert.Equal(t, string(entry.Payload), string(got.Payload))
-	assert.Equal(t, entry.Metadata, got.Metadata)
-	assert.True(t, got.CreatedAt.Equal(now))
-	assert.Equal(t, entry.Observability, got.Observability)
+	assert.Equal(t, entry.id, got.id)
+	assert.Equal(t, entry.aggregateID, got.aggregateID)
+	assert.Equal(t, entry.aggregateType, got.aggregateType)
+	assert.Equal(t, entry.eventType, got.eventType)
+	assert.Equal(t, entry.topic, got.topic)
+	assert.Equal(t, string(entry.payload), string(got.payload))
+	assert.Equal(t, entry.metadata, got.metadata)
+	assert.True(t, got.createdAt.Equal(now))
+	assert.Equal(t, entry.observability, got.observability)
 }
 
 func TestUnmarshalEnvelope_UnknownVersionRejected(t *testing.T) {
@@ -132,21 +133,23 @@ func TestMarshalEnvelope_ProducesV1FromMinimalEntry(t *testing.T) {
 	id := "direct-id-1"
 	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
 
+	now := time.Now()
 	raw, err := MarshalEnvelope(Entry{
-		ID:        id,
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
+		id:         id,
+		eventType:  topic,
+		topic:      topic,
+		payload:    payload,
+		createdAt:  now,
+		occurredAt: now,
 	})
 	require.NoError(t, err)
 
 	got, err := UnmarshalEnvelope(topic, raw)
 	require.NoError(t, err)
-	assert.Equal(t, id, got.ID)
-	assert.Equal(t, topic, got.EventType)
-	assert.Equal(t, topic, got.Topic)
-	assert.Equal(t, string(payload), string(got.Payload))
+	assert.Equal(t, id, got.id)
+	assert.Equal(t, topic, got.eventType)
+	assert.Equal(t, topic, got.topic)
+	assert.Equal(t, string(payload), string(got.payload))
 }
 
 func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
@@ -159,27 +162,28 @@ func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
 	}
 
 	entry := Entry{
-		ID:            "obs-rt-1",
-		EventType:     "test.event.v1",
-		Topic:         "test.event.v1",
-		Payload:       []byte(`{"x":1}`),
-		Metadata:      map[string]string{"foo": "bar"},
-		Observability: obs,
-		CreatedAt:     time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
+		id:            "obs-rt-1",
+		eventType:     "test.event.v1",
+		topic:         "test.event.v1",
+		payload:       []byte(`{"x":1}`),
+		metadata:      map[string]string{"foo": "bar"},
+		observability: obs,
+		createdAt:     time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
+		occurredAt:    time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
 	}
 
 	raw, err := MarshalEnvelope(entry)
 	require.NoError(t, err)
 
-	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	got, err := UnmarshalEnvelope(entry.topic, raw)
 	require.NoError(t, err)
 
-	assert.Equal(t, obs.TraceID, got.Observability.TraceID)
-	assert.Equal(t, obs.TraceParent, got.Observability.TraceParent)
-	assert.Equal(t, obs.RequestID, got.Observability.RequestID)
-	assert.Equal(t, obs.CorrelationID, got.Observability.CorrelationID)
+	assert.Equal(t, obs.TraceID, got.observability.TraceID)
+	assert.Equal(t, obs.TraceParent, got.observability.TraceParent)
+	assert.Equal(t, obs.RequestID, got.observability.RequestID)
+	assert.Equal(t, obs.CorrelationID, got.observability.CorrelationID)
 	// struct-equal 兜底：未来新增字段时测试自动失败
-	assert.Equal(t, obs, got.Observability)
+	assert.Equal(t, obs, got.observability)
 }
 
 func TestUnmarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
@@ -251,13 +255,13 @@ func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 	// SafeID(rawUnsafe) cast) must be caught at write time rather than
 	// poisoning downstream consumers (defense in depth).
 	validEntry := Entry{
-		ID:            "valid-id",
-		AggregateID:   "agg-1",
-		AggregateType: "Order",
-		EventType:     "order.created.v1",
-		Topic:         "order.created.v1",
-		Payload:       []byte(`{"x":1}`),
-		CreatedAt:     time.Now(),
+		id:            "valid-id",
+		aggregateID:   "agg-1",
+		aggregateType: "Order",
+		eventType:     "order.created.v1",
+		topic:         "order.created.v1",
+		payload:       []byte(`{"x":1}`),
+		createdAt:     time.Now(),
 	}
 
 	tests := []struct {
@@ -266,29 +270,29 @@ func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 	}{
 		{
 			name:  "ID with newline injection",
-			entry: func() Entry { e := validEntry; e.ID = "evt-1\nlevel=error"; return e }(),
+			entry: func() Entry { e := validEntry; e.id = "evt-1\nlevel=error"; return e }(),
 		},
 		{
 			name:  "AggregateID with angle brackets",
-			entry: func() Entry { e := validEntry; e.AggregateID = "<script>"; return e }(),
+			entry: func() Entry { e := validEntry; e.aggregateID = "<script>"; return e }(),
 		},
 		{
 			name:  "AggregateType with space",
-			entry: func() Entry { e := validEntry; e.AggregateType = "some type"; return e }(),
+			entry: func() Entry { e := validEntry; e.aggregateType = "some type"; return e }(),
 		},
 		{
 			name:  "EventType with newline",
-			entry: func() Entry { e := validEntry; e.EventType = "foo.v1\nx"; return e }(),
+			entry: func() Entry { e := validEntry; e.eventType = "foo.v1\nx"; return e }(),
 		},
 		{
 			name:  "Topic with CR injection",
-			entry: func() Entry { e := validEntry; e.Topic = "foo.v1\rINJECT"; return e }(),
+			entry: func() Entry { e := validEntry; e.topic = "foo.v1\rINJECT"; return e }(),
 		},
 		{
 			name: "invalid TraceParent in Observability",
 			entry: func() Entry {
 				e := validEntry
-				e.Observability = ObservabilityMetadata{TraceParent: "malformed"}
+				e.observability = ObservabilityMetadata{TraceParent: "malformed"}
 				return e
 			}(),
 		},
@@ -311,19 +315,19 @@ func TestMarshalEnvelope_RejectsUnsafeIDs(t *testing.T) {
 // even in pure in-memory construction (no wire involvement).
 func TestEntryValidate_RejectsUnsafeIDFields(t *testing.T) {
 	base := Entry{
-		ID: "valid", EventType: "t.v1", Topic: "t.v1", Payload: []byte(`{}`),
+		id: "valid", eventType: "t.v1", topic: "t.v1", payload: []byte(`{}`),
 	}
 	tests := []struct {
 		name  string
 		mut   func(*Entry)
 		field string
 	}{
-		{name: "unsafe ID", mut: func(e *Entry) { e.ID = "id\nbad" }, field: "id"},
-		{name: "unsafe EventType", mut: func(e *Entry) { e.EventType = "t\nv1"; e.Topic = "t.v1" }, field: "eventType"},
-		{name: "unsafe Topic", mut: func(e *Entry) { e.Topic = "t\nv1"; e.EventType = "t.v1" }, field: "topic"},
-		{name: "unsafe AggregateID", mut: func(e *Entry) { e.AggregateID = "<script>" }, field: "aggregateId"},
-		{name: "unsafe AggregateType", mut: func(e *Entry) { e.AggregateType = "a b" }, field: "aggregateType"},
-		{name: "overlong ID", mut: func(e *Entry) { e.ID = strings.Repeat("a", 257) }, field: "id"},
+		{name: "unsafe ID", mut: func(e *Entry) { e.id = "id\nbad" }, field: "id"},
+		{name: "unsafe EventType", mut: func(e *Entry) { e.eventType = "t\nv1"; e.topic = "t.v1" }, field: "eventType"},
+		{name: "unsafe Topic", mut: func(e *Entry) { e.topic = "t\nv1"; e.eventType = "t.v1" }, field: "topic"},
+		{name: "unsafe AggregateID", mut: func(e *Entry) { e.aggregateID = "<script>" }, field: "aggregateId"},
+		{name: "unsafe AggregateType", mut: func(e *Entry) { e.aggregateType = "a b" }, field: "aggregateType"},
+		{name: "overlong ID", mut: func(e *Entry) { e.id = strings.Repeat("a", 257) }, field: "id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -343,9 +347,9 @@ func TestEntryValidate_RejectsEmptyRequiredFields(t *testing.T) {
 		name string
 		e    Entry
 	}{
-		{name: "empty id", e: Entry{EventType: "t.v1", Topic: "t.v1", Payload: []byte(`{}`)}},
-		{name: "empty eventType and topic", e: Entry{ID: "some-id", Payload: []byte(`{}`)}},
-		{name: "empty payload", e: Entry{ID: "some-id", EventType: "t.v1", Topic: "t.v1"}},
+		{name: "empty id", e: Entry{eventType: "t.v1", topic: "t.v1", payload: []byte(`{}`)}},
+		{name: "empty eventType and topic", e: Entry{id: "some-id", payload: []byte(`{}`)}},
+		{name: "empty payload", e: Entry{id: "some-id", eventType: "t.v1", topic: "t.v1"}},
 	}
 
 	for _, tt := range tests {

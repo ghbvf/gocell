@@ -631,7 +631,11 @@ func (b *testBus) Publish(_ context.Context, topic string, payload []byte) error
 	if b.closed {
 		return errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "closed")
 	}
-	entry := outbox.Entry{ID: "evt-test", EventType: topic, Payload: payload}
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload,
+		outbox.WithID("evt-test"))
+	if err != nil {
+		return err
+	}
 	for _, s := range b.subs[topic] {
 		select {
 		case s.ch <- entry:

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -24,7 +25,7 @@ var allowAllContractPolicy = func(*http.Request) error { return nil }
 func newContractHandlerWithRepo(t testing.TB, repo *mem.OrderRepository) (http.Handler, *recordingWriter) {
 	t.Helper()
 	writer := &recordingWriter{}
-	svc, err := NewService(repo, slog.Default(),
+	svc, err := NewService(clock.Real(), repo, slog.Default(),
 		WithEmitter(mustEmitter(t, writer)),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 	)
@@ -90,9 +91,9 @@ func TestEventOrderStatusChangedV1Publish(t *testing.T) {
 	entry := writer.entries[0]
 
 	// Validate event payload against schema
-	eventContract.ValidatePayload(t, entry.Payload)
+	eventContract.ValidatePayload(t, entry.Payload())
 	// Validate headers (eventId must be present)
-	eventContract.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	eventContract.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	// MustRejectPayload: missing required fields
 	eventContract.MustRejectPayload(t, []byte(`{"id":"o-1"}`))
 	// MustRejectHeaders: missing eventId
@@ -104,7 +105,7 @@ func TestEventOrderStatusChangedV1Publish(t *testing.T) {
 		OldStatus string `json:"oldStatus"`
 		NewStatus string `json:"newStatus"`
 	}
-	require.NoError(t, json.Unmarshal(entry.Payload, &payload))
+	require.NoError(t, json.Unmarshal(entry.Payload(), &payload))
 	require.Equal(t, orderID, payload.ID)
 	require.Equal(t, "pending", payload.OldStatus)
 	require.Equal(t, "confirmed", payload.NewStatus)

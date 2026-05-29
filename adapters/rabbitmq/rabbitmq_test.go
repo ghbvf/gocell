@@ -543,12 +543,29 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 // of the wire envelope outside kernel/outbox.
 func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	t.Helper()
-	if entry.Payload == nil {
-		entry.Payload = []byte(`{}`)
-	}
+	// Entries are constructed via outbox.NewEntry, which validates a non-empty
+	// payload, so no nil-payload default is needed.
 	b, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 	return b
+}
+
+// mustNewEntry constructs a sealed outbox.Entry via the producer constructor,
+// failing the test on construction error. eventType and payload are positional;
+// remaining fields (ID, topic, metadata, timestamps) are passed as options.
+func mustNewEntry(t *testing.T, eventType string, payload []byte, opts ...outbox.EntryOption) outbox.Entry {
+	t.Helper()
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), eventType, payload, opts...)
+	require.NoError(t, err)
+	return e
+}
+
+// newIDEntry builds a valid entry carrying the given idempotency ID. The
+// eventType/payload are dummy-but-valid placeholders for tests that only assert
+// on the entry ID (e.g. ConsumerBase claim-key behaviour).
+func newIDEntry(t *testing.T, id string) outbox.Entry {
+	t.Helper()
+	return mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID(id))
 }
 
 // =============================================================================
@@ -1551,11 +1568,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		DLXExchange:   "test.dlx",
 	})
 
-	entry := outbox.Entry{
-		ID:        "evt-001",
-		EventType: "test.created",
-		Payload:   []byte(`{"key":"value"}`),
-	}
+	entry := mustNewEntry(t, "test.created", []byte(`{"key":"value"}`), outbox.WithID("evt-001"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handled := make(chan outbox.Entry, 1)
@@ -1587,8 +1600,8 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 
 	select {
 	case received := <-handled:
-		assert.Equal(t, "evt-001", received.ID)
-		assert.Equal(t, "test.created", received.EventType)
+		assert.Equal(t, "evt-001", received.ID())
+		assert.Equal(t, "test.created", received.EventType())
 	case <-time.After(testtime.D1s):
 		t.Fatal("handler was not called")
 	}
@@ -1654,28 +1667,20 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 //  4. Empty body — returns error.
 func TestUnmarshalDelivery(t *testing.T) {
 	t.Run("wire_message_envelope", func(t *testing.T) {
-		entry := outbox.Entry{
-			ID:        "entry-uuid-001",
-			EventType: "test.created",
-			Payload:   []byte(`{"x":1}`),
-		}
+		entry := mustNewEntry(t, "test.created", []byte(`{"x":1}`), outbox.WithID("entry-uuid-001"))
 		body := makeDeliveryBody(t, entry) // includes schemaVersion:"v1" since P1-14 A1
 
 		got, err := unmarshalDelivery(body)
 		require.NoError(t, err)
-		assert.Equal(t, "entry-uuid-001", got.ID)
-		assert.Equal(t, "test.created", got.EventType)
-		assert.JSONEq(t, `{"x":1}`, string(got.Payload))
+		assert.Equal(t, "entry-uuid-001", got.ID())
+		assert.Equal(t, "test.created", got.EventType())
+		assert.JSONEq(t, `{"x":1}`, string(got.Payload()))
 	})
 
 	t.Run("legacy_entry_json", func(t *testing.T) {
 		// Legacy outbox.Entry JSON (PascalCase, missing schemaVersion) is now
 		// rejected with ErrUnknownEnvelopeVersion (fail-closed, no fallback).
-		entry := outbox.Entry{
-			ID:        "evt-legacy-001",
-			EventType: "test.legacy",
-			Payload:   []byte(`{"legacy":true}`),
-		}
+		entry := mustNewEntry(t, "test.legacy", []byte(`{"legacy":true}`), outbox.WithID("evt-legacy-001"))
 		body, err := json.Marshal(entry)
 		require.NoError(t, err)
 
@@ -1710,7 +1715,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
+	entry := mustNewEntry(t, "test.failed", []byte(`{}`), outbox.WithID("evt-002"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1821,7 +1826,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 
 	handled := make(chan string, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handled <- e.ID
+		handled <- e.ID()
 		return outbox.Ack()
 	}
 
@@ -1846,7 +1851,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 		return ch2.qosCalled
 	}, testtime.D2s, testtime.D10ms, "subscriber did not reconnect to ch2")
 
-	entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
+	entry := mustNewEntry(t, "test.reconnected", []byte(`{}`), outbox.WithID("reconnect-001"))
 	entryBytes := makeDeliveryBody(t, entry)
 	ch2.consumeDeliveries <- amqp.Delivery{
 		DeliveryTag: 1,
@@ -2329,7 +2334,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
+	entry := mustNewEntry(t, "test.cancel", []byte(`{}`), outbox.WithID("evt-ctx-cancel"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2529,7 +2534,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	entry := outbox.Entry{ID: "evt-claimer-001"}
+	entry := newIDEntry(t, "evt-claimer-001")
 	res, settlement := handler(context.Background(), entry)
 
 	assert.True(t, handlerCalled)
@@ -2555,7 +2560,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-done"})
+	res, settlement := handler(context.Background(), newIDEntry(t, "evt-done"))
 	assert.False(t, handlerCalled)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.Nil(t, settlement, "ClaimDone should not return a Settlement")
@@ -2574,7 +2579,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-busy"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-busy"))
 	assert.False(t, handlerCalled)
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 }
@@ -2594,7 +2599,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 			return outbox.Requeue(errors.New("fail"))
 		})
 
-	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-reject"})
+	res, settlement := handler(context.Background(), newIDEntry(t, "evt-reject"))
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 	assert.Same(t, receipt, settlement, "Settlement should be the receipt for processDelivery to Release")
 	// ConsumerBase must NOT call Commit/Release on Receipt.
@@ -2621,7 +2626,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 			return outbox.Reject(errors.New("bad payload"))
 		})
 
-	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-reject-direct"})
+	res, settlement := handler(context.Background(), newIDEntry(t, "evt-reject-direct"))
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 	assert.Equal(t, 1, handlerCallCount, "DispositionReject must skip retry loop — handler called exactly once")
 	assert.Same(t, receipt, settlement)
@@ -2686,7 +2691,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 			return outbox.Ack()
 		})
 
-	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-retry-ok"})
+	res, settlement := handler(context.Background(), newIDEntry(t, "evt-retry-ok"))
 	assert.True(t, handlerCalled, "handler must be called after claim retry succeeds")
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.Same(t, receipt, settlement, "Receipt from successful retry must be threaded through")
@@ -2715,7 +2720,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 		})
 
 	start := time.Now()
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-claim-err"))
 	elapsed := time.Since(start)
 
 	assert.False(t, handlerCalled, "handler must NOT be called when all retries fail")
@@ -2748,7 +2753,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 	}()
 
 	start := time.Now()
-	res, _ := handler(ctx, outbox.Entry{ID: "evt-claim-ctx"})
+	res, _ := handler(ctx, newIDEntry(t, "evt-claim-ctx"))
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
@@ -2771,7 +2776,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 		})
 
 	start := time.Now()
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-retry1"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-retry1"))
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
@@ -2806,7 +2811,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 		})
 
 	start := time.Now()
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-independent"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-independent"))
 	elapsed := time.Since(start)
 
 	assert.True(t, handlerCalled)
@@ -2836,7 +2841,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 		})
 
 	start := time.Now()
-	_, _ = handler(context.Background(), outbox.Entry{ID: "evt-cap"})
+	_, _ = handler(context.Background(), newIDEntry(t, "evt-cap"))
 	elapsed := time.Since(start)
 
 	// Without cap: 100ms + 200ms = 300ms. With cap at 50ms: 50ms + 50ms = 100ms.
@@ -2860,7 +2865,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 		})
 
 	// Must not panic; negative delay is clamped to default by setDefaults.
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-neg-delay"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-neg-delay"))
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 }
 
@@ -2879,7 +2884,7 @@ func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-neg-cap"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-neg-cap"))
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 }
 
@@ -2897,7 +2902,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-ack-receipt", EventType: "test.ack"}
+	entry := mustNewEntry(t, "test.ack", []byte(`{}`), outbox.WithID("evt-ack-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -2933,7 +2938,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-reject-receipt", EventType: "test.reject"}
+	entry := mustNewEntry(t, "test.reject", []byte(`{}`), outbox.WithID("evt-reject-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -2969,7 +2974,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
+	entry := mustNewEntry(t, "test.nil", []byte(`{}`), outbox.WithID("evt-nil-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -3005,15 +3010,14 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	// Entry has Observability populated, but since the bare Subscriber is
 	// invoked here (no SubscriberWithMiddleware wrapper, which owns restore),
 	// subscriber MUST NOT restore ctx itself.
-	entry := outbox.Entry{
-		ID:        "evt-ctx-restore",
-		EventType: "test.restore",
-		Observability: outbox.ObservabilityMetadata{
-			RequestID:     "req-sub-1",
-			CorrelationID: "corr-sub-1",
-			TraceID:       "trace-sub-1",
-		},
-	}
+	obsCtx := ctxkeys.WithTraceID(
+		ctxkeys.WithCorrelationID(
+			ctxkeys.WithRequestID(context.Background(), "req-sub-1"),
+			"corr-sub-1"),
+		"trace-sub-1")
+	entry, entryErr := outbox.NewEntry(clock.Real(), obsCtx, "test.restore", []byte(`{}`),
+		outbox.WithID("evt-ctx-restore"))
+	require.NoError(t, entryErr)
 	entryBytes := makeDeliveryBody(t, entry)
 
 	const sentinelKey testContextKey = "sentinel"
@@ -3068,15 +3072,14 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	// Entry has Observability populated; processDelivery must not restore it
 	// (restoration is built into SubscriberWithMiddleware.Subscribe, not the
 	// bare subscriber's processDelivery).
-	entry := outbox.Entry{
-		ID:        "evt-no-restore",
-		EventType: "test.restore",
-		Observability: outbox.ObservabilityMetadata{
-			RequestID:     "req-log-1",
-			CorrelationID: "corr-log-1",
-			TraceID:       "trace-log-1",
-		},
-	}
+	obsCtx := ctxkeys.WithTraceID(
+		ctxkeys.WithCorrelationID(
+			ctxkeys.WithRequestID(context.Background(), "req-log-1"),
+			"corr-log-1"),
+		"trace-log-1")
+	entry, entryErr := outbox.NewEntry(clock.Real(), obsCtx, "test.restore", []byte(`{}`),
+		outbox.WithID("evt-no-restore"))
+	require.NoError(t, entryErr)
 	entryBytes := makeDeliveryBody(t, entry)
 
 	var capturedRequestID, capturedTraceID string
@@ -3110,7 +3113,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-detached-ctx", EventType: "test.ctx"}
+	entry := mustNewEntry(t, "test.ctx", []byte(`{}`), outbox.WithID("evt-detached-ctx"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3148,7 +3151,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-requeue-receipt", EventType: "test.requeue"}
+	entry := mustNewEntry(t, "test.requeue", []byte(`{}`), outbox.WithID("evt-requeue-receipt"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3203,7 +3206,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 		})
 
 	start := time.Now()
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-busy-backoff"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-busy-backoff"))
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
@@ -3229,7 +3232,7 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
-	entry := outbox.Entry{ID: "evt-broker-fail", EventType: "test.brokerfail"}
+	entry := mustNewEntry(t, "test.brokerfail", []byte(`{}`), outbox.WithID("evt-broker-fail"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3263,7 +3266,7 @@ func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testi
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
-	entry := outbox.Entry{ID: "evt-commit-fail-release", EventType: "test.commitfail"}
+	entry := mustNewEntry(t, "test.commitfail", []byte(`{}`), outbox.WithID("evt-commit-fail-release"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3301,7 +3304,7 @@ func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
-	entry := outbox.Entry{ID: "evt-commit-fail-nack-fail-release", EventType: "test.commitfail.nackfail"}
+	entry := mustNewEntry(t, "test.commitfail.nackfail", []byte(`{}`), outbox.WithID("evt-commit-fail-nack-fail-release"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3347,7 +3350,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	res, _ := handler(context.Background(), outbox.Entry{ID: "evt-fail-closed"})
+	res, _ := handler(context.Background(), newIDEntry(t, "evt-fail-closed"))
 	assert.False(t, handlerCalled, "handler must NOT be called when fail-closed")
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 	assert.Error(t, res.Err)
@@ -3369,7 +3372,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 			return outbox.Ack()
 		})
 
-	res, settlement := handler(context.Background(), outbox.Entry{ID: "evt-fail-open-explicit"})
+	res, settlement := handler(context.Background(), newIDEntry(t, "evt-fail-open-explicit"))
 	assert.True(t, handlerCalled, "handler must be called when fail-open is explicit")
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.Nil(t, settlement, "no Receipt when claim fails")
@@ -3445,7 +3448,7 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 			return outbox.Requeue(errors.New("transient"))
 		})
 
-	res, _ := handler(ctx, outbox.Entry{ID: "evt-ctx-final"})
+	res, _ := handler(ctx, newIDEntry(t, "evt-ctx-final"))
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
 		"must Requeue (not Reject to DLX) when ctx is canceled after final attempt")
 	assert.ErrorIs(t, res.Err, context.Canceled)
@@ -3466,7 +3469,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
+	entry := mustNewEntry(t, "test.ackwitherr", []byte(`{}`), outbox.WithID("evt-ack-with-err"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	// Handler returns DispositionAck but also an error (e.g., a warning).
@@ -3504,7 +3507,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-requeue-nack-fail", EventType: "test.requeue.nackfail"}
+	entry := mustNewEntry(t, "test.requeue.nackfail", []byte(`{}`), outbox.WithID("evt-requeue-nack-fail"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3631,7 +3634,7 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{}
-	entry := outbox.Entry{ID: "evt-unknown-disp", EventType: "test.unknown"}
+	entry := mustNewEntry(t, "test.unknown", []byte(`{}`), outbox.WithID("evt-unknown-disp"))
 	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
@@ -3710,7 +3713,7 @@ func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
 			return outbox.Ack()
 		})
 
-	entry := outbox.Entry{ID: "evt-transient-ok"}
+	entry := newIDEntry(t, "evt-transient-ok")
 	res, settlement := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
@@ -3736,7 +3739,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 			return outbox.Reject(errors.New("bad payload shape"))
 		})
 
-	entry := outbox.Entry{ID: "evt-explicit-reject"}
+	entry := newIDEntry(t, "evt-explicit-reject")
 	res, settlement := handler(context.Background(), entry)
 
 	assert.Equal(t, 1, callCount, "handler should be called exactly once (no retry for Reject)")
@@ -4395,12 +4398,7 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 			return outbox.Requeue(assert.AnError)
 		})
 
-	entry := outbox.Entry{
-		ID:        "evt-retry-unit-001",
-		EventType: "test.retry",
-		Payload:   []byte(`{"retry":"unit"}`),
-		CreatedAt: time.Now().UTC(),
-	}
+	entry := mustNewEntry(t, "test.retry", []byte(`{"retry":"unit"}`), outbox.WithID("evt-retry-unit-001"), outbox.WithCreatedAt(time.Now().UTC()))
 
 	res, _ := wrappedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, res.Disposition,

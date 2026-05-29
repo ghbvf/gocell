@@ -159,17 +159,20 @@ func (p *stoppingPublisher) Close(_ context.Context) error { return nil }
 func writeOutboxEntry(t *testing.T, pool *postgres.Pool, topic string, payload []byte) string {
 	t.Helper()
 	id := uuid.New().String()
+	clk := clock.Real()
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter(clock.Real())
+	writer := postgres.NewOutboxWriter(clk)
+	now := time.Now().UTC()
+	entry, err := outbox.NewEntry(clk, context.Background(), topic, payload,
+		outbox.WithID(id),
+		outbox.WithTopic(topic),
+		outbox.WithCreatedAt(now),
+		outbox.WithOccurredAt(now),
+	)
+	require.NoError(t, err, "NewEntry must succeed")
 	require.NoError(t,
 		txm.RunInTx(context.Background(), func(txCtx context.Context) error {
-			return writer.Write(txCtx, outbox.Entry{
-				ID:        id,
-				EventType: topic,
-				Topic:     topic,
-				Payload:   payload,
-				CreatedAt: time.Now().UTC(),
-			})
+			return writer.Write(txCtx, entry)
 		}),
 		"writeOutboxEntry must succeed")
 	return id

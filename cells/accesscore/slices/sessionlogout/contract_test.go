@@ -15,7 +15,9 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -93,7 +95,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 
 	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := seedContractSession(sessionRepo)
-	svc, err := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
+	svc, err := NewService(clock.Real(), sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(outbox.WrapEmitterForCell(testoutbox.MustEmitter(t, &recordingWriter{}))),
 		WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	require.NoError(t, err)
@@ -133,8 +135,8 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.entries, 1, "Logout must emit one outbox entry")
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{"sessionId":"s"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
@@ -159,11 +161,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"assigned"}`)
 	c.ValidatePayload(t, payload)
-	result := consumer.HandleRoleChanged(context.Background(), outbox.Entry{
-		ID:        "evt-test-assigned",
-		EventType: "event.role.assigned.v1",
-		Payload:   payload,
-	})
+	result := consumer.HandleRoleChanged(context.Background(), outboxtest.NewEntry("event.role.assigned.v1", payload))
 	require.Equal(t, outbox.DispositionAck, result.Disposition,
 		"valid assigned payload must yield Ack")
 
@@ -180,11 +178,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"revoked"}`)
 	c.ValidatePayload(t, payload)
-	result := consumer.HandleRoleChanged(context.Background(), outbox.Entry{
-		ID:        "evt-test-revoked",
-		EventType: "event.role.revoked.v1",
-		Payload:   payload,
-	})
+	result := consumer.HandleRoleChanged(context.Background(), outboxtest.NewEntry("event.role.revoked.v1", payload))
 	require.Equal(t, outbox.DispositionAck, result.Disposition,
 		"valid revoked payload must yield Ack")
 
