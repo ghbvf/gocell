@@ -322,7 +322,11 @@ var expectedColumns = []expectedColumn{
 	// (status, attempts, lease_id, claimed_at, next_retry_at, published_at,
 	// dead_at, last_error) are not enumerated here — they evolve independently
 	// of the sealed-construction principal injection feature.
-	{Table: "outbox_entries", Column: "id", Type: "uuid", NotNull: true},
+	// id is TEXT, not UUID: migration 003 widens it from UUID to TEXT in its Up
+	// section ("support prefixed IDs evt-<uuid>/audit-<uuid>"; outbox.NewEntryID
+	// returns a string). The UUID conversion in 003 lives in the Down (rollback)
+	// section only, so the live forward schema is text.
+	{Table: "outbox_entries", Column: "id", Type: "text", NotNull: true},
 	{Table: "outbox_entries", Column: "aggregate_id", Type: "text", NotNull: true},
 	{Table: "outbox_entries", Column: "aggregate_type", Type: "text", NotNull: true},
 	{Table: "outbox_entries", Column: "event_type", Type: "text", NotNull: true},
