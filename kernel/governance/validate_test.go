@@ -1775,11 +1775,11 @@ func TestFMT09(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "invalid kind grpc",
+			name: "invalid kind websocket",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["grpc.test.v1"] = &metadata.ContractMeta{
-					ID:               "grpc.test.v1",
-					Kind:             "grpc",
+				pm.Contracts["websocket.test.v1"] = &metadata.ContractMeta{
+					ID:               "websocket.test.v1",
+					Kind:             "websocket",
 					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
@@ -1927,6 +1927,12 @@ func TestContractProviderAndConsumers(t *testing.T) {
 		{
 			kind:          "projection",
 			endpoints:     metadata.EndpointsMeta{Provider: metadatatest.CellIDSvcA, Readers: []string{metadatatest.CellIDSvcB}},
+			wantProvider:  metadatatest.CellIDSvcA,
+			wantConsumers: []string{metadatatest.CellIDSvcB},
+		},
+		{
+			kind:          "grpc",
+			endpoints:     metadata.EndpointsMeta{Server: metadatatest.CellIDSvcA, Clients: []string{metadatatest.CellIDSvcB}},
 			wantProvider:  metadatatest.CellIDSvcA,
 			wantConsumers: []string{metadatatest.CellIDSvcB},
 		},
@@ -2100,6 +2106,20 @@ func TestFMT07(t *testing.T) {
 				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
 					ID:               "projection.test.v1",
 					Kind:             "projection",
+					OwnerCell:        metadatatest.CellIDAccessCore,
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "grpc contract missing server",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.access.session.verify.v1"] = &metadata.ContractMeta{
+					ID:               "grpc.access.session.verify.v1",
+					Kind:             "grpc",
 					OwnerCell:        metadatatest.CellIDAccessCore,
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",

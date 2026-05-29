@@ -62,6 +62,7 @@ var (
 		string(cellvocab.ContractEvent):      true,
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
+		string(cellvocab.ContractGRPC):       true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
@@ -304,6 +305,8 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				field = "endpoints.handler"
 			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
+			case cellvocab.ContractGRPC:
+				field = "endpoints.server"
 			default:
 				field = "endpoints"
 			}
@@ -319,7 +322,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 	return results
 }
 
-// validateFMT09 checks that contract.kind is one of {http, event, command, projection}.
+// validateFMT09 checks that contract.kind is one of {http, event, command, projection, grpc}.
 func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -328,8 +331,8 @@ func (v *Validator) validateFMT09() []ValidationResult {
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
-				"set kind to http, event, command, or projection",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, or grpc)", c.ID, c.Kind),
+				"set kind to http, event, command, projection, or grpc",
 			))
 		}
 	}

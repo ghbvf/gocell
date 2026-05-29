@@ -103,6 +103,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 		return c.Endpoints.Handler, nil
 	case "projection":
 		return c.Endpoints.Provider, nil
+	case "grpc":
+		return c.Endpoints.Server, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
@@ -111,8 +113,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 }
 
 // Consumers returns the consumer actor IDs for a contract.
-// For http: clients, event: subscribers, command: invokers, projection: readers.
-// Returns an error if the contract is not found or the kind is unknown.
+// For http: clients, event: subscribers, command: invokers, projection: readers,
+// grpc: clients. Returns an error if the contract is not found or kind is unknown.
 func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
 	if c == nil {
@@ -129,6 +131,8 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 		return append([]string(nil), c.Endpoints.Invokers...), nil
 	case "projection":
 		return append([]string(nil), c.Endpoints.Readers...), nil
+	case "grpc":
+		return append([]string(nil), c.Endpoints.Clients...), nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",

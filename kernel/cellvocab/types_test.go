@@ -78,6 +78,7 @@ func TestContractKindValues(t *testing.T) {
 	assert.Equal(t, cellvocab.ContractKind("event"), cellvocab.ContractEvent)
 	assert.Equal(t, cellvocab.ContractKind("command"), cellvocab.ContractCommand)
 	assert.Equal(t, cellvocab.ContractKind("projection"), cellvocab.ContractProjection)
+	assert.Equal(t, cellvocab.ContractKind("grpc"), cellvocab.ContractGRPC)
 }
 
 func TestContractRoleValues(t *testing.T) {
@@ -153,6 +154,7 @@ func TestParseContractKindRoundTrip(t *testing.T) {
 		{"event", cellvocab.ContractEvent},
 		{"command", cellvocab.ContractCommand},
 		{"projection", cellvocab.ContractProjection},
+		{"grpc", cellvocab.ContractGRPC},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -171,7 +173,7 @@ func TestParseContractKindInvalid(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"uppercase", "HTTP"},
-		{"unknown", "grpc"},
+		{"unknown", "workflow"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

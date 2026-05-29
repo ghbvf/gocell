@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
@@ -105,9 +106,10 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--owner value=%q pattern=%s",
 				owner, scaffoldid.IdentifierPattern))))
 	}
-	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
-	if !validKinds[kind] {
-		return nil, fmt.Errorf("scaffold contract: --kind must be one of [http event command projection], got %q", kind)
+	// Kind validity derives from the single canonical source cellvocab.ParseContractKind
+	// (no duplicate kind list here — adding a kind there is the only edit needed).
+	if _, err := cellvocab.ParseContractKind(kind); err != nil {
+		return nil, fmt.Errorf("scaffold contract: --kind %q is not a recognized contract kind (http|event|command|projection|grpc)", kind)
 	}
 	parts := strings.Split(id, ".")
 	if len(parts) < 3 {
@@ -650,7 +652,7 @@ func scaffoldSlice(root string, args []string) error {
 func scaffoldContract(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold contract", flag.ContinueOnError)
 	id := fs.String("id", "", "contract ID (required)")
-	kind := fs.String("kind", "", "contract kind: http|event|command|projection (required)")
+	kind := fs.String("kind", "", "contract kind: http|event|command|projection|grpc (required)")
 	owner := fs.String("owner", "", "owner cell ID (required)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
@@ -857,6 +859,16 @@ endpoints:
 {{- else if eq .Kind "projection"}}
   provider: {{.OwnerCell}}
   readers: []
+{{- else if eq .Kind "grpc"}}
+  server: {{.OwnerCell}}
+  clients: []
+  grpc:
+    service: {{.OwnerCell}}.v1.RenameService
+    method: RenameMethod
+    streamingType: unary
+    proto: contracts/grpc/{{.OwnerCell}}/v1/rename.proto
+    auth:
+      public: false
 {{- end}}
 `))
 

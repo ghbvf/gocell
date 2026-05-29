@@ -27,6 +27,40 @@ type HTTPTransportMeta struct {
 	Ownership *HTTPOwnershipMeta `yaml:"ownership,omitempty" json:"ownership,omitempty"`
 }
 
+// GRPCTransportMeta holds transport-level details for gRPC contracts. It mirrors
+// HTTPTransportMeta's role: elevate the wire-level RPC contract (proto service,
+// method, streaming pattern, proto file location) to first-class metadata so
+// static tooling (codegen, trace span labels, contract-health) can derive the
+// RPC shape from contract.yaml. It lives under EndpointsMeta.GRPC, parallel to
+// EndpointsMeta.HTTP; the provider/consumer cells reuse endpoints.server /
+// endpoints.clients (gRPC mirrors http: roles serve/call).
+//
+// ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
+// descriptor — service/method names are the wire identity.
+type GRPCTransportMeta struct {
+	// Service is the proto fully-qualified service name,
+	// e.g. "device.command.v1.DeviceCommandService".
+	Service string `yaml:"service" json:"service"`
+	// Method is the proto method name, e.g. "IssueCommand".
+	Method string `yaml:"method" json:"method"`
+	// StreamingType is one of unary | server-stream | client-stream | bidi.
+	// Empty is treated as unary by downstream codegen (PR 2+).
+	StreamingType string `yaml:"streamingType,omitempty" json:"streamingType,omitempty"`
+	// Proto is the contracts-relative path to the .proto file, e.g.
+	// "contracts/grpc/device/command/v1/device_command.proto".
+	Proto string `yaml:"proto" json:"proto"`
+	// Auth declares route-level authentication overrides, mirroring HTTPAuthMeta's
+	// public flag. Omit for standard authenticated RPCs.
+	Auth GRPCAuthMeta `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+// GRPCAuthMeta carries RPC-level authentication override flags, mirroring the
+// public flag of HTTPAuthMeta.
+type GRPCAuthMeta struct {
+	// Public marks the RPC as JWT-exempt (no listener auth required).
+	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
+}
+
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.
 // Required when auth.serviceOwned=true (governance FMT-32 + schema if/then enforces this).
 // Pointer field tri-state: nil = block absent, non-nil with empty fields = declared but

@@ -505,3 +505,93 @@ func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
 		})
 	}
 }
+
+// TestContractSchemaGRPCKind verifies the kind=grpc if/then block: endpoints
+// require server/clients/grpc and the nested grpc block requires service/method/
+// proto with proto rooted under contracts/grpc/. gRPC mirrors http endpoints.
+func TestContractSchemaGRPCKind(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	grpcDoc := func(grpcBlock string) string {
+		return `{
+			"id": "grpc.device.command.v1",
+			"kind": "grpc",
+			"ownerCell": "iotdevice",
+			"consistencyLevel": "L1",
+			"lifecycle": "active",
+			"endpoints": {
+				"server": "iotdevice",
+				"clients": [],
+				"grpc": ` + grpcBlock + `
+			}
+		}`
+	}
+
+	tests := []struct {
+		name        string
+		grpcBlock   string
+		expectValid bool
+	}{
+		{
+			name: "full grpc block accepted",
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"method": "IssueCommand",
+				"streamingType": "unary",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"auth": {"public": false}
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "minimal grpc block accepted",
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"method": "IssueCommand",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto"
+			}`,
+			expectValid: true,
+		},
+		{
+			name:        "missing service rejected",
+			grpcBlock:   `{"method": "IssueCommand", "proto": "contracts/grpc/x/v1/x.proto"}`,
+			expectValid: false,
+		},
+		{
+			name:        "missing method rejected",
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto"}`,
+			expectValid: false,
+		},
+		{
+			name:        "missing proto rejected",
+			grpcBlock:   `{"service": "x.v1.S", "method": "M"}`,
+			expectValid: false,
+		},
+		{
+			name:        "proto outside contracts/grpc rejected",
+			grpcBlock:   `{"service": "x.v1.S", "method": "M", "proto": "proto/x.proto"}`,
+			expectValid: false,
+		},
+		{
+			name:        "invalid streamingType rejected",
+			grpcBlock:   `{"service": "x.v1.S", "method": "M", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
+			expectValid: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var doc any
+			require.NoError(t, json.Unmarshal([]byte(grpcDoc(tc.grpcBlock)), &doc))
+			err := schema.Validate(doc)
+			if tc.expectValid && err != nil {
+				t.Errorf("schema rejected valid grpc contract: %v", err)
+			}
+			if !tc.expectValid && err == nil {
+				t.Errorf("schema accepted invalid grpc contract (case %q)", tc.name)
+			}
+		})
+	}
+}

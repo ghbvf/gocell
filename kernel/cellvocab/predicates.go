@@ -6,6 +6,7 @@ package cellvocab
 //	event:      publish, subscribe
 //	command:    handle, invoke
 //	projection: provide, read
+//	grpc:       serve, call
 func ValidRolesForKind(kind ContractKind) []ContractRole {
 	switch kind {
 	case ContractHTTP:
@@ -16,6 +17,8 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 		return []ContractRole{RoleHandle, RoleInvoke}
 	case ContractProjection:
 		return []ContractRole{RoleProvide, RoleRead}
+	case ContractGRPC:
+		return []ContractRole{RoleServe, RoleCall}
 	default:
 		return nil
 	}

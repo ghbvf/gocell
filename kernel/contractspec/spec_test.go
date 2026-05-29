@@ -100,6 +100,72 @@ func TestContractSpec_CommandProjection_Validate(t *testing.T) {
 	}
 }
 
+// TestContractSpec_GRPCSpec_Validate verifies ContractSpec validation for
+// grpc kind: Service + Method are required (nested GRPCEndpointSpec), and
+// HTTP/event fields are rejected on a grpc spec.
+func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		spec    contractspec.ContractSpec
+		wantErr bool
+	}{
+		{"happy — full grpc spec", contractspec.ContractSpec{
+			ID: "grpc.device.command.v1.IssueCommand", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{
+				Service: "device.command.v1.DeviceCommandService", Method: "IssueCommand",
+			},
+		}, false},
+		{"grpc kind requires GRPC block", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+		}, true},
+		{"grpc kind requires service", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Method: "IssueCommand"},
+		}, true},
+		{"grpc kind requires method", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "device.command.v1.DeviceCommandService"},
+		}, true},
+		{"grpc spec with http Method rejected", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc", Method: "POST",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"},
+		}, true},
+		{"grpc spec with event Topic rejected", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc", Topic: "t",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"},
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.spec.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %+v, got nil", tc.spec)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error %v for %+v", err, tc.spec)
+			}
+		})
+	}
+}
+
+// TestContractSpec_GRPCInfo verifies the GRPCInfo accessor returns the nested
+// grpc endpoint spec for a grpc contract and nil otherwise.
+func TestContractSpec_GRPCInfo(t *testing.T) {
+	t.Parallel()
+	grpcSpec := &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"}
+	withGRPC := contractspec.ContractSpec{
+		ID: "grpc.x.y.v1.M", Kind: cellvocab.ContractGRPC, Transport: "grpc", GRPC: grpcSpec,
+	}
+	if got := withGRPC.GRPCInfo(); got != grpcSpec {
+		t.Fatalf("GRPCInfo() = %v, want %v", got, grpcSpec)
+	}
+	httpSpec := contractspec.ContractSpec{ID: "http.a.b.v1", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "GET", Path: "/x"}
+	if got := httpSpec.GRPCInfo(); got != nil {
+		t.Fatalf("GRPCInfo() on http spec = %v, want nil", got)
+	}
+}
+
 // TestContractSpec_UnknownKind_Validate verifies that an unrecognized kind
 // is rejected with a kind-specific error message.
 func TestContractSpec_UnknownKind_Validate(t *testing.T) {
