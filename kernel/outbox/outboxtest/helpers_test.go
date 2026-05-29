@@ -79,16 +79,21 @@ func TestNewEntryWithMetadata(t *testing.T) {
 	}
 }
 
-// TestNewEntry_ReservedMetadataRejected pins the contract that
-// trace_id / request_id / correlation_id / span_id / traceparent /
-// tracestate must not appear in entry.Metadata. Since issue #1229 sealed
-// Entry, the reserved-key check (kernel/outbox.reservedMetadataKeySet) runs
-// inside outbox.NewEntry's Validate at construction time — so a reserved key
-// makes NewEntry itself return an error; producers must use Entry.Observability.
+// TestNewEntry_ReservedMetadataRejected pins the contract that the reserved
+// observability/trace keys (trace_id / traceparent / trace_state / tracestate /
+// span_id / request_id / correlation_id) AND the reserved principal keys
+// (actor_id / subject_id / tenant_id / session_id) must not appear in
+// entry.Metadata. Since issue #1229 sealed Entry, the reserved-key check
+// (kernel/outbox.reservedMetadataKeySet) runs inside outbox.NewEntry's Validate
+// at construction time — so a reserved key makes NewEntry itself return an error;
+// producers must use Entry.Observability / Entry.Principal.
 func TestNewEntry_ReservedMetadataRejected(t *testing.T) {
 	for _, key := range []string{
+		// Observability/trace family (7).
 		"trace_id", "traceparent", "trace_state", "tracestate",
 		"span_id", "request_id", "correlation_id",
+		// Principal family (4) — issue #1229.
+		"actor_id", "subject_id", "tenant_id", "session_id",
 	} {
 		_, err := outbox.NewEntry(clock.Real(), context.Background(), "t", []byte(`{}`),
 			outbox.WithTopic("t"), outbox.WithMetadata(map[string]string{key: "abc"}))

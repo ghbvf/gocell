@@ -174,14 +174,17 @@ fail-fast 拒绝。
 
 > **occurred_at 刻意不纳入 ReservedMetadataKeys**（issue #1291 FP1 reconcile，
 > 原文「12 key / 5 new」含 `occurred_at` 系误写，已订正为 11/4）。理由：reserved
-> 的 11 个 key 全部有 **ctxkeys round-trip**（consumer 侧 `RestoreToContext`
-> 把它们重注入 handler ctx，与同名 ctxkey 存在命名空间冲突面），保留 metadata
-> key 是真实的命名空间卫生 + 防伪造；`occurred_at` 则是无 ctxkeys 往返的 typed
-> `time.Time` 标量，且 `Entry` 已 sealed-construction（producer 无法构造/篡改该
-> 字段），写 `Metadata["occurred_at"]` 对真实 `OccurredAt` 字段完全 inert——把它
-> 列为 reserved 是不产生任何防御价值的 scope-creep，故不加。membership 由
-> archtest `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（hardcoded want-set，
-> anti-tautology）冻结。
+> 的 11 个 key 都属于 kernel 两个跨 async **桥的命名空间**——observability/trace
+> 族（W3C trace-context + correlation：trace_id / traceparent / trace_state /
+> tracestate / span_id / request_id / correlation_id）与 principal 族（actor_id /
+> subject_id / tenant_id / session_id）。注意「round-trip」**不是**判据：`span_id`
+> / `trace_state` / `tracestate` 今天并无 `ObservabilityMetadata` 字段、不经
+> `RestoreToContext` 还原，仍被 reserve——纯属 W3C trace 命名空间卫生。`occurred_at`
+> 则**不属于任一桥族**：它是 domain 事件时间标量，由自己专属的 sealed `Entry`
+> 字段（`occurredAt`）承载，写 `Metadata["occurred_at"]` 对真实字段完全 inert——
+> 把它列为 reserved 是 category error，非防御。membership 由 archtest
+> `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（hardcoded want-set，anti-tautology）
+> 冻结。
 
 ### 6. archtest Hard funnel 双向锁 （audit: PR-A1 / outbox: PR-A2）
 
@@ -331,8 +334,9 @@ helper 写入 delivery span：
 
 - audit ledger HMAC msg rewrite 不向后兼容 —— audit chain 从 seq=1 重建，旧 row
   数据丢失。该后果对 gocell（无外部部署）是设计接受值，不是免责论述。
-- 12 reserved key 集合（PR-A2 落地） —— 业务需熟悉 Metadata 黑名单，trade-off 换
-  typed envelope 反伪造。
+- 11 reserved key 集合（7 observability + 4 principal；occurred_at 刻意移出，见 §5
+  + Amendment 2026-05-30） —— 业务需熟悉 Metadata 黑名单，trade-off 换 typed
+  envelope 反伪造。
 - Principal 由 `NewEntry` 从 ctx 单一注入（无 producer-facing inject API）——producers
   不显式调用任何 Inject。**生产桥**（`runtime/auth/middleware.go` 认证后写
   `ctxkeys.WithActorID/WithSubjectID/WithSessionID`）是非空壳前提：未接桥时注入全空。

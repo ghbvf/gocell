@@ -41,9 +41,11 @@
 //     actually consults the set. "key in list but not enforced" is covered by the
 //     behavioral witness kernel/outbox.TestEntry_Validate_RejectsReservedMetadataKeys
 //     (which ranges over its OWN hardcoded want-set after FP1), not here.
-//   - slice ORDER carries no semantics (the production set is also projected into
-//     a map at init); the compare is order-insensitive via sort, so a reordering
-//     is intentionally NOT a violation.
+//
+// Design note (NOT a blind spot — a deliberate choice): slice ORDER carries no
+// semantics (the production set is also projected into a map at init), so the
+// compare is order-insensitive via sort and a reordering is intentionally NOT a
+// violation.
 package archtest
 
 import (
@@ -57,11 +59,17 @@ import (
 // wantReservedMetadataKeys is the frozen membership of
 // outbox.ReservedMetadataKeys (11 keys = 7 observability + 4 principal).
 // Adding / removing a bridge key requires editing this list under explicit
-// reviewer attention (deny-by-default). occurred_at is deliberately NOT here:
-// it is a typed time.Time scalar with no ctxkeys round-trip (unlike all 11
-// keys, which RestoreToContext re-injects), and Entry is sealed-construction so
-// no producer can forge the field — reserving its metadata key would be inert
-// (issue #1291 FP1; ADR 202605281200-1042 §5 reconciled 12→11).
+// reviewer attention (deny-by-default).
+//
+// occurred_at is deliberately NOT here: it belongs to neither the
+// observability/trace bridge family nor the principal bridge family. It is a
+// domain event-time scalar carried by its own dedicated sealed Entry field
+// (occurredAt), so Metadata["occurred_at"] is inert against the real field —
+// reserving it would be a category error, not defense. (Note: not every
+// reserved key round-trips through ctx either — span_id / trace_state /
+// tracestate have no ObservabilityMetadata field but are reserved for W3C
+// trace-namespace hygiene; "no round-trip" is therefore NOT the discriminator.)
+// See issue #1291 FP1; ADR 202605281200-1042 §5 reconciled 12→11.
 var wantReservedMetadataKeys = []string{
 	// Observability family (7).
 	"trace_id",
@@ -88,10 +96,10 @@ func TestOutboxReservedMetadataKeysFrozen01(t *testing.T) {
 		t.Fatalf("OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01: outbox.ReservedMetadataKeys drifted from the "+
 			"frozen want-set.\n%s\n"+
 			"A reserved key is part of the observability/principal bridge contract: adding/removing one "+
-			"rewires what Entry.Validate rejects in the producer Metadata namespace. Update "+
-			"wantReservedMetadataKeys here AND the behavioral witness "+
-			"kernel/outbox.TestEntry_Validate_RejectsReservedMetadataKeys AND ADR 202605281200-1042 §5 "+
-			"under reviewer attention.", diff)
+			"rewires what Entry.Validate rejects in the producer Metadata namespace. Update ALL four "+
+			"sync points under reviewer attention: (1) wantReservedMetadataKeys here, (2) the behavioral "+
+			"witness kernel/outbox.TestEntry_Validate_RejectsReservedMetadataKeys, (3) ADR "+
+			"202605281200-1042 §5, (4) .claude/rules/gocell/observability.md §Outbox Wire Envelope 三族字段.", diff)
 	}
 }
 

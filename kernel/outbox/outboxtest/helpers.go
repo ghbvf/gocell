@@ -420,7 +420,10 @@ func (h *pubSubHarness) publishAndWait(payload []byte) {
 // parallel wire struct: the kernel-layer concern that once justified the manual
 // build is gone (envelope marshaling lives in kernel/outbox, which this package
 // already imports), so a single source of truth makes wire-schema drift between
-// the helper and production structurally impossible (issue #1291 FP1, F28).
+// the helper and production structurally impossible (issue #1291 FP1, F28). Do
+// NOT reintroduce a parallel wire struct: it would live outside kernel/outbox,
+// so the SafeID + schema guards on the production wireMessage could not cover
+// it, reopening exactly the drift surface this change closed.
 func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 	t.Helper()
 	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload, outbox.WithTopic(topic))
