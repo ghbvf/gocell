@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -392,4 +393,129 @@ func TestLoop_RecordsSuccessMetrics(t *testing.T) {
 	// In-flight returns to 0 and leader to 0 after Stop.
 	assert.Equal(t, float64(0), p.gaugeValue(metricReconcileInFlight, kernelmetrics.Labels{labelReconciler: "rc"}))
 	assert.Equal(t, float64(0), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}))
+}
+
+// -----------------------------------------------------------------------------
+// Review fixes: leader-gauge reset paths (F3/F4) + ReconcilerID validation (F7)
+// -----------------------------------------------------------------------------
+
+// TestLoop_OwnerCtxCanceledBeforeStartResetsLeader covers F3: Start
+// optimistically sets reconcile_leader=1, then awaitProbe's owner-cancel
+// pre-check returns without confirming the loop and makes the subsequent Stop a
+// no-op. The gauge MUST be reset to 0 on that path, else it stays stuck at 1.
+func TestLoop_OwnerCtxCanceledBeforeStartResetsLeader(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		Interval:     testtime.D1h,
+		Metrics:      m,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	ownerCancel() // cancel BEFORE Start — awaitProbe pre-check fires
+	require.NoError(t, l.Start(ownerCtx))
+	assert.Equal(t, float64(0), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}),
+		"leader must reset to 0 when the owner ctx is canceled before the loop confirms running")
+	require.NoError(t, l.Stop(context.Background())) // no-op; state already cleared
+}
+
+// TestLoop_StopRetryableAfterTimeout covers F4: a Stop that exhausts its budget
+// while a reconcile is stuck must NOT prematurely clear l.cancel/l.done or reset
+// the leader gauge. State is retained so a concurrent Start stays a no-op (no
+// second pool racing the draining one) and a later Stop drains and resets the
+// gauge to 0.
+func TestLoop_StopRetryableAfterTimeout(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	rec := newBlockingReconciler()
+	rec.ignoreCtx = true // stuck mid-work, ignores ctx until released
+	src := make(chan Request)
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
+	l := &Loop{ReconcilerID: "rc", Reconciler: rec, Source: src, Interval: testtime.D1h, Metrics: m}
+	ownerCtx, ownerCancel := startCtxs(t)
+	defer ownerCancel()
+	require.NoError(t, l.Start(ownerCtx))
+
+	src <- Request{EntityID: "stuck"}
+	testwait.External(t, "reconcile-started", func() bool { return rec.calls.Load() >= 1 },
+		testtime.D500ms, testtime.D1ms, "a reconcile must be running before Stop")
+
+	// First Stop times out (reconcile stuck): returns deadline, leaves state.
+	sc1, cancel1 := context.WithTimeout(context.Background(), testtime.D1ms)
+	defer cancel1()
+	require.ErrorIs(t, l.Stop(sc1), context.DeadlineExceeded)
+	assert.Equal(t, float64(1), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}),
+		"a timed-out Stop must leave leader=1 (loop not yet drained)")
+	l.mu.Lock()
+	retained := l.cancel != nil && l.done != nil
+	l.mu.Unlock()
+	assert.True(t, retained, "a timed-out Stop must retain l.cancel/l.done so Start stays a no-op and Stop is retryable")
+
+	// Start during draining must be a no-op (does not spawn a second pool).
+	require.NoError(t, l.Start(ownerCtx))
+	assert.EqualValues(t, 1, rec.calls.Load(), "Start during draining must not spawn a second pool / reconcile")
+
+	// Unstick, then a retried Stop drains and resets the gauge.
+	close(rec.release)
+	sc2, cancel2 := stopCtx(t)
+	defer cancel2()
+	require.NoError(t, l.Stop(sc2), "Stop must be retryable after a timeout")
+	assert.Equal(t, float64(0), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}))
+	l.mu.Lock()
+	cleared := l.cancel == nil && l.done == nil
+	l.mu.Unlock()
+	assert.True(t, cleared, "a drained Stop must clear l.cancel/l.done")
+}
+
+// TestValidateReconcilerID covers F7: the owner-dimension validator that keeps a
+// ReconcilerID label-safe and low-cardinality.
+func TestValidateReconcilerID(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"empty uses sentinel", "", true},
+		{"simple", "mdmcell", true},
+		{"digits and underscore", "mdm_cell2", true},
+		{"sentinel", reconcilerIDSentinel, true},
+		{"leading underscore", "_x", true},
+		{"max length", strings.Repeat("a", maxReconcilerIDLen), true},
+		{"leading digit", "2cell", false},
+		{"uppercase", "Cell", false},
+		{"dash", "mdm-cell", false},
+		{"dot", "mdm.cell", false},
+		{"space", "mdm cell", false},
+		{"label separator pipe", "a|b", false},
+		{"label separator equals", "a=b", false},
+		{"too long", strings.Repeat("a", maxReconcilerIDLen+1), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateReconcilerID(tc.id)
+			if tc.ok {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
+
+// TestLoop_BadReconcilerIDFailsStart covers F7 at the Start gate: a malformed
+// ReconcilerID fails OnStart (bootstrap rolls back) before any metric record.
+func TestLoop_BadReconcilerIDFailsStart(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	l := &Loop{
+		ReconcilerID: "Bad-ID",
+		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{}, nil }),
+	}
+	err := l.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ReconcilerID")
+	require.NoError(t, l.Stop(context.Background())) // no-op, goleak stays clean
 }

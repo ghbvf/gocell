@@ -102,7 +102,12 @@ type reconcilerReadinessChecker interface {
 type Loop struct {
 	// Name labels logs; defaults to "reconcile.loop".
 	Name string
-	// ReconcilerID is the metric/log owner dimension; defaults to "_unknown".
+	// ReconcilerID is the metric/log owner dimension; when empty it defaults to
+	// the "_runtime" sentinel (see reconcilerIDSentinel). When set it MUST be a
+	// low-cardinality, label-safe identifier: Start rejects any value that fails
+	// validateReconcilerID (lowercase [a-z0-9_], leading [a-z_], ≤48 runes) so a
+	// high-cardinality or separator-bearing owner cannot blow up / corrupt the
+	// reconciler metric label.
 	ReconcilerID string
 	// Reconciler is the required convergence callback.
 	Reconciler Reconciler
@@ -141,6 +146,9 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 		if err := rc.Validate(); err != nil {
 			return fmt.Errorf("reconcile: reconciler not ready: %w", err)
 		}
+	}
+	if err := validateReconcilerID(l.ReconcilerID); err != nil {
+		return err
 	}
 	if err := l.Metrics.preflight(l.reconcilerID()); err != nil {
 		return err
@@ -228,6 +236,13 @@ func (l *Loop) runWorker(runCtx context.Context, queue chan Request, wg *sync.Wa
 // process reconciles one Request: it serializes per EntityID (dropping a
 // duplicate while one is in flight — safe under level-triggering, since the next
 // trigger / requeue re-observes), records metrics, and requeues per the result.
+//
+// Scope note (ADR §2.2): A3 deliberately uses skip-if-busy rather than
+// controller-runtime's dirty/processing dedup. A coalesced trigger is NOT lost
+// under level-triggering — the next resync / requeue re-observes the latest
+// state — but a "mark-dirty, re-run once after the in-flight reconcile" queue
+// (so convergence does not wait for the next resync) is deferred to PR-A5's
+// rate-limited delaying queue.
 func (l *Loop) process(runCtx context.Context, req Request, queue chan<- Request, wg *sync.WaitGroup) {
 	if _, busy := l.inflight.LoadOrStore(req.EntityID, struct{}{}); busy {
 		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultSkipped)
@@ -286,6 +301,13 @@ func (l *Loop) safeReconcile(ctx context.Context, req Request) (res Result, err 
 // via a goroutine bounded by the run ctx. The goroutine is tracked by wg so Stop
 // waits for it, and exits immediately on cancellation (no leak, no requeue into
 // a draining Loop).
+//
+// Scope note (ADR §2.2, threat T-LEAK): A3 spawns one short-lived timer
+// goroutine per requeue — simpler than client-go's shared delaying queue, and
+// leak-free (every goroutine is runCtx-derived + WaitGroup-tracked). The
+// concurrent count is bounded by the live entity set, not capped; a shared
+// rate-limited delaying queue (one timer goroutine total, exponential backoff)
+// is deferred to PR-A5.
 func (l *Loop) scheduleRequeue(runCtx context.Context, req Request, after time.Duration, queue chan<- Request, wg *sync.WaitGroup) {
 	if after <= 0 {
 		after = l.interval()
@@ -323,6 +345,12 @@ func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, rea
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()))
 		cancel()
+		// Reset the leader gauge optimistically set to 1 in Start: this Loop
+		// never confirmed running and the subsequent Stop is a no-op (cancel is
+		// cleared below), so without this reset reconcile_leader would stay 1
+		// forever. Background ctx because runCtx is already canceled (mirrors
+		// Stop's drained-path reset).
+		l.Metrics.setLeader(context.Background(), l.reconcilerID(), 0)
 		l.cancel = nil
 		l.done = nil
 		return nil
@@ -339,6 +367,15 @@ func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, rea
 
 // Stop cancels the Loop and waits for all goroutines (workers, pump, pending
 // requeues) to exit within ctx's budget.
+//
+// State (l.cancel / l.done) is cleared ONLY after the goroutines actually drain.
+// Until then the fields stay set so that (a) a concurrent Start remains a no-op
+// — it never spawns a second pool racing the one still unwinding — and (b) a
+// Stop that exhausts ctx's budget can simply be called again to keep waiting.
+// cancel() is idempotent, so a retried Stop re-selects on the same done channel
+// without harm. The leader gauge is reset to 0 only on confirmed drain: a
+// timed-out Stop is "not yet stopped", so leader stays 1 until a later Stop
+// drains it.
 func (l *Loop) Stop(ctx context.Context) error {
 	if l == nil {
 		return nil
@@ -346,23 +383,28 @@ func (l *Loop) Stop(ctx context.Context) error {
 	l.mu.Lock()
 	cancel := l.cancel
 	done := l.done
-	l.cancel = nil
-	l.done = nil
 	l.mu.Unlock()
 
 	if cancel == nil {
-		return nil
+		return nil // never started, or already fully stopped
 	}
 	cancel()
 
 	select {
 	case <-done:
+		l.mu.Lock()
+		l.cancel = nil
+		l.done = nil
+		l.mu.Unlock()
 		l.Metrics.setLeader(context.Background(), l.reconcilerID(), 0)
 		l.logger().Info("reconcile: loop stopped",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()))
 		return nil
 	case <-ctx.Done():
+		// Budget exhausted before drain. cancel() has fired so the goroutines
+		// are unwinding; leave l.cancel/l.done intact so Stop is retryable and
+		// Start cannot race the draining pool.
 		return ctx.Err()
 	}
 }
@@ -386,6 +428,39 @@ func (l *Loop) reconcilerID() string {
 		return l.ReconcilerID
 	}
 	return reconcilerIDSentinel
+}
+
+// maxReconcilerIDLen bounds a ReconcilerID, mirroring the owner-dimension length
+// cap used by adapters/redis KeyNamespace and kernel/healthz ProbeName.
+const maxReconcilerIDLen = 48
+
+// validateReconcilerID rejects a non-empty ReconcilerID that is not a
+// low-cardinality, label-safe owner identifier. Empty is allowed (Start then
+// uses the reconcilerIDSentinel). The accepted shape — leading [a-z_], body
+// [a-z0-9_], ≤ maxReconcilerIDLen runes — mirrors the cell-id / ProbeName /
+// KeyNamespace owner conventions: lowercase keeps the metric/log dimension
+// stable, the charset excludes the adapter label separators ('|', '=') plus
+// whitespace / control bytes, and the length cap bounds cardinality. The
+// reconciler metric label is a registration-time owner dimension (set by the
+// Loop's constructor, not request input), so this is a fail-fast guard against a
+// misconfigured owner rather than untrusted-input sanitization. It runs at Start
+// before the metric preflight so a bad ID surfaces at OnStart (bootstrap rolls
+// back) instead of corrupting the time-series.
+func validateReconcilerID(id string) error {
+	if id == "" {
+		return nil
+	}
+	if len(id) > maxReconcilerIDLen {
+		return fmt.Errorf("reconcile: ReconcilerID %q exceeds %d bytes", id, maxReconcilerIDLen)
+	}
+	for i, r := range id {
+		ok := r == '_' || (r >= 'a' && r <= 'z') || (i > 0 && r >= '0' && r <= '9')
+		if !ok {
+			return fmt.Errorf("reconcile: ReconcilerID %q has illegal character %q "+
+				"(allowed: leading [a-z_], then [a-z0-9_])", id, r)
+		}
+	}
+	return nil
 }
 
 func (l *Loop) name() string {

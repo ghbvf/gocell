@@ -457,75 +457,73 @@ var forbiddenTimeFns = map[string]string{
 	"Sleep":     "clock.Clock.Sleep",
 }
 
-// exactSanctionedTimeCalls maps each controlPlaneClock method name to the
-// exact stdlib time.* function name (without the "time." prefix) that the
-// method body may call. The carve-out is keyed on the (method name, callee)
-// pair, NOT on receiver type alone — so any other stdlib time.* function call
-// inside a controlPlaneClock method (e.g. time.Sleep inside newTicker) is a
-// violation, and any new exempt method requires extending this map AND adding
-// the method to the sealed type.
+// controlPlaneClockCarveOut maps each sanctioned control-plane host package
+// (directory prefix, trailing "/") to the exact set of (controlPlaneClock method
+// name → stdlib time.* function name, without the "time." prefix) pairs that
+// host's methods may call directly. The carve-out key is the (host, method,
+// callee) TRIPLE: a method is exempt ONLY in the host that declares it.
 //
-// Extension policy (HARD form-uniqueness): the only way to add a new
-// (method, callee) pair is a deliberate code change here PLUS adding the
-// method to a controlPlaneClock type in a sanctioned host package (see
-// controlPlaneClockHosts: runtime/command/lifecycle.go or
-// kernel/reconcile/loop.go). A new method on controlPlaneClock without an entry
-// here is a violation for every time.* call it makes (the method exists but
-// exactSanctionedTimeCalls lookup returns ""); a new entry here without a
-// matching method does nothing (no FuncDecl position binds to it). Both halves
-// are required.
+// Why host-scoped, not a global method→callee map (#1275 review F1): a flat,
+// host-agnostic map let any host borrow any other host's method exception — and
+// let a newly added host inherit ALL methods for free. Binding the method set to
+// its host closes both: runtime/command's newTicker is not exempt in
+// kernel/reconcile, kernel/reconcile's newRequeueTimer/now are not exempt in
+// runtime/command, and adding a third host grants NOTHING until that host gets
+// its own explicit (method→callee) entries here.
 //
-// The map is keyed by method name only (not package): each sanctioned host
-// declares the subset it uses (runtime/command: newTicker + newProbeTimer;
-// kernel/reconcile: newProbeTimer + newRequeueTimer + now). A host need not
-// declare every method, but any method it declares MUST appear here.
+// Host prefixes are disjoint (runtime/command/ vs kernel/reconcile/), so the
+// per-rel lookup in controlPlaneClockHostMethods is unambiguous.
 //
-// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
-var exactSanctionedTimeCalls = map[string]string{
-	"newTicker":       "NewTicker", // runtime/command: SweeperLifecycle ticker
-	"newProbeTimer":   "NewTimer",  // runtime/command + kernel/reconcile: startup probe
-	"newRequeueTimer": "NewTimer",  // kernel/reconcile: delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
-	"now":             "Now",       // kernel/reconcile: reconcile-duration measurement
-}
-
-// controlPlaneClockHosts lists the packages sanctioned to host a sealed,
-// package-private controlPlaneClock type (the real-only control-plane scheduling
-// clock). Gate (a) of clockControlPlaneAllowedMethods restricts the carve-out to
-// these paths so no other package can claim it by reusing the type name; each
-// member declares its OWN unexported controlPlaneClock.
-//
-// Members (trailing "/" = directory prefix):
-//   - runtime/command/  — SweeperLifecycle (PROD-CLOCK-INJECTION-01 origin).
-//   - kernel/reconcile/ — reconcile.Loop (RECONCILE-LOOP-CLOCK-CARVEOUT-01).
+// Extension policy (HARD form-uniqueness): adding a new exempt callsite requires
+// BOTH a deliberate entry here under the owning host AND a matching method on
+// that host's package-private controlPlaneClock type. A method without an entry
+// is a violation for every time.* call it makes; an entry without a matching
+// method binds to no FuncDecl position and does nothing. Both halves are
+// required, and the host that declares the method must be the host that lists
+// it.
 //
 // AI-robust grade unchanged: Medium (permanent ceiling) — see
-// clockControlPlaneAllowedMethods. Adding a host is a deliberate, reviewable
-// change here; the per-host seal is the package-private type name + gate (c).
-var controlPlaneClockHosts = []string{
-	"runtime/command/",
-	"kernel/reconcile/",
+// clockControlPlaneAllowedMethods. Adding a host/method is a deliberate,
+// reviewable change here; the per-host seal is the package-private type name +
+// gate (c) + this host-scoped table.
+//
+// ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
+var controlPlaneClockCarveOut = map[string]map[string]string{
+	"runtime/command/": {
+		"newTicker":     "NewTicker", // SweeperLifecycle ticker
+		"newProbeTimer": "NewTimer",  // startup probe
+	},
+	"kernel/reconcile/": {
+		"newProbeTimer":   "NewTimer", // startup probe
+		"newRequeueTimer": "NewTimer", // delayed requeue (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
+		"now":             "Now",      // reconcile-duration measurement
+	},
 }
 
-// hasControlPlaneClockHostPrefix reports whether rel is under a sanctioned
-// control-plane host package (gate (a)).
-func hasControlPlaneClockHostPrefix(rel string) bool {
-	for _, h := range controlPlaneClockHosts {
-		if strings.HasPrefix(rel, h) {
-			return true
+// controlPlaneClockHostMethods returns the (method name → sanctioned callee) set
+// for the control-plane host package that rel belongs to, or nil if rel is under
+// no sanctioned host (gate (a)). Host prefixes in controlPlaneClockCarveOut are
+// disjoint, so at most one matches.
+func controlPlaneClockHostMethods(rel string) map[string]string {
+	for host, methods := range controlPlaneClockCarveOut {
+		if strings.HasPrefix(rel, host) {
+			return methods
 		}
 	}
-	return false
+	return nil
 }
 
 // clockControlPlaneAllowedMethods returns the map of FuncDecl name-positions
-// (format: fset.Position(fd.Name.Pos()).String()) to method name for methods
-// in file that are candidates for the PROD-CLOCK-INJECTION-01 carve-out.
+// (format: fset.Position(fd.Name.Pos()).String()) to the sanctioned stdlib
+// callee for methods in file that are candidates for the PROD-CLOCK-INJECTION-01
+// carve-out.
 //
 // A FuncDecl is a candidate if and only if ALL of:
 //
-//	(a) rel is under a sanctioned control-plane host package
-//	    (controlPlaneClockHosts: "runtime/command/" or "kernel/reconcile/") —
-//	    this package gate prevents any other package from claiming to host a
+//	(a) rel is under a sanctioned control-plane host package — i.e.
+//	    controlPlaneClockHostMethods(rel) is non-nil (host keys of
+//	    controlPlaneClockCarveOut: "runtime/command/" or "kernel/reconcile/").
+//	    This package gate prevents any other package from claiming to host a
 //	    "controlPlaneClock" method; the type is package-private (unexported) so
 //	    only code in a host package can declare methods on it. This is the
 //	    structural "seal" that replaces the old hand-maintained allowlist map.
@@ -537,14 +535,16 @@ func hasControlPlaneClockHostPrefix(rel string) bool {
 //	    forms are accepted for robustness, though the current impl uses value
 //	    receivers only.
 //
-//	(d) The method name appears as a key in exactSanctionedTimeCalls — methods
-//	    on controlPlaneClock that lack an entry never grant carve-out. This is
-//	    the form-uniqueness lock that closes the "any time.* in any method
+//	(d) The method name is listed FOR THIS HOST in controlPlaneClockCarveOut.
+//	    A method listed only under a different host is NOT a candidate here (no
+//	    cross-host borrowing — #1275 review F1); a method absent from every host
+//	    set is not a candidate either, closing the "any time.* in any method
 //	    body" gap (#1136 review F2).
 //
-// The returned map value is the method name; callers check the resolved time
-// function name against exactSanctionedTimeCalls[methodName] to decide whether
-// the specific time.* call is sanctioned (exact (method, callee) pair).
+// The returned map value is the sanctioned stdlib callee for that (host, method)
+// pair; callers check the resolved time function name against it to decide
+// whether the specific time.* call is sanctioned (exact (host, method, callee)
+// triple).
 //
 // Uses EachInChildren[ast.FuncDecl](file, ...) — top-level FuncDecls are
 // direct children of *ast.File, so depth=1 is correct and sufficient.
@@ -552,13 +552,17 @@ func hasControlPlaneClockHostPrefix(rel string) bool {
 // AI-robust grade: Medium (permanent ceiling). The stdlib time.NewTicker /
 // time.NewTimer free functions cannot be made uncallable in Go, so receiver-type
 // confinement is the permanent ceiling here (same as SPAN-SETATTR-REDACT-01
-// package-internal axis). Form-uniqueness within that ceiling is now (method,
-// callee) exact-pair — the strongest available form for stdlib free-function
-// callouts. Gain over the former receiver-type-only carve-out (#1136 F2):
+// package-internal axis). Form-uniqueness within that ceiling is now the
+// (host, method, callee) exact-triple — the strongest available form for stdlib
+// free-function callouts. Gain over the former receiver-type-only carve-out
+// (#1136 F2) and the host-agnostic method map (#1275 F1):
 //   - Any time.* call inside a controlPlaneClock method body other than the
-//     declared (method, callee) pair is a violation — no "method body wildcard".
-//   - Adding a controlPlaneClock method without an exactSanctionedTimeCalls
-//     entry leaves it ungated; any time.* call in it is flagged.
+//     declared (host, method, callee) triple is a violation — no "method body
+//     wildcard".
+//   - Adding a controlPlaneClock method without a controlPlaneClockCarveOut
+//     entry for its host leaves it ungated; any time.* call in it is flagged.
+//   - A host cannot use another host's sanctioned method, and a newly added
+//     host inherits no exceptions until it gets its own explicit entries.
 //
 // Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
 //  1. A FuncLit (anonymous function / closure) cannot be a method; time.* calls
@@ -571,7 +575,7 @@ func hasControlPlaneClockHostPrefix(rel string) bool {
 //  2. A method named controlPlaneClock from an entirely different package would
 //     satisfy (b)+(c) without gate (a). Gate (a) prevents this by requiring the
 //     file's module-relative path to be under a sanctioned host package
-//     (controlPlaneClockHosts: runtime/command/ or kernel/reconcile/).
+//     (controlPlaneClockCarveOut keys: runtime/command/ or kernel/reconcile/).
 //     Reverse self-check: control_plane_wrong_path_violates fixture has a struct
 //     named controlPlaneClock with a method outside any host → still flagged.
 //     GREEN self-check for the kernel/reconcile host: control_plane_reconcile_passes.
@@ -582,22 +586,28 @@ func hasControlPlaneClockHostPrefix(rel string) bool {
 //     Reverse self-check: control_plane_wrong_receiver_type_violates asserts such
 //     a method is flagged (receiver type "otherClock" ≠ "controlPlaneClock").
 //  4. A new controlPlaneClock method (e.g. "harvest") that calls time.Sleep
-//     would have passed under the receiver-type-only form; the (method, callee)
-//     pair lock rejects it because "harvest" is not in exactSanctionedTimeCalls.
+//     would have passed under the receiver-type-only form; the host-scoped table
+//     rejects it because "harvest" is in no host's set.
 //     Reverse self-check: control_plane_wrong_method_name_violates fixture.
 //  5. A sanctioned method (e.g. "newTicker") that calls the wrong time.*
 //     function (e.g. time.Sleep instead of time.NewTicker) would pass under
-//     the receiver-type-only form; the (method, callee) pair lock rejects it
-//     because exactSanctionedTimeCalls["newTicker"] != "Sleep".
+//     the receiver-type-only form; the stored-callee check rejects it because
+//     the host's "newTicker" callee is "NewTicker", not "Sleep".
 //     Reverse self-check: control_plane_wrong_callee_violates fixture.
+//  6. A host using ANOTHER host's sanctioned method (e.g. kernel/reconcile
+//     declaring "newTicker", which is only runtime/command's) would have passed
+//     under the former host-agnostic method map; the host-scoped table rejects
+//     it because "newTicker" is not in the kernel/reconcile set (#1275 F1).
+//     Reverse self-check: control_plane_cross_host_method_violates fixture.
 //
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md §#619
 // ref: PROD-CLOCK-INJECTION-01
 func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel string) map[string]string {
 	out := map[string]string{}
-	// Gate (a): only sanctioned control-plane host packages may host
-	// controlPlaneClock methods (see controlPlaneClockHosts).
-	if !hasControlPlaneClockHostPrefix(rel) {
+	// Gate (a): resolve the host's (method→callee) carve-out set. nil ⇒ rel is
+	// under no sanctioned control-plane host, so no method here is a candidate.
+	hostMethods := controlPlaneClockHostMethods(rel)
+	if hostMethods == nil {
 		return out
 	}
 	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
@@ -606,23 +616,24 @@ func clockControlPlaneAllowedMethods(fset *token.FileSet, file *ast.File, rel st
 			return
 		}
 		// Gate (c): receiver type name must be "controlPlaneClock" (or pointer to it).
-		recvTypeName := clockReceiverTypeName(fd)
-		if recvTypeName != "controlPlaneClock" {
+		if clockReceiverTypeName(fd) != "controlPlaneClock" {
 			return
 		}
 		if fd.Name == nil {
 			return
 		}
-		// Gate (d): method name must be a key in exactSanctionedTimeCalls. Methods
-		// on controlPlaneClock that lack an entry are NOT carve-out candidates —
-		// any time.* call inside them is flagged the same as in any other production
-		// method. This is the form-uniqueness lock that prevents the "any method
-		// body wildcard" loophole (#1136 review F2).
-		if _, ok := exactSanctionedTimeCalls[fd.Name.Name]; !ok {
+		// Gate (d): the method must be listed FOR THIS HOST. A method present in a
+		// different host's set is NOT a candidate here (the host-scoped table
+		// prevents cross-host borrowing — #1275 review F1). Methods absent from
+		// every host set are NOT candidates either, closing the "any method body
+		// wildcard" loophole (#1136 review F2). The stored value is the sanctioned
+		// stdlib callee, so the caller checks the exact (host, method, callee)
+		// triple without a second lookup.
+		callee, ok := hostMethods[fd.Name.Name]
+		if !ok {
 			return
 		}
-		key := fset.Position(fd.Name.Pos()).String()
-		out[key] = fd.Name.Name
+		out[fset.Position(fd.Name.Pos()).String()] = callee
 	})
 	return out
 }
@@ -806,22 +817,22 @@ func scanProdClockInjectionAST(fset *token.FileSet, file *ast.File, rel string, 
 	var out []Diagnostic
 	seen := map[string]bool{}
 
-	// Receiver-type + (method, callee) confinement: compute which FuncDecls in
-	// this file may host a sanctioned time.* call, mapped to the controlPlaneClock
-	// method name. Only FuncDecls that are methods of controlPlaneClock AND whose
-	// file is under runtime/command/ AND whose name appears as a key in
-	// exactSanctionedTimeCalls qualify. The final (method, callee) pair check
-	// happens inside record() against exactSanctionedTimeCalls[methodName].
+	// Receiver-type + (host, method, callee) confinement: compute which FuncDecls
+	// in this file may host a sanctioned time.* call, mapped to the sanctioned
+	// stdlib callee for that (host, method) pair. Only FuncDecls that are methods
+	// of controlPlaneClock AND whose file is under a sanctioned host AND whose
+	// name is listed for THAT host (controlPlaneClockCarveOut) qualify. The final
+	// callee check happens inside record() against the stored callee.
 	allowedFuncs := clockControlPlaneAllowedMethods(fset, file, rel)
 
 	record := func(node ast.Node, name string) {
-		// (method, callee) exact-pair carve-out: skip only if pos is inside an
-		// exempt FuncDecl (not inside a closure) AND the time.* function name
-		// matches exactSanctionedTimeCalls[methodName].
+		// (host, method, callee) exact-triple carve-out: skip only if pos is
+		// inside an exempt FuncDecl (not inside a closure) AND the time.* function
+		// name matches the sanctioned callee stored for that method/host.
 		if funcKey := enclosingFuncDeclKey(fset, file, node.Pos()); funcKey != "" {
-			if methodName, isCandidate := allowedFuncs[funcKey]; isCandidate {
-				if exactSanctionedTimeCalls[methodName] == name {
-					return // sanctioned (method, callee) pair
+			if sanctionedCallee, isCandidate := allowedFuncs[funcKey]; isCandidate {
+				if sanctionedCallee == name {
+					return // sanctioned (host, method, callee) triple
 				}
 				// fall through: method is a carve-out candidate but the callee
 				// does not match the declared pair — record violation.

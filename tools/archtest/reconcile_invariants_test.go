@@ -1,12 +1,14 @@
 package archtest
 
-// reconcile_invariants_test.go locks the three-piece minimal core of
-// kernel/reconcile — the Reconciler interface method set and the Request /
-// Result field sets — via reflect golden freezes.
+// reconcile_invariants_test.go locks kernel/reconcile's public surface: the
+// three-piece minimal core (Reconciler interface method set + Request / Result
+// field sets) via reflect golden freezes, plus the transition-window guard that
+// no code outside the package bare-constructs the scheduling Loop.
 //
 //   - INVARIANT: RECONCILE-INTERFACE-FROZEN-01
 //   - INVARIANT: RECONCILE-REQUEST-FIELDS-FROZEN-01
 //   - INVARIANT: RECONCILE-RESULT-FIELDS-FROZEN-01
+//   - INVARIANT: RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01
 //
 // The design ADR (docs/architecture/202605291600-661-adr-kernel-reconcile-design.md)
 // promises a deliberately minimal public surface: a Reconciler whose only method
@@ -41,9 +43,13 @@ package archtest
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/types"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/reconcile"
 )
@@ -278,5 +284,155 @@ func TestReconcileStructShape_ReverseBlindSpot(t *testing.T) {
 		if v := checkReconcileStructShape(dt, reconcileRequestWantFields); len(v) == 0 {
 			t.Errorf("RECONCILE-REQUEST self-test: detector passed malformed Request %q (blind spot)", name)
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01 — no bare Loop{} outside the package
+// -----------------------------------------------------------------------------
+//
+// # RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01
+//
+// reconcile.Loop currently exposes exported fields, so a consumer could
+// bare-construct `reconcile.Loop{Reconciler: r}` and silently skip the
+// metric / leader / backoff wiring a Builder would inject (threat T-BUILDER,
+// design ADR §"威胁矩阵"). PR-A7 closes this for good by privatizing the Loop
+// constructor behind a Builder (the Hard upstream); until then this archtest
+// holds the line: a production composite literal of reconcile.Loop is forbidden
+// anywhere except the home package itself and the A8 kernel/command migration
+// point. Test files (`*_test.go`) construct Loop directly via exported fields and
+// are out of scope (RunTypedProduction excludes them).
+//
+// AI-robust grade (per .claude/rules/gocell/ai-robust.md §"Funnel 双向锁评级"):
+//   - Downstream: Hard. The forbidden form is a single AST shape —
+//     ast.CompositeLit whose type resolves to (kernel/reconcile, "Loop") — with
+//     no "looks-like-but-isn't" grey zone; the type resolver sees through import
+//     aliases and `&Loop{}` address-of wrappers.
+//   - Upstream: Medium (transition). The package-external ban is an archtest
+//     caller-allowlist, not a type-system seal — Go visibility cannot express
+//     "only package P may compose this exported struct". PR-A7's constructor
+//     privatization is the Hard upstream that retires this guard (replaced by
+//     RECONCILE-BUILDER-FUNNEL-01). Tracked under parent issue #661, task A7.
+//
+// This is the documented Medium-upstream + Hard-downstream transition form the
+// charter permits with an open tracking issue (#661 / A7), named here so a
+// reviewer can follow the upgrade path.
+//
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
+//   - Import alias (`import rc ".../kernel/reconcile"; rc.Loop{}`): the type
+//     resolver keys on the resolved *types.Named obj package path, not the
+//     source alias, so aliasing does not hide the literal.
+//   - Address-of (`&reconcile.Loop{}`): EachInSubtree visits the inner
+//     CompositeLit regardless of the enclosing UnaryExpr, so `&Loop{}` is caught.
+//   - Reflection construction (`reflect.New(...)`): out of scope, same theoretical
+//     gap accepted by BASESLICE-CTOR-FUNNEL-01.
+//   - Zero-field literal `reconcile.Loop{}`: still a CompositeLit of the type —
+//     flagged; the RED fixture below uses exactly this shape to prove the
+//     detector is non-vacuous.
+
+// reconcileLoopLiteralMsg is the diagnostic for a forbidden reconcile.Loop
+// composite literal. Extracted as a const to keep callsites within the line cap.
+const reconcileLoopLiteralMsg = "forbidden composite literal reconcile.Loop{...} outside kernel/reconcile" +
+	" — construct via the package Builder (PR-A7); the exported-field form skips metric/leader/backoff wiring"
+
+// isReconcileLoopType reports whether expr names reconcile.Loop from reconcilePkgPath.
+func isReconcileLoopType(info *types.Info, expr ast.Expr, reconcilePkgPath string) bool {
+	if info == nil || expr == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	named, ok := tv.Type.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == reconcilePkgPath && obj.Name() == "Loop"
+}
+
+// scanReconcileLoopConstruction flags every reconcile.Loop composite literal in
+// p, unless p's package is in allowedPkgPaths (the home package + the A8
+// kernel/command migration point). Test files are excluded by the caller
+// (RunTypedProduction with Tests:false).
+func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgPaths map[string]bool) []Diagnostic {
+	if p.Pkg != nil && allowedPkgPaths[p.Pkg.Path()] {
+		return nil
+	}
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		EachInSubtree[ast.CompositeLit](file, func(lit *ast.CompositeLit) {
+			if !isReconcileLoopType(p.TypesInfo, lit.Type, reconcilePkgPath) {
+				return
+			}
+			diags = append(diags, Diagnostic{
+				Rel:     rel,
+				Line:    p.Fset.Position(lit.Pos()).Line,
+				Message: reconcileLoopLiteralMsg,
+			})
+		})
+	}
+	return diags
+}
+
+// reconcileLoopConstructionAllowed returns the package paths permitted to
+// compose reconcile.Loop: the home package (future Builder host) and the A8
+// kernel/command migration point.
+func reconcileLoopConstructionAllowed(modPath string) (reconcilePkgPath string, allowed map[string]bool) {
+	reconcilePkgPath = modPath + "/kernel/reconcile"
+	return reconcilePkgPath, map[string]bool{
+		reconcilePkgPath:            true,
+		modPath + "/kernel/command": true, // A8 migration point (design ADR)
+	}
+}
+
+// TestReconcileLoopConstructionAllowlist01 is the production GREEN baseline: no
+// package outside the allowlist bare-constructs reconcile.Loop.
+func TestReconcileLoopConstructionAllowlist01(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
+
+	diags := RunTypedProduction(t, TypedOpts{Tests: false}, func(p *Pass) []Diagnostic {
+		return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
+	})
+	Report(t, "RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01", diags)
+}
+
+// TestReconcileLoopConstructionAllowlist01_RedFixture proves the detector is
+// non-vacuous: a fixture package outside the allowlist that composes
+// reconcile.Loop{} must be flagged at least once.
+func TestReconcileLoopConstructionAllowlist01_RedFixture(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	modPath, err := moduleImportPath(root)
+	require.NoError(t, err, "read module path from go.mod")
+	reconcilePkgPath, allowed := reconcileLoopConstructionAllowed(modPath)
+
+	diags := RunTypedFixture(
+		t,
+		FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/reconcileloopredfixture/..."},
+		func(p *Pass) []Diagnostic {
+			return scanReconcileLoopConstruction(p, reconcilePkgPath, allowed)
+		},
+	)
+
+	var hits int
+	for _, d := range diags {
+		if d.Message == reconcileLoopLiteralMsg {
+			hits++
+		}
+	}
+	if hits == 0 {
+		t.Errorf("RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01 RED fixture: scanner found 0 hits; " +
+			"expected ≥ 1 from reconcileloopredfixture — the detector may be broken")
 	}
 }
