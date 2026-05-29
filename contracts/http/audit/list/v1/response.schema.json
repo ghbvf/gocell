@@ -23,6 +23,9 @@
           "subjectId": {
             "type": "string"
           },
+          "correlationId": {
+            "type": "string"
+          },
           "occurredAt": {
             "type": "string",
             "format": "date-time"

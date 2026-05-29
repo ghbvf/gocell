@@ -138,8 +138,8 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 		SessionID:     "session-must-not-leak",
 		CorrelationID: "corr-id-123",
 		OccurredAt:    occurred,
-		Timestamp:  time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
-		Payload:    []byte(`{"key":"value"}`),
+		Timestamp:     time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
+		Payload:       []byte(`{"key":"value"}`),
 	})
 
 	rec := httptest.NewRecorder()

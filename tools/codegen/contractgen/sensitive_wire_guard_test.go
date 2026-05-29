@@ -88,7 +88,7 @@ func flatObject(fields string) string {
 // HTTP response schemas, recurses into nested array items, is gated to the audit
 // domain, and never touches the request path.
 //
-// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01
+// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
 func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -158,7 +158,7 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 // never funneled — an audit-domain request schema may legitimately carry a
 // password-like field (the funnel covers wire-OUT only).
 //
-// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01
+// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
 func TestAuditWireSensitiveFieldFunnel_RequestExempt(t *testing.T) {
 	tmp := t.TempDir()
 	contractDir := "contracts/synth/v1"
@@ -178,7 +178,7 @@ func TestAuditWireSensitiveFieldFunnel_RequestExempt(t *testing.T) {
 // TestAuditWireSensitiveFieldFunnel_Payload asserts the funnel fires on audit
 // event payload schemas and is gated to the audit domain.
 //
-// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01
+// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
 func TestAuditWireSensitiveFieldFunnel_Payload(t *testing.T) {
 	cases := []struct {
 		name        string

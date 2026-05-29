@@ -197,6 +197,12 @@ func buildHTTPDTOs(
 		if err != nil {
 			return nil, fmt.Errorf("contractgen build: %q response schema: %w", contract.ID, err)
 		}
+		// Wire-out funnel: audit-domain responses must not project Principal
+		// credentials (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01). Request path above
+		// is intentionally exempt (inbound password/token fields are legitimate).
+		if err := rejectSensitiveAuditWireFields(contract.ID, "response", respSchema); err != nil {
+			return nil, fmt.Errorf("contractgen build: %w", err)
+		}
 		respDTOs, err := schemaToDTOs("Response", respSchema)
 		if err != nil {
 			return nil, fmt.Errorf("contractgen build: %q response DTOs: %w", contract.ID, err)
@@ -562,6 +568,11 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	payloadSchema, err := Parse(rootDir, payloadPath)
 	if err != nil {
 		return fmt.Errorf("contractgen build: %q payload schema: %w", contract.ID, err)
+	}
+	// Wire-out funnel: audit-domain event payloads must not project Principal
+	// credentials (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01).
+	if err := rejectSensitiveAuditWireFields(contract.ID, "payload", payloadSchema); err != nil {
+		return fmt.Errorf("contractgen build: %w", err)
 	}
 	payloadDTOs, err := schemaToDTOs("Payload", payloadSchema)
 	if err != nil {
