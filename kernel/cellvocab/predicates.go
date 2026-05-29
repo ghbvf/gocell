@@ -7,6 +7,7 @@ package cellvocab
 //	command:    handle, invoke
 //	projection: provide, read
 //	grpc:       serve, call
+//	saga:       orchestrate
 //
 // An unknown or future kind returns nil (fail-open); callers must check for nil
 // before ranging and must not treat nil as "kind is valid with no roles".
@@ -22,16 +23,18 @@ func ValidRolesForKind(kind ContractKind) []ContractRole {
 		return []ContractRole{RoleProvide, RoleRead}
 	case ContractGRPC:
 		return []ContractRole{RoleServe, RoleCall}
+	case ContractSaga:
+		return []ContractRole{RoleOrchestrate}
 	default:
 		return nil
 	}
 }
 
 // IsProviderRole returns true if role is a provider-side role
-// (serve, publish, handle, provide).
+// (serve, publish, handle, provide, orchestrate).
 func IsProviderRole(role ContractRole) bool {
 	switch role {
-	case RoleServe, RolePublish, RoleHandle, RoleProvide:
+	case RoleServe, RolePublish, RoleHandle, RoleProvide, RoleOrchestrate:
 		return true
 	default:
 		return false

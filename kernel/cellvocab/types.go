@@ -30,6 +30,7 @@ const (
 	ContractCommand    ContractKind = "command"
 	ContractProjection ContractKind = "projection"
 	ContractGRPC       ContractKind = "grpc"
+	ContractSaga       ContractKind = "saga"
 )
 
 // ContractRole describes how a Slice participates in a Contract.
@@ -44,6 +45,10 @@ const (
 	RoleInvoke    ContractRole = "invoke"
 	RoleProvide   ContractRole = "provide"
 	RoleRead      ContractRole = "read"
+	// RoleOrchestrate is the saga provider role: the cell that owns and drives
+	// the saga definition (declares the contract via endpoints.server). Saga has
+	// no consumer-side role — participation is one orchestrating cell per saga.
+	RoleOrchestrate ContractRole = "orchestrate"
 )
 
 // ContractLifecycle represents the wire-stability governance state of a Contract
@@ -88,6 +93,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractProjection, nil
 	case "grpc":
 		return ContractGRPC, nil
+	case "saga":
+		return ContractSaga, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract kind",
@@ -115,6 +122,8 @@ func ParseContractRole(s string) (ContractRole, error) {
 		return RoleProvide, nil
 	case "read":
 		return RoleRead, nil
+	case "orchestrate":
+		return RoleOrchestrate, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",
