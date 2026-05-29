@@ -255,8 +255,8 @@ func (l *Loop) runWorker(runCtx context.Context, queue chan Request, wg *sync.Wa
 // controller-runtime's dirty/processing dedup. A coalesced trigger is NOT lost
 // under level-triggering — the next resync / requeue re-observes the latest
 // state — but a "mark-dirty, re-run once after the in-flight reconcile" queue
-// (so convergence does not wait for the next resync) is deferred to PR-A5's
-// rate-limited delaying queue.
+// (so convergence does not wait for the next resync) is deferred to PR-A5
+// (#1166, F5) — accepted deferral, not yet implemented.
 func (l *Loop) process(runCtx context.Context, req Request, queue chan<- Request, wg *sync.WaitGroup) {
 	if _, busy := l.inflight.LoadOrStore(req.EntityID, struct{}{}); busy {
 		l.Metrics.recordResult(runCtx, l.reconcilerID(), resultSkipped)
@@ -321,7 +321,7 @@ func (l *Loop) safeReconcile(ctx context.Context, req Request) (res Result, err 
 // leak-free (every goroutine is runCtx-derived + WaitGroup-tracked). The
 // concurrent count is bounded by the live entity set, not capped; a shared
 // rate-limited delaying queue (one timer goroutine total, exponential backoff)
-// is deferred to PR-A5.
+// is deferred to PR-A5 (#1166, F6) — accepted deferral, not yet implemented.
 func (l *Loop) scheduleRequeue(runCtx context.Context, req Request, after time.Duration, queue chan<- Request, wg *sync.WaitGroup) {
 	if after <= 0 {
 		after = l.interval()
