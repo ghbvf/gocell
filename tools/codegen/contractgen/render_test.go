@@ -756,6 +756,63 @@ func TestBuildContractSpec_Saga(t *testing.T) {
 	}
 }
 
+// TestBuildSagaSpec_GoNameCollisionRejected asserts that two steps whose names
+// collapse to the same PascalCase Go identifier (e.g. "reserve" / "Reserve")
+// are rejected at buildSagaSpec time with a clear error message naming both
+// steps and the colliding identifier.
+func TestBuildSagaSpec_GoNameCollisionRejected(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{
+				{Name: "reserve", Output: "reserve-inventory.output.schema.json"},
+				{Name: "Reserve", Output: "charge-payment.output.schema.json"},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind}
+	err := buildSagaSpec(spec, root, c, contractDir)
+	if err == nil {
+		t.Fatal("expected collision error for steps 'reserve'/'Reserve', got nil")
+	}
+	if !strings.Contains(err.Error(), "Reserve") {
+		t.Errorf("error should mention the colliding identifier, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rename one step") {
+		t.Errorf("error should suggest renaming a step, got: %v", err)
+	}
+}
+
+// TestBuildSagaSpec_RetryPolicyMaxIntervalBelowBaseRejected asserts that a
+// retries block where maxInterval < baseInterval is rejected at buildSagaSpec.
+func TestBuildSagaSpec_RetryPolicyMaxIntervalBelowBaseRejected(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Retries: &metadata.SagaRetryMeta{
+				MaxAttempts:  3,
+				BaseInterval: "30s",
+				MaxInterval:  "1s",
+			},
+			Steps: []metadata.SagaStepMeta{
+				{Name: "reserveInventory", Output: "reserve-inventory.output.schema.json"},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind}
+	err := buildSagaSpec(spec, root, c, contractDir)
+	if err == nil {
+		t.Fatal("expected error for maxInterval < baseInterval, got nil")
+	}
+	if !strings.Contains(err.Error(), "MaxInterval") {
+		t.Errorf("error should mention MaxInterval, got: %v", err)
+	}
+}
+
 // TestBuildSagaSpec_CompensationOrderRejected asserts a non-reverse
 // compensationOrder fails the build (the only supported value is "reverse").
 func TestBuildSagaSpec_CompensationOrderRejected(t *testing.T) {

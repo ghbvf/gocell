@@ -51,6 +51,44 @@ const (
 	RoleOrchestrate ContractRole = "orchestrate"
 )
 
+// allContractKinds is the canonical ordered set of ContractKind values. It is
+// the SINGLE SOURCE for both the contract.schema.json `kind` enum (byte-locked
+// by TestSchemaConstantsMatchSchemaLiterals) and the governance validKinds set.
+// Order matches the schema enum; do not reorder without updating the schema in
+// lockstep. ParseContractKind round-trips every member (asserted in the
+// cellvocab round-trip test), so this slice, the typed consts, the parser, the
+// schema literal, and governance cannot drift apart.
+var allContractKinds = []ContractKind{
+	ContractHTTP, ContractEvent, ContractCommand, ContractProjection, ContractGRPC, ContractSaga,
+}
+
+// allContractRoles is the canonical ordered set of ContractRole values. Single
+// source for the slice.schema.json contractUsages `role` enum (byte-locked by
+// TestSchemaConstantsMatchSchemaLiterals) and the governance validRoles set.
+// Order matches the schema enum; do not reorder without updating the schema.
+var allContractRoles = []ContractRole{
+	RoleServe, RoleCall, RolePublish, RoleSubscribe, RoleHandle,
+	RoleInvoke, RoleProvide, RoleRead, RoleOrchestrate,
+}
+
+// AllContractKinds returns a copy of the canonical ordered ContractKind set.
+// Callers that need string values convert with string(k). The schema enum and
+// governance validKinds derive from this slice so the accepted kind set has one
+// source of truth.
+func AllContractKinds() []ContractKind {
+	out := make([]ContractKind, len(allContractKinds))
+	copy(out, allContractKinds)
+	return out
+}
+
+// AllContractRoles returns a copy of the canonical ordered ContractRole set.
+// The schema role enum and governance validRoles derive from this slice.
+func AllContractRoles() []ContractRole {
+	out := make([]ContractRole, len(allContractRoles))
+	copy(out, allContractRoles)
+	return out
+}
+
 // ContractLifecycle represents the wire-stability governance state of a Contract
 // (draft / active / deprecated). This is orthogonal to CellLifecycle (the
 // cell/slice maturity axis) and JourneyMeta.Lifecycle (journey delivery status).

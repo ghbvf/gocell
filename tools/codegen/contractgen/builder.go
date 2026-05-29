@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
@@ -623,11 +624,18 @@ func buildSagaSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		CompensationOrder: "reverse",
 	}
 
+	// seenIdent tracks identifier -> first step index for collision detection.
+	// Keys are both step.GoName and each DTO name emitted by buildSagaStep.
+	seenIdent := make(map[string]int)
+
 	var prevOutput string
 	var allDTOs []DTOSpec
 	for i := range sm.Steps {
 		step, dtos, err := buildSagaStep(rootDir, contract, contractDir, i, prevOutput)
 		if err != nil {
+			return err
+		}
+		if err := checkSagaStepIdentCollision(seenIdent, contract, i, step, dtos); err != nil {
 			return err
 		}
 		allDTOs = append(allDTOs, dtos...)
@@ -638,6 +646,33 @@ func buildSagaSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	out.NeedsTime = sagaNeedsTime(out)
 	spec.DTOs = allDTOs
 	spec.Saga = out
+	return nil
+}
+
+// checkSagaStepIdentCollision registers the Go identifiers step i emits (its
+// GoName and each output DTO name) into seen, failing fast if any collides with
+// an identifier an earlier step already produced. Two distinct step names can
+// collapse to the same identifier after goPascalCase ("reserve" and "Reserve"
+// both → "Reserve"), which would emit duplicate Run<Name>/<Name>Output
+// declarations into an uncompilable generated package — this codegen-funnel
+// fail-fast makes that output unexpressible. Extracted from buildSagaSpec to
+// keep it within the cognitive-complexity budget.
+func checkSagaStepIdentCollision(seen map[string]int, contract *metadata.ContractMeta, i int, step SagaStepSpec, dtos []DTOSpec) error {
+	steps := contract.Saga.Steps
+	idents := make([]string, 0, len(dtos)+1)
+	idents = append(idents, step.GoName)
+	for _, dto := range dtos {
+		idents = append(idents, dto.Name)
+	}
+	for _, id := range idents {
+		if prev, ok := seen[id]; ok {
+			return fmt.Errorf(
+				"contractgen build: contract %q saga steps[%d] %q and steps[%d] %q produce the same Go identifier %q "+
+					"(names collapse after PascalCase, e.g. \"reserve\"/\"Reserve\"); rename one step",
+				contract.ID, prev, steps[prev].Name, i, steps[i].Name, id)
+		}
+		seen[id] = i
+	}
 	return nil
 }
 
@@ -713,19 +748,48 @@ func buildSagaStep(
 // field). The kernel zero value means "inherit", so an all-zero meta yields a
 // RetryPolicySpec with empty exprs (the template renders an empty literal,
 // equivalent to inheriting).
+//
+// F6B: delegates to saga.RetryPolicy.Validate so that kernel-level invariants
+// (e.g. MaxInterval >= BaseInterval) are enforced at codegen time — making an
+// invalid policy UNEXPRESSIBLE in generated output (Hard codegen funnel).
 func retryPolicySpec(m *metadata.SagaRetryMeta) (*RetryPolicySpec, error) {
-	if m.MaxAttempts < 0 {
-		return nil, fmt.Errorf("maxAttempts must be >= 0, got %d", m.MaxAttempts)
+	// Parse durations first so we can construct a saga.RetryPolicy for Validate.
+	var bi, maxI time.Duration
+	if m.BaseInterval != "" {
+		d, err := time.ParseDuration(m.BaseInterval)
+		if err != nil {
+			return nil, fmt.Errorf("baseInterval: invalid duration %q: %w", m.BaseInterval, err)
+		}
+		bi = d
 	}
-	base, err := durationExpr(m.BaseInterval)
+	if m.MaxInterval != "" {
+		d, err := time.ParseDuration(m.MaxInterval)
+		if err != nil {
+			return nil, fmt.Errorf("maxInterval: invalid duration %q: %w", m.MaxInterval, err)
+		}
+		maxI = d
+	}
+
+	// Delegate to kernel validation — catches MaxAttempts < 0, negative intervals,
+	// and MaxInterval < BaseInterval (the partial-fork replaced by this funnel).
+	rp := saga.RetryPolicy{
+		MaxAttempts:  m.MaxAttempts,
+		BaseInterval: bi,
+		MaxInterval:  maxI,
+	}
+	if err := rp.Validate(); err != nil {
+		return nil, fmt.Errorf("saga retry policy: %w", err)
+	}
+
+	baseExpr, err := durationExpr(m.BaseInterval)
 	if err != nil {
 		return nil, fmt.Errorf("baseInterval: %w", err)
 	}
-	maxI, err := durationExpr(m.MaxInterval)
+	maxIExpr, err := durationExpr(m.MaxInterval)
 	if err != nil {
 		return nil, fmt.Errorf("maxInterval: %w", err)
 	}
-	return &RetryPolicySpec{MaxAttempts: m.MaxAttempts, BaseIntervalExpr: base, MaxIntervalExpr: maxI}, nil
+	return &RetryPolicySpec{MaxAttempts: m.MaxAttempts, BaseIntervalExpr: baseExpr, MaxIntervalExpr: maxIExpr}, nil
 }
 
 // sagaRetrySpec resolves an optional SagaRetryMeta to a *RetryPolicySpec,

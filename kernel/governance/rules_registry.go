@@ -127,12 +127,14 @@ var allRules = []Rule{
 	{Code: codePROJECTIONCONSISTENCY01, Phase: PhaseBase, Detect: (*Validator).validateProjectionConsistency},
 
 	// SAGA — saga contract format (rules_saga.go)
+	{Code: codeSAGACONTRACTBLOCKPRESENT01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTBLOCKPRESENT01},
 	{Code: codeSAGACONTRACTSTEPSNONEMPTY01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTSTEPSNONEMPTY01},
 	{Code: codeSAGACONTRACTSTEPNAMEVALID01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTSTEPNAMEVALID01},
 	{Code: codeSAGACONTRACTSTEPNAMEUNIQUE01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTSTEPNAMEUNIQUE01},
 	{Code: codeSAGACONTRACTSTEPSCHEMAREF01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTSTEPSCHEMAREF01},
 	{Code: codeSAGACONTRACTCOMPENSATIONORDER01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTCOMPENSATIONORDER01},
 	{Code: codeSAGACONTRACTCONSISTENCYL301, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTCONSISTENCYL301},
+	{Code: codeSAGACONTRACTRETRYTIMEOUT01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTRETRYTIMEOUT01},
 
 	// -------------------------------------------------------------------------
 	// PhaseStrict — run only with `gocell validate --strict`

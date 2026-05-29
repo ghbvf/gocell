@@ -5,6 +5,7 @@ package {{.PackageName}}
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 {{- if .Saga.NeedsTime}}
 	"time"
 {{- end}}
@@ -68,20 +69,24 @@ func BuildDefinition(impl Impl) *saga.Definition {
 {{- else}}
 					var in {{.InputGoType}}
 					if err := json.Unmarshal(prevState, &in); err != nil {
-						return nil, err
+						return nil, fmt.Errorf("unmarshal prevState: %w", err)
 					}
 					out, err := impl.Run{{.GoName}}(ctx, inst, in)
 {{- end}}
 					if err != nil {
 						return nil, err
 					}
-					return json.Marshal(out)
+					b, err := json.Marshal(out)
+					if err != nil {
+						return nil, fmt.Errorf("marshal output: %w", err)
+					}
+					return b, nil
 				},
 {{- if .HasCompensate}}
 				Compensate: func(ctx context.Context, inst *saga.Instance, committedState []byte) error {
 					var out {{.OutputGoType}}
 					if err := json.Unmarshal(committedState, &out); err != nil {
-						return err
+						return fmt.Errorf("unmarshal committedState: %w", err)
 					}
 					return impl.Compensate{{.GoName}}(ctx, inst, out)
 				},

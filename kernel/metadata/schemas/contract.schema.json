@@ -129,8 +129,8 @@
       "properties": {
         "maxAttempts": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Total Run invocations including the first."
+          "minimum": 0,
+          "description": "Total Run invocations including the first. 0 means inherit from the saga-level or runtime default."
         },
         "baseInterval": {
           "type": "string",

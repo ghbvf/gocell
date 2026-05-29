@@ -62,6 +62,31 @@ func TestContractSchemaRefsDeterministicOrder(t *testing.T) {
 	assert.Nil(t, ContractSchemaRefs(nil))
 }
 
+func TestContractSchemaRefsSagaStepOutputs(t *testing.T) {
+	c := &ContractMeta{
+		ID:   "saga.order.v1",
+		Kind: "saga",
+		Saga: &SagaMeta{
+			Steps: []SagaStepMeta{
+				{Name: "Reserve", Output: "reserve-output.schema.json"},
+				{Name: "Charge", Output: "charge-output.schema.json"},
+				{Name: "Fulfill", Output: "fulfill-output.schema.json"},
+			},
+		},
+	}
+
+	refs := ContractSchemaRefs(c)
+	// 4 base schemaRefs (request/response/payload/headers, all empty) + 3 saga steps
+	require.Len(t, refs, 7)
+
+	sagaRefs := refs[4:]
+	assert.Equal(t, []ContractSchemaRef{
+		{Field: "saga.steps[0].output", Ref: "reserve-output.schema.json", Scope: SchemaRefScopeContractDir},
+		{Field: "saga.steps[1].output", Ref: "charge-output.schema.json", Scope: SchemaRefScopeContractDir},
+		{Field: "saga.steps[2].output", Ref: "fulfill-output.schema.json", Scope: SchemaRefScopeContractDir},
+	}, sagaRefs)
+}
+
 func TestResolveContractSchemaRefEmptyRefDoesNotRequireRoot(t *testing.T) {
 	resolved, err := ResolveContractSchemaRef("", nil, ContractSchemaRef{Field: "schemaRefs.request"})
 	require.NoError(t, err)

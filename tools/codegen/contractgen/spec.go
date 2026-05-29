@@ -10,7 +10,7 @@ type ContractGenSpec struct {
 	PackagePath string
 	// ContractID is the full contract id, e.g. "http.order.create.v1".
 	ContractID string
-	// Kind is "http" or "event".
+	// Kind is one of the closed set: "http", "event", "saga", "grpc", "command", "projection".
 	Kind string
 	// SourceFile is the repo-relative path of the contract.yaml that drove
 	// generation, e.g. "examples/todoorder/contracts/http/order/create/v1/contract.yaml".

@@ -6,6 +6,7 @@ package orderfulfillment
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/saga"
@@ -51,12 +52,16 @@ func BuildDefinition(impl Impl) *saga.Definition {
 					if err != nil {
 						return nil, err
 					}
-					return json.Marshal(out)
+					b, err := json.Marshal(out)
+					if err != nil {
+						return nil, fmt.Errorf("marshal output: %w", err)
+					}
+					return b, nil
 				},
 				Compensate: func(ctx context.Context, inst *saga.Instance, committedState []byte) error {
 					var out ReserveInventoryOutput
 					if err := json.Unmarshal(committedState, &out); err != nil {
-						return err
+						return fmt.Errorf("unmarshal committedState: %w", err)
 					}
 					return impl.CompensateReserveInventory(ctx, inst, out)
 				},
@@ -67,18 +72,22 @@ func BuildDefinition(impl Impl) *saga.Definition {
 				Run: func(ctx context.Context, inst *saga.Instance, prevState []byte) ([]byte, error) {
 					var in ReserveInventoryOutput
 					if err := json.Unmarshal(prevState, &in); err != nil {
-						return nil, err
+						return nil, fmt.Errorf("unmarshal prevState: %w", err)
 					}
 					out, err := impl.RunChargePayment(ctx, inst, in)
 					if err != nil {
 						return nil, err
 					}
-					return json.Marshal(out)
+					b, err := json.Marshal(out)
+					if err != nil {
+						return nil, fmt.Errorf("marshal output: %w", err)
+					}
+					return b, nil
 				},
 				Compensate: func(ctx context.Context, inst *saga.Instance, committedState []byte) error {
 					var out ChargePaymentOutput
 					if err := json.Unmarshal(committedState, &out); err != nil {
-						return err
+						return fmt.Errorf("unmarshal committedState: %w", err)
 					}
 					return impl.CompensateChargePayment(ctx, inst, out)
 				},
@@ -88,13 +97,17 @@ func BuildDefinition(impl Impl) *saga.Definition {
 				Run: func(ctx context.Context, inst *saga.Instance, prevState []byte) ([]byte, error) {
 					var in ChargePaymentOutput
 					if err := json.Unmarshal(prevState, &in); err != nil {
-						return nil, err
+						return nil, fmt.Errorf("unmarshal prevState: %w", err)
 					}
 					out, err := impl.RunCreateShipment(ctx, inst, in)
 					if err != nil {
 						return nil, err
 					}
-					return json.Marshal(out)
+					b, err := json.Marshal(out)
+					if err != nil {
+						return nil, fmt.Errorf("marshal output: %w", err)
+					}
+					return b, nil
 				},
 			},
 		},

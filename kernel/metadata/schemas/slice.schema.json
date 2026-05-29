@@ -37,7 +37,7 @@
           "role": {
             "type": "string",
             "description": "The role this slice plays in the contract.",
-            "enum": ["serve", "call", "publish", "subscribe", "handle", "invoke", "provide", "read"]
+            "enum": ["serve", "call", "publish", "subscribe", "handle", "invoke", "provide", "read", "orchestrate"]
           },
           "handler": {
             "type": "string",

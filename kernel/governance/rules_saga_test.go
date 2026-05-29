@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -47,7 +48,7 @@ func buildSagaProject(consistencyLevel string, saga *metadata.SagaMeta) *metadat
 	}
 }
 
-// wellFormedSaga returns a SagaMeta that satisfies all 6 saga governance rules.
+// wellFormedSaga returns a SagaMeta that satisfies all 8 saga governance rules.
 func wellFormedSaga() *metadata.SagaMeta {
 	comp := true
 	return &metadata.SagaMeta{
@@ -525,6 +526,191 @@ func TestSagaConsistencyL301(t *testing.T) {
 				}
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
+			}
+		})
+	}
+}
+
+// ---- SAGA-CONTRACT-BLOCK-PRESENT-01 -----------------------------------------
+
+func TestSagaContractBlockPresent01(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		saga         *metadata.SagaMeta
+		wantErrCount int
+		wantField    string
+	}{
+		{
+			name:         "nil saga block → error",
+			saga:         nil,
+			wantErrCount: 1,
+			wantField:    "saga",
+		},
+		{
+			name:         "non-nil saga block (even empty) → no error from this rule",
+			saga:         &metadata.SagaMeta{},
+			wantErrCount: 0,
+		},
+		{
+			name:         "well-formed saga → no error",
+			saga:         wellFormedSaga(),
+			wantErrCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			project := buildSagaProject("L3", tc.saga)
+			v := NewValidator(project, "", clock.Real())
+			got := filterByCode(v.validateSAGACONTRACTBLOCKPRESENT01(), codeSAGACONTRACTBLOCKPRESENT01)
+			if len(got) != tc.wantErrCount {
+				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
+			}
+			if tc.wantErrCount > 0 {
+				r := got[0]
+				if r.Severity != SeverityError {
+					t.Errorf("expected SeverityError, got %s", r.Severity)
+				}
+				if r.Field != tc.wantField {
+					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
+			}
+		})
+	}
+}
+
+// ---- SAGA-CONTRACT-RETRY-TIMEOUT-01 -----------------------------------------
+
+func TestSagaContractRetryTimeout01(t *testing.T) {
+	t.Parallel()
+
+	retryMeta := func(maxAttempts int, base, max string) *metadata.SagaRetryMeta {
+		return &metadata.SagaRetryMeta{MaxAttempts: maxAttempts, BaseInterval: base, MaxInterval: max}
+	}
+
+	tests := []struct {
+		name         string
+		saga         *metadata.SagaMeta
+		wantErrCount int
+		wantField    string
+	}{
+		{
+			name:         "nil saga block → no finding (skip)",
+			saga:         nil,
+			wantErrCount: 0,
+		},
+		{
+			name:         "well-formed saga, no retries or timeout → no finding",
+			saga:         wellFormedSaga(),
+			wantErrCount: 0,
+		},
+		{
+			name: "valid saga-level retries → no finding",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Retries: retryMeta(3, "1s", "30s"),
+			},
+			wantErrCount: 0,
+		},
+		{
+			name: "valid saga-level timeout → no finding",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Timeout: "5m",
+			},
+			wantErrCount: 0,
+		},
+		{
+			name: "maxAttempts=0 → no finding (0 means inherit, not unlimited)",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Retries: retryMeta(0, "1s", "30s"),
+			},
+			wantErrCount: 0,
+		},
+		{
+			name: "maxInterval < baseInterval → error",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Retries: retryMeta(3, "30s", "1s"),
+			},
+			wantErrCount: 1,
+			wantField:    "saga.retries",
+		},
+		{
+			name: "unparseable saga-level timeout → error",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Timeout: "not-a-duration",
+			},
+			wantErrCount: 1,
+			wantField:    "saga.timeout",
+		},
+		{
+			name: "unparseable step timeout → error",
+			saga: &metadata.SagaMeta{
+				Steps: []metadata.SagaStepMeta{
+					{Name: "reserve", Output: "schemas/reserve-output.json", Timeout: "bad"},
+				},
+			},
+			wantErrCount: 1,
+			wantField:    "saga.steps[0].timeout",
+		},
+		{
+			name: "unparseable step retry baseInterval → error",
+			saga: &metadata.SagaMeta{
+				Steps: []metadata.SagaStepMeta{
+					{
+						Name: "reserve", Output: "schemas/reserve-output.json",
+						Retries: &metadata.SagaRetryMeta{BaseInterval: "bad"},
+					},
+				},
+			},
+			wantErrCount: 1,
+			wantField:    "saga.steps[0].retries.baseInterval",
+		},
+		{
+			name: "valid step-level retries → no finding",
+			saga: &metadata.SagaMeta{
+				Steps: []metadata.SagaStepMeta{
+					{
+						Name: "reserve", Output: "schemas/reserve-output.json",
+						Retries: retryMeta(2, "500ms", "10s"),
+					},
+				},
+			},
+			wantErrCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			project := buildSagaProject("L3", tc.saga)
+			v := NewValidator(project, "", clock.Real())
+			got := filterByCode(v.validateSAGACONTRACTRETRYTIMEOUT01(), codeSAGACONTRACTRETRYTIMEOUT01)
+			if len(got) != tc.wantErrCount {
+				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
+			}
+			if tc.wantErrCount > 0 {
+				r := got[0]
+				if r.Severity != SeverityError {
+					t.Errorf("expected SeverityError, got %s", r.Severity)
+				}
+				if tc.wantField != "" && !strings.HasPrefix(r.Field, tc.wantField) {
+					t.Errorf("expected field with prefix %q, got %q", tc.wantField, r.Field)
 				}
 				if r.Fix == "" {
 					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")

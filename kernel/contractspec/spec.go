@@ -105,10 +105,10 @@ func (s ContractSpec) Validate() error {
 	case cellvocab.ContractGRPC:
 		return s.validateGRPC()
 	case cellvocab.ContractCommand, cellvocab.ContractProjection, cellvocab.ContractSaga:
-		// Allowed but no additional validation yet — command/projection
+		// Allowed but no additional kind-specific validation beyond the
+		// kind-agnostic ID/Kind/Transport checks above — command/projection
 		// transports are future PRs; saga is orchestrated via the runtime
-		// Coordinator (kernel/saga), not a wire transport, so it carries no
-		// ContractSpec transport fields to validate.
+		// Coordinator (kernel/saga), not a wire transport.
 		return nil
 	default:
 		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|grpc|saga)", s.Kind)

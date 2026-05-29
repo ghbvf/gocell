@@ -331,6 +331,32 @@ func TestSourceFingerprint_ResponseSchemaFileContentChange(t *testing.T) {
 	assert.NotEqual(t, baseline, got, "changing response schema file content must change fingerprint")
 }
 
+// TestSourceFingerprint_SagaOutputSchemaFileContentChange verifies that
+// modifying the content of a saga step's output schema file (without changing
+// its path) changes the fingerprint. This is the schema-content half of the
+// REF-12 / fingerprint coverage that ContractSchemaRefs now exposes for saga
+// step outputs (the structural ref-path half is already covered by the
+// canonicalEncode recursion into *SagaMeta exercised by AnyFieldChange).
+func TestSourceFingerprint_SagaOutputSchemaFileContentChange(t *testing.T) {
+	root := t.TempDir()
+	contractDir := filepath.Join(root, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	schemaPath := filepath.Join(contractDir, "reserve.output.schema.json")
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version":1}`), 0o644))
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
+	p.Contracts["http.auth.login.v1"].Saga = &metadata.SagaMeta{
+		Steps: []metadata.SagaStepMeta{{Name: "reserve", Output: "reserve.output.schema.json"}},
+	}
+
+	baseline := computeFingerprintWithRoot(t, p, root)
+	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version":2}`), 0o644))
+	got := computeFingerprintWithRoot(t, p, root)
+
+	assert.NotEqual(t, baseline, got, "changing saga step output schema file content must change fingerprint")
+}
+
 func TestSourceFingerprint_ResponseSchemaMissingFileFailsLoudly(t *testing.T) {
 	root := t.TempDir()
 	p := fingerprintProject()
@@ -659,8 +685,15 @@ func mutateContractPointerField(v reflect.Value) {
 	case reflect.TypeFor[*metadata.SagaMeta]():
 		// Saga is fingerprinted (saga steps/outputs drive generated code);
 		// set it non-nil so the mutation flips the structural fingerprint.
+		// Output is left empty on purpose: this AnyFieldChange harness runs with
+		// an EMPTY projectRoot (computeFingerprint), so a non-empty step output
+		// would now route through the schema-content resolver and fail with
+		// "project root is required". The nil→non-nil SagaMeta is enough to flip
+		// the structural fingerprint; the saga-output schema-content hashing path
+		// is covered separately by TestSourceFingerprint_SagaOutputSchemaFileContentChange
+		// (which supplies a real projectRoot + on-disk schema file).
 		v.Set(reflect.ValueOf(&metadata.SagaMeta{
-			Steps: []metadata.SagaStepMeta{{Name: "step", Output: "out.schema.json"}},
+			Steps: []metadata.SagaStepMeta{{Name: "step"}},
 		}))
 	}
 }
