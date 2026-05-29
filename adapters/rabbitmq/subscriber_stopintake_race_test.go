@@ -69,11 +69,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	// Push the first delivery so consumeLoop dispatches it and we have a
 	// real inflight handler waiting on `released`. localWg counter == 1
 	// when StopIntake fires.
-	first := makeDeliveryBody(t, outbox.Entry{
-		ID:        "addafterwait-1",
-		EventType: "addafterwait",
-		Payload:   []byte(`{}`),
-	})
+	first := makeDeliveryBody(t, mustNewEntry(t, "addafterwait", []byte(`{}`), outbox.WithID("addafterwait-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: first}
 
 	subCtx, subCancel := context.WithCancel(context.Background())
@@ -114,11 +110,7 @@ func TestStopIntake_NoAddAfterWaitRace_PostCancelDeliveryArrival(t *testing.T) {
 	// the precondition that triggers the Add-after-Wait panic with the old
 	// implementation: drainRemaining receives it, calls registerDelivery
 	// (= localWg.Add(1)), while Phase 2 is concurrently in localWg.Wait.
-	second := makeDeliveryBody(t, outbox.Entry{
-		ID:        "addafterwait-2",
-		EventType: "addafterwait",
-		Payload:   []byte(`{}`),
-	})
+	second := makeDeliveryBody(t, mustNewEntry(t, "addafterwait", []byte(`{}`), outbox.WithID("addafterwait-2")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 2, Body: second}
 
 	// Release both handlers so they complete.
@@ -189,9 +181,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 		StopIntakeDrainTimeout:   testtime.D5s,
 	})
 
-	body1 := makeDeliveryBody(t, outbox.Entry{
-		ID: "stress-1", EventType: "stress", Payload: []byte(`{}`),
-	})
+	body1 := makeDeliveryBody(t, mustNewEntry(t, "stress", []byte(`{}`), outbox.WithID("stress-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body1}
 
 	subCtx, subCancel := context.WithCancel(context.Background())
@@ -223,9 +213,7 @@ func runPostCancelArrivalScenario(t *testing.T) {
 		return ch.cancelCalled
 	}, testtime.D3s, testtime.D10ms, "basic.cancel issued")
 
-	body2 := makeDeliveryBody(t, outbox.Entry{
-		ID: "stress-2", EventType: "stress", Payload: []byte(`{}`),
-	})
+	body2 := makeDeliveryBody(t, mustNewEntry(t, "stress", []byte(`{}`), outbox.WithID("stress-2")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 2, Body: body2}
 
 	close(released)

@@ -15,6 +15,18 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+// newConfigEventEntry builds a valid outbox.Entry for the config-event consumer
+// middleware tests. The middleware only forwards the entry, so eventType and
+// payload merely satisfy the sealed-constructor validation; the ID is the only
+// field the tests pin.
+func newConfigEventEntry(t *testing.T, id string) outbox.Entry {
+	t.Helper()
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(),
+		"event.config.entry-upserted.v1", []byte("{}"), outbox.WithID(id))
+	require.NoError(t, err)
+	return entry
+}
+
 func TestSharedDepsValidateRequiresConfigEventCollector(t *testing.T) {
 	deps := buildTestSharedDeps(t)
 	deps.ConfigEventCollector = nil
@@ -34,7 +46,7 @@ func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T
 		CellID:        "accesscore",
 		SliceID:       "configreceive",
 	}
-	entry := outbox.Entry{ID: "evt-target"}
+	entry := newConfigEventEntry(t, "evt-target")
 	wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
 		return outbox.Ack()
 	})
@@ -91,7 +103,7 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 		}))
 	require.NotNil(t, capturedHandler)
 
-	entry := outbox.Entry{ID: "evt-retry-exhausted"}
+	entry := newConfigEventEntry(t, "evt-retry-exhausted")
 	result, _ := capturedHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultRetryExhausted, nil)
 
@@ -129,7 +141,7 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 		}))
 	require.NotNil(t, capturedHandler)
 
-	entry := outbox.Entry{ID: "evt-permanent"}
+	entry := newConfigEventEntry(t, "evt-permanent")
 	result, _ := capturedHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
 

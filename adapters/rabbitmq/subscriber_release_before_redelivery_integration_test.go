@@ -134,12 +134,7 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 
 	waitForSubscriberReady(t, conn, queueName, subErrCh, testtime.EventuallyLong)
 
-	entry := outbox.Entry{
-		ID:        "evt-release-before-redelivery",
-		EventType: "test.event",
-		Payload:   []byte(`{}`),
-		CreatedAt: time.Now().UTC(),
-	}
+	entry := mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID("evt-release-before-redelivery"), outbox.WithCreatedAt(time.Now().UTC()))
 	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 	require.NoError(t, pub.Publish(context.Background(), topic, payload))

@@ -71,11 +71,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 
 	// Pre-load 3 deliveries before Subscribe starts.
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, outbox.Entry{
-			ID:        fmt.Sprintf("drain-evt-%d", i),
-			EventType: "drain.test",
-			Payload:   []byte(`{}`),
-		})
+		body := makeDeliveryBody(t, mustNewEntry(t, "drain.test", []byte(`{}`), outbox.WithID(fmt.Sprintf("drain-evt-%d", i))))
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
@@ -248,11 +244,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	})
 
 	// Send one delivery so Subscribe has something to process.
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "close-fast-1",
-		EventType: "close.fast",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "close.fast", []byte(`{}`), outbox.WithID("close-fast-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx := t.Context()
@@ -321,11 +313,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	})
 
 	// Send one delivery to trigger a hanging handler goroutine.
-	body := makeDeliveryBody(t, outbox.Entry{
-		ID:        "timeout-1",
-		EventType: "timeout.test",
-		Payload:   []byte(`{}`),
-	})
+	body := makeDeliveryBody(t, mustNewEntry(t, "timeout.test", []byte(`{}`), outbox.WithID("timeout-1")))
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
 	ctx, cancel := context.WithCancel(context.Background())

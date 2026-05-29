@@ -39,7 +39,7 @@ func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 		return outbox.Ack()
 	}
 	w := wrapOrFatal(t, tr, eventSpec(), inner)
-	res := w(context.Background(), outbox.Entry{EventType: "session.revoked.v1"})
+	res := w(context.Background(), outbox.Entry{})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack, got %v", res.Disposition)
 	}

@@ -114,10 +114,10 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil
 	}
-	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: TopicDeviceRegistered,
-		Payload:   payload,
+	entry, err := outbox.NewEntry(s.clock, ctx, TopicDeviceRegistered, payload)
+	if err != nil {
+		s.logger.Error("device-register: build event failed", slog.Any("error", err))
+		return nil, fmt.Errorf("device-register: build event: %w", err)
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		s.logger.Error(

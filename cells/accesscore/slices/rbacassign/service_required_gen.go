@@ -23,5 +23,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"rbacassign: TxRunner required; use WithTxManager")
 	}
+	if validation.IsNilInterface(s.clk) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"rbacassign.NewService: clock.Clock required")
+	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -24,11 +25,11 @@ func validAssignedPayload(userID string) []byte {
 }
 
 func makeEntry(id string, payload []byte) outbox.Entry {
-	return outbox.Entry{
-		ID:        id,
-		EventType: "event.role.revoked.v1",
-		Payload:   payload,
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), "event.role.revoked.v1", payload, outbox.WithID(id))
+	if err != nil {
+		panic(err)
 	}
+	return e
 }
 
 // --- consumer tests ---

@@ -313,9 +313,30 @@ const queryErrFmt = "query: %v"
 // ---------------------------------------------------------------------------
 
 // expectedColumns is the authoritative column-type-nullability registry for
-// the S3F-owned tables (users/sessions/roles/role_assignments) and the
-// auditcore-owned audit_entries table (020_audit_ledger.sql).
+// the S3F-owned tables (users/sessions/roles/role_assignments), the
+// auditcore-owned audit_entries table (020_audit_ledger.sql), and the
+// outbox_entries relay table (001_create_outbox_entries.sql + 044).
 var expectedColumns = []expectedColumn{
+	// outbox_entries (001 + subsequent migrations + 044_outbox_entries_principal.sql)
+	// Only the writer-supplied columns are registered; relay-internal columns
+	// (status, attempts, lease_id, claimed_at, next_retry_at, published_at,
+	// dead_at, last_error) are not enumerated here — they evolve independently
+	// of the sealed-construction principal injection feature.
+	// id is TEXT, not UUID: migration 003 widens it from UUID to TEXT in its Up
+	// section ("support prefixed IDs evt-<uuid>/audit-<uuid>"; outbox.NewEntryID
+	// returns a string). The UUID conversion in 003 lives in the Down (rollback)
+	// section only, so the live forward schema is text.
+	{Table: "outbox_entries", Column: "id", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "aggregate_id", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "aggregate_type", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "event_type", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "topic", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "payload", Type: "jsonb", NotNull: true},
+	{Table: "outbox_entries", Column: "metadata", Type: "jsonb", NotNull: false},
+	{Table: "outbox_entries", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
+	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
+	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "users", Column: "username", Type: "text", NotNull: true},

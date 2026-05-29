@@ -35,6 +35,11 @@ import (
 const (
 	// fullchainD20s is used as the subscriber receive timeout; not in testtime table.
 	fullchainD20s = 20 * time.Second
+	// occurredAtSkew is how far OccurredAt (producer-domain event time) is set
+	// before CreatedAt (store/seal time) in the round-trip, proving the two
+	// timestamps are carried independently end-to-end. Extracted to a
+	// package-level const per TEST-TIME-LITERAL-01.
+	occurredAtSkew = 90 * time.Minute
 )
 
 type queueInspector interface {
@@ -196,6 +201,11 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-full-chain-001")
 	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-full-chain-001")
 	publishCtx = ctxkeys.WithTraceID(publishCtx, "trace-full-chain-001")
+	// Principal IDs ride the same producer ctx; NewEntry injects them into
+	// entry.Principal at construction (the single injection trust boundary).
+	publishCtx = ctxkeys.WithActorID(publishCtx, "actor-full-chain-001")
+	publishCtx = ctxkeys.WithSubjectID(publishCtx, "subj-full-chain-001")
+	publishCtx = ctxkeys.WithSessionID(publishCtx, "sess-full-chain-001")
 
 	// Infrastructure context is clean — no obs IDs. This ensures that
 	// obs values in the consumer handler come from middleware restore,
@@ -245,15 +255,25 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	entryID := uuid.New().String()
 	topic := "test.outbox.fullchain"
-	entry := outbox.Entry{
-		ID:            entryID,
-		AggregateID:   "order-42",
-		AggregateType: "order",
-		EventType:     topic,
-		Payload:       []byte(`{"orderId":"order-42","status":"created"}`),
-		Metadata:      map[string]string{"source": "integration-test"},
-		CreatedAt:     time.Now().UTC(),
-	}
+	// PG TIMESTAMPTZ resolves to microseconds; truncate so the round-trip
+	// equality assertions are exact. OccurredAt (producer-domain event time) is
+	// deliberately distinct from CreatedAt (store/seal time) — 90 minutes earlier
+	// — so Step 8 proves the two timestamps are carried INDEPENDENTLY end-to-end
+	// and OccurredAt is not silently collapsed onto CreatedAt (review F7b).
+	entryCreatedAt := time.Now().UTC().Truncate(time.Microsecond)
+	entryOccurredAt := entryCreatedAt.Add(-occurredAtSkew)
+	// Construct with publishCtx so NewEntry injects observability + principal
+	// from context (NewEntry replaced the old write-time inject path).
+	entry, err := outbox.NewEntry(clock.Real(), publishCtx, topic,
+		[]byte(`{"orderId":"order-42","status":"created"}`),
+		outbox.WithID(entryID),
+		outbox.WithAggregateID("order-42"),
+		outbox.WithAggregateType("order"),
+		outbox.WithMetadata(map[string]string{"source": "integration-test"}),
+		outbox.WithCreatedAt(entryCreatedAt),
+		outbox.WithOccurredAt(entryOccurredAt),
+	)
+	require.NoError(t, err, "NewEntry should succeed")
 
 	// Create a business table for the test.
 	_, err = pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
@@ -301,6 +321,9 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		requestID     string
 		correlationID string
 		traceID       string
+		actorID       string
+		subjectID     string
+		sessionID     string
 	}
 
 	received := make(chan observedDelivery, 1)
@@ -319,11 +342,20 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
+			// Principal family restored by SubscriberWithMiddleware.SubscribeEntry
+			// (entry.Principal → ctxkeys), proving the seal preserves the async
+			// principal carry across the real PG round-trip.
+			actorID, _ := ctxkeys.ActorIDFrom(handlerCtx)
+			subjectID, _ := ctxkeys.SubjectIDFrom(handlerCtx)
+			sessionID, _ := ctxkeys.SessionIDFrom(handlerCtx)
 			received <- observedDelivery{
 				entry:         e,
 				requestID:     requestID,
 				correlationID: correlationID,
 				traceID:       traceID,
+				actorID:       actorID,
+				subjectID:     subjectID,
+				sessionID:     sessionID,
 			}
 			return outbox.Ack()
 		})
@@ -362,30 +394,43 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 8: Verify received message payload matches the original.
 	// ---------------------------------------------------------------
-	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
-	assert.Equal(t, "order-42", got.entry.AggregateID, "aggregate ID should match")
-	assert.Equal(t, "order", got.entry.AggregateType, "aggregate type should match")
-	assert.Equal(t, topic, got.entry.EventType, "event type should match")
+	assert.Equal(t, entryID, got.entry.ID(), "event ID should match")
+	assert.Equal(t, "order-42", got.entry.AggregateID(), "aggregate ID should match")
+	assert.Equal(t, "order", got.entry.AggregateType(), "aggregate type should match")
+	assert.Equal(t, topic, got.entry.EventType(), "event type should match")
 	assert.JSONEq(t,
 		`{"orderId":"order-42","status":"created"}`,
-		string(got.entry.Payload),
+		string(got.entry.Payload()),
 		"payload should match original business event")
 
+	// Timestamps: CreatedAt (seal) and OccurredAt (producer-domain) are carried
+	// as INDEPENDENT wire fields through PG → relay → consumer (review F7b).
+	assert.True(t, got.entry.CreatedAt().Equal(entryCreatedAt),
+		"createdAt should survive the full chain unchanged: got %s want %s",
+		got.entry.CreatedAt(), entryCreatedAt)
+	assert.True(t, got.entry.OccurredAt().Equal(entryOccurredAt),
+		"occurredAt should survive the full chain unchanged: got %s want %s",
+		got.entry.OccurredAt(), entryOccurredAt)
+	assert.False(t, got.entry.OccurredAt().Equal(got.entry.CreatedAt()),
+		"occurredAt must stay distinct from createdAt — proves the two timestamps are not collapsed")
+	assert.True(t, got.entry.OccurredAt().Before(got.entry.CreatedAt()),
+		"the producer-domain occurredAt should precede the seal createdAt, as constructed")
+
 	// The relay serialises the full outbox.Entry (including entry.Observability)
-	// as the AMQP body. The outbox writer injects observability from context into
-	// entry.Observability at write time; the consumer middleware restores it into
+	// as the AMQP body. NewEntry injects observability from the producer context into
+	// entry.Observability at construction time; the consumer middleware restores it into
 	// the handler context. Business metadata and observability are now distinct columns.
-	assert.Equal(t, "integration-test", got.entry.Metadata["source"],
+	assert.Equal(t, "integration-test", got.entry.Metadata()["source"],
 		"business metadata should be preserved")
-	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	_, hasReqIDInMeta := got.entry.Metadata()["request_id"]
 	assert.False(t, hasReqIDInMeta,
 		"request_id must not be in business metadata — it belongs in entry.Observability")
 
-	assert.Equal(t, "req-full-chain-001", string(got.entry.Observability.RequestID),
-		"request_id should be in entry.Observability, injected from context at write time")
-	assert.Equal(t, "corr-full-chain-001", string(got.entry.Observability.CorrelationID),
+	assert.Equal(t, "req-full-chain-001", string(got.entry.Observability().RequestID),
+		"request_id should be in entry.Observability, injected from context at construction time")
+	assert.Equal(t, "corr-full-chain-001", string(got.entry.Observability().CorrelationID),
 		"correlation_id should be in entry.Observability")
-	assert.Equal(t, "trace-full-chain-001", string(got.entry.Observability.TraceID),
+	assert.Equal(t, "trace-full-chain-001", string(got.entry.Observability().TraceID),
 		"trace_id should survive the full chain via entry.Observability")
 
 	assert.Equal(t, "req-full-chain-001", got.requestID,
@@ -394,6 +439,25 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		"correlation_id should be restored into consumer handler context")
 	assert.Equal(t, "trace-full-chain-001", got.traceID,
 		"trace_id should be restored into consumer handler context")
+
+	// Principal family (issue #1229 B-fullchain proof): NewEntry injected the
+	// principal from publishCtx into entry.Principal; the relay serialised it via
+	// MarshalEnvelope; the consumer UnmarshalEnvelope + SubscriberWithMiddleware
+	// restored it into the handler ctx. Same producer-ctx → entry → PG → relay →
+	// consumer-ctx path as observability above.
+	assert.Equal(t, "actor-full-chain-001", string(got.entry.Principal().ActorID),
+		"actor_id should be in entry.Principal, injected from context at construction time")
+	assert.Equal(t, "subj-full-chain-001", string(got.entry.Principal().SubjectID),
+		"subject_id should be in entry.Principal")
+	assert.Equal(t, "sess-full-chain-001", string(got.entry.Principal().SessionID),
+		"session_id should survive the full chain via entry.Principal")
+
+	assert.Equal(t, "actor-full-chain-001", got.actorID,
+		"actor_id should be restored into consumer handler context")
+	assert.Equal(t, "subj-full-chain-001", got.subjectID,
+		"subject_id should be restored into consumer handler context")
+	assert.Equal(t, "sess-full-chain-001", got.sessionID,
+		"session_id should be restored into consumer handler context")
 
 	// ---------------------------------------------------------------
 	// Step 9: Verify the relay marked the outbox entry as published.
@@ -508,17 +572,20 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// ---------------------------------------------------------------
 	entryID := uuid.New().String()
 	topic := "test.outbox.fullchain.notrace"
-	entry := outbox.Entry{
-		ID:            entryID,
-		AggregateID:   "order-notrace-42",
-		AggregateType: "order",
-		EventType:     topic,
-		Payload:       []byte(`{"orderId":"order-notrace-42","status":"created"}`),
-		Metadata:      map[string]string{"source": "no-trace-test"},
-		CreatedAt:     time.Now().UTC(),
-	}
+	entryCreatedAt := time.Now().UTC()
+	// Construct with publishCtx so NewEntry injects observability from context.
+	entry, err := outbox.NewEntry(clock.Real(), publishCtx, topic,
+		[]byte(`{"orderId":"order-notrace-42","status":"created"}`),
+		outbox.WithID(entryID),
+		outbox.WithAggregateID("order-notrace-42"),
+		outbox.WithAggregateType("order"),
+		outbox.WithMetadata(map[string]string{"source": "no-trace-test"}),
+		outbox.WithCreatedAt(entryCreatedAt),
+		outbox.WithOccurredAt(entryCreatedAt),
+	)
+	require.NoError(t, err, "NewEntry should succeed")
 
-	_, err := pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
+	_, err = pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
 		id   TEXT PRIMARY KEY,
 		data TEXT NOT NULL
 	)`)
@@ -607,23 +674,23 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// Step 7: Verify observability metadata — request_id and
 	//         correlation_id survive; trace_id is absent.
 	// ---------------------------------------------------------------
-	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+	assert.Equal(t, entryID, got.entry.ID(), "event ID should match")
 
 	// Business metadata preserved.
-	assert.Equal(t, "no-trace-test", got.entry.Metadata["source"],
+	assert.Equal(t, "no-trace-test", got.entry.Metadata()["source"],
 		"business metadata should be preserved")
-	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	_, hasReqIDInMeta := got.entry.Metadata()["request_id"]
 	assert.False(t, hasReqIDInMeta,
 		"request_id must not be in business metadata — it belongs in entry.Observability")
 
 	// request_id and correlation_id round-trip via entry.Observability.
-	assert.Equal(t, "req-no-trace-001", string(got.entry.Observability.RequestID),
-		"request_id should be in entry.Observability, injected from context at write time")
-	assert.Equal(t, "corr-no-trace-001", string(got.entry.Observability.CorrelationID),
+	assert.Equal(t, "req-no-trace-001", string(got.entry.Observability().RequestID),
+		"request_id should be in entry.Observability, injected from context at construction time")
+	assert.Equal(t, "corr-no-trace-001", string(got.entry.Observability().CorrelationID),
 		"correlation_id should be in entry.Observability")
 
 	// trace_id should NOT be present in Observability (was never in context).
-	assert.Empty(t, got.entry.Observability.TraceID,
+	assert.Empty(t, got.entry.Observability().TraceID,
 		"trace_id should be empty in entry.Observability when not in originating context")
 
 	// request_id and correlation_id should be restored into consumer context.
@@ -675,17 +742,19 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 
 	// Write outbox entry within a transaction.
 	entryID := uuid.New().String()
-	entry := outbox.Entry{
-		ID:            entryID,
-		AggregateID:   "agg-mock-1",
-		AggregateType: "mock_aggregate",
-		EventType:     "mock.created",
-		Payload:       []byte(`{"mock":true}`),
-		Metadata:      map[string]string{"test": "mock-relay"},
-		CreatedAt:     time.Now().UTC(),
-	}
+	entryCreatedAt := time.Now().UTC()
+	entry, err := outbox.NewEntry(clock.Real(), ctx, "mock.created",
+		[]byte(`{"mock":true}`),
+		outbox.WithID(entryID),
+		outbox.WithAggregateID("agg-mock-1"),
+		outbox.WithAggregateType("mock_aggregate"),
+		outbox.WithMetadata(map[string]string{"test": "mock-relay"}),
+		outbox.WithCreatedAt(entryCreatedAt),
+		outbox.WithOccurredAt(entryCreatedAt),
+	)
+	require.NoError(t, err, "NewEntry should succeed")
 
-	err := txm.RunInTx(ctx, func(txCtx context.Context) error {
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
 		return writer.Write(txCtx, entry)
 	})
 	require.NoError(t, err, "outbox write should succeed")
@@ -754,20 +823,22 @@ func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
 	store := postgres.NewOutboxStore(pool.DB(), clock.Real())
 
 	entryID := uuid.New().String()
-	entry := outbox.Entry{
-		ID:            entryID,
-		AggregateID:   "agg-zero-obs",
-		AggregateType: "zero_obs",
-		EventType:     "test.zero.obs",
-		Payload:       []byte(`{"k":"v"}`),
+	entryCreatedAt := time.Now().UTC()
+	// ctx is clean (no observability ctxkeys), so NewEntry injects a zero
+	// ObservabilityMetadata — the explicit-zero case under test.
+	entry, err := outbox.NewEntry(clock.Real(), ctx, "test.zero.obs",
+		[]byte(`{"k":"v"}`),
+		outbox.WithID(entryID),
+		outbox.WithAggregateID("agg-zero-obs"),
+		outbox.WithAggregateType("zero_obs"),
 		// Metadata: producer-owned domain fields only.
-		Metadata: map[string]string{"source": "zero-obs-test"},
-		// Observability: explicit zero value.
-		Observability: outbox.ObservabilityMetadata{},
-		CreatedAt:     time.Now().UTC(),
-	}
+		outbox.WithMetadata(map[string]string{"source": "zero-obs-test"}),
+		outbox.WithCreatedAt(entryCreatedAt),
+		outbox.WithOccurredAt(entryCreatedAt),
+	)
+	require.NoError(t, err, "NewEntry should succeed")
 
-	err := txm.RunInTx(ctx, func(txCtx context.Context) error {
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
 		return writer.Write(txCtx, entry)
 	})
 	require.NoError(t, err, "outbox write with zero observability should succeed")
@@ -786,13 +857,13 @@ func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
 	require.Len(t, claimed, 1, "exactly one pending entry should be claimed")
 
 	got := claimed[0]
-	assert.Equal(t, entryID, got.ID)
-	assert.True(t, got.Observability.IsZero(),
+	assert.Equal(t, entryID, got.ID())
+	assert.True(t, got.Observability().IsZero(),
 		"round-tripped Observability must be the zero struct for a NULL column")
-	assert.Empty(t, got.Observability.RequestID)
-	assert.Empty(t, got.Observability.CorrelationID)
-	assert.Empty(t, got.Observability.TraceID)
-	assert.Empty(t, got.Observability.TraceParent)
+	assert.Empty(t, got.Observability().RequestID)
+	assert.Empty(t, got.Observability().CorrelationID)
+	assert.Empty(t, got.Observability().TraceID)
+	assert.Empty(t, got.Observability().TraceParent)
 }
 
 // publishedMessage captures a single Publish call.

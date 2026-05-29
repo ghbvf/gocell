@@ -225,7 +225,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// order-confirm slice (L2 OutboxFact) — PATCH status to confirmed, publishes
 	// event.order-status-changed.v1 through the same emitter+txRunner sink as
 	// order-create.
-	confirmSvc, err := orderconfirm.NewService(c.repo, c.logger,
+	confirmSvc, err := orderconfirm.NewService(clock.Real(), c.repo, c.logger,
 		orderconfirm.WithEmitter(c.emitter),
 		orderconfirm.WithTxManager(c.txRunner),
 	)

@@ -58,7 +58,7 @@ type selectiveFailWriter struct {
 }
 
 func (w *selectiveFailWriter) Write(ctx context.Context, entry outbox.Entry) error {
-	if t, _ := w.failType.Load().(string); t != "" && entry.EventType == t {
+	if t, _ := w.failType.Load().(string); t != "" && entry.EventType() == t {
 		w.failCount.Add(1)
 		return simulatedOutboxErr
 	}

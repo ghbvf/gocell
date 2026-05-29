@@ -333,10 +333,10 @@ func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-	event, err := configevents.DecodeEntryUpserted(entry.Payload)
+	event, err := configevents.DecodeEntryUpserted(entry.Payload())
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err)))
 	}
@@ -377,10 +377,10 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-	event, err := configevents.DecodeEntryDeleted(entry.Payload)
+	event, err := configevents.DecodeEntryDeleted(entry.Payload())
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err)))
 	}

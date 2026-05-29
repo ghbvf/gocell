@@ -16,6 +16,7 @@ import (
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
 
 // helpers reused by handler_test.go and contract_test.go in this package.
@@ -32,7 +33,7 @@ func makeCreatedEntry(t *testing.T, id, status string) outbox.Entry {
 	payload := ordercreated.Payload{ID: id, Item: "widget", Status: status}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-created.v1", b)
 }
 
 func makeStatusChangedEntry(t *testing.T, id string) outbox.Entry {
@@ -40,7 +41,7 @@ func makeStatusChangedEntry(t *testing.T, id string) outbox.Entry {
 	payload := orderstatuschanged.Payload{ID: id, OldStatus: domain.StatusPending, NewStatus: domain.StatusConfirmed}
 	b, err := json.Marshal(payload)
 	require.NoError(t, err)
-	return outbox.Entry{ID: "entry-sc-" + id, Payload: b}
+	return outboxtest.NewEntry("event.order-status-changed.v1", b)
 }
 
 // TestSliceAlias_NewService verifies the slice alias correctly delegates to the

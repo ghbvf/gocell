@@ -156,9 +156,9 @@ func NewService(opts ...Option) (*Service, error) {
 // (retrying cannot fix it), so the entry is Rejected to DLX.
 func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload ordercreated.Payload
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.Error("orderprojection: failed to decode order-created payload; routing to DLX",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("orderprojection: decode order-created: %w", err)))
 	}
 
@@ -167,15 +167,15 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 	// A missing field is a permanent producer-side violation; reject to DLX without retry.
 	if payload.ID == "" {
 		s.logger.Error("orderprojection: order-created payload missing id; routing to DLX",
-			slog.String("entry_id", entry.ID))
+			slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-created payload id is empty (entry %s)", entry.ID)))
+			"orderprojection: order-created payload id is empty (entry %s)", entry.ID())))
 	}
 	if payload.Status == "" {
 		s.logger.Error("orderprojection: order-created payload missing status; routing to DLX",
-			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID))
+			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-created payload status is empty (entry %s)", entry.ID)))
+			"orderprojection: order-created payload status is empty (entry %s)", entry.ID())))
 	}
 
 	s.store.mu.Lock()
@@ -185,7 +185,7 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 	if _, exists := s.store.orderAt[payload.ID]; exists {
 		s.logger.Debug("orderprojection: idempotent ack — already applied",
 			slog.String("order_id", payload.ID),
-			slog.String("entry_id", entry.ID))
+			slog.String("entry_id", entry.ID()))
 		return outbox.Ack()
 	}
 
@@ -220,9 +220,9 @@ func (s *Service) HandleOrderCreated(ctx context.Context, entry outbox.Entry) ou
 // violation (retrying cannot fix it), so the entry is Rejected to DLX.
 func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload orderstatuschanged.Payload
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		s.logger.Error("orderprojection: failed to decode order-status-changed payload; routing to DLX",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("orderprojection: decode order-status-changed: %w", err)))
 	}
 
@@ -232,21 +232,21 @@ func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Ent
 	// to DLX without retry.
 	if payload.ID == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing id; routing to DLX",
-			slog.String("entry_id", entry.ID))
+			slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-status-changed payload id is empty (entry %s)", entry.ID)))
+			"orderprojection: order-status-changed payload id is empty (entry %s)", entry.ID())))
 	}
 	if payload.OldStatus == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing oldStatus; routing to DLX",
-			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID))
+			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-status-changed payload oldStatus is empty (entry %s)", entry.ID)))
+			"orderprojection: order-status-changed payload oldStatus is empty (entry %s)", entry.ID())))
 	}
 	if payload.NewStatus == "" {
 		s.logger.Error("orderprojection: order-status-changed payload missing newStatus; routing to DLX",
-			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID))
+			slog.String("order_id", payload.ID), slog.String("entry_id", entry.ID()))
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf(
-			"orderprojection: order-status-changed payload newStatus is empty (entry %s)", entry.ID)))
+			"orderprojection: order-status-changed payload newStatus is empty (entry %s)", entry.ID())))
 	}
 
 	s.store.mu.Lock()
@@ -256,7 +256,7 @@ func (s *Service) HandleOrderStatusChanged(ctx context.Context, entry outbox.Ent
 	if cur, exists := s.store.orderAt[payload.ID]; exists && cur == payload.NewStatus {
 		s.logger.Debug("orderprojection: idempotent ack — already applied",
 			slog.String("order_id", payload.ID),
-			slog.String("entry_id", entry.ID))
+			slog.String("entry_id", entry.ID()))
 		return outbox.Ack()
 	}
 

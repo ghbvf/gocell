@@ -94,9 +94,12 @@ audit-side（PR-A1）：`ledger.Entry.OccurredAt` 字段加进 12-field HMAC 输
 表列 `occurred_at TIMESTAMPTZ NOT NULL`（无 DEFAULT），caller 必须供值（零
 值或真实值）。
 
-outbox-side（PR-A2）：`outbox.Entry.OccurredAt` **mandatory**（zero-value 被
-`Entry.Validate()` 拒绝）；producers 必须 `entry.OccurredAt = clk.Now().UTC()`
-或通过 `outbox.Emit` helper 自动填充。
+outbox-side（PR-A2，as-built — 见 §Amendment 2026-05-29）：`outbox.Entry.OccurredAt`
+**mandatory**（zero-value 被 `Entry.Validate()` 拒绝）。**producers 不手动 set
+OccurredAt**——唯一构造器 `outbox.NewEntry(clk, ctx, …)` 在构造期 stamp
+`createdAt = occurredAt = clk.Now().UTC()`（`WithOccurredAt` 覆盖为 domain 时间）。
+emitter / PG writer 旧有的 `CreatedAt.IsZero()` fallback 全部删除（NewEntry 是单一
+时间源）。
 
 Lamport / causation_id defer 到 W3 Command Bus —— causation 链需 command/event
 双向关系上下文，单字段补齐无意义。
@@ -177,12 +180,12 @@ fail-fast 拒绝。
 | `AUDIT-HASH-INPUT-FROZEN-01` （新增） | A1 上游：AST/reflect 锁 `auditHashInput` 字段集 + 顺序 + JSON tag + Go 类型；包外不可构造（Go 包私可见性）。A2 下游：AST 锁 `hmac.New(sha256.New, _)` callsite ⊆ `{Protocol.ComputeHash.Body}`，audit ledger 包内其他位置不得直接构造 HMAC。A3 字段顺序冻结。B 反向自检（合成违反 fixture）。 | Hard 双向 | **PR-A1** |
 | `SAFEID-WIREMESSAGE-USAGE-01`（既有，carve-out 扩展） | deny-by-default：wireMessage 所有 exported 字段必须 `idutil.SafeID`，PrincipalMetadata 加入 walked types | Hard 下游 | PR-A2 |
 | `SAFEID-UPSTREAM-FUNNEL-HARD-01`（既有） | wireMessage unexported + 无任意名 re-export | Hard 上游（自动覆盖） | — |
-| `PRINCIPAL-SEALED-FIELD-FROZEN-01`（新增） | reflect 锁 4 字段名 + JSON tag + AST 锁方法集 (`IsZero` / `Validate` / `RestoreToContext` + `ContextPrincipal` + `Entry.InjectPrincipalFromContext`) + 盲区反向自检 | Hard 下游 | PR-A2 |
+| `PRINCIPAL-SEALED-FIELD-FROZEN-01`（新增，as-built） | reflect 锁 4 字段名 + JSON tag + `idutil.SafeID` 类型 + 盲区反向自检（negative control）。方法行为（`IsZero`/`Validate`/`RestoreToContext`/`ContextPrincipal` + 非导出 `(*Entry).injectPrincipalFromContext`）由 `kernel/outbox/principal_test.go` + NewEntry 构造测试覆盖，不在此 reflect schema 锁内。 | Hard 下游 | PR-A2 |
+| `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`（新增，as-built） | reflect 反向自检：`outbox.Entry` 全字段 unexported（外部 populated 字面量编译不可表达 = type-system Hard 上游）；getter read surface 完整；SoleReconstructionSurface 子检查锁「唯一产出 Entry 的导出 func = NewEntry+UnmarshalEnvelope，唯一 mirror = EntryScan」。**只封闭「字面量伪造」向量**（见 §Amendment 2026-05-29 round-2）。 | Hard 上游（type-system，**仅字面量向量**） | PR-A2 |
+| `OUTBOX-RECONSTRUCTION-CALLER-01`（新增，round-2） | caller-allowlist：`UnmarshalEnvelope` / `EntryScan.ToEntry` 生产引用点（call+value，go/types 解析）⊆ {storage adapter / wire+consumer 解码 / store conformance helper}。封闭「reconstruction 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
+| `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`（新增，round-2） | caller-allowlist：principal ctxkeys setter（`WithActorID/SubjectID/TenantID/SessionID`）生产引用点 ⊆ {auth 请求桥 `runtime/auth/middleware.go` / consumer `RestoreToContext`}。封闭「ctx-注入 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
 
-**不引入** INJECTION-FUNNEL callsite uniqueness archtest：业务构造
-`outbox.Entry{Principal: ..., OccurredAt: ...}` 字面量是合法形态；wire 安全四路
-（wireMessage unexported + SafeID + ReservedMetadataKeys + Entry.Validate）已
-Hard 双向锁，额外 callsite uniqueness 无 Hard 增益。
+**as-built 修正（见 §Amendment 2026-05-29 + §Amendment 2026-05-29 round-2）**：原 ADR 此处称「不引入 INJECTION-FUNNEL，业务构造 `outbox.Entry{Principal: ..., OccurredAt: ...}` 字面量是合法形态」。PR-A2 **撤回该论述**——实际落地把 `Entry` 全字段 unexported（sealed construction），所以 `outbox.Entry{<field>: ...}` populated 字面量在 `kernel/outbox` 包外**编译不可表达**（type-system Hard 上游，`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` 反向自检守卫）。唯一构造路径是 `NewEntry`（producer）/ `UnmarshalEnvelope`（wire decode）/ `EntryScan.ToEntry`（storage 重建），三者均在包内。Principal/Observability 仅由 `NewEntry` 从 ctx 注入（单一信任边界，无 producer-facing inject API——导出的 `InjectObservabilityFromContext` 已删，从未导出 `InjectPrincipalFromContext`）。因此「INJECTION-FUNNEL callsite uniqueness archtest」确实不需要——但根因是 type system 让伪造不可表达，**不是**「字面量合法 + archtest 够用」。
 
 ### 7. consumer span Principal attrs （PR-A2）
 
@@ -317,9 +320,13 @@ helper 写入 delivery span：
   数据丢失。该后果对 gocell（无外部部署）是设计接受值，不是免责论述。
 - 12 reserved key 集合（PR-A2 落地） —— 业务需熟悉 Metadata 黑名单，trade-off 换
   typed envelope 反伪造。
-- Principal optional 字段需 producer 显式调用 InjectPrincipalFromContext —— audit
-  侧零值满足 schema 但不携带业务语义；PR-A2 引入接入路径，PR-A1 仅完成 schema
-  + chain 准备。
+- Principal 由 `NewEntry` 从 ctx 单一注入（无 producer-facing inject API）——producers
+  不显式调用任何 Inject。**生产桥**（`runtime/auth/middleware.go` 认证后写
+  `ctxkeys.WithActorID/WithSubjectID/WithSessionID`）是非空壳前提：未接桥时注入全空。
+  无认证 ctx 的事件（如 login 期 `session.created`，发生在 auth 建立之前）Principal
+  为空——可接受，因 audit `actor_id` 源自 payload domain actor（见 §Amendment "actor
+  来源" 决议），Principal 族是正交的 request-context。develop 上 `auth.Principal` 无
+  tenant 字段，故 TenantID 暂空，待 multi-tenant 概念落地。
 - `cells/auditcore/internal/appender/service.go` 在 PR-A1 不动 —— 5 个新字段当前
   以 Go 零值落 DB，PR-A2 引入 outbox.Entry.Principal/OccurredAt 后改读真实源。
   这不是双路径或半成品语义：appender 始终是「读源构造 Entry」单路径，PR-A1 与
@@ -347,17 +354,22 @@ Implementations:
   [x] (PR-A1) runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (5 字段 RoundTrip + HMAC parity)
   [x] (PR-A1) runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (12-field tamper sensitivity)
   [x] (PR-A1) tools/archtest/audit_hash_input_frozen_test.go (AUDIT-HASH-INPUT-FROZEN-01 A1/A2/A3/B)
-  [ ] (PR-A2) kernel/outbox.PrincipalMetadata (typed + Validate + Context/Restore/Inject)
-  [ ] (PR-A2) kernel/outbox.wireMessage (Principal + OccurredAt wire 字段)
-  [ ] (PR-A2) kernel/outbox.Entry.OccurredAt 字段 + Validate mandatory
-  [ ] (PR-A2) kernel/outbox.SubscriberWithMiddleware (Principal RestoreToContext)
-  [ ] (PR-A2) kernel/outbox/outboxtest.RunPrincipalRoundTripConformance
-  [ ] (PR-A2) cells/auditcore/internal/appender (5 字段派生 + HMAC 对齐)
-  [ ] (PR-A2) kernel/wrapper.{WrapConsumer,WrapSubscriber} (Principal/OccurredAt span attrs)
-  [ ] (PR-A2) pkg/ctxkeys (4 new typed key pairs)
-  [ ] (PR-A2) tools/archtest/principal_sealed_field_frozen_test.go (PRINCIPAL-SEALED-FIELD-FROZEN-01)
-  [ ] (PR-A2) tools/archtest/safeid_funnel_test.go (carve-out 扩 PrincipalMetadata)
-  [ ] (PR-A2) adapters/postgres/migrations/042_outbox_principal_occurred_at.sql
+  [x] (PR-A2) kernel/outbox.PrincipalMetadata (typed + Validate + Context/Restore + 非导出 injectPrincipalFromContext)
+  [x] (PR-A2) kernel/outbox.Entry sealed construction — 全字段 unexported + getters + NewEntry 唯一构造 + EntryScan 重建漏斗
+  [x] (PR-A2) kernel/outbox.wireMessage (Principal omitempty + OccurredAt required wire 字段)
+  [x] (PR-A2) kernel/outbox.Entry.OccurredAt 字段 + Validate mandatory（NewEntry stamp，emitter/writer fallback 删除）
+  [x] (PR-A2) kernel/outbox.SubscriberWithMiddleware (Principal RestoreToContext)
+  [x] (PR-A2) kernel/outbox/outboxtest helpers + new_surface_test.go (NewEntry/EntryScan/principal 覆盖)
+  [x] (PR-A2) cells/auditcore/internal/appender (subject/tenant/session/correlation/occurred_at 真值；actor 仍源自 payload，见 §Amendment)
+  [x] (PR-A2) cells/auditcore/slices/auditquery + response.schema.json §4 (subjectId/occurredAt DTO；无 tenantId queryParam = Hard tenant 隔离；sessionId 不出 DTO)
+  [x] (PR-A2) runtime/auth/middleware.go 生产桥 (WithActorID/WithSubjectID/WithSessionID ctxkeys)
+  [x] (PR-A2) kernel/wrapper.{WrapConsumer,WrapSubscriber} (Principal/OccurredAt span attrs)
+  [x] (PR-A2) pkg/ctxkeys (4 new typed key pairs) + pkg/redaction (session_id sensitive key + dotted-split)
+  [x] (PR-A2) tools/archtest/principal_sealed_field_frozen_test.go (PRINCIPAL-SEALED-FIELD-FROZEN-01, reflect)
+  [x] (PR-A2) tools/archtest/outbox_entry_sealed_construction_test.go (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01, reflect 反向自检)
+  [x] (PR-A2) tools/archtest/safeid_funnel_test.go (carve-out 扩 PrincipalMetadata + OccurredAt)
+  [x] (PR-A2) governance CCE-01 + reverse_coverage EMIT-DECL-COVER-01 (outbox.Emit topic Args[2]→Args[3])
+  [x] (PR-A2) adapters/postgres/migrations/044_outbox_entries_principal.sql (TRUNCATE + principal JSONB + occurred_at, NOT NULL 无 DEFAULT)
 Conformance test:
   - runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (PR-A1)
   - runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (PR-A1)
@@ -377,6 +389,132 @@ Invariant inventory (DROP COLUMN 043_audit_entries_v2.sql):
   - existing audit_entries rows → DROP TABLE + chain restart from seq=1; TailVerify 自然适配空表
   - W0 sentinel adoption (PR #1218 retracted) → 5 列 NOT NULL 无 DEFAULT 一刀切，appender 零值满足约束
 ```
+
+## Amendment 2026-05-29 — PR-A2 as-built (sealed construction realized; issue #1229)
+
+PR-A2 landed **beyond** the original §1 "镜像 ObservabilityMetadata（Medium 上游）"
+design: rather than mirror an exported-field struct, it sealed `outbox.Entry`
+itself. This Amendment is the authoritative as-built record; where it conflicts
+with §1/§3/§6 above, the inline statements were rewritten in this same PR (no
+two-truth-source carryover, per ai-robust §"ADR amendment 落地必查").
+
+**As-built deltas vs original PR-A2 design:**
+
+1. **Entry is sealed construction (Hard 上游, type-system)** — all `Entry` fields
+   unexported; `NewEntry(clk, ctx, eventType, payload, opts...)` is the sole
+   producer constructor; `UnmarshalEnvelope` + `EntryScan.ToEntry` are the wire /
+   storage reconstruction funnels (all in-package). External populated
+   `outbox.Entry{...}` literals are compile-impossible. This realizes the #1229
+   Medium→Hard upgrade the issue tracked. `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`
+   reflect-locks the all-fields-unexported property.
+2. **Single injection trust boundary** — `NewEntry` injects Observability +
+   Principal from the construction ctx. The exported `InjectObservabilityFromContext`
+   was removed; no `InjectPrincipalFromContext` was ever exported. emitter +
+   PG writer no longer inject (they re-Validate as defense). The
+   `CreatedAt.IsZero()` fallbacks in DirectEmitter / OutboxWriter were deleted —
+   `NewEntry` is the single time source (createdAt = occurredAt = clk.Now()).
+3. **`Emit[T]` gained a leading `clk clock.Clock` positional arg** (it funnels
+   through NewEntry). Consequence: governance CCE-01 + reverse_coverage
+   EMIT-DECL-COVER-01 topic extraction moved `Args[2]`→`Args[3]`.
+4. **migration 044** (not 042 — 042=saga, 043=audit on develop) adds
+   `principal JSONB` + `occurred_at TIMESTAMPTZ`, NOT NULL no-DEFAULT, with a
+   TRUNCATE-before-ADD destructive-forward Up block.
+5. **actor 来源决议** — audit `actor_id` stays sourced from the producer-declared
+   payload actor (`appender.extractActor`), NOT `entry.Principal().ActorID`. The
+   issue draft proposed single-sourcing actor from Principal; that would break
+   login audit (`session.created` is emitted during login, before any auth
+   Principal exists in ctx → empty actor → reject). actor (domain action actor,
+   in payload) and the Principal family (request-context: subject/tenant/session/
+   correlation) are distinct columns with distinct authoritative sources — not a
+   dual-source-for-one-field shim. The appender feeds subject/tenant/session ←
+   `entry.Principal()`, correlation ← `entry.Observability().CorrelationID`,
+   occurred_at ← `entry.OccurredAt()`; actor ← payload.
+6. **auditquery §4** — DTO exposes `subjectId` + `occurredAt` (additive,
+   omitempty); `sessionId` is NOT exposed (sensitive-key set). Tenant isolation
+   is type-system Hard **by absence**: the contract declares no `tenantId` query
+   parameter, so no typed surface exists to request another tenant; scoping is
+   ctx-derived only.
+
+**威胁矩阵 逐行重评（ai-robust §"ADR amendment 落地必查"）** — every row that the
+original §威胁矩阵 marked for PR-A2 is re-evaluated against the as-built seal; no
+cell regressed ✅→⚠️/❌:
+
+| 威胁 | 原评估 (PR-A2) | as-built 重评 |
+|------|---------------|---------------|
+| Principal 4 字段 wire 携带 / ctx 还原 / span redact | ✅ | ✅ 不变（NewEntry 注入 + SubscribeEntry 还原 + entry_attrs span，session_id 经 IsSensitiveKey mask） |
+| OccurredAt 携带 / redact | ✅ | ✅ 不变（wire required，typed int64 span attr 绕 string redactor） |
+| ReservedMetadataKeys 伪造（actor_id 等经 Metadata 写入） | ✅ `validateMetadata` 拒 | ✅ **强化**：除 validateMetadata 拒 12 reserved key 外，`Entry{...}` populated 字面量本身编译不可表达（type-system Hard），伪造面从「runtime Validate 拒」升级为「compile 不可表达」 |
+| Principal 注入空壳（producer 漏注入） | （原 ADR 未列） | ⚠️→缓解：生产桥（auth middleware 写 ctxkeys）是非空壳前提，已落地 ActorID/SubjectID/SessionID；无 auth ctx 的事件 Principal 空（acceptable，audit actor 源自 payload）。TenantID 无源（develop 无 tenant 概念）——已知缺口，非回归 |
+| auditquery 跨租户读 | （issue §4 目标） | ✅ type-system Hard by absence（无 tenantId queryParam，codegen 不生成字段，编译不可表达跨租户） |
+| auditquery sessionId 泄漏 | （issue §4 目标） | ✅ DTO 不含 sessionId 值（命中 redaction sensitive-key set） |
+
+## Amendment 2026-05-29 round-2 — provenance-funnel closure (review C1/F1/F2)
+
+PR-A2 round-1 (Amendment 2026-05-29) 把 `Entry` sealed 后，**笼统宣称整体 sealing 是
+"type-system Hard 上游"**。Round-2 review (C1/F1/F2) 指出该宣称 over-claim：
+type-system 只封闭了 `outbox.Entry{...}` **字面量伪造**一条向量；`Entry` 另有两条
+provenance 通道在 type system 之外，round-1 未加 enforcement——任一处被 business
+producer 触达即可伪造审计身份（actor/subject/tenant/session/occurredAt）：
+
+1. **reconstruction**：`UnmarshalEnvelope(topic, raw)` 与 `EntryScan{…}.ToEntry()`
+   从不可信输入重建 sealed `Entry`；`Entry.Validate` 只查 well-formedness，**不查
+   provenance**。一个 producer 直接调任一函数即可 mint 一个带伪造 Principal 的
+   `Entry` 再 `Emit`。
+2. **ctx-注入**：`NewEntry` 从 ctx 读 Principal（`ctxkeys.With{Actor,Subject,Tenant,
+   Session}ID`）。这些 setter 是导出函数；producer 调 `ctxkeys.WithActorID(ctx,"evil")`
+   再 `NewEntry`，即可经「blessed」ctx 路径伪造——round-1 宣称的「单一信任边界 = ctx」
+   仅靠 keys.go 注释约定，无 enforcement。
+
+**Round-2 决议（取 ai-robust「AI HARD 原则」，不降级宣称、就地补 enforcement）**：
+
+- 两条通道各加一条 caller-allowlist archtest（go/types reference 解析，覆盖 call +
+  function-value 两种形态）：`OUTBOX-RECONSTRUCTION-CALLER-01`（reconstruction）、
+  `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`（ctx-注入）。business producer（cells/examples）
+  对两条通道**都不可达**。
+- 评级：两条 funnel 均 **Hard 下游 + Medium 上游**。**Hard 上游不可达且是 Go-language
+  永久天花板**（不是延期 TODO）：reconstruction 与 ctx-write 本质跨包（kernel ↔ runtime
+  ↔ adapters 互为不同包，且 `kernel` 不可 import `runtime/auth`），Go 包可见性无法表达
+  「仅某几个包可调某导出符号」。同 `SPAN-SETATTR-HOLDER-SEAL`(#851) /
+  `HEALTHZ-HOLDER-SEAL`(#893) 的天花板形态，gh issue **#1282** 跟踪（won't-do）。
+- `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` 文案就地重写（§6 表 + archtest godoc）：
+  「type-system Hard」明确限定到字面量向量，并新增 SoleReconstructionSurface 子检查
+  锁定「唯一产出 `Entry` 的导出 func = `NewEntry`+`UnmarshalEnvelope`，唯一重建 mirror
+  = `EntryScan`」——防止新增一条未纳入 caller-allowlist 的 Entry 产出面。
+
+**附带 review 修复（同 round-2 PR 内）**：
+
+- **F3/C4**：service-token 认证路径补 `injectPrincipalCtxKeys` 桥（与 JWT 共用单源
+  helper；service principal 的 actor_id = CallerCellID）。round-1「auth middleware 是
+  非空壳前提」对 service-token 路径**实为空壳**——内部 `/internal/v1/access/roles/assign`
+  等 service-token 触发的 outbox 事件 round-1 Principal 全空。已修。
+- **F4/C2**：migration 044 forward TRUNCATE 改用专属 forward GUC
+  `gocell.allow_outbox_rebuild`（不再混用 `allow_destructive_down`，对齐 043
+  `allow_audit_rebuild` 的解耦），Up 守卫精确到 `status <> 'published'` 未投递行，
+  runbook drain 判据从误导的 `CountPending==0`（排除 backoff 行）改为
+  `count(status<>'published')==0`；新增 `MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01`
+  archtest 锁「whole-table forward 销毁必带专属 rebuild GUC」（绑定 012/043/044）。
+- **F5/C3**：PG scan 对 principal JSONB 列补 `maxPrincipalJSONBytes` size cap，与
+  observability 对称（`kernel/outbox.MaxPrincipalTotalSize`）。
+- **F6**：auditquery 出口 occurredAt + timestamp 改 `time.RFC3339Nano`（亚秒精度是
+  HMAC chain `*UnixNano` 的一部分，RFC3339 截断破坏证据精度）。
+- **F7**：回归锁——SoleReconstructionSurface（见上）、`outbox_fullchain_test` 令
+  CreatedAt≠OccurredAt 并断言两者独立 round-trip、auditquery contract test 断言
+  subjectId/occurredAt 出现且 sessionId/tenantId 不出现（projection invariant）。
+
+**威胁矩阵 round-2 逐行重评**（ai-robust §"ADR amendment 落地必查"；只列 round-1 ✅
+被 round-2 收紧或新识别的格子）：
+
+| 威胁 | round-1 评估 | round-2 重评 |
+|------|-------------|-------------|
+| Principal 伪造 — 字面量 `outbox.Entry{principal:…}` | ✅ compile 不可表达 | ✅ 不变（type-system Hard，仅此向量） |
+| Principal 伪造 — reconstruction（`UnmarshalEnvelope`/`EntryScan.ToEntry`） | （round-1 未识别，**隐含 over-claim 为已封闭**） | ✅→ 由 `OUTBOX-RECONSTRUCTION-CALLER-01` 封闭（Hard 下游 / Medium 上游 Go-ceiling）；round-1 的「整体 type-system Hard」对此向量为 **false**，已就地改写 |
+| Principal 伪造 — ctx-write（`ctxkeys.With*ID` + NewEntry） | （round-1 仅注释约定） | ✅→ 由 `CTXKEYS-PRINCIPAL-WRITE-CALLER-01` 封闭（Hard 下游 / Medium 上游 Go-ceiling） |
+| Principal 注入空壳 — service-token 路径 | ⚠️ round-1 称 auth 桥非空壳 | ❌→✅ round-1 对 service-token **实为空壳**（漏桥），F3 已补；现 JWT + service-token 双路径均桥接 |
+| occurredAt 证据精度（auditquery 出口） | （未列） | ⚠️→✅ round-1 用 RFC3339 截断亚秒，F6 改 RFC3339Nano |
+| 读侧 principal 列无界分配 | （未列） | ⚠️→✅ round-1 principal scan 无 size cap（observability 有），F5 对称补齐 |
+| migration 044 forward TRUNCATE 误删未投递行 | （未列） | ⚠️→✅ round-1 runbook 用 `CountPending==0`（排除 backoff），且复用 down GUC；F4 改精确判据 + 专属 forward GUC + archtest |
+
+无 round-1 ✅ 因 round-2 退化为 ⚠️/❌ 而未补偿者；上表每个收紧格子均给出 round-2 落地措施。
 
 ## References
 

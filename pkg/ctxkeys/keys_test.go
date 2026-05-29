@@ -116,6 +116,45 @@ func TestRealIPRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPrincipalRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		with func(context.Context, string) context.Context
+		from func(context.Context) (string, bool)
+	}{
+		{name: "ActorID", with: WithActorID, from: ActorIDFrom},
+		{name: "SubjectID", with: WithSubjectID, from: SubjectIDFrom},
+		{name: "TenantID", with: WithTenantID, from: TenantIDFrom},
+		{name: "SessionID", with: WithSessionID, from: SessionIDFrom},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := tt.with(context.Background(), "id-"+tt.name)
+			got, ok := tt.from(ctx)
+			assert.True(t, ok)
+			assert.Equal(t, "id-"+tt.name, got)
+		})
+	}
+}
+
+func TestPrincipalKeysIndependent(t *testing.T) {
+	// All four principal keys coexist without collision.
+	ctx := context.Background()
+	ctx = WithActorID(ctx, "actor-1")
+	ctx = WithSubjectID(ctx, "subject-1")
+	ctx = WithTenantID(ctx, "tenant-1")
+	ctx = WithSessionID(ctx, "session-1")
+
+	a, _ := ActorIDFrom(ctx)
+	s, _ := SubjectIDFrom(ctx)
+	tn, _ := TenantIDFrom(ctx)
+	se, _ := SessionIDFrom(ctx)
+	assert.Equal(t, "actor-1", a)
+	assert.Equal(t, "subject-1", s)
+	assert.Equal(t, "tenant-1", tn)
+	assert.Equal(t, "session-1", se)
+}
+
 func TestFromMissingKey(t *testing.T) {
 	ctx := context.Background()
 
@@ -129,6 +168,10 @@ func TestFromMissingKey(t *testing.T) {
 		{name: "SpanID missing", fn: SpanIDFrom},
 		{name: "RequestID missing", fn: RequestIDFrom},
 		{name: "RealIP missing", fn: RealIPFrom},
+		{name: "ActorID missing", fn: ActorIDFrom},
+		{name: "SubjectID missing", fn: SubjectIDFrom},
+		{name: "TenantID missing", fn: TenantIDFrom},
+		{name: "SessionID missing", fn: SessionIDFrom},
 	}
 
 	for _, tt := range tests {

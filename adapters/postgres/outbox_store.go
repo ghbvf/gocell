@@ -22,6 +22,15 @@ import (
 // or maliciously-crafted row at ~4 KB.
 const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 
+// maxPrincipalJSONBytes bounds the JSONB payload size accepted from the
+// principal column at scan time. The principal family is sized identically to
+// observability (4 idutil.SafeID fields), so it shares the same headroom
+// formula and ~4 KB ceiling. The symmetry is required, not incidental:
+// observability and principal are sibling reconstruction inputs and the
+// scan-side size guard must be applied uniformly to both (issue #1229 review
+// F5 — principal previously decoded without a cap, unlike observability).
+const maxPrincipalJSONBytes = 4 * kout.MaxPrincipalTotalSize
+
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
 // Each method opens its own short transaction; methods do not compose into a
@@ -80,12 +89,12 @@ updated AS (
 	WHERE e.id = picked.id
 	RETURNING e.id, e.aggregate_id, e.aggregate_type, e.event_type,
 		e.topic, e.payload, e.metadata, e.created_at, e.attempts, e.observability,
-		e.lease_id,
+		e.lease_id, e.principal, e.occurred_at,
 		picked.next_retry_at AS picked_next_retry_at,
 		picked.created_at AS picked_created_at
 )
 SELECT id, aggregate_id, aggregate_type, event_type,
-	topic, payload, metadata, created_at, attempts, observability, lease_id
+	topic, payload, metadata, created_at, attempts, observability, lease_id, principal, occurred_at
 FROM updated
 ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id`
 
@@ -319,44 +328,50 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 // ClaimedEntry. Column order:
 //
 //	id, aggregate_id, aggregate_type, event_type, topic, payload,
-//	metadata, created_at, attempts, observability, lease_id
+//	metadata, created_at, attempts, observability, lease_id, principal, occurred_at
 //
-// Both metadata and observability are JSONB; NULL is valid for both and is
-// treated as an empty map / zero struct respectively. A JSON parse failure
-// is logged as Warn (data integrity) and the entry is still returned.
+// metadata, observability, and principal are JSONB; NULL is valid for
+// observability (treated as zero struct) and metadata (treated as empty map).
+// principal is NOT NULL but may decode to a zero PrincipalMetadata when
+// all fields are absent from the JSON object.
+// A JSON parse failure is logged as Warn (data integrity); the entry is
+// still returned with the affected field at its zero value.
 // lease_id is returned by claim as a non-NULL UUID and surfaced as a string
 // fencing token to the runtime layer.
 func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	var (
-		ce                outbox.ClaimedEntry
+		scan              kout.EntryScan
 		metadataJSON      []byte
 		observabilityJSON []byte
+		principalJSON     []byte
 		leaseID           uuid.UUID
+		attempts          int
 	)
 	if err := rows.Scan(
-		&ce.ID, &ce.AggregateID, &ce.AggregateType, &ce.EventType,
-		&ce.Topic, &ce.Payload, &metadataJSON, &ce.CreatedAt, &ce.Attempts,
-		&observabilityJSON, &leaseID,
+		&scan.ID, &scan.AggregateID, &scan.AggregateType, &scan.EventType,
+		&scan.Topic, &scan.Payload, &metadataJSON, &scan.CreatedAt, &attempts,
+		&observabilityJSON, &leaseID, &principalJSON, &scan.OccurredAt,
 	); err != nil {
 		return outbox.ClaimedEntry{}, err
 	}
-	ce.LeaseID = leaseID.String()
+
 	if len(metadataJSON) > 0 {
-		if err := json.Unmarshal(metadataJSON, &ce.Metadata); err != nil {
+		if err := json.Unmarshal(metadataJSON, &scan.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",
-				slog.String("entry_id", ce.ID),
-				slog.String("event_type", ce.EventType),
+				slog.String("entry_id", scan.ID),
+				slog.String("event_type", scan.EventType),
 				slog.Any("error", err))
 		}
 	}
+
 	if len(observabilityJSON) > maxObservabilityJSONBytes {
 		// Defensive: reject oversized observability payloads to prevent
 		// unbounded allocation from a corrupted row. Field-level limits
 		// in ObservabilityMetadata.Validate cover the producer side; this
 		// guard covers tampered/legacy data on the read side.
 		slog.Warn("outbox store: observability JSON exceeds max size, dropping",
-			slog.String("entry_id", ce.ID),
-			slog.String("event_type", ce.EventType),
+			slog.String("entry_id", scan.ID),
+			slog.String("event_type", scan.EventType),
 			slog.Int("size", len(observabilityJSON)),
 			slog.Int("max", maxObservabilityJSONBytes))
 	} else if len(observabilityJSON) > 0 {
@@ -365,29 +380,69 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		// when it errors mid-decode (e.g., SafeID.UnmarshalJSON rejects field
 		// N while fields 1..N-1 already succeeded). Without a local-var
 		// staging variable, an unsafe row would leak partially-valid
-		// observability into ce.Observability. Mirrors etcd clientv3 /
+		// observability into scan.Observability. Mirrors etcd clientv3 /
 		// K8s runtime.Decode pattern.
 		var obs kout.ObservabilityMetadata
 		if err := json.Unmarshal(observabilityJSON, &obs); err != nil {
 			slog.Warn("outbox store: failed to unmarshal observability — dropping",
-				slog.String("entry_id", ce.ID),
-				slog.String("event_type", ce.EventType),
+				slog.String("entry_id", scan.ID),
+				slog.String("event_type", scan.EventType),
 				slog.Any("error", err))
-			// ce.Observability stays zero-value
+			// scan.Observability stays zero-value
 		} else if validateErr := obs.Validate(); validateErr != nil {
 			// Persisted row violates field-size invariants (older row written
 			// before the invariant existed, or schema drift). Drop entirely —
 			// downstream restore must not see partially valid IDs.
 			slog.Warn("outbox store: observability fails validation — dropping",
-				slog.String("entry_id", ce.ID),
-				slog.String("event_type", ce.EventType),
+				slog.String("entry_id", scan.ID),
+				slog.String("event_type", scan.EventType),
 				slog.Any("error", validateErr))
-			// ce.Observability stays zero-value
+			// scan.Observability stays zero-value
 		} else {
-			ce.Observability = obs
+			scan.Observability = obs
 		}
 	}
-	return ce, nil
+
+	if len(principalJSON) > maxPrincipalJSONBytes {
+		// Defensive: reject oversized principal payloads to prevent unbounded
+		// allocation from a corrupted or maliciously-crafted row — symmetric
+		// with the observability guard above (issue #1229 review F5).
+		slog.Warn("outbox store: principal JSON exceeds max size, dropping",
+			slog.String("entry_id", scan.ID),
+			slog.String("event_type", scan.EventType),
+			slog.Int("size", len(principalJSON)),
+			slog.Int("max", maxPrincipalJSONBytes))
+	} else if len(principalJSON) > 0 {
+		// Same staged-unmarshal pattern as observability (PR #582 F4): unmarshal
+		// into a local variable first so a partial decode does not leak into
+		// scan.Principal.
+		var principal kout.PrincipalMetadata
+		if err := json.Unmarshal(principalJSON, &principal); err != nil {
+			slog.Warn("outbox store: failed to unmarshal principal — dropping",
+				slog.String("entry_id", scan.ID),
+				slog.String("event_type", scan.EventType),
+				slog.Any("error", err))
+			// scan.Principal stays zero-value
+		} else if validateErr := principal.Validate(); validateErr != nil {
+			slog.Warn("outbox store: principal fails validation — dropping",
+				slog.String("entry_id", scan.ID),
+				slog.String("event_type", scan.EventType),
+				slog.Any("error", validateErr))
+			// scan.Principal stays zero-value
+		} else {
+			scan.Principal = principal
+		}
+	}
+
+	entry, err := scan.ToEntry()
+	if err != nil {
+		return outbox.ClaimedEntry{}, fmt.Errorf("outbox store: scanClaimedEntry: ToEntry: %w", err)
+	}
+	return outbox.ClaimedEntry{
+		Entry:    entry,
+		Attempts: attempts,
+		LeaseID:  leaseID.String(),
+	}, nil
 }
 
 // CountPending returns the number of rows in pending status. The count may be

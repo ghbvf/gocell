@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -136,8 +137,61 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// Inject the unified Principal (F7 wiring).
 	p := jwtClaimsToPrincipal(claims)
 	ctx := WithPrincipal(r.Context(), p)
+	ctx = injectPrincipalCtxKeys(ctx, p)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// injectPrincipalCtxKeys writes the authenticated principal identity into the
+// pkg/ctxkeys typed keys so that any outbox.NewEntry constructed downstream in
+// the same request carries the principal across the async boundary (NewEntry
+// reads these keys at its single injection trust boundary via
+// outbox.ContextPrincipal). This is the producer-side half of the
+// principal-propagation contract; the consumer-side restore lives in
+// SubscriberWithMiddleware.
+//
+// It is the single source for the bridge: BOTH the JWT path (Middleware) and
+// the service-token path (ServiceTokenMiddleware) call it after WithPrincipal,
+// so neither authentication scheme can silently skip principal propagation.
+//
+// Mapping:
+//   - actor_id   = actorOf(p) — the acting party. For JWT principals this is the
+//     subject (develop has no "act" claim); for service principals it is the
+//     CallerCellID (see actorOf).
+//   - subject_id = p.Subject  — the subject-of-record (JWT "sub"); empty for
+//     service principals.
+//   - session_id = p.Claims["sid"] — server-side session binding, when present.
+//   - tenant_id  is intentionally NOT written: auth.Principal carries no tenant
+//     field on develop (no source yet), so the key stays unset/empty.
+//
+// Only non-empty values are written so anonymous / sessionless / subjectless
+// tokens do not stamp empty principal fields onto produced entries.
+func injectPrincipalCtxKeys(ctx context.Context, p *Principal) context.Context {
+	if actor := actorOf(p); actor != "" {
+		ctx = ctxkeys.WithActorID(ctx, actor)
+	}
+	if p.Subject != "" {
+		ctx = ctxkeys.WithSubjectID(ctx, p.Subject)
+	}
+	if sid := p.Claims["sid"]; sid != "" {
+		ctx = ctxkeys.WithSessionID(ctx, sid)
+	}
+	// TenantID has no source on develop — see godoc above.
+	return ctx
+}
+
+// actorOf returns the acting party for the principal. RFC 8693 §4.1 expresses
+// delegation via an "act" claim ("act.sub" = the acting party); GoCell does not
+// issue or verify an "act" claim on develop, so for JWT (user) principals there
+// is no impersonation chain and the actor is identically the subject-of-record.
+// Service principals carry identity via CallerCellID (their Subject is empty —
+// see Principal godoc), so the calling cell IS the acting party. When an "act"
+// claim is introduced, this is the single place to derive the actor from it.
+func actorOf(p *Principal) string {
+	if p.Subject != "" {
+		return p.Subject
+	}
+	return p.CallerCellID
 }
 
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED

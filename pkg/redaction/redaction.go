@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -57,6 +58,12 @@ const sensitiveKeyPattern = `password|passwd|pwd|secret|` +
 	`access[_-]?token|refresh[_-]?token|id[_-]?token|token|` +
 	`authorization|connection[_ ]?string|api[_-]?key|bearer|` +
 	`private[_-]?key|signing[_-]?key|dsn|` +
+	// Session identifier — a live-session credential-adjacent token. Matches
+	// snake/dash/camel (session_id / session-id / sessionId) via optional
+	// separator + (?i). Surfaces in outbox Principal span attrs
+	// (gocell.principal.session_id) and audit event payloads; excluded from
+	// the auditquery DTO. INV-SESSION-REDACTED (issue #1229).
+	`session[_-]?id|` +
 	// Webhook signing surface (KERNEL-WEBHOOK-01): inbound/outbound HMAC
 	// secrets + signature headers in Svix/Stripe/GitHub naming variants.
 	`webhook[_-]?secret|stripe[_-]?signature|x[_-]?signature|` +
@@ -101,9 +108,26 @@ var sensitiveKeyExactPattern = regexp.MustCompile(`(?i)^(` + sensitiveKeyPattern
 // Value: "hunter2"} — the value field carries no `password=` anchor token
 // so RedactString returns it unchanged).
 //
+// Dotted namespace keys (OTel span attributes such as
+// "gocell.principal.session_id", slog group keys) are matched per dot-delimited
+// segment: a sensitive segment anywhere in the key makes the whole key
+// sensitive. This is fail-closed — a namespaced attribute whose leaf names a
+// credential is masked even though the full dotted string is not itself a bare
+// sensitive key. Bare (non-dotted) keys keep the exact-match semantics.
+//
 // ref: adapters/otel/span.go safeStringAttr; pkg/redaction.RedactSlogAttr.
 func IsSensitiveKey(key string) bool {
-	return sensitiveKeyExactPattern.MatchString(key)
+	if sensitiveKeyExactPattern.MatchString(key) {
+		return true
+	}
+	if strings.ContainsRune(key, '.') {
+		for _, seg := range strings.Split(key, ".") {
+			if sensitiveKeyExactPattern.MatchString(seg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a

@@ -157,6 +157,32 @@ readyz 各字段归属：
 
 详见 ADR `docs/architecture/202605171200-adr-readyz-verbose-four-channel-redaction.md`。
 
+## Outbox Wire Envelope 三族字段（sealed construction）
+
+`kernel/outbox.Entry` 跨 async 边界携带**三族正交身份**，命名空间物理隔离，禁止互串：
+
+| 族 | 载体字段 | 来源 | 消费侧 | 出站脱敏 |
+|----|---------|------|--------|---------|
+| **Observability**（trace/request/correlation） | `Entry.observability ObservabilityMetadata` | `NewEntry` 从 ctx 注入 | `SubscriberWithMiddleware` 自动 `RestoreToContext` | span attr 走 `safeStringAttr` |
+| **Principal**（actor/subject/tenant/session） | `Entry.principal PrincipalMetadata` | `NewEntry` 从 ctx 注入（生产桥 `runtime/auth` 认证后写 `ctxkeys`） | 同上自动还原 | `gocell.principal.session_id` 命中 `IsSensitiveKey` mask；actor/subject/tenant opaque 明文 |
+| **业务 Metadata** | `Entry.metadata map[string]string` | producer 经 `WithMetadata` | handler 读 `entry.Metadata()`（clone） | `RedactPayload` 不覆盖（结构化 KV，非 payload） |
+
+约束（**sealed construction**，issue #1229，权威记录见 ADR `202605281200-1042` §Amendment 2026-05-29 round-2）：
+
+- `Entry` 全字段 unexported；获得 `Entry` 的三条路径都在 `kernel/outbox` 包内：`NewEntry(clk, ctx, …)`（producer 构造，ctx 注入身份）/ `UnmarshalEnvelope`（wire 解码）/ `EntryScan.ToEntry`（storage 重建）。包外 populated `outbox.Entry{…}` 字面量编译不可表达（**type-system Hard 上游**，`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`；其 SoleReconstructionSurface 子检查另锁「唯一产出 Entry 的导出 func = `NewEntry`+`UnmarshalEnvelope`，唯一重建 mirror = `EntryScan`」）。该 type-system Hard **只封闭「字面量伪造」一条向量**；reconstruction 与 ctx 注入两条 provenance 通道不在其内，由下面的 caller-allowlist funnel 封闭——不要把整体 sealing 笼统称为 type-system Hard。
+- **provenance funnel 双向锁**（Principal/OccurredAt 可信补齐的实际 enforcement）：
+  - **reconstruction**：`UnmarshalEnvelope` / `EntryScan.ToEntry` 的生产引用点（call 或 function-value）锁定在 storage adapter（`adapters/postgres/outbox_store.go`）+ wire/consumer 解码（`runtime/eventbus` / `adapters/rabbitmq`）+ store conformance helper——`OUTBOX-RECONSTRUCTION-CALLER-01`。
+  - **ctx 注入**：principal ctxkeys setter（`WithActorID/SubjectID/TenantID/SessionID`）的生产引用点锁定在 auth 请求边界桥（`runtime/auth/middleware.go`，JWT+service-token 共用 `injectPrincipalCtxKeys`）+ consumer 还原（`kernel/outbox/principal.go::RestoreToContext`）——`CTXKEYS-PRINCIPAL-WRITE-CALLER-01`。business producer（cells/examples）无法触达任一通道。
+  - **评级**：两条 funnel 均 **Hard 下游（archtest caller-allowlist，go/types 解析 alias / value-ref，形态唯一）+ Medium 上游（Go-language ceiling）**。Hard 上游不可达——reconstruction 与 ctx-write 本质跨包（kernel ↔ runtime ↔ adapters 互为不同包，且 kernel 不可 import runtime/auth），Go 包可见性无法表达「仅某几个包可调某导出符号」。同 `SPAN-SETATTR-HOLDER-SEAL`(#851) / `HEALTHZ-HOLDER-SEAL`(#893) 的永久天花板形态，gh issue **#1282** 跟踪（won't-do）。
+  - observability ctxkeys setter（`WithTraceID` 等，~11 生产调用点）**不**纳入同等锁——伪造 trace id 无害，伪造 principal 是审计身份越权（P1）；安全语义差异下的非对称是刻意为之。
+- Observability + Principal **由 `NewEntry` 从 ctx 注入**（无 producer-facing inject API，无 `WithPrincipal`/`WithObservability` option）；producer 亦不可经 `Metadata` 伪造身份键（`ReservedMetadataKeys` 12 key + `Entry.Validate` fail-fast）。三条伪造面——字面量 / `Metadata` / (ctx-write + reconstruction)——由上述机制合并封闭。
+- 消费侧还原由 `SubscriberWithMiddleware.SubscribeEntry`（`kernel/outbox/outbox.go`）的 outermost built-in step 完成（`entry.observability` + `entry.principal` → ctxkeys），先于业务 middleware；`kernel/wrapper.WrapSubscriber` 只写 delivery span attrs，不负责 ctx 还原。
+- `OccurredAt`（producer 域事件时间）mandatory（`Validate` 拒零值），`NewEntry` stamp，`WithOccurredAt` 注入 domain 时间；与 `CreatedAt`（store/seal 时间）语义分层，两者作为独立 wire 字段端到端携带（`outbox_fullchain_test.go` 锁 round-trip 独立性）。auditquery 出口对二者用 `time.RFC3339Nano`（亚秒精度是 HMAC chain `*UnixNano` 的一部分，不可截断）。
+- wire schema：Principal `omitempty`（additive），OccurredAt required；`PrincipalMetadata` 4 字段 `idutil.SafeID`，由 `SAFEID-WIREMESSAGE-USAGE-01` + `PRINCIPAL-SEALED-FIELD-FROZEN-01` 冻结。
+- 读侧 size cap：PG scan 对 observability 与 principal JSONB 列对称施加 `maxObservabilityJSONBytes` / `maxPrincipalJSONBytes` 上限（drop+warn），防 corrupted row 无界分配。
+
+audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extractActor`），非 `entry.Principal().ActorID`——actor 是被审计动作的执行者（login 期 `session.created` 无 auth principal 时仍可用），Principal 族是正交的 request-context。详见 ADR §Amendment 2026-05-29 "actor 来源决议"。
+
 ## Audit Payload Redaction
 
 `auditcore` 通过 `runtime/audit/ledger.Store.Append` 落 hash chain；payload 是订阅事件的原始 JSON。从 `auditquery` HTTP 出口下发时，`cells/auditcore/slices/auditquery/handler.go` 强制走 `pkg/redaction.RedactPayload(payload []byte) []byte`：

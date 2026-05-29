@@ -62,15 +62,15 @@ func TestEventOrderCreatedV1Publish(t *testing.T) {
 		t.Fatalf("expected one emitted outbox entry, got %d", len(writer.entries))
 	}
 	entry := writer.entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	c.MustRejectPayload(t, []byte(`{"id":"o-1"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 
 	var payload struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		t.Fatalf("decode emitted payload: %v", err)
 	}
 	if payload.ID == "" {

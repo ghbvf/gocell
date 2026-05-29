@@ -8,10 +8,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metautil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
@@ -37,15 +39,16 @@ const (
 	internalMetadataKeyQuotedFmt = "key=%q"
 )
 
-// ReservedMetadataKeys lists keys that the kernel observability bridge owns
-// exclusively. Producers writing these into Entry.Metadata is a programming
-// error: the typed Entry.Observability field is the canonical home for
-// trace/request/correlation identity, and Entry.Validate rejects entries
-// that try to forge them via the producer-owned Metadata namespace.
+// ReservedMetadataKeys lists keys that the kernel observability and principal
+// bridges own exclusively. Producers writing these into Entry.Metadata is a
+// programming error: the typed Entry.Observability / Entry.Principal fields are
+// the canonical home for trace/request/correlation and actor/subject/tenant/
+// session identity, and Entry.Validate rejects entries that try to forge them
+// via the producer-owned Metadata namespace.
 //
-// The list is exhaustive — these are the only keys the kernel bridge maps
-// in either direction. Adding a new bridge field requires extending this
-// list (caught by reservedMetadataKeyMembership invariant test).
+// The list is exhaustive — these are the only keys the kernel bridges map in
+// either direction. Adding a new bridge field requires extending this list
+// (caught by reservedMetadataKeyMembership invariant test).
 var ReservedMetadataKeys = []string{
 	"trace_id",
 	"traceparent",
@@ -54,6 +57,13 @@ var ReservedMetadataKeys = []string{
 	"span_id",
 	"request_id",
 	"correlation_id",
+	// Principal family (issue #1229) — owned by Entry.Principal, injected from
+	// ctx at NewEntry construction time. Forbidding them in the free Metadata
+	// namespace removes the entry.Metadata["subject_id"]="evil" forgery surface.
+	"actor_id",
+	"subject_id",
+	"tenant_id",
+	"session_id",
 }
 
 // reservedMetadataKeySet is the membership-test view of ReservedMetadataKeys.
@@ -72,7 +82,7 @@ func validateMetadata(m map[string]string) error {
 	for k := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
+				"outbox: metadata key is reserved for the observability/principal bridges — use Entry.Observability or Entry.Principal instead",
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalMetadataKeyQuotedFmt, k))))
 		}
 	}
@@ -84,58 +94,116 @@ func validateMetadata(m map[string]string) error {
 // ---------------------------------------------------------------------------
 
 // Entry represents a single outbox record to be published.
+//
+// Entry is sealed construction (issue #1229): all fields are unexported and the
+// only ways to obtain an Entry are NewEntry (the producer constructor),
+// UnmarshalEnvelope (the wire-decode funnel), and EntryScan.ToEntry (the
+// storage-adapter reconstruction funnel) — all three in package kernel/outbox.
+// A composite literal `outbox.Entry{...}` outside this package is a compile
+// error (type-system Hard), which is the point: OccurredAt is always
+// clock-derived, Observability and Principal are always ctx-injected at the
+// trust boundary, and no producer can forge or omit them. Consumers read state
+// through the value-receiver getters below.
+//
+// ref: OpenTelemetry SpanContext / OIDC Principal — typed carriers of trace and
+// principal identity, kept distinct from producer-owned business Metadata.
 type Entry struct {
-	// ID is the canonical idempotency identifier. Consumers SHOULD use this
-	// field to construct idempotency keys.
-	ID string
-	// AggregateID identifies the domain entity that owns this event (e.g. a
+	// id is the canonical idempotency identifier. Consumers SHOULD use ID() to
+	// construct idempotency keys.
+	id string
+	// aggregateID identifies the domain entity that owns this event (e.g. a
 	// session UUID or a config-entry slug). It MUST be a domain entity
 	// identifier (UUID or opaque slug validated by SafeID); it MUST NOT carry
-	// user PII (email, phone number, username, or display name). AggregateID
-	// is emitted verbatim in structured logs, including Error-level drop and
-	// dead-letter records, and is NOT redacted by pkg/redaction.
-	AggregateID   string
-	AggregateType string
-	EventType     string
-	Topic         string // broker routing key; falls back to EventType if empty
-	Payload       []byte
-	CreatedAt     time.Time
-	// Metadata carries optional business metadata (ref: Watermill Message.Metadata).
-	// Producers may freely read and write this map for domain-specific key-value
-	// pairs. Observability IDs (trace_id, request_id, etc.) must NOT be written
-	// here — use the typed Observability field instead.
-	Metadata map[string]string
+	// user PII (email, phone number, username, or display name). It is emitted
+	// verbatim in structured logs, including Error-level drop and dead-letter
+	// records, and is NOT redacted by pkg/redaction.
+	aggregateID   string
+	aggregateType string
+	eventType     string
+	topic         string // broker routing key; falls back to eventType if empty
+	payload       []byte
+	// createdAt is the store/seal time, stamped by NewEntry from the injected
+	// clock; occurredAt is the producer-domain event time (defaults to the same
+	// instant, overridable via WithOccurredAt for domain-time injection).
+	createdAt  time.Time
+	occurredAt time.Time
+	// metadata carries optional business metadata (ref: Watermill Message.Metadata).
+	// Producers may set domain-specific key-value pairs via WithMetadata.
+	// Observability and principal IDs must NOT be written here — use the typed
+	// fields; Validate rejects ReservedMetadataKeys.
+	metadata map[string]string
 
-	// Observability carries cross-async tracing context managed exclusively by
-	// the gocell observability bridge. Producers MUST NOT populate this field
-	// directly — (e *Entry).InjectObservabilityFromContext fills it from the
-	// originating request context at write time. SubscriberWithMiddleware
+	// observability carries cross-async tracing context managed exclusively by
+	// the gocell observability bridge. NewEntry fills it from the construction
+	// context (the single injection trust boundary). SubscriberWithMiddleware
 	// (the canonical consumer wrapper) restores it into the handler context
-	// before any user middleware as an OUTERMOST built-in step — there is no
-	// separate middleware to install or to forget.
-	//
-	// The typed field prevents producers from forging observability IDs via
-	// entry.Metadata["trace_id"] = "evil" — the two namespaces are now physically
-	// separate, and Entry.Validate rejects ReservedMetadataKeys to keep producers
-	// honest at write time.
-	//
-	// ref: OpenTelemetry SpanContext — typed carrier of trace identity, distinct
-	// from application attributes (Baggage).
-	Observability ObservabilityMetadata
+	// before any user middleware as an OUTERMOST built-in step.
+	observability ObservabilityMetadata
 
-	// FailurePolicy controls how an Emitter handles publisher-side failures
-	// for this specific entry. Zero value (FailurePolicyDefault) falls
-	// through to the Emitter's construction-time default.
-	//
-	// In-process control plane only — not marshaled to the wire envelope
-	// (see MarshalEnvelope). Callers that need per-topic/per-event semantics
-	// (e.g., security topics that must surface publisher errors; observability
-	// topics that may drop on failure) set this at entry-construction time.
+	// principal carries cross-async OAuth/OIDC principal identity (actor /
+	// subject / tenant / session), filled by NewEntry from the construction
+	// context exactly like observability, restored consumer-side the same way.
+	principal PrincipalMetadata
+
+	// failurePolicy controls how an Emitter handles publisher-side failures for
+	// this specific entry. Zero value (FailurePolicyDefault) falls through to
+	// the Emitter's construction-time default. In-process control plane only —
+	// not marshaled to the wire envelope (see MarshalEnvelope). Set via
+	// WithFailurePolicy for per-topic/per-event semantics (e.g. security topics
+	// that must surface publisher errors).
 	//
 	// ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
 	// — policy lives with the event, not hardcoded per sink.
-	FailurePolicy FailurePolicy `json:"-"`
+	failurePolicy FailurePolicy
 }
+
+// ID returns the canonical idempotency identifier.
+func (e Entry) ID() string { return e.id }
+
+// AggregateID returns the owning domain-entity identifier (may be empty).
+func (e Entry) AggregateID() string { return e.aggregateID }
+
+// AggregateType returns the owning domain-entity type (may be empty).
+func (e Entry) AggregateType() string { return e.aggregateType }
+
+// EventType returns the event type tag.
+func (e Entry) EventType() string { return e.eventType }
+
+// Topic returns the explicit broker routing key (may be empty; use
+// RoutingTopic for the EventType fallback).
+func (e Entry) Topic() string { return e.topic }
+
+// Payload returns the event payload. The returned slice aliases the entry's
+// backing array (no copy, consumer hot path) — callers MUST NOT mutate it.
+func (e Entry) Payload() []byte { return e.payload }
+
+// CreatedAt returns the store/seal time stamped at construction.
+func (e Entry) CreatedAt() time.Time { return e.createdAt }
+
+// OccurredAt returns the producer-domain event time.
+func (e Entry) OccurredAt() time.Time { return e.occurredAt }
+
+// Metadata returns a defensive copy of the business metadata map so external
+// mutation cannot reach the sealed entry state. Returns nil when no metadata
+// is set.
+func (e Entry) Metadata() map[string]string {
+	if e.metadata == nil {
+		return nil
+	}
+	return maps.Clone(e.metadata)
+}
+
+// Observability returns the cross-async tracing identity carried by the entry.
+func (e Entry) Observability() ObservabilityMetadata { return e.observability }
+
+// Principal returns the cross-async OAuth/OIDC principal identity carried by
+// the entry. The returned value is itself immutable-by-construction
+// (PrincipalMetadata exposes no setters).
+func (e Entry) Principal() PrincipalMetadata { return e.principal }
+
+// FailurePolicy returns the per-entry publisher failure policy (in-process
+// control plane; not on the wire).
+func (e Entry) FailurePolicy() FailurePolicy { return e.failurePolicy }
 
 // FailurePolicy expresses how an Emitter handles publisher-side failures
 // for a particular Entry. Cells default their DirectEmitter to
@@ -171,58 +239,69 @@ func (p FailurePolicy) Resolve(ctorDefault DirectPublishFailureMode) DirectPubli
 }
 
 // RoutingTopic returns the broker routing key for the entry.
-// If Topic is set, it is returned; otherwise EventType is used as fallback.
+// If topic is set, it is returned; otherwise eventType is used as fallback.
 func (e Entry) RoutingTopic() string {
-	if e.Topic != "" {
-		return e.Topic
+	if e.topic != "" {
+		return e.topic
 	}
-	return e.EventType
+	return e.eventType
 }
 
-// Validate checks that required fields (ID, Topic or EventType, and Payload)
-// are present, that Metadata is within size limits and free of reserved
-// keys, and that Observability fields are well-formed. Writers MUST call
-// Validate before persisting (every Writer.Write impl threads through this).
-// (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant).
+// Validate checks that required fields (id, topic or eventType, payload, and a
+// non-zero occurredAt) are present, that metadata is within size limits and
+// free of reserved keys, and that observability + principal fields are
+// well-formed. NewEntry calls Validate at construction; the wire-decode and
+// reconstruction funnels (UnmarshalEnvelope, EntryScan.ToEntry) re-run it.
+// (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant, issue #1229).
 func (e Entry) Validate() error {
-	if e.ID == "" {
+	if e.id == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing ID")
 	}
 	if e.RoutingTopic() == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing topic (Topic and EventType are both empty)")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing topic (topic and eventType are both empty)")
 	}
-	if len(e.Payload) == 0 {
+	if len(e.payload) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing payload")
 	}
-	if len(e.Payload) > MaxPayloadBytes {
+	if len(e.payload) > MaxPayloadBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: payload size exceeds max",
-			errcode.WithDetails(errcode.PublicInt("size", len(e.Payload)), errcode.PublicInt("max", MaxPayloadBytes)))
+			errcode.WithDetails(errcode.PublicInt("size", len(e.payload)), errcode.PublicInt("max", MaxPayloadBytes)))
+	}
+	// OccurredAt is the producer-domain event time and is mandatory: NewEntry
+	// always stamps it from the injected clock (defaulting to createdAt), so a
+	// zero value means the entry bypassed the constructor — fail closed. The
+	// audit HMAC chain pins OccurredAtUnixNano, so a zero value would also poison
+	// the chain canonicalization. (issue #1229, no createdAt/occurredAt fallback.)
+	if e.occurredAt.IsZero() {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing occurredAt")
 	}
 	// CWE-117 defense in depth at the in-memory boundary. Wire-side enforcement
-	// lives in wireMessage's SafeID fields (see envelope.go); this guards programmer-constructed
-	// Entries (e.g., business-code literal Entry{ID: "evil\n"} that never enters
-	// the wire decode funnel). Without this check, an unsafe in-memory Entry can
+	// lives in wireMessage's SafeID fields (see envelope.go); this guards the
+	// reconstruction funnels and the constructor against unsafe IDs before they
 	// reach adapters/postgres.Write → INSERT → relay log injection.
-	if err := validateEntryIDField("id", e.ID); err != nil {
+	if err := validateEntryIDField("id", e.id); err != nil {
 		return err
 	}
-	if err := validateEntryIDField("eventType", e.EventType); err != nil {
+	if err := validateEntryIDField("eventType", e.eventType); err != nil {
 		return err
 	}
-	if err := validateEntryIDField("topic", e.Topic); err != nil {
+	if err := validateEntryIDField("topic", e.topic); err != nil {
 		return err
 	}
-	if err := validateEntryIDField("aggregateId", e.AggregateID); err != nil {
+	if err := validateEntryIDField("aggregateId", e.aggregateID); err != nil {
 		return err
 	}
-	if err := validateEntryIDField("aggregateType", e.AggregateType); err != nil {
+	if err := validateEntryIDField("aggregateType", e.aggregateType); err != nil {
 		return err
 	}
-	if err := validateMetadata(e.Metadata); err != nil {
+	if err := validateMetadata(e.metadata); err != nil {
 		return err
 	}
-	if err := e.Observability.Validate(); err != nil {
+	if err := e.observability.Validate(); err != nil {
+		return err
+	}
+	if err := e.principal.Validate(); err != nil {
 		return err
 	}
 	return nil
@@ -238,6 +317,101 @@ func validateEntryIDField(name, value string) error {
 			errcode.WithDetails(errcode.PublicString("field", name)))
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// NewEntry — the sole producer constructor (sealed construction, issue #1229)
+// ---------------------------------------------------------------------------
+
+// EntryOption customizes an Entry under construction. Options may set the
+// aggregate identity, explicit topic, business metadata, failure policy, and
+// (for domain-time / reconstruction needs) the createdAt / occurredAt stamps.
+//
+// There is deliberately no WithPrincipal / WithObservability option: those two
+// families are injected from the construction context by NewEntry alone, so a
+// producer cannot forge or override them — the trust boundary is the ctx, not
+// the call site.
+type EntryOption func(*Entry)
+
+// WithID overrides the auto-generated entry ID. Reserved for reconstruction
+// and tests that need a deterministic ID; producers should let NewEntry
+// generate one.
+func WithID(id string) EntryOption { return func(e *Entry) { e.id = id } }
+
+// WithAggregateID sets the owning domain-entity identifier.
+func WithAggregateID(id string) EntryOption { return func(e *Entry) { e.aggregateID = id } }
+
+// WithAggregateType sets the owning domain-entity type.
+func WithAggregateType(t string) EntryOption { return func(e *Entry) { e.aggregateType = t } }
+
+// WithTopic sets an explicit broker routing key. When unset, RoutingTopic
+// falls back to the eventType.
+func WithTopic(t string) EntryOption { return func(e *Entry) { e.topic = t } }
+
+// WithMetadata sets business metadata. The map is cloned so later caller-side
+// mutation cannot reach the sealed entry state. Reserved keys are rejected by
+// Validate.
+func WithMetadata(m map[string]string) EntryOption {
+	return func(e *Entry) {
+		if m == nil {
+			e.metadata = nil
+			return
+		}
+		e.metadata = maps.Clone(m)
+	}
+}
+
+// WithFailurePolicy sets the per-entry publisher failure policy (DirectEmitter
+// paths only; ignored by the transactional WriterEmitter).
+func WithFailurePolicy(p FailurePolicy) EntryOption { return func(e *Entry) { e.failurePolicy = p } }
+
+// WithOccurredAt overrides the producer-domain event time. By default NewEntry
+// stamps occurredAt = createdAt = clock.Now(); pass this when the domain event
+// time differs from the seal time (e.g. an order created earlier in the same
+// request). The value is normalized to UTC.
+func WithOccurredAt(t time.Time) EntryOption { return func(e *Entry) { e.occurredAt = t.UTC() } }
+
+// WithCreatedAt overrides the store/seal time. Rare — reserved for callers that
+// must pin createdAt to a domain timestamp. The value is normalized to UTC.
+func WithCreatedAt(t time.Time) EntryOption { return func(e *Entry) { e.createdAt = t.UTC() } }
+
+// NewEntry is the sole producer constructor for an outbox Entry. It stamps
+// createdAt = occurredAt = clk.Now().UTC() (overridable via WithCreatedAt /
+// WithOccurredAt), generates a fresh ID (overridable via WithID), applies the
+// options, injects observability + principal identity from ctx (the single
+// injection trust boundary — there is no producer-facing inject API), and
+// validates. clk is the mandatory positional clock dependency
+// (CLOCK-POSITIONAL-INJECTION-01); a typed-nil clk panics via MustHaveClock
+// (programmer error).
+//
+// Because Entry fields are unexported, NewEntry / UnmarshalEnvelope /
+// EntryScan.ToEntry are the only ways to obtain an Entry — a composite literal
+// outside kernel/outbox does not compile (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01).
+func NewEntry(clk clock.Clock, ctx context.Context, eventType string, payload []byte, opts ...EntryOption) (Entry, error) {
+	clock.MustHaveClock(clk, "outbox.NewEntry")
+	id, err := NewEntryID()
+	if err != nil {
+		return Entry{}, fmt.Errorf("outbox.NewEntry(%s): new entry id: %w", eventType, err)
+	}
+	now := clk.Now().UTC()
+	e := Entry{
+		id:         id,
+		eventType:  eventType,
+		payload:    payload,
+		createdAt:  now,
+		occurredAt: now,
+	}
+	for _, opt := range opts {
+		opt(&e)
+	}
+	// Single injection trust boundary: observability + principal come from the
+	// construction ctx, never from the producer call site.
+	e.injectObservabilityFromContext(ctx)
+	e.injectPrincipalFromContext(ctx)
+	if err := e.Validate(); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -331,8 +505,8 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 			// itself. Surface entry_index unconditionally; surface entry_id
 			// only when SafeID-shaped to avoid log injection vector.
 			details := []errcode.PublicDetail{errcode.PublicInt("entry_index", i)}
-			if idutil.SafeID(e.ID).Validate() == nil {
-				details = append(details, errcode.PublicString("entry_id", e.ID))
+			if idutil.SafeID(e.id).Validate() == nil {
+				details = append(details, errcode.PublicString("entry_id", e.id))
 			}
 			return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"outbox: batch sequential write failed", err,
@@ -579,8 +753,8 @@ func NotifySettlement(
 			defer func() {
 				if r := recover(); r != nil {
 					slog.LogAttrs(ctx, slog.LevelError, "outbox: settlement observer panicked",
-						slog.String("topic", entry.Topic),
-						slog.String("entry_id", entry.ID),
+						slog.String("topic", entry.topic),
+						slog.String("entry_id", entry.id),
 						slog.Any("panic", redaction.RedactAny(r)))
 				}
 			}()
@@ -798,7 +972,8 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 
 // SubscribeEntry is the entry point for callers that hold an EntryHandler
 // (e.g. eventrouter.Router). It applies the full pipeline:
-// business middleware chain → ConsumerBase.Wrap → observability restore → inner Subscribe.
+// business middleware chain → ConsumerBase.Wrap → observability/principal
+// restore → inner Subscribe.
 //
 // The business middleware chain is applied via slices.Backward(s.middleware):
 // middleware[0] is the outermost layer (first to wrap, last to return) and
@@ -831,10 +1006,15 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	// idempotency Settlement.
 	subHandler := s.consumerBase.Wrap(sub, wrapped)
 
-	// Step 3: observability restore — built-in OUTERMOST wrapper so all layers
-	// (business middleware, ConsumerBase, inner Subscribe) see a populated ctx.
+	// Step 3: observability + principal restore — built-in OUTERMOST wrapper so
+	// all layers (business middleware, ConsumerBase, inner Subscribe) see a ctx
+	// populated with trace/request/correlation AND actor/subject/tenant/session
+	// identity. Symmetric with NewEntry's construction-time injection; neither
+	// endpoint has a kill-switch.
 	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
-		return subHandler(entry.Observability.RestoreToContext(reqCtx), entry)
+		reqCtx = entry.observability.RestoreToContext(reqCtx)
+		reqCtx = entry.principal.RestoreToContext(reqCtx)
+		return subHandler(reqCtx, entry)
 	}
 	return s.inner.Subscribe(ctx, sub, withRestore)
 }

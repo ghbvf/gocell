@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -106,6 +107,7 @@ type Service struct {
 	provisioner *adminprovision.Provisioner `gocell:"required" gocellErr:"setup: provisioner is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger      *slog.Logger                `gocell:"required" gocellErr:"setup: logger is required"`
 	txRunner    persistence.CellTxManager   `gocell:"required" gocellErr:"setup: TxRunner required; use WithTxManager"`
+	clk         clock.Clock                 `gocell:"required" gocellErr:"setup.NewService: clock.Clock required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter     outbox.CellEmitter
 	// setupLock is the REQUIRED serialization primitive for the admin-provisioning
 	// path. CreateAdmin acquires it inside RunInTx before calling
@@ -124,9 +126,11 @@ type Service struct {
 
 // NewService constructs a Service. provisioner is required; passing nil returns
 // an error so mis-wired assemblies fail at startup.
-func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
+func NewService(clk clock.Clock, provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "setup.NewService")
 	s := &Service{
 		provisioner: provisioner,
+		clk:         clk,
 		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 		hasher:      credential.NewProductionHasher(),
@@ -344,10 +348,9 @@ func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) err
 	if err != nil {
 		return fmt.Errorf("setup: marshal user.created payload: %w", err)
 	}
-	entry := outbox.Entry{
-		ID:        outbox.MustNewEntryID(),
-		EventType: dto.TopicUserCreated,
-		Payload:   payload,
+	entry, err := outbox.NewEntry(s.clk, ctx, dto.TopicUserCreated, payload)
+	if err != nil {
+		return fmt.Errorf("setup: build user.created: %w", err)
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
 		return fmt.Errorf("setup: emit user.created: %w", err)
