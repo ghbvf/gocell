@@ -128,6 +128,12 @@ var allowedPkgCtxkeysValueDeclNames = map[string]struct{}{
 	"traceParent":   {},
 	"requestID":     {},
 	"realIP":        {},
+	// Principal family (issue #1229) — request-scoped OAuth/OIDC identity const
+	// keys; see allowedPkgCtxkeysKeyStringValues for the rationale.
+	"actorID":   {},
+	"subjectID": {},
+	"tenantID":  {},
+	"sessionID": {},
 }
 
 // allowedPkgCtxkeysFuncNames is the golden allowlist of function declaration
@@ -143,6 +149,12 @@ var allowedPkgCtxkeysFuncNames = map[string]struct{}{
 	"WithSpanID": {}, "SpanIDFrom": {},
 	"WithRequestID": {}, "RequestIDFrom": {},
 	"WithRealIP": {}, "RealIPFrom": {},
+	// Principal family (issue #1229) — request-scoped OAuth/OIDC identity
+	// accessor pairs; see allowedPkgCtxkeysKeyStringValues for the rationale.
+	"WithActorID": {}, "ActorIDFrom": {},
+	"WithSubjectID": {}, "SubjectIDFrom": {},
+	"WithTenantID": {}, "TenantIDFrom": {},
+	"WithSessionID": {}, "SessionIDFrom": {},
 }
 
 // allowedPkgCtxkeysTypeNames is the golden allowlist of top-level type
@@ -163,6 +175,15 @@ var allowedPkgCtxkeysKeyStringValues = map[string]struct{}{
 	"traceparent":    {},
 	"request_id":     {},
 	"real_ip":        {},
+	// Principal family (issue #1229): request-scoped OAuth/OIDC identity, set by
+	// runtime/auth middleware at the request trust boundary and read by
+	// kernel/outbox.ContextPrincipal at NewEntry time. Same category as
+	// request_id / correlation_id (request-scoped cross-async identity), NOT a
+	// cell-model routing dimension (those — e.g. CellID — live in kernel/ctxkeys).
+	"actor_id":   {},
+	"subject_id": {},
+	"tenant_id":  {},
+	"session_id": {},
 }
 
 // goldenSelfFile is the module-relative slash path of this file; used as the

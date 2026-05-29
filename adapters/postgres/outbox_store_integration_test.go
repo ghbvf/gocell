@@ -58,22 +58,22 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Now().UTC()
-	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: mustSeedEntry(t, kout.EntryScan{
 		ID:            "evt-state-sync",
 		AggregateID:   "cfg-app-name",
 		AggregateType: "config_entry",
 		EventType:     "event.config.entry-upserted.v1",
 		Payload:       []byte(`{"key":"app.name","value":"v1","version":2}`),
 		CreatedAt:     base,
-	}})
-	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+	})})
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: mustSeedEntry(t, kout.EntryScan{
 		ID:            "evt-rollback-audit",
 		AggregateID:   "cfg-app-name",
 		AggregateType: "config_entry",
 		EventType:     "event.config.rollback.v1",
 		Payload:       []byte(`{"key":"app.name","targetVersion":1,"newVersion":2}`),
 		CreatedAt:     base.Add(time.Microsecond),
-	}})
+	})})
 
 	store := NewOutboxStore(pool.DB(), clock.Real())
 	pub := &recordingPublisher{}
@@ -189,7 +189,7 @@ func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
 
 	ctx := context.Background()
 
-	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: mustSeedEntry(t, kout.EntryScan{
 		ID:            "evt-fencing-race",
 		AggregateID:   "agg-1",
 		AggregateType: "test",
@@ -197,7 +197,7 @@ func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
 		Topic:         "test.v1",
 		Payload:       []byte(`{"x":1}`),
 		CreatedAt:     time.Now().UTC(),
-	}})
+	})})
 
 	store := NewOutboxStore(pool.DB(), clock.Real())
 
@@ -306,7 +306,7 @@ func TestPGOutboxStore_Reclaim_DoesNotRegressTerminalRow(t *testing.T) {
 
 			ctx := context.Background()
 
-			insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+			insertSeedRow(t, pool, rout.ClaimedEntry{Entry: mustSeedEntry(t, kout.EntryScan{
 				ID:            "evt-reclaim-noregress",
 				AggregateID:   "agg-1",
 				AggregateType: "test",
@@ -314,7 +314,7 @@ func TestPGOutboxStore_Reclaim_DoesNotRegressTerminalRow(t *testing.T) {
 				Topic:         "test.v1",
 				Payload:       []byte(`{"x":1}`),
 				CreatedAt:     time.Now().UTC(),
-			}})
+			})})
 
 			store := NewOutboxStore(pool.DB(), clock.Real())
 
@@ -371,7 +371,7 @@ func TestPGOutboxStore_Reclaim_RaceWithMarkPublished(t *testing.T) {
 	leases := make(map[string]string, rowCount)
 	for i := 0; i < rowCount; i++ {
 		id := "evt-race-" + strconv.Itoa(i)
-		insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+		insertSeedRow(t, pool, rout.ClaimedEntry{Entry: mustSeedEntry(t, kout.EntryScan{
 			ID:            id,
 			AggregateID:   "agg-race",
 			AggregateType: "test",
@@ -379,14 +379,14 @@ func TestPGOutboxStore_Reclaim_RaceWithMarkPublished(t *testing.T) {
 			Topic:         "test.v1",
 			Payload:       []byte(`{"x":1}`),
 			CreatedAt:     time.Now().UTC(),
-		}})
+		})})
 	}
 
 	cs, err := store.ClaimPending(ctx, rowCount)
 	require.NoError(t, err)
 	require.Len(t, cs, rowCount)
 	for _, c := range cs {
-		leases[c.ID] = c.LeaseID
+		leases[c.ID()] = c.LeaseID
 	}
 
 	// Force every row stale.
@@ -455,34 +455,56 @@ func TestPGOutboxStore_Reclaim_RaceWithMarkPublished(t *testing.T) {
 // table without going through OutboxWriter (which requires a live transaction).
 func insertSeedRow(t *testing.T, pool *Pool, ce rout.ClaimedEntry) {
 	t.Helper()
+	// principal + occurred_at are NOT NULL (migration 044); the direct seed INSERT
+	// must supply them or it violates the schema.
 	const insertSQL = `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, attempts)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)`
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, principal, occurred_at, created_at, status, attempts)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11)`
 
 	e := ce.Entry
-	if e.ID == "" {
+	if e.ID() == "" {
 		t.Fatal("insertSeedRow: entry ID must not be empty")
 	}
 
-	payload := e.Payload
+	payload := e.Payload()
 	if payload == nil {
 		payload = []byte(`{}`)
 	}
 
-	createdAt := e.CreatedAt
+	createdAt := e.CreatedAt()
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+	occurredAt := e.OccurredAt()
+	if occurredAt.IsZero() {
+		occurredAt = createdAt
+	}
 
 	var metadataJSON []byte
-	if e.Metadata != nil {
-		b, mErr := json.Marshal(e.Metadata)
+	if md := e.Metadata(); md != nil {
+		b, mErr := json.Marshal(md)
 		require.NoError(t, mErr, "metadata marshal must succeed")
 		metadataJSON = b
 	}
+	principalJSON, pErr := json.Marshal(e.Principal())
+	require.NoError(t, pErr, "principal marshal must succeed")
 
 	_, err := pool.DB().Exec(context.Background(), insertSQL,
-		e.ID, e.AggregateID, e.AggregateType, e.EventType,
-		e.Topic, payload, metadataJSON, createdAt, ce.Attempts)
-	require.NoError(t, err, "insertSeedRow must succeed for entry %s", e.ID)
+		e.ID(), e.AggregateID(), e.AggregateType(), e.EventType(),
+		e.Topic(), payload, metadataJSON, principalJSON, occurredAt, createdAt, ce.Attempts)
+	require.NoError(t, err, "insertSeedRow must succeed for entry %s", e.ID())
+}
+
+// mustSeedEntry builds a sealed kout.Entry from an EntryScan for direct-seed
+// integration tests; defaults OccurredAt to CreatedAt so ToEntry validation
+// (which requires a non-zero occurredAt) passes for seed rows that only pin a
+// created_at.
+func mustSeedEntry(t *testing.T, s kout.EntryScan) kout.Entry {
+	t.Helper()
+	if s.OccurredAt.IsZero() {
+		s.OccurredAt = s.CreatedAt
+	}
+	e, err := s.ToEntry()
+	require.NoError(t, err)
+	return e
 }
