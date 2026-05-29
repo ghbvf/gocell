@@ -21,7 +21,7 @@ Introduce gRPC as a third transport protocol alongside HTTP (`runtime/http`) and
 
 **Storage**: N/A for this feature (transport-only; no new schema; existing cell repos unchanged)
 **Testing**: stdlib `testing` + `testify`; table-driven tests for invariants; integration tests use in-process grpc dial (`bufconn`) — no testcontainers required for the runtime tests; archtest follows the existing `tools/archtest` typed loader
-**Target Platform**: Linux server (same as HTTP); HTTP/2 with TLS standard production; H2C plaintext gated to dev/loopback profiles
+**Target Platform**: Linux server (same as HTTP); HTTP/2 with TLS standard production; H2C plaintext gated behind explicit `AllowInsecure` opt-in (not restricted to loopback; mesh-sidecar plaintext on non-loopback is a valid production posture)
 **Project Type**: framework + adapter (single Go module; layered per GoCell constitution)
 **Performance Goals**: unary RPC p99 ≤ HTTP+JSON p99 for equivalent operation (typically 30–50% lower wire size + parsing cost; not a feature gate, observable in SC-001)
 **Constraints**:
@@ -50,7 +50,7 @@ GoCell project constitution (`.specify/memory/constitution.md`) gates re-evaluat
 | **V. Cell Data Sovereignty** | no schema change | ✅ — transport-only feature |
 | **VI. Event-driven + L0-L4** | RPC L-level semantics | ✅ — unary RPC defaults to L1 (single-cell tx) or L2 (with outbox emit inside handler); streaming spec defers to PR 10. archtest `GRPC-HANDLER-NO-DIRECT-OUTBOX-01` ensures handlers don't bypass outbox for L2 events |
 | **VII. Journey-driven Acceptance** | journey covers RPC paths | ⚠️ — at PR 12 add a journey `J-grpc-roundtrip.yaml` (auto passCriteria); first RPC handler (PR 8) gets smoke + contract verify, journey added at closure PR |
-| **VIII. Security by Default** | AuthPlan + Principal + audit | ✅ — `kauth.AuthGRPC` extends sealed `ListenerAuth`; mTLS supported (FR-009); no plaintext default outside dev |
+| **VIII. Security by Default** | AuthPlan + Principal + audit | ✅ — `kauth.AuthGRPC` extends sealed `ListenerAuth`; mTLS supported (FR-009); no plaintext by default (explicit `AllowInsecure` opt-in required; non-loopback plaintext valid for mesh-sidecar deployments) |
 | **IX. Simplicity + Incremental Delivery** | YAGNI | ✅ — unary first, streaming PR 10; client retry policy deferred to future feature |
 
 **Pre-v1.0 evolution rule** (ADR `202605211200`): wire contracts may evolve directly without v2 indirection. RPC contracts adopt the same rule, written in spec Assumptions.

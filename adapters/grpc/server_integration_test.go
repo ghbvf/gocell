@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -461,6 +462,73 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 	require.Len(t, probes, 1)
 	assert.Error(t, probes[0].Check(context.Background()),
 		"probe must be unhealthy after concurrent Stop+Close")
+}
+
+// TestIntegration_ServeContextCancel_GracefulDrain verifies the serve() ctx.Done
+// branch: when the context passed to ServeListenerForTest is canceled (simulating
+// a WorkerGroup / bootstrap external cancel), serve initiates a graceful drain
+// using its own self-owned ShutdownTimeout budget (via context.WithoutCancel +
+// cfg.ShutdownTimeout), then returns ctx.Err() == context.Canceled.
+//
+// This is the only integration path NOT covered by the Close / Worker().Stop
+// family of tests. It exercises the mirror of the runtime/websocket Hub
+// external-cancel shutdown pattern documented in server.go.
+func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
+	t.Parallel()
+
+	cfg := grpcadapter.Config{
+		Addr:            "127.0.0.1:0",
+		ShutdownTimeout: integServeTimeout,
+		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
+	}
+	srv, err := grpcadapter.New(cfg)
+	require.NoError(t, err)
+
+	// Register health service so waitForServing has an RPC to probe against.
+	healthSrv := health.NewServer()
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := lis.Addr().String()
+
+	// cancelableCtx simulates the WorkerGroup / bootstrap parent ctx being
+	// canceled externally (sibling worker crash, SIGTERM, etc.).
+	cancelableCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- srv.ServeListenerForTest(cancelableCtx, lis)
+	}()
+
+	// Wait until the server is actively serving before triggering the cancel.
+	waitForServing(t, srv)
+
+	// Sanity: one successful RPC confirms the server is actually serving RPCs,
+	// not just that the probe flipped to healthy.
+	cc := dialInsecure(t, addr)
+	defer func() { _ = cc.Close() }()
+	st, err := healthCheck(t, cc)
+	require.NoError(t, err)
+	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, st,
+		"server must respond to health check before ctx cancel")
+
+	// Cancel the context — this is the core of this test: external cancel of
+	// the serve ctx triggers the ctx.Done branch in serve().
+	cancel()
+
+	// serve() must return context.Canceled (the ctx.Err() from the canceled ctx).
+	serveErr := testwait.Deterministic(t, serveDone, integServeTimeout, "serve-returns-on-ctx-cancel")
+	assert.True(t, errors.Is(serveErr, context.Canceled),
+		"serve must return context.Canceled on external ctx cancel, got: %v", serveErr)
+
+	// After serve returns, gracefulStop has completed and serving must be false.
+	probes := srv.Probes()
+	require.Len(t, probes, 1)
+	assert.Error(t, probes[0].Check(context.Background()),
+		"probe must be unhealthy after serve returns from ctx-cancel drain")
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
