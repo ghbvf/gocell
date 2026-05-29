@@ -148,11 +148,13 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // backstop: it rejects any sensitive-key field in an audit wire-out schema at
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
-// TenantID is not exposed either — no producer writes principal.TenantID on
-// develop (multi-tenancy epic #1296). Cross-tenant reads are structurally
-// impossible: the contract declares no tenantId query parameter, so there is
-// no typed surface through which a caller could request another tenant — tenant
-// scoping is ctx-derived only (type-system Hard isolation by absence).
+// TenantID is not exposed either. The structural guarantee is that
+// ResponseDataItem has no tenantId field at all (type-system absence), so it
+// cannot be projected without a schema change — which the audit-domain funnel
+// would re-review. The field is also empty in practice: no producer writes
+// principal.TenantID on develop (multi-tenancy epic #1296). Cross-tenant reads
+// are likewise impossible: the contract declares no tenantId query parameter,
+// so tenant scoping is ctx-derived only (isolation by absence).
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

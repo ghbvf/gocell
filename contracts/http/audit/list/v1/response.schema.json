@@ -24,7 +24,8 @@
             "type": "string"
           },
           "correlationId": {
-            "type": "string"
+            "type": "string",
+            "description": "Opaque cross-cell correlation identifier from the originating request context. Lets consumers stitch an audited action back to its request. Empty for entries predating its introduction."
           },
           "occurredAt": {
             "type": "string",

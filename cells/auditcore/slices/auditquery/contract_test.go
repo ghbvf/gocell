@@ -178,8 +178,13 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 		t.Errorf("occurredAt %q lost sub-second precision — RFC3339Nano expected", resp.Data[0].OccurredAt)
 	}
 
-	// ABSENT — sessionId / tenantId must not appear by key or by value.
-	for _, forbidden := range []string{"sessionId", "tenantId", "session-must-not-leak", "tenant-must-not-leak"} {
+	// ABSENT — sessionId / tenantId must not appear by key or by value, in
+	// camelCase (DTO/wire) or snake_case (DB column) form, even though the
+	// underlying ledger.Entry carries them.
+	for _, forbidden := range []string{
+		"sessionId", "session_id", "tenantId", "tenant_id",
+		"session-must-not-leak", "tenant-must-not-leak",
+	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("response leaked %q — sessionId/tenantId must never reach the wire\nbody=%s", forbidden, body)
 		}

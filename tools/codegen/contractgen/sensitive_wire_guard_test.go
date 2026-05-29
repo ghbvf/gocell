@@ -27,10 +27,14 @@
 //     Principal-aggregating consumer). When a new such cell appears, extend
 //     isAuditWireContract in the same PR.
 //
-// This file tests the funnel through the real generation entry points
-// (buildHTTPDTOs / buildEventSpec) rather than the private validator, so it
-// locks both the rejection behavior AND its wiring into exactly the wire-out
-// paths.
+// This file holds the BEHAVIORAL coverage: it drives the funnel through the
+// real generation entry points (buildHTTPDTOs / buildEventSpec) so the
+// rejection/exemption behavior is pinned. The call-site allowlist (funnel is
+// wired into exactly the Response + Payload paths, never Request) and the
+// domain scope-completeness lock live in the archtest
+// tools/archtest/audit_wire_sensitive_funnel_test.go — those are the
+// AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 enforcement points discovered by
+// ARCHTEST-VERIFY-COVERAGE-01; this file is an ordinary contractgen unit test.
 package contractgen
 
 import (
@@ -118,6 +122,14 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			// subjectId is the OAuth subject-of-record (stable identity), NOT in
+			// pkg/redaction's sensitive-key set — explicitly safe to project.
+			name:       "audit_response_subjectId_safe",
+			contractID: "http.audit.list.v1",
+			respBody:   listShapedResponse(`"subjectId":{"type":"string"}`),
+			wantErr:    false,
+		},
+		{
 			name:       "non_audit_response_sessionId_ok",
 			contractID: "http.auth.login.v1",
 			respBody:   flatObject(`"sessionId":{"type":"string"}`),
@@ -151,6 +163,28 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 				t.Fatalf("unexpected error for %s: %v", tc.contractID, err)
 			}
 		})
+	}
+}
+
+// TestAuditWireSensitiveFieldFunnel_FallbackUnordered exercises the fail-closed
+// fallback in walkAuditWireSensitive: a Schema whose Properties map carries a
+// sensitive key NOT enumerated in PropertyOrder must still be rejected. Parse
+// always populates PropertyOrder, so a hand-built Schema is the only way to
+// cover the fallback map walk.
+//
+// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (fallback branch).
+func TestAuditWireSensitiveFieldFunnel_FallbackUnordered(t *testing.T) {
+	s := &Schema{
+		Type:       "object",
+		Properties: map[string]*Schema{"sessionId": {Type: "string"}},
+		// PropertyOrder deliberately empty — forces the fallback Properties walk.
+	}
+	if err := rejectSensitiveAuditWireFields("http.audit.list.v1", "response", s); err == nil {
+		t.Fatal("fallback walk must reject sessionId even when PropertyOrder is empty")
+	}
+	// Non-audit domain stays exempt regardless of the fallback path.
+	if err := rejectSensitiveAuditWireFields("http.auth.login.v1", "response", s); err != nil {
+		t.Fatalf("non-audit contract must be exempt, got: %v", err)
 	}
 }
 

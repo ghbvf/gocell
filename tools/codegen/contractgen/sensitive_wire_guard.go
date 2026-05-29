@@ -8,19 +8,39 @@ import (
 )
 
 // AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 — audit-domain wire-out sensitive-field
-// rejection. See tools/codegen/contractgen/sensitive_wire_guard_test.go for the
-// invariant statement and AI-robust grading.
+// rejection. Invariant statement + AI-robust grading live in
+// tools/archtest/audit_wire_sensitive_funnel_test.go (the archtest that locks
+// this funnel's call sites). The behavioral pos/neg coverage lives in
+// tools/codegen/contractgen/sensitive_wire_guard_test.go.
 //
 // The audit cell aggregates the Principal metadata of whoever triggered each
 // audited event, so projecting a third party's sessionId (or any other
 // pkg/redaction sensitive-key field) onto an audit wire-out schema leaks a
 // credential-adjacent token. Unlike the auth domain — where sessionId is the
-// caller's own resource id — sensitivity here is unconditional, so the funnel
+// caller's own resource id and a legitimate wire field (login response,
+// session.created payload) — sensitivity here is unconditional, so the funnel
 // rejects such schemas at generation time and the leaking DTO is never produced.
 //
-// Scope is audit-domain only on purpose (规则不超前于代码现状): auditcore is
-// today's sole Principal-aggregating consumer. When another such cell appears,
-// extend isAuditWireContract in the same PR.
+// AI-robust grading (Hard 范本目录: codegen funnel + golden):
+//   - Upstream Hard: a sensitive field cannot reach a generated audit DTO. By
+//     schema → generation rejects it here; by hand-edited types_gen.go →
+//     `gocell verify generated` byte-stable golden drift fails CI.
+//   - Downstream Medium (ceiling): the funnel must be CALLED on every audit
+//     wire-out path. That "must-call" cannot be expressed in Go's type system
+//     (schemaToDTOs is shared with the exempt Request path), so it is locked by
+//     archtest AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (call-site allowlist +
+//     coverage), which is the Go ceiling for this shape — not a low-cost-to-Hard
+//     gap, so no upgrade issue is opened.
+//
+// Scope: audit domain only (规则不超前于代码现状 — auditcore is today's sole
+// Principal-aggregating consumer). To extend when another such cell appears:
+//  1. add the new cell's contractID prefix to isAuditWireContract below;
+//  2. add a "<cell>_response_sessionId_rejected" case to
+//     sensitive_wire_guard_test.go and confirm the non-audit exempt case still
+//     reflects reality;
+//  3. the archtest's scope-completeness check (every auditcore-owned contract's
+//     id matches a covered prefix) will fail until step 1 lands, so the
+//     extension cannot be silently forgotten.
 func isAuditWireContract(contractID string) bool {
 	return strings.HasPrefix(contractID, "http.audit.") ||
 		strings.HasPrefix(contractID, "event.audit.")
@@ -30,37 +50,41 @@ func isAuditWireContract(contractID string) bool {
 // schema (HTTP response or event payload) declares a property whose name
 // matches pkg/redaction.IsSensitiveKey, at any nesting depth. wireRole labels
 // the schema ("response" / "payload") for the error message. Non-audit
-// contracts and the inbound request path are exempt (callers must not invoke
-// this for Request schemas — inbound password/token fields are legitimate).
+// contracts and the inbound request path are exempt — callers MUST NOT invoke
+// this for Request schemas (inbound password/token fields are legitimate); the
+// archtest enforces that the only call sites are the Response and Payload paths.
 func rejectSensitiveAuditWireFields(contractID, wireRole string, s *Schema) error {
 	if !isAuditWireContract(contractID) {
 		return nil
 	}
-	return walkAuditWireSensitive(contractID, wireRole, s)
+	return walkAuditWireSensitive(contractID, wireRole, "$", s)
 }
 
 // walkAuditWireSensitive recurses the schema tree (Properties + array Items),
 // fail-closed: it checks every declared property name, not only those listed in
 // PropertyOrder, so a future parser change that diverges the two cannot open a
-// gap.
-func walkAuditWireSensitive(contractID, wireRole string, s *Schema) error {
+// gap. path is a JSON-pointer-ish breadcrumb ("$.properties.data.items...")
+// included in the error so deep-schema rejections are locatable without a manual
+// grep.
+func walkAuditWireSensitive(contractID, wireRole, path string, s *Schema) error {
 	if s == nil {
 		return nil
 	}
-	checked := make(map[string]bool, len(s.PropertyOrder))
+	checked := make(map[string]bool, len(s.Properties))
 	check := func(name string, sub *Schema) error {
 		if checked[name] {
 			return nil
 		}
 		checked[name] = true
+		fieldPath := path + ".properties." + name
 		if redaction.IsSensitiveKey(name) {
 			return fmt.Errorf(
-				"contract %q %s schema declares sensitive-key field %q: "+
+				"contract %q %s schema declares sensitive-key field %q at %s: "+
 					"audit wire-out schemas must not project Principal credentials "+
 					"(AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01)",
-				contractID, wireRole, name)
+				contractID, wireRole, name, fieldPath)
 		}
-		return walkAuditWireSensitive(contractID, wireRole, sub)
+		return walkAuditWireSensitive(contractID, wireRole, fieldPath, sub)
 	}
 	// PropertyOrder first for deterministic error ordering.
 	for _, name := range s.PropertyOrder {
@@ -74,5 +98,5 @@ func walkAuditWireSensitive(contractID, wireRole string, s *Schema) error {
 			return err
 		}
 	}
-	return walkAuditWireSensitive(contractID, wireRole, s.Items)
+	return walkAuditWireSensitive(contractID, wireRole, path+".items", s.Items)
 }
