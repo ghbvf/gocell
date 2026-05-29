@@ -8,9 +8,12 @@
 //
 //   - kernel/projection/ itself (the method body calls reg.Subscribe internally)
 //   - _test.go files (tests of the Coordinator API — explicitly allowed)
-//   - cellgen DO-NOT-EDIT generated files (cell_gen.go files emitted by
-//     gocell generate cell — PR-04 introduces these; they are the only
-//     legitimate production callsites outside kernel/projection)
+//   - the cellgen projection wiring file cell_gen.go ONLY (basename == cell_gen.go
+//     AND the "gocell generate cell" DO-NOT-EDIT banner) — PR-04 introduces these;
+//     it is the only legitimate production callsite outside kernel/projection.
+//     Sibling generated files (healthz_gen.go / slice_gen.go) carry the IDENTICAL
+//     banner but are NOT sanctioned Subscribe callsites and are scanned like any
+//     other file (F6: marker-only matching was too broad).
 //
 // Any other production callsite bypasses the PR-04 cellgen funnel (which
 // will derive Coordinator.Subscribe calls from slice.yaml contractUsages) and
@@ -145,7 +148,15 @@ func isProjectionSubscribeCall(call *ast.CallExpr, info *types.Info) bool {
 // and abs path is in the allowed set for Coordinator.Subscribe calls:
 //   - kernel/projection package itself (where the method is defined and used internally)
 //   - _test.go files (tests of the Coordinator API)
-//   - cellgen DO-NOT-EDIT generated files (gocell generate cell output)
+//   - the cellgen projection wiring file: ONLY cell_gen.go bearing the
+//     "gocell generate cell" DO-NOT-EDIT banner.
+//
+// The marker alone is INSUFFICIENT (F6): `gocell generate cell` stamps the
+// identical banner into cell_gen.go, healthz_gen.go, and slice_gen.go, so a
+// marker-only check would green-light a Subscribe call in any of them. Only the
+// projection-derived cell_gen.go is the sanctioned production callsite (PR-04),
+// so the allowlist requires basename == "cell_gen.go" AND the marker (defense in
+// depth — basename pins the producer, marker pins it as generated).
 func isProjectionApplyHookAllowed(rel, absPath string) bool {
 	// _test.go files are explicitly allowed.
 	if strings.HasSuffix(rel, "_test.go") {
@@ -155,8 +166,10 @@ func isProjectionApplyHookAllowed(rel, absPath string) bool {
 	if strings.HasPrefix(rel, "kernel/projection/") {
 		return true
 	}
-	// cellgen DO NOT EDIT generated files.
-	if projectionApplyHookFileHasCellgenMarker(absPath) {
+	// cellgen projection wiring: cell_gen.go ONLY, bearing the DO-NOT-EDIT marker.
+	// Sibling generated files (healthz_gen.go / slice_gen.go) share the banner but
+	// are NOT sanctioned Subscribe callsites — they fall through and are scanned.
+	if filepath.Base(rel) == "cell_gen.go" && projectionApplyHookFileHasCellgenMarker(absPath) {
 		return true
 	}
 	return false
@@ -197,9 +210,10 @@ func TestProjectionApplyHookFunnel01(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				if p.IsGenerated(f) {
-					continue
-				}
+				// NOTE: do NOT blanket-skip generated files (p.IsGenerated) here —
+				// that would exempt healthz_gen.go / slice_gen.go too. Generated-file
+				// scoping is decided solely by isProjectionApplyHookAllowed, which
+				// allows ONLY cell_gen.go (F6). This matches the reverse-fixture scan.
 				rel := p.Rel(f)
 				absPath := p.Abs(f)
 				if isProjectionApplyHookAllowed(rel, absPath) {
@@ -278,6 +292,64 @@ func TestProjectionApplyHookFunnel01_ReverseFixture(t *testing.T) {
 	assert.NotEmpty(t, diags,
 		"PROJECTION-APPLY-HOOK-FUNNEL-01 reverse fixture: expected ≥1 diagnostic for "+
 			"rogue Coordinator.Subscribe call; rule logic is broken or fixture is missing the violation")
+}
+
+// TestProjectionApplyHookFunnel01_ReverseFixture_GeneratedScope (F6) asserts the
+// allowlist distinguishes the sanctioned cellgen projection output (cell_gen.go)
+// from sibling generated files (healthz_gen.go / slice_gen.go) that carry the
+// IDENTICAL "gocell generate cell" DO-NOT-EDIT banner. A marker-only check would
+// green-light a Coordinator.Subscribe call in any of them; the tightened
+// allowlist (basename == cell_gen.go AND marker) must ALLOW the call in
+// cell_gen.go and FIRE on the same call in healthz_gen.go.
+func TestProjectionApplyHookFunnel01_ReverseFixture_GeneratedScope(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "projection_apply_hook_violate")
+
+	var diags []Diagnostic
+
+	_ = RunTypedDir(t, fixtureDir, TypedOpts{Tests: false}, []string{"./..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				absPath := p.Abs(f)
+				if isProjectionApplyHookAllowed(rel, absPath) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if !isProjectionSubscribeCall(call, p.TypesInfo) {
+						return
+					}
+					diags = append(diags, Diagnostic{
+						Rel:  rel,
+						Line: p.Fset.Position(call.Pos()).Line,
+					})
+				})
+			}
+			return nil
+		})
+
+	var firedHealthz, firedCellGen bool
+	for _, d := range diags {
+		switch filepath.Base(d.Rel) {
+		case "healthz_gen.go":
+			firedHealthz = true
+		case "cell_gen.go":
+			firedCellGen = true
+		}
+	}
+	assert.True(t, firedHealthz,
+		"F6: Coordinator.Subscribe in a marker-bearing healthz_gen.go MUST fire — "+
+			"sibling generated files share the cellgen banner but are not sanctioned callsites")
+	assert.False(t, firedCellGen,
+		"F6: Coordinator.Subscribe in the sanctioned cell_gen.go must be allowed (no diagnostic)")
 }
 
 // TestProjectionApplyHookFunnel01_ReverseBlindSpot_NoFuncValue (blind spot B1)

@@ -4,7 +4,13 @@
 //
 // Every concrete production type implementing kernel/projection.CheckpointStore
 // must appear in at least one projectiontest.RunCheckpointConformance call in a
-// _test.go file of its package.
+// _test.go file somewhere in the production test corpus. Enrollment is credited
+// by the impl's CONCRETE TYPE (the resolved type of the call's store argument),
+// not by the enrolling test's package — this matches the established sibling
+// precedents (saga_journal_conformance_enrollment + cell_repo_readyz_probe), which
+// also key enrollment by concrete type across the corpus. (Earlier godoc said "of
+// its package"; that over-promised a package-scope check the scanner never
+// performed — reconciled to doc==code rather than diverging from the siblings.)
 //
 // This enforces the contract-fanout.md §5 M4 rule: every CheckpointStore impl
 // must be verified by the shared conformance harness. Adding a new impl without
@@ -24,6 +30,15 @@
 //     type at compile time. The behavioral correctness of RunCheckpointConformance
 //     itself carries a different guarantee (runtime correctness of the store
 //     contract under the five canonical sub-tests).
+//   - Negative coverage: the Medium guard's detection path (impl discovery +
+//     RunCheckpointConformance arg-type resolution + the shared
+//     unenrolledCheckpointDiags comparison) is exercised against a real fixture by
+//     TestProjectionCheckpointConformanceEnroll01_RedFixture — a scanner regression
+//     fails CI rather than degrading silently (F8: the prior REDFixture only
+//     re-implemented the diff loop on in-memory maps and proved nothing about the
+//     scanner). Enrollment is keyed by the impl's concrete type across the whole
+//     test corpus (not "of its package"), consistent with the saga / cell_repo_readyz
+//     sibling enrollment archtests.
 //
 // # Blind spots (forms *types.Info cannot see)
 //
@@ -65,6 +80,12 @@ const (
 	checkpointConformancePkg      = "github.com/ghbvf/gocell/kernel/projection/projectiontest"
 	checkpointConformanceFuncName = "RunCheckpointConformance"
 )
+
+// fixtureEnrollPkg is the import path of the archtest_fixture-gated red fixture
+// loaded by TestProjectionCheckpointConformanceEnroll01_RedFixture. The fixture
+// declares an enrolledStore (enrolled via RunCheckpointConformance in its
+// _test.go) and an unenrolledStore (deliberately not enrolled).
+const fixtureEnrollPkg = "github.com/ghbvf/gocell/tools/archtest/internal/projectioncheckpointenrollfixture"
 
 // TestProjectionCheckpointConformanceEnroll01 enforces PROJECTION-CHECKPOINT-
 // CONFORMANCE-ENROLL-01: every concrete production type implementing
@@ -174,52 +195,74 @@ func TestProjectionCheckpointConformanceEnroll01(t *testing.T) {
 			return nil
 		})
 
-	// ─── Step 4: flag unenrolled implementations ─────────────────────────────
+	// ─── Step 4: flag unenrolled implementations (shared diff) ───────────────
+	// The diff lives in unenrolledCheckpointDiags so that the RED fixture test
+	// exercises the SAME production comparison logic (not a re-implemented copy).
+	Report(t, "PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01",
+		unenrolledCheckpointDiags(implSet, enrolledImpls))
+}
+
+// unenrolledCheckpointDiags returns one Diagnostic per CheckpointStore impl in
+// implSet that is absent from enrolledImpls. It is the single source of the
+// enroll-rule comparison, shared by TestProjectionCheckpointConformanceEnroll01
+// (production) and TestProjectionCheckpointConformanceEnroll01_RedFixture (so the
+// negative case verifies the real diff, not an inline re-implementation).
+func unenrolledCheckpointDiags(implSet, enrolledImpls map[string]bool) []Diagnostic {
 	var diags []Diagnostic
 	for implKey := range implSet {
 		if enrolledImpls[implKey] {
 			continue
 		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
 		diags = append(diags, Diagnostic{
 			Rel:  implKey,
 			Line: 0,
 			Message: fmt.Sprintf(
 				"archtest: projection.CheckpointStore impl %q not enrolled in "+
 					"projectiontest.RunCheckpointConformance "+
-					"(PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01). "+
-					"Add a _test.go in package %s that calls "+
-					"projectiontest.RunCheckpointConformance(t, <store>) passing "+
-					"a concretely-typed instance of this impl.",
-				implKey, pkgPath),
+					"(PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01). Add a _test.go that "+
+					"calls projectiontest.RunCheckpointConformance(t, <store>) passing a "+
+					"concretely-typed instance of this impl.",
+				implKey),
 		})
 	}
 	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
-	Report(t, "PROJECTION-CHECKPOINT-CONFORMANCE-ENROLL-01", diags)
+	return diags
 }
 
-// TestProjectionCheckpointConformanceEnroll01_REDFixture simulates a missing
-// enrollment by removing one impl from the enrolled set and asserts the
-// diagnostic logic produces at least one violation. It also verifies that an
-// entirely-empty enrolledImpls set (zero enrollments) produces violations for
-// all discovered implementations.
-func TestProjectionCheckpointConformanceEnroll01_REDFixture(t *testing.T) {
+// TestProjectionCheckpointConformanceEnroll01_RedFixture runs the REAL scanner
+// over a synthetic fixture (internal/projectioncheckpointenrollfixture) instead
+// of manipulating in-memory maps. The fixture declares two CheckpointStore impls:
+// enrolledStore (enrolled via a RunCheckpointConformance call in the fixture's
+// _test.go) and unenrolledStore (no enrollment). The test exercises the actual
+// detection path end-to-end:
+//
+//   - impl discovery via collectCheckpointStoreImplsForEnrollment + ImplementsInterface
+//     (finds both fixture impls),
+//   - enrollment-call resolution via hasCheckpointConformanceCall + ResolvePackageRef
+//   - concreteCheckpointKey (credits enrolledStore from the real call expression),
+//   - the shared unenrolledCheckpointDiags comparison (same code as the production rule).
+//
+// It asserts the scanner FLAGS unenrolledStore (negative direction) and does NOT
+// flag enrolledStore (positive direction) — so a regression in any of the real
+// scanner steps fails the test, unlike the previous in-memory map re-implementation.
+func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based fixture test in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	prodPatterns := prodscan.Patterns(root)
+	// kernel/projection is loaded alongside the fixture as an explicit root so the
+	// CheckpointStore interface and the fixture impls come from the SAME load
+	// (pointer-identical *types.Named, required by types.Implements).
+	loadPatterns := []string{
+		"./kernel/projection/...",
+		"./tools/archtest/internal/projectioncheckpointenrollfixture/...",
+	}
 
+	// ─── Pass 1 (Tests:false): resolve iface + collect impls in one load ─────
 	var cpIface *types.Interface
 	var cpImplPkgs []*types.Package
-
-	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns,
+	_ = RunTypedFixture(t, FixtureOpts{Tests: false}, loadPatterns,
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -236,8 +279,7 @@ func TestProjectionCheckpointConformanceEnroll01_REDFixture(t *testing.T) {
 			cpImplPkgs = append(cpImplPkgs, p.Pkg)
 			return nil
 		})
-
-	require.NotNil(t, cpIface, "REDFixture: could not resolve CheckpointStore interface")
+	require.NotNil(t, cpIface, "RedFixture: could not resolve CheckpointStore interface from fixture load")
 
 	implSet := make(map[string]bool)
 	implPkgSet := make(map[string]bool)
@@ -246,49 +288,71 @@ func TestProjectionCheckpointConformanceEnroll01_REDFixture(t *testing.T) {
 			collectCheckpointStoreImplsForEnrollment(pkg, cpIface, implSet, implPkgSet)
 		}
 	}
-	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty (need at least MemCheckpointStore)")
 
-	// --- Case A: zero enrollments (enrolledImpls entirely empty) ---
-	// Simulates a world where no _test.go has called RunCheckpointConformance.
-	// Every discovered impl must be flagged.
-	t.Run("zero enrollments fires for all impls", func(t *testing.T) {
-		emptyEnrolled := make(map[string]bool)
-		var diags []Diagnostic
-		for implKey := range implSet {
-			if !emptyEnrolled[implKey] {
-				diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
-			}
-		}
-		assert.Equal(t, len(implSet), len(diags),
-			"REDFixture zero-enrollment: expected one diagnostic per impl (%d), got %d",
-			len(implSet), len(diags))
-	})
-
-	// --- Case B: one impl missing from enrolled set ---
-	// Pick an arbitrary impl as the "missing enrollment" target.
-	var targetImplKey string
+	// Restrict to the fixture package's impls — kernel/projection.MemCheckpointStore
+	// is also discovered (as a load root) but is irrelevant to this fixture's assertions.
 	for k := range implSet {
-		targetImplKey = k
-		break
+		if !strings.HasPrefix(k, fixtureEnrollPkg+".") {
+			delete(implSet, k)
+		}
 	}
+	unenrolledKey := fixtureEnrollPkg + ".unenrolledStore"
+	enrolledKey := fixtureEnrollPkg + ".enrolledStore"
+	require.Contains(t, implSet, unenrolledKey, "RedFixture: impl discovery must find unenrolledStore")
+	require.Contains(t, implSet, enrolledKey, "RedFixture: impl discovery must find enrolledStore")
 
-	// Build enrolled impls = all impls EXCEPT the target.
+	// ─── Pass 2 (Tests:true): scan the fixture's _test.go for enrollment ─────
 	enrolledImpls := make(map[string]bool)
-	for k := range implSet {
-		if k != targetImplKey {
-			enrolledImpls[k] = true
+	_ = RunTypedFixture(t, FixtureOpts{Tests: true},
+		[]string{"./tools/archtest/internal/projectioncheckpointenrollfixture/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, f := range p.Files {
+				rel := p.Rel(f)
+				if !strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				if !hasCheckpointConformanceCall(f, p.TypesInfo) {
+					continue
+				}
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+					if !ok || pkgPath != checkpointConformancePkg || name != checkpointConformanceFuncName {
+						return
+					}
+					if len(call.Args) < 2 {
+						return
+					}
+					if key, ok := concreteCheckpointKey(p.TypesInfo, call.Args[1]); ok {
+						enrolledImpls[key] = true
+					}
+				})
+			}
+			return nil
+		})
+	require.True(t, enrolledImpls[enrolledKey],
+		"RedFixture: the enrollment scan must credit enrolledStore via its "+
+			"RunCheckpointConformance call (positive direction: arg-type resolution works)")
+
+	// ─── Shared diff: the SAME production function the GREEN test uses ───────
+	diags := unenrolledCheckpointDiags(implSet, enrolledImpls)
+
+	var flaggedUnenrolled, flaggedEnrolled bool
+	for _, d := range diags {
+		switch d.Rel {
+		case unenrolledKey:
+			flaggedUnenrolled = true
+		case enrolledKey:
+			flaggedEnrolled = true
 		}
 	}
-
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if !enrolledImpls[implKey] {
-			diags = append(diags, Diagnostic{Rel: implKey, Message: implKey + " not enrolled"})
-		}
-	}
-
-	assert.GreaterOrEqual(t, len(diags), 1,
-		"REDFixture: removing impl %q from enrolledImpls must produce ≥1 violation, got 0", targetImplKey)
+	assert.True(t, flaggedUnenrolled,
+		"RedFixture: the real scanner must FLAG unenrolledStore (negative direction)")
+	assert.False(t, flaggedEnrolled,
+		"RedFixture: the real scanner must NOT flag enrolledStore (its RunCheckpointConformance "+
+			"call was resolved and credited)")
 }
 
 // TestProjectionCheckpointConformanceEnroll01_ReverseBlindSpot_NoReflectImpl (B1)
