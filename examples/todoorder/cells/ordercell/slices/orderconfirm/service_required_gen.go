@@ -19,5 +19,9 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"orderconfirm: TxRunner required")
 	}
+	if validation.IsNilInterface(s.clk) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"orderconfirm.NewService: clock.Clock required")
+	}
 	return nil
 }

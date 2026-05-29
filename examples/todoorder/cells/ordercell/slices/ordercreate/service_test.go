@@ -118,12 +118,12 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	require.NotNil(t, r.Data)
 	require.Len(t, writer.entries, 1, "should write exactly one outbox entry")
 	assert.Equal(t, 1, txRunner.calls, "should run inside txRunner")
-	assert.NotEmpty(t, writer.entries[0].ID)
-	assert.Equal(t, r.Data.ID, writer.entries[0].AggregateID)
-	assert.Equal(t, "order", writer.entries[0].AggregateType)
-	assert.Equal(t, TopicOrderCreated, writer.entries[0].EventType)
+	assert.NotEmpty(t, writer.entries[0].ID())
+	assert.Equal(t, r.Data.ID, writer.entries[0].AggregateID())
+	assert.Equal(t, "order", writer.entries[0].AggregateType())
+	assert.Equal(t, TopicOrderCreated, writer.entries[0].EventType())
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].RoutingTopic())
-	assert.Contains(t, string(writer.entries[0].Payload), r.Data.ID)
+	assert.Contains(t, string(writer.entries[0].Payload()), r.Data.ID)
 }
 
 func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {

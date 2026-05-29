@@ -400,7 +400,7 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 }
 
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
-// closed set (http | event | command | projection) returns an error.
+// closed set (http | event | command | projection | grpc) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
@@ -633,6 +633,46 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 			}
 			content := renderFile(t, spec, outFile)
 			goldenFile := goldenFilePath("synth_event", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// TestRender_Golden_Synth_GRPC tests the grpc placeholder-stub fixture. A
+// kind=grpc contract emits the universal types_gen.go (near-empty: no JSON-schema
+// DTOs — proto is the schema, deferred to PR 6) + iface_gen.go (the []byte
+// placeholder Server interface). No handler/spec/subscription artifacts.
+func TestRender_Golden_Synth_GRPC(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_grpc_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["grpc.device.command.v1"]
+	if contract == nil {
+		t.Fatal("grpc.device.command.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
+			if err != nil {
+				t.Fatalf("buildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_grpc_minimal", outFile)
 
 			if *updateGolden {
 				writeGolden(t, goldenFile, content)

@@ -1,0 +1,203 @@
+// ctxkeys_principal_write_caller_test.go — closes the DOWNSTREAM side of the
+// principal ctx-injection trust boundary.
+//
+//   - INVARIANT: CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+//
+// # What this guards
+//
+// outbox.NewEntry injects the Principal family (actor/subject/tenant/session)
+// from the construction context — "the single injection trust boundary, no
+// producer-facing inject API" (ADR-1042). That claim only holds if the ctx keys
+// themselves are written by a trusted writer. The setters
+// ctxkeys.With{Actor,Subject,Tenant,Session}ID are exported package functions:
+// without enforcement, any same-process producer could call
+// ctxkeys.WithActorID(ctx, "evil") and then NewEntry, forging the audit
+// identity THROUGH the blessed ctx path — the trust boundary asserted by the
+// keys.go godoc ("Authentication middleware populates them") would be
+// convention-only.
+//
+// This archtest pins the callsite identity of all four principal setters to the
+// two legitimate writers:
+//
+//   - runtime/auth/middleware.go — injectPrincipalCtxKeys, the producer-side
+//     bridge (shared by the JWT and service-token paths) that runs AFTER
+//     authentication at the request trust boundary.
+//   - kernel/outbox/principal.go — PrincipalMetadata.RestoreToContext, the
+//     consumer-side restore that re-hydrates the entry's principal into handler
+//     ctx after the async hop.
+//
+// No producer (cells/* or examples/*) can write a principal ctx key. Together
+// with OUTBOX-RECONSTRUCTION-CALLER-01 (the reconstruction-funnel lock), this
+// closes the two non-literal forgery paths the composite-literal seal
+// (OUTBOX-ENTRY-SEALED-CONSTRUCTION-01) does not cover.
+//
+// # Why principal but not observability
+//
+// The observability ctx setters (WithTraceID / WithSpanID / WithTraceParent /
+// WithCorrelationID / WithRequestID) are equally exported and have ~11 production
+// callers across runtime/http, adapters/otel, etc. They are deliberately NOT
+// locked here: forging a trace id is operationally harmless, whereas forging a
+// principal is an audit-identity bypass (P1). The tighter lock on the
+// security-sensitive family — and the looser treatment of the observability
+// family — is the intended asymmetry, justified by the threat delta, not an
+// oversight.
+//
+// # AI-robust rating (charter §"Funnel 双向锁评级")
+//
+//   - Downstream: HARD by archtest caller-allowlist. The callee is resolved via
+//     go/types (ResolvePackageRef), so import aliases and dot-imports resolve to
+//     the same symbol. Any setter callsite outside the allowlist fails in CI.
+//   - Upstream: MEDIUM, a GO-LANGUAGE CEILING (not a deferred TODO). Hard
+//     upstream would require the setters to be unreachable outside the two
+//     writers. They cannot be sealed: kernel may depend on pkg/ctxkeys but NOT on
+//     runtime/auth, so the setter must live in pkg/ctxkeys and be exported for
+//     BOTH writers (different packages) to call — Go visibility cannot express
+//     "only runtime/auth + kernel/outbox may call this exported func". Same
+//     permanent ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL
+//     (#893 won't-do); tracked here as #1282. The downstream archtest is the enforcement.
+//
+// # Detection is REFERENCE-based, not call-based
+//
+// The scanner matches every SelectorExpr that go/types resolves to a setter —
+// whether it is the callee of a call OR passed as a function value. This is
+// load-bearing here: kernel/outbox.RestoreToContext does NOT call the setters
+// directly; it passes them as function values to a higher-order
+// withContextMetadata(ctx, val, getter, setter) helper. A call-only scanner
+// would miss that legitimate writer AND any producer using the same indirection.
+// Reference-based detection catches both at the `ctxkeys.WithActorID` SelectorExpr.
+//
+// # Tool blind spots (charter §"强制盲区自检")
+//
+//   - Dot-import bare-identifier form (import . "…/pkg/ctxkeys"; WithActorID(ctx,x))
+//     references the symbol as a bare *ast.Ident, not a SelectorExpr — not matched.
+//     Dot-importing pkg/ctxkeys is absent and conspicuous; documented, not enforced.
+//   - A bypass in a //go:build-gated production file under a non-default tag is
+//     missed by the default-tags scan; principal writers today are default-build.
+//   - The anti-vacuity guard (every allowlisted file must reference its setter ≥1×)
+//     is the reverse self-check: it proves the scanner resolves the real references
+//     and forbids stale allowlist rot (a dead entry is a latent bypass slot).
+package archtest
+
+import (
+	"fmt"
+	"go/ast"
+	"go/types"
+	"sort"
+	"testing"
+)
+
+const ctxkeysPkgPath = "github.com/ghbvf/gocell/pkg/ctxkeys"
+
+// principalSetterAllowlist maps each principal ctx-key setter to the
+// module-relative production files allowed to call it. WithTenantID has only the
+// consumer-restore writer because auth.Principal carries no tenant field on
+// develop (no producer source yet), so middleware.go never writes it.
+var principalSetterAllowlist = map[string]map[string]struct{}{
+	"WithActorID": {
+		"runtime/auth/middleware.go": {}, // producer bridge (JWT + service-token)
+		"kernel/outbox/principal.go": {}, // consumer-side RestoreToContext
+	},
+	"WithSubjectID": {
+		"runtime/auth/middleware.go": {},
+		"kernel/outbox/principal.go": {},
+	},
+	"WithSessionID": {
+		"runtime/auth/middleware.go": {},
+		"kernel/outbox/principal.go": {},
+	},
+	"WithTenantID": {
+		"kernel/outbox/principal.go": {}, // only RestoreToContext (no producer source on develop)
+	},
+}
+
+// TestCtxkeysPrincipalWriteCaller01 asserts that every production callsite of the
+// four principal ctx-key setters sits in the per-setter allowlist, and that no
+// allowlist entry is stale (anti-vacuity reverse check).
+func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	observed := map[string]map[string]struct{}{}
+	record := func(setter, rel string) {
+		if observed[setter] == nil {
+			observed[setter] = map[string]struct{}{}
+		}
+		observed[setter][rel] = struct{}{}
+	}
+
+	diags := RunTypedProduction(t, TypedOpts{}, func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			ast.Inspect(file, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				setter, matched := principalSetterName(p.TypesInfo, sel)
+				if !matched {
+					return true
+				}
+				record(setter, rel)
+				if _, allowed := principalSetterAllowlist[setter][rel]; !allowed {
+					pos := p.Fset.Position(sel.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"CTXKEYS-PRINCIPAL-WRITE-CALLER-01: ctxkeys.%s is called from %s, which is not a "+
+								"sanctioned principal writer. Writing a principal ctx key lets outbox.NewEntry stamp "+
+								"that identity onto produced entries — only the auth request-boundary bridge "+
+								"(runtime/auth) and the consumer-side RestoreToContext (kernel/outbox) may write it. "+
+								"Producers MUST NOT set principal ctx keys; the identity comes from authentication. "+
+								"If this IS a new sanctioned writer, add it to principalSetterAllowlist with rationale.",
+							setter, rel),
+					})
+				}
+				return true
+			})
+		}
+		return d
+	})
+
+	// Anti-vacuity / no-stale reverse self-check.
+	for setter, files := range principalSetterAllowlist {
+		allowed := make([]string, 0, len(files))
+		for f := range files {
+			allowed = append(allowed, f)
+		}
+		sort.Strings(allowed)
+		for _, f := range allowed {
+			if _, seen := observed[setter][f]; !seen {
+				diags = append(diags, Diagnostic{
+					Message: fmt.Sprintf(
+						"CTXKEYS-PRINCIPAL-WRITE-CALLER-01: allowlist entry %q for ctxkeys.%s is STALE — no "+
+							"live call observed. Either the scanner regressed or the call was removed; drop the dead "+
+							"allowlist entry so it cannot become a silent bypass slot.",
+						f, setter),
+				})
+			}
+		}
+	}
+
+	Report(t, "CTXKEYS-PRINCIPAL-WRITE-CALLER-01", diags)
+}
+
+// principalSetterName resolves a SelectorExpr REFERENCE (call or function value)
+// to one of the four principal ctx-key setters in pkg/ctxkeys (alias-proof via
+// go/types). Returns ("", false) otherwise.
+func principalSetterName(info *types.Info, sel *ast.SelectorExpr) (string, bool) {
+	pkgPath, name, ok := ResolvePackageRef(info, sel)
+	if !ok || pkgPath != ctxkeysPkgPath {
+		return "", false
+	}
+	if _, isSetter := principalSetterAllowlist[name]; !isSetter {
+		return "", false
+	}
+	return name, true
+}

@@ -421,7 +421,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1)
-	assert.Equal(t, domain.TopicConfigVersionPublished, ow.entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigVersionPublished, ow.entries[0].EventType())
 }
 
 func TestService_WithTxManager(t *testing.T) {
@@ -452,8 +452,8 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 3, "publish writes version-published; rollback writes state-sync then audit")
-	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[1].EventType)
-	assert.Equal(t, domain.TopicConfigRollback, ow.entries[2].EventType)
+	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[1].EventType())
+	assert.Equal(t, domain.TopicConfigRollback, ow.entries[2].EventType())
 }
 
 func seedForService(repo *mem.ConfigRepository, key, value string) {

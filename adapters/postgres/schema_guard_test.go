@@ -42,7 +42,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 38 migrations: 001-033 contiguous, plus 040-044 (intentional gap
+	// Currently 39 migrations: 001-033 contiguous, plus 040-045 (intentional gap
 	// per saga/L3 plan §R2 — 034-039 reserved for parallel PRs; goose sorts
 	// by number, gaps are harmless).
 	// 017/018/019 land users/sessions/roles schema for accesscore PG repos (S3+S5);
@@ -67,10 +67,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// 043 rebuilds audit_entries (DROP+CREATE) with 5 new NOT NULL columns
 	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) for
 	// the 12-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition);
-	// 044 creates projection_checkpoints for the CQRS projection harness PG CheckpointStore
+	// 044 adds principal (JSONB NOT NULL) and occurred_at (TIMESTAMPTZ NOT NULL) to
+	// outbox_entries for the sealed-construction principal-injection feature (#1229);
+	// 045 creates projection_checkpoints for the CQRS projection harness PG CheckpointStore
 	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten).
-	assert.Equal(t, int64(44), v,
-		"expected version should be exactly 44 (current migration max — 044 projection_checkpoints)")
+	assert.Equal(t, int64(45), v,
+		"expected version should be exactly 45 (current migration max — 045 projection_checkpoints)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

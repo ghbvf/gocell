@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -81,7 +82,9 @@ func TestNewContractTracingSubscriber_WrapsSubscribeAndDelegatesLifecycle(t *tes
 		}))
 	require.NotNil(t, inner.capturedHandler)
 
-	entry := outbox.Entry{ID: "evt-1", Topic: sub.Topic}
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(), sub.Topic, []byte("{}"),
+		outbox.WithID("evt-1"), outbox.WithTopic(sub.Topic))
+	require.NoError(t, err)
 	res, settlement := inner.capturedHandler(context.Background(), entry)
 	assert.Nil(t, settlement)
 	outbox.NotifySettlement(context.Background(), res, entry,

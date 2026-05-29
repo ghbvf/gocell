@@ -88,12 +88,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 		// --- Publish one message ---
-		entry := outbox.Entry{
-			ID:        "evt-ack-001",
-			EventType: topic,
-			Payload:   []byte(`{"disposition":"ack"}`),
-			CreatedAt: time.Now().UTC(),
-		}
+		entry := mustNewEntry(t, topic, []byte(`{"disposition":"ack"}`), outbox.WithID("evt-ack-001"), outbox.WithCreatedAt(time.Now().UTC()))
 		payload, err := outbox.MarshalEnvelope(entry)
 		require.NoError(t, err)
 
@@ -192,12 +187,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 		// --- Publish one message ---
-		entry := outbox.Entry{
-			ID:        "evt-requeue-001",
-			EventType: topic,
-			Payload:   []byte(`{"disposition":"requeue"}`),
-			CreatedAt: time.Now().UTC(),
-		}
+		entry := mustNewEntry(t, topic, []byte(`{"disposition":"requeue"}`), outbox.WithID("evt-requeue-001"), outbox.WithCreatedAt(time.Now().UTC()))
 		payload, err := outbox.MarshalEnvelope(entry)
 		require.NoError(t, err)
 
@@ -306,12 +296,7 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 		// --- Publish a message ---
-		entry := outbox.Entry{
-			ID:        "evt-reject-001",
-			EventType: topic,
-			Payload:   []byte(`{"disposition":"reject"}`),
-			CreatedAt: time.Now().UTC(),
-		}
+		entry := mustNewEntry(t, topic, []byte(`{"disposition":"reject"}`), outbox.WithID("evt-reject-001"), outbox.WithCreatedAt(time.Now().UTC()))
 		payload, err := outbox.MarshalEnvelope(entry)
 		require.NoError(t, err)
 
@@ -351,9 +336,9 @@ func TestSubscriber_DispositionBrokerSemantics(t *testing.T) {
 		}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 			"message should appear in dead-letter queue — DLX routing failed")
 
-		assert.Equal(t, "evt-reject-001", dlEntry.ID, "dead-lettered entry ID must match")
-		assert.JSONEq(t, `{"disposition":"reject"}`, string(dlEntry.Payload), "payload must match")
-		t.Logf("Reject/RoutesToDLX verified: message %s arrived in dead-letter queue", dlEntry.ID)
+		assert.Equal(t, "evt-reject-001", dlEntry.ID(), "dead-lettered entry ID must match")
+		assert.JSONEq(t, `{"disposition":"reject"}`, string(dlEntry.Payload()), "payload must match")
+		t.Logf("Reject/RoutesToDLX verified: message %s arrived in dead-letter queue", dlEntry.ID())
 
 		subCancel()
 		_ = sub.Close(context.Background())

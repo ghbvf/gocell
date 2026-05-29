@@ -3,7 +3,7 @@
 // PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01 — the projection_checkpoints
 // owner column is reserved-but-unwritten in v1.
 //
-// Migration 044 provisions projection_checkpoints.owner (TEXT NOT NULL, default
+// Migration 045 provisions projection_checkpoints.owner (TEXT NOT NULL, default
 // empty string) for a future v1.1 multi-pod pessimistic claim (ADR §Q5, ref Axon
 // token_entry.owner). v1 is single-pod and MUST NOT write that column: silently
 // writing a stale/empty owner would seed dirty claim state that v1.1 then has to
@@ -55,7 +55,7 @@
 //     automatically out of scope.
 //
 // ref: adapters/postgres/projection_checkpoint_store.go (upsert omits owner)
-// ref: adapters/postgres/migrations/044_create_projection_checkpoints.sql (owner reserved)
+// ref: adapters/postgres/migrations/045_create_projection_checkpoints.sql (owner reserved)
 // ref: docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §Q5
 package archtest
 

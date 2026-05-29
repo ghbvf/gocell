@@ -192,12 +192,12 @@ func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T)
 	}
 
 	// Construct a valid entry to pass Validate() and reach the publish path.
-	entry := outbox.Entry{
-		ID:        "test-entry-1",
-		EventType: "test.event.v1",
-		Topic:     "test.topic.v1",
-		Payload:   []byte(`{"ok":true}`),
-		CreatedAt: time.Now(),
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(), "test.event.v1", []byte(`{"ok":true}`),
+		outbox.WithID("test-entry-1"),
+		outbox.WithTopic("test.topic.v1"),
+		outbox.WithCreatedAt(time.Now()))
+	if err != nil {
+		t.Fatalf("NewEntry: %v", err)
 	}
 
 	// Emit once — Publish will fail → fail-open path → counter +1.

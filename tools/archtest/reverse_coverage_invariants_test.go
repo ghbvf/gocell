@@ -817,10 +817,13 @@ func TestEmitDeclCover(t *testing.T) {
 				if !ok || pkgPath != outboxPkg || name != "Emit" {
 					return
 				}
-				if len(call.Args) < 3 {
+				// outbox.Emit signature is Emit(ctx, clk, emitter, topic, payload)
+				// since the clock became a mandatory positional arg (issue #1229):
+				// the topic is Args[3].
+				if len(call.Args) < 4 {
 					return
 				}
-				topic, isConst := EvaluateConstString(p.TypesInfo, call.Args[2])
+				topic, isConst := EvaluateConstString(p.TypesInfo, call.Args[3])
 				if !isConst {
 					pos := p.Fset.Position(call.Pos())
 					d = append(d, Diagnostic{

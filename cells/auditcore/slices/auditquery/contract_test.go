@@ -2,9 +2,11 @@ package auditquery
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +105,76 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 	req = req.WithContext(auth.TestContext("usr-1", nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestHttpAuditListV1Serve_PrincipalProjection pins the auditquery output
+// policy (issue #1229 §4 + review F6/F7c). It is the regression lock for two
+// invariants the DTO must hold simultaneously:
+//
+//   - PRESENT: subjectId is surfaced; occurredAt is surfaced at RFC3339Nano
+//     (sub-second) precision — RFC3339 truncation would drop chain-relevant
+//     resolution (F6).
+//   - ABSENT: sessionId and tenantId never appear on the wire, by VALUE or by
+//     KEY, even when the underlying ledger.Entry carries them. sessionId is a
+//     credential-adjacent token (pkg/redaction sensitive-key set); tenantId has
+//     no exposure surface (cross-tenant isolation by absence). Asserting on the
+//     raw JSON (not the typed DTO) is deliberate: a future PR that adds the
+//     fields to ResponseDataItem would compile-pass but fail here.
+func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
+
+	// Sub-second OccurredAt so the precision assertion is meaningful.
+	occurred := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	h := newContractQueryHandler(&ledger.Entry{
+		ID: "ae-proj", EventID: "evt-proj", EventType: "event.test.v1",
+		ActorID:    "usr-actor",
+		SubjectID:  "sub-of-record",
+		TenantID:   "tenant-must-not-leak",
+		SessionID:  "session-must-not-leak",
+		OccurredAt: occurred,
+		Timestamp:  time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
+		Payload:    []byte(`{"key":"value"}`),
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
+	req = req.WithContext(auth.TestContext("usr-actor", nil))
+	h.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	body := rec.Body.String()
+
+	// PRESENT — subjectId surfaced.
+	var resp struct {
+		Data []struct {
+			SubjectID  string `json:"subjectId"`
+			OccurredAt string `json:"occurredAt"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, body)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("want 1 row, got %d\nbody=%s", len(resp.Data), body)
+	}
+	if resp.Data[0].SubjectID != "sub-of-record" {
+		t.Errorf("subjectId = %q, want %q", resp.Data[0].SubjectID, "sub-of-record")
+	}
+	// PRESENT — occurredAt at nanosecond precision (F6).
+	if want := occurred.Format(time.RFC3339Nano); resp.Data[0].OccurredAt != want {
+		t.Errorf("occurredAt = %q, want %q (RFC3339Nano sub-second precision)", resp.Data[0].OccurredAt, want)
+	}
+	if !strings.Contains(resp.Data[0].OccurredAt, ".123456789") {
+		t.Errorf("occurredAt %q lost sub-second precision — RFC3339Nano expected", resp.Data[0].OccurredAt)
+	}
+
+	// ABSENT — sessionId / tenantId must not appear by key or by value.
+	for _, forbidden := range []string{"sessionId", "tenantId", "session-must-not-leak", "tenant-must-not-leak"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("response leaked %q — sessionId/tenantId must never reach the wire\nbody=%s", forbidden, body)
+		}
+	}
 }
 
 func TestHttpAuditListV1Serve_Empty(t *testing.T) {

@@ -51,7 +51,7 @@ import (
 //   - saga_events        (040)  append-only saga event log
 //                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
 //                                 + saga_events_kind_range, saga_events_version_positive CHECK
-//   - projection_checkpoints (044)  CQRS projection harness consumed-offset store
+//   - projection_checkpoints (045)  CQRS projection harness consumed-offset store
 //                                 + PK(cell_id, projection_id)
 //                                 + owner column reserved, write-guarded (v1 never writes it; reads harmless; ADR §Q5)
 //
@@ -332,9 +332,30 @@ const queryErrFmt = "query: %v"
 // ---------------------------------------------------------------------------
 
 // expectedColumns is the authoritative column-type-nullability registry for
-// the S3F-owned tables (users/sessions/roles/role_assignments) and the
-// auditcore-owned audit_entries table (020_audit_ledger.sql).
+// the S3F-owned tables (users/sessions/roles/role_assignments), the
+// auditcore-owned audit_entries table (020_audit_ledger.sql), and the
+// outbox_entries relay table (001_create_outbox_entries.sql + 044).
 var expectedColumns = []expectedColumn{
+	// outbox_entries (001 + subsequent migrations + 044_outbox_entries_principal.sql)
+	// Only the writer-supplied columns are registered; relay-internal columns
+	// (status, attempts, lease_id, claimed_at, next_retry_at, published_at,
+	// dead_at, last_error) are not enumerated here — they evolve independently
+	// of the sealed-construction principal injection feature.
+	// id is TEXT, not UUID: migration 003 widens it from UUID to TEXT in its Up
+	// section ("support prefixed IDs evt-<uuid>/audit-<uuid>"; outbox.NewEntryID
+	// returns a string). The UUID conversion in 003 lives in the Down (rollback)
+	// section only, so the live forward schema is text.
+	{Table: "outbox_entries", Column: "id", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "aggregate_id", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "aggregate_type", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "event_type", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "topic", Type: "text", NotNull: true},
+	{Table: "outbox_entries", Column: "payload", Type: "jsonb", NotNull: true},
+	{Table: "outbox_entries", Column: "metadata", Type: "jsonb", NotNull: false},
+	{Table: "outbox_entries", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
+	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
+	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},
 	{Table: "users", Column: "username", Type: "text", NotNull: true},
@@ -441,7 +462,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
-	// projection_checkpoints (044_create_projection_checkpoints.sql) — CQRS projection
+	// projection_checkpoints (045_create_projection_checkpoints.sql) — CQRS projection
 	// harness consumed-offset store. owner is reserved for v1.1 multi-pod claim and is
 	// NOT written by the v1 adapter (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01).
 	{Table: "projection_checkpoints", Column: "cell_id", Type: "text", NotNull: true},
@@ -475,14 +496,14 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_instances", Columns: []string{"id"}},
 	// saga_events: composite PK (instance_id, version) (040_create_saga_tables.sql).
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
-	// projection_checkpoints: composite PK (cell_id, projection_id) (044_create_projection_checkpoints.sql).
+	// projection_checkpoints: composite PK (cell_id, projection_id) (045_create_projection_checkpoints.sql).
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
 // write path relies upon by omitting the column are registered here.
 var expectedDefaults = []expectedDefault{
-	// projection_checkpoints.owner (044) — the v1 upsert OMITS owner (forbidden by
+	// projection_checkpoints.owner (045) — the v1 upsert OMITS owner (forbidden by
 	// PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01), so the column's NOT NULL
 	// constraint is only satisfiable via this DEFAULT ''. A dropped/changed default
 	// would make the first SaveOffset fail at write time; asserting it here surfaces

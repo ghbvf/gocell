@@ -136,9 +136,12 @@ func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T)
 
 	// Attempt to insert a pre-014 style row: claiming + NULL lease_id. The
 	// post-N8 CHECK constraint must reject this with 23514 check_violation.
+	// principal + occurred_at are NOT NULL (migration 044, applied by Up above);
+	// supply them so the INSERT reaches the lease CHECK rather than tripping a
+	// not-null violation first.
 	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now(), NULL)`,
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, principal, occurred_at, created_at, status, claimed_at, lease_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', now(), now(), 'claiming', now(), NULL)`,
 		"00000000-0000-0000-0000-000000000001", "agg-1", "demo", "demo.event", "demo.topic",
 		[]byte(`{}`), []byte(`{}`))
 
@@ -251,10 +254,11 @@ func TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
 
 	// Insert a non-claiming row first so we have something to UPDATE. Use
-	// status='pending' which has no constraint coupling.
+	// status='pending' which has no constraint coupling. principal + occurred_at
+	// are NOT NULL (migration 044, applied by Up above); supply them.
 	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'pending')`,
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, principal, occurred_at, created_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, '{}', now(), now(), 'pending')`,
 		"00000000-0000-0000-0000-000000000016", "agg-update", "demo", "demo.event", "demo.topic",
 		[]byte(`{}`), []byte(`{}`))
 	require.NoError(t, execErr, "inserting pending row must succeed")

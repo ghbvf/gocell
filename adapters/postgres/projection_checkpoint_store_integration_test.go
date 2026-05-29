@@ -16,7 +16,7 @@ import (
 )
 
 // newCheckpointStore builds a real PG-backed ProjectionCheckpointStore on a
-// fresh per-test database cloned from the migrated template (table 044 present),
+// fresh per-test database cloned from the migrated template (table 045 present),
 // plus a TxManager for the ambient-transaction tests.
 func newCheckpointStore(t *testing.T) (*ProjectionCheckpointStore, *TxManager) {
 	t.Helper()

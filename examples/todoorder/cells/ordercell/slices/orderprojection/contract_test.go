@@ -12,6 +12,7 @@ import (
 
 	projectionsummary "github.com/ghbvf/gocell/generated/contracts/http/order/projection-summary/v1"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -80,7 +81,7 @@ func TestEventOrderCreatedV1Subscribe(t *testing.T) {
 	validPayload := []byte(`{"id":"order-ct-1","item":"widget","status":"pending"}`)
 	c.ValidatePayload(t, validPayload)
 
-	result := svc.HandleOrderCreated(ctx, outbox.Entry{ID: "e-ct-1", Payload: validPayload})
+	result := svc.HandleOrderCreated(ctx, outboxtest.NewEntry("event.order-created.v1", validPayload))
 	assert.Equal(t, outbox.Ack(), result, "HandleOrderCreated must Ack valid payload")
 
 	summary := svc.Query(ctx)
@@ -107,7 +108,7 @@ func TestEventOrderStatusChangedV1Subscribe(t *testing.T) {
 	validPayload := []byte(`{"id":"order-ct-2","oldStatus":"pending","newStatus":"confirmed"}`)
 	c.ValidatePayload(t, validPayload)
 
-	result := svc.HandleOrderStatusChanged(ctx, outbox.Entry{ID: "e-sc-ct-1", Payload: validPayload})
+	result := svc.HandleOrderStatusChanged(ctx, outboxtest.NewEntry("event.order-status-changed.v1", validPayload))
 	assert.Equal(t, outbox.Ack(), result, "HandleOrderStatusChanged must Ack valid payload")
 
 	// negative: payload missing required field must be rejected by schema

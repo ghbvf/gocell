@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -54,6 +55,7 @@ type Service struct {
 	roleRepo    ports.RoleRepository              `gocell:"required" gocellErr:"rbacassign: roleRepo is required"`                 //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	invalidator *credentialinvalidate.Invalidator `gocell:"required" gocellErr:"rbacassign: invalidator is required"`              //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	txRunner    persistence.CellTxManager         `gocell:"required" gocellErr:"rbacassign: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk         clock.Clock                       `gocell:"required" gocellErr:"rbacassign.NewService: clock.Clock required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter     outbox.CellEmitter
 	logger      *slog.Logger
 }
@@ -86,17 +88,20 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // NewService creates a new rbac-assign service.
 // The invalidator is required; it handles credential revocation for Revoke operations.
 func NewService(
+	clk clock.Clock,
 	roleRepo ports.RoleRepository,
 	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "rbacassign.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
 		roleRepo:    roleRepo,
 		invalidator: invalidator,
+		clk:         clk,
 		emitter:     outbox.DemoCellEmitter(),
 		logger:      logger,
 	}
@@ -167,7 +172,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	}
 
 	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
-		return outbox.Emit(txCtx, s.emitter, dto.TopicRoleAssigned, evt)
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicRoleAssigned, evt)
 	}
 	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, false)
 	if err != nil {
@@ -207,7 +212,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	}
 
 	emitFn := func(txCtx context.Context, evt dto.RoleChangedEvent) error {
-		return outbox.Emit(txCtx, s.emitter, dto.TopicRoleRevoked, evt)
+		return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicRoleRevoked, evt)
 	}
 	changed, err := s.persistChange(ctx, writeFn, evt, emitFn, true)
 	if err != nil {

@@ -205,11 +205,11 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 
 	require.Len(t, w.entries, 1, "setup.CreateAdmin must emit exactly one event on fresh create")
 	entry := w.entries[0]
-	assert.Equal(t, dto.TopicUserCreated, entry.EventType)
+	assert.Equal(t, dto.TopicUserCreated, entry.EventType())
 
 	// Payload + headers must satisfy the published contract schema.
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID+`"}`))
+	c.ValidatePayload(t, entry.Payload())
+	c.ValidateHeaders(t, []byte(`{"eventId":"`+entry.ID()+`"}`))
 	// Negative: schema rejects an incomplete payload.
 	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
 }

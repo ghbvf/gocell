@@ -1,4 +1,4 @@
--- Migration 044: create projection_checkpoints table for the CQRS projection
+-- Migration 045: create projection_checkpoints table for the CQRS projection
 -- lifecycle harness PG CheckpointStore backend (epic #1100, PR-02).
 --
 -- Design decisions:

@@ -800,11 +800,11 @@ func (s *Subscriber) processDelivery(
 	// AMQP shortstr cap: too-long IDs cannot survive a broker round-trip, so
 	// reject before touching metadata. Logged with capped length to indicate
 	// overflow magnitude without exposing the full byte count.
-	if validateEntryIDLength(entry.ID) {
+	if validateEntryIDLength(entry.ID()) {
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: entry.ID exceeds AMQP shortstr limit, nacking without requeue",
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
-			slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
+			slog.Int("len_capped", min(len(entry.ID()), maxEntryIDLength*2)))
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -822,11 +822,12 @@ func (s *Subscriber) processDelivery(
 		return
 	}
 
-	// Populate metadata from AMQP headers if present and entry metadata is empty.
-	if entry.Metadata == nil {
-		entry.Metadata = make(map[string]string)
-	}
-	entry.Metadata["topic"] = topic
+	// Note: the broker routing topic is available to handlers via entry.Topic() /
+	// entry.RoutingTopic(); the legacy entry.Metadata["topic"] injection (which
+	// had no readers and was not mirrored by the in-memory bus) was removed when
+	// Entry became sealed/immutable (issue #1229) — a sealed Entry cannot be
+	// mutated post-decode, and reconstructing one just to add a redundant
+	// metadata key on the consume hot path is wasteful.
 
 	// Observability metadata (request_id, correlation_id, trace_id) is restored
 	// into the handler context by SubscriberWithMiddleware.SubscribeEntry (built-in
@@ -843,7 +844,7 @@ func (s *Subscriber) processDelivery(
 	if res.Err != nil {
 		slog.LogAttrs(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
 			slog.String(logKeyTopic, topic),
-			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyEventID, entry.ID()),
 			slog.String("disposition", res.Disposition.String()),
 			slog.Any("error", res.Err))
 	}
@@ -872,7 +873,7 @@ func (s *Subscriber) dispatchDisposition(
 	topic string,
 	entry outbox.Entry,
 ) {
-	eventID := entry.ID
+	eventID := entry.ID()
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		s.dispatchAck(ctx, ch, tag, res, settlement, topic, entry)
@@ -934,7 +935,7 @@ func (s *Subscriber) dispatchAck(
 	topic string,
 	entry outbox.Entry,
 ) {
-	eventID := entry.ID
+	eventID := entry.ID()
 	if settlement != nil {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 		commitErr := settlement.Commit(rctx)

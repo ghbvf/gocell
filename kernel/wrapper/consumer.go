@@ -96,6 +96,7 @@ func WrapConsumer(tr Tracer, spec contractspec.ContractSpec, fn ConsumerFunc) (C
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
 		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))
 		span.SetAttributes(baseAttrs...)
+		span.SetAttributes(entryEnvelopeAttrs(entry)...)
 		defer func() { recoverAndFinish(span, recover()) }()
 
 		res = fn(ctx, entry)
