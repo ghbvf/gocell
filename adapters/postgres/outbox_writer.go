@@ -215,7 +215,8 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 }
 
 // encodeBatchEntry validates and serializes a single outbox.Entry for batch
-// INSERT. Returns the 10-arg row in fixed column order. globalIndex is the
+// INSERT. Returns the 12-arg row in fixed column order (the 10 base columns
+// plus principal + occurred_at added by migration 044). globalIndex is the
 // caller's original-slice index, used only to produce ergonomic error
 // messages when many entries are in flight.
 //

@@ -250,7 +250,13 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	entryID := uuid.New().String()
 	topic := "test.outbox.fullchain"
-	entryCreatedAt := time.Now().UTC()
+	// PG TIMESTAMPTZ resolves to microseconds; truncate so the round-trip
+	// equality assertions are exact. OccurredAt (producer-domain event time) is
+	// deliberately distinct from CreatedAt (store/seal time) — 90 minutes earlier
+	// — so Step 8 proves the two timestamps are carried INDEPENDENTLY end-to-end
+	// and OccurredAt is not silently collapsed onto CreatedAt (review F7b).
+	entryCreatedAt := time.Now().UTC().Truncate(time.Microsecond)
+	entryOccurredAt := entryCreatedAt.Add(-90 * time.Minute)
 	// Construct with publishCtx so NewEntry injects observability + principal
 	// from context (NewEntry replaced the old write-time inject path).
 	entry, err := outbox.NewEntry(clock.Real(), publishCtx, topic,
@@ -260,7 +266,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		outbox.WithAggregateType("order"),
 		outbox.WithMetadata(map[string]string{"source": "integration-test"}),
 		outbox.WithCreatedAt(entryCreatedAt),
-		outbox.WithOccurredAt(entryCreatedAt),
+		outbox.WithOccurredAt(entryOccurredAt),
 	)
 	require.NoError(t, err, "NewEntry should succeed")
 
@@ -391,6 +397,19 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		`{"orderId":"order-42","status":"created"}`,
 		string(got.entry.Payload()),
 		"payload should match original business event")
+
+	// Timestamps: CreatedAt (seal) and OccurredAt (producer-domain) are carried
+	// as INDEPENDENT wire fields through PG → relay → consumer (review F7b).
+	assert.True(t, got.entry.CreatedAt().Equal(entryCreatedAt),
+		"createdAt should survive the full chain unchanged: got %s want %s",
+		got.entry.CreatedAt(), entryCreatedAt)
+	assert.True(t, got.entry.OccurredAt().Equal(entryOccurredAt),
+		"occurredAt should survive the full chain unchanged: got %s want %s",
+		got.entry.OccurredAt(), entryOccurredAt)
+	assert.False(t, got.entry.OccurredAt().Equal(got.entry.CreatedAt()),
+		"occurredAt must stay distinct from createdAt — proves the two timestamps are not collapsed")
+	assert.True(t, got.entry.OccurredAt().Before(got.entry.CreatedAt()),
+		"the producer-domain occurredAt should precede the seal createdAt, as constructed")
 
 	// The relay serialises the full outbox.Entry (including entry.Observability)
 	// as the AMQP body. NewEntry injects observability from the producer context into

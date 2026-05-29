@@ -143,9 +143,13 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // no typed surface through which a caller could request another tenant — tenant
 // scoping is ctx-derived only (type-system Hard isolation by absence).
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
+	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
+	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond
+	// granularity via *UnixNano), so RFC3339 (second-granularity) would silently
+	// truncate the wire projection below the chain's resolution (issue #1229 F6).
 	occurredAt := ""
 	if !e.OccurredAt.IsZero() {
-		occurredAt = e.OccurredAt.Format(time.RFC3339)
+		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
 	}
 	return &auditlist.ResponseDataItem{
 		ID:         e.ID,
@@ -154,7 +158,7 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		ActorID:    e.ActorID,
 		SubjectID:  e.SubjectID,
 		OccurredAt: occurredAt,
-		Timestamp:  e.Timestamp.Format(time.RFC3339),
+		Timestamp:  e.Timestamp.Format(time.RFC3339Nano),
 		Payload:    json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
 }

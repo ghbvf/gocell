@@ -2,18 +2,34 @@
 -- outbox_entries for the sealed-construction principal-injection feature (#1229).
 --
 -- Runbook (DESTRUCTIVE FORWARD — operator steps required before `goose up`):
---   1. Drain relay: wait until `outbox_entries` CountPending == 0 and the
---      broker queue is empty. No in-flight messages will be lost — the relay
---      reads from outbox_entries, and after TRUNCATE there is nothing to relay.
---   2. Confirm all relay instances are stopped or will tolerate a full drain.
---   3. Run `goose up` — the migration TRUNCATEs outbox_entries then ADDs the
---      two NOT NULL columns (no DEFAULT sentinel; the writer always supplies
---      values; empty principal marshals to `{}`).
+--   1. Stop all producer traffic, then drain the relay. The drain is complete
+--      when there are ZERO undelivered rows:
+--          SELECT count(*) FROM outbox_entries WHERE status <> 'published';   -- must be 0
+--      Do NOT use CountPending / outbox_pending_depth as the drain signal: that
+--      query counts only status='pending' rows whose backoff has elapsed
+--      (next_retry_at <= now()), so it EXCLUDES rows still in retry backoff and
+--      rows in 'claiming'. A green CountPending==0 can hide undelivered rows
+--      that this TRUNCATE would destroy. The criterion above is the safe one —
+--      every non-'published' row is still un-relayed.
+--   2. Confirm all relay instances are stopped (so no row re-enters 'claiming'
+--      between the check and `goose up`).
+--   3. Run `goose up`. The Up block fails closed if any non-'published' row
+--      remains, unless the operator explicitly accepts the loss by setting the
+--      dedicated forward-rebuild GUC gocell.allow_outbox_rebuild=true.
+--
+-- GUC decoupling (mirror of migration 043_audit_entries_v2):
+--   This is a forward (Up) destructive rebuild, NOT a rollback. It uses the
+--   dedicated gocell.allow_outbox_rebuild GUC, NOT gocell.allow_destructive_down
+--   (which gates Down/rollback sections). Sharing the down GUC for a forward
+--   TRUNCATE would conflate "I am rolling back" with "I am rebuilding forward",
+--   so the boundary is kept explicit at the runbook + audit-log layer — exactly
+--   the decoupling 043 established for audit_entries.
 --
 -- Rationale for TRUNCATE + ADD COLUMN rather than ADD COLUMN DEFAULT:
 --   - NOT NULL with no DEFAULT cannot apply to existing rows in PostgreSQL
---     without a back-fill. The relay has already forwarded pending rows, so
---     there are no actionable pending rows in a drained deployment.
+--     without a back-fill. A drained deployment (step 1) has no undelivered
+--     rows, and already-'published' rows are awaiting cleanup retention only —
+--     safe to discard.
 --   - GoCell ships only itself (no external callers, no rolling deploy
 --     compatibility — see CLAUDE.md "Review 和重构时不考虑向后兼容"). A one-shot
 --     TRUNCATE + schema upgrade is the correct DESTRUCTIVE-FORWARD pattern
@@ -22,13 +38,19 @@
 --     column value from outbox.PrincipalMetadata (zero value encodes fine).
 --
 -- +goose Up
--- Guard: if any pending rows exist, require operator ack via GUC.
+-- Forward-rebuild permit (decoupled from the destructive-down GUC). Fail closed
+-- if any UNDELIVERED row (status <> 'published') would be destroyed, unless the
+-- operator sets gocell.allow_outbox_rebuild=true. Already-'published' rows are
+-- delivered and safe to TRUNCATE, so they do not block the migration.
 -- +goose StatementBegin
 DO $$
+DECLARE
+    undelivered bigint;
 BEGIN
-    IF EXISTS (SELECT 1 FROM outbox_entries LIMIT 1)
-       AND current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'migration 044: outbox_entries is non-empty. Drain relay (CountPending==0, broker queue empty) then set GUC gocell.allow_destructive_down=true before running goose up.';
+    SELECT count(*) INTO undelivered FROM outbox_entries WHERE status <> 'published';
+    IF undelivered > 0
+       AND current_setting('gocell.allow_outbox_rebuild', true) IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'migration 044: outbox_entries has % undelivered row(s) (status <> published). Drain the relay until "SELECT count(*) FROM outbox_entries WHERE status <> ''published''" is 0, then re-run; or set GUC gocell.allow_outbox_rebuild=true to accept the loss.', undelivered;
     END IF;
 END $$;
 -- +goose StatementEnd

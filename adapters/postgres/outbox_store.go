@@ -22,6 +22,15 @@ import (
 // or maliciously-crafted row at ~4 KB.
 const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 
+// maxPrincipalJSONBytes bounds the JSONB payload size accepted from the
+// principal column at scan time. The principal family is sized identically to
+// observability (4 idutil.SafeID fields), so it shares the same headroom
+// formula and ~4 KB ceiling. The symmetry is required, not incidental:
+// observability and principal are sibling reconstruction inputs and the
+// scan-side size guard must be applied uniformly to both (issue #1229 review
+// F5 — principal previously decoded without a cap, unlike observability).
+const maxPrincipalJSONBytes = 4 * kout.MaxPrincipalTotalSize
+
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
 // Each method opens its own short transaction; methods do not compose into a
@@ -394,7 +403,16 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		}
 	}
 
-	if len(principalJSON) > 0 {
+	if len(principalJSON) > maxPrincipalJSONBytes {
+		// Defensive: reject oversized principal payloads to prevent unbounded
+		// allocation from a corrupted or maliciously-crafted row — symmetric
+		// with the observability guard above (issue #1229 review F5).
+		slog.Warn("outbox store: principal JSON exceeds max size, dropping",
+			slog.String("entry_id", scan.ID),
+			slog.String("event_type", scan.EventType),
+			slog.Int("size", len(principalJSON)),
+			slog.Int("max", maxPrincipalJSONBytes))
+	} else if len(principalJSON) > 0 {
 		// Same staged-unmarshal pattern as observability (PR #582 F4): unmarshal
 		// into a local variable first so a partial decode does not leak into
 		// scan.Principal.

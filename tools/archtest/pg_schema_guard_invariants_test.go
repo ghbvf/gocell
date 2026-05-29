@@ -2,6 +2,7 @@
 //
 // File invariants:
 //   - INVARIANT: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01
+//   - INVARIANT: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01
 //   - INVARIANT: SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01
 
 package archtest
@@ -139,6 +140,121 @@ func TestArchtest_MigrationDestructiveDownGUCGuard(t *testing.T) {
 					"    END $$;\n"+
 					"  This ensures direct goose CLI / psql usage cannot bypass the Go-layer DestructiveDownPermit.\n"+
 					"  Rule: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01",
+				cc.Rel,
+			)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01 (Medium AI-robust)
+//
+// Every migration Up (forward) section that destroys an entire table's data
+// (TRUNCATE or DROP TABLE) MUST gate behind a DEDICATED forward-rebuild GUC of
+// the shape current_setting('gocell.allow_<domain>_rebuild', ...). It MUST NOT
+// rely on the destructive-DOWN GUC (gocell.allow_destructive_down) for a forward
+// operation: conflating "I am rolling back" with "I am rebuilding forward" is a
+// semantic-mixing footgun that hides the blast radius of a forward TRUNCATE
+// behind a rollback toggle.
+//
+// Rationale (Strong-Migrations philosophy): a forward migration that wipes a
+// whole table is "dangerous by default" and must carry an explicit operator
+// opt-in distinct from the rollback opt-in. Migration 043_audit_entries_v2
+// established the dedicated-GUC pattern (gocell.allow_audit_rebuild) precisely
+// to decouple forward rebuild from destructive-down; this archtest makes that
+// decoupling a machine rule so a later forward-TRUNCATE migration cannot silently
+// reuse the down GUC (issue #1229 review F4/C2).
+//
+// Scope: whole-table destroyers only (TRUNCATE, DROP TABLE). Column-grained ops
+// (DROP COLUMN) and predicate deletes (DELETE FROM) are a different, finer risk
+// class and are intentionally out of scope — they are not table rebuilds.
+//
+// Bound set today: {012_refresh_tokens_rebuild, 043_audit_entries_v2,
+// 044_outbox_entries_principal}, all of which carry a dedicated allow_*_rebuild
+// GUC. No grandfathering — an empty steady state is the intended shape.
+//
+// AI-robust: Medium — string/regex match on SQL content caught at test time
+// (sibling of MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01). The runtime gate itself
+// (the GUC fail-closed RAISE EXCEPTION in the SQL) is the Hard backstop; this
+// archtest is the regression guard that the gate is present and uses the
+// dedicated forward GUC.
+//
+// Tool blind spot: a destructive op token appearing inside a SQL comment must
+// NOT trigger the requirement (e.g. 040 mentions "TRUNCATE saga_events" in a
+// comment). stripSQLLineComments removes -- line comments before the scan; a
+// destructive token hidden inside a quoted string literal is not handled (no
+// such case exists in the migration corpus today) — documented, not enforced.
+// ---------------------------------------------------------------------------
+
+// forwardRebuildOps are the whole-table data-destroying DDL tokens that, when
+// present in a forward (Up) section, require the dedicated forward-rebuild GUC.
+var forwardRebuildOps = []string{
+	"TRUNCATE",
+	"DROP TABLE",
+}
+
+// forwardRebuildGUCRE matches the required dedicated forward-rebuild GUC in an
+// Up section: current_setting('gocell.allow_<domain>_rebuild', ...). It does NOT
+// match gocell.allow_destructive_down (the rollback GUC), which is the whole
+// point — a forward destructive rebuild must use its own opt-in.
+var forwardRebuildGUCRE = regexp.MustCompile(`current_setting\s*\(\s*'gocell\.allow_[a-z_]*rebuild'`)
+
+// stripSQLLineComments removes -- line comments from SQL so destructive-op
+// detection inspects executable statements only, not prose in runbook comments.
+func stripSQLLineComments(sql string) string {
+	lines := strings.Split(sql, "\n")
+	for i, line := range lines {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			lines[i] = line[:idx]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestArchtest_MigrationDestructiveUpRebuildGUCGuard asserts that every migration
+// whose Up section TRUNCATEs or DROPs a whole table gates behind a dedicated
+// forward-rebuild GUC (gocell.allow_*_rebuild), not the destructive-down GUC.
+//
+// To confirm this test catches violations (TDD RED):
+//  1. In 044_outbox_entries_principal.sql Up block, change
+//     current_setting('gocell.allow_outbox_rebuild', ...) to
+//     current_setting('gocell.allow_destructive_down', ...).
+//  2. Run: go test ./tools/archtest/... -run TestArchtest_MigrationDestructiveUpRebuildGUCGuard
+//  3. Test must FAIL. Restore the dedicated GUC, test must PASS.
+func TestArchtest_MigrationDestructiveUpRebuildGUCGuard(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
+	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
+		upSection := stripSQLLineComments(upSectionOf(string(cc.Bytes)))
+		upperUp := strings.ToUpper(upSection)
+
+		isWholeTableDestructive := false
+		for _, op := range forwardRebuildOps {
+			if strings.Contains(upperUp, op) {
+				isWholeTableDestructive = true
+				break
+			}
+		}
+		if !isWholeTableDestructive {
+			return
+		}
+
+		if !forwardRebuildGUCRE.MatchString(upSection) {
+			assert.Fail(t,
+				"forward (Up) section destroys a whole table but lacks a dedicated forward-rebuild GUC",
+				"file: %s\n"+
+					"  Up section contains TRUNCATE / DROP TABLE but no "+
+					"current_setting('gocell.allow_<domain>_rebuild') guard.\n"+
+					"  A forward destructive rebuild MUST use its own opt-in GUC, NOT "+
+					"gocell.allow_destructive_down (the rollback gate). Add a guard block "+
+					"at the top of the -- +goose Up section, e.g.:\n"+
+					"    DO $$ BEGIN\n"+
+					"      IF <undelivered rows exist>\n"+
+					"         AND current_setting('gocell.allow_outbox_rebuild', true) IS DISTINCT FROM 'true' THEN\n"+
+					"        RAISE EXCEPTION 'rebuild blocked: GUC gocell.allow_outbox_rebuild not set';\n"+
+					"      END IF;\n"+
+					"    END $$;\n"+
+					"  Rule: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01",
 				cc.Rel,
 			)
 		}

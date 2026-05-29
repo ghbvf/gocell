@@ -82,7 +82,7 @@ func validateMetadata(m map[string]string) error {
 	for k := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
+				"outbox: metadata key is reserved for the observability/principal bridges — use Entry.Observability or Entry.Principal instead",
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalMetadataKeyQuotedFmt, k))))
 		}
 	}

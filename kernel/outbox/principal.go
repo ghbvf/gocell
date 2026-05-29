@@ -8,6 +8,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
+// MaxPrincipalTotalSize is a sizing-ceiling reference for downstream adapters
+// that allocate buffers proportional to the worst-case total length of all
+// principal fields combined. With four ID-shaped fields each capped at
+// idutil.MaxMetadataIDLen (256B), the worst-case is 1024B; adapters/postgres
+// uses a multiple of this value for the JSONB column scan cap. Mirror of
+// MaxObservabilityTotalSize — the two families are sized identically (4 SafeID
+// fields each). Validate() enforces per-field bounds, not this aggregate.
+const MaxPrincipalTotalSize = 4 * idutil.MaxMetadataIDLen
+
 // PrincipalMetadata carries cross-async principal identity that the gocell
 // observability bridge owns. Producers MUST NOT populate these fields
 // directly — NewEntry fills them from the construction context (the single
