@@ -18,9 +18,13 @@ const (
 	// defaultMaxConcurrentReconciles is the worker count when unset.
 	defaultMaxConcurrentReconciles = 1
 	defaultLoopName                = "reconcile.loop"
-	// reconcilerIDSentinel labels metrics when ReconcilerID is unset, aligning
-	// with the observability.md "_runtime"-style sentinel convention.
-	reconcilerIDSentinel = "_unknown"
+	// reconcilerIDSentinel labels metrics when ReconcilerID is unset. It reuses
+	// the observability.md "_runtime" framework/unknown-owner sentinel (same as
+	// the HTTP metrics cell label and the transplant source's cellID default) so
+	// owner-dimension filters stay consistent across metrics — e.g. a dashboard
+	// can exclude unowned series with reconciler!="_runtime" exactly as it does
+	// cell!="_runtime".
+	reconcilerIDSentinel = "_runtime"
 	// startProbeTimeout bounds how long Start waits for the worker pool to
 	// confirm it is running before returning (fast-return OnStart contract).
 	startProbeTimeout = 50 * time.Millisecond
@@ -303,25 +307,32 @@ func (l *Loop) scheduleRequeue(runCtx context.Context, req Request, after time.D
 	}()
 }
 
-// awaitProbe waits up to startProbeTimeout for the worker pool to confirm it is
-// running. Returns nil in all non-error cases (mirrors SweeperLifecycle):
+// awaitProbe waits for the worker pool to confirm it is running, returning nil
+// in all non-error cases:
+//   - owner ctx already canceled before we got here: log Warn, clear state so a
+//     later Stop is a no-op, and let the workers self-exit via runCtx.Done().
+//     Checked FIRST (before the select) so this path is deterministic — `ready`
+//     closes at worker spawn and would otherwise race the cancellation, leaving
+//     this branch ~unreachable (and untestable).
 //   - ready closed: a worker started — confirmed.
-//   - probe window elapsed: workers are running, just slow to schedule.
-//   - owner ctx canceled before either: log Warn, clear state so Stop is a no-op.
+//   - probe window elapsed: defensive fallback if a worker is slow to schedule;
+//     workers are spawned, so return anyway (fast-return OnStart contract).
 func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, ready <-chan struct{}) error {
-	probeTimer := controlPlaneClock{}.newProbeTimer(startProbeTimeout)
-	defer probeTimer.Stop()
-
-	select {
-	case <-ready:
-	case <-probeTimer.C:
-	case <-runCtx.Done():
+	if runCtx.Err() != nil {
 		l.logger().Warn("reconcile: owner ctx canceled before loop confirmed running",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()))
 		cancel()
 		l.cancel = nil
 		l.done = nil
+		return nil
+	}
+
+	probeTimer := controlPlaneClock{}.newProbeTimer(startProbeTimeout)
+	defer probeTimer.Stop()
+	select {
+	case <-ready:
+	case <-probeTimer.C:
 	}
 	return nil
 }

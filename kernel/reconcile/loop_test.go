@@ -185,6 +185,24 @@ func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 	ownerCancel() // assembly shutdown — no explicit Stop; goleak verifies drain
 }
 
+// TestLoop_OwnerCtxCanceledBeforeStart mirrors the transplant source's
+// TestSweeperLifecycle_OwnerCtxCancelDuringProbe: the owner ctx is canceled
+// BEFORE Start, so awaitProbe must take the deterministic cancel pre-check —
+// Start returns nil without reporting "started", and the subsequent Stop is a
+// no-op (state was cleared). goleak verifies the spawned workers self-drain.
+func TestLoop_OwnerCtxCanceledBeforeStart(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	l := &Loop{
+		ReconcilerID: "rc",
+		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
+		Interval:     testtime.D1h,
+	}
+	ownerCtx, ownerCancel := startCtxs(t)
+	ownerCancel() // cancel BEFORE Start — awaitProbe's pre-check path must fire
+	require.NoError(t, l.Start(ownerCtx))
+	require.NoError(t, l.Stop(context.Background())) // no-op: state cleared in awaitProbe
+}
+
 func TestLoop_StopTimeoutReturnsDeadline(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	rec := newBlockingReconciler()
