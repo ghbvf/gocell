@@ -65,6 +65,42 @@ func NewServerMTLSConfig(certPEMBlock, keyPEMBlock []byte, clientCAs *x509.CertP
 	}, nil
 }
 
+// NewServerTLSConfig builds a *tls.Config suitable for server-side TLS
+// without client certificate verification (single-direction TLS). The returned
+// config:
+//
+//   - pins MinVersion to TLS 1.3 (fail-closed; no negotiation down to weaker
+//     suites; matches NewServerMTLSConfig and modern Go TLS defaults);
+//   - sets ClientAuth = tls.NoClientCert (server does not request or verify
+//     client certificates; use NewServerMTLSConfig for mutual TLS);
+//   - parses certPEMBlock + keyPEMBlock via tls.X509KeyPair as the server
+//     identity.
+//
+// Returns an error on PEM parse failure, cert/key mismatch, or empty inputs.
+//
+// CALLERS MUST NOT MUTATE the returned *tls.Config's MinVersion or ClientAuth
+// fields. See NewServerMTLSConfig for the same constraint rationale.
+func NewServerTLSConfig(certPEMBlock, keyPEMBlock []byte) (*tls.Config, error) {
+	if len(certPEMBlock) == 0 {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"tlsutil: certPEMBlock is empty; pass the PEM-encoded server certificate (see os.ReadFile)")
+	}
+	if len(keyPEMBlock) == 0 {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"tlsutil: keyPEMBlock is empty; pass the PEM-encoded server private key (see os.ReadFile)")
+	}
+	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"tlsutil: parse server cert/key PEM", err)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.NoClientCert,
+		Certificates: []tls.Certificate{cert},
+	}, nil
+}
+
 // NewClientCAPool parses one or more PEM-encoded CA bundles into an
 // x509.CertPool used to verify incoming peer certificates. Multiple
 // bundles are appended into the same pool; intra-bundle concatenation
