@@ -3,21 +3,24 @@
 | 字段 | 值 |
 |------|---|
 | ADR ID | 661 |
-| 状态 | **Accepted（设计冻结）；A1–A3 ahead-of-trigger 验证 stack 依次合入 develop，A4–A10 PARKED-ON-TRIGGER（详见 §6）** |
+| 状态 | **Accepted（设计冻结）。PR-A1（本 ADR，docs-only）= 当前 PR；A2/A3 实现已在同 stack 原型分支 `661-loop-skeleton` 验证，但尚未合入 develop、不在本 PR；A4–A10 PARKED-ON-TRIGGER（详见 §6）** |
 | 日期 | 2026-05-29 |
 | Issue | [#661](https://github.com/ghbvf/gocell/issues/661)（父）/ [#1162](https://github.com/ghbvf/gocell/issues/1162)（PR-A1） |
 | Spec | `docs/plans/specs/202605262359-661-kernel-reconcile-{spec,plan,tasks}.md` |
 | 一致性级别 | **L4 DeviceLatent**（issue 第一性原理重评结论） |
 
-> 本 ADR 是 `kernel/reconcile` 的设计权威源。其设计经本 stack 的 PR-A2（3 件套最小核）+
-> PR-A3（Loop 调度骨架）可运行实现验证（同 stack 开发，`go test -race ./kernel/reconcile/`
-> 通过、coverage 90.8%），故本文记录的是**经代码验证的设计**而非纯前瞻推演——`§2 ≥80%
-> reuse`、`§3 接口形态`、`§7 panic 隔离`等论断均有该实现背书。
+> 本 ADR 是 `kernel/reconcile` 的设计权威源。本 PR（PR-A1）是 **docs-only**——`kernel/reconcile`
+> 的实现代码**不在本 PR、也尚未合入 develop**，而活在同 stack 的原型分支 `661-loop-skeleton`
+> （PR-A2 3 件套最小核 + PR-A3 Loop 调度骨架）。该原型经 `go test -race ./kernel/reconcile/`
+> 通过、coverage 90.8%，为 `§2 ≥80% reuse`、`§3 接口形态`、`§7 panic 隔离` 等论断提供**原型实现
+> 背书**——但这是「**分支原型验证**」而非「trunk 已验证」：A2/A3 作为各自独立 PR（经各自 review）
+> 实际合入 develop 前，develop 上没有任何 `kernel/reconcile` 代码，本文论断在 trunk 维度仍是
+> 「设计 + 待兑现」。引用具体数值（coverage / LoC）时须带此 provenance，勿表述为 trunk 现状。
 > A1–A3 是 **stacked PR，按 A1（base develop）← A2 ← A3 依次合入**（plan.md「每 PR merge
-> 后 trunk 可发布」）；本文用「由 PR-Ax 交付」标注每条论断的承载 PR——读者在 develop 上看到
-> 的实现取决于已合入到哪一 PR：单独合入 A1 时 develop 上尚无 A2/A3 代码，因此 A2/A3 交付的
-> 形态/数值（接口、Loop、metrics、archtest 等）是「设计 + 该 PR 兑现」而非 A1 合入即存在。
-> 设计与实现分歧时以本 ADR 为准，并在同 PR 内修正实现或修订本 ADR。
+> 后 trunk 可发布」）；本文用「由 PR-Ax 交付」标注每条论断的承载 PR——读者在 develop 上看到的
+> 实现取决于已合入到哪一 PR，A2/A3 交付的形态/数值（接口、Loop、metrics、archtest 等）只在其
+> 承载 PR 实际合入 develop 后才成为 trunk 事实。设计与实现分歧时以本 ADR 为准，并在同 PR 内
+> 修正实现或修订本 ADR。
 
 ---
 
@@ -44,11 +47,12 @@
 `PermanentError`/`IsPermanent` ≈ 30 LoC（`reconciler.go` 45 + `result.go` 类型部分）；
 controller-runtime `pkg/reconcile`+`pkg/builder` 公开面 ≥800 LoC，简化 ≥4x。
 
-**交付划分**：本 stack 分三 PR——PR-A1（本 ADR）/ PR-A2（接口 + 3 frozen archtest）/
-PR-A3（Loop 调度骨架 + 4 metrics + clock carve-out），各经 `go test -race` + 90.8% coverage
-验证后依次合入 develop（A1←A2←A3）。下文「由 PR-Ax 交付」标注每条论断的承载 PR——某论断
-背书的代码只有在其承载 PR 合入后才存在于 develop。PR-A4–A10（Trigger / Backoff /
-LeaderElector / Builder / 迁移 / 文档）受 §6 trigger gate 封存。
+**交付划分**：本 stack 分三 PR——PR-A1（本 ADR，docs-only，= 当前 PR）/ PR-A2（接口 + 3 frozen
+archtest）/ PR-A3（Loop 调度骨架 + 4 metrics + clock carve-out）。A2/A3 已在原型分支
+`661-loop-skeleton` 经 `go test -race` + 90.8% coverage 验证，但**尚未作为 PR 合入 develop**；
+合入顺序 A1←A2←A3。下文「由 PR-Ax 交付」标注每条论断的承载 PR——某论断背书的代码只有在其
+承载 PR 实际合入后才存在于 develop。PR-A4–A10（Trigger / Backoff / LeaderElector / Builder /
+迁移 / 文档）受 §6 trigger gate 封存。
 
 ---
 
@@ -93,14 +97,25 @@ ADR `202605041430-adr-architecture-optimization-via-engineering-thinking.md` §3
 
 ---
 
-## §2 对标 controller-runtime（快照 @ main，2026-05-29）
+## §2 对标 controller-runtime（快照 @ pinned commit，2026-05-29）
 
-对标快照固定在以下 5 个上游源；后续 PR commit message 引用对应 `ref:` 行。
+对标快照 **pin 到具体 commit SHA**（不用移动的 `main`/`master` ref，保证可复现）；后续 PR
+commit message 引用对应 `ref:` 行。下方所有 `ref:` 行均锚定于这两个 commit：
+
+| 上游 repo | 默认分支 | pinned commit（2026-05-29 抓取，HEAD-of-default-branch） |
+|-----------|---------|------------------------------------------------------|
+| `kubernetes-sigs/controller-runtime` | `main` | `346f1930fde577d7d5e49c88e5ee625e4ebb7daa`（短 `346f1930fde5`，committed 2026-05-26） |
+| `kubernetes/client-go` | **`master`**（非 `main`） | `5d252d37f7301d279fc55030c9f8e0e1688a6985`（短 `5d252d37f730`，committed 2026-05-28） |
+
+> 上述 5 个引用路径已在对应 pinned SHA 处核验存在。§6.3「激活前核验对标快照仍有效」=
+> 比对 pinned SHA 处源码与本 §2 摘录；上游演进时先 re-pin（更新本表 SHA + 下方 raw URL）
+> 再修订摘录。注意 client-go 默认分支是 `master` 不是 `main`——§2.4 / §2.5 的 raw URL 须用
+> 上表 SHA（commit-pinned，分支无关），勿写 `/main/`。
 
 ### 2.1 `pkg/reconcile/reconcile.go` — Reconciler / Request / Result
 
 ref: `kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go`
-（https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/main/pkg/reconcile/reconcile.go）
+（https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/346f1930fde577d7d5e49c88e5ee625e4ebb7daa/pkg/reconcile/reconcile.go）
 
 ```go
 type TypedReconciler[request comparable] interface {
@@ -270,6 +285,7 @@ type LeaderElector interface {
 type LeaseToken struct {
 	ReconcilerID string
 	HolderID     string
+	Epoch        uint64    // 单调 fencing token（每次换持有者 +1）——见 §4.3
 	AcquiredAt   time.Time
 	ExpiresAt    time.Time
 }
@@ -279,6 +295,11 @@ type LeaseToken struct {
 kernel-driven adapter-implements 模式，满足分层）。`LeaseToken` 字段对标 §2.5
 `LeaderElectionRecord`，但用中立形态（不绑 K8s `coordination.k8s.io/Lease`），扩 etcd 等
 adapter 不改 kernel。
+
+> `LeaseToken` 是 **PR-A6 设计接口**（未 frozen，与 §3.1 三件套 frozen core 不同），A6 落地时
+> 随 `LeaderElector` 一并 frozen。`Epoch` 是 F5 review 引入的**单调 fencing token**——leader
+> election 本身**不是 fencing 保证**（见 §4），正确性闭环靠 `Epoch` + §4.3 `FencedRepository`
+> 写路径 CAS。注意它与 `kernel/outbox` 的 UUID `lease_id`（identity-fencing）语义不同（§4.3）。
 
 ### 3.5 Builder（PR-A7 设计）
 
@@ -306,15 +327,24 @@ struct 字面量构造，供测试 + kernel/command 迁移过渡）；A7 收口�
 `runtime/command.preflightSweepErrorCounter`）。
 
 > result 标签集冻结为 {success/transient/permanent/skipped}（FR-010）；recovered panic 归为
-> transient（可重试）。**spec 内部矛盾备案**：tasks.md T18 提到 `result="panic"` 第 5 标签，
-> 与 FR-010 四标签集冲突；本 ADR 采 FR-010 四标签，panic→transient；若 A5 需独立 panic
-> disposition，由 A5 同 PR 修订 FR-010 + 本 §3.6。
+> transient（可重试），与 FR-009「panic → transient error」一致。单一真值源：spec FR-009/
+> FR-010、tasks.md T18（`TestRecovery_PanicMetricRecorded` 断言 `result="transient"`）、
+> 本 §3.6 三处一致——**不存在** `result="panic"` 第 5 标签。若未来 A5 确需独立 panic
+> disposition，必须由 A5 同 PR 同步修订 FR-010 + tasks.md T18 + 本 §3.6 三处，不得单点漂移。
 
 ---
 
 ## §4 leader-elect 设计
 
-多副本部署时，`Loop` 必须保证**单实例扫描**（否则 mdmcell 会向设备重复发命令）。
+多副本部署时，`Loop` 用 leader election **降低但不消除**跨副本并发 Reconcile——leader election
+**不是 fencing 机制**。client-go `tools/leaderelection` 自身文档明示：*"This implementation does
+not guarantee that only one client is acting as a leader (a.k.a. fencing)."* STW GC 暂停、时钟
+偏移、renew/acquire 竞争都会留下**残余双执行窗口**：旧 leader L1 在 `Reconcile(X)` 中途被暂停
+→ lease 过期 → L2 接管并 `Reconcile(X)` → L1 苏醒后写完 → mdmcell 对 X 发两次命令。
+
+因此单实例正确性**不能**靠 lease 本身，必须靠 **monotonic fencing token + 写路径 CAS**（§4.3）
++ **消费方幂等**（§4.4）兜底。本节 §4.1–§4.2 是 lease 机制（best-effort 收窄窗口），§4.3–§4.4
+是正确性闭环（结构性兜底）。**以下 §4 全节是 PR-A6 设计**（未落地，受 §6 trigger gate 封存）。
 
 ### 4.1 两 adapter
 
@@ -325,13 +355,49 @@ struct 字面量构造，供测试 + kernel/command 迁移过渡）；A7 收口�
 
 复用 `adapters/redis` Cache 的 cell-namespaced key 约定（lease key 带 namespace 前缀）。
 
-### 4.2 lease/token 模型 + RTO
+### 4.2 lease/token 模型 + RTO + lost-lease 中断
 
-- `AcquireLease` 成功返回 `LeaseToken{ExpiresAt = now + LeaseDuration}`；`Loop` 仅在持 lease
-  时调 `Reconcile`，follower 在 `awaitProbe` 等待。
+- `AcquireLease` 成功返回 `LeaseToken{Epoch, ExpiresAt = now + LeaseDuration}`；`Loop` 仅在持
+  lease 时 dispatch `Reconcile`，follower 在 `awaitProbe` 等待。
+- **lost-lease 中断（A6 必做，best-effort 收窄窗口）**：`Loop` 必须从 lease 派生 lease-scoped
+  ctx，并在 `RenewLease` 失败 / lease 被观察到丢失的**瞬间** cancel 该 ctx、中断 in-flight
+  `Reconcile`——镜像 client-go `release()` 文档警告「cancel ctx 前须确保 lease 守护的代码已完成，
+  否则两进程会同时在 critical path」。这只**收窄**不**消除**窗口（暂停/分区下 L1 可能根本来不及
+  观察到丢失），故必须叠加 §4.3 fencing。
 - RTO（SC-004）：leader 崩溃 → follower 接管 P99 ≤ `LeaseDuration + 1s`（默认 LeaseDuration=15s，
-  对标 §2.5）；graceful shutdown（`ReleaseLease`）→ follower 接管 P99 ≤ 1s。
+  对标 §2.5）；graceful shutdown（`ReleaseLease`）→ follower 接管 P99 ≤ 1s。**RTO 是接管延迟
+  指标，不是「双执行不发生」的保证。**
 - `reconcile_leader{reconciler}` gauge：持 lease=1，否则=0（A3 单进程恒置 1，A6 接真实选举）。
+
+### 4.3 fencing：FencedRepository 写路径 CAS（结构性正确性闭环）
+
+leader election 留下的残余窗口由 **monotonic fencing token（Kleppmann DDIA §8.4）+ 写路径
+CAS** 兜底，并以**结构性收口**（而非每消费方自觉）落地：
+
+- **monotonic epoch**：lease store 每次成功 `AcquireLease`（**换持有者**）单调递增 `Epoch`；
+  `RenewLease` 保持 epoch 不变。PG 用 SEQUENCE / 行版本号在 acquire UPDATE 内 bump；Redis 在
+  SETNX-acquire Lua 内 INCR per-reconciler epoch key。
+- **为何不照搬 outbox 的 UUID `lease_id`**：outbox fencing（ADR `202605051600`，archtest
+  `OUTBOX-LEASE-ID-CAS-01`）用 UUID 做 **identity fencing**——CAS 按「等于当前 lease_id」放行，
+  是单次换手语义（任何 stale token != current 即失败）。reconcile 的设备写可能在 **L1→L2→L3
+  多次换手后**才迟到落地；UUID 只能判「不等」不能判「更旧」，无法拒绝乱序迟到写。故 reconcile
+  **必须用单调 epoch**：资源行记「已见最高 epoch」，CAS 拒绝**所有** `incoming_epoch < 已见最高`
+  的写（`UPDATE ... WHERE incoming_epoch >= row.last_epoch`），而不仅是非等值。
+- **FencedRepository seam（结构性收口）**：`Loop` 持 `LeaseToken{Epoch}`，给每次 `Reconcile`
+  注入一个 epoch-bound 的 `FencedWriter`（而非让 `Reconcile` 直接写裸 cell 表）。L4 reconciler
+  **唯一拿到的写面**是这个 epoch-bound handle，CAS 在 handle 内统一注入 epoch 并拒 stale——
+  消费方**结构上无法**发出未 fenced 的设备命令（不是「记得 fence」而是「想绕过都没有 API」），
+  把 fencing 从「每消费方义务」升级为「结构不变式」，对齐 AI-robust「违反不可表达」。enforcement
+  目标（A6 落地）：上游 Hard = `FencedWriter` 是 Reconciler 唯一写面 + sealed 构造；下游 Hard =
+  `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + `reconciletest.RunFencingConformance`
+  real-failure-injection（epoch-N 写在 epoch-N+1 接管后重放，断言 CAS 拒绝、无重复命令）入列。
+
+### 4.4 消费方幂等契约（残余窗口的最终兜底）
+
+即便有 §4.2 中断 + §4.3 fencing，**残余双执行/迟到窗口仍被 ACCEPTED**（分布式 lease 的本质，
+无法 100% 消除）。故 **L4 reconcile 消费方契约**：所有 `Reconcile` / 设备写 / 命令发射路径
+**必须幂等**（per `EntityID + intent` 的 dedup key）。这与 §5「L4 跨不可靠设备边界」已隐含的
+at-least-once 投递语义一致——幂等是 L4 的入场券，不是可选项。
 
 ---
 
@@ -397,17 +463,33 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 | **T-CLOCK** | 控制面 ticker/probe/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（由 PR-A3 交付） | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
 | **T-LEAK** | Loop goroutine（worker / pump / requeue 定时）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）；per-requeue goroutine 双 select runCtx.Done。`goleak.VerifyNone` 守 6 个生命周期测试（由 PR-A3 交付，`-race` 通过） | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
 | **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `safeReconcile` recover → 转 transient error → 记 metric → 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` 守（由 PR-A3 交付）。A5 细化 panic 分类/taxonomy | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
-| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | `LeaderElector` 单实例保证（§4，PR-A6）；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，由 PR-A3 交付，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试）；跨副本 leader **设计**（A6 落地后补 conformance） |
-| **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew/token 模型（§4）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s；2 adapter conformance（PR-A6） | **设计**（A6 落地 + real-failure-injection conformance 后定级） |
-| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7） | **设计**（A7 落地后：上游 Hard 构造私有化 + 下游 Hard callsite） |
+| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | **leader election 非 fencing**（§4，client-go 明示不保证单 leader）——只 best-effort 收窄窗口。跨副本正确性靠 §4.3 `FencedRepository` + monotonic-epoch 写路径 CAS（结构拒 stale-epoch 写）+ §4.4 消费方幂等；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，由 PR-A3 交付，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试，已兑现）；跨副本正确性 **设计**（A6：`FencedWriter` 上游 Hard + `RECONCILE-FENCED-WRITE-FUNNEL-01` 下游 Hard + `RunFencingConformance` real-failure-injection 后定级；leader election 永远只是 best-effort 收窄，不计入正确性保证） |
+| **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew 模型（§4.1–4.2）+ lost-lease ctx-cancel 中断（§4.2，收窄）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s（接管延迟，**非**双执行保证）。**双 leader 不靠 lease 排除**——靠 §4.3 epoch fencing CAS 让旧 leader 迟到写被结构拒绝 | **设计**（A6 落地 lease 模型 + epoch fencing + real-failure-injection conformance 后定级；明确 leader election ≠ fencing） |
+| **T-FENCE** | 旧 leader 迟到设备写绕过 fencing → 落地为重复命令（leader election 残余窗口的兜底失效） | §4.3 `FencedRepository`：`Loop` 只给 Reconciler epoch-bound `FencedWriter`，写路径 CAS 拒 `incoming_epoch < 已见最高`（**单调 epoch**，非 outbox 的 UUID identity-fencing）；绕过在 type system 不可表达（消费方无裸写面） | **设计**（A6：上游 Hard = `FencedWriter` 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite + conformance 入列；leader election ≠ fencing 由本行结构兜底） |
+| **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | 终态 Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7）；A3–A6 exported-`Loop` 窗口期由临时 Medium archtest `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01` 机器守（见下注，**非** code review 兜底） | **过渡**（A3–A6：Medium 上游 archtest allowlist + 下游 Hard callsite）→ **A7 闭环**（上游 Hard 构造私有化 + 下游 Hard callsite） |
 
 > A3 阶段 `Loop` 字段 exported（过渡，支持 struct 字面量 + kernel/command 迁移），故 T-BUILDER
-> 的上游 Hard 在 A7 才闭环；A3–A6 期间「裸构造」由 code review 兜底，不是 silent gap（A7 是
-> 已规划的 funnel 收口 PR）。
+> 的**上游 Hard 要到 A7 才闭环**。A3–A6 期间**不以 code review 兜底**——AI-robust 章程明定 code
+> review 是 Soft 机制、严禁作为 standing enforcement，故旧表述「裸构造由 code review 兜底，不是
+> silent gap」本身就是被章程禁止的 Soft gap。替代：A2/A3 同 PR 必须补一条**临时 Medium archtest**
+> `RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01`（callsite allowlist：禁止 `kernel/reconcile` 包外裸
+> 构造 `Loop{}`，仅放行 `*_test.go` + A8 `kernel/command` 迁移点），把 exported-`Loop` 窗口期从
+> 「人审」降到「机器守」。A7 落地 Builder + `Loop` 构造私有化后，该临时 Medium archtest 退役、由
+> 上游 Hard `RECONCILE-BUILDER-FUNNEL-01` 取代。此「Medium 上游 + Hard 下游」过渡形态按章程
+> §Funnel 双向锁评级开 gh issue 跟踪显式 Hard 化（归口父 issue #661 的 A7 任务）。
 
----
-
-## §8 不向后兼容声明
+> **F5 amendment 重评（AI-robust §ADR amendment 落地必查）**：本次 review 把 leader election 从
+> 「单实例 fencing 保证」更正为「best-effort 收窄，非 fencing」。受影响格子逐行重评：
+> - **T-DUAL 缓解列**：原文「`LeaderElector` 单实例保证」是 overclaim（client-go 自身文档否认
+>   fencing），**已同 PR 重写**为「leader election best-effort + §4.3 epoch fencing CAS + §4.4
+>   幂等」——非保留原文加注，避免两套真理源。
+> - **T-LEADER 缓解列**：原文「lease/renew/token 模型」被误当作双 leader 的排除手段，**已重写**
+>   为「lease 收窄 + epoch fencing 结构兜底」。
+> - **新增 T-FENCE 行**：覆盖「旧 leader 迟到写」这一原矩阵漏掉的威胁；评级 **设计**（A6 落地
+>   FencedWriter funnel 后定级）。
+> - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 未落地），本次只是把
+>   *保证来源* 从 lease（错）改为 epoch fencing + 幂等（对），并把 A6 验收门槛写死，使 A6 实现者
+>   无法回退到「信 lease」的旧错。fencing 设计是 docs（不建代码），不违反 §6 trigger gate。
 
 A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/command.Sweeper` 改为
 实现 `reconcile.Reconciler`：
