@@ -163,7 +163,11 @@ PR-3/PR-5 落地。
 | `CONTRACT-YAML-WEBHOOK-FIELDS-FROZEN-01` | `EndpointsMeta.Receivers` / `Dispatchers` 必须 `yaml:"-"`（reflect 锁，派生不可手写） | Hard |
 | `WEBHOOK-MARKER-RETIRED-01` | markergen 只识别 `cell:`/`slice:` 前缀，`webhook:` marker 被**静默忽略**（不产生 wiring，也**不报错**）；AST backstop 扫 production cell.go 拦截残留 `// +webhook:*` marker，强制 slice.yaml 单源 | Medium（AST backstop scan；上游 markergen 结构上无法用 marker 驱动 wiring，但非编译期错误，无开发者反馈） |
 
-> **故障排查**：若 webhook 注册代码未生成，检查 slice.yaml contractUsages 是否含 `role: webhook-receive` 或 `role: webhook-dispatch`；`// +webhook:*` 注释不产生任何效果也不报错。
+### 故障排查（与 subscribe 同范式，见 `.claude/rules/gocell/eventbus.md`）
+
+- **webhook 注册代码未生成**：检查 slice.yaml contractUsages 是否含 `role: webhook-receive` 或 `role: webhook-dispatch`；`// +webhook:*` 注释不产生任何效果也不报错（marker 已退役，单源是 slice.yaml）。
+- **`gocell generate cell` 报 "no cell.go struct field for slice"**：cell.go 结构体缺少对应 webhook slice 的字段。在 cell struct 添加 `*<sliceID>.Service`（或 `*<sliceID>.Consumer`）字段后重新运行——该字段必须在 `generate` 执行前已存在于 cell.go（cellgen 按「字段指针类型包名 == sliceID」解析 handler/selector 表达式）。
+- **`gocell generate cell` 报 "ambiguous field for slice <sliceID>"**：cell struct 中有多个字段的指针类型包名与 sliceID 相同。在 slice.yaml 的 webhook-receive / webhook-dispatch CU 中添加 `field: <fieldName>` 消歧。
 
 ## 与现有 contract kind 的差异
 

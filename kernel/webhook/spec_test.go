@@ -7,10 +7,10 @@ package webhook_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestReceiverSpecValidate_ValidAllFieldsSet verifies that ReceiverSpec.Validate()
@@ -70,7 +70,7 @@ func TestReceiverSpecValidate_MissingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.spec.Validate()
-			assert.Error(t, err, "ReceiverSpec.Validate() should return error when a required field is empty")
+			requireWebhookConfigInvalid(t, err)
 		})
 	}
 }
@@ -110,7 +110,7 @@ func TestDispatchSpecValidate_MissingFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.spec.Validate()
-			assert.Error(t, err, "DispatchSpec.Validate() should return error when a required field is empty")
+			requireWebhookConfigInvalid(t, err)
 		})
 	}
 }
@@ -119,12 +119,25 @@ func TestDispatchSpecValidate_MissingFields(t *testing.T) {
 // fails Validate() — all three fields are required.
 func TestReceiverSpec_ZeroValueIsInvalid(t *testing.T) {
 	var spec webhook.ReceiverSpec
-	assert.Error(t, spec.Validate(), "zero-value ReceiverSpec must fail Validate()")
+	requireWebhookConfigInvalid(t, spec.Validate())
 }
 
 // TestDispatchSpec_ZeroValueIsInvalid asserts that the zero value of DispatchSpec
 // fails Validate().
 func TestDispatchSpec_ZeroValueIsInvalid(t *testing.T) {
 	var spec webhook.DispatchSpec
-	assert.Error(t, spec.Validate(), "zero-value DispatchSpec must fail Validate()")
+	requireWebhookConfigInvalid(t, spec.Validate())
+}
+
+// requireWebhookConfigInvalid asserts err is an *errcode.Error carrying the
+// ErrWebhookConfigInvalid / KindInvalid pair that ReceiverSpec.Validate and
+// DispatchSpec.Validate always return on a missing field. Local to this
+// external (webhook_test) package — the sibling helper in webhook_test.go lives
+// in the internal (package webhook) test files and is not visible here.
+func requireWebhookConfigInvalid(t *testing.T, err error) {
+	t.Helper()
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	require.Equal(t, errcode.ErrWebhookConfigInvalid, ec.Code)
+	require.Equal(t, errcode.KindInvalid, ec.Kind)
 }

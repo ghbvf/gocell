@@ -23,6 +23,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -549,7 +550,7 @@ func validateWebhookReceive(cu ContractUsage, sl *SliceMeta, c *ContractMeta, id
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingSourceID,
 			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
 	}
-	if c.Direction != "inbound" {
+	if c.Direction != string(cellvocab.DirectionInbound) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgWrongDirection,
 			errcode.WithDetails(
 				errcode.PublicString("contract", cu.Contract),
@@ -595,7 +596,7 @@ func validateWebhookDispatch(cu ContractUsage, sl *SliceMeta, c *ContractMeta, i
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgForbiddenHandler,
 			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
 	}
-	if c.Direction != "outbound" {
+	if c.Direction != string(cellvocab.DirectionOutbound) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgWrongDirection,
 			errcode.WithDetails(
 				errcode.PublicString("contract", cu.Contract),
@@ -660,7 +661,7 @@ func deriveWebhookEndpoints(pm *ProjectMeta) error {
 // fire for slice-referenced contracts, so an unreferenced contract with an
 // empty/invalid direction would otherwise slip through.
 func finalizeWebhookContract(c *ContractMeta, idx *webhookCellIndex) error {
-	if c.Direction != "inbound" && c.Direction != "outbound" {
+	if c.Direction != string(cellvocab.DirectionInbound) && c.Direction != string(cellvocab.DirectionOutbound) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"webhook contract direction must be \"inbound\" or \"outbound\"",
 			errcode.WithDetails(
@@ -685,14 +686,14 @@ func finalizeWebhookContract(c *ContractMeta, idx *webhookCellIndex) error {
 // validating each and recording the owning cell ID in the index.
 func indexWebhookSlice(sl *SliceMeta, contracts map[string]*ContractMeta, idx *webhookCellIndex) error {
 	for _, cu := range sl.ContractUsages {
-		if cu.Role != "webhook-receive" && cu.Role != "webhook-dispatch" {
+		if cu.Role != string(cellvocab.RoleWebhookReceive) && cu.Role != string(cellvocab.RoleWebhookDispatch) {
 			continue
 		}
 		c, ok := contracts[cu.Contract]
 		if !ok || c.Kind != "webhook" {
 			continue
 		}
-		if cu.Role == "webhook-receive" {
+		if cu.Role == string(cellvocab.RoleWebhookReceive) {
 			if err := validateWebhookReceive(cu, sl, c, idx); err != nil {
 				return err
 			}

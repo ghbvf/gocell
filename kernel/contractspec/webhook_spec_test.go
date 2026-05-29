@@ -5,6 +5,7 @@ package contractspec_test
 // ContractSpec.Validate(), these tests should pass. They are the RED baseline.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -36,8 +37,14 @@ func TestContractSpec_WebhookKind_EmptyIDRejected(t *testing.T) {
 		Kind:      cellvocab.ContractWebhook,
 		Transport: "http",
 	}
-	if err := spec.Validate(); err == nil {
+	err := spec.Validate()
+	if err == nil {
 		t.Fatal("expected error for webhook ContractSpec with empty ID")
+	}
+	// Assert it is the ID-empty error specifically — not the kind-not-recognized
+	// fallback — so the test cannot pass for the wrong reason.
+	if !strings.Contains(err.Error(), "ID must not be empty") {
+		t.Fatalf("expected an 'ID must not be empty' error, got: %v", err)
 	}
 }
 
@@ -50,8 +57,17 @@ func TestContractSpec_WebhookKind_EmptyTransportRejected(t *testing.T) {
 		Kind:      cellvocab.ContractWebhook,
 		Transport: "",
 	}
-	if err := spec.Validate(); err == nil {
+	err := spec.Validate()
+	if err == nil {
 		t.Fatal("expected error for webhook ContractSpec with empty Transport")
+	}
+	// Assert it is the Transport-empty error specifically — Kind is a valid
+	// webhook here, so the kind-not-recognized branch must not fire.
+	if !strings.Contains(err.Error(), "Transport must not be empty") {
+		t.Fatalf("expected a 'Transport must not be empty' error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "not recognized") {
+		t.Fatalf("empty-Transport webhook spec must not hit the kind-not-recognized branch; got: %v", err)
 	}
 }
 

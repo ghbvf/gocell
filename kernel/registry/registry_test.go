@@ -237,6 +237,32 @@ func TestContractRegistry_ByKind_DeepCopiesHTTP(t *testing.T) {
 	assert.Equal(t, "not found", second[0].Endpoints.HTTP.Responses[404].Description, "Responses map must be deep-copied")
 }
 
+// TestContractRegistry_ByKind_Webhook asserts that ByKind resolves the webhook
+// kind (the 5th first-class contract kind). It uses its own project rather than
+// extending the shared testProject() fixture so the ByOwner / Provider count
+// tables stay stable.
+func TestContractRegistry_ByKind_Webhook(t *testing.T) {
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"webhook-stripe-events-v1": {
+				ID:        "webhook-stripe-events-v1",
+				Kind:      "webhook",
+				OwnerCell: metadatatest.CellIDAccessCore,
+				Direction: "inbound",
+				Endpoints: metadata.EndpointsMeta{
+					Inbound:   &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+					Receivers: []string{metadatatest.CellIDAccessCore},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	got := reg.ByKind("webhook")
+	require.Len(t, got, 1)
+	assert.Equal(t, "webhook-stripe-events-v1", got[0].ID)
+	assert.Empty(t, reg.ByKind("websocket"), "unknown kind must return no contracts")
+}
+
 func TestContractRegistry_Provider(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -300,6 +300,7 @@ func inboundWebhookContractMeta() *metadata.ContractMeta {
 		},
 		Signature: &metadata.WebhookSignatureMeta{
 			Algorithm:        fmt38WebhookAlgorithm,
+			ToleranceSeconds: 300,
 			DeliveryIDHeader: "svix-id",
 			TimestampHeader:  "svix-timestamp",
 			SignatureHeader:  "svix-signature",
@@ -353,6 +354,31 @@ func TestFMT38_InvalidAlgorithm_Rejected(t *testing.T) {
 
 	results := NewValidator(project, "", clock.Real()).validateFMT38()
 	assertResultsContainCode(t, results, codeFMT38, "signature.algorithm")
+}
+
+// TestFMT38_InboundZeroTolerance_Rejected verifies that an inbound webhook whose
+// signature.toleranceSeconds is 0 (disables the replay-attack window, fail-open)
+// is rejected — parity with the runtime HMAC verifier requiring a positive tolerance.
+func TestFMT38_InboundZeroTolerance_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Signature.ToleranceSeconds = 0
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.toleranceSeconds")
+}
+
+// TestFMT38_InboundZeroMaxBody_Rejected verifies that an inbound webhook whose
+// payload.maxBodyBytes is 0 (unbounded request body, DoS surface) is rejected.
+func TestFMT38_InboundZeroMaxBody_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Payload.MaxBodyBytes = 0
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "payload.maxBodyBytes")
 }
 
 // TestFMT38_OutboundWithoutSignaturePayload_Passes verifies outbound webhooks do

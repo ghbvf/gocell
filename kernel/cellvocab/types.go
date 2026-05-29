@@ -51,6 +51,17 @@ const (
 	RoleWebhookDispatch ContractRole = "webhook-dispatch"
 )
 
+// WebhookDirection is the flow direction of a kind=webhook contract: inbound
+// (external → cell, receiver-side) or outbound (cell → external, dispatcher-side).
+// Single source shared by kernel/metadata (parser webhook derivation) and
+// kernel/governance (FMT-38), so the direction string never drifts across layers.
+type WebhookDirection string
+
+const (
+	DirectionInbound  WebhookDirection = "inbound"
+	DirectionOutbound WebhookDirection = "outbound"
+)
+
 // ContractLifecycle represents the wire-stability governance state of a Contract
 // (draft / active / deprecated). This is orthogonal to CellLifecycle (the
 // cell/slice maturity axis) and JourneyMeta.Lifecycle (journey delivery status).

@@ -149,6 +149,139 @@ func TestWebhookContractSchema_InvalidAlgorithmFails(t *testing.T) {
 		"webhook signature with algorithm other than hmac-sha256 must be rejected by the enum constraint")
 }
 
+// TestWebhookContractSchema_OutboundValid verifies that a well-formed outbound
+// webhook contract — which carries no inbound block and (optionally) no
+// signature/payload, since the dispatcher signs with its own key — passes
+// schema validation. Asserts the inbound-only required constraints do not leak
+// onto the outbound direction.
+func TestWebhookContractSchema_OutboundValid(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.shopify.orders.v1",
+		"kind": "webhook",
+		"ownerCell": "ordercore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "outbound",
+		"endpoints": {}
+	}`), &doc))
+
+	assert.NoError(t, schema.Validate(doc),
+		"valid outbound webhook contract (no inbound/signature/payload) must pass schema validation")
+}
+
+// TestWebhookContractSchema_InboundMissingPayloadFails verifies the symmetric
+// counterpart of the missing-signature case: an inbound webhook that omits the
+// payload block is rejected (the receiver needs payload constraints).
+func TestWebhookContractSchema_InboundMissingPayloadFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook contract without payload must be rejected (payload is required for inbound)")
+}
+
+// TestWebhookContractSchema_ZeroToleranceFails verifies signature.toleranceSeconds
+// of 0 is rejected by the minimum:1 constraint — 0 disables the replay-attack
+// window (fail-open). Parity with FMT-38 and the runtime HMAC verifier.
+func TestWebhookContractSchema_ZeroToleranceFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 0,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"signature.toleranceSeconds=0 must be rejected by minimum:1 (disabling the replay window is fail-open)")
+}
+
+// TestWebhookContractSchema_ZeroMaxBodyFails verifies payload.maxBodyBytes of 0
+// is rejected by the minimum:1 constraint — 0 means an unbounded request body
+// (DoS surface). Parity with FMT-38.
+func TestWebhookContractSchema_ZeroMaxBodyFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 0
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"payload.maxBodyBytes=0 must be rejected by minimum:1 (unbounded body is a DoS surface)")
+}
+
 // TestWebhookContractSchema_HandWrittenReceiversFails verifies that a
 // contract.yaml with a hand-written "receivers" key under endpoints is
 // rejected by additionalProperties:false (receivers is derived, yaml:"-").

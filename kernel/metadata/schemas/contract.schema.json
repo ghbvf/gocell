@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gocell.dev/schemas/contract.schema.json",
   "title": "GoCell Contract Descriptor",
-  "description": "Defines a Contract, the cross-Cell boundary protocol. All interactions between L1+ Cells require a contract. The endpoints structure varies by kind (http, event, command, projection).",
+  "description": "Defines a Contract, the cross-Cell boundary protocol. All interactions between L1+ Cells require a contract. The endpoints structure varies by kind (http, event, command, projection, webhook).",
   "type": "object",
   "required": ["id", "kind", "consistencyLevel", "lifecycle", "endpoints"],
   "additionalProperties": false,
@@ -77,8 +77,8 @@
         },
         "toleranceSeconds": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Bidirectional time window (seconds) for replay-attack prevention. Requests whose timestamp differs from server time by more than this value in either direction are rejected."
+          "minimum": 1,
+          "description": "Bidirectional time window (seconds) for replay-attack prevention. Requests whose timestamp differs from server time by more than this value in either direction are rejected. Must be >= 1; 0 (disable the window) is fail-open and rejected — the runtime kernel/webhook HMAC verifier likewise requires a positive tolerance. Also enforced by FMT-37."
         },
         "deliveryIDHeader": {
           "type": "string",
@@ -105,7 +105,7 @@
       "properties": {
         "schemaRef": { "type": "string" },
         "contentType": { "type": "string" },
-        "maxBodyBytes": { "type": "integer", "minimum": 0 }
+        "maxBodyBytes": { "type": "integer", "minimum": 1, "description": "Maximum inbound request body size in bytes. Must be >= 1; 0 (no limit) is an unbounded-body DoS surface and is rejected. Also enforced by FMT-37 for inbound webhooks." }
       }
     },
     "description": {

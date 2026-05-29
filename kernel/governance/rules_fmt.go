@@ -1762,6 +1762,10 @@ func (v *Validator) validateFMT36() []ValidationResult {
 //
 //   - direction==inbound → signature block AND payload block required (the
 //     receiver landing in PR-3 cannot verify without them).
+//   - direction==inbound → signature.toleranceSeconds MUST be >= 1 (0 disables
+//     the replay-attack window — fail-open) AND payload.maxBodyBytes MUST be
+//     >= 1 (0 is an unbounded-body DoS surface). The runtime HMAC verifier
+//     likewise rejects a non-positive tolerance.
 //   - whenever a signature block is present (inbound: required; outbound:
 //     optional), signature.algorithm MUST equal the sole supported value
 //     hmac-sha256 — no downgrade path.
@@ -1784,23 +1788,8 @@ func (v *Validator) validateFMT38() []ValidationResult {
 		if c == nil || c.Kind != string(cellvocab.ContractWebhook) {
 			continue
 		}
-		if c.Direction == "inbound" {
-			if c.Signature == nil {
-				results = append(results, v.newError(
-					codeFMT38, IssueRequired,
-					contractFile(c), "signature",
-					fmt.Sprintf("inbound webhook contract %q must declare a signature block", c.ID),
-					"add a signature block (algorithm, headers, signedStringForm) to the inbound webhook contract",
-				))
-			}
-			if c.Payload == nil {
-				results = append(results, v.newError(
-					codeFMT38, IssueRequired,
-					contractFile(c), "payload",
-					fmt.Sprintf("inbound webhook contract %q must declare a payload block", c.ID),
-					"add a payload block (contentType, maxBodyBytes) to the inbound webhook contract",
-				))
-			}
+		if c.Direction == string(cellvocab.DirectionInbound) {
+			results = append(results, v.fmt38InboundChecks(c)...)
 		}
 		if c.Signature != nil && c.Signature.Algorithm != fmt38WebhookAlgorithm {
 			results = append(results, v.newError(
@@ -1810,6 +1799,50 @@ func (v *Validator) validateFMT38() []ValidationResult {
 				fmt.Sprintf("set signature.algorithm to %q (the sole supported HMAC algorithm)", fmt38WebhookAlgorithm),
 			))
 		}
+	}
+	return results
+}
+
+// fmt38InboundChecks returns the FMT-38 findings specific to an inbound webhook
+// contract: signature + payload blocks are required, and their fail-open knobs
+// (toleranceSeconds, maxBodyBytes) must carry a positive value. Split out of
+// validateFMT38 to keep each function under the cognitive-complexity ceiling.
+func (v *Validator) fmt38InboundChecks(c *metadata.ContractMeta) []ValidationResult {
+	var results []ValidationResult
+	switch {
+	case c.Signature == nil:
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), "signature",
+			fmt.Sprintf("inbound webhook contract %q must declare a signature block", c.ID),
+			"add a signature block (algorithm, headers, signedStringForm) to the inbound webhook contract",
+		))
+	case c.Signature.ToleranceSeconds < 1:
+		results = append(results, v.newError(
+			codeFMT38, IssueInvalid,
+			contractFile(c), "signature.toleranceSeconds",
+			fmt.Sprintf("inbound webhook contract %q signature.toleranceSeconds=%d must be >= 1; "+
+				"0 disables the replay-window check (fail-open)", c.ID, c.Signature.ToleranceSeconds),
+			"set signature.toleranceSeconds to a positive number of seconds (e.g. 300); "+
+				"the runtime HMAC verifier also requires a positive tolerance",
+		))
+	}
+	switch {
+	case c.Payload == nil:
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), "payload",
+			fmt.Sprintf("inbound webhook contract %q must declare a payload block", c.ID),
+			"add a payload block (contentType, maxBodyBytes) to the inbound webhook contract",
+		))
+	case c.Payload.MaxBodyBytes < 1:
+		results = append(results, v.newError(
+			codeFMT38, IssueInvalid,
+			contractFile(c), "payload.maxBodyBytes",
+			fmt.Sprintf("inbound webhook contract %q payload.maxBodyBytes=%d must be >= 1; "+
+				"0 means an unbounded request body (DoS surface)", c.ID, c.Payload.MaxBodyBytes),
+			"set payload.maxBodyBytes to a positive byte limit (e.g. 1048576 for 1 MB)",
+		))
 	}
 	return results
 }

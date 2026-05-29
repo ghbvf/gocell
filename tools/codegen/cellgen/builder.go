@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
@@ -35,12 +36,6 @@ var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
 // Used to validate HandlerField, which is derived from AST field names but
 // still validated defensively to catch any unexpected input.
 var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
-
-// webhookSourceIDPattern matches valid webhook source IDs.
-// Mirrors kernel/webhook sourceIDPattern: lowercase start, lowercase alphanumeric
-// with hyphens/underscores, max 64 chars. Validated at codegen time so a malformed
-// sourceID fails fast rather than being silently baked into generated source.
-var webhookSourceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 // msgUndeclaredListener is the errcode message for a route that references
 // a listener not declared via +cell:listener in cell.go.
@@ -426,16 +421,16 @@ func buildWebhookReceiverSpecFromCU(
 				errcode.PublicString("pattern", goExportedIdentPattern.String()),
 			))
 	}
-	if !webhookSourceIDPattern.MatchString(cu.SourceID) {
+	if _, err := webhook.NewSourceID(cu.SourceID); err != nil {
 		return WebhookReceiverGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: webhook-receive SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
+			"cellgen build: webhook-receive SourceID is not a valid webhook source ID (validated by kernel/webhook.NewSourceID — single source)",
 			errcode.WithDetails(
 				errcode.PublicString("role", roleWebhookReceive),
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("sourceID", cu.SourceID),
-				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
-			))
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
 	}
 	fieldName, err := resolveWebhookField(p, cellID, sliceID, roleWebhookReceive, cu.Contract, cu.Field, fieldIndex)
 	if err != nil {
@@ -483,16 +478,16 @@ func buildWebhookDispatchSpecFromCU(
 				errcode.PublicString("pattern", goExportedIdentPattern.String()),
 			))
 	}
-	if !webhookSourceIDPattern.MatchString(cu.SourceID) {
+	if _, err := webhook.NewSourceID(cu.SourceID); err != nil {
 		return WebhookDispatchGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: webhook-dispatch SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
+			"cellgen build: webhook-dispatch SourceID is not a valid webhook source ID (validated by kernel/webhook.NewSourceID — single source)",
 			errcode.WithDetails(
 				errcode.PublicString("role", roleWebhookDispatch),
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("sourceID", cu.SourceID),
-				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
-			))
+			),
+			errcode.WithInternal(errcode.InternalAttr("cause", err)))
 	}
 	fieldName, err := resolveWebhookField(p, cellID, sliceID, roleWebhookDispatch, cu.Contract, cu.Field, fieldIndex)
 	if err != nil {
