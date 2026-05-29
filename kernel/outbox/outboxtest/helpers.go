@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -74,23 +75,26 @@ func TestTopic(t *testing.T) string {
 	return fmt.Sprintf("test-%s-%s", t.Name(), hex.EncodeToString(b))
 }
 
-// NewEntry creates a valid Entry with a unique ID for testing.
+// NewEntry creates a valid Entry with a unique ID for testing via the sealed
+// producer constructor outbox.NewEntry (which auto-generates a unique ID,
+// stamps createdAt/occurredAt from the clock, and validates). It panics on
+// construction error — the inputs here are always valid, so an error signals a
+// test-helper bug.
 func NewEntry(topic string, payload []byte) outbox.Entry {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return outbox.Entry{
-		ID:        "evt-" + hex.EncodeToString(b),
-		EventType: topic,
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload, outbox.WithTopic(topic))
+	if err != nil {
+		panic(fmt.Sprintf("outboxtest.NewEntry(%s): %v", topic, err))
 	}
+	return e
 }
 
 // NewEntryWithMetadata creates a valid Entry with metadata.
 func NewEntryWithMetadata(topic string, payload []byte, metadata map[string]string) outbox.Entry {
-	e := NewEntry(topic, payload)
-	e.Metadata = metadata
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload,
+		outbox.WithTopic(topic), outbox.WithMetadata(metadata))
+	if err != nil {
+		panic(fmt.Sprintf("outboxtest.NewEntryWithMetadata(%s): %v", topic, err))
+	}
 	return e
 }
 

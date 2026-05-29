@@ -57,7 +57,15 @@ type wireMessage struct {
 	Payload       json.RawMessage       `json:"payload"`
 	Metadata      map[string]string     `json:"metadata,omitempty"`
 	Observability ObservabilityMetadata `json:"observability,omitempty"`
-	CreatedAt     time.Time             `json:"createdAt"`
+	// Principal is additive/optional on the wire (omitempty) — a principal-less
+	// envelope decodes fine (api-versioning rule 1). OccurredAt is required
+	// (no omitempty): NewEntry always stamps it and Entry.Validate rejects zero,
+	// so a wire envelope without occurredAt is malformed. Pre-v1.0 direct wire
+	// evolution + the migration-044 TRUNCATE/broker-drain runbook guarantee no
+	// pre-Principal envelope survives the cutover. (issue #1229)
+	Principal  PrincipalMetadata `json:"principal,omitempty"`
+	OccurredAt time.Time         `json:"occurredAt"`
+	CreatedAt  time.Time         `json:"createdAt"`
 }
 
 // MarshalEnvelope serializes an Entry into the canonical v1 wire envelope.
@@ -74,19 +82,19 @@ type wireMessage struct {
 // against accidental Entry{ID: rawUnsafe} construction outside the
 // trusted MustNewEntryID path).
 func MarshalEnvelope(entry Entry) ([]byte, error) {
-	id, err := idutil.ParseSafeID(entry.ID)
+	id, err := idutil.ParseSafeID(entry.id)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.ID", err)
 	}
-	aggID, err := idutil.ParseSafeID(entry.AggregateID)
+	aggID, err := idutil.ParseSafeID(entry.aggregateID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.AggregateID", err)
 	}
-	aggType, err := idutil.ParseSafeID(entry.AggregateType)
+	aggType, err := idutil.ParseSafeID(entry.aggregateType)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.AggregateType", err)
 	}
-	eventType, err := idutil.ParseSafeID(entry.EventType)
+	eventType, err := idutil.ParseSafeID(entry.eventType)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.EventType", err)
 	}
@@ -94,13 +102,18 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope: invalid entry.Topic", err)
 	}
-	// Producer-side observability fail-fast (PR #582 round-3 review F2/F3):
-	// TraceParent is a `string` (W3C format, not SafeID) — without this
-	// explicit revalidate, an unsafe TraceParent in entry.Observability
-	// would slip past SafeID's UnmarshalJSON-driven funnel and reach wire.
-	if err := entry.Observability.Validate(); err != nil {
+	// Producer-side observability + principal fail-fast (PR #582 round-3 review
+	// F2/F3): TraceParent is a `string` (W3C format, not SafeID) — without this
+	// explicit revalidate, an unsafe TraceParent in entry.observability would
+	// slip past SafeID's UnmarshalJSON-driven funnel and reach wire. Principal
+	// SafeID fields are revalidated for the same defense-in-depth reason.
+	if err := entry.observability.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: marshal envelope: invalid observability", err)
+	}
+	if err := entry.principal.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
+			"outbox: marshal envelope: invalid principal", err)
 	}
 	msg := wireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
@@ -109,10 +122,12 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		AggregateType: aggType,
 		EventType:     eventType,
 		Topic:         topic,
-		Payload:       json.RawMessage(entry.Payload),
-		Metadata:      entry.Metadata,
-		Observability: entry.Observability,
-		CreatedAt:     entry.CreatedAt,
+		Payload:       json.RawMessage(entry.payload),
+		Metadata:      entry.metadata,
+		Observability: entry.observability,
+		Principal:     entry.principal,
+		OccurredAt:    entry.occurredAt,
+		CreatedAt:     entry.createdAt,
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -155,16 +170,22 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 	if entryTopic == "" {
 		entryTopic = topic
 	}
+	// In-package reconstruction funnel: build the sealed Entry directly from the
+	// decoded wire fields (lowercase field access is legal in-package). This is
+	// one of the three sanctioned Entry construction paths alongside NewEntry and
+	// EntryScan.ToEntry.
 	entry := Entry{
-		ID:            string(msg.ID),
-		AggregateID:   string(msg.AggregateID),
-		AggregateType: string(msg.AggregateType),
-		EventType:     string(msg.EventType),
-		Topic:         entryTopic,
-		Payload:       []byte(msg.Payload),
-		Metadata:      msg.Metadata,
-		Observability: msg.Observability,
-		CreatedAt:     msg.CreatedAt,
+		id:            string(msg.ID),
+		aggregateID:   string(msg.AggregateID),
+		aggregateType: string(msg.AggregateType),
+		eventType:     string(msg.EventType),
+		topic:         entryTopic,
+		payload:       []byte(msg.Payload),
+		metadata:      msg.Metadata,
+		observability: msg.Observability,
+		principal:     msg.Principal,
+		occurredAt:    msg.OccurredAt,
+		createdAt:     msg.CreatedAt,
 	}
 	// Wire-boundary single-source fail-closed (PR #582 round-3 review F3 +
 	// user-flagged "missing payload" finding): defer all required-field /
