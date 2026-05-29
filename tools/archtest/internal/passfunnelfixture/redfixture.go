@@ -53,6 +53,12 @@ import (
 	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — same package, different symbols.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+
+	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — callresolver helpers
+	// (qualified + alias forms; a typeseval-style dot-import conflict does not
+	// apply, but two forms suffice — same coverage shape as the typeseval helpers).
+	"github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	cr "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
 )
 
 // VIOLATION samples — value references suffice for typeseval.ResolvePackageRef
@@ -133,6 +139,17 @@ var (
 	_ = scanner.ImportBan{} // qualified (value reference, zero-value struct literal)
 	_ = sn.ImportBan{}      // alias-import
 	_ = ImportBan{}         // dot-import (bare Ident from `. "…/scanner"` above)
+
+	// callresolver helpers (qualified + alias). FuncDeclContext{} exercises the
+	// *types.TypeName struct-literal branch (same shape as scanner.ImportBan{}).
+	_ = callresolver.WalkFuncDecls     // qualified
+	_ = callresolver.IsCallToPkgFunc   // qualified
+	_ = callresolver.HasReceiver       // qualified
+	_ = callresolver.FuncDeclContext{} // qualified (TypeName struct-literal ref)
+	_ = cr.WalkFuncDecls               // alias-import
+	_ = cr.IsCallToPkgFunc             // alias-import
+	_ = cr.HasReceiver                 // alias-import
+	_ = cr.FuncDeclContext{}           // alias-import
 )
 
 // PASS-FUNNEL-FIXTURE-TAG-01 V' RED — type-aware (callee, arg) form-uniqueness.
