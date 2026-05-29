@@ -660,6 +660,55 @@ func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
 	}
 }
 
+// TestBuildContractSpec_GRPCKind_RejectsMalformed exercises the fail-closed
+// buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
+// are the funnel's own defense). Empty service/method, a method that is not an
+// exported Go identifier (keyword "func", lower-case "issueCommand", dashed
+// "issue-command"), and a control character (newline) in service or proto — each
+// must error rather than emit a silently-broken or injected stub.
+func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		grpc metadata.GRPCTransportMeta
+	}{
+		{"empty service", metadata.GRPCTransportMeta{Service: "", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"empty method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"keyword method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "func", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"unexported method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"dashed method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issue-command", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"newline in service", metadata.GRPCTransportMeta{
+			Service: "S\nimport \"os\"", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto",
+		}},
+		{"newline in proto", metadata.GRPCTransportMeta{
+			Service: "d.c.v1.S", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			grpc := tc.grpc
+			p := &metadata.ProjectMeta{
+				Contracts: map[string]*metadata.ContractMeta{
+					"grpc.device.command.v1": {
+						ID:      "grpc.device.command.v1",
+						Kind:    "grpc",
+						Codegen: true,
+						File:    "contracts/grpc/device/command/v1/contract.yaml",
+						Endpoints: metadata.EndpointsMeta{
+							Server: "devicecell",
+							GRPC:   &grpc,
+						},
+					},
+				},
+			}
+			if _, err := buildContractSpec("", p, "grpc.device.command.v1"); err == nil {
+				t.Fatalf("buildContractSpec should reject malformed grpc input %q", tc.name)
+			}
+		})
+	}
+}
+
 // --- BuildHTTPEndpointSpec HasBody tests ---
 
 // TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that

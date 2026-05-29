@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,9 @@ import (
 //   - schemaRef parsing fails
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
+//   - kind=grpc but endpoints.grpc missing, service/method empty, method not an
+//     exported Go identifier, service/proto carrying a control character, or a
+//     non-unary streamingType (streaming codegen deferred to PR 10)
 func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
@@ -77,7 +81,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		// When a full generator is added, add the corresponding case here.
 	default:
 		return nil, fmt.Errorf(
-			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)",
+			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection|grpc only)",
 			contractID, contract.Kind)
 	}
 
@@ -590,12 +594,26 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 // buildGRPCSpec projects metadata.GRPCTransportMeta into spec.GRPC for the
 // placeholder server-interface generator. No schema or proto file is read: the
 // PR-2 stub uses []byte for request/response, so the proto path is metadata
-// only (rendered into a doc comment). The fail-closed guards below mirror
-// buildHTTPSpec's nil-endpoint check.
+// only (rendered into a doc comment).
 //
-// Streaming is fail-closed: a non-unary streamingType is rejected rather than
-// emitting a misleading unary []byte placeholder. PR 10 adds streaming codegen
-// and lifts this restriction. Empty streamingType is the unary default.
+// All guards are fail-closed at codegen time (the golden test path does not run
+// governance FMT-37, so this is the funnel's own defense against malformed
+// endpoints.grpc):
+//   - nil endpoints.grpc / empty service / empty method (mirrors buildHTTPSpec).
+//   - Method is rendered verbatim as the Go interface method identifier, so it
+//     MUST be an exported Go identifier: token.IsIdentifier rejects keywords
+//     (e.g. "func", which would emit a constraint-interface element that
+//     compiles but no cell can implement) and non-identifier text; IsExported
+//     requires the uppercase initial that lets another package implement the
+//     interface. Without this the breakage is silent (gofmt/gofumpt accept it)
+//     or an opaque downstream parse error.
+//   - Service and Proto are rendered into the interface doc comment; a control
+//     rune (notably a newline) would break out of the // comment and inject
+//     arbitrary text into the generated source that goimports/gofumpt accept
+//     silently. Reject control runes so the comment stays a comment.
+//   - A non-unary streamingType is rejected rather than emitting a misleading
+//     unary []byte placeholder. PR 10 adds streaming codegen and lifts this;
+//     empty streamingType is the unary default.
 func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error {
 	g := contract.Endpoints.GRPC
 	if g == nil {
@@ -606,6 +624,15 @@ func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error
 	}
 	if g.Method == "" {
 		return fmt.Errorf("contractgen build: contract %q grpc block requires method", contract.ID)
+	}
+	if !token.IsIdentifier(g.Method) || !token.IsExported(g.Method) {
+		return fmt.Errorf("contractgen build: contract %q grpc method %q must be an exported Go identifier", contract.ID, g.Method)
+	}
+	if i := strings.IndexFunc(g.Service, unicode.IsControl); i >= 0 {
+		return fmt.Errorf("contractgen build: contract %q grpc service contains a control character at byte %d", contract.ID, i)
+	}
+	if i := strings.IndexFunc(g.Proto, unicode.IsControl); i >= 0 {
+		return fmt.Errorf("contractgen build: contract %q grpc proto path contains a control character at byte %d", contract.ID, i)
 	}
 	if g.StreamingType != "" && g.StreamingType != "unary" {
 		return fmt.Errorf(

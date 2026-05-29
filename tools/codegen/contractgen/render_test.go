@@ -400,7 +400,7 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 }
 
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
-// closed set (http | event | command | projection) returns an error.
+// closed set (http | event | command | projection | grpc) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{

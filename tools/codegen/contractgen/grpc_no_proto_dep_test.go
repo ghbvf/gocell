@@ -112,25 +112,26 @@ func TestGRPC_CODEGEN_NO_PROTO_DEP_01(t *testing.T) {
 }
 
 // TestGRPC_CODEGEN_NO_PROTO_DEP_01_DetectorIsLive is the reverse self-check: it
-// proves forbiddenProtoImports actually flags a forbidden import (covering the
-// aliased-import form), so TestGRPC_CODEGEN_NO_PROTO_DEP_01's green result means
-// "no forbidden import" rather than "detector never fires".
+// proves forbiddenProtoImports actually flags forbidden imports across the
+// aliased, plain, and dot-import forms, so TestGRPC_CODEGEN_NO_PROTO_DEP_01's
+// green result means "no forbidden import" rather than "detector never fires".
 func TestGRPC_CODEGEN_NO_PROTO_DEP_01_DetectorIsLive(t *testing.T) {
 	t.Parallel()
-	// Aliased + dot imports both still carry the module string in ImportSpec.Path.
+	// Aliased, plain, and dot imports all carry the module string in
+	// ImportSpec.Path (forbiddenProtoImports reads Path, never the alias/Name),
+	// so all three forms are flagged. (parser.ImportsOnly stops after the import
+	// block, so no symbol references are needed.)
 	redSource := []byte(`package command
 
 import (
 	pb "google.golang.org/protobuf/proto"
 	"google.golang.org/grpc"
+	. "google.golang.org/grpc/codes"
 )
-
-var _ = pb.Marshal
-var _ = grpc.ServiceDesc{}
 `)
 	bad := forbiddenProtoImports(t, "red_fixture.go", redSource)
-	if len(bad) != 2 {
-		t.Fatalf("detector should flag both forbidden imports, got %v", bad)
+	if len(bad) != 3 {
+		t.Fatalf("detector should flag all 3 forbidden imports (aliased + plain + dot), got %v", bad)
 	}
 
 	// A clean stub (the actual placeholder shape) must NOT be flagged.
