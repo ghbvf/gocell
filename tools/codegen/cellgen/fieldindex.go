@@ -132,15 +132,19 @@ func fieldPkgName(field *ast.Field) (pkg, name string, ok bool) {
 	return pkgIdent.Name, field.Names[0].Name, true
 }
 
-// resolveSliceField returns the cell struct field name that holds a subscribe
-// slice's consumer, for the generated `c.<field>.<handler>` expression.
+// resolveSliceField returns the cell struct field name that holds a slice's
+// consumer/handler, for the generated `c.<field>.<expr>` expression. It is
+// shared by every contractUsage role that renders a cell-struct field reference
+// (subscribe, webhook-receive, webhook-dispatch); the role is carried through
+// to error diagnostics so a webhook author is not pointed at a "subscribe CU"
+// that does not exist in their slice.yaml.
 //
-// explicitField (the slice.yaml subscribe CU `field:`) when set MUST name a
+// explicitField (the slice.yaml CU `field:`) when set MUST name a
 // *<sliceID>.T pointer field on the cell struct — byField[explicitField] must
 // equal sliceID. A field that exists but points at a different slice's package
-// is rejected: otherwise `c.<field>.<handler>` could compile (when that other
+// is rejected: otherwise `c.<field>.<expr>` could compile (when that other
 // type happens to expose a same-named method) and silently bind the
-// subscription to the wrong slice. This binds the configuration reference to a
+// registration to the wrong slice. This binds the configuration reference to a
 // determinate typed target before rendering, rather than trusting the Go build
 // to incidentally catch it. It is the disambiguator for slices owning more than
 // one *sliceID.T field (e.g. sessionlogout: a route Handler plus a subscribe
@@ -149,31 +153,36 @@ func fieldPkgName(field *ast.Field) (pkg, name string, ok bool) {
 // Otherwise the field is resolved by package convention from byPkg[sliceID]:
 //   - absent     → error (cell.go lacks a *sliceID.T pointer field)
 //   - ambiguous  → error (multiple *sliceID.T fields; add field: to the CU)
-func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID string) (string, error) {
+func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID, role string) (string, error) {
 	if idx == nil {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: fieldIndex is nil; IndexCellStructFields must run before BuildCellSpec when subscriptions exist",
-			errcode.WithDetails(errcode.PublicString("cellID", cellID)))
+			"cellgen build: fieldIndex is nil; IndexCellStructFields must run before BuildCellSpec when field-bound contractUsages exist",
+			errcode.WithDetails(
+				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("role", role),
+			))
 	}
 	if explicitField != "" {
 		pkg, ok := idx.byField[explicitField]
 		if !ok {
 			return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"cellgen build: subscribe field: names no *<pkg>.T pointer field on the cell struct; "+
+				"cellgen build: field: names no *<pkg>.T pointer field on the cell struct; "+
 					"field: must reference a declared cell-struct field whose type is *<sliceID>.T",
 				errcode.WithDetails(
 					errcode.PublicString("sliceID", sliceID),
 					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("role", role),
 					errcode.PublicString("field", explicitField),
 				))
 		}
 		if pkg != sliceID {
 			return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"cellgen build: subscribe field: points to a different slice's package, not the subscribing slice; "+
-					"the generated c.<field>.<handler> would bind the subscription to the wrong slice",
+				"cellgen build: field: points to a different slice's package, not the owning slice; "+
+					"the generated c.<field>.<expr> would bind the registration to the wrong slice",
 				errcode.WithDetails(
 					errcode.PublicString("sliceID", sliceID),
 					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("role", role),
 					errcode.PublicString("field", explicitField),
 					errcode.PublicString("fieldPackage", pkg),
 				))
@@ -183,19 +192,21 @@ func (idx *CellFieldIndex) resolveSliceField(explicitField, cellID, sliceID stri
 	field, ok := idx.byPkg[sliceID]
 	if !ok {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: no cell.go struct field for subscribing slice; "+
-				"cell struct must declare a *<sliceID>.T pointer field, or set field: on the subscribe CU",
+			"cellgen build: no cell.go struct field for slice; "+
+				"cell struct must declare a *<sliceID>.T pointer field, or set field: on the contractUsage",
 			errcode.WithDetails(
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("role", role),
 			))
 	}
 	if field == ambiguousField {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build: subscribing slice has multiple *<sliceID>.T cell-struct fields; set field: on the subscribe CU to disambiguate",
+			"cellgen build: slice has multiple *<sliceID>.T cell-struct fields; set field: on the contractUsage to disambiguate",
 			errcode.WithDetails(
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("cellID", cellID),
+				errcode.PublicString("role", role),
 			))
 	}
 	return field, nil

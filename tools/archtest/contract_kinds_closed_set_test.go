@@ -3,7 +3,7 @@
 // # CONTRACT-KINDS-CLOSED-SET-01
 //
 // Invariant: all contract kinds in the project must be members of the closed
-// set {"http", "event", "command", "projection", "grpc"}. Any new kind
+// set {"http", "event", "command", "projection", "webhook", "grpc"}. Any new kind
 // introduced without updating this gate signals an unreviewed extension and
 // requires architecture approval.
 //
@@ -26,6 +26,7 @@ var closedSetContractKinds = map[string]bool{
 	"event":      true,
 	"command":    true,
 	"projection": true,
+	"webhook":    true,
 	"grpc":       true,
 }
 
@@ -45,7 +46,7 @@ func TestCONTRACT_KINDS_CLOSED_SET_01(t *testing.T) {
 			continue
 		}
 		violations = append(violations, "contract "+contract.ID+": unknown kind \""+kind+
-			"\" (allowed: http | event | command | projection | grpc)")
+			"\" (allowed: http | event | command | projection | webhook | grpc)")
 	}
 
 	sort.Strings(violations)
@@ -87,7 +88,7 @@ func TestCONTRACT_KINDS_CLOSED_SET_01_NegativeFixture(t *testing.T) {
 	for _, c := range contracts {
 		if !closedSetContractKinds[c.kind] {
 			violations = append(violations,
-				"contract "+c.id+": unknown kind \""+c.kind+"\" (allowed: http | event | command | projection | grpc)")
+				"contract "+c.id+": unknown kind \""+c.kind+"\" (allowed: http | event | command | projection | webhook | grpc)")
 		}
 	}
 

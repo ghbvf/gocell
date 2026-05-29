@@ -598,6 +598,52 @@ func TestSourceFingerprint_AnyFieldChange(t *testing.T) {
 	}
 }
 
+// TestSourceFingerprint_PointerStructContentChange closes the blind spot left by
+// mutateContractPointerField (which only toggles nil↔non-nil): it asserts that
+// changing an INNER field of an already-non-nil pointer-to-struct
+// (*WebhookSignatureMeta / *WebhookPayloadMeta) also changes the fingerprint.
+// Without this, a shallow canonicalEncode that hashed only pointer presence
+// ("P" vs "N") would pass TestSourceFingerprint_AnyFieldChange yet silently
+// drop inner-field changes from the structural fingerprint.
+func TestSourceFingerprint_PointerStructContentChange(t *testing.T) {
+	t.Parallel()
+
+	withWebhookMeta := func(sig *metadata.WebhookSignatureMeta, pay *metadata.WebhookPayloadMeta) string {
+		p := fingerprintProject()
+		c := *p.Contracts["http.auth.login.v1"]
+		c.Signature = sig
+		c.Payload = pay
+		p.Contracts["http.auth.login.v1"] = &c
+		return computeFingerprint(t, p)
+	}
+
+	baseline := withWebhookMeta(
+		&metadata.WebhookSignatureMeta{Algorithm: "hmac-sha256", ToleranceSeconds: 300},
+		&metadata.WebhookPayloadMeta{ContentType: "application/json", MaxBodyBytes: 1048576},
+	)
+
+	sigAlgoChanged := withWebhookMeta(
+		&metadata.WebhookSignatureMeta{Algorithm: "hmac-sha512", ToleranceSeconds: 300},
+		&metadata.WebhookPayloadMeta{ContentType: "application/json", MaxBodyBytes: 1048576},
+	)
+	assert.NotEqual(t, baseline, sigAlgoChanged,
+		"changing Signature.Algorithm (inner field of a non-nil pointer-struct) must change the fingerprint")
+
+	sigToleranceChanged := withWebhookMeta(
+		&metadata.WebhookSignatureMeta{Algorithm: "hmac-sha256", ToleranceSeconds: 600},
+		&metadata.WebhookPayloadMeta{ContentType: "application/json", MaxBodyBytes: 1048576},
+	)
+	assert.NotEqual(t, baseline, sigToleranceChanged,
+		"changing Signature.ToleranceSeconds (inner field of a non-nil pointer-struct) must change the fingerprint")
+
+	payloadChanged := withWebhookMeta(
+		&metadata.WebhookSignatureMeta{Algorithm: "hmac-sha256", ToleranceSeconds: 300},
+		&metadata.WebhookPayloadMeta{ContentType: "application/json", MaxBodyBytes: 2097152},
+	)
+	assert.NotEqual(t, baseline, payloadChanged,
+		"changing Payload.MaxBodyBytes (inner field of a non-nil pointer-struct) must change the fingerprint")
+}
+
 // mutateContractField sets a single exported field of *c to a non-zero / changed
 // value so that canonicalEncode produces a different byte sequence.
 func mutateContractField(c *metadata.ContractMeta, f reflect.StructField) {
@@ -649,14 +695,27 @@ func mutateContractSliceField(v reflect.Value) {
 }
 
 func mutateContractPointerField(v reflect.Value) {
-	if v.Type() != reflect.TypeFor[*bool]() {
+	// *bool (Replayable): flip the pointed value, allocating when nil.
+	if v.Type() == reflect.TypeFor[*bool]() {
+		b := true
+		if !v.IsNil() {
+			b = !v.Elem().Bool()
+		}
+		v.Set(reflect.ValueOf(&b))
 		return
 	}
-	b := true
-	if !v.IsNil() {
-		b = !v.Elem().Bool()
+	// Pointer-to-struct (e.g. *WebhookSignatureMeta, *WebhookPayloadMeta):
+	// toggle the nil state. canonicalEncode emits "N" for nil and "P{...}" for
+	// non-nil, so flipping nil↔non-nil always changes the fingerprint — which is
+	// all this exhaustive structural test asserts. New pointer-to-struct fields
+	// on ContractMeta are thus covered without per-field updates here.
+	if v.Type().Elem().Kind() == reflect.Struct {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		} else {
+			v.Set(reflect.Zero(v.Type()))
+		}
 	}
-	v.Set(reflect.ValueOf(&b))
 }
 
 func mutateContractStructField(v reflect.Value, fieldName string) {

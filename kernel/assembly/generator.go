@@ -866,6 +866,8 @@ func normalizeContract(c metadata.ContractMeta) metadata.ContractMeta {
 	e.Subscribers = sortedCopy(e.Subscribers)
 	e.Invokers = sortedCopy(e.Invokers)
 	e.Readers = sortedCopy(e.Readers)
+	e.Receivers = sortedCopy(e.Receivers)
+	e.Dispatchers = sortedCopy(e.Dispatchers)
 	c.Endpoints = e
 	return c
 }

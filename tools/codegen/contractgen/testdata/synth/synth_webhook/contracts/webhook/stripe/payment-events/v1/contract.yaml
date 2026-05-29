@@ -1,0 +1,22 @@
+id: webhook.stripe.payment-events.v1
+kind: webhook
+direction: inbound
+ownerCell: hooks
+lifecycle: active
+signature:
+  algorithm: hmac-sha256
+  toleranceSeconds: 300
+  deliveryIDHeader: X-Stripe-Delivery-Id
+  timestampHeader: X-Stripe-Timestamp
+  signatureHeader: X-Stripe-Signature
+  signedStringForm: "{deliveryID}.{timestamp}.{body}"
+endpoints:
+  inbound:
+    pathPattern: /api/webhooks/stripe/payment-events
+    sourceID: stripe
+payload:
+  schemaRef: ./payload.schema.json
+  contentType: application/json
+  maxBodyBytes: 1048576
+# codegen: true selects this contract for Generate(ScopeAll); webhook still emits zero artifacts by design.
+codegen: true

@@ -23,6 +23,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -103,6 +104,9 @@ func (p *Parser) parseWith(loc *Locator) (*ProjectMeta, error) {
 	}
 	applyAssemblyDerivations(pm)
 	deriveEventSubscribers(pm)
+	if err := deriveWebhookEndpoints(pm); err != nil {
+		return nil, err
+	}
 	return pm, nil
 }
 
@@ -511,6 +515,195 @@ func deriveEventSubscribers(pm *ProjectMeta) {
 		combined = append(combined, cellSubs[c.ID]...)
 		c.Endpoints.Subscribers = dedupSorted(combined)
 	}
+}
+
+// webhookCellIndex accumulates receiver/dispatcher cell IDs per contract.
+type webhookCellIndex struct {
+	receivers   map[string][]string // contractID → []cellID
+	dispatchers map[string][]string // contractID → []cellID
+}
+
+func newWebhookCellIndex() *webhookCellIndex {
+	return &webhookCellIndex{
+		receivers:   make(map[string][]string),
+		dispatchers: make(map[string][]string),
+	}
+}
+
+// validateWebhookReceive validates a webhook-receive ContractUsage and records
+// the owning cell in the index.
+func validateWebhookReceive(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webhookCellIndex) error {
+	const (
+		msgMissingHandler  = "webhook-receive contractUsage missing required handler"
+		msgMissingSourceID = "webhook-receive contractUsage missing required sourceID"
+		msgWrongDirection  = "webhook-receive requires contract direction=inbound;" +
+			" use role=webhook-dispatch for an outbound contract"
+		msgNoInboundBlock = "webhook-receive requires contract.endpoints.inbound;" +
+			" set direction=inbound or use role=webhook-dispatch for outbound"
+		msgSourceIDMismatch = "webhook-receive contractUsage sourceID does not match contract inbound.sourceID"
+	)
+	if cu.Handler == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingHandler,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if cu.SourceID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingSourceID,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if c.Direction != string(cellvocab.DirectionInbound) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgWrongDirection,
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("direction", c.Direction),
+			))
+	}
+	if c.Endpoints.Inbound == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgNoInboundBlock,
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("direction", c.Direction),
+			))
+	}
+	if c.Endpoints.Inbound.SourceID != "" && cu.SourceID != c.Endpoints.Inbound.SourceID {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgSourceIDMismatch,
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("cuSourceID", cu.SourceID),
+				errcode.PublicString("contractSourceID", c.Endpoints.Inbound.SourceID),
+			))
+	}
+	idx.receivers[cu.Contract] = append(idx.receivers[cu.Contract], sl.BelongsToCell)
+	return nil
+}
+
+// validateWebhookDispatch validates a webhook-dispatch ContractUsage and records
+// the owning cell in the index. The contract is required so the direction can be
+// checked: dispatching an inbound contract is a fail-closed error (the symmetric
+// counterpart of validateWebhookReceive rejecting an outbound contract).
+func validateWebhookDispatch(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webhookCellIndex) error {
+	const (
+		msgMissingTargetSel = "webhook-dispatch contractUsage missing required targetSelector"
+		msgMissingSourceID  = "webhook-dispatch contractUsage missing required sourceID"
+		msgForbiddenHandler = "webhook-dispatch contractUsage must not set handler" +
+			" (handler is forbidden for role=webhook-dispatch; use targetSelector instead)"
+		msgWrongDirection = "webhook-dispatch requires contract direction=outbound;" +
+			" use role=webhook-receive for an inbound contract"
+	)
+	if cu.Handler != "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgForbiddenHandler,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if c.Direction != string(cellvocab.DirectionOutbound) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgWrongDirection,
+			errcode.WithDetails(
+				errcode.PublicString("contract", cu.Contract),
+				errcode.PublicString("slice", sl.ID),
+				errcode.PublicString("direction", c.Direction),
+			))
+	}
+	if cu.TargetSelector == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingTargetSel,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	if cu.SourceID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMissingSourceID,
+			errcode.WithDetails(errcode.PublicString("contract", cu.Contract), errcode.PublicString("slice", sl.ID)))
+	}
+	idx.dispatchers[cu.Contract] = append(idx.dispatchers[cu.Contract], sl.BelongsToCell)
+	return nil
+}
+
+// deriveWebhookEndpoints populates EndpointsMeta.Receivers and
+// EndpointsMeta.Dispatchers for every webhook contract from the slice
+// contractUsages[role=webhook-receive] and [role=webhook-dispatch]
+// respectively. The resulting lists are deduped and sorted alphabetically —
+// mirroring deriveEventSubscribers.
+//
+// Validation rules (return error):
+//   - webhook-receive requires non-empty handler AND sourceID
+//   - webhook-dispatch requires non-empty targetSelector AND sourceID
+//   - webhook-receive requires contract direction=inbound; webhook-dispatch
+//     requires contract direction=outbound (fail-closed: dispatching an inbound
+//     contract or receiving an outbound contract is rejected)
+//   - webhook-receive CU sourceID must equal contract.endpoints.inbound.sourceID
+//     (when an inbound block is present)
+//   - webhook-receive CU on a contract with no inbound block → direction/role
+//     mismatch
+//
+// Skip conditions (no error — other governance rules handle them):
+//   - contract not found in pm.Contracts
+//   - contract.Kind != "webhook"
+func deriveWebhookEndpoints(pm *ProjectMeta) error {
+	idx := newWebhookCellIndex()
+	for _, sl := range pm.Slices {
+		if err := indexWebhookSlice(sl, pm.Contracts, idx); err != nil {
+			return err
+		}
+	}
+	for _, c := range pm.Contracts {
+		if c.Kind != "webhook" {
+			continue
+		}
+		if err := finalizeWebhookContract(c, idx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finalizeWebhookContract validates a webhook contract's direction and populates
+// its derived Receivers/Dispatchers from the slice index. Direction validation
+// is fail-closed and applies to EVERY webhook contract, independent of whether a
+// slice wires it: the per-CU validators (validateWebhookReceive/Dispatch) only
+// fire for slice-referenced contracts, so an unreferenced contract with an
+// empty/invalid direction would otherwise slip through.
+func finalizeWebhookContract(c *ContractMeta, idx *webhookCellIndex) error {
+	if c.Direction != string(cellvocab.DirectionInbound) && c.Direction != string(cellvocab.DirectionOutbound) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"webhook contract direction must be \"inbound\" or \"outbound\"",
+			errcode.WithDetails(
+				errcode.PublicString("contract", c.ID),
+				errcode.PublicString("direction", c.Direction),
+			))
+	}
+	r := dedupSorted(idx.receivers[c.ID])
+	if r == nil {
+		r = []string{}
+	}
+	c.Endpoints.Receivers = r
+	d := dedupSorted(idx.dispatchers[c.ID])
+	if d == nil {
+		d = []string{}
+	}
+	c.Endpoints.Dispatchers = d
+	return nil
+}
+
+// indexWebhookSlice processes all webhook contractUsages in a single slice,
+// validating each and recording the owning cell ID in the index.
+func indexWebhookSlice(sl *SliceMeta, contracts map[string]*ContractMeta, idx *webhookCellIndex) error {
+	for _, cu := range sl.ContractUsages {
+		if cu.Role != string(cellvocab.RoleWebhookReceive) && cu.Role != string(cellvocab.RoleWebhookDispatch) {
+			continue
+		}
+		c, ok := contracts[cu.Contract]
+		if !ok || c.Kind != "webhook" {
+			continue
+		}
+		if cu.Role == string(cellvocab.RoleWebhookReceive) {
+			if err := validateWebhookReceive(cu, sl, c, idx); err != nil {
+				return err
+			}
+		} else {
+			if err := validateWebhookDispatch(cu, sl, c, idx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // dedupSorted returns a new sorted slice with duplicate strings removed.

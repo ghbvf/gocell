@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gocell.dev/schemas/contract.schema.json",
   "title": "GoCell Contract Descriptor",
-  "description": "Defines a Contract, the cross-Cell boundary protocol. All interactions between L1+ Cells require a contract. The endpoints structure varies by kind (http, event, command, projection).",
+  "description": "Defines a Contract, the cross-Cell boundary protocol. All interactions between L1+ Cells require a contract. The endpoints structure varies by kind (http, event, command, projection, webhook).",
   "type": "object",
   "required": ["id", "kind", "consistencyLevel", "lifecycle", "endpoints"],
   "additionalProperties": false,
@@ -10,12 +10,12 @@
     "id": {
       "type": "string",
       "description": "Unique contract identifier in the form {kind}.{domain-path}.{version}.",
-      "pattern": "^(http|event|command|projection|grpc)\\..+\\.v[0-9]+$"
+      "pattern": "^(http|event|command|projection|webhook|grpc)\\..+\\.v[0-9]+$"
     },
     "kind": {
       "type": "string",
       "description": "Contract kind that determines the endpoint structure.",
-      "enum": ["http", "event", "command", "projection", "grpc"]
+      "enum": ["http", "event", "command", "projection", "webhook", "grpc"]
     },
     "ownerCell": {
       "type": "string",
@@ -59,6 +59,54 @@
       "type": "boolean",
       "default": false,
       "description": "Opt the contract into `gocell generate contract` output. When true, contractgen produces types_gen.go / iface_gen.go (and handler_gen.go for kind=http). Default false; will be removed in PR-4 when all contracts are migrated."
+    },
+    "direction": {
+      "type": "string",
+      "description": "Webhook flow direction. Only valid for kind=webhook.",
+      "enum": ["inbound", "outbound"]
+    },
+    "signature": {
+      "type": "object",
+      "description": "HMAC signature verification parameters for a webhook contract.",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["hmac-sha256"],
+          "description": "HMAC algorithm used to verify the webhook signature. 'hmac-sha256' is the sole supported value (aligns with runtime kernel/webhook AlgorithmHMACSHA256; no downgrade path)."
+        },
+        "toleranceSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bidirectional time window (seconds) for replay-attack prevention. Requests whose timestamp differs from server time by more than this value in either direction are rejected. Must be >= 1; 0 (disable the window) is fail-open and rejected — the runtime kernel/webhook HMAC verifier likewise requires a positive tolerance. Also enforced by FMT-37."
+        },
+        "deliveryIDHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the unique delivery ID (e.g. 'svix-id'). Used as part of the signed string to prevent cross-delivery replay."
+        },
+        "timestampHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the Unix timestamp of the delivery (e.g. 'svix-timestamp'). Must be within toleranceSeconds of server time."
+        },
+        "signatureHeader": {
+          "type": "string",
+          "description": "HTTP header carrying the HMAC signature value (e.g. 'svix-signature')."
+        },
+        "signedStringForm": {
+          "type": "string",
+          "description": "Template for constructing the signed string from delivery fields. Variables: {deliveryID} (value of deliveryIDHeader), {timestamp} (value of timestampHeader), {body} (raw request body). Example: '{deliveryID}.{timestamp}.{body}'."
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "description": "Payload constraints for a webhook contract.",
+      "additionalProperties": false,
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "contentType": { "type": "string" },
+        "maxBodyBytes": { "type": "integer", "minimum": 1, "description": "Maximum inbound request body size in bytes. Must be >= 1; 0 (no limit) is an unbounded-body DoS surface and is rejected. Also enforced by FMT-37 for inbound webhooks." }
+      }
     },
     "description": {
       "type": "string",
@@ -418,6 +466,80 @@
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "webhook" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["direction"],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "inbound": {
+                "type": "object",
+                "description": "Inbound webhook routing metadata (direction=inbound only).",
+                "additionalProperties": false,
+                "required": ["pathPattern", "sourceID"],
+                "properties": {
+                  "pathPattern": {
+                    "type": "string",
+                    "description": "HTTP path the platform exposes for receiving webhook callbacks."
+                  },
+                  "sourceID": {
+                    "type": "string",
+                    "description": "Secret-isolation key identifying the webhook source. Must match ^[a-z][a-z0-9_-]{0,63}$ (aligns with runtime kernel/webhook sourceIDPattern).",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "direction": { "const": "inbound" } },
+              "required": ["direction"]
+            },
+            "then": {
+              "required": ["signature", "payload"],
+              "properties": {
+                "endpoints": { "required": ["inbound"] },
+                "signature": {
+                  "description": "Inbound signature block: every field the PR-3 runtime HMAC verifier needs to build the signed string is required and non-empty (fail-closed at declaration). algorithm is also constrained to the sole supported value by the base enum + FMT-38. Scoped to the inbound then-branch so outbound (which signs with its own key) is not over-constrained.",
+                  "required": [
+                    "algorithm",
+                    "toleranceSeconds",
+                    "deliveryIDHeader",
+                    "timestampHeader",
+                    "signatureHeader",
+                    "signedStringForm"
+                  ],
+                  "properties": {
+                    "algorithm": { "minLength": 1 },
+                    "deliveryIDHeader": { "minLength": 1 },
+                    "timestampHeader": { "minLength": 1 },
+                    "signatureHeader": { "minLength": 1 },
+                    "signedStringForm": { "minLength": 1 }
+                  }
+                },
+                "payload": {
+                  "description": "Inbound payload block: contentType and maxBodyBytes are required and non-empty so the receiver can enforce a Content-Type and a bounded body. schemaRef stays optional. Scoped to the inbound then-branch.",
+                  "required": ["contentType", "maxBodyBytes"],
+                  "properties": {
+                    "contentType": { "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {

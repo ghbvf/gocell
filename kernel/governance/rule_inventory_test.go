@@ -104,6 +104,9 @@ func goldenRuleIDs() []string {
 		// streamingType, rejects endpoints.grpc on non-grpc contracts, requires
 		// the block on grpc contracts.
 		"FMT-37",
+		// FMT-38: webhook contract-side required fields — inbound→signature+payload;
+		// signature.algorithm==hmac-sha256 (live parity with FMT-04; #1265).
+		"FMT-38",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

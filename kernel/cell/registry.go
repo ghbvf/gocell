@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -111,6 +112,48 @@ type Registrar interface {
 		cellID string,
 		opts ...SubscriptionOption,
 	) error
+
+	// RegisterWebhookReceiver records an inbound-webhook receiver declaration.
+	// Returns a non-nil error when handler is nil or spec.Validate() fails.
+	//
+	// RECORD-ONLY semantics (PR-2): like Subscribe, this method only appends a
+	// WebhookReceiverRequest to the recorder's accumulator — it does NOT mount
+	// an HTTP route, resolve a signing secret, or start any goroutine. The
+	// receiver runtime drain (bootstrap reading RegistrySnapshot.WebhookReceivers
+	// and wiring the HTTP receive endpoint + Claimer) lands in PR-3. This keeps
+	// the same two-phase pattern as Subscribe (declare intent in Init, wire in
+	// bootstrap) so the generated reg.RegisterWebhookReceiver(...) call compiles
+	// today against a stable seam.
+	//
+	// The call is emitted by cellgen from slice.yaml
+	// contractUsages[role=webhook-receive]; the [webhook.ReceiverSpec] literal
+	// carries identifiers known at code-generation time (ContractID / SourceID /
+	// CellID, the last injected from cell metadata exactly like Subscribe's
+	// positional cellID). The handler type is [webhook.WebhookReceiveHandler],
+	// defined in kernel/webhook alongside ReceiverSpec and consumed directly here
+	// (same pattern as Subscribe consuming outbox.EntryHandler).
+	//
+	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
+	RegisterWebhookReceiver(spec webhook.ReceiverSpec, handler webhook.WebhookReceiveHandler) error
+
+	// RegisterWebhookDispatch records an outbound-webhook dispatcher declaration.
+	// Returns a non-nil error when selector is nil or spec.Validate() fails.
+	//
+	// RECORD-ONLY semantics (PR-2): the dispatch counterpart of
+	// RegisterWebhookReceiver. It only appends a WebhookDispatchRequest to the
+	// recorder's accumulator — no dispatcher consumer is started and no signing
+	// secret is resolved. The dispatcher runtime drain (bootstrap reading
+	// RegistrySnapshot.WebhookDispatchers and wiring the outbound dispatcher
+	// consumer) lands in PR-5.
+	//
+	// The call is emitted by cellgen from slice.yaml
+	// contractUsages[role=webhook-dispatch]; the [webhook.DispatchSpec] literal
+	// carries ContractID / SourceID / CellID. The selector type is
+	// [webhook.WebhookDispatchSelector], defined in kernel/webhook alongside
+	// DispatchSpec.
+	//
+	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
+	RegisterWebhookDispatch(spec webhook.DispatchSpec, selector webhook.WebhookDispatchSelector) error
 
 	// RegisterReadiness registers a readiness probe under the typed
 	// [healthz.ProbeName]. The probe runs against the runtime
@@ -298,6 +341,24 @@ func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 	}
 }
 
+// WebhookReceiverRequest holds everything needed to register one inbound-webhook
+// receiver. RegistryRecorder accumulates these via Registrar.RegisterWebhookReceiver;
+// the bootstrap receiver runtime (PR-3) drains them. Mirrors SubscriptionRequest's
+// exported-field shape.
+type WebhookReceiverRequest struct {
+	Spec    webhook.ReceiverSpec
+	Handler webhook.WebhookReceiveHandler
+}
+
+// WebhookDispatchRequest holds everything needed to register one outbound-webhook
+// dispatcher. RegistryRecorder accumulates these via Registrar.RegisterWebhookDispatch;
+// the bootstrap dispatcher runtime (PR-5) drains them. Mirrors SubscriptionRequest's
+// exported-field shape.
+type WebhookDispatchRequest struct {
+	Spec     webhook.DispatchSpec
+	Selector webhook.WebhookDispatchSelector
+}
+
 // SubscriptionValidator validates a Subscription at registration time.
 //
 // ref: opentelemetry-collector otelcol/config.go Validate() — declarative validation at config load time.
@@ -393,6 +454,17 @@ type RegistrySnapshot struct {
 	// RouteGroups, Subscriptions, and LifecycleHooks. The recorder does NOT
 	// hold a live aggregator; it is a pure accumulator.
 	Probes []healthz.Probe
+
+	// WebhookReceivers are the inbound-webhook receivers declared during Init
+	// via reg.RegisterWebhookReceiver(...). PR-2 only accumulates them; the
+	// bootstrap receiver runtime drains this slice in PR-3 (no drain exists
+	// yet) — same write-side-accumulate / read-side-drain split as Subscriptions.
+	WebhookReceivers []WebhookReceiverRequest
+
+	// WebhookDispatchers are the outbound-webhook dispatchers declared during
+	// Init via reg.RegisterWebhookDispatch(...). PR-2 only accumulates them; the
+	// bootstrap dispatcher runtime drains this slice in PR-5.
+	WebhookDispatchers []WebhookDispatchRequest
 }
 
 // ---------------------------------------------------------------------------
@@ -409,12 +481,14 @@ type RegistryRecorder struct {
 	log  *slog.Logger
 
 	// accumulators
-	routeGroups     []RouteGroup
-	subscriptions   []SubscriptionRequest
-	lifecycleHooks  []LifecycleHook
-	configReloaders []ConfigReloadRequest
-	probes          []healthz.Probe
-	probeNames      map[healthz.ProbeName]struct{}
+	routeGroups        []RouteGroup
+	subscriptions      []SubscriptionRequest
+	lifecycleHooks     []LifecycleHook
+	configReloaders    []ConfigReloadRequest
+	probes             []healthz.Probe
+	probeNames         map[healthz.ProbeName]struct{}
+	webhookReceivers   []WebhookReceiverRequest
+	webhookDispatchers []WebhookDispatchRequest
 
 	finalized bool
 }
@@ -500,6 +574,52 @@ func (r *RegistryRecorder) Subscribe(
 	}
 
 	r.subscriptions = append(r.subscriptions, req)
+	return nil
+}
+
+// RegisterWebhookReceiver validates and appends a WebhookReceiverRequest
+// (record-only — see Registrar.RegisterWebhookReceiver godoc).
+func (r *RegistryRecorder) RegisterWebhookReceiver(
+	spec webhook.ReceiverSpec,
+	handler webhook.WebhookReceiveHandler,
+) error {
+	r.mustNotBeFinalized("RegisterWebhookReceiver")
+
+	if handler == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterWebhookReceiver: handler must not be nil")
+	}
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+
+	r.webhookReceivers = append(r.webhookReceivers, WebhookReceiverRequest{
+		Spec:    spec,
+		Handler: handler,
+	})
+	return nil
+}
+
+// RegisterWebhookDispatch validates and appends a WebhookDispatchRequest
+// (record-only — see Registrar.RegisterWebhookDispatch godoc).
+func (r *RegistryRecorder) RegisterWebhookDispatch(
+	spec webhook.DispatchSpec,
+	selector webhook.WebhookDispatchSelector,
+) error {
+	r.mustNotBeFinalized("RegisterWebhookDispatch")
+
+	if selector == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterWebhookDispatch: selector must not be nil")
+	}
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+
+	r.webhookDispatchers = append(r.webhookDispatchers, WebhookDispatchRequest{
+		Spec:     spec,
+		Selector: selector,
+	})
 	return nil
 }
 
@@ -601,12 +721,20 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	probes := make([]healthz.Probe, len(r.probes))
 	copy(probes, r.probes)
 
+	whRecv := make([]WebhookReceiverRequest, len(r.webhookReceivers))
+	copy(whRecv, r.webhookReceivers)
+
+	whDisp := make([]WebhookDispatchRequest, len(r.webhookDispatchers))
+	copy(whDisp, r.webhookDispatchers)
+
 	return RegistrySnapshot{
-		RouteGroups:     rgs,
-		Subscriptions:   subs,
-		LifecycleHooks:  hooks,
-		ConfigReloaders: reloaders,
-		Probes:          probes,
+		RouteGroups:        rgs,
+		Subscriptions:      subs,
+		LifecycleHooks:     hooks,
+		ConfigReloaders:    reloaders,
+		Probes:             probes,
+		WebhookReceivers:   whRecv,
+		WebhookDispatchers: whDisp,
 	}
 }
 

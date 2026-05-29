@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -498,3 +499,212 @@ var _ = RouteGroup{Register: func(m RouteMux) error {
 	m.Handle("GET /", http.NotFoundHandler())
 	return nil
 }}
+
+// ---------------------------------------------------------------------------
+// Webhook record-only API (PR-2)
+// ---------------------------------------------------------------------------
+
+func noopWebhookHandler(_ context.Context, _ []byte) error { return nil }
+
+func noopWebhookSelector(_ context.Context, _ []byte) (string, error) { return "target", nil }
+
+func validReceiverSpec() webhook.ReceiverSpec {
+	return webhook.ReceiverSpec{
+		ContractID: "webhook.stripe.payment-events.v1",
+		SourceID:   "stripe",
+		CellID:     "hooks",
+	}
+}
+
+func validDispatchSpec() webhook.DispatchSpec {
+	return webhook.DispatchSpec{
+		ContractID: "webhook.shopify.orders.v1",
+		SourceID:   "shopify",
+		CellID:     "hooks",
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_RegisterWebhookReceiver_HappyPath_AppendsToSnapshot
+// ---------------------------------------------------------------------------
+
+// TestRegistry_RegisterWebhookReceiver_HappyPath_AppendsToSnapshot verifies the
+// record-only API accumulates a WebhookReceiverRequest into the snapshot —
+// mirroring the Subscribe happy-path test. PR-2 does not drain it.
+func TestRegistry_RegisterWebhookReceiver_HappyPath_AppendsToSnapshot(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+
+	spec := validReceiverSpec()
+	require.NoError(t, rec.RegisterWebhookReceiver(spec, noopWebhookHandler))
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.WebhookReceivers, 1)
+	assert.Equal(t, spec, snap.WebhookReceivers[0].Spec)
+	assert.NotNil(t, snap.WebhookReceivers[0].Handler)
+	// Dispatch slice stays empty when only a receiver is registered.
+	assert.Empty(t, snap.WebhookDispatchers)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_RegisterWebhookDispatch_HappyPath_AppendsToSnapshot
+// ---------------------------------------------------------------------------
+
+func TestRegistry_RegisterWebhookDispatch_HappyPath_AppendsToSnapshot(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+
+	spec := validDispatchSpec()
+	require.NoError(t, rec.RegisterWebhookDispatch(spec, noopWebhookSelector))
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.WebhookDispatchers, 1)
+	assert.Equal(t, spec, snap.WebhookDispatchers[0].Spec)
+	assert.NotNil(t, snap.WebhookDispatchers[0].Selector)
+	assert.Empty(t, snap.WebhookReceivers)
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_RegisterWebhookReceiver_RejectsNilAndInvalidSpec
+// ---------------------------------------------------------------------------
+
+// TestRegistry_RegisterWebhookReceiver_RejectsNilAndInvalidSpec is table-driven
+// over the rejection paths: nil handler and each empty spec field (spec.Validate
+// failure). Rejected receivers must not accumulate.
+func TestRegistry_RegisterWebhookReceiver_RejectsNilAndInvalidSpec(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		spec        webhook.ReceiverSpec
+		handler     webhook.WebhookReceiveHandler
+		wantMsgPart string
+	}{
+		{
+			name:        "nil_handler",
+			spec:        validReceiverSpec(),
+			handler:     nil,
+			wantMsgPart: "handler",
+		},
+		{
+			name:        "empty_contract_id",
+			spec:        webhook.ReceiverSpec{ContractID: "", SourceID: "stripe", CellID: "hooks"},
+			handler:     noopWebhookHandler,
+			wantMsgPart: "ContractID",
+		},
+		{
+			name:        "empty_source_id",
+			spec:        webhook.ReceiverSpec{ContractID: "webhook.x.v1", SourceID: "", CellID: "hooks"},
+			handler:     noopWebhookHandler,
+			wantMsgPart: "SourceID",
+		},
+		{
+			name:        "empty_cell_id",
+			spec:        webhook.ReceiverSpec{ContractID: "webhook.x.v1", SourceID: "stripe", CellID: ""},
+			handler:     noopWebhookHandler,
+			wantMsgPart: "CellID",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+			err := rec.RegisterWebhookReceiver(tc.spec, tc.handler)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
+			assert.Contains(t, ecErr.Message, tc.wantMsgPart)
+			assert.Empty(t, rec.Snapshot().WebhookReceivers, "rejected receiver must not accumulate")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_RegisterWebhookDispatch_RejectsNilAndInvalidSpec
+// ---------------------------------------------------------------------------
+
+func TestRegistry_RegisterWebhookDispatch_RejectsNilAndInvalidSpec(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		spec        webhook.DispatchSpec
+		selector    webhook.WebhookDispatchSelector
+		wantMsgPart string
+	}{
+		{
+			name:        "nil_selector",
+			spec:        validDispatchSpec(),
+			selector:    nil,
+			wantMsgPart: "selector",
+		},
+		{
+			name:        "empty_contract_id",
+			spec:        webhook.DispatchSpec{ContractID: "", SourceID: "shopify", CellID: "hooks"},
+			selector:    noopWebhookSelector,
+			wantMsgPart: "ContractID",
+		},
+		{
+			name:        "empty_source_id",
+			spec:        webhook.DispatchSpec{ContractID: "webhook.x.v1", SourceID: "", CellID: "hooks"},
+			selector:    noopWebhookSelector,
+			wantMsgPart: "SourceID",
+		},
+		{
+			name:        "empty_cell_id",
+			spec:        webhook.DispatchSpec{ContractID: "webhook.x.v1", SourceID: "shopify", CellID: ""},
+			selector:    noopWebhookSelector,
+			wantMsgPart: "CellID",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+			err := rec.RegisterWebhookDispatch(tc.spec, tc.selector)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
+			assert.Contains(t, ecErr.Message, tc.wantMsgPart)
+			assert.Empty(t, rec.Snapshot().WebhookDispatchers, "rejected dispatcher must not accumulate")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_PostSnapshot_Webhook_Panics
+// ---------------------------------------------------------------------------
+
+// TestRegistry_PostSnapshot_Webhook_Panics verifies both webhook registration
+// methods share the same post-Snapshot finalize guard as Subscribe.
+func TestRegistry_PostSnapshot_Webhook_Panics(t *testing.T) {
+	t.Run("receiver", func(t *testing.T) {
+		rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+		_ = rec.Snapshot() // finalize
+		assert.Panics(t, func() {
+			_ = rec.RegisterWebhookReceiver(validReceiverSpec(), noopWebhookHandler)
+		})
+	})
+	t.Run("dispatch", func(t *testing.T) {
+		rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+		_ = rec.Snapshot() // finalize
+		assert.Panics(t, func() {
+			_ = rec.RegisterWebhookDispatch(validDispatchSpec(), noopWebhookSelector)
+		})
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Snapshot_DefensiveCopy_Webhook
+// ---------------------------------------------------------------------------
+
+// TestRegistry_Snapshot_DefensiveCopy_Webhook verifies the webhook slices are
+// defensively copied — mutating the snapshot must not affect recorder state.
+func TestRegistry_Snapshot_DefensiveCopy_Webhook(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	require.NoError(t, rec.RegisterWebhookReceiver(validReceiverSpec(), noopWebhookHandler))
+	require.NoError(t, rec.RegisterWebhookDispatch(validDispatchSpec(), noopWebhookSelector))
+
+	snap := rec.Snapshot()
+	snap.WebhookReceivers = append(snap.WebhookReceivers, WebhookReceiverRequest{})
+	snap.WebhookDispatchers = append(snap.WebhookDispatchers, WebhookDispatchRequest{})
+
+	assert.Len(t, rec.webhookReceivers, 1, "snap mutation must not affect recorder.webhookReceivers")
+	assert.Len(t, rec.webhookDispatchers, 1, "snap mutation must not affect recorder.webhookDispatchers")
+}

@@ -48,20 +48,23 @@ var (
 		string(cellvocab.CellTypeSupport): true,
 	}
 	validRoles = map[string]bool{
-		string(cellvocab.RoleServe):     true,
-		string(cellvocab.RoleCall):      true,
-		string(cellvocab.RolePublish):   true,
-		string(cellvocab.RoleSubscribe): true,
-		string(cellvocab.RoleHandle):    true,
-		string(cellvocab.RoleInvoke):    true,
-		string(cellvocab.RoleProvide):   true,
-		string(cellvocab.RoleRead):      true,
+		string(cellvocab.RoleServe):           true,
+		string(cellvocab.RoleCall):            true,
+		string(cellvocab.RolePublish):         true,
+		string(cellvocab.RoleSubscribe):       true,
+		string(cellvocab.RoleHandle):          true,
+		string(cellvocab.RoleInvoke):          true,
+		string(cellvocab.RoleProvide):         true,
+		string(cellvocab.RoleRead):            true,
+		string(cellvocab.RoleWebhookReceive):  true,
+		string(cellvocab.RoleWebhookDispatch): true,
 	}
 	validKinds = map[string]bool{
 		string(cellvocab.ContractHTTP):       true,
 		string(cellvocab.ContractEvent):      true,
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
+		string(cellvocab.ContractWebhook):    true,
 		string(cellvocab.ContractGRPC):       true,
 	}
 	validHTTPMethods = map[string]bool{
@@ -305,6 +308,12 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				field = "endpoints.handler"
 			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
+			case cellvocab.ContractWebhook:
+				// Webhook provider is the explicitly-declared ownerCell (see
+				// ContractMeta.ProviderEndpoint godoc). Receivers/Dispatchers are
+				// derived fields populated after parse time and cannot be the
+				// canonical provider field for FMT-07.
+				field = "ownerCell"
 			case cellvocab.ContractGRPC:
 				field = "endpoints.server"
 			default:
@@ -315,7 +324,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				contractFile(c),
 				field,
 				fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
-				"add the required endpoint (server/publisher/handler/provider)",
+				"add the required endpoint (server/publisher/handler/provider for http/event/command/projection; ownerCell for webhook)",
 			))
 		}
 	}
@@ -331,8 +340,8 @@ func (v *Validator) validateFMT09() []ValidationResult {
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, or grpc)", c.ID, c.Kind),
-				"set kind to http, event, command, projection, or grpc",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, webhook, or grpc)", c.ID, c.Kind),
+				"set kind to http, event, command, projection, webhook, or grpc",
 			))
 		}
 	}
@@ -1739,6 +1748,173 @@ func (v *Validator) validateFMT36() []ValidationResult {
 	return results
 }
 
+// validateFMT38 enforces webhook contract-side required fields at
+// `gocell validate` time — the live parity counterpart to FMT-04 (event/projection
+// required fields). The same constraints live in contract.schema.json's
+// kind==webhook if/then block, but that schema is not run by `gocell validate`
+// (see kernel/metadata/schemas/embed.go — "planned Phase 2"). Without this rule
+// an inbound webhook contract that omits its signature/payload block, or
+// declares an unsupported signature algorithm, passes `gocell validate`
+// silently (fail-open), unlike its event counterpart.
+//
+// (FMT-37 is the sibling grpc-transport rule; webhook landed second and took the
+// next free code FMT-38.)
+//
+//   - direction==inbound → signature block AND payload block required (the
+//     receiver landing in PR-3 cannot verify without them).
+//   - direction==inbound → signature.toleranceSeconds MUST be >= 1 (0 disables
+//     the replay-attack window — fail-open) AND payload.maxBodyBytes MUST be
+//     >= 1 (0 is an unbounded-body DoS surface). The runtime HMAC verifier
+//     likewise rejects a non-positive tolerance.
+//   - direction==inbound → every signed-string ingredient on the (now-required)
+//     signature block MUST be non-empty: signature.deliveryIDHeader,
+//     signature.timestampHeader, signature.signatureHeader, and
+//     signature.signedStringForm. A partially-hollow shell (block present but
+//     headers/template empty) leaves the PR-3 runtime HMAC verifier unable to
+//     build the signed string → fail-open; reject it at declaration.
+//   - direction==inbound → payload.contentType on the (now-required) payload
+//     block MUST be non-empty so the receiver can enforce a Content-Type on
+//     incoming deliveries. payload.schemaRef stays optional.
+//   - whenever a signature block is present (inbound: required; outbound:
+//     optional), signature.algorithm MUST equal the sole supported value
+//     hmac-sha256 — no downgrade path.
+//
+// direction itself is validated fail-closed at parse time
+// (kernel/metadata.finalizeWebhookContract), so a bad/empty direction never
+// reaches this rule.
+//
+// fmt38WebhookAlgorithm is the sole supported signature algorithm. It is a
+// local literal rather than an import of kernel/webhook.AlgorithmHMACSHA256:
+// kernel/governance must not depend on kernel/webhook (KERNEL-INTERNAL-DAG-01
+// forbids the governance→webhook edge). The value is kept in lock-step with the
+// runtime const by the test-only cross-check TestFMT38AlgorithmMatchesKernel
+// (a _test.go import of kernel/webhook is not a production DAG edge).
+const fmt38WebhookAlgorithm = "hmac-sha256"
+
+func (v *Validator) validateFMT38() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c == nil || c.Kind != string(cellvocab.ContractWebhook) {
+			continue
+		}
+		if c.Direction == string(cellvocab.DirectionInbound) {
+			results = append(results, v.fmt38InboundChecks(c)...)
+		}
+		if c.Signature != nil && c.Signature.Algorithm != fmt38WebhookAlgorithm {
+			results = append(results, v.newError(
+				codeFMT38, IssueInvalid,
+				contractFile(c), "signature.algorithm",
+				fmt.Sprintf("webhook contract %q signature.algorithm=%q is not a supported value", c.ID, c.Signature.Algorithm),
+				fmt.Sprintf("set signature.algorithm to %q (the sole supported HMAC algorithm)", fmt38WebhookAlgorithm),
+			))
+		}
+	}
+	return results
+}
+
+// fmt38InboundChecks returns the FMT-38 findings specific to an inbound webhook
+// contract: signature + payload blocks are required, their fail-open knobs
+// (toleranceSeconds, maxBodyBytes) must carry a positive value, and — when the
+// block is present — every field the PR-3 runtime HMAC verifier needs to build
+// the signed string (delivery/timestamp/signature headers, signedStringForm,
+// contentType) must be non-empty. The per-field checks are split into
+// fmt38SignatureFieldChecks / fmt38PayloadFieldChecks to keep each function
+// under the cognitive-complexity ceiling.
+func (v *Validator) fmt38InboundChecks(c *metadata.ContractMeta) []ValidationResult {
+	var results []ValidationResult
+	switch {
+	case c.Signature == nil:
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), "signature",
+			fmt.Sprintf("inbound webhook contract %q must declare a signature block", c.ID),
+			"add a signature block (algorithm, headers, signedStringForm) to the inbound webhook contract",
+		))
+	case c.Signature.ToleranceSeconds < 1:
+		results = append(results, v.newError(
+			codeFMT38, IssueInvalid,
+			contractFile(c), "signature.toleranceSeconds",
+			fmt.Sprintf("inbound webhook contract %q signature.toleranceSeconds=%d must be >= 1; "+
+				"0 disables the replay-window check (fail-open)", c.ID, c.Signature.ToleranceSeconds),
+			"set signature.toleranceSeconds to a positive number of seconds (e.g. 300); "+
+				"the runtime HMAC verifier also requires a positive tolerance",
+		))
+	}
+	results = append(results, v.fmt38SignatureFieldChecks(c)...)
+	switch {
+	case c.Payload == nil:
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), "payload",
+			fmt.Sprintf("inbound webhook contract %q must declare a payload block", c.ID),
+			"add a payload block (contentType, maxBodyBytes) to the inbound webhook contract",
+		))
+	case c.Payload.MaxBodyBytes < 1:
+		results = append(results, v.newError(
+			codeFMT38, IssueInvalid,
+			contractFile(c), "payload.maxBodyBytes",
+			fmt.Sprintf("inbound webhook contract %q payload.maxBodyBytes=%d must be >= 1; "+
+				"0 means an unbounded request body (DoS surface)", c.ID, c.Payload.MaxBodyBytes),
+			"set payload.maxBodyBytes to a positive byte limit (e.g. 1048576 for 1 MB)",
+		))
+	}
+	results = append(results, v.fmt38PayloadFieldChecks(c)...)
+	return results
+}
+
+// fmt38SignatureFieldChecks flags each empty signed-string ingredient on an
+// inbound webhook signature block (delivery/timestamp/signature headers,
+// signedStringForm). Without all four the PR-3 runtime HMAC verifier cannot
+// build the signed string and the route fails open. Only runs when a signature
+// block is present (the missing-block case is handled by fmt38InboundChecks).
+func (v *Validator) fmt38SignatureFieldChecks(c *metadata.ContractMeta) []ValidationResult {
+	if c.Signature == nil {
+		return nil
+	}
+	type fieldCheck struct {
+		value string
+		field string
+		human string
+	}
+	checks := []fieldCheck{
+		{c.Signature.DeliveryIDHeader, "signature.deliveryIDHeader", "deliveryIDHeader"},
+		{c.Signature.TimestampHeader, "signature.timestampHeader", "timestampHeader"},
+		{c.Signature.SignatureHeader, "signature.signatureHeader", "signatureHeader"},
+		{c.Signature.SignedStringForm, "signature.signedStringForm", "signedStringForm"},
+	}
+	var results []ValidationResult
+	for _, ch := range checks {
+		if ch.value != "" {
+			continue
+		}
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), ch.field,
+			fmt.Sprintf("inbound webhook contract %q must declare a non-empty signature.%s; "+
+				"the runtime HMAC verifier cannot build the signed string without it (fail-open)", c.ID, ch.human),
+			fmt.Sprintf("set signature.%s to the header/template value the webhook source uses", ch.human),
+		))
+	}
+	return results
+}
+
+// fmt38PayloadFieldChecks flags an empty payload.contentType on an inbound
+// webhook payload block. Without it the receiver cannot enforce a Content-Type
+// on incoming deliveries. Only runs when a payload block is present (the
+// missing-block case is handled by fmt38InboundChecks).
+func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []ValidationResult {
+	if c.Payload == nil || c.Payload.ContentType != "" {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT38, IssueRequired,
+		contractFile(c), "payload.contentType",
+		fmt.Sprintf("inbound webhook contract %q must declare a non-empty payload.contentType; "+
+			"the receiver cannot enforce a Content-Type on incoming deliveries without it", c.ID),
+		"set payload.contentType to the expected MIME type (e.g. application/json)",
+	)}
+}
+
 // sliceMixesHTTPVisibility reports whether s serves at least one public
 // (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
 // contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01
@@ -1766,64 +1942,115 @@ func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
 	return hasPublic && hasInternal
 }
 
-// validateFMT35 enforces the subscribe-only placement of the contractUsage
-// handler / group / field columns:
+// validateFMT35 enforces the per-role placement of the contractUsage
+// handler / group / field / sourceID / targetSelector columns. Each role
+// permits a different subset of columns; the rule fires when a required column
+// is absent or a forbidden column is set:
 //
-//   - role=subscribe MUST carry a handler (the consumer handler method name
-//     cellgen renders into reg.Subscribe; absent → cellgen would emit an empty
-//     c.<field>. expression).
-//   - any non-subscribe role MUST NOT carry handler / group / field — those
-//     columns are meaningless outside subscribe and silently ignored by
-//     cellgen, so a stray value is a latent authoring mistake.
+//   - subscribe:        handler required; group/field optional; sourceID/targetSelector forbidden
+//   - webhook-receive:  handler+sourceID required; field optional; group/targetSelector forbidden
+//   - webhook-dispatch: targetSelector+sourceID required; field optional; handler/group forbidden
+//   - any other role:   all five columns forbidden
 //
 // These constraints also live in slice.schema.json as if/then conditionals,
 // but that schema is not run by `gocell validate` (see
-// kernel/metadata/schemas/embed.go — "planned Phase 2"). FMT-35 enforces them
-// in the governance main path so the rule actually fires, independent of any
-// schema-runner wiring.
+// kernel/metadata/schemas/embed.go — "planned Phase 2"). FMT-35 is the live
+// enforcement path, so the matrix below MUST stay in sync with the schema.
 func (v *Validator) validateFMT35() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			field := fmt.Sprintf("contractUsages[%d]", i)
-			if cu.Role == string(cellvocab.RoleSubscribe) {
-				if cu.Handler == "" {
-					results = append(results, v.newError(
-						codeFMT35, IssueRequired,
-						sliceFile(s), field+".handler",
-						fmt.Sprintf(
-							"slice %q contractUsage %q has role=subscribe but no handler;"+
-								" cellgen needs the consumer handler method name to generate reg.Subscribe",
-							s.ID, cu.Contract,
-						),
-						"set handler: to the consumer handler method name (e.g. HandleEvent)",
-					))
-				}
-				continue
-			}
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "handler", cu.Handler)...)
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "group", cu.Group)...)
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "field", cu.Field)...)
+			results = append(results, v.checkFMT35Columns(s, cu, field)...)
 		}
 	}
 	return results
 }
 
-// forbidSubscribeColumn reports a FMT-35 error when a subscribe-only column
-// (handler / group / field) is set on a non-subscribe contractUsage.
-func (v *Validator) forbidSubscribeColumn(
-	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column, value string,
-) []ValidationResult {
-	if value == "" {
-		return nil
+// fmt35Placement is the disposition of a single contractUsage placement column
+// for one role.
+type fmt35Placement uint8
+
+const (
+	fmt35Forbidden fmt35Placement = iota // column must be empty
+	fmt35Optional                        // column may be empty or set
+	fmt35Required                        // column must be non-empty
+)
+
+// fmt35RoleColumns returns the placement rule for each of the five placement
+// columns (handler, group, field, sourceID, targetSelector) for the given
+// role. The matrix mirrors the if/then conditionals in slice.schema.json; any
+// role not listed forbids all five columns.
+func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelector fmt35Placement) {
+	switch role {
+	case string(cellvocab.RoleSubscribe):
+		return fmt35Required, fmt35Optional, fmt35Optional, fmt35Forbidden, fmt35Forbidden
+	case string(cellvocab.RoleWebhookReceive):
+		return fmt35Required, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Forbidden
+	case string(cellvocab.RoleWebhookDispatch):
+		return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Required
+	default:
+		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	}
-	return []ValidationResult{v.newError(
+}
+
+// checkFMT35Columns reports a FMT-35 finding for every placement column whose
+// presence/absence violates the role's matrix entry.
+func (v *Validator) checkFMT35Columns(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field string,
+) []ValidationResult {
+	hRule, gRule, fRule, sRule, tRule := fmt35RoleColumns(cu.Role)
+	cols := []struct {
+		name  string
+		value string
+		rule  fmt35Placement
+	}{
+		{"handler", cu.Handler, hRule},
+		{"group", cu.Group, gRule},
+		{"field", cu.Field, fRule},
+		{"sourceID", cu.SourceID, sRule},
+		{"targetSelector", cu.TargetSelector, tRule},
+	}
+	var results []ValidationResult
+	for _, c := range cols {
+		switch {
+		case c.rule == fmt35Required && c.value == "":
+			results = append(results, v.fmt35RequiredColumn(s, cu, field, c.name))
+		case c.rule == fmt35Forbidden && c.value != "":
+			results = append(results, v.fmt35ForbiddenColumn(s, cu, field, c.name))
+		}
+	}
+	return results
+}
+
+// fmt35RequiredColumn reports a FMT-35 error when a column required for the
+// contractUsage's role is empty.
+func (v *Validator) fmt35RequiredColumn(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column string,
+) ValidationResult {
+	return v.newError(
+		codeFMT35, IssueRequired,
+		sliceFile(s), field+"."+column,
+		fmt.Sprintf(
+			"slice %q contractUsage %q has role=%q but no %s; %s is required for this role",
+			s.ID, cu.Contract, cu.Role, column, column,
+		),
+		fmt.Sprintf("set %s: on this contractUsage (required for role=%q)", column, cu.Role),
+	)
+}
+
+// fmt35ForbiddenColumn reports a FMT-35 error when a column forbidden for the
+// contractUsage's role is set.
+func (v *Validator) fmt35ForbiddenColumn(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column string,
+) ValidationResult {
+	return v.newError(
 		codeFMT35, IssueForbidden,
 		sliceFile(s), field+"."+column,
 		fmt.Sprintf(
-			"slice %q contractUsage %q has role=%q but sets %s; %s is only valid for role=subscribe",
+			"slice %q contractUsage %q has role=%q but sets %s; %s is not valid for this role",
 			s.ID, cu.Contract, cu.Role, column, column,
 		),
-		fmt.Sprintf("remove %s: from this contractUsage (only role=subscribe carries it)", column),
-	)}
+		fmt.Sprintf("remove %s: from this contractUsage (not valid for role=%q)", column, cu.Role),
+	)
 }

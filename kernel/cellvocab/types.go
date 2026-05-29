@@ -29,6 +29,7 @@ const (
 	ContractEvent      ContractKind = "event"
 	ContractCommand    ContractKind = "command"
 	ContractProjection ContractKind = "projection"
+	ContractWebhook    ContractKind = "webhook"
 	ContractGRPC       ContractKind = "grpc"
 )
 
@@ -44,6 +45,21 @@ const (
 	RoleInvoke    ContractRole = "invoke"
 	RoleProvide   ContractRole = "provide"
 	RoleRead      ContractRole = "read"
+	// Webhook roles: a cell either receives inbound webhooks (consumer-side) or
+	// dispatches outbound webhooks (provider-side). See ValidRolesForKind.
+	RoleWebhookReceive  ContractRole = "webhook-receive"
+	RoleWebhookDispatch ContractRole = "webhook-dispatch"
+)
+
+// WebhookDirection is the flow direction of a kind=webhook contract: inbound
+// (external → cell, receiver-side) or outbound (cell → external, dispatcher-side).
+// Single source shared by kernel/metadata (parser webhook derivation) and
+// kernel/governance (FMT-38), so the direction string never drifts across layers.
+type WebhookDirection string
+
+const (
+	DirectionInbound  WebhookDirection = "inbound"
+	DirectionOutbound WebhookDirection = "outbound"
 )
 
 // ContractLifecycle represents the wire-stability governance state of a Contract
@@ -86,6 +102,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractCommand, nil
 	case "projection":
 		return ContractProjection, nil
+	case "webhook":
+		return ContractWebhook, nil
 	case "grpc":
 		return ContractGRPC, nil
 	default:
@@ -115,6 +133,10 @@ func ParseContractRole(s string) (ContractRole, error) {
 		return RoleProvide, nil
 	case "read":
 		return RoleRead, nil
+	case "webhook-receive":
+		return RoleWebhookReceive, nil
+	case "webhook-dispatch":
+		return RoleWebhookDispatch, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract role",
