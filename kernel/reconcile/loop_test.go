@@ -176,14 +176,28 @@ func TestLoop_StartStopGraceful(t *testing.T) {
 
 func TestLoop_OwnerCtxCancelDrainsWithoutStop(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	p := newRecordingProvider()
+	m, err := RegisterMetrics(p)
+	require.NoError(t, err)
 	l := &Loop{
 		ReconcilerID: "rc",
 		Reconciler:   funcReconciler(func(context.Context, Request) (Result, error) { return Result{RequeueAfter: testtime.D1h}, nil }),
 		Interval:     testtime.D1h,
+		Metrics:      m,
 	}
 	ownerCtx, ownerCancel := startCtxs(t)
 	require.NoError(t, l.Start(ownerCtx))
+	assert.Equal(t, float64(1), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}),
+		"leader must be 1 while the loop runs")
 	ownerCancel() // assembly shutdown — no explicit Stop; goleak verifies drain
+	// F3: leader must return to 0 on owner-cancel drain even WITHOUT an explicit
+	// Stop — the done-watcher is the single reset site, so this path no longer
+	// leaves reconcile_leader stuck at 1.
+	testwait.External(t, "leader-reset-on-owner-cancel",
+		func() bool {
+			return p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}) == 0
+		},
+		testtime.D500ms, testtime.D1ms, "leader gauge must reset to 0 when owner ctx drains the loop without Stop")
 }
 
 // TestLoop_OwnerCtxCanceledBeforeStart mirrors the transplant source's
@@ -417,8 +431,13 @@ func TestLoop_OwnerCtxCanceledBeforeStartResetsLeader(t *testing.T) {
 	ownerCtx, ownerCancel := startCtxs(t)
 	ownerCancel() // cancel BEFORE Start — awaitProbe pre-check fires
 	require.NoError(t, l.Start(ownerCtx))
-	assert.Equal(t, float64(0), p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}),
-		"leader must reset to 0 when the owner ctx is canceled before the loop confirms running")
+	// The reset is via the done-watcher (single reset site), so it is async to
+	// Start returning — poll until the spawned workers drain and reset it.
+	testwait.External(t, "leader-reset-precancel",
+		func() bool {
+			return p.gaugeValue(metricReconcileLeader, kernelmetrics.Labels{labelReconciler: "rc"}) == 0
+		},
+		testtime.D500ms, testtime.D1ms, "leader must reset to 0 when owner ctx is canceled before the loop confirms running")
 	require.NoError(t, l.Stop(context.Background())) // no-op; state already cleared
 }
 
