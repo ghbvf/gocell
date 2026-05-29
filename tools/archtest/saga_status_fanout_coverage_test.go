@@ -44,6 +44,15 @@
 //     dedicated type-aware archtest. The runtime harness's got-kind assertion is a
 //     second line of defense for the "missing case" direction; C4 also catches the
 //     "extra case" direction.
+//   - C5 (const-set ⇄ Valid()-range bijection): the go/types declared const set
+//     of saga.Status / journal.EventKind MUST equal the value set Render()
+//     enumerates via `for v := <start>; v.Valid(); v++`. This is what makes the
+//     "const set is the single source of truth" claim STRICT: Render() (and hence
+//     the golden) enumerates by the Valid()-loop, so without C5 a const added
+//     without extending Valid() would be silently invisible to the whole funnel.
+//     C5 enumerates the const set independently (go/types, compiler-derived) and
+//     fails if it diverges from the loop in either direction. Type-aware archtest
+//     (Medium) — closes blind-spot B2 below.
 //
 // # Blind-spot catalog (forms the chosen tools cannot see) + reverse self-checks
 //
@@ -53,18 +62,29 @@
 //     yields an empty set. NOT a vacuous pass: the require.NotEmpty floor guards in
 //     TestSagaStatusFanoutCoverageC4 fire and name both root causes (switch-form
 //     change OR Status rename).
-//   - B2 (Valid()∩IsTerminal() coupling): the generator enumerates terminals via
-//     `for s := StatusPending; s.Valid(); s++` filtered by IsTerminal(). A status
-//     that is IsTerminal()==true but Valid()==false (out of the Valid range) would
-//     be skipped by Render() and the golden lock. This is a self-contradiction the
-//     const author would not create (Valid and IsTerminal are updated together for
-//     a real status); C4's IsTerminal-vs-TerminalEventKind check is the backstop.
+//   - B2 (const-set ⇄ Valid()-range coupling — NOW MACHINE-CHECKED BY C5): the
+//     generator enumerates via `for v := <start>; v.Valid(); v++`. A const added
+//     without extending Valid() (the loop stops before it), or a Valid() range that
+//     exceeds / is non-contiguous with the declared const set, would make Render()
+//     and the golden lock blind to part of the const set. Formerly dismissed as "a
+//     self-contradiction the const author would not create"; that dismissal is
+//     retired — C5 (TestSagaStatusFanoutCoverageC5) enumerates the const set
+//     independently via go/types and fails on any divergence from the loop, in
+//     either direction. C5's own residual blind spots are compile-gated: the loop
+//     start sentinels (saga.StatusPending / journal.KindStepStarted) are referenced
+//     by name, so renaming/removing them breaks the archtest build; renaming Valid()
+//     drops the method-location floor guard (require.NotZero) rather than passing
+//     vacuously.
 //   - RED-fixtures: TestSagaStatusFanoutCoverageC4_REDFixture exercises
-//     sfcDiagsTerminalEventKind on synthetic mismatched sets; TestSagaCoverageGolden_REDFixture
-//     exercises sfcGoldenDiags on synthetic drifted artifacts; both prove the live
+//     sfcDiagsTerminalEventKind on synthetic mismatched sets;
+//     TestSagaStatusFanoutCoverageC5_REDFixture exercises sfcDiagsConstSetValidRange
+//     on synthetic const-set/loop divergence (including the user-reported
+//     "added a const but forgot Valid()" scenario); TestSagaCoverageGolden_REDFixture
+//     exercises sfcGoldenDiags on synthetic drifted artifacts; all prove the live
 //     checks emit diagnostics on drift even though they are green on aligned source.
-//     TestSagaCoverageDiagnosticLocations asserts every emitted Diagnostic carries
-//     a real module-relative Rel and a non-zero Line (no import-path Rel, no :0:).
+//     TestSagaCoverageDiagnosticLocations asserts every emitted Diagnostic (C4, C5,
+//     and golden) carries a real module-relative Rel and a non-zero Line (no
+//     import-path Rel, no :0:).
 //
 // # AI-robust grading: Hard (codegen funnel + type-system compile gate)
 //
@@ -95,6 +115,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/types"
 	"strings"
 	"testing"
@@ -102,6 +123,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 )
 
@@ -109,6 +132,7 @@ const (
 	sfcStatusPkgPath  = "github.com/ghbvf/gocell/kernel/saga"
 	sfcJournalPkgPath = "github.com/ghbvf/gocell/kernel/saga/journal"
 	sfcStatusTypeName = "Status"
+	sfcKindTypeName   = "EventKind"
 	sfcReadyzDocRel   = "docs/ops/readyz.md"
 	sfcAlertingDocRel = "docs/ops/alerting-rules.md"
 	sfcGenFileRel     = "kernel/saga/sagajournaltest/terminal_coverage_gen.go"
@@ -218,6 +242,108 @@ func sfcDiagsTerminalEventKind(isTerminal, tekCases map[string]bool, rel string,
 		if !isTerminal[name] {
 			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
 				"journal.TerminalEventKind has case saga.%s which Status.IsTerminal() does not classify terminal", name)})
+		}
+	}
+	return diags
+}
+
+// ─── const-set ⇄ Valid()-range cross-check (C5) ──────────────────────────────
+
+// sfcCollectDeclaredConsts enumerates, via go/types, the integer values of every
+// package-scope const whose named type is pkgPath.typeName, and locates the
+// type's Valid() method — the site to fix when the const set and the Valid()
+// range diverge. Returns the value→constName map plus the Valid() decl's
+// module-relative file and 1-based line (for C5 diagnostics).
+func sfcCollectDeclaredConsts(p *Pass, pkgPath, typeName string) (values map[int64]string, validRel string, validLine int) {
+	values = map[int64]string{}
+	if p.Pkg == nil || p.TypesInfo == nil {
+		return values, "", 0
+	}
+	scope := p.Pkg.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if !sfcIsTypedConst(obj, pkgPath, typeName) {
+			continue
+		}
+		v, exact := constant.Int64Val(obj.(*types.Const).Val())
+		if !exact {
+			continue
+		}
+		values[v] = name
+	}
+	for _, f := range p.Files {
+		if strings.HasSuffix(p.Rel(f), "_test.go") {
+			continue
+		}
+		EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			if fd.Name.Name != "Valid" || !sfcReceiverIsType(fd, p.TypesInfo, pkgPath, typeName) {
+				return
+			}
+			validRel = p.Rel(f)
+			validLine = p.Fset.Position(fd.Pos()).Line
+		})
+	}
+	return values, validRel, validLine
+}
+
+// sfcStatusLoopValues returns the saga.Status value set enumerated EXACTLY as
+// sagacoveragegen.collectStatuses does — `for s := StatusPending; s.Valid(); s++`
+// — so C5 compares the declared const set against the values Render() actually
+// sees, not a re-derived range (which would miss a non-contiguous Valid() that
+// truncates the loop early). The iteration is capped at the uint8 domain: a
+// Valid() that admits the whole domain never terminates the loop, which is
+// itself the kind of bug C5 exists to surface, so the cap fails loudly rather
+// than hanging CI.
+func sfcStatusLoopValues(t *testing.T) map[int64]bool {
+	t.Helper()
+	out := map[int64]bool{}
+	n := 0
+	for s := saga.StatusPending; s.Valid(); s++ {
+		out[int64(s)] = true
+		if n++; n > 256 {
+			t.Fatalf("saga.Status.Valid() admits >256 values — Valid() never terminates the enumeration loop")
+		}
+	}
+	return out
+}
+
+// sfcKindLoopValues mirrors sfcStatusLoopValues for journal.EventKind
+// (sagacoveragegen.collectKinds enumeration).
+func sfcKindLoopValues(t *testing.T) map[int64]bool {
+	t.Helper()
+	out := map[int64]bool{}
+	n := 0
+	for k := journal.KindStepStarted; k.Valid(); k++ {
+		out[int64(k)] = true
+		if n++; n > 256 {
+			t.Fatalf("journal.EventKind.Valid() admits >256 values — Valid() never terminates the enumeration loop")
+		}
+	}
+	return out
+}
+
+// sfcDiagsConstSetValidRange builds C5 diagnostics: the go/types declared const
+// value set MUST equal the value set Render() enumerates via
+// `for v := <start>; v.Valid(); v++`. Any divergence means Render() (and thus
+// the fanout golden) cannot see the full declared const set — the gap where a
+// new const is added but Valid() is not extended. Both directions are reported;
+// every diagnostic points at the type's Valid() method (the fix site).
+func sfcDiagsConstSetValidRange(typeLabel string, declared map[int64]string, loop map[int64]bool, rel string, line int) []Diagnostic {
+	var diags []Diagnostic
+	for v, name := range declared {
+		if !loop[v] {
+			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
+				"%s const %s (value %d) is declared but %s.Valid() excludes it from the `for v := …; v.Valid(); v++` enumeration — "+
+					"Render() and the fanout golden cannot cover it; extend Valid() (and IsTerminal()/String()/the fanout carriers) to admit it",
+				typeLabel, name, v, typeLabel)})
+		}
+	}
+	for v := range loop {
+		if _, ok := declared[v]; !ok {
+			diags = append(diags, Diagnostic{Rel: rel, Line: line, Message: fmt.Sprintf(
+				"%s.Valid() admits value %d which no declared const carries — Valid()'s range exceeds the "+
+					"const set; tighten Valid() or declare the missing const",
+				typeLabel, v)})
 		}
 	}
 	return diags
@@ -345,6 +471,59 @@ func TestSagaStatusFanoutCoverageC4(t *testing.T) {
 	Report(t, "SAGA-STATUS-FANOUT-COVERAGE-01/C4", sfcDiagsTerminalEventKind(isTerminal, tekCases, tekRel, tekLine))
 }
 
+// TestSagaStatusFanoutCoverageC5 enforces that the go/types declared const set
+// of saga.Status / journal.EventKind is identical to the value set Render()
+// enumerates via `for v := <start>; v.Valid(); v++`. This closes the formerly
+// dismissed blind-spot B2: a const added without extending Valid() is invisible
+// to Render() and the golden lock, but C5 turns that divergence into a red test —
+// making the "saga.Status / journal.EventKind const set is the single source of
+// truth" claim strictly true rather than "the Valid()-admitted range is".
+func TestSagaStatusFanoutCoverageC5(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	statusDeclared := map[int64]string{}
+	kindDeclared := map[int64]string{}
+	var statusValidRel, kindValidRel string
+	var statusValidLine, kindValidLine int
+
+	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
+		[]string{"./kernel/saga/..."},
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			switch p.Pkg.Path() {
+			case sfcStatusPkgPath:
+				statusDeclared, statusValidRel, statusValidLine = sfcCollectDeclaredConsts(p, sfcStatusPkgPath, sfcStatusTypeName)
+			case sfcJournalPkgPath:
+				kindDeclared, kindValidRel, kindValidLine = sfcCollectDeclaredConsts(p, sfcJournalPkgPath, sfcKindTypeName)
+			}
+			return nil
+		})
+
+	// Floor guards (not vacuous passes): an empty declared set means the type was
+	// renamed/moved or the package failed to load; a zero Valid() line means
+	// Valid() was renamed or refactored away from a method.
+	require.NotEmpty(t, statusDeclared, "SAGA-STATUS-FANOUT-COVERAGE-01/C5: saga.Status declared const set "+
+		"resolved empty — type renamed/moved or package load failed")
+	require.NotEmpty(t, kindDeclared, "SAGA-STATUS-FANOUT-COVERAGE-01/C5: journal.EventKind declared const set "+
+		"resolved empty — type renamed/moved or package load failed")
+	require.NotZero(t, statusValidLine, "SAGA-STATUS-FANOUT-COVERAGE-01/C5: saga.Status.Valid() method not found "+
+		"— renamed or refactored away")
+	require.NotZero(t, kindValidLine, "SAGA-STATUS-FANOUT-COVERAGE-01/C5: journal.EventKind.Valid() method not found "+
+		"— renamed or refactored away")
+
+	var diags []Diagnostic
+	diags = append(diags,
+		sfcDiagsConstSetValidRange("saga.Status", statusDeclared, sfcStatusLoopValues(t), statusValidRel, statusValidLine)...)
+	diags = append(diags,
+		sfcDiagsConstSetValidRange("journal.EventKind", kindDeclared, sfcKindLoopValues(t), kindValidRel, kindValidLine)...)
+	Report(t, "SAGA-STATUS-FANOUT-COVERAGE-01/C5", diags)
+}
+
 // TestSagaCoverageGolden enforces that the three generated fanout artifacts are
 // byte-identical to a fresh Render() of the const set.
 func TestSagaCoverageGolden(t *testing.T) {
@@ -384,6 +563,28 @@ func TestSagaStatusFanoutCoverageC4_REDFixture(t *testing.T) {
 	extraCase := map[string]bool{"StatusSucceeded": true, "StatusFailed": true, "StatusRunning": true}
 	assert.NotEmpty(t, sfcDiagsTerminalEventKind(terminal, extraCase, sfcJournalPkgPath, 1),
 		"TerminalEventKind case not classified terminal by IsTerminal() must fire C4")
+}
+
+// TestSagaStatusFanoutCoverageC5_REDFixture proves the C5 detection path fires on
+// either-direction drift between the declared const set and the Valid() loop, and
+// is silent when they agree.
+func TestSagaStatusFanoutCoverageC5_REDFixture(t *testing.T) {
+	t.Parallel()
+	declared := map[int64]string{1: "StatusPending", 2: "StatusRunning"}
+	loop := map[int64]bool{1: true, 2: true}
+	assert.Empty(t, sfcDiagsConstSetValidRange("saga.Status", declared, loop, "kernel/saga/status.go", 42),
+		"aligned const set and Valid() loop must yield zero C5 diags")
+
+	// The user-reported gap: a const is added (value 3) but Valid() is not
+	// extended, so the `s.Valid()` loop stops at 2 and never sees value 3.
+	declaredExtra := map[int64]string{1: "StatusPending", 2: "StatusRunning", 3: "StatusAborted"}
+	assert.NotEmpty(t, sfcDiagsConstSetValidRange("saga.Status", declaredExtra, loop, "kernel/saga/status.go", 42),
+		"a declared const outside the Valid() loop range must fire C5")
+
+	// The inverse: Valid() admits a value that no declared const carries.
+	loopExtra := map[int64]bool{1: true, 2: true, 3: true}
+	assert.NotEmpty(t, sfcDiagsConstSetValidRange("saga.Status", declared, loopExtra, "kernel/saga/status.go", 42),
+		"a Valid()-admitted value with no declared const must fire C5")
 }
 
 // TestSagaCoverageGolden_REDFixture proves the golden detection path fires when
@@ -426,6 +627,9 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 		"kernel/saga/journal/event.go", 135)...)
 	all = append(all, sfcGoldenDiags(art, []byte("drift\n"),
 		[]byte("no markers"), []byte("no markers"))...)
+	all = append(all, sfcDiagsConstSetValidRange("saga.Status",
+		map[int64]string{9: "StatusAborted"}, map[int64]bool{1: true},
+		"kernel/saga/status.go", 42)...)
 
 	require.NotEmpty(t, all, "self-check must exercise at least one diagnostic")
 	for _, d := range all {
