@@ -133,13 +133,28 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // toListResponseDataItem converts a ledger.Entry to auditlist.ResponseDataItem.
 // B2-C-09: Payload is scrubbed of sensitive fields via pkg/redaction.RedactPayload
 // before being returned to API consumers.
+//
+// Principal exposure (issue #1229 §4): SubjectID and OccurredAt are surfaced
+// (additive, omitempty — empty/zero for rows predating PR-A2). SessionID is
+// deliberately NOT exposed (it matches pkg/redaction's sensitive-key set —
+// a live-session credential-adjacent token). TenantID is not exposed either
+// (no producer source on develop). Cross-tenant reads are structurally
+// impossible: the contract declares no tenantId query parameter, so there is
+// no typed surface through which a caller could request another tenant — tenant
+// scoping is ctx-derived only (type-system Hard isolation by absence).
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
+	occurredAt := ""
+	if !e.OccurredAt.IsZero() {
+		occurredAt = e.OccurredAt.Format(time.RFC3339)
+	}
 	return &auditlist.ResponseDataItem{
-		ID:        e.ID,
-		EventID:   e.EventID,
-		EventType: e.EventType,
-		ActorID:   e.ActorID,
-		Timestamp: e.Timestamp.Format(time.RFC3339),
-		Payload:   json.RawMessage(redaction.RedactPayload(e.Payload)),
+		ID:         e.ID,
+		EventID:    e.EventID,
+		EventType:  e.EventType,
+		ActorID:    e.ActorID,
+		SubjectID:  e.SubjectID,
+		OccurredAt: occurredAt,
+		Timestamp:  e.Timestamp.Format(time.RFC3339),
+		Payload:    json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
 }
