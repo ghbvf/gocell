@@ -328,8 +328,7 @@ func unconditionalSlots(stmt ast.Stmt) []ast.Node {
 // callee type-resolves to credentialauthority.Assert.
 func nodeContainsAssertCall(info *types.Info, n ast.Node) bool {
 	_, found := FindFirstInSubtree[ast.CallExpr](n, func(call *ast.CallExpr) bool {
-		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-		return ok && pkgPath == credAuthorityPkgPath && name == credAuthorityFnName
+		return IsCallToPkgFunc(info, call, credAuthorityPkgPath, credAuthorityFnName)
 	})
 	return found
 }

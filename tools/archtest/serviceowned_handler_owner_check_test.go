@@ -1054,8 +1054,7 @@ func checkFunnelReturnForms(pass *Pass, fn *ast.FuncDecl, rel string) []Diagnost
 // expected inside the funnel and is treated as a B2 violation if present
 // (would still be flagged via the otherCalls / notFoundCalls accounting).
 func isErrCodeNewCall(typesInfo *types.Info, call *ast.CallExpr) bool {
-	pkg, name, ok := resolveErrcodeCtor(typesInfo, call)
-	return ok && pkg == serviceOwnedErrcodePkg && name == "New"
+	return IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "New")
 }
 
 // isErrCodeNewOrWrapCall reports whether call resolves via go/types to
@@ -1068,23 +1067,8 @@ func isErrCodeNewCall(typesInfo *types.Info, call *ast.CallExpr) bool {
 // Detection requires SSA dataflow analysis; tracked at gh #1199 alongside
 // the SSA callgraph upgrade.
 func isErrCodeNewOrWrapCall(typesInfo *types.Info, call *ast.CallExpr) bool {
-	pkg, name, ok := resolveErrcodeCtor(typesInfo, call)
-	if !ok || pkg != serviceOwnedErrcodePkg {
-		return false
-	}
-	return name == "New" || name == "Wrap"
-}
-
-// resolveErrcodeCtor resolves a call's callee through go/types and returns
-// the package path and symbol name. Bare-Ident (dot-import) and SelectorExpr
-// (qualified) and IndexExpr (explicit generic, defensive) shapes all
-// resolve correctly.
-func resolveErrcodeCtor(typesInfo *types.Info, call *ast.CallExpr) (pkgPath, name string, ok bool) {
-	ref := unwrapCalleeForResolve(call.Fun)
-	if ref == nil {
-		return "", "", false
-	}
-	return ResolvePackageRef(typesInfo, ref)
+	return IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "New") ||
+		IsCallToPkgFunc(typesInfo, call, serviceOwnedErrcodePkg, "Wrap")
 }
 
 // isKindNotFoundArg reports whether arg evaluates to errcode.KindNotFound,
@@ -1254,9 +1238,19 @@ func calleeIdentName(ref ast.Expr) string {
 	return ""
 }
 
-// unwrapCalleeForResolve strips IndexExpr / IndexListExpr wrappers added by
-// explicit generic type arguments so the underlying SelectorExpr / Ident can
-// be passed to ResolvePackageRef.
+// unwrapCalleeForResolve strips ParenExpr (parenthesized callee) and
+// IndexExpr / IndexListExpr (explicit generic type arguments) wrappers, at any
+// nesting level, so the underlying SelectorExpr / Ident can be passed to
+// ResolvePackageRef.
+//
+// NOTE: callresolver.IsCallToPkgFunc folds the unwrap+resolve+(pkg,name)-compare
+// shape, and the errcode-ctor sites here were migrated to it. This local copy is
+// deliberately RETAINED — the ownership/BFS sites (isOwnershipMismatchCall,
+// fileCallsAuthCheckOwnerFromEntries) need the *unwrapped ast.Expr* itself (to
+// feed calleeIdentName for intra-file call-graph naming), not the bool that
+// IsCallToPkgFunc returns, and callresolver.unwrapCallee is unexported. The
+// duplicated 4-line switch is the accepted cost of keeping that expr-returning
+// helper local rather than widening the façade.
 //
 // IndexExpr handles single-type-arg generic dispatch (`CheckOwner[T](...)`,
 // the only currently-instantiable form for `CheckOwner[T any]`). IndexListExpr
@@ -1266,6 +1260,10 @@ func calleeIdentName(ref ast.Expr) string {
 // produces IndexListExpr; the branch is defensive only.
 func unwrapCalleeForResolve(fun ast.Expr) ast.Expr {
 	switch v := fun.(type) {
+	case *ast.ParenExpr:
+		// Parenthesized callee, e.g. `(auth.CheckOwner)(...)` — strip parens at
+		// any nesting level (mirrors go/ast.Unparen + callresolver.unwrapCallee).
+		return unwrapCalleeForResolve(v.X)
 	case *ast.SelectorExpr, *ast.Ident:
 		return v
 	case *ast.IndexExpr:

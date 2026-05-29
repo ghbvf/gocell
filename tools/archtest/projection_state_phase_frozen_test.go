@@ -277,28 +277,22 @@ func phaseConstNames(f *ast.File) []string {
 // Phase.String() method to its string literal.
 func phaseStringArms(f *ast.File) map[string]string {
 	arms := map[string]string{}
-	for _, d := range f.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "String" || fn.Recv == nil || !isPhaseReceiver(fn.Recv) {
-			continue
+	WalkFuncDeclsAST([]*ast.File{f}, nil, nil, func(ctx FuncDeclContext) {
+		if ctx.Func.Name.Name != "String" || !HasReceiver(ctx.Func, "Phase") {
+			return
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			cc, ok := n.(*ast.CaseClause)
-			if !ok {
-				return true
-			}
+		EachInSubtree[ast.CaseClause](ctx.Func.Body, func(cc *ast.CaseClause) {
 			lit := firstReturnedStringLit(cc.Body)
 			if lit == "" {
-				return true
+				return
 			}
 			for _, e := range cc.List {
 				if id, ok := e.(*ast.Ident); ok {
 					arms[id.Name] = lit
 				}
 			}
-			return true
 		})
-	}
+	})
 	return arms
 }
 
@@ -316,43 +310,20 @@ func parseFileOrFatal(t *testing.T, src []byte) *ast.File {
 // literal (BasicLit), so phaseStringArms (which keys on const Idents) excludes
 // it; it is locked separately because "invalid" is also a wire/log contract.
 func phaseZeroLiteralArm(f *ast.File) string {
-	for _, d := range f.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "String" || fn.Recv == nil || !isPhaseReceiver(fn.Recv) {
-			continue
+	var lit string
+	WalkFuncDeclsAST([]*ast.File{f}, nil, nil, func(ctx FuncDeclContext) {
+		if lit != "" || ctx.Func.Name.Name != "String" || !HasReceiver(ctx.Func, "Phase") {
+			return
 		}
-		var lit string
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			cc, ok := n.(*ast.CaseClause)
-			if !ok {
-				return true
-			}
+		EachInSubtree[ast.CaseClause](ctx.Func.Body, func(cc *ast.CaseClause) {
 			for _, e := range cc.List {
 				if bl, ok := e.(*ast.BasicLit); ok && bl.Kind == token.INT && bl.Value == "0" {
 					lit = firstReturnedStringLit(cc.Body)
 				}
 			}
-			return true
 		})
-		if lit != "" {
-			return lit
-		}
-	}
-	return ""
-}
-
-func isPhaseReceiver(recv *ast.FieldList) bool {
-	if len(recv.List) != 1 {
-		return false
-	}
-	switch t := recv.List[0].Type.(type) {
-	case *ast.Ident:
-		return t.Name == "Phase"
-	case *ast.StarExpr:
-		id, ok := t.X.(*ast.Ident)
-		return ok && id.Name == "Phase"
-	}
-	return false
+	})
+	return lit
 }
 
 func firstReturnedStringLit(body []ast.Stmt) string {

@@ -166,11 +166,7 @@ func appendIfNewBaseSliceCall(
 	diags []Diagnostic, p *Pass, file *ast.File, rel string,
 	call *ast.CallExpr, cellPkgPath string,
 ) []Diagnostic {
-	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-	if !ok {
-		return diags
-	}
-	if pkgPath != cellPkgPath || name != "NewBaseSlice" {
+	if !IsCallToPkgFunc(p.TypesInfo, call, cellPkgPath, "NewBaseSlice") {
 		return diags
 	}
 	pos := p.Fset.Position(call.Pos())

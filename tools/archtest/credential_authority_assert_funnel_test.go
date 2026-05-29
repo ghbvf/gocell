@@ -249,11 +249,7 @@ func TestCredentialAuthorityAssertFunnel_DownstreamCaller_01(t *testing.T) {
 func scanAssertCallSites(p *Pass, file *ast.File, rel string) []string {
 	var out []string
 	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !ok {
-			return
-		}
-		if pkgPath != credAuthorityPkgPath || name != credAuthorityFnName {
+		if !IsCallToPkgFunc(p.TypesInfo, call, credAuthorityPkgPath, credAuthorityFnName) {
 			return
 		}
 		line := p.Fset.Position(call.Pos()).Line

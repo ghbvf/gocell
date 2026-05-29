@@ -66,6 +66,7 @@ const (
 	scannerPkgPath        = "github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	archtestPkgPath       = "github.com/ghbvf/gocell/tools/archtest"
 	typesevalPkgPath      = "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	callresolverPkgPath   = "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
 	packagesPkgPath       = "golang.org/x/tools/go/packages"
 	usage02FixturesRelDir = "tools/archtest/internal/usage02fixtures"
 )
@@ -343,7 +344,9 @@ func diagsPackagesImport(tgt passFunnelTarget) []scanner.Diagnostic {
 // scannerImportBanCount from 3 to 2, failing the assertion.
 func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 	const replacement = "archtest.{ResolvePackageRef,ResolveMethodCall,ResolveEnclosingFunc," +
-		"EvaluateConstString,FlatNonDefaultTags,KnownNonDefaultTags} / Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
+		"EvaluateConstString,FlatNonDefaultTags,KnownNonDefaultTags,WalkFuncDecls," +
+		"WalkFuncDeclsAST,IsCallToPkgFunc,HasReceiver,FuncDeclContext} / " +
+		"Pass.{IsFileInScope,IsGenerated} / archtest.ImportBan"
 	return scanForForbiddenCallees(
 		tgt,
 		map[string]map[string]bool{
@@ -360,6 +363,34 @@ func diagsResolveHelpers(tgt passFunnelTarget) []scanner.Diagnostic {
 			},
 			scannerPkgPath: {
 				"ImportBan": true,
+			},
+			// callresolver convenience layer (internal/callresolver). Business
+			// *_test.go must use the archtest.{WalkFuncDecls,WalkFuncDeclsAST,
+			// IsCallToPkgFunc,HasReceiver} façade, not import the internal pkg.
+			// WalkFuncDeclsAST is façade-only (no internal symbol of that name),
+			// so it is not banned here. FuncDeclContext (the *types.TypeName
+			// struct-literal ref) is banned alongside the funcs, mirroring how
+			// scanner.ImportBan is banned as a TypeName.
+			//
+			// Only DIRECT internal-pkg refs trip this: the façade alias
+			// `archtest.FuncDeclContext = callresolver.FuncDeclContext` used
+			// inside package archtest resolves (via types.Info.Uses) to
+			// archtestPkgPath, NOT callresolverPkgPath, so same-package façade
+			// use (e.g. a `FuncDeclContext{...}` literal in an archtest rule) is
+			// intentionally NOT flagged — that is the sanctioned path.
+			//
+			// AI-robust grade: Medium (extends the existing PASS-FUNNEL-RESOLVE-01
+			// Medium funnel with more symbols — NOT a new funnel). Downstream:
+			// type-aware ResolvePackageRef + red-fixture per-symbol lock.
+			// Upstream: Go's internal-import visibility ceiling (a sibling
+			// *_test.go in package archtest CAN import internal/callresolver), the
+			// same permanent ceiling documented for the typeseval-helper ban
+			// above — no low-cost Hard path exists, so no new gh-issue is opened.
+			callresolverPkgPath: {
+				"WalkFuncDecls":   true,
+				"IsCallToPkgFunc": true,
+				"HasReceiver":     true,
+				"FuncDeclContext": true,
 			},
 		},
 		replacement,
@@ -1143,6 +1174,42 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 			"(qualified L123 + alias L124 + dot-import L125 must each trip the detector; "+
 			"exact-count regression lock — reverting TypeName fix drops to 2)",
 			scannerImportBanCount, wantImportBanCount)
+	}
+
+	// callresolver helpers (internal/callresolver). Per-symbol assertion matches
+	// the exact "instead of <callresolverPkgPath>.<sym>" clause (the replacement
+	// string says "archtest.<sym>", so this does not collide with the helper
+	// names embedded in every message's replacement). The 3 funcs each appear in
+	// 3 forms (qualified + alias + dot-import) → ≥1 per symbol; FuncDeclContext
+	// (the *types.TypeName struct-literal ref) is exact-count == 3 (qualified +
+	// alias + dot-import bare Ident), mirroring the ImportBan TypeName 3-form lock.
+	callresolverFuncs := []string{"WalkFuncDecls", "IsCallToPkgFunc", "HasReceiver"}
+	perCRCount := make(map[string]int, len(callresolverFuncs))
+	var crFuncDeclContextCount int
+	for _, d := range resolveDiags {
+		if strings.Contains(d.Message, callresolverPkgPath+".FuncDeclContext") {
+			crFuncDeclContextCount++
+			continue
+		}
+		for _, sym := range callresolverFuncs {
+			if strings.Contains(d.Message, callresolverPkgPath+"."+sym) {
+				perCRCount[sym]++
+			}
+		}
+	}
+	for _, sym := range callresolverFuncs {
+		if perCRCount[sym] == 0 {
+			t.Errorf("PASS-FUNNEL-RESOLVE-01: callresolver helper %q produced 0 diagnostics on red fixture; "+
+				"either the fixture lines for this symbol were removed from redfixture.go "+
+				"or the detector regressed for this symbol (per-symbol regression lock)",
+				sym)
+		}
+	}
+	const wantCRFuncDeclContextCount = 3
+	if crFuncDeclContextCount != wantCRFuncDeclContextCount {
+		t.Errorf("PASS-FUNNEL-RESOLVE-01: callresolver.FuncDeclContext diagnostics on red fixture = %d, want %d "+
+			"(qualified + alias + dot-import struct-literal refs must each trip the *types.TypeName branch)",
+			crFuncDeclContextCount, wantCRFuncDeclContextCount)
 	}
 
 	// PASS-FUNNEL-FIXTURE-TAG-01 per-form coverage. Cross-package fixture forms

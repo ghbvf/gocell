@@ -53,6 +53,15 @@ import (
 	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — same package, different symbols.
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+
+	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — callresolver helpers
+	// (qualified + alias + dot-import; unlike typeseval, callresolver exports no
+	// name that collides with the scanner dot-import, so all 3 forms coexist —
+	// the dot-import form locks resolveBarePkgSymbol's *types.Func + *types.TypeName
+	// branches for callresolver directly).
+	"github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	. "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	cr "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
 )
 
 // VIOLATION samples — value references suffice for typeseval.ResolvePackageRef
@@ -133,6 +142,23 @@ var (
 	_ = scanner.ImportBan{} // qualified (value reference, zero-value struct literal)
 	_ = sn.ImportBan{}      // alias-import
 	_ = ImportBan{}         // dot-import (bare Ident from `. "…/scanner"` above)
+
+	// callresolver helpers (qualified + alias). FuncDeclContext{} exercises the
+	// *types.TypeName struct-literal branch (same shape as scanner.ImportBan{}).
+	_ = callresolver.WalkFuncDecls     // qualified
+	_ = callresolver.IsCallToPkgFunc   // qualified
+	_ = callresolver.HasReceiver       // qualified
+	_ = callresolver.FuncDeclContext{} // qualified (TypeName struct-literal ref)
+	_ = cr.WalkFuncDecls               // alias-import
+	_ = cr.IsCallToPkgFunc             // alias-import
+	_ = cr.HasReceiver                 // alias-import
+	_ = cr.FuncDeclContext{}           // alias-import
+	// dot-import (bare Ident) — resolveBarePkgSymbol *types.Func (funcs) +
+	// *types.TypeName (FuncDeclContext) branches for callresolver.
+	_ = WalkFuncDecls     // dot-import
+	_ = IsCallToPkgFunc   // dot-import
+	_ = HasReceiver       // dot-import
+	_ = FuncDeclContext{} // dot-import (TypeName bare Ident)
 )
 
 // PASS-FUNNEL-FIXTURE-TAG-01 V' RED — type-aware (callee, arg) form-uniqueness.

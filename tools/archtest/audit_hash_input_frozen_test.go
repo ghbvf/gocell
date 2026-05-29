@@ -160,85 +160,50 @@ func runAuditHashInputA2Rule(p *Pass) []Diagnostic {
 		return nil
 	}
 	var diags []Diagnostic
-	for _, file := range p.Files {
-		rel := p.Rel(file)
-		if strings.HasSuffix(rel, "_test.go") {
-			continue
+	WalkFuncDecls(p, func(ctx FuncDeclContext) {
+		if strings.HasSuffix(ctx.Rel, "_test.go") {
+			return
 		}
-		diags = append(diags, scanFileForHmacViolations(p, file, rel)...)
-	}
-	return diags
-}
-
-// scanFileForHmacViolations iterates top-level funcs in file; for each, checks
-// whether the func is the sanctioned ComputeHash method, then walks the body
-// for hmac.New calls.
-func scanFileForHmacViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
-	var diags []Diagnostic
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		sanctioned := isSanctionedComputeHash(fn)
-		diags = append(diags, scanFuncBodyForHmacViolations(p.TypesInfo, p.Fset, rel, fn, sanctioned)...)
-	}
-	return diags
-}
-
-// scanFuncBodyForHmacViolations walks fn.Body, emits a Diagnostic for each
-// hmac.New call; suppresses them when sanctioned.
-func scanFuncBodyForHmacViolations(info *types.Info, fset *token.FileSet, rel string, fn *ast.FuncDecl, sanctioned bool) []Diagnostic {
-	var diags []Diagnostic
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || !isHmacNewCall(info, call) || sanctioned {
-			return true
-		}
-		pos := fset.Position(call.Pos())
-		diags = append(diags, Diagnostic{
-			Rel:  rel,
-			Line: pos.Line,
-			Message: fmt.Sprintf(
-				"hmac.New called outside Protocol.ComputeHash (inside %s) — "+
-					"all audit HMAC must flow through Protocol.ComputeHash with the canonical auditHashInput marshaling",
-				fn.Name.Name,
-			),
-		})
-		return true
+		diags = append(diags, scanFuncBodyForHmacViolations(ctx)...)
 	})
 	return diags
 }
 
-// isHmacNewCall resolves call.Fun via go/types and reports whether the callee
-// is crypto/hmac.New. Alias-proof: handles `hmac.New`, `h.New` after
-// `import h "crypto/hmac"`, and `New` after `import . "crypto/hmac"`.
-func isHmacNewCall(info *types.Info, call *ast.CallExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
-	return ok && pkgPath == "crypto/hmac" && name == "New"
-}
-
-// isSanctionedComputeHash reports whether fn is `func (*Protocol) ComputeHash`
-// (value or pointer receiver). hasProtocolReceiver pins the receiver type.
-func isSanctionedComputeHash(fn *ast.FuncDecl) bool {
-	return fn.Name != nil && fn.Name.Name == "ComputeHash" && hasProtocolReceiver(fn)
-}
-
-// hasProtocolReceiver reports whether fn declares a value-or-pointer receiver
-// whose base type identifier is exactly "Protocol".
-func hasProtocolReceiver(fn *ast.FuncDecl) bool {
-	if fn.Recv == nil || len(fn.Recv.List) == 0 {
-		return false
+// scanFuncBodyForHmacViolations walks the FuncDecl body, emitting a Diagnostic
+// for each crypto/hmac.New call; suppresses them when the enclosing func is the
+// sanctioned `func (*Protocol) ComputeHash` (HasReceiver pins the receiver, so
+// a same-named method on another type is not exempt). IsCallToPkgFunc is
+// alias-proof: handles `hmac.New`, `h.New` after `import h "crypto/hmac"`, and
+// `New` after `import . "crypto/hmac"`.
+//
+// HasReceiver (via scanner.ReceiverTypeName) also matches generic receivers
+// `Protocol[T]`. Protocol is non-generic today, so this is a no-op; if Protocol
+// ever becomes generic, re-confirm the exemption still scopes to the intended
+// ComputeHash method (the broadening only ever *exempts* more, never detects
+// less, so it cannot cause a missed hmac.New violation on a non-Protocol type).
+func scanFuncBodyForHmacViolations(ctx FuncDeclContext) []Diagnostic {
+	sanctioned := ctx.Func.Name != nil && ctx.Func.Name.Name == "ComputeHash" &&
+		HasReceiver(ctx.Func, "Protocol")
+	if sanctioned {
+		return nil
 	}
-	recvType := fn.Recv.List[0].Type
-	if star, ok := recvType.(*ast.StarExpr); ok {
-		recvType = star.X
-	}
-	ident, ok := recvType.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	return ident.Name == "Protocol"
+	var diags []Diagnostic
+	EachInSubtree[ast.CallExpr](ctx.Func.Body, func(call *ast.CallExpr) {
+		if !IsCallToPkgFunc(ctx.Info, call, "crypto/hmac", "New") {
+			return
+		}
+		pos := ctx.Fset.Position(call.Pos())
+		diags = append(diags, Diagnostic{
+			Rel:  ctx.Rel,
+			Line: pos.Line,
+			Message: fmt.Sprintf(
+				"hmac.New called outside Protocol.ComputeHash (inside %s) — "+
+					"all audit HMAC must flow through Protocol.ComputeHash with the canonical auditHashInput marshaling",
+				ctx.Func.Name.Name,
+			),
+		})
+	})
+	return diags
 }
 
 // TestAuditHashInputFrozen_B_ReverseSelfCheck proves the A2 scanner
@@ -339,14 +304,18 @@ func scanSyntheticSource(t *testing.T, src string) []Diagnostic {
 		t.Fatalf("type-check synthetic source: %v", err)
 	}
 	var diags []Diagnostic
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
+	// Standalone load (own info/fset, no Pass) — build the FuncDeclContext the
+	// same way the WalkFuncDecls engine does so the shared per-func scanner runs
+	// against the synthetic typed info. EachInChildren keeps this depth-1
+	// FuncDecl walk SCANNER-FRAMEWORK-USAGE compliant.
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Body == nil {
+			return
 		}
-		sanctioned := isSanctionedComputeHash(fn)
-		diags = append(diags, scanFuncBodyForHmacViolations(info, fset, "synthetic.go", fn, sanctioned)...)
-	}
+		diags = append(diags, scanFuncBodyForHmacViolations(FuncDeclContext{
+			File: file, Func: fn, Info: info, Fset: fset, Rel: "synthetic.go",
+		})...)
+	})
 	return diags
 }
 
