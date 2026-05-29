@@ -44,6 +44,72 @@ func TestWebhookContractSchemaValid(t *testing.T) {
 	assert.NoError(t, schema.Validate(doc), "valid webhook inbound contract must pass schema validation")
 }
 
+// TestWebhookContractSchema_MissingDirectionFails verifies that a webhook
+// contract that omits the direction field is rejected (direction is required so
+// the inbound/outbound flow is never ambiguous — fail-closed).
+func TestWebhookContractSchema_MissingDirectionFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "${deliveryId}.${timestamp}.${body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"webhook contract without direction must be rejected (direction is required)")
+}
+
+// TestWebhookContractSchema_InboundMissingSignatureFails verifies that an
+// inbound webhook contract that omits signature is rejected (inbound requires
+// signature + payload so verification metadata is never absent — fail-closed).
+func TestWebhookContractSchema_InboundMissingSignatureFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook contract without signature must be rejected (signature is required for inbound)")
+}
+
 // TestWebhookContractSchema_HandWrittenReceiversFails verifies that a
 // contract.yaml with a hand-written "receivers" key under endpoints is
 // rejected by additionalProperties:false (receivers is derived, yaml:"-").

@@ -212,6 +212,70 @@ func TestContractRegistry_Consumers_NotFound(t *testing.T) {
 	errcodetest.AssertCode(t, err, errcode.ErrContractNotFound)
 }
 
+// webhookProject builds a project with one inbound webhook contract whose
+// receiver/dispatcher fields + signature/payload pointers are populated so the
+// registry's webhook awareness (Provider/Consumers) and deep-copy isolation can
+// be exercised.
+func webhookProject() *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"webhook-stripe-events-v1": {
+				ID:        "webhook-stripe-events-v1",
+				Kind:      "webhook",
+				Direction: "inbound",
+				OwnerCell: metadatatest.CellIDAccessCore,
+				Signature: &metadata.WebhookSignatureMeta{Algorithm: "hmac-sha256"},
+				Payload:   &metadata.WebhookPayloadMeta{ContentType: "application/json"},
+				Endpoints: metadata.EndpointsMeta{
+					Inbound:     &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+					Receivers:   []string{metadatatest.CellIDAccessCore},
+					Dispatchers: []string{metadatatest.CellIDAuditCore},
+				},
+			},
+		},
+	}
+}
+
+// TestContractRegistry_WebhookProviderConsumers verifies webhook is in the
+// Provider/Consumers closed set: Provider is the ownerCell, Consumers are the
+// derived receivers (no "unknown contract kind" error).
+func TestContractRegistry_WebhookProviderConsumers(t *testing.T) {
+	reg := registry.NewContractRegistry(webhookProject())
+
+	provider, err := reg.Provider("webhook-stripe-events-v1")
+	require.NoError(t, err)
+	assert.Equal(t, metadatatest.CellIDAccessCore, provider)
+
+	consumers, err := reg.Consumers("webhook-stripe-events-v1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{metadatatest.CellIDAccessCore}, consumers)
+}
+
+// TestContractRegistry_WebhookDeepCopyIsolation verifies the deep copy returned
+// by Get does not alias the registry's webhook slices/pointers: mutating the
+// copy must not affect a second copy.
+func TestContractRegistry_WebhookDeepCopyIsolation(t *testing.T) {
+	reg := registry.NewContractRegistry(webhookProject())
+
+	a := reg.Get("webhook-stripe-events-v1")
+	require.NotNil(t, a)
+	a.Endpoints.Receivers[0] = "mutated"
+	a.Endpoints.Dispatchers[0] = "mutated"
+	a.Signature.Algorithm = "mutated"
+	a.Endpoints.Inbound.SourceID = "mutated"
+
+	b := reg.Get("webhook-stripe-events-v1")
+	require.NotNil(t, b)
+	assert.Equal(t, metadatatest.CellIDAccessCore, b.Endpoints.Receivers[0],
+		"mutating one copy's Receivers must not leak through the registry")
+	assert.Equal(t, metadatatest.CellIDAuditCore, b.Endpoints.Dispatchers[0],
+		"mutating one copy's Dispatchers must not leak through the registry")
+	assert.Equal(t, "hmac-sha256", b.Signature.Algorithm,
+		"mutating one copy's Signature must not leak through the registry")
+	assert.Equal(t, "stripe", b.Endpoints.Inbound.SourceID,
+		"mutating one copy's Inbound must not leak through the registry")
+}
+
 func TestContractRegistry_AllIDs(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
 	ids := reg.AllIDs()

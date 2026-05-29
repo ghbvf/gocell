@@ -1656,64 +1656,115 @@ func (v *Validator) sliceMixesHTTPVisibility(s *metadata.SliceMeta) bool {
 	return hasPublic && hasInternal
 }
 
-// validateFMT35 enforces the subscribe-only placement of the contractUsage
-// handler / group / field columns:
+// validateFMT35 enforces the per-role placement of the contractUsage
+// handler / group / field / sourceID / targetSelector columns. Each role
+// permits a different subset of columns; the rule fires when a required column
+// is absent or a forbidden column is set:
 //
-//   - role=subscribe MUST carry a handler (the consumer handler method name
-//     cellgen renders into reg.Subscribe; absent → cellgen would emit an empty
-//     c.<field>. expression).
-//   - any non-subscribe role MUST NOT carry handler / group / field — those
-//     columns are meaningless outside subscribe and silently ignored by
-//     cellgen, so a stray value is a latent authoring mistake.
+//   - subscribe:        handler required; group/field optional; sourceID/targetSelector forbidden
+//   - webhook-receive:  handler+sourceID required; field optional; group/targetSelector forbidden
+//   - webhook-dispatch: targetSelector+sourceID required; field optional; handler/group forbidden
+//   - any other role:   all five columns forbidden
 //
 // These constraints also live in slice.schema.json as if/then conditionals,
 // but that schema is not run by `gocell validate` (see
-// kernel/metadata/schemas/embed.go — "planned Phase 2"). FMT-35 enforces them
-// in the governance main path so the rule actually fires, independent of any
-// schema-runner wiring.
+// kernel/metadata/schemas/embed.go — "planned Phase 2"). FMT-35 is the live
+// enforcement path, so the matrix below MUST stay in sync with the schema.
 func (v *Validator) validateFMT35() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			field := fmt.Sprintf("contractUsages[%d]", i)
-			if cu.Role == string(cellvocab.RoleSubscribe) {
-				if cu.Handler == "" {
-					results = append(results, v.newError(
-						codeFMT35, IssueRequired,
-						sliceFile(s), field+".handler",
-						fmt.Sprintf(
-							"slice %q contractUsage %q has role=subscribe but no handler;"+
-								" cellgen needs the consumer handler method name to generate reg.Subscribe",
-							s.ID, cu.Contract,
-						),
-						"set handler: to the consumer handler method name (e.g. HandleEvent)",
-					))
-				}
-				continue
-			}
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "handler", cu.Handler)...)
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "group", cu.Group)...)
-			results = append(results, v.forbidSubscribeColumn(s, cu, field, "field", cu.Field)...)
+			results = append(results, v.checkFMT35Columns(s, cu, field)...)
 		}
 	}
 	return results
 }
 
-// forbidSubscribeColumn reports a FMT-35 error when a subscribe-only column
-// (handler / group / field) is set on a non-subscribe contractUsage.
-func (v *Validator) forbidSubscribeColumn(
-	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column, value string,
-) []ValidationResult {
-	if value == "" {
-		return nil
+// fmt35Placement is the disposition of a single contractUsage placement column
+// for one role.
+type fmt35Placement uint8
+
+const (
+	fmt35Forbidden fmt35Placement = iota // column must be empty
+	fmt35Optional                        // column may be empty or set
+	fmt35Required                        // column must be non-empty
+)
+
+// fmt35RoleColumns returns the placement rule for each of the five placement
+// columns (handler, group, field, sourceID, targetSelector) for the given
+// role. The matrix mirrors the if/then conditionals in slice.schema.json; any
+// role not listed forbids all five columns.
+func fmt35RoleColumns(role string) (handler, group, field, sourceID, targetSelector fmt35Placement) {
+	switch role {
+	case string(cellvocab.RoleSubscribe):
+		return fmt35Required, fmt35Optional, fmt35Optional, fmt35Forbidden, fmt35Forbidden
+	case string(cellvocab.RoleWebhookReceive):
+		return fmt35Required, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Forbidden
+	case string(cellvocab.RoleWebhookDispatch):
+		return fmt35Forbidden, fmt35Forbidden, fmt35Optional, fmt35Required, fmt35Required
+	default:
+		return fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden, fmt35Forbidden
 	}
-	return []ValidationResult{v.newError(
+}
+
+// checkFMT35Columns reports a FMT-35 finding for every placement column whose
+// presence/absence violates the role's matrix entry.
+func (v *Validator) checkFMT35Columns(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field string,
+) []ValidationResult {
+	hRule, gRule, fRule, sRule, tRule := fmt35RoleColumns(cu.Role)
+	cols := []struct {
+		name  string
+		value string
+		rule  fmt35Placement
+	}{
+		{"handler", cu.Handler, hRule},
+		{"group", cu.Group, gRule},
+		{"field", cu.Field, fRule},
+		{"sourceID", cu.SourceID, sRule},
+		{"targetSelector", cu.TargetSelector, tRule},
+	}
+	var results []ValidationResult
+	for _, c := range cols {
+		switch {
+		case c.rule == fmt35Required && c.value == "":
+			results = append(results, v.fmt35RequiredColumn(s, cu, field, c.name))
+		case c.rule == fmt35Forbidden && c.value != "":
+			results = append(results, v.fmt35ForbiddenColumn(s, cu, field, c.name))
+		}
+	}
+	return results
+}
+
+// fmt35RequiredColumn reports a FMT-35 error when a column required for the
+// contractUsage's role is empty.
+func (v *Validator) fmt35RequiredColumn(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column string,
+) ValidationResult {
+	return v.newError(
+		codeFMT35, IssueRequired,
+		sliceFile(s), field+"."+column,
+		fmt.Sprintf(
+			"slice %q contractUsage %q has role=%q but no %s; %s is required for this role",
+			s.ID, cu.Contract, cu.Role, column, column,
+		),
+		fmt.Sprintf("set %s: on this contractUsage (required for role=%q)", column, cu.Role),
+	)
+}
+
+// fmt35ForbiddenColumn reports a FMT-35 error when a column forbidden for the
+// contractUsage's role is set.
+func (v *Validator) fmt35ForbiddenColumn(
+	s *metadata.SliceMeta, cu metadata.ContractUsage, field, column string,
+) ValidationResult {
+	return v.newError(
 		codeFMT35, IssueForbidden,
 		sliceFile(s), field+"."+column,
 		fmt.Sprintf(
-			"slice %q contractUsage %q has role=%q but sets %s; %s is only valid for role=subscribe",
+			"slice %q contractUsage %q has role=%q but sets %s; %s is not valid for this role",
 			s.ID, cu.Contract, cu.Role, column, column,
 		),
-		fmt.Sprintf("remove %s: from this contractUsage (only role=subscribe carries it)", column),
-	)}
+		fmt.Sprintf("remove %s: from this contractUsage (not valid for role=%q)", column, cu.Role),
+	)
 }

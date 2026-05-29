@@ -15,6 +15,22 @@ in one of two directions:
 > outbox consumer、SSRF guard、healthz/metrics）在后续 PR 落地（receiver = PR-3，
 > SSRF = PR-4，dispatcher = PR-5）。kernel 纯计算内核（Signer/Verifier/Source）已在
 > PR-1（#1251）落地于 `kernel/webhook/`。
+>
+> **PR-2 → PR-3/5/6 排序约束（forward reference）**：cellgen 的 `cell.tmpl` 已无条件
+> emit `reg.RegisterWebhookReceiver/Dispatch` 调用，但这两个 `cell.Registrar` 方法本体
+> 在 PR-3/PR-5 才落地。PR-2 之所以 `go build ./...` 绿，是因为**当前没有任何真实 webhook
+> cell**——这些调用只存在于 cellgen 的 golden 文本夹具（`*.go.golden`，不参与编译）。
+> 因此 **PR-3（receiver）/ PR-5（dispatcher）必须先把对应 Registrar 方法 + bootstrap drain
+> 落地，才能生成第一个真实 webhook cell（PR-6 demo）**；否则 `gocell generate cell` 会产出
+> 引用不存在方法的 `cell_gen.go`（编译失败）。这是有意的 seam 排序，不是缺陷。
+>
+> **codegen 零产物语义**：webhook 契约即便 `codegen: true`，contractgen 也**有意产出零
+> per-contract 产物**（注册经 cellgen 字面量，不经 contractgen；见 `generator.go` webhook 分支
+> + 下方差异表）。`codegen: true` 仅用于让 `Generate(ScopeAll)` 选中该契约。`CODEGEN-CONTRACT-GEN-01`
+> archtest（opted-in 契约须有 `types_gen.go`/`iface_gen.go`）**已对 webhook kind 显式豁免**
+> （本 PR 落地：`TestCodegenContractGen01_OptedInHasGen` 对 `Kind == "webhook"` 提前 `continue`，
+> 与 `generator.go` 零产物分支对齐）。因此 PR-6 落地首个真实 webhook 契约（即使 `codegen: true`）
+> 时不会 false-fail。
 
 ## 文件布局
 

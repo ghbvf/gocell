@@ -121,6 +121,10 @@ type SubscriptionGenSpec struct {
 type WebhookReceiverGenSpec struct {
 	// ContractID is the webhook contract id, e.g. "webhook.stripe.payment-events.v1".
 	ContractID string
+	// SliceID identifies the slice owning the handler — the primary sort key so
+	// output ordering is deterministic even when one contract is wired by more
+	// than one slice (mirrors SubscriptionGenSpec).
+	SliceID string
 	// SourceID is the secret-isolation key (slice.yaml contractUsages.sourceID).
 	SourceID string
 	// HandlerExpr is the dotted handler reference, e.g. "c.stripeSvc.HandleStripeEvent".
@@ -131,6 +135,10 @@ type WebhookReceiverGenSpec struct {
 type WebhookDispatchGenSpec struct {
 	// ContractID is the webhook contract id, e.g. "webhook.shopify.orders.v1".
 	ContractID string
+	// SliceID identifies the slice owning the selector — the primary sort key so
+	// output ordering is deterministic even when one contract is wired by more
+	// than one slice (mirrors SubscriptionGenSpec).
+	SliceID string
 	// SourceID is the signing-secret source (slice.yaml contractUsages.sourceID).
 	SourceID string
 	// SelectorExpr is the dotted selector reference, e.g. "c.shopifySvc.ShopifyTarget".

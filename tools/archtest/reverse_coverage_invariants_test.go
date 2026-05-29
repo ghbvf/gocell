@@ -243,6 +243,47 @@ func loadSliceSubscribers(root string) ([]sliceSubscriberEntry, error) {
 	return entries, nil
 }
 
+// loadSliceWebhookWiring scans cells/**/slice.yaml AND examples/**/slice.yaml
+// for webhook-receive / webhook-dispatch contractUsages and returns the set of
+// contract IDs that have at least one such wiring. Mirrors loadSliceSubscribers
+// (the contract.yaml Receivers/Dispatchers fields are derived, yaml:"-", and so
+// are NOT populated by the static loader DEAD-CONTRACT-01 uses; the wiring must
+// be discovered from the slice scan, exactly as event subscribers are).
+func loadSliceWebhookWiring(root string) (map[string]bool, error) {
+	scope := DirsScope(root, []string{"cells", "examples"},
+		MatchRels(func(rel string) bool {
+			return strings.HasSuffix(rel, "/slice.yaml")
+		}),
+	)
+
+	files, loadErr := LoadContentFiles(scope, []string{".yaml"})
+	if loadErr != nil {
+		return nil, loadErr
+	}
+
+	wired := make(map[string]bool)
+	for _, fc := range files {
+		var doc struct {
+			ContractUsages []struct {
+				Contract string `yaml:"contract"`
+				Role     string `yaml:"role"`
+			} `yaml:"contractUsages"`
+		}
+		if parseErr := yaml.Unmarshal(fc.Bytes, &doc); parseErr != nil {
+			return nil, parseErr
+		}
+		for _, cu := range doc.ContractUsages {
+			if cu.Contract == "" {
+				continue
+			}
+			if cu.Role == "webhook-receive" || cu.Role == "webhook-dispatch" {
+				wired[cu.Contract] = true
+			}
+		}
+	}
+	return wired, nil
+}
+
 // ---------------------------------------------------------------------------
 // IMPL-DECL-COVER-01
 // ---------------------------------------------------------------------------
@@ -1020,6 +1061,15 @@ func TestDeadContractCover(t *testing.T) {
 		subscriberIndex[s.ContractID] = true
 	}
 
+	// Load webhook receiver/dispatcher wiring index (contractID → has a
+	// webhook-receive or webhook-dispatch slice). Like subscriberIndex, this is
+	// discovered from the slice scan because contract.yaml Receivers/Dispatchers
+	// are derived (yaml:"-") and not populated by the static loader.
+	webhookWiredIndex, loadErr := loadSliceWebhookWiring(root)
+	if loadErr != nil {
+		t.Fatalf("DEAD-CONTRACT-01: loadSliceWebhookWiring: %v", loadErr)
+	}
+
 	// Build genPkgPath → contractYamlAbsPath from generated/contracts/http/iface_gen.go
 	// "// source:" comments. Needed because codegen remaps some source path segments
 	// (e.g. "internal" → "internalapi") that the dot-to-slash ID transform cannot reproduce.
@@ -1169,19 +1219,31 @@ func TestDeadContractCover(t *testing.T) {
 				})
 			}
 		case "webhook":
-			// Webhook contracts declare their provider via the explicit ownerCell
-			// field. Receivers/Dispatchers are derived fields (yaml:"-") populated
-			// at parse time from slice contractUsages; this archtest checks the
-			// static contract.yaml declaration only. "Has impl" is satisfied when
-			// ownerCell is set (mirrors the contractProvider() / ProviderEndpoint()
-			// post-fix semantics). Currently vacuous (no active webhook contracts)
-			// but prevents a wrong-pass when PR-6 adds real webhook contracts.
+			// A webhook contract has impl when BOTH hold:
+			//   (1) ownerCell is declared (the explicit provider; mirrors
+			//       contractProvider() / ProviderEndpoint() post-fix semantics), and
+			//   (2) at least one slice wires it via a webhook-receive (inbound) or
+			//       webhook-dispatch (outbound) contractUsage.
+			// Receivers/Dispatchers on contract.yaml are derived (yaml:"-") and not
+			// populated by this static loader, so the wiring is discovered from the
+			// slice scan (webhookWiredIndex), exactly as event subscribers are.
+			// Currently vacuous (no active webhook contracts) but prevents a
+			// wrong-pass when PR-6 adds real webhook contracts.
 			if c.OwnerCell == "" {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
 					Line: 1,
 					Message: "active webhook contract " + c.ID + " has no ownerCell declared " +
 						"(webhook provider must be the explicit ownerCell; change lifecycle to draft/deprecated if unused)",
+				})
+			}
+			if !webhookWiredIndex[c.ID] {
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: 1,
+					Message: "active webhook contract " + c.ID + " has no webhook-receive or webhook-dispatch slice wiring " +
+						"(add a contractUsages[role=webhook-receive|webhook-dispatch] entry to a slice, " +
+						"or change lifecycle to draft/deprecated if unused)",
 				})
 			}
 		default:

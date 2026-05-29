@@ -208,12 +208,21 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	return spec, nil
 }
 
-// buildSubscriptionsFromSlices scans all slices belonging to cellID and
-// converts each contractUsage[role=subscribe] entry into a SubscriptionGenSpec.
-// fieldIndex is used to resolve the cell struct field for each subscribing slice.
-// Results are sorted deterministically by SliceID then ContractID.
-func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
-	var out []SubscriptionGenSpec
+// buildSpecsFromSlices scans every slice belonging to cellID, converts each
+// contractUsage with the matching role via build, and returns the resulting
+// specs sorted deterministically by (SliceID, ContractID). It is the shared
+// kernel for the subscribe / webhook-receive / webhook-dispatch builders, which
+// differ only in the role string, the per-CU builder, and the element type
+// (sliceID/contractID accessors expose the two sort keys generically).
+func buildSpecsFromSlices[T any](
+	p *metadata.ProjectMeta,
+	cellID, role string,
+	fieldIndex *CellFieldIndex,
+	build func(p *metadata.ProjectMeta, cellID, sliceID string, cu metadata.ContractUsage, fieldIndex *CellFieldIndex) (T, error),
+	sliceID func(T) string,
+	contractID func(T) string,
+) ([]T, error) {
+	var out []T
 	for key, s := range p.Slices {
 		if !strings.HasPrefix(key, cellID+"/") {
 			continue
@@ -222,10 +231,10 @@ func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldI
 			continue
 		}
 		for _, cu := range s.ContractUsages {
-			if cu.Role != "subscribe" {
+			if cu.Role != role {
 				continue
 			}
-			spec, err := buildSubscriptionSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
+			spec, err := build(p, cellID, s.ID, cu, fieldIndex)
 			if err != nil {
 				return nil, err
 			}
@@ -233,12 +242,21 @@ func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldI
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].SliceID != out[j].SliceID {
-			return out[i].SliceID < out[j].SliceID
+		if sliceID(out[i]) != sliceID(out[j]) {
+			return sliceID(out[i]) < sliceID(out[j])
 		}
-		return out[i].ContractID < out[j].ContractID
+		return contractID(out[i]) < contractID(out[j])
 	})
 	return out, nil
+}
+
+// buildSubscriptionsFromSlices scans all slices belonging to cellID and
+// converts each contractUsage[role=subscribe] entry into a SubscriptionGenSpec,
+// sorted by SliceID then ContractID.
+func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
+	return buildSpecsFromSlices(p, cellID, "subscribe", fieldIndex, buildSubscriptionSpecFromCU,
+		func(s SubscriptionGenSpec) string { return s.SliceID },
+		func(s SubscriptionGenSpec) string { return s.ContractID })
 }
 
 // buildSubscriptionSpecFromCU validates one ContractUsage[role=subscribe]
@@ -315,36 +333,14 @@ func buildSubscriptionSpecFromCU(
 }
 
 // buildWebhookReceiversFromSlices scans all slices belonging to cellID and
-// converts each contractUsage[role=webhook-receive] entry into a WebhookReceiverGenSpec.
-// fieldIndex is used to resolve the cell struct field for each receiving slice.
-// Results are sorted deterministically by SliceID then ContractID.
+// converts each contractUsage[role=webhook-receive] entry into a
+// WebhookReceiverGenSpec, sorted by SliceID then ContractID.
 func buildWebhookReceiversFromSlices(
 	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
 ) ([]WebhookReceiverGenSpec, error) {
-	var out []WebhookReceiverGenSpec
-	for key, s := range p.Slices {
-		if !strings.HasPrefix(key, cellID+"/") {
-			continue
-		}
-		if s == nil {
-			continue
-		}
-		for _, cu := range s.ContractUsages {
-			if cu.Role != "webhook-receive" {
-				continue
-			}
-			spec, err := buildWebhookReceiverSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, spec)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		// sort by ContractID since WebhookReceiverGenSpec has no SliceID field
-		return out[i].ContractID < out[j].ContractID
-	})
-	return out, nil
+	return buildSpecsFromSlices(p, cellID, "webhook-receive", fieldIndex, buildWebhookReceiverSpecFromCU,
+		func(s WebhookReceiverGenSpec) string { return s.SliceID },
+		func(s WebhookReceiverGenSpec) string { return s.ContractID })
 }
 
 // resolveWebhookField resolves and validates the cell struct field name and
@@ -440,41 +436,21 @@ func buildWebhookReceiverSpecFromCU(
 	}
 	return WebhookReceiverGenSpec{
 		ContractID:  cu.Contract,
+		SliceID:     sliceID,
 		SourceID:    cu.SourceID,
 		HandlerExpr: "c." + fieldName + "." + cu.Handler,
 	}, nil
 }
 
 // buildWebhookDispatchesFromSlices scans all slices belonging to cellID and
-// converts each contractUsage[role=webhook-dispatch] entry into a WebhookDispatchGenSpec.
-// fieldIndex is used to resolve the cell struct field for each dispatching slice.
-// Results are sorted deterministically by ContractID.
+// converts each contractUsage[role=webhook-dispatch] entry into a
+// WebhookDispatchGenSpec, sorted by SliceID then ContractID.
 func buildWebhookDispatchesFromSlices(
 	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
 ) ([]WebhookDispatchGenSpec, error) {
-	var out []WebhookDispatchGenSpec
-	for key, s := range p.Slices {
-		if !strings.HasPrefix(key, cellID+"/") {
-			continue
-		}
-		if s == nil {
-			continue
-		}
-		for _, cu := range s.ContractUsages {
-			if cu.Role != "webhook-dispatch" {
-				continue
-			}
-			spec, err := buildWebhookDispatchSpecFromCU(p, cellID, s.ID, cu, fieldIndex)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, spec)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].ContractID < out[j].ContractID
-	})
-	return out, nil
+	return buildSpecsFromSlices(p, cellID, "webhook-dispatch", fieldIndex, buildWebhookDispatchSpecFromCU,
+		func(s WebhookDispatchGenSpec) string { return s.SliceID },
+		func(s WebhookDispatchGenSpec) string { return s.ContractID })
 }
 
 // buildWebhookDispatchSpecFromCU validates one ContractUsage[role=webhook-dispatch]
@@ -517,6 +493,7 @@ func buildWebhookDispatchSpecFromCU(
 	}
 	return WebhookDispatchGenSpec{
 		ContractID:   cu.Contract,
+		SliceID:      sliceID,
 		SourceID:     cu.SourceID,
 		SelectorExpr: "c." + fieldName + "." + cu.TargetSelector,
 	}, nil

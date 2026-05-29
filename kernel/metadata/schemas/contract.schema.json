@@ -473,6 +473,7 @@
         "required": ["kind"]
       },
       "then": {
+        "required": ["direction"],
         "properties": {
           "endpoints": {
             "type": "object",
@@ -482,6 +483,7 @@
                 "type": "object",
                 "description": "Inbound webhook routing metadata (direction=inbound only).",
                 "additionalProperties": false,
+                "required": ["pathPattern", "sourceID"],
                 "properties": {
                   "pathPattern": {
                     "type": "string",
@@ -497,7 +499,21 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "direction": { "const": "inbound" } },
+              "required": ["direction"]
+            },
+            "then": {
+              "required": ["signature", "payload"],
+              "properties": {
+                "endpoints": { "required": ["inbound"] }
+              }
+            }
+          }
+        ]
       }
     }
   ]

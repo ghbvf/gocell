@@ -60,6 +60,114 @@ func TestBuildWebhookReceiversFromSlices_HappyPath(t *testing.T) {
 	}
 }
 
+// TestBuildWebhookReceivers_SortedBySliceIDThenContractID verifies the ordering
+// invariant: receivers are sorted by (SliceID, ContractID), mirroring the
+// subscription path. The fixture is chosen so SliceID order is the REVERSE of
+// ContractID order, so the assertion deterministically distinguishes the
+// (SliceID, ContractID) sort from a ContractID-only sort.
+func TestBuildWebhookReceivers_SortedBySliceIDThenContractID(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	// alphaingest (low SliceID) receives the high-ContractID contract;
+	// zebraingest (high SliceID) receives the low-ContractID contract.
+	alpha := &metadata.SliceMeta{
+		ID: "alphaingest", BelongsToCell: "hooks", Dir: "alphaingest",
+		File: "cells/hooks/slices/alphaingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{{
+			Contract: "webhook.zzz.events.v1", Role: "webhook-receive",
+			Handler: "HandleZzz", SourceID: "zzz",
+		}},
+	}
+	zebra := &metadata.SliceMeta{
+		ID: "zebraingest", BelongsToCell: "hooks", Dir: "zebraingest",
+		File: "cells/hooks/slices/zebraingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{{
+			Contract: "webhook.aaa.events.v1", Role: "webhook-receive",
+			Handler: "HandleAaa", SourceID: "aaa",
+		}},
+	}
+	contracts := []*metadata.ContractMeta{
+		{ID: "webhook.zzz.events.v1", Kind: "webhook"},
+		{ID: "webhook.aaa.events.v1", Kind: "webhook"},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{alpha, zebra}, contracts)
+	fieldIndex := idxOf(map[string]string{"alphaingest": "alphaSvc", "zebraingest": "zebraSvc"})
+
+	spec, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if len(spec.WebhookReceivers) != 2 {
+		t.Fatalf("WebhookReceivers len = %d, want 2", len(spec.WebhookReceivers))
+	}
+	// Primary key is SliceID: alphaingest before zebraingest, regardless of
+	// their ContractIDs (which are in the opposite order).
+	if got := spec.WebhookReceivers[0].SliceID; got != "alphaingest" {
+		t.Errorf("WebhookReceivers[0].SliceID = %q, want alphaingest (sorted by SliceID)", got)
+	}
+	if got := spec.WebhookReceivers[1].SliceID; got != "zebraingest" {
+		t.Errorf("WebhookReceivers[1].SliceID = %q, want zebraingest (sorted by SliceID)", got)
+	}
+}
+
+// TestBuildWebhookDispatches_SortedBySliceIDThenContractID verifies the
+// ordering invariant for dispatches (symmetric to the receivers test): specs
+// are sorted by (SliceID, ContractID). The fixture puts SliceID order in the
+// REVERSE of ContractID order so the assertion deterministically distinguishes
+// the (SliceID, ContractID) sort from a ContractID-only sort.
+func TestBuildWebhookDispatches_SortedBySliceIDThenContractID(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	// alphapush (low SliceID) dispatches the high-ContractID contract;
+	// zebrapush (high SliceID) dispatches the low-ContractID contract.
+	alpha := &metadata.SliceMeta{
+		ID: "alphapush", BelongsToCell: "hooks", Dir: "alphapush",
+		File: "cells/hooks/slices/alphapush/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{{
+			Contract: "webhook.zzz.orders.v1", Role: "webhook-dispatch",
+			TargetSelector: "ZzzTarget", SourceID: "zzz",
+		}},
+	}
+	zebra := &metadata.SliceMeta{
+		ID: "zebrapush", BelongsToCell: "hooks", Dir: "zebrapush",
+		File: "cells/hooks/slices/zebrapush/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{{
+			Contract: "webhook.aaa.orders.v1", Role: "webhook-dispatch",
+			TargetSelector: "AaaTarget", SourceID: "aaa",
+		}},
+	}
+	contracts := []*metadata.ContractMeta{
+		{ID: "webhook.zzz.orders.v1", Kind: "webhook"},
+		{ID: "webhook.aaa.orders.v1", Kind: "webhook"},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{alpha, zebra}, contracts)
+	fieldIndex := idxOf(map[string]string{"alphapush": "alphaSvc", "zebrapush": "zebraSvc"})
+
+	spec, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if len(spec.WebhookDispatches) != 2 {
+		t.Fatalf("WebhookDispatches len = %d, want 2", len(spec.WebhookDispatches))
+	}
+	if got := spec.WebhookDispatches[0].SliceID; got != "alphapush" {
+		t.Errorf("WebhookDispatches[0].SliceID = %q, want alphapush (sorted by SliceID)", got)
+	}
+	if got := spec.WebhookDispatches[1].SliceID; got != "zebrapush" {
+		t.Errorf("WebhookDispatches[1].SliceID = %q, want zebrapush (sorted by SliceID)", got)
+	}
+}
+
 // TestBuildWebhookDispatchesFromSlices_HappyPath verifies that a slice with
 // role=webhook-dispatch produces a WebhookDispatchGenSpec with the correct
 // ContractID, SourceID, and SelectorExpr.

@@ -44,10 +44,11 @@ func buildWebhookProject(
 //nolint:unparam // id is parameterised for future callers; current tests happen to share one contractID
 func inboundWebhookContract(id, sourceID string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
-		ID:   id,
-		Kind: "webhook",
-		Dir:  "contracts/webhook/stripe/events/v1",
-		File: "contracts/webhook/stripe/events/v1/contract.yaml",
+		ID:        id,
+		Kind:      "webhook",
+		Direction: "inbound",
+		Dir:       "contracts/webhook/stripe/events/v1",
+		File:      "contracts/webhook/stripe/events/v1/contract.yaml",
 		Endpoints: metadata.EndpointsMeta{
 			Inbound: &metadata.WebhookInboundMeta{
 				PathPattern: "/webhooks/stripe/events",
@@ -62,10 +63,11 @@ func inboundWebhookContract(id, sourceID string) *metadata.ContractMeta {
 //nolint:unparam // id is parameterised for future callers; current tests happen to share one contractID
 func outboundWebhookContract(id string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
-		ID:   id,
-		Kind: "webhook",
-		Dir:  "contracts/webhook/shopify/dispatch/v1",
-		File: "contracts/webhook/shopify/dispatch/v1/contract.yaml",
+		ID:        id,
+		Kind:      "webhook",
+		Direction: "outbound",
+		Dir:       "contracts/webhook/shopify/dispatch/v1",
+		File:      "contracts/webhook/shopify/dispatch/v1/contract.yaml",
 	}
 }
 
@@ -340,6 +342,88 @@ func TestDeriveWebhookEndpoints_DirectionRoleMismatch_ReceiveOnOutbound(t *testi
 
 	err := metadata.ExportedDeriveWebhookEndpoints(pm)
 	assert.Error(t, err, "webhook-receive on outbound contract must fail direction/role mismatch")
+}
+
+// TestDeriveWebhookEndpoints_DirectionRoleMismatch_DispatchOnInbound verifies
+// the symmetric fail-closed case: a webhook-dispatch CU on an inbound contract
+// is rejected (you cannot dispatch an inbound contract). This guards the gap
+// where validateWebhookDispatch previously did not receive the contract and so
+// could not check its direction.
+func TestDeriveWebhookEndpoints_DirectionRoleMismatch_DispatchOnInbound(t *testing.T) {
+	contractID := "webhook.stripe.events.v1"
+	pm := buildWebhookProject(
+		map[string]*metadata.SliceMeta{
+			"ordercore/webhookdispatch": {
+				ID:            "webhookdispatch",
+				BelongsToCell: metadatatest.NewCellID("ordercore"),
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract:       contractID,
+						Role:           "webhook-dispatch", // wrong: contract is inbound
+						TargetSelector: "StripeTarget",
+						SourceID:       "stripe",
+					},
+				},
+			},
+		},
+		map[string]*metadata.ContractMeta{
+			contractID: inboundWebhookContract(contractID, "stripe"), // an inbound contract
+		},
+	)
+
+	err := metadata.ExportedDeriveWebhookEndpoints(pm)
+	assert.Error(t, err, "webhook-dispatch on inbound contract must fail direction/role mismatch")
+}
+
+// TestDeriveWebhookEndpoints_MissingDirectionRejected verifies that a webhook
+// contract with an empty direction is rejected fail-closed when wired by a
+// receive slice (direction is mandatory, not inferred from the inbound block).
+func TestDeriveWebhookEndpoints_MissingDirectionRejected(t *testing.T) {
+	contractID := "webhook.stripe.events.v1"
+	noDirection := inboundWebhookContract(contractID, "stripe")
+	noDirection.Direction = "" // simulate a contract authored without direction
+	pm := buildWebhookProject(
+		map[string]*metadata.SliceMeta{
+			"ordercore/webhookingest": {
+				ID:            "webhookingest",
+				BelongsToCell: metadatatest.NewCellID("ordercore"),
+				ContractUsages: []metadata.ContractUsage{
+					{
+						Contract: contractID,
+						Role:     "webhook-receive",
+						Handler:  "HandleStripeEvent",
+						SourceID: "stripe",
+					},
+				},
+			},
+		},
+		map[string]*metadata.ContractMeta{
+			contractID: noDirection,
+		},
+	)
+
+	err := metadata.ExportedDeriveWebhookEndpoints(pm)
+	assert.Error(t, err, "webhook contract without direction must be rejected fail-closed")
+}
+
+// TestDeriveWebhookEndpoints_UnreferencedContractMissingDirectionRejected is the
+// fail-closed guard for a webhook contract with an invalid direction that NO
+// slice wires: the per-CU validators never fire for it, so direction must be
+// validated in the all-contracts pass. Without that pass the contract would
+// silently persist with an empty direction.
+func TestDeriveWebhookEndpoints_UnreferencedContractMissingDirectionRejected(t *testing.T) {
+	contractID := "webhook.stripe.events.v1"
+	noDirection := inboundWebhookContract(contractID, "stripe")
+	noDirection.Direction = "" // contract authored without direction
+	pm := buildWebhookProject(
+		map[string]*metadata.SliceMeta{}, // no slice references the contract
+		map[string]*metadata.ContractMeta{
+			contractID: noDirection,
+		},
+	)
+
+	err := metadata.ExportedDeriveWebhookEndpoints(pm)
+	assert.Error(t, err, "unreferenced webhook contract with empty direction must be rejected fail-closed")
 }
 
 // ---------------------------------------------------------------------------

@@ -134,3 +134,136 @@ func TestFMT09_WebhookKindIsValid(t *testing.T) {
 		}
 	}
 }
+
+// --- FMT-35 per-role placement matrix (webhook-receive / webhook-dispatch) ---
+//
+// These guard the contradiction where cellgen + slice.schema.json require
+// handler/sourceID/targetSelector on the webhook roles while the FMT-35
+// governance rule (the live enforcement path) previously forbade them on any
+// non-subscribe role. The matrix in validateFMT35 must stay in sync with
+// slice.schema.json.
+
+// TestFMT35_WebhookReceive_Valid_Passes verifies a well-formed webhook-receive
+// CU (handler + sourceID, optional field) produces no FMT-35 finding.
+func TestFMT35_WebhookReceive_Valid_Passes(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.stripe.events.v1", Role: "webhook-receive",
+		Handler: "HandleStripeEvent", SourceID: "stripe", Field: "stripeIngest",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertNoCode(t, results, codeFMT35)
+}
+
+// TestFMT35_WebhookReceive_MissingHandler_Rejected verifies handler is required.
+func TestFMT35_WebhookReceive_MissingHandler_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.stripe.events.v1", Role: "webhook-receive", SourceID: "stripe",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].handler")
+}
+
+// TestFMT35_WebhookReceive_MissingSourceID_Rejected verifies sourceID is required.
+func TestFMT35_WebhookReceive_MissingSourceID_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.stripe.events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].sourceID")
+}
+
+// TestFMT35_WebhookReceive_WithGroupAndTargetSelector_Rejected verifies group and
+// targetSelector are forbidden on webhook-receive.
+func TestFMT35_WebhookReceive_WithGroupAndTargetSelector_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.stripe.events.v1", Role: "webhook-receive",
+		Handler: "HandleStripeEvent", SourceID: "stripe", Group: "g", TargetSelector: "T",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].group")
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].targetSelector")
+}
+
+// TestFMT35_WebhookDispatch_Valid_Passes verifies a well-formed webhook-dispatch
+// CU (targetSelector + sourceID) produces no FMT-35 finding.
+func TestFMT35_WebhookDispatch_Valid_Passes(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.shopify.dispatch.v1", Role: "webhook-dispatch",
+		TargetSelector: "ShopifyTarget", SourceID: "shopify",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertNoCode(t, results, codeFMT35)
+}
+
+// TestFMT35_WebhookDispatch_MissingTargetSelector_Rejected verifies targetSelector
+// is required for webhook-dispatch.
+func TestFMT35_WebhookDispatch_MissingTargetSelector_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.shopify.dispatch.v1", Role: "webhook-dispatch", SourceID: "shopify",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].targetSelector")
+}
+
+// TestFMT35_WebhookDispatch_WithHandler_Rejected verifies handler is forbidden on
+// webhook-dispatch (use targetSelector instead).
+func TestFMT35_WebhookDispatch_WithHandler_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.shopify.dispatch.v1", Role: "webhook-dispatch",
+		TargetSelector: "ShopifyTarget", SourceID: "shopify", Handler: "Nope",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].handler")
+}
+
+// TestFMT35_WebhookDispatch_MissingSourceID_Rejected verifies sourceID is
+// required for webhook-dispatch (completes the dispatch required-column matrix).
+func TestFMT35_WebhookDispatch_MissingSourceID_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "webhook.shopify.dispatch.v1", Role: "webhook-dispatch", TargetSelector: "ShopifyTarget",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].sourceID")
+}
+
+// TestFMT35_SubscribeWithSourceID_Rejected verifies sourceID (a webhook-only
+// column) is forbidden on subscribe.
+func TestFMT35_SubscribeWithSourceID_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/subs"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "event.foo.v1", Role: "subscribe", Handler: "HandleFoo", SourceID: "stripe",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].sourceID")
+}
+
+// TestFMT35_NonWebhookRole_SourceIDAndTargetSelectorForbidden verifies the two
+// webhook-only columns are forbidden on ordinary non-subscribe roles (the
+// matrix's default branch forbids all five columns).
+func TestFMT35_NonWebhookRole_SourceIDAndTargetSelectorForbidden(t *testing.T) {
+	project := minimalGovernanceProject()
+	project.Slices["demo/srv"] = sliceWithCU(metadata.ContractUsage{
+		Contract: "http.users.v1", Role: "serve", SourceID: "stripe", TargetSelector: "T",
+	})
+
+	results := NewValidator(project, "", clock.Real()).validateFMT35()
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].sourceID")
+	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].targetSelector")
+}
