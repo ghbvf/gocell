@@ -21,10 +21,16 @@ func TestValidateModulePath(t *testing.T) {
 		{name: "single segment", input: "foo", wantErr: false},
 		{name: "empty", input: "", wantErr: true},
 		{name: "dotdot", input: "../foo", wantErr: true},
+		{name: "embedded dotdot element", input: "foo/../bar", wantErr: true},
 		{name: "backslash", input: `foo\bar`, wantErr: true},
 		{name: "newline", input: "foo\nbar", wantErr: true},
 		{name: "tab", input: "foo\tbar", wantErr: true},
 		{name: "space", input: "foo bar", wantErr: true},
+		// Regression: the prior hand-rolled regex silently admitted these
+		// malformed paths, corrupting generated import statements (#1083 F1).
+		{name: "trailing slash", input: "github.com/acme/svc/", wantErr: true},
+		{name: "double slash", input: "github.com//acme", wantErr: true},
+		{name: "leading dash", input: "-leadingdash/x", wantErr: true},
 	}
 
 	for _, tt := range tests {

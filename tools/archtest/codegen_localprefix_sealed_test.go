@@ -58,12 +58,16 @@ const allowedLocalPrefixWriteFile = "tools/codegen/render.go"
 // goimportsPkgPath is the canonical import path whose LocalPrefix global is sealed.
 const goimportsPkgPath = "golang.org/x/tools/imports"
 
-// TestCODEGEN_LOCALPREFIX_SEALED_01 scans Go files under tools/ and cmd/ for
-// assignments to imports.LocalPrefix and fails on any outside render.go.
+// TestCODEGEN_LOCALPREFIX_SEALED_01 scans Go files across the entire module for
+// assignments to imports.LocalPrefix and fails on any outside render.go. The
+// scope is module-wide (not just tools/ + cmd/) to match the invariant's claim
+// that render.go is the ONE sanctioned writer: a write under runtime/, kernel/,
+// adapters/, cells/, pkg/, or examples/ must fail too, not slip through a
+// narrow scope.
 func TestCODEGEN_LOCALPREFIX_SEALED_01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, DirsScope(root, []string{"tools", "cmd"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, ModuleScope(root), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, f := range p.Files {
 			rel := p.Rel(f)

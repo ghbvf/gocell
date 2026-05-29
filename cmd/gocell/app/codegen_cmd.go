@@ -175,6 +175,10 @@ func runCodegenVerify[R CodegenResult](spec codegenSpec[R], args []string) error
 	local := fs.Bool("local", true,
 		"skip git worktree sandbox; verify in-place against current working tree "+
 			"(default true; CI should pass --local=false for sandbox mode)")
+	mp := fs.String("module-path", "",
+		"consuming repo's Go module path (e.g. github.com/acme/svc); must match the "+
+			"--module-path used to generate, else the diff reports spurious drift. "+
+			"Default: read from go.mod")
 	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -188,13 +192,15 @@ func runCodegenVerify[R CodegenResult](spec codegenSpec[R], args []string) error
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
 	if *local {
-		return runCodegenVerifyInPlace(spec, root, locatorOpts...)
+		return runCodegenVerifyInPlace(spec, root, *mp, locatorOpts...)
 	}
-	return runCodegenVerifySandbox(spec, root)
+	return runCodegenVerifySandbox(spec, root, *mp)
 }
 
-func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string, locatorOpts ...metadata.LocatorOption) error {
-	modulePath, err := resolveModule(root, "")
+func runCodegenVerifyInPlace[R CodegenResult](
+	spec codegenSpec[R], root, modulePathFlag string, locatorOpts ...metadata.LocatorOption,
+) error {
+	modulePath, err := resolveModule(root, modulePathFlag)
 	if err != nil {
 		return err
 	}
@@ -218,9 +224,9 @@ func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string, 
 	return nil
 }
 
-func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root string) error {
+func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root, modulePathFlag string) error {
 	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
-		modulePath, merr := resolveModule(workdir, "")
+		modulePath, merr := resolveModule(workdir, modulePathFlag)
 		if merr != nil {
 			return merr
 		}

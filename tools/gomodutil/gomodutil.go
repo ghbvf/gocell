@@ -11,47 +11,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
-// modulePathRe validates a plausible Go module path. It mirrors the spirit of
-// cellgen's modulePathPattern: letters/digits/hyphens/underscores/dots/slashes
-// are all valid; backslash, whitespace, control characters, and ".." are not.
-// Single-segment paths like "foo" are accepted (valid for local/test modules).
-var modulePathRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$`)
-
-// ValidateModulePath checks that s is a plausible Go module path suitable for
-// use in generated import paths. It rejects:
-//   - empty strings
-//   - paths containing ".." (traversal)
-//   - paths containing backslash (Windows path separator)
-//   - paths containing whitespace or control characters
-//   - paths that do not match the module-path character set
+// ValidateModulePath checks that s is a valid Go module path suitable for use
+// as the prefix of generated import paths. It delegates to the canonical
+// validator the Go toolchain itself uses (golang.org/x/mod/module) rather than
+// a hand-rolled regex — the regex silently admitted malformed paths (trailing
+// slash, double slash) that would corrupt the import statements emitted into
+// generated files.
+//
+// It uses CheckImportPath, not CheckPath: the value is joined with the
+// module-relative package suffix to form a Go *import path*, and CheckImportPath
+// accepts single-segment local/test module paths like "foo" (which CheckPath
+// rejects with "missing dot in first path element"). CheckImportPath rejects
+// empty strings, "." / ".." path elements, backslashes, whitespace, control
+// characters, leading/trailing slashes, and double slashes.
 func ValidateModulePath(s string) error {
-	if s == "" {
-		return fmt.Errorf("module path must not be empty")
-	}
-	if strings.Contains(s, "..") {
-		return fmt.Errorf("module path must not contain \"..\": %q", s)
-	}
-	if strings.ContainsRune(s, '\\') {
-		return fmt.Errorf("module path must not contain backslash: %q", s)
-	}
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("module path must not contain whitespace or control characters: %q", s)
-		}
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return fmt.Errorf("module path must not contain whitespace: %q", s)
-		}
-	}
-	if !modulePathRe.MatchString(s) {
-		return fmt.Errorf("module path contains invalid characters: %q", s)
-	}
-	return nil
+	// CheckImportPath's error is already self-describing
+	// (`malformed import path %q: <reason>`); callers add their own boundary
+	// context (e.g. resolveModule prefixes the --module-path flag name).
+	return module.CheckImportPath(s)
 }
 
 // ReadModulePath reads root/go.mod and returns its declared module path

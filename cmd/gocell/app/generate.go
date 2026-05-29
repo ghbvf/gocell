@@ -55,7 +55,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		name: "catalog",
 		help: []string{
 			"Render the project catalog Go source from metadata.",
-			"--out=<path> --package=<pkg>",
+			"--out=<path> --package=<pkg> [--module-path=<module>]",
 		},
 		run: func(_ context.Context, a []string) error { return generateCatalog(a) },
 	},
@@ -65,6 +65,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"Render cell_gen.go and slice_gen.go from cell.yaml /",
 			"slice.yaml. Default: all opted-in cells (goStructName set).",
 			"Optional: [<cellID>] scopes to a single cell.",
+			"[--module-path=<module>] sets the local import prefix (default: go.mod).",
 			verifyDryRunHelpLine,
 			"would-write file paths without writing.",
 			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
@@ -75,7 +76,8 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		name: "contract",
 		help: []string{
 			"Render generated/contracts/**/*_gen.go from contract.yaml",
-			"+ JSON schemas. <contractID> | --all [--dry-run | --verify].",
+			"+ JSON schemas. <contractID> | --all [--dry-run | --verify]",
+			"[--module-path=<module>].",
 			verifyDryRunHelpLine,
 			"would-write paths without writing.",
 			"Default: codegen on; set codegen: false to opt out.",
