@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
@@ -349,26 +350,28 @@ func TestObservabilityMetadata_RestoreToContext_EmptyStringContextValueIsOverwri
 }
 
 // ---------------------------------------------------------------------------
-// Entry.InjectObservabilityFromContext
+// NewEntry observability injection (the single injection trust boundary;
+// the exported Entry.InjectObservabilityFromContext was removed in issue
+// #1229 — injection is NewEntry-only).
 // ---------------------------------------------------------------------------
 
-func TestEntry_InjectObservabilityFromContext_RoundTrip(t *testing.T) {
+func TestNewEntry_InjectObservabilityFromContext_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ctx = ctxkeys.WithRequestID(ctx, "req-round-trip")
 	ctx = ctxkeys.WithCorrelationID(ctx, "corr-round-trip")
 	ctx = ctxkeys.WithTraceID(ctx, "4bf92f3577b34da6a3ce929d0e0e4736")
 	ctx = ctxkeys.WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 
-	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}
-	e.InjectObservabilityFromContext(ctx)
+	e, err := NewEntry(clock.Real(), ctx, "test.v1", []byte(`{}`))
+	require.NoError(t, err)
 
-	assert.Equal(t, "req-round-trip", string(e.Observability.RequestID))
-	assert.Equal(t, "corr-round-trip", string(e.Observability.CorrelationID))
-	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", string(e.Observability.TraceID))
-	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", e.Observability.TraceParent)
+	assert.Equal(t, "req-round-trip", string(e.observability.RequestID))
+	assert.Equal(t, "corr-round-trip", string(e.observability.CorrelationID))
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", string(e.observability.TraceID))
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", e.observability.TraceParent)
 
 	// Restore back to a clean context and verify round-trip.
-	restored := e.Observability.RestoreToContext(context.Background())
+	restored := e.observability.RestoreToContext(context.Background())
 
 	reqID, ok := ctxkeys.RequestIDFrom(restored)
 	require.True(t, ok)
@@ -387,22 +390,20 @@ func TestEntry_InjectObservabilityFromContext_RoundTrip(t *testing.T) {
 	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", tp)
 }
 
-func TestEntry_InjectObservabilityFromContext_OverwritesPriorValue(t *testing.T) {
-	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}
-	e.Observability = ObservabilityMetadata{RequestID: "old-req"}
+func TestNewEntry_InjectObservabilityFromContext_PopulatesFromCtx(t *testing.T) {
+	ctx := ctxkeys.WithRequestID(context.Background(), "new-req")
 
-	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, "new-req")
+	e, err := NewEntry(clock.Real(), ctx, "test.v1", []byte(`{}`))
+	require.NoError(t, err)
 
-	e.InjectObservabilityFromContext(ctx)
-
-	assert.Equal(t, "new-req", string(e.Observability.RequestID), "InjectObservabilityFromContext must overwrite prior value")
+	assert.Equal(t, "new-req", string(e.observability.RequestID),
+		"NewEntry must inject observability from the construction context")
 }
 
-func TestEntry_InjectObservabilityFromContext_EmptyContextYieldsZero(t *testing.T) {
-	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}
-	e.InjectObservabilityFromContext(context.Background())
-	assert.True(t, e.Observability.IsZero())
+func TestNewEntry_InjectObservabilityFromContext_EmptyContextYieldsZero(t *testing.T) {
+	e, err := NewEntry(clock.Real(), context.Background(), "test.v1", []byte(`{}`))
+	require.NoError(t, err)
+	assert.True(t, e.observability.IsZero())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,8 +461,8 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 
 	require.NotNil(t, cap.handler)
 	res, _ := cap.handler(context.Background(), Entry{
-		ID: "evt-789",
-		Observability: ObservabilityMetadata{
+		id: "evt-789",
+		observability: ObservabilityMetadata{
 			RequestID:     "req-789",
 			CorrelationID: "corr-789",
 			TraceID:       "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -487,7 +488,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 		}))
 
 	require.NotNil(t, cap.handler)
-	res, _ := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
+	res, _ := cap.handler(context.Background(), Entry{id: "e1", observability: ObservabilityMetadata{}})
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
 }
@@ -513,8 +514,8 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 		}))
 	require.NotNil(t, cap.handler)
 	_, _ = cap.handler(context.Background(), Entry{
-		ID:            "e1",
-		Observability: ObservabilityMetadata{RequestID: "req-outermost"},
+		id:            "e1",
+		observability: ObservabilityMetadata{RequestID: "req-outermost"},
 	})
 	assert.Equal(t, "req-outermost", seenInMiddleware,
 		"user middleware must observe ctx after built-in observability restore (outermost)")
@@ -528,10 +529,10 @@ func TestEntryID_RoundTrip_InjectAndRestore(t *testing.T) {
 	entryID := MustNewEntryID()
 	ctx := ctxkeys.WithRequestID(context.Background(), entryID)
 
-	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}
-	e.InjectObservabilityFromContext(ctx)
+	e, err := NewEntry(clock.Real(), ctx, "test.v1", []byte(`{}`))
+	require.NoError(t, err)
 
-	restored := e.Observability.RestoreToContext(context.Background())
+	restored := e.observability.RestoreToContext(context.Background())
 	got, ok := ctxkeys.RequestIDFrom(restored)
 	require.True(t, ok)
 	assert.Equal(t, entryID, got)

@@ -49,10 +49,11 @@ func WrapSubscriber(tr Tracer, spec contractspec.ContractSpec, fn outbox.Subscri
 	}
 
 	return func(ctx context.Context, entry outbox.Entry) (res outbox.HandleResult, settlement outbox.Settlement) {
-		ctx = entry.Observability.RestoreToContext(ctx)
+		ctx = entry.Observability().RestoreToContext(ctx)
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
 		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))
 		span.SetAttributes(baseAttrs...)
+		span.SetAttributes(entryEnvelopeAttrs(entry)...)
 		defer func() { recoverAndFinish(span, recover()) }()
 
 		res, settlement = fn(ctx, entry)

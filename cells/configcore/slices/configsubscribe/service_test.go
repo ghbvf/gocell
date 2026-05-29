@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -56,13 +57,13 @@ func makeEntryUpserted(key string, version int) outbox.Entry {
 		Version: version,
 		ActorID: "admin-test",
 	})
-	return outbox.Entry{ID: "test-upsert", Topic: domain.TopicConfigEntryUpserted, Payload: payload}
+	return outboxtest.NewEntry(domain.TopicConfigEntryUpserted, payload)
 }
 
 // makeEntryDeleted builds an outbox.Entry for entry-deleted with the given version.
 func makeEntryDeleted(key string, version int) outbox.Entry {
 	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version, ActorID: "admin-test"})
-	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
+	return outboxtest.NewEntry(domain.TopicConfigEntryDeleted, payload)
 }
 
 // requireAck asserts that the handler result is a successful Ack with no error.
@@ -106,7 +107,7 @@ func callWithConfigEventOwner(
 ) outbox.HandleResult {
 	var result outbox.HandleResult
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
-		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
+		outbox.Subscription{Topic: entry.Topic(), ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
 		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			result = fn(ctx, entry)
 			return result
@@ -319,7 +320,7 @@ func TestHandleEntryUpserted_InvalidPayload_Reject(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := mustNewService(t, clock.Real(), slog.Default())
-			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
+			entry := outboxtest.NewEntry(domain.TopicConfigEntryUpserted, tc.payload)
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -373,7 +374,7 @@ func TestHandleEntryDeleted_InvalidPayload_Reject(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := mustNewService(t, clock.Real(), slog.Default())
-			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tc.payload}
+			entry := outboxtest.NewEntry(domain.TopicConfigEntryDeleted, tc.payload)
 			result := svc.HandleEntryDeleted(context.Background(), entry)
 
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -412,7 +413,7 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := mustNewService(t, clock.Real(), slog.Default())
-			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tt.payload}
+			entry := outboxtest.NewEntry(domain.TopicConfigEntryUpserted, tt.payload)
 
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -444,7 +445,7 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 			svc := mustNewService(t, clock.Real(), slog.Default())
 			requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", 1)))
 
-			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tt.payload}
+			entry := outboxtest.NewEntry(domain.TopicConfigEntryDeleted, tt.payload)
 			result := svc.HandleEntryDeleted(context.Background(), entry)
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			require.Error(t, result.Err)
@@ -473,7 +474,7 @@ func TestHandleEntryUpserted_Reject_Cases(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := mustNewService(t, clock.Real(), slog.Default())
-			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
+			entry := outboxtest.NewEntry(domain.TopicConfigEntryUpserted, tc.payload)
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -508,11 +509,8 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name: "invalid upsert records permanent error",
-			entry: outbox.Entry{
-				ID: "bad", Topic: domain.TopicConfigEntryUpserted,
-				Payload: []byte(`not-json{`),
-			},
+			name:       "invalid upsert records permanent error",
+			entry:      outboxtest.NewEntry(domain.TopicConfigEntryUpserted, []byte(`not-json{`)),
 			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
@@ -587,11 +585,8 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name: "invalid delete records permanent error",
-			entry: outbox.Entry{
-				ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted,
-				Payload: []byte(`not-json{`),
-			},
+			name:       "invalid delete records permanent error",
+			entry:      outboxtest.NewEntry(domain.TopicConfigEntryDeleted, []byte(`not-json{`)),
 			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,

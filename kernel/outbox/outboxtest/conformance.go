@@ -195,8 +195,8 @@ func testPublishSubscribe(t *testing.T, _ Features, constructor PubSubConstructo
 	})
 
 	h.publishAndWait(payload)
-	assertBytesEqual(t, payload, received.Payload)
-	assertTrue(t, received.ID != "", "entry ID must not be empty")
+	assertBytesEqual(t, payload, received.Payload())
+	assertTrue(t, received.ID() != "", "entry ID must not be empty")
 	h.teardown()
 }
 
@@ -215,11 +215,11 @@ func testPublishSubscribeMultiple(t *testing.T, features Features, constructor P
 
 	publishedPayloads := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		publishedPayloads[string(e.Payload)] = true
+		publishedPayloads[string(e.Payload())] = true
 	}
 	for _, entry := range collected {
-		assertTrue(t, publishedPayloads[string(entry.Payload)],
-			fmt.Sprintf("unexpected payload: %s", string(entry.Payload)))
+		assertTrue(t, publishedPayloads[string(entry.Payload())],
+			fmt.Sprintf("unexpected payload: %s", string(entry.Payload())))
 	}
 }
 
@@ -247,7 +247,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 	assertLen(t, len(collected), n)
 
 	for i, entry := range collected {
-		assertBytesEqual(t, testPayload(i), entry.Payload,
+		assertBytesEqual(t, testPayload(i), entry.Payload(),
 			fmt.Sprintf("message %d: expected seq %d payload", i, i))
 	}
 }
@@ -322,7 +322,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	mu.Lock()
 	defer mu.Unlock()
 	assertLen(t, len(receivedA), 1, "subscriber on topic A should only receive topic A messages")
-	assertBytesEqual(t, []byte(`{"topic":"A"}`), receivedA[0].Payload)
+	assertBytesEqual(t, []byte(`{"topic":"A"}`), receivedA[0].Payload())
 }
 
 func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstructor) {

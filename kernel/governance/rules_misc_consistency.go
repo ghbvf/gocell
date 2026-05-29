@@ -625,8 +625,11 @@ func findHelperTopicParamIndex(body *ast.BlockStmt, paramNames []string, pkgCons
 	return findReceiverEmitViaEntryParam(body, paramNames, pkgConsts)
 }
 
-// findOutboxEmitTopicParam checks if the body contains outbox.Emit(ctx, e, topicParam, ...)
-// where topicParam is a parameter identifier. Returns the parameter index on match.
+// findOutboxEmitTopicParam checks if the body contains
+// outbox.Emit(ctx, clk, e, topicParam, ...) where topicParam is a parameter
+// identifier. Returns the parameter index on match. The topic is Args[3]:
+// the Emit[T] signature is Emit(ctx, clk, emitter, topic, payload) since the
+// clock became a mandatory positional argument (issue #1229).
 func findOutboxEmitTopicParam(body *ast.BlockStmt, paramNames []string, pkgConsts cellPkgConsts) (int, bool) {
 	dummyConsts := pkgConstMap{}
 	var foundIdx int
@@ -636,10 +639,10 @@ func findOutboxEmitTopicParam(body *ast.BlockStmt, paramNames []string, pkgConst
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
-		if !ok || !isOutboxEmitCall(call) || len(call.Args) < 3 {
+		if !ok || !isOutboxEmitCall(call) || len(call.Args) < 4 {
 			return true
 		}
-		topicArg := call.Args[2]
+		topicArg := call.Args[3]
 		ident, ok := topicArg.(*ast.Ident)
 		if !ok {
 			return true
@@ -1102,7 +1105,7 @@ func scanNodeForEmitCalls(node ast.Node, ctx emitScanContext, state *emitScanSta
 
 func collectEmitCallTopics(call *ast.CallExpr, ctx emitScanContext, state *emitScanState) []ValidationResult {
 	var results []ValidationResult
-	if isOutboxEmitCall(call) && len(call.Args) >= 3 {
+	if isOutboxEmitCall(call) && len(call.Args) >= 4 {
 		return collectOutboxEmitTopic(call, ctx, state)
 	}
 	if isReceiverEmitCall(call) && len(call.Args) >= 2 {
@@ -1163,7 +1166,8 @@ func collectOutboxEmitTopic(
 	ctx emitScanContext,
 	_ *emitScanState, // unused here; kept for signature parity with sibling collectors
 ) []ValidationResult {
-	topicExpr := call.Args[2]
+	// outbox.Emit signature is Emit(ctx, clk, emitter, topic, payload): topic is Args[3].
+	topicExpr := call.Args[3]
 	topic, resolved := resolveTopicExpr(topicExpr, ctx.pkgConsts, ctx.fileConsts)
 	if resolved {
 		ctx.topics[topic] = struct{}{}
@@ -1200,6 +1204,25 @@ func collectReceiverEmitTopics(
 
 func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
 	var results []ValidationResult
+	// Sealed-construction form (issue #1229): `entry, err := outbox.NewEntry(
+	// clk, ctx, eventType, payload, opts...)`. Multi-value assignment (Lhs has
+	// the entry var + err, Rhs has the single call). Bind the entry var to the
+	// constructor's 3rd positional arg (the eventType/topic) when it resolves to
+	// a const/literal; a dynamic eventType clears any prior binding.
+	if len(stmt.Lhs) >= 1 && len(stmt.Rhs) == 1 {
+		if call, isCall := stmt.Rhs[0].(*ast.CallExpr); isCall && isOutboxNewEntryCall(call) {
+			if lhsIdent, ok := stmt.Lhs[0].(*ast.Ident); ok {
+				if len(call.Args) >= 3 {
+					if topic, resolved := resolveTopicExpr(call.Args[2], ctx.pkgConsts, ctx.fileConsts); resolved {
+						state.entryTopics[lhsIdent.Name] = []string{topic}
+						return results
+					}
+				}
+				delete(state.entryTopics, lhsIdent.Name)
+				return results
+			}
+		}
+	}
 	for i, lhs := range stmt.Lhs {
 		lhsIdent, ok := lhs.(*ast.Ident)
 		if !ok || i >= len(stmt.Rhs) {
@@ -1472,6 +1495,21 @@ func isDynamicExpr(expr ast.Expr) bool {
 func isOutboxEmitCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Emit" {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == "outbox"
+}
+
+// isOutboxNewEntryCall returns true if the call is outbox.NewEntry(...).
+// Since the sealed-construction change (issue #1229), producers build entries
+// via outbox.NewEntry(clk, ctx, eventType, payload, opts...) instead of an
+// outbox.Entry{EventType: TOPIC} composite literal, so the receiver-emit topic
+// scan must trace this constructor's 3rd positional arg (the eventType) as the
+// emitted topic.
+func isOutboxNewEntryCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "NewEntry" {
 		return false
 	}
 	ident, ok := sel.X.(*ast.Ident)

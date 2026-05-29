@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -807,6 +808,49 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 		"service principal Roles should be nil after CallerCellID migration")
 	assert.Equal(t, "service_token", gotPrincipal.AuthMethod)
 	assert.False(t, gotPrincipal.PasswordResetRequired)
+}
+
+// TestServiceTokenMiddleware_InjectsPrincipalCtxKeys verifies the producer-side
+// principal bridge for the service-token path (F3): after a valid service token
+// authenticates, the principal ctxkeys are populated so a downstream
+// outbox.NewEntry carries the principal across the async boundary. A service
+// principal's identity lives in CallerCellID (Subject is empty), so actor_id is
+// stamped from CallerCellID; subject_id / session_id / tenant_id stay unset.
+func TestServiceTokenMiddleware_InjectsPrincipalCtxKeys(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+
+	var gotActor, gotSubject, gotSession, gotTenant string
+	var actorOK, subjectOK, sessionOK, tenantOK bool
+	handler := ServiceTokenMiddleware(
+		ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+	)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			gotActor, actorOK = ctxkeys.ActorIDFrom(ctx)
+			gotSubject, subjectOK = ctxkeys.SubjectIDFrom(ctx)
+			gotSession, sessionOK = ctxkeys.SessionIDFrom(ctx)
+			gotTenant, tenantOK = ctxkeys.TenantIDFrom(ctx)
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, actorOK, "actor_id must be set so service-token-emitted entries carry a non-empty principal")
+	assert.Equal(t, "accesscore", gotActor, "actor_id equals CallerCellID for service principals")
+	assert.False(t, subjectOK, "subject_id has no source for service principals (Subject empty)")
+	assert.Empty(t, gotSubject)
+	assert.False(t, sessionOK, "session_id has no source for service principals")
+	assert.Empty(t, gotSession)
+	assert.False(t, tenantOK, "tenant_id has no source on develop")
+	assert.Empty(t, gotTenant)
 }
 
 func TestCanonicalQuery_SortsKeys(t *testing.T) {

@@ -79,10 +79,10 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 // pipeline retries. A 404 (entry truly gone) is treated as a stale event:
 // log Warn and Ack (retry cannot help).
 func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-	event, err := dto.DecodeEntryUpserted(entry.Payload)
+	event, err := dto.DecodeEntryUpserted(entry.Payload())
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err)))
 	}
@@ -136,10 +136,10 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
 func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-	event, err := dto.DecodeEntryDeleted(entry.Payload)
+	event, err := dto.DecodeEntryDeleted(entry.Payload())
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
-			slog.Any("error", err), slog.String("entry_id", entry.ID))
+			slog.Any("error", err), slog.String("entry_id", entry.ID()))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err)))
 	}

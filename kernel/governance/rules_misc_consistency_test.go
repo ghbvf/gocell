@@ -197,11 +197,12 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseA(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicTestCreated, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicTestCreated, struct{}{})
 }
 `)
 
@@ -284,11 +285,12 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseD(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicTestOther, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicTestOther, struct{}{})
 }
 `)
 
@@ -348,12 +350,13 @@ const (
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	_ = outbox.Emit(ctx, e, dto.TopicTestCreated, struct{}{})
-	return outbox.Emit(ctx, e, dto.TopicTestExtra, struct{}{})
+	_ = outbox.Emit(ctx, clock.Real(), e, dto.TopicTestCreated, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicTestExtra, struct{}{})
 }
 `)
 
@@ -394,11 +397,12 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseF(t *testing.T) {
 import (
 	"context"
 	"fmt"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter, v string) error {
-	return outbox.Emit(ctx, e, fmt.Sprintf("event.x.%s", v), struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, fmt.Sprintf("event.x.%s", v), struct{}{})
 }
 `)
 
@@ -446,6 +450,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitInlineCompLit(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -487,6 +492,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitPreBuiltEntry(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -511,6 +517,57 @@ func doEmit(ctx context.Context, e emitter) error {
 	}
 }
 
+// TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitNewEntry verifies the sealed-
+// construction path (issue #1229): an entry built via
+// outbox.NewEntry(clk, ctx, eventType, payload) and passed to a receiver-style
+// Emit is resolved via the NewEntry-assignment walk-back
+// (collectEntryAssignments → isOutboxNewEntryCall traces the 3rd positional arg
+// as the emitted topic). This is the production replacement for the legacy
+// outbox.Entry{EventType:} composite literal, which is no longer constructible
+// outside kernel/outbox after Entry was sealed.
+func TestCONTRACTCONSISTENCYEMIT01_ReceiverEmitNewEntry(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.done.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	writeDtoConst(t, dtoDir, "TopicTestDone", topic)
+
+	// Service builds the entry via outbox.NewEntry, then calls receiver emit.
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+type emitter interface {
+	Emit(ctx context.Context, entry outbox.Entry) error
+}
+
+func doEmit(ctx context.Context, e emitter) error {
+	entry, err := outbox.NewEntry(clock.Real(), ctx, dto.TopicTestDone, []byte("{}"))
+	if err != nil {
+		return err
+	}
+	return e.Emit(ctx, entry)
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.done.v1", "L2", []string{topic}),
+	})
+
+	v := NewValidator(project, root, clock.Real())
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	if got := findResultByCode(results); len(got) != 0 {
+		t.Errorf("receiver-emit-newentry: expected 0 findings, got %d: %v", len(got), got)
+	}
+}
+
 // TestCONTRACTCONSISTENCYEMIT01_IndirectHelper verifies that topic resolution
 // works when the topic constant is passed as an argument to a helper method
 // (collectAllTopicSelectors picks up dto.TopicXxx selectors anywhere in the file).
@@ -530,11 +587,12 @@ func TestCONTRACTCONSISTENCYEMIT01_IndirectHelper(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func publish(ctx context.Context, e outbox.Emitter, topic string) error {
-	return outbox.Emit(ctx, e, topic, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, topic, struct{}{})
 }
 
 func doWork(ctx context.Context, e outbox.Emitter) error {
@@ -654,11 +712,12 @@ func TestCONTRACTCONSISTENCYEMIT01_SubscriberTopicNotCollected(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicA, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicA, struct{}{})
 }
 `)
 
@@ -762,6 +821,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseD_ReceiverStyle(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -826,13 +886,14 @@ func TestCONTRACTCONSISTENCYEMIT01_MultiContractNoDuplicateFindings(t *testing.T
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	_ = outbox.Emit(ctx, e, dto.TopicOne, struct{}{})
-	_ = outbox.Emit(ctx, e, dto.TopicTwo, struct{}{})
-	return outbox.Emit(ctx, e, dto.TopicExtra, struct{}{})
+	_ = outbox.Emit(ctx, clock.Real(), e, dto.TopicOne, struct{}{})
+	_ = outbox.Emit(ctx, clock.Real(), e, dto.TopicTwo, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicExtra, struct{}{})
 }
 `)
 
@@ -966,11 +1027,12 @@ func handle() error {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicTestCreated, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicTestCreated, struct{}{})
 }
 `)
 
@@ -1009,11 +1071,12 @@ func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceExistingEventContract(t *
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicMissing, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicMissing, struct{}{})
 }
 `)
 
@@ -1043,11 +1106,12 @@ func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceEventKind(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func doEmit(ctx context.Context, e outbox.Emitter) error {
-	return outbox.Emit(ctx, e, dto.TopicCreated, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, dto.TopicCreated, struct{}{})
 }
 `)
 
@@ -1085,6 +1149,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ReceiverDynamicTopicRejected(t *testing.T) {
 import (
 	"context"
 	"fmt"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -1125,11 +1190,12 @@ func TestCONTRACTCONSISTENCYEMIT01_HelperDynamicTopicRejected(t *testing.T) {
 import (
 	"context"
 	"fmt"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func publish(ctx context.Context, e outbox.Emitter, topic string) error {
-	return outbox.Emit(ctx, e, topic, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, topic, struct{}{})
 }
 
 func doEmit(ctx context.Context, e outbox.Emitter, suffix string) error {
@@ -1169,6 +1235,7 @@ func TestCONTRACTCONSISTENCYEMIT01_HelperAndEntryEvidenceScoped(t *testing.T) {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -1185,11 +1252,12 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 
 import (
 	"context"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func publish(ctx context.Context, e outbox.Emitter, topic string) error {
-	return outbox.Emit(ctx, e, topic, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), e, topic, struct{}{})
 }
 `)
 
@@ -1218,6 +1286,7 @@ func publish(ctx context.Context, e outbox.Emitter, topic string) error {
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -1290,6 +1359,7 @@ const (
 import (
 	"context"
 	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -1308,28 +1378,28 @@ func doEmit(ctx context.Context, receiver emitter, out outbox.Emitter, ch <-chan
 		_ = receiver.Emit(ctx, entry)
 	}
 	for i := 0; i < 1; i++ {
-		_ = outbox.Emit(ctx, out, dto.TopicFor, struct{}{})
+		_ = outbox.Emit(ctx, clock.Real(), out, dto.TopicFor, struct{}{})
 	}
 	for range []int{1} {
-		_ = outbox.Emit(ctx, out, dto.TopicRange, struct{}{})
+		_ = outbox.Emit(ctx, clock.Real(), out, dto.TopicRange, struct{}{})
 	}
 	switch n {
 	case 1:
-		_ = outbox.Emit(ctx, out, dto.TopicSwitch, struct{}{})
+		_ = outbox.Emit(ctx, clock.Real(), out, dto.TopicSwitch, struct{}{})
 	}
 	switch value.(type) {
 	case string:
-		_ = outbox.Emit(ctx, out, dto.TopicTypeSwitch, struct{}{})
+		_ = outbox.Emit(ctx, clock.Real(), out, dto.TopicTypeSwitch, struct{}{})
 	}
 	select {
 	case <-ch:
-		_ = outbox.Emit(ctx, out, dto.TopicSelect, struct{}{})
+		_ = outbox.Emit(ctx, clock.Real(), out, dto.TopicSelect, struct{}{})
 	default:
 	}
 	var declared = outbox.Entry{EventType: dto.TopicVar}
 	_ = receiver.Emit(ctx, declared)
-	_ = outbox.Emit(ctx, out, LocalAlias, struct{}{})
-	return outbox.Emit(ctx, out, "event.test.literal.v1", struct{}{})
+	_ = outbox.Emit(ctx, clock.Real(), out, LocalAlias, struct{}{})
+	return outbox.Emit(ctx, clock.Real(), out, "event.test.literal.v1", struct{}{})
 }
 `)
 

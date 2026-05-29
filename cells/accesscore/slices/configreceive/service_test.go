@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -55,7 +56,7 @@ func callWithConfigEventOwner(
 	fn outbox.EntryHandler,
 ) (outbox.Disposition, error) {
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
-		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+		outbox.Subscription{Topic: entry.Topic(), ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		fn,
 	)
 	result := wrapped(context.Background(), entry)
@@ -74,11 +75,7 @@ func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			entry := outbox.Entry{
-				ID:      "evt-1",
-				Topic:   TopicConfigEntryUpserted,
-				Payload: tt.payload,
-			}
+			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, tt.payload)
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 			assert.Equal(t, outbox.DispositionAck, result.Disposition)
 			assert.NoError(t, result.Err)
@@ -105,11 +102,7 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			entry := outbox.Entry{
-				ID:      "evt-bad",
-				Topic:   TopicConfigEntryUpserted,
-				Payload: tt.payload,
-			}
+			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, tt.payload)
 
 			result := svc.HandleEntryUpserted(context.Background(), entry)
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -124,11 +117,7 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 
 func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
-	entry := outbox.Entry{
-		ID:      "evt-del-1",
-		Topic:   TopicConfigEntryDeleted,
-		Payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"admin-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryDeleted, []byte(`{"key":"jwt.ttl","version":3,"actorId":"admin-1"}`))
 	result := svc.HandleEntryDeleted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
@@ -151,11 +140,7 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			entry := outbox.Entry{
-				ID:      "evt-del-bad",
-				Topic:   TopicConfigEntryDeleted,
-				Payload: tt.payload,
-			}
+			entry := outboxtest.NewEntry(TopicConfigEntryDeleted, tt.payload)
 
 			result := svc.HandleEntryDeleted(context.Background(), entry)
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -176,11 +161,7 @@ func TestTopicConstants(t *testing.T) {
 func TestHandleEntryUpserted_DirectHandler_ValidPayload_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	entry := outbox.Entry{
-		ID:      "evt-direct-1",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -190,7 +171,7 @@ func TestHandleEntryUpserted_DirectHandler_ValidPayload_Ack(t *testing.T) {
 func TestHandleEntryUpserted_DirectHandler_InvalidJSON_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	entry := outbox.Entry{ID: "evt-direct-2", Topic: TopicConfigEntryUpserted, Payload: []byte("bad{")}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte("bad{"))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -205,11 +186,7 @@ func TestHandleEntryUpserted_DirectHandler_InvalidJSON_Reject(t *testing.T) {
 func TestHandleEntryUpserted_ValueField_Accepted(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	entry := outbox.Entry{
-		ID:      "evt-direct-3",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition,
@@ -223,11 +200,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchOK(t *testing.T) {
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
-	entry := outbox.Entry{
-		ID:      "evt-cfg-1",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
@@ -243,11 +216,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
-	entry := outbox.Entry{
-		ID:      "evt-cfg-2",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition, "transient fetch failure must trigger Requeue")
 	assert.Error(t, result.Err)
@@ -264,11 +233,7 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
-	entry := outbox.Entry{
-		ID:      "evt-cfg-404",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition, "not-found fetch must Ack (stale event, no retry needed)")
 	assert.NoError(t, result.Err)
@@ -278,11 +243,7 @@ func TestHandleEntryUpserted_WithoutConfigGetter_NoFetch(t *testing.T) {
 	// Nil configGetter — service must function correctly in log-only mode.
 	svc := NewService(slog.Default())
 
-	entry := outbox.Entry{
-		ID:      "evt-cfg-3",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
@@ -350,7 +311,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 				opts = append(opts, WithConfigGetter(tt.getter))
 			}
 			svc := NewService(slog.Default(), opts...)
-			entry := outbox.Entry{ID: "evt-metrics", Topic: TopicConfigEntryUpserted, Payload: tt.payload}
+			entry := outboxtest.NewEntry(TopicConfigEntryUpserted, tt.payload)
 
 			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryUpserted)
 			assert.Equal(t, tt.wantDisposition, disposition)
@@ -390,11 +351,7 @@ func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401(t *testing.T) {
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
-	entry := outbox.Entry{
-		ID:      "evt-auth-401",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition, "401 must Reject (permanent)")
 	require.Error(t, result.Err)
@@ -411,11 +368,7 @@ func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth403(t *testing.T) {
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
-	entry := outbox.Entry{
-		ID:      "evt-auth-403",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition, "403 must Reject (permanent)")
 	require.Error(t, result.Err)
@@ -430,11 +383,7 @@ func TestWithConfigEventCollector_NilCollector(t *testing.T) {
 	svc := NewService(slog.Default(), WithConfigEventCollector(nil))
 	require.NotNil(t, svc)
 	// Calling through the service must not panic (noop collector is set).
-	entry := outbox.Entry{
-		ID:      "evt-noop",
-		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-	}
+	entry := outboxtest.NewEntry(TopicConfigEntryUpserted, []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`))
 	result := svc.HandleEntryUpserted(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 }
@@ -483,7 +432,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			collector := &recordingConfigEventCollector{}
 			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
-			entry := outbox.Entry{ID: "evt-del-metrics", Topic: TopicConfigEntryDeleted, Payload: tt.payload}
+			entry := outboxtest.NewEntry(TopicConfigEntryDeleted, tt.payload)
 
 			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryDeleted)
 			assert.Equal(t, tt.wantDisposition, disposition)

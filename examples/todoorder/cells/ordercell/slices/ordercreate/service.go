@@ -118,7 +118,7 @@ func (s *Service) createInternal(ctx context.Context, item string) (*domain.Orde
 		CreatedAt: s.clock.Now(),
 	}
 
-	entry, err := s.buildOrderCreatedEntry(order)
+	entry, err := s.buildOrderCreatedEntry(ctx, order)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (s *Service) createInternal(ctx context.Context, item string) (*domain.Orde
 
 	s.logger.Info("order-create: event emitted",
 		slog.String("order_id", order.ID),
-		slog.String("entry_id", entry.ID),
+		slog.String("entry_id", entry.ID()),
 		slog.String("topic", entry.RoutingTopic()),
 	)
 	return order, nil
@@ -153,22 +153,23 @@ func toCreateResponse(o *domain.Order) createv1.Response {
 	}
 }
 
-func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, error) {
+func (s *Service) buildOrderCreatedEntry(ctx context.Context, order *domain.Order) (outbox.Entry, error) {
 	payload, err := json.Marshal(toOrderCreatedEvent(order))
 	if err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-create: marshal event: %w", err)
 	}
-	entry := outbox.Entry{
-		ID:            outbox.MustNewEntryID(),
-		AggregateID:   order.ID,
-		AggregateType: "order",
-		EventType:     TopicOrderCreated,
-		Topic:         TopicOrderCreated,
-		Payload:       payload,
-		CreatedAt:     order.CreatedAt,
-	}
-	if err := entry.Validate(); err != nil {
-		return outbox.Entry{}, fmt.Errorf("order-create: invalid outbox entry: %w", err)
+	// order.CreatedAt is the producer-domain event time: stamp it as both
+	// OccurredAt (domain event time) and CreatedAt (outbox row time) so the
+	// domain timestamp is preserved instead of the construction-time clock.Now().
+	entry, err := outbox.NewEntry(s.clock, ctx, TopicOrderCreated, payload,
+		outbox.WithAggregateID(order.ID),
+		outbox.WithAggregateType("order"),
+		outbox.WithTopic(TopicOrderCreated),
+		outbox.WithOccurredAt(order.CreatedAt),
+		outbox.WithCreatedAt(order.CreatedAt),
+	)
+	if err != nil {
+		return outbox.Entry{}, fmt.Errorf("order-create: build outbox entry: %w", err)
 	}
 	return entry, nil
 }

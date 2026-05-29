@@ -76,7 +76,6 @@ var _ Emitter = (*WriterEmitter)(nil)
 type DirectEmitter struct {
 	publisher         Publisher
 	mode              DirectPublishFailureMode
-	clock             clock.Clock
 	cellID            string
 	failOpenProbeName healthz.ProbeName
 	logger            *slog.Logger
@@ -122,8 +121,11 @@ const defaultFailOpenRateThreshold = 0.05 // 5%
 // register the fail-open dropped counter (fqName after Namespace injection:
 // gocell_outbox_emit_failopen_dropped_total); pass metrics.NopProvider{} in
 // tests or demos where no backend is wired. A nil mp returns an errcode error.
-// clk is the clock used to stamp entry.CreatedAt when the caller has not set
-// it; pass clock.Real() in production and clockmock.New(...) in tests.
+// clk is the mandatory positional clock dependency (CLOCK-POSITIONAL-INJECTION-01);
+// it is validated via MustHaveClock at construction. DirectEmitter no longer
+// stamps timestamps — NewEntry is the single source of createdAt/occurredAt —
+// but the dependency is retained so every emitter is constructed clock-aware.
+// Pass clock.Real() in production and clockmock.New(...) in tests.
 //
 // Use WithLogger to override the default slog.Default() logger.
 // Use WithFailOpenRateThreshold to set the drop-ratio threshold for the
@@ -169,7 +171,6 @@ func NewDirectEmitter(
 	return &DirectEmitter{
 		publisher:         p,
 		mode:              mode,
-		clock:             clk,
 		cellID:            cellID,
 		failOpenProbeName: probeName,
 		logger:            cfg.logger,
@@ -178,28 +179,20 @@ func NewDirectEmitter(
 	}, nil
 }
 
-// Emit validates the entry, injects observability metadata from ctx, marshals
-// the v1 wire envelope, and publishes synchronously. When publish fails, the
-// per-entry FailurePolicy (or the construction-time default) decides between
-// fail-closed (return the wrapped error) and fail-open (log + increment the
-// gocell_outbox_emit_failopen_dropped_total counter and return nil so the
-// caller's request path is not blocked on broker availability).
+// Emit validates the entry, marshals the v1 wire envelope, and publishes
+// synchronously. The entry's createdAt/occurredAt stamps and observability +
+// principal identity were already set by NewEntry at construction (the single
+// injection trust boundary); Emit re-runs Validate as defense in depth before
+// touching the wire. When publish fails, the per-entry FailurePolicy (or the
+// construction-time default) decides between fail-closed (return the wrapped
+// error) and fail-open (log + increment the gocell_outbox_emit_failopen_dropped_total
+// counter and return nil so the caller's request path is not blocked on broker
+// availability).
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	if e == nil || validation.IsNilInterface(e.publisher) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
 	}
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = e.clock.Now().UTC()
-	}
-	// Inject observability BEFORE Validate so the validator covers the values
-	// actually written to wire (CWE-117): unsafe ctx-injected IDs must fail
-	// here, not at the consumer's UnmarshalEnvelope (which would waste a
-	// broker round-trip + DLQ slot). Mirrors adapters/postgres/outbox_writer.go
-	// where InjectObservabilityFromContext runs BEFORE Validate for the same
-	// reason. See PR #582 round-3 review F2 / K8s apiserver/audit Backend
-	// pattern (validate at trust boundary).
-	entry.InjectObservabilityFromContext(ctx)
 	if err := entry.Validate(); err != nil {
 		return err
 	}
@@ -214,12 +207,12 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 		// entry-construction time; observability events may opt into
 		// FailurePolicyFailOpen. Zero value falls through to e.mode.
 		// ref: k8s apiserver/pkg/audit Backend.FailurePolicy model.
-		mode := entry.FailurePolicy.Resolve(e.mode)
+		mode := entry.failurePolicy.Resolve(e.mode)
 		if mode == DirectPublishFailOpen {
 			e.logger.Warn(WarnDirectPublishFailOpen,
 				slog.String("topic", topic),
-				slog.String("entry_id", entry.ID),
-				slog.String("event_type", entry.EventType),
+				slog.String("entry_id", entry.id),
+				slog.String("event_type", entry.eventType),
 				slog.Any("error", err))
 			e.failOpenDroppedCv.With(metrics.Labels{
 				"cell":  e.cellID,

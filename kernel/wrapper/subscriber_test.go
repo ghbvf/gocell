@@ -7,8 +7,18 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
+
+// newDeliveryEntry builds a valid sealed Entry for delivery-path tests. The
+// wrapper logic under test is opaque to entry contents (it only reads envelope
+// fields, asserted separately in entry_attrs_test.go), so a topic-only entry
+// suffices; outboxtest.NewEntry auto-generates a unique ID via the sealed
+// outbox.NewEntry producer constructor.
+func newDeliveryEntry() outbox.Entry {
+	return outboxtest.NewEntry(eventSpec().Topic, []byte(`{}`))
+}
 
 func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 	tr := &spyTracer{}
@@ -20,7 +30,7 @@ func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 			return outbox.Ack(), nil
 		})
 
-	entry := outbox.Entry{ID: "evt-done", Topic: eventSpec().Topic}
+	entry := newDeliveryEntry()
 	res, settlement := wrapped(context.Background(), entry)
 	if settlement != nil {
 		t.Fatalf("ClaimDone-style handler returned settlement: %T", settlement)
@@ -48,7 +58,7 @@ func TestWrapSubscriber_ClaimBusySpanRecordsRequeueSettlement(t *testing.T) {
 			return outbox.Requeue(nil), nil
 		})
 
-	entry := outbox.Entry{ID: "evt-busy", Topic: eventSpec().Topic}
+	entry := newDeliveryEntry()
 	res, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), res, entry,
 		outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
@@ -86,7 +96,7 @@ func TestWrapSubscriber_CommitFailedUsesFinalSettlementAndPreservesObservers(t *
 			}, nil
 		})
 
-	entry := outbox.Entry{ID: "evt-commit-failed", Topic: eventSpec().Topic}
+	entry := newDeliveryEntry()
 	res, _ := wrapped(context.Background(), entry)
 	if len(res.SettlementObservers) != 2 {
 		t.Fatalf("want existing observer plus tracing observer, got %d", len(res.SettlementObservers))
@@ -135,7 +145,7 @@ func TestWrapSubscriber_PanicEndsSpan(t *testing.T) {
 		}
 	}()
 
-	_, _ = wrapped(context.Background(), outbox.Entry{ID: "evt-panic", Topic: eventSpec().Topic})
+	_, _ = wrapped(context.Background(), newDeliveryEntry())
 }
 
 func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
@@ -194,11 +204,12 @@ func TestWrapSubscriber_NilTracerFallsBackToNoop(t *testing.T) {
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.Ack(), nil
 		})
-	res, settlement := wrapped(context.Background(), outbox.Entry{ID: "evt-noop", Topic: eventSpec().Topic})
+	entry := newDeliveryEntry()
+	res, settlement := wrapped(context.Background(), entry)
 	if settlement != nil {
 		t.Fatalf("want nil settlement, got %T", settlement)
 	}
-	outbox.NotifySettlement(context.Background(), res, outbox.Entry{ID: "evt-noop", Topic: eventSpec().Topic},
+	outbox.NotifySettlement(context.Background(), res, entry,
 		outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 }
 
@@ -266,7 +277,7 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 					return outbox.Ack(), nil
 				})
 
-			entry := outbox.Entry{ID: "evt-" + tt.name, Topic: eventSpec().Topic}
+			entry := newDeliveryEntry()
 			res, _ := wrapped(context.Background(), entry)
 			outbox.NotifySettlement(context.Background(), res, entry, tt.disposition, tt.result, tt.err)
 
@@ -291,7 +302,7 @@ func TestWrapSubscriber_SettlementObserverEndsSpanOnce(t *testing.T) {
 			return outbox.Ack(), nil
 		})
 
-	entry := outbox.Entry{ID: "evt-once", Topic: eventSpec().Topic}
+	entry := newDeliveryEntry()
 	res, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), res, entry,
 		outbox.DispositionAck, outbox.SettlementResultSuccess, nil)

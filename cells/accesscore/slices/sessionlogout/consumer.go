@@ -37,7 +37,7 @@ import (
 // Topics: event.role.assigned.v1, event.role.revoked.v1
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h,
 //
-//	key = entry.ID (prefixed "evt-{uuid}" from outbox.Entry)
+//	key = entry.ID() (prefixed "evt-{uuid}" from outbox.Entry)
 //
 // Disposition:
 //   - unmarshal fail / empty userID → DispositionReject (PermanentError) → DLX
@@ -66,7 +66,7 @@ func NewConsumer(logger *slog.Logger) *Consumer {
 //   - ActionRevoked      → DispositionAck (funnel already ran in rbacassign tx).
 func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload dto.RoleChangedEvent
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+	if err := json.Unmarshal(entry.Payload(), &payload); err != nil {
 		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("sessionlogout: decode role-changed payload: %w", err)))
 	}
 
@@ -82,14 +82,14 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) ou
 		c.logger.Info("role assigned event received — no credential invalidation",
 			slog.String("user_id", payload.UserID),
 			slog.String("role_id", payload.RoleID),
-			slog.String("event_id", entry.ID))
+			slog.String("event_id", entry.ID()))
 	case dto.ActionRevoked:
 		// Credential invalidation already performed by rbacassign.Revoke
 		// via the credentialinvalidate funnel in the same transaction.
 		c.logger.Info("role revoked event received — credential invalidation already applied",
 			slog.String("user_id", payload.UserID),
 			slog.String("role_id", payload.RoleID),
-			slog.String("event_id", entry.ID))
+			slog.String("event_id", entry.ID()))
 	default:
 		return outbox.Reject(outbox.NewPermanentError(
 			fmt.Errorf("sessionlogout: unknown role-changed action %q for user %s", payload.Action, payload.UserID),

@@ -8,10 +8,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
+
+// newConfigEventEntry builds a valid outbox.Entry for the config-event
+// middleware tests. The middleware only forwards the entry, so eventType and
+// payload merely satisfy the sealed-constructor validation; the ID is the only
+// field the tests pin.
+func newConfigEventEntry(t *testing.T, id string) outbox.Entry {
+	t.Helper()
+	entry, err := outbox.NewEntry(clock.Real(), context.Background(),
+		"event.config.entry-upserted.v1", []byte("{}"), outbox.WithID(id))
+	require.NoError(t, err)
+	return entry
+}
 
 func TestProviderConfigEventCollector_RejectsNilProvider(t *testing.T) {
 	collector, err := obmetrics.NewProviderConfigEventCollector(nil)
@@ -75,7 +88,7 @@ func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *test
 		},
 	)
 
-	result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
+	result := wrapped(context.Background(), newConfigEventEntry(t, "evt-1"))
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	require.Equal(t, []configEventProcessRecord{{
@@ -87,7 +100,7 @@ func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *test
 func TestConfigEventMiddleware_RecordsSettlementOnlyAfterNotification(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
 	mw := obmetrics.ConfigEventMiddleware(collector)
-	entry := outbox.Entry{ID: "evt-1"}
+	entry := newConfigEventEntry(t, "evt-1")
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		func(context.Context, outbox.Entry) outbox.HandleResult {
@@ -117,9 +130,10 @@ func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *te
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
 			return outbox.Ack()
 		})
-		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
+		entry := newConfigEventEntry(t, "evt-1")
+		result := wrapped(context.Background(), entry)
 		outbox.NotifySettlement(context.Background(), result,
-			outbox.Entry{ID: "evt-1"}, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+			entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 	}
 
 	assert.Empty(t, collector.processRecords)
@@ -215,7 +229,7 @@ func TestConfigEventMiddleware_RetryExhaustedSettlement(t *testing.T) {
 	t.Parallel()
 	collector := &recordingConfigEventCollector{}
 	mw := obmetrics.ConfigEventMiddleware(collector)
-	entry := outbox.Entry{ID: "evt-retry-exhausted"}
+	entry := newConfigEventEntry(t, "evt-retry-exhausted")
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
 		func(context.Context, outbox.Entry) outbox.HandleResult {

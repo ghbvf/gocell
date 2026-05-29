@@ -58,13 +58,18 @@ func newIntegProtocol(t *testing.T) *ledger.Protocol {
 
 // newValidEntry returns an outbox.Entry with a JSON payload that satisfies
 // ActorAcceptUserFallback (carries "actorId"). Caller may adjust ID for replay tests.
-func newValidEntry(id string) outbox.Entry {
-	return outbox.Entry{
-		ID:        id,
-		EventType: "event.user.created.v1",
-		Payload:   []byte(`{"actorId":"integ-actor-1","userId":"integ-user-1"}`),
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
+func newValidEntry(t *testing.T, id string) outbox.Entry {
+	t.Helper()
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	e, err := outbox.EntryScan{
+		ID:         id,
+		EventType:  "event.user.created.v1",
+		Payload:    []byte(`{"actorId":"integ-actor-1","userId":"integ-user-1"}`),
+		CreatedAt:  createdAt,
+		OccurredAt: createdAt,
+	}.ToEntry()
+	require.NoError(t, err)
+	return e
 }
 
 // countAuditRows returns the number of audit_entries rows for the auditcore namespace.
@@ -103,7 +108,7 @@ func TestL2Atomicity_appender_RollsBack(t *testing.T) {
 	require.NoError(t, err)
 
 	countBefore := countAuditRows(t, failPool)
-	res := failSvc.HandleEvent(ctx, newValidEntry("atomicity-evt-fail"))
+	res := failSvc.HandleEvent(ctx, newValidEntry(t, "atomicity-evt-fail"))
 	assert.NotEqual(t, outbox.DispositionAck, res.Disposition,
 		"failing emitter must not produce Ack")
 	countAfter := countAuditRows(t, failPool)
@@ -123,7 +128,7 @@ func TestL2Atomicity_appender_RollsBack(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	okRes := okSvc.HandleEvent(ctx, newValidEntry("atomicity-evt-ok"))
+	okRes := okSvc.HandleEvent(ctx, newValidEntry(t, "atomicity-evt-ok"))
 	assert.Equal(t, outbox.DispositionAck, okRes.Disposition,
 		"pass-through emitter must Ack")
 	assert.Equal(t, 1, countAuditRows(t, okPool),
@@ -154,7 +159,7 @@ func TestL2Atomicity_appender_ReplayIdempotent(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	entry := newValidEntry("replay-idempotent-evt-1")
+	entry := newValidEntry(t, "replay-idempotent-evt-1")
 
 	// First delivery — must Ack and commit one row.
 	first := svc.HandleEvent(ctx, entry)

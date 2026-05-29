@@ -1897,7 +1897,7 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 	require.Len(t, cap.entries, 1, "Lock must emit exactly one event")
 
 	var payload dto.UserLockedEvent
-	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload(), &payload))
 	assert.NotEmpty(t, payload.UserID, "emitted UserLockedEvent.userId must be non-empty")
 	assert.NotEmpty(t, payload.ActorID, "emitted UserLockedEvent.actorId must be non-empty")
 	assert.Equal(t, user2.ID, payload.UserID)
@@ -1932,7 +1932,7 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	require.Len(t, cap.entries, 1, "Update must emit exactly one event")
 
 	var payload dto.UserUpdatedEvent
-	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload(), &payload))
 	assert.NotEmpty(t, payload.UserID, "emitted UserUpdatedEvent.userId must be non-empty")
 	assert.NotEmpty(t, payload.ActorID, "emitted UserUpdatedEvent.actorId must be non-empty")
 	assert.Equal(t, user.ID, payload.UserID)
@@ -1959,7 +1959,7 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 	require.Len(t, cap.entries, 1, "Delete must emit exactly one event")
 
 	var payload dto.UserDeletedEvent
-	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload(), &payload))
 	assert.NotEmpty(t, payload.UserID, "emitted UserDeletedEvent.userId must be non-empty")
 	assert.NotEmpty(t, payload.ActorID, "emitted UserDeletedEvent.actorId must be non-empty")
 	assert.Equal(t, user.ID, payload.UserID)
@@ -1993,7 +1993,7 @@ func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 	require.Len(t, cap.entries, 1, "Unlock must emit exactly one event")
 
 	var payload dto.UserUnlockedEvent
-	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload(), &payload))
 	assert.NotEmpty(t, payload.UserID, "emitted UserUnlockedEvent.userId must be non-empty")
 	assert.NotEmpty(t, payload.ActorID, "emitted UserUnlockedEvent.actorId must be non-empty")
 	assert.Equal(t, user.ID, payload.UserID)

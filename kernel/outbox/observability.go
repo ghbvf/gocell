@@ -163,18 +163,18 @@ func (o ObservabilityMetadata) RestoreToContext(ctx context.Context) context.Con
 	return ctx
 }
 
-// InjectObservabilityFromContext populates e.Observability from ctx.
-// The writer bridge calls this right before persistence so the entry
-// carries the originating context's trace/request/correlation identity
-// across the async boundary. Idempotent; overwrites any prior value.
+// injectObservabilityFromContext populates e.observability from ctx. NewEntry
+// calls this at construction — the single injection trust boundary. There is no
+// exported producer-facing inject API (issue #1229: identity injection is the
+// framework's responsibility). Idempotent; overwrites any prior value.
 //
 // Symmetric with the consumer-side restoration baked into
-// SubscriberWithMiddleware.Subscribe: producers inject from ctx at write
-// time, consumers automatically restore from entry.Observability at
-// dispatch time. The two endpoints are coupled by construction —
-// neither can be silently disabled.
-func (e *Entry) InjectObservabilityFromContext(ctx context.Context) {
-	e.Observability = ContextObservability(ctx)
+// SubscriberWithMiddleware.SubscribeEntry: NewEntry injects from the
+// construction ctx, consumers automatically restore from entry.observability at
+// dispatch time. The two endpoints are coupled by construction — neither can be
+// silently disabled.
+func (e *Entry) injectObservabilityFromContext(ctx context.Context) {
+	e.observability = ContextObservability(ctx)
 }
 
 // ---------------------------------------------------------------------------

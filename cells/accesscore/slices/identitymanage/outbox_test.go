@@ -191,7 +191,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox should receive user.created event")
-	assert.Equal(t, TopicUserCreated, ow.entries[0].EventType)
+	assert.Equal(t, TopicUserCreated, ow.entries[0].EventType())
 }
 
 func TestService_WithTxManager(t *testing.T) {
@@ -230,7 +230,7 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 
 	// One for create, one for lock
 	assert.Len(t, ow.entries, 2)
-	assert.Equal(t, TopicUserLocked, ow.entries[1].EventType)
+	assert.Equal(t, TopicUserLocked, ow.entries[1].EventType())
 }
 
 func TestService_Lock_EmptyID(t *testing.T) {
