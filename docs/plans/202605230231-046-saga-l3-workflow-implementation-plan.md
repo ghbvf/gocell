@@ -384,6 +384,14 @@ PR-10 ────────────────────────�
 - `kernel/governance/rules/topo_saga_l3_test.go` +250
 - `.claude/rules/gocell/saga.md` +120（新规则文件，记录所有 saga 强约束）
 
+> **更新（#1213 / PR #1280）**：saga 主题 archtest 已合并入单一
+> `tools/archtest/saga_invariants_test.go`，并由 `SAGA-INVARIANTS-FILE-CONSOLIDATED-01`
+> 守卫强制单文件布局。上列已落地的 `saga_compensate_pure_test.go` /
+> `saga_journal_holder_seal_test.go` 现为该合并文件内的 section。PR-08 新增的
+> saga archtest（`SAGA-CONSTRUCTOR-NIL-GUARD-01` / `SAGA-CELL-LEVEL-L3-DECLARE-01` 等）
+> **必须直接写入 `saga_invariants_test.go`**，不能新建独立 `saga_*_test.go`——否则
+> 守卫报红。
+
 **ref**：`ref: .claude/rules/gocell/ai-robust.md Hard 范本目录 (in-repo)`
 
 ---
