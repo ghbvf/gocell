@@ -1,0 +1,102 @@
+package grpc
+
+import (
+	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+const (
+	// defaultShutdownTimeout is the default GracefulStop budget.
+	defaultShutdownTimeout = 30 * time.Second
+)
+
+// TLSConfig holds PEM-encoded TLS materials for the gRPC server.
+//
+// Three modes are supported:
+//   - Plaintext (dev-only): set AllowInsecure = true; leave all PEM fields nil.
+//   - Server-side TLS: set CertPEM + KeyPEM; leave ClientCAPEM nil.
+//   - Mutual TLS (mTLS): set CertPEM + KeyPEM + ClientCAPEM.
+//
+// AllowInsecure and any PEM material are mutually exclusive (V2 validation).
+// Omitting both AllowInsecure and PEM fields is rejected fail-closed (V5).
+type TLSConfig struct {
+	// AllowInsecure enables plaintext (no TLS). Explicit dev-only opt-in.
+	// Must not be combined with CertPEM, KeyPEM, or ClientCAPEM.
+	AllowInsecure bool
+
+	// CertPEM is the PEM-encoded server leaf certificate. Required for TLS/mTLS.
+	CertPEM []byte
+
+	// KeyPEM is the PEM-encoded server private key. Required for TLS/mTLS.
+	KeyPEM []byte
+
+	// ClientCAPEM is the PEM-encoded CA bundle for client certificate verification.
+	// Non-empty enables mTLS (RequireAndVerifyClientCert).
+	ClientCAPEM []byte
+}
+
+// Config holds the gRPC server configuration.
+type Config struct {
+	// Addr is the listen address (e.g. ":9000"). Required.
+	Addr string
+
+	// ShutdownTimeout bounds the GracefulStop phase. Defaults to 30s.
+	ShutdownTimeout time.Duration
+
+	// TLS configures transport security. See TLSConfig for the three supported modes.
+	TLS TLSConfig
+}
+
+// applyDefaults fills zero-value fields with their defaults.
+func (c *Config) applyDefaults() {
+	if c.ShutdownTimeout == 0 {
+		c.ShutdownTimeout = defaultShutdownTimeout
+	}
+}
+
+// validate checks the configuration for required fields and conflicting options.
+// It does NOT perform network I/O; TLS credential building happens in New.
+func (c *Config) validate() error {
+	// V1: Addr is required.
+	if c.Addr == "" {
+		return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+			"grpc: Addr is required; set Config.Addr to a listen address (e.g. \":9000\")")
+	}
+
+	hasCert := len(c.TLS.CertPEM) > 0
+	hasKey := len(c.TLS.KeyPEM) > 0
+	hasCA := len(c.TLS.ClientCAPEM) > 0
+
+	// V2: AllowInsecure and TLS material are mutually exclusive.
+	if c.TLS.AllowInsecure && (hasCert || hasKey || hasCA) {
+		return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+			"grpc: AllowInsecure and TLS material (CertPEM/KeyPEM/ClientCAPEM) are mutually exclusive; "+
+				"use AllowInsecure for plaintext-only mode or supply PEM material for TLS")
+	}
+
+	if !c.TLS.AllowInsecure {
+		// V5: fail-closed — neither plaintext nor TLS configured.
+		if !hasCert && !hasKey && !hasCA {
+			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev-only) "+
+					"or supply CertPEM+KeyPEM for TLS")
+		}
+
+		// V3: CertPEM required when any TLS material is present.
+		if !hasCert {
+			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+				"grpc: TLS.CertPEM is required when configuring TLS; "+
+					"supply the PEM-encoded server certificate")
+		}
+
+		// V4: KeyPEM required when any TLS material is present.
+		if !hasKey {
+			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+				"grpc: TLS.KeyPEM is required when configuring TLS; "+
+					"supply the PEM-encoded server private key")
+		}
+	}
+
+	return nil
+}

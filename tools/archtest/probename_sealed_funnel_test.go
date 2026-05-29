@@ -8,6 +8,7 @@
 //
 //   - kernel/healthz — framework-level typed const (ConfigWatcherProbeName,
 //     ConfigDriftProbeName) and composed-name constructor (EmitterFailOpenProbeName).
+//   - adapters/grpc — ProbeReady
 //   - adapters/postgres — ProbeReady, ProbeIndexesValidReady
 //   - adapters/redis — ProbeReady
 //   - adapters/rabbitmq — ProbeReady
@@ -163,6 +164,7 @@ var probeNameSanctionedPkgs = map[string]bool{
 	// Framework-level (kernel owns the typed concept)
 	"github.com/ghbvf/gocell/kernel/healthz": true,
 	// Adapter dependency probes
+	"github.com/ghbvf/gocell/adapters/grpc":     true,
 	"github.com/ghbvf/gocell/adapters/postgres": true,
 	"github.com/ghbvf/gocell/adapters/redis":    true,
 	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
@@ -197,6 +199,7 @@ var cellgenSanctionedPkgs = map[string]bool{
 // adapterSanctionedPkgs requires that all ProbeName values in these packages
 // end with the "_ready" suffix (adapter dependency-availability convention).
 var adapterSanctionedPkgs = map[string]bool{
+	"github.com/ghbvf/gocell/adapters/grpc":     true,
 	"github.com/ghbvf/gocell/adapters/postgres": true,
 	"github.com/ghbvf/gocell/adapters/redis":    true,
 	"github.com/ghbvf/gocell/adapters/rabbitmq": true,
@@ -273,6 +276,7 @@ func goldenProbeNames() []string {
 		"kernel/healthz.ConfigWatcherProbeName=config_watcher",
 		"kernel/healthz.EventRouterProbeName=event_router",
 		// adapter probes (all _ready suffix)
+		"adapters/grpc.ProbeReady=grpc_ready",
 		"adapters/mqtt.ProbeReady=mqtt_ready",
 		"adapters/oidc.ProbeReady=oidc_ready",
 		"adapters/postgres.ProbeIndexesValidReady=postgres_indexes_valid_ready",

@@ -237,6 +237,29 @@ linters:
                 journal implementations satisfy structurally. Keeps the executor a
                 generic per-step engine decoupled from the saga journal package
                 (SAGA-JOURNAL-HOLDER-SEAL-01 / #1209).
+        grpc-adapter-no-interceptor-import:
+          # GRPC-ADAPTER-LAYER-01: adapters/grpc provides server lifecycle only.
+          # Interceptors (recovery/metrics/tracing/auth) are composed at the
+          # bootstrap layer (PR-4) and must not be imported from within the adapter
+          # itself — importing them would invert the composition dependency direction
+          # and make the adapter dependent on bootstrap-level concerns. Layered on
+          # top of adapters-isolation (which allows runtime/* broadly); this rule
+          # subtracts the two specific packages that must never be imported here.
+          # Ref: ai-robust.md §"路径级 import ban → depguard".
+          files:
+            - "**/adapters/grpc/**"
+            - "!**/adapters/grpc/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+              desc: |
+                adapters/grpc must never import runtime/grpc/interceptor;
+                interceptors are composed at the bootstrap layer (PR-4) and
+                plumbed in via grpc.ServerOption from outside the adapter.
+                GRPC-ADAPTER-LAYER-01.
+            - pkg: github.com/ghbvf/gocell/cells
+              desc: |
+                adapters/grpc must never import cells/; cells depend on adapters
+                through interfaces, not the reverse. GRPC-ADAPTER-LAYER-01.
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` is owned by the cell
@@ -257,6 +280,7 @@ linters:
             - github.com/aws/aws-sdk-go-v2
             - github.com/aws/smithy-go
             - github.com/coder/websocket
+            - google.golang.org/grpc
             - github.com/coreos/go-oidc
             - github.com/google/uuid
             - github.com/hashicorp/vault

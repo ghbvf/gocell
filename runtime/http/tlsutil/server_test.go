@@ -174,6 +174,49 @@ func TestNewClientCAPool_NoValidCertReturnsError(t *testing.T) {
 	})
 }
 
+// ─── NewServerTLSConfig ───────────────────────────────────────────────────────
+
+func TestNewServerTLSConfig_Valid(t *testing.T) {
+	chain := genTestChain(t)
+
+	cfg, err := NewServerTLSConfig(chain.serverCertPEM, chain.serverKeyPEM)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion, "must pin TLS 1.3")
+	assert.Equal(t, tls.NoClientCert, cfg.ClientAuth, "must not require client cert")
+	require.Len(t, cfg.Certificates, 1)
+}
+
+func TestNewServerTLSConfig_ErrorPaths(t *testing.T) {
+	chain := genTestChain(t)
+
+	t.Run("empty_cert_PEM_returns_error", func(t *testing.T) {
+		cfg, err := NewServerTLSConfig(nil, chain.serverKeyPEM)
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
+
+	t.Run("empty_key_PEM_returns_error", func(t *testing.T) {
+		cfg, err := NewServerTLSConfig(chain.serverCertPEM, nil)
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
+
+	t.Run("cert_key_parse_error_returns_error", func(t *testing.T) {
+		cfg, err := NewServerTLSConfig([]byte("not a pem"), chain.serverKeyPEM)
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
+
+	t.Run("mismatched_cert_key_returns_error", func(t *testing.T) {
+		other := genTestChain(t)
+		cfg, err := NewServerTLSConfig(chain.serverCertPEM, other.serverKeyPEM)
+		assert.Error(t, err)
+		assert.Nil(t, cfg)
+	})
+}
+
 // TestNewClientCAPool_FailsClosedOnBadBundleInMix locks the fail-closed
 // contract (F4 / cluster C2): a non-contributing bundle anywhere in the
 // variadic input fails the whole construction, regardless of position, even
