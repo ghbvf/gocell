@@ -69,8 +69,10 @@ type codegenSpec[R CodegenResult] struct {
 	SourceArtifacts string
 	// Generate runs the underlying codegen pipeline. dryRun + verify +
 	// only are the standard flag set; only is the single-target id (empty
-	// means --all).
-	Generate func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only string) (R, error)
+	// means --all). modulePath is the consuming repo's Go module path
+	// (resolved flag-or-go.mod by the caller), threaded into the generator so
+	// the formatter groups module-local imports for the target repo (#1083).
+	Generate func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only, modulePath string) (R, error)
 }
 
 // runCodegenGenerate implements `gocell generate <kind>` for the spec.
@@ -80,7 +82,7 @@ type codegenSpec[R CodegenResult] struct {
 //   - --all=false without positional id: error
 //   - --dry-run + --verify: mutually exclusive
 func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) error {
-	dryRun, verify, only, locatorOpts, err := parseCodegenFlags(spec, args)
+	dryRun, verify, only, modulePathFlag, locatorOpts, err := parseCodegenFlags(spec, args)
 	if err != nil {
 		return err
 	}
@@ -88,11 +90,15 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
+	modulePath, err := resolveModule(root, modulePathFlag)
+	if err != nil {
+		return err
+	}
 	project, err := parseProject(root, locatorOpts...)
 	if err != nil {
 		return err
 	}
-	res, err := spec.Generate(root, project, dryRun, verify, only)
+	res, err := spec.Generate(root, project, dryRun, verify, only, modulePath)
 	if err != nil {
 		return err
 	}
@@ -119,41 +125,42 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 //   - explicit --all=false without a positional id is an error
 func parseCodegenFlags[R CodegenResult](
 	spec codegenSpec[R], args []string,
-) (dryRun, verify bool, only string, locatorOpts []metadata.LocatorOption, err error) {
+) (dryRun, verify bool, only, modulePath string, locatorOpts []metadata.LocatorOption, err error) {
 	fs := flag.NewFlagSet("generate "+spec.Kind, flag.ContinueOnError)
 	all := fs.Bool("all", true, spec.AllFlagDesc)
 	dr := fs.Bool("dry-run", false, "print would-write file paths without writing")
 	ver := fs.Bool("verify", false, "diff against disk, exit non-zero on drift, no write")
+	mp := fs.String("module-path", "", "Go module path for generated import grouping (default: read from go.mod)")
 	layout, manifestPath := addLocatorFlags(fs)
 	if perr := fs.Parse(args); perr != nil {
-		return false, false, "", nil, perr
+		return false, false, "", "", nil, perr
 	}
 	const dryVerMutexMsg = "--dry-run (stdout preview) and --verify " +
 		"(CI drift check, no write) are mutually exclusive; pick one"
 	if *dr && *ver {
-		return false, false, "", nil, errors.New(dryVerMutexMsg)
+		return false, false, "", "", nil, errors.New(dryVerMutexMsg)
 	}
 	opts, lerr := buildLocatorOptions(*layout, *manifestPath)
 	if lerr != nil {
-		return false, false, "", nil, fmt.Errorf("generate %s: %w", spec.Kind, lerr)
+		return false, false, "", "", nil, fmt.Errorf("generate %s: %w", spec.Kind, lerr)
 	}
 	pos := fs.Args()
 	// Reject more than one positional id to avoid silent arg-drop surprises.
 	if len(pos) > 1 {
-		return false, false, "", nil, fmt.Errorf("only one %s id allowed; got: %v", spec.Kind, pos)
+		return false, false, "", "", nil, fmt.Errorf("only one %s id allowed; got: %v", spec.Kind, pos)
 	}
 	// Positional id takes priority over --all (including the default true).
 	if len(pos) == 1 {
-		return *dr, *ver, pos[0], opts, nil
+		return *dr, *ver, pos[0], *mp, opts, nil
 	}
 	// No positional id: honor --all flag value.
 	if !*all {
 		if *dr || *ver {
-			return false, false, "", nil, fmt.Errorf("specify a %s id or --all when using --dry-run/--verify", spec.Kind)
+			return false, false, "", "", nil, fmt.Errorf("specify a %s id or --all when using --dry-run/--verify", spec.Kind)
 		}
-		return false, false, "", nil, fmt.Errorf("usage: %s", spec.GenerateUsage)
+		return false, false, "", "", nil, fmt.Errorf("usage: %s", spec.GenerateUsage)
 	}
-	return *dr, *ver, "", opts, nil
+	return *dr, *ver, "", *mp, opts, nil
 }
 
 // runCodegenVerify implements `gocell verify codegen-<kind>` (sandbox + --local).
@@ -185,11 +192,15 @@ func runCodegenVerify[R CodegenResult](spec codegenSpec[R], args []string) error
 }
 
 func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string, locatorOpts ...metadata.LocatorOption) error {
+	modulePath, err := resolveModule(root, "")
+	if err != nil {
+		return err
+	}
 	project, err := parseProject(root, locatorOpts...)
 	if err != nil {
 		return err
 	}
-	res, err := spec.Generate(root, project, false, true, "")
+	res, err := spec.Generate(root, project, false, true, "", modulePath)
 	if err != nil {
 		return err
 	}
@@ -207,11 +218,15 @@ func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string, 
 
 func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root string) error {
 	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
+		modulePath, merr := resolveModule(workdir, "")
+		if merr != nil {
+			return merr
+		}
 		project, perr := parseProject(workdir)
 		if perr != nil {
 			return perr
 		}
-		_, gerr := spec.Generate(workdir, project, false, false, "")
+		_, gerr := spec.Generate(workdir, project, false, false, "", modulePath)
 		return gerr
 	})
 	if err != nil {

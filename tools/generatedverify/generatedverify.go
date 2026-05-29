@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -289,9 +290,14 @@ func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Art
 	}
 	sort.Strings(cellIDs)
 
+	modulePath, err := gomodutil.ReadModulePath(root)
+	if err != nil {
+		return nil, fmt.Errorf("generatedverify: %w", err)
+	}
+
 	artifacts := make([]Artifact, 0, len(cellIDs)*2)
 	for _, id := range cellIDs {
-		cellPaths, err := cellgen.RenderCellArtifacts(root, project, id)
+		cellPaths, err := cellgen.RenderCellArtifacts(root, project, id, modulePath)
 		if err != nil {
 			return nil, fmt.Errorf("cellgen artifacts for %q: %w", id, err)
 		}
@@ -352,9 +358,14 @@ func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([
 	}
 	sort.Strings(contractIDs)
 
+	modulePath, err := gomodutil.ReadModulePath(root)
+	if err != nil {
+		return nil, fmt.Errorf("generatedverify: %w", err)
+	}
+
 	artifacts := make([]Artifact, 0, len(contractIDs)*3)
 	for _, id := range contractIDs {
-		ca, err := contractgen.RenderContractArtifacts(root, project, id)
+		ca, err := contractgen.RenderContractArtifacts(root, project, id, modulePath)
 		if err != nil {
 			return nil, fmt.Errorf("contractgen artifacts for %q: %w", id, err)
 		}

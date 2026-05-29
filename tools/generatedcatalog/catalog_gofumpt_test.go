@@ -38,7 +38,7 @@ func TestEmitFile_OutputIsGofumptClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmitFile: %v", err)
 	}
-	canonical, err := gofumpt.Source(got, codegen.GofumptOptions)
+	canonical, err := gofumpt.Source(got, gofumpt.Options{LangVersion: codegen.LangVersion, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("gofumpt.Source on EmitFile output: %v", err)
 	}

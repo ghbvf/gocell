@@ -1,0 +1,77 @@
+package gomodutil_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ghbvf/gocell/tools/gomodutil"
+)
+
+func TestReadModulePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		goMod   string // "" means do not write go.mod
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "simple module line",
+			goMod: "module github.com/ghbvf/gocell\n\ngo 1.25\n",
+			want:  "github.com/ghbvf/gocell",
+		},
+		{
+			name:  "external module path",
+			goMod: "module github.com/acme/svc\n\ngo 1.25\n",
+			want:  "github.com/acme/svc",
+		},
+		{
+			name:  "module line with trailing inline comment",
+			goMod: "module github.com/acme/commented // pinned\n\ngo 1.25\n",
+			want:  "github.com/acme/commented",
+		},
+		{
+			name:  "leading comment lines before module",
+			goMod: "// Code generated header.\n// keep.\nmodule github.com/acme/leadcomment\n\ngo 1.25\n",
+			want:  "github.com/acme/leadcomment",
+		},
+		{
+			name:    "missing go.mod",
+			goMod:   "",
+			wantErr: true,
+		},
+		{
+			name:    "no module directive",
+			goMod:   "go 1.25\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if tt.goMod != "" {
+				if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(tt.goMod), 0o600); err != nil {
+					t.Fatalf("write go.mod: %v", err)
+				}
+			}
+
+			got, err := gomodutil.ReadModulePath(root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ReadModulePath(%q) = %q, want error", root, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadModulePath(%q) unexpected error: %v", root, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ReadModulePath(%q) = %q, want %q", root, got, tt.want)
+			}
+		})
+	}
+}

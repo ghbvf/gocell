@@ -126,14 +126,14 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	// Always render templates to catch template/input errors early (even on dry-run).
 	// cellTemplateData embeds spec and adds ListenerMarker so the template can
 	// reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01).
-	cellGoContent, err := renderTemplate(cellGoTemplate, cellTemplateData{
+	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
 	}, true)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
-	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
+	cellYAMLContent, err := renderTemplate(spec.ModulePath, cellYAMLTemplate, spec, false)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
@@ -300,13 +300,13 @@ func containsString(slice []string, target string) bool {
 // (goimports → gofumpt) so scaffolded files match the CI formatter gate
 // (.golangci.yml gofumpt) and template bugs surface at scaffold time rather
 // than producing invalid Go that breaks at compile time.
-func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
+func renderTemplate(modulePath string, tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	if isGoSource {
-		formatted, err := codegen.FormatGoSource("", buf.Bytes())
+		formatted, err := codegen.FormatGoSource(modulePath, "", buf.Bytes())
 		if err != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "rendered Go source is not valid", err)
 		}

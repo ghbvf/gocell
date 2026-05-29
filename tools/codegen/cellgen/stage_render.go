@@ -230,10 +230,17 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("stageRoot=%s", stageRoot))))
 	}
 
+	// Module path comes from the REAL repo's go.mod (the staging dir has none);
+	// it drives formatter import grouping + subscription import paths (#1083).
+	modulePath, err := readModulePath(realRoot)
+	if err != nil {
+		return nil, err
+	}
+
 	// Contract artifacts first so generated DTO types are available for cellgen.
 	contractIDs := contractgen.ContractIDsForCell(project, cellID)
 	for _, cid := range contractIDs {
-		artifacts, artErr := contractgen.RenderContractArtifacts(stageRoot, project, cid)
+		artifacts, artErr := contractgen.RenderContractArtifacts(stageRoot, project, cid, modulePath)
 		if artErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: render contract artifacts", artErr,
@@ -253,7 +260,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	}
 
 	// Cell artifacts (cell_gen.go + slice_gen.go).
-	cellArtifacts, err := RenderCellArtifacts(stageRoot, project, cellID)
+	cellArtifacts, err := RenderCellArtifacts(stageRoot, project, cellID, modulePath)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: render cell artifacts", err,

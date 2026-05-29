@@ -526,7 +526,7 @@ func TestPlanBundleFiles_ErrorCarriesKindLabelInDetails(t *testing.T) {
 			t.Parallel()
 			// Absolute targetRel forces pathsafe.ContainPath to reject before
 			// any template work, exercising the planBundleFiles top-level wrap.
-			_, err := planBundleFiles(root, "/escapes", nil, nil, nil, tc.kindLabel)
+			_, err := planBundleFiles(root, "github.com/ghbvf/gocell", "/escapes", nil, nil, nil, tc.kindLabel)
 			if err == nil {
 				t.Fatal("planBundleFiles with absolute targetRel: want error, got nil")
 			}

@@ -77,7 +77,7 @@ func preRenderAssemblyModulesGen(t *testing.T, root string) {
 	if err != nil {
 		t.Fatalf("pre-render metadata parse: %v", err)
 	}
-	if _, err := generateAssemblyModulesGen(root, project, false, false, ""); err != nil {
+	if _, err := generateAssemblyModulesGen(root, project, false, false, "", ""); err != nil {
 		t.Fatalf("pre-render generateAssemblyModulesGen: %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestCollectAssemblyModulesGenDrift_NoDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestCollectAssemblyModulesGenDrift_DetectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestCollectAssemblyModulesGenDrift_DetectsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProject: %v", err)
 	}
-	res, err := generateAssemblyModulesGen(root, project, false, true, "")
+	res, err := generateAssemblyModulesGen(root, project, false, true, "", "")
 	if err != nil {
 		t.Fatalf("generateAssemblyModulesGen verify: %v", err)
 	}

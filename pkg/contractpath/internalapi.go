@@ -43,3 +43,19 @@ func Segments(id string) []string {
 func ContractIDToPackagePath(id string) string {
 	return "generated/contracts/" + strings.Join(Segments(id), "/")
 }
+
+// ContractIDToImportPath converts a contract ID into the fully-qualified Go
+// import path of its generated package, by joining the consuming repo's module
+// path with the module-relative package path from ContractIDToPackagePath:
+//
+//   - ("github.com/acme/svc", "event.session.created.v1")
+//     → "github.com/acme/svc/generated/contracts/event/session/created/v1"
+//   - (mod, "http.internal.devicecommands.v1")
+//     → mod + "/generated/contracts/http/internalapi/devicecommands/v1"
+//
+// Single source of truth shared by cellgen (subscription import enrichment) and
+// archtest (adapter return-type import resolution). modulePath comes from the
+// target repo's go.mod — never hardcode the framework module (#1083).
+func ContractIDToImportPath(modulePath, id string) string {
+	return modulePath + "/" + ContractIDToPackagePath(id)
+}

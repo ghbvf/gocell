@@ -24,6 +24,7 @@ func generateCatalog(args []string) error {
 	out := fs.String("out", "", "output .go file path (required)")
 	pkg := fs.String("package", "", "Go package declaration name (required)")
 	root := fs.String("root", "", "project root directory; empty triggers go.mod auto-detection")
+	module := fs.String("module-path", "", "Go module path (default: read from go.mod)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -40,9 +41,9 @@ func generateCatalog(args []string) error {
 		return err
 	}
 
-	modulePath, err := readModule(rootDir)
+	modulePath, err := resolveModule(rootDir, *module)
 	if err != nil {
-		return fmt.Errorf("cannot read module from go.mod: %w", err)
+		return err
 	}
 
 	// Load the package dep graph synchronously (CLI context — acceptable latency).

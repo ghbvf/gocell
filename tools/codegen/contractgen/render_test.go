@@ -24,7 +24,7 @@ import (
 // to memory — goimports path-aware import resolution disabled), matching the
 // committed goldens.
 func renderTypes(spec *ContractGenSpec) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "types.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -34,7 +34,7 @@ func renderTypes(spec *ContractGenSpec) ([]byte, error) {
 }
 
 func renderIface(spec *ContractGenSpec) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "iface.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -47,7 +47,7 @@ func renderHandler(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "http" {
 		return nil, fmt.Errorf("contractgen render handler: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "handler.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func renderSpec(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "event" {
 		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "spec.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func renderSubscription(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "event" {
 		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "subscription.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -1012,7 +1012,7 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	fileNames := make(map[string]bool)
 	for _, path := range res.Generated {
