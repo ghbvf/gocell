@@ -29,8 +29,9 @@ import (
 //     wire-out path. That "must-call" cannot be expressed in Go's type system
 //     (schemaToDTOs is shared with the exempt Request path), so it is locked by
 //     archtest AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (call-site allowlist +
-//     coverage), which is the Go ceiling for this shape — not a low-cost-to-Hard
-//     gap, so no upgrade issue is opened.
+//     coverage). archtest-Medium is the Go ceiling for codegen must-call;
+//     gh #1299 tracks this ceiling (same won't-do shape as #851/#893) and the
+//     optional schemaToWireOutDTOs strengthening.
 //
 // Scope: audit domain only (规则不超前于代码现状 — auditcore is today's sole
 // Principal-aggregating consumer). To extend when another such cell appears:

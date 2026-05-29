@@ -18,8 +18,10 @@
 //     every audit wire-out generation path. That "must-call" cannot be expressed
 //     in Go's type system — schemaToDTOs is shared with the exempt Request path,
 //     so the funnel cannot be folded into it unconditionally. A1 below is the
-//     Go-language ceiling for this shape (call-site allowlist + coverage), not a
-//     low-cost-to-Hard gap; no upgrade issue is opened.
+//     Go-language ceiling for this shape (call-site allowlist + coverage). The
+//     ceiling — and an optional archtest-Medium strengthening via a
+//     schemaToWireOutDTOs wrapper — is tracked in gh #1299 (same won't-do shape
+//     as the SPAN-SETATTR #851 / HEALTHZ-HOLDER #893 Medium ceilings).
 //
 // Two sub-checks:
 //
@@ -44,11 +46,20 @@
 //   - A1 scope excludes _test.go (DirsScope default) and generated/ — the
 //     behavioral test and the fallback unit test call the funnel directly and
 //     must not be mistaken for production call sites.
+//   - A1 locks where the funnel IS called, not "every wire-out schemaToDTOs is
+//     funnel-guarded". Other schemaToDTOs callers (buildSagaSpec's saga output,
+//     headers) are NOT funnel-guarded today — but they cannot carry an audit
+//     wire surface unnoticed: a kind:saga (or any new-kind) contract owned by
+//     auditcore would have an id that misses the http.audit./event.audit. prefix
+//     gate, so A2 fails until isAuditWireContract is extended (at which point the
+//     funnel must be wired into that path too). The gap is real but A2-gated.
 //   - A2 keys on ownerCell == "auditcore"; a Principal-aggregating cell under a
 //     different owner name is out of A2's scope. That is acceptable today
-//     (auditcore is the sole such cell); the funnel godoc documents the manual
-//     extension step, and A2 catches the common case (renaming/adding an
-//     auditcore contract).
+//     (auditcore is the sole such cell — 规则不超前于代码现状); the funnel godoc
+//     documents the manual extension step. No reverse self-check is added for
+//     this case because it is vacuously covered: A2 already enumerates ALL
+//     contract.yaml and only acts on ownerCell==auditcore, so a different-owner
+//     audit cell is a future-cell concern, not a present escapable gap.
 package archtest
 
 import (
