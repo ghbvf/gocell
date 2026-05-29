@@ -42,6 +42,26 @@
 // checkpoint SaveOffset commit in one transaction (exactly-once). Decided in
 // ADR §3 Q1/Q2 against an explicit tx-handle parameter.
 //
+// # Ordering precondition (exactly-once requires serial in-order delivery)
+//
+// The exactly-once guarantee rests on a cumulative monotonic checkpoint: applyOne
+// skips any event whose Cursor position is ≤ the stored checkpoint. This is only
+// SOUND when the projection's stream is delivered strictly serially and in order.
+// Under concurrent delivery (the production AMQP subscriber dispatches one
+// goroutine per delivery, prefetch defaulting to 10) or broker redelivery-reorder,
+// a higher position can commit the checkpoint before a lower position is applied;
+// the lower event's distinct Apply is then silently skipped (pos ≤ checkpoint),
+// leaving a projection gap. A single consumer GROUP does NOT by itself provide
+// this ordering — it only prevents cross-cell fanout.
+//
+// v1 ships safe because the only wired event bus (cmd/* → in-memory) consumes
+// serially in one goroutine. Enforcing serial in-order delivery on the production
+// transport (prefetch=1 / single-goroutine dispatch for projection subscriptions)
+// is a HARD prerequisite of the cellgen projection wiring in PR-04 (#1176): no
+// concurrent transport may carry a projection subscription until that enforcement
+// lands. This intra-consumer-group ordering precondition is distinct from the
+// multi-pod boundary below. See ADR §6 threat row 4.
+//
 // # v1 operational boundaries
 //
 //   - Single-pod only. v1 has no distributed claim: running two pods that

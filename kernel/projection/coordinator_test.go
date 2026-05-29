@@ -269,6 +269,18 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 			wantDisp:       outbox.DispositionAck,
 		},
 		{
+			// F2: enforce the Cursor 1-based invariant (cursor.go #2) at the trust
+			// boundary. A non-conformant Cursor returning 0 for a real event must NOT
+			// be silently Ack-skipped (0<=0 at cold start = a dropped event); it
+			// routes to the DLX as a permanent error so the breach is observable.
+			name:           "invalid: cursor pos=0 violates 1-based invariant → Reject",
+			currentOffset:  0,
+			cursorPos:      0,
+			wantApplyCalls: 0,
+			wantSaved:      false,
+			wantDisp:       outbox.DispositionReject,
+		},
+		{
 			name:           "apply transient error → Requeue",
 			currentOffset:  0,
 			cursorPos:      1,
@@ -413,6 +425,61 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 			t.Errorf("Disposition = %v, want Requeue", result.Disposition)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// TestCoordinator_ReorderDropsLowerPosition — exactly-once ordering precondition
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_ReorderDropsLowerPosition CHARACTERIZES the exactly-once
+// precondition: the cumulative-watermark skip in applyOne (pos<=checkpoint →
+// Ack-skip) is only sound under STRICTLY SERIAL, IN-ORDER delivery of a
+// projection's stream. If a higher position commits the checkpoint before a lower
+// position is processed — which happens under concurrent delivery (the production
+// AMQP subscriber dispatches one goroutine per delivery with prefetch defaulting
+// to 10) or broker redelivery-reorder — the lower position's distinct Apply is
+// silently dropped (Acked, never applied), producing a projection gap.
+//
+// This test deterministically simulates that interleaving (pos=7 commits, then
+// pos=6 arrives). It asserts the lower event IS dropped: this documents the HAZARD
+// (why serial in-order delivery is required), not desired end-state behavior. v1
+// ships safe because cmd/* wires only the serial in-memory bus and the production
+// subscriber wiring (cellgen kind:projection) lands in PR-04 (#1176), which MUST
+// enforce prefetch=1 / single-goroutine dispatch before a concurrent transport
+// carries a projection subscription. See kernel/projection/doc.go "Ordering
+// precondition" and ADR §6 threat row 4.
+func TestCoordinator_ReorderDropsLowerPosition(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	ctx := context.Background()
+
+	// Higher position 7 is processed first → checkpoint advances to 7.
+	applyHi := &recordingApply{}
+	cHi := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 7})
+	rHi := cHi.buildHandler("testcell", "p1", applyHi.fn)(ctx, outbox.Entry{})
+	if applyHi.calls != 1 || rHi.Disposition != outbox.DispositionAck {
+		t.Fatalf("pos=7: calls=%d disp=%v, want 1 / Ack", applyHi.calls, rHi.Disposition)
+	}
+
+	// Lower position 6 arrives AFTER the checkpoint is at 7 → 6 <= 7 → silently
+	// skipped. Apply for pos=6 never runs: this is the dropped distinct event.
+	applyLo := &recordingApply{}
+	cLo := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 6})
+	rLo := cLo.buildHandler("testcell", "p1", applyLo.fn)(ctx, outbox.Entry{})
+	if applyLo.calls != 0 {
+		t.Fatalf("pos=6 after checkpoint=7: Apply called %d times — hazard expects 0 (silently dropped)", applyLo.calls)
+	}
+	if rLo.Disposition != outbox.DispositionAck {
+		t.Fatalf("pos=6 dropped-event disposition=%v, want Ack (silent skip)", rLo.Disposition)
+	}
+
+	off, _ := store.LoadOffset(ctx, "testcell", "p1")
+	if off != 7 {
+		t.Fatalf("checkpoint=%d, want 7 (a lower position must not regress the watermark)", off)
+	}
 }
 
 // ---------------------------------------------------------------------------

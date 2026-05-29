@@ -114,7 +114,14 @@ func (c *Coordinator) Phase() Phase {
 // should pass their caller context for forward compatibility.
 //
 // The consumerGroup is derived as cellID + "-" + projectionID and is not
-// caller-configurable — each projection has exactly one consumer for ordering.
+// caller-configurable — each projection has exactly one consumer GROUP (no
+// cross-cell fanout). NOTE: a single consumer group does NOT by itself guarantee
+// serial in-order delivery — the production AMQP subscriber dispatches deliveries
+// concurrently (prefetch>1). The exactly-once skip in applyOne is only sound under
+// serial in-order delivery; enforcing prefetch=1 / single-goroutine dispatch for
+// projection subscriptions lands with the cellgen wiring in PR-04 (#1176). v1
+// ships safe because cmd/* wires only the serial in-memory bus. See doc.go
+// "Ordering precondition".
 //
 // In production, Subscribe should only be called from cellgen-generated wiring
 // derived from slice.yaml contractUsages (kind:projection → cell_gen.go).
@@ -206,24 +213,48 @@ func (c *Coordinator) applyOne(
 ) error {
 	current, err := c.store.LoadOffset(ctx, cellID, projectionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("projection.applyOne[load]: %w", err)
 	}
 
 	pos, err := c.cursor.Position(entry)
 	if err != nil {
-		return err
+		return fmt.Errorf("projection.applyOne[cursor]: %w", err)
+	}
+
+	// Enforce the Cursor 1-based invariant (cursor.go #2) at the trust boundary:
+	// position 0 is reserved for cold start, so a real event MUST have pos >= 1.
+	// A non-conformant Cursor returning < 1 would otherwise be silently Ack-skipped
+	// by the pos<=current guard below (0<=0 at cold start = a dropped event with no
+	// error). Route the malformed event to the DLX as a permanent error instead of
+	// dropping it silently — the worst failure mode is a silent skip.
+	if pos < 1 {
+		return outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.applyOne: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
 	}
 
 	// Exactly-once: skip events already reflected in the checkpoint.
+	//
+	// CORRECTNESS PRECONDITION: this cumulative-watermark skip is only sound under
+	// strictly serial, in-order delivery of the projection's stream. Under
+	// concurrent delivery (e.g. the production AMQP subscriber dispatches one
+	// goroutine per delivery with prefetch>1) or broker redelivery-reorder, a
+	// higher position can advance the checkpoint before a lower position is
+	// applied, and the lower event's distinct Apply is then silently skipped
+	// (projection gap). v1 wires only the serial in-memory bus; serial-delivery
+	// enforcement for the production transport lands with the cellgen projection
+	// wiring in PR-04 (#1176). See doc.go "Ordering precondition" + ADR §6 row 4.
 	if pos <= current {
 		return nil
 	}
 
 	if err := apply(ctx, entry); err != nil {
-		return err
+		return fmt.Errorf("projection.applyOne[apply]: %w", err)
 	}
 
-	return c.store.SaveOffset(ctx, cellID, projectionID, pos)
+	if err := c.store.SaveOffset(ctx, cellID, projectionID, pos); err != nil {
+		return fmt.Errorf("projection.applyOne[save]: %w", err)
+	}
+	return nil
 }
 
 // classify maps an error to the appropriate HandleResult disposition.
