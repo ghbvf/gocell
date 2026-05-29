@@ -293,8 +293,17 @@ func TestIntegration_PublisherTrueReconnect(t *testing.T) {
 // Subscriber bound to the "itest" namespace.
 func newSubscriberForITest(t *testing.T, role string) (*Subscriber, *Connection) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.D20s)
-	defer cancel()
+	// autopaho binds the ConnectionManager lifecycle to the ctx passed to Open:
+	// canceling it tears the connection down. Since this is a HELPER (unlike the
+	// publisher tests whose `defer cancel()` lives in the test body), a
+	// `context.WithTimeout + defer cancel()` would fire the moment the helper
+	// returns — killing the manager before the test ever subscribes and leaving
+	// every cm.Subscribe with ConnectionDownError ("subscribe not ready"). Scope
+	// cancel to t.Cleanup so the manager outlives the helper; cfg.ConnectTimeout
+	// already bounds the bootstrap connect inside Open. Mirrors the unit
+	// newTestSubscriber fix.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	cfg := newTestConfig(t, role)
 	conn, err := Open(ctx, clock.Real(), cfg)
 	if err != nil {
@@ -448,9 +457,27 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 }
 
 // TestIntegration_Subscriber_SessionRecovery verifies clean=false session
-// persistence: a subscriber with SessionExpiry > 0 and a STABLE clientId
-// subscribes, disconnects, messages are published while offline, then a fresh
-// connection with the same clientId + session receives the queued messages.
+// persistence on the GoCell consumer-group path, which ALWAYS uses a
+// $share/{group}/{filter} shared subscription (the Subscriber derives the wire
+// filter from subscription.ConsumerGroup via TopicNamespace.MintFilter). A
+// subscriber with SessionExpiry > 0 and a STABLE clientId subscribes, the
+// connection is dropped, messages are published while offline, then a fresh
+// connection with the same clientId + session resumes the persistent session and
+// the broker REDELIVERS the offline-queued messages.
+//
+// Phase-1 teardown drops the connection by CANCELING the Open ctx (kills the
+// autopaho manager / TCP) rather than Connection.Close. This is the crux of the
+// fix: Connection.Close runs unsubscribeAll() + a clean DISCONNECT, which
+// removes the persistent subscription on the broker before any offline message
+// can queue against it — leaving the resumed session with nothing to redeliver.
+// Canceling the ctx leaves the broker-side persistent session + subscription
+// intact, so offline messages queue and are redelivered on resume.
+//
+// Empirically (throwaway probe, real mosquitto): with ctx-cancel teardown a
+// $share shared subscription offline-queues all 3 messages (plain=3 shared=3);
+// with Connection.Close teardown it queues 0 (plain=0 shared=0). The earlier CI
+// failure was this Close-unsubscribes-all artifact, NOT a $share limitation —
+// mosquitto DOES offline-queue for $share members with a persistent session.
 func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	// Mosquitto persists per-clientId sessions. Use a dedicated container so the
 	// session lifecycle is isolated from the shared broker.
@@ -489,8 +516,15 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	subscription := itestSubscription(filter, group)
 
 	// Phase 1: subscribe to establish the broker-side shared subscription, then
-	// disconnect (the session + subscription persist on the broker).
-	ctx1, cancel1 := context.WithTimeout(context.Background(), testtime.D20s)
+	// drop the connection by canceling the Open ctx (NOT Connection.Close — see
+	// the test doc-comment; Close would unsubscribe-all and clear the persistent
+	// subscription before offline messages could queue).
+	//
+	// Use a cancelable (non-timeout) ctx so the manager lifecycle is controlled
+	// solely by cancel1: canceling it tears down the autopaho manager / TCP
+	// uncleanly, which the broker treats as a non-clean disconnect, retaining the
+	// SessionExpiry>0 session + its subscription.
+	ctx1, cancel1 := context.WithCancel(context.Background())
 	conn1, err := Open(ctx1, clock.Real(), mkCfg())
 	if err != nil {
 		cancel1()
@@ -514,14 +548,16 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 		cancel1()
 		t.Fatal("phase-1 subscribe not ready")
 	}
-	subCancel1()
-	if cErr := conn1.Close(context.Background()); cErr != nil {
-		t.Logf("conn1 close: %v", cErr)
-	}
+	// Drop the connection UNCLEANLY (ctx cancel) — do NOT call subCancel1 first
+	// (that would UNSUBSCRIBE via the Subscribe-returned cancel) and do NOT call
+	// conn1.Close (that unsubscribes-all). Canceling ctx1 tears down the manager,
+	// leaving the persistent session + subscription on the broker.
 	cancel1()
+	time.Sleep(testtime.D1s) // let the TCP teardown settle before publishing
 
-	// Publish while offline. Shared-subscription queued-while-offline delivery is
-	// broker-dependent; mosquitto delivers persisted-session messages on resume.
+	// Publish while offline. Because the persistent session + $share subscription
+	// survive the unclean disconnect, mosquitto offline-queues these messages and
+	// redelivers them when the session resumes (phase 2).
 	pubCfg := newTestConfig(t, "session-pub")
 	pubCfg.Brokers = []string{testutil.LoopbackIPEndpoint(dedicatedURL)}
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), testtime.D20s)
@@ -553,7 +589,7 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	// online probe below carries {"seq":"online"} and is deliberately NOT
 	// counted: counting it would make the test tautological — it would pass even
 	// if ZERO offline-queued messages were redelivered, which is exactly the
-	// "clean=false 离线消息补投" criterion under test (Plan §3.4).
+	// clean=false offline-redelivery criterion under test.
 	var offlineReceived atomic.Int64
 	var onlineReceived atomic.Int64
 	subCtx2, subCancel2 := context.WithCancel(ctx2)
@@ -580,13 +616,14 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	itestPublish(t, conn2, filter, itestEnvelope(t, filter, []byte(`{"seq":"online"}`)))
 
 	// HARD assertion: at least one OFFLINE-queued message must be redelivered to
-	// the resumed persistent session. This can go RED if offline redelivery
-	// breaks — it is NOT skipped on the offline-redelivery criterion.
+	// the resumed persistent ($share) session. This can go RED if offline
+	// redelivery breaks — it is NOT skipped on the offline-redelivery criterion.
 	//
-	// Residual gap: mosquitto's exact offline-queue depth for shared
-	// subscriptions can vary by version, so we require >= 1 of the 3 offline
-	// messages rather than all 3. The session-resumed + at-least-one-redelivered
-	// invariant is the deterministic core of "clean=false 离线消息补投".
+	// We require >= 1 of the 3 offline messages rather than all 3: mosquitto's
+	// exact offline-queue depth for shared subscriptions can vary by version, so
+	// the session-resumed + at-least-one-redelivered invariant is the
+	// deterministic core of clean=false offline redelivery (empirically all 3 are
+	// redelivered on the pinned mosquitto image).
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if offlineReceived.Load() >= 1 {
