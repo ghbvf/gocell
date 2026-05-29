@@ -37,7 +37,6 @@ import (
 	"go/types"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,7 +58,7 @@ import (
 // ============================================================================
 // INVARIANT: SAGA-STEP-COMPENSATE-PURE-01
 //
-// saga_compensate_pure_test.go — funnel guarding saga.CompensateFunc purity.
+// SAGA-STEP-COMPENSATE-PURE-01 — funnel guarding saga.CompensateFunc purity.
 // Compensate is the pure-reverse rollback for one previously-committed step.
 // The Coordinator owns the transaction layer; Compensate runs in the
 // application domain only and MUST NOT perform durable/persistent side effects.
@@ -1064,7 +1063,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 // ============================================================================
 // INVARIANT: SAGA-EXECUTOR-RAND-INJECTED-01
 //
-// saga_executor_rand_injected_test.go — funnel guarding random-source injection
+// SAGA-EXECUTOR-RAND-INJECTED-01 — funnel guarding random-source injection
 // inside runtime/saga/executor.
 //
 // # Rule
@@ -2391,7 +2390,7 @@ func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 // ============================================================================
 // INVARIANT: SAGA-DRIVE-BEHIND-LEADER-GATE-01
 //
-// saga_leader_gate_test.go — leader-elect gate call-discipline lock for the
+// SAGA-DRIVE-BEHIND-LEADER-GATE-01 — leader-elect gate call-discipline lock for the
 // Coordinator tick loop (PR-05, #964).
 //
 // The central correctness property of leader-elect is: no claimed instance is
@@ -2767,7 +2766,7 @@ func TestSagaLeaderGate_Detector_RedTickIgnoresLead(t *testing.T) {
 // ============================================================================
 // INVARIANT: SAGA-STATUS-FANOUT-COVERAGE-01
 //
-// saga_status_fanout_coverage_test.go — enforces the contract-fanout closure for
+// SAGA-STATUS-FANOUT-COVERAGE-01 — enforces the contract-fanout closure for
 // the saga.Status / journal.EventKind enums: when a constant is added, its fanout
 // carriers must stay in lockstep, or the build / CI goes red.
 //
@@ -3394,7 +3393,7 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 // ============================================================================
 // INVARIANT: SAGA-STEP-RUN-OUTSIDE-TX-01
 //
-// saga_step_run_outside_tx_test.go — call-discipline lock for the Coordinator
+// SAGA-STEP-RUN-OUTSIDE-TX-01 — call-discipline lock for the Coordinator
 // step executor.
 //
 // Inside all production .go files in runtime/saga/ (excluding _test.go),
@@ -3922,13 +3921,19 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 //     start with "SAGA-" escapes the theme key. TestSagaInvariantsConsolidated_
 //     BlindSpot_KnownIDsPresent asserts every known saga ID is present here and
 //     SAGA-prefixed — catching both a dropped ID and a convention drift.
-//   - B2 (comment location): the scan matches "INVARIANT: SAGA-" anywhere in a
-//     file, not only its header CommentGroup, so a stray mid-file annotation is
-//     still caught.
-//   - RED fixture: TestSagaInvariantsConsolidated_REDFixture drives
-//     sagaConsolidationDiags on a synthetic file map (a SAGA-* ID in
-//     saga_stray_test.go → non-empty; all in saga_invariants_test.go → empty)
-//     and asserts each diagnostic carries a real Rel + non-zero Line.
+//   - B2 (comment location): the scan reads every parsed CommentGroup, not only
+//     the header one, so a stray mid-file `// INVARIANT: SAGA-…` annotation is
+//     still caught. Conversely, because detection runs over ast.File.Comments
+//     (parser.ParseComments) and not raw lines, a SAGA token in a string literal
+//     or other code text is structurally excluded — it cannot masquerade as a
+//     declaration.
+//   - RED fixture: TestSagaInvariantsConsolidated_REDFixture drives the real
+//     entry point — scanSagaInvariantDecls (the comment parser) →
+//     sagaConsolidationDiags — on synthetic *source files*: a SAGA-* anchor in
+//     saga_stray_test.go → non-empty; all anchors in saga_invariants_test.go →
+//     empty; and a string-literal SAGA token in the home file is not counted.
+//     Each diagnostic is asserted to carry a real Rel + non-zero Line + the
+//     stray ID.
 //
 // ref: tools/archtest/archtest_verify_coverage_test.go (directory content-scan pattern)
 // ref: .claude/rules/gocell/ai-robust.md §"archtest 文件命名" (the convention this enforces)
@@ -3944,19 +3949,10 @@ const sagaConsolidatedFile = "saga_invariants_test.go"
 // vacuously. 3 is the structural floor (well below the actual 9 declared today).
 const sagaConsolidatedFileMinIDs = 3
 
-// sagaInvariantHeaderRE matches a saga-theme INVARIANT declaration in any comment
-// form ("// INVARIANT: SAGA-…" or the list-continuation "//   - INVARIANT: SAGA-…").
-// Capture group 1 is the full ID. Anchored on the "INVARIANT:" keyword so plain
-// string literals mentioning a SAGA- token do not match (blind-spot B2 scope).
-//
-// The "INVARIANT:" keyword is reserved for *declarations* (per ai-robust.md
-// §"archtest 文件命名"): a cross-reference to a saga rule from another file uses
-// "// ref: SAGA-…" or the bare ID, never "// INVARIANT: SAGA-…". So a non-
-// consolidated file carrying "INVARIANT: SAGA-…" — even as prose — is by
-// definition a misplaced declaration and is intentionally flagged, not a false
-// positive. (Prose examples that write "SAGA-…" with the U+2026 ellipsis after
-// the dash do not capture: the `[A-Z0-9-]+` class stops at the non-ASCII rune.)
-var sagaInvariantHeaderRE = regexp.MustCompile(`INVARIANT:\s+(SAGA-[A-Z0-9-]+)`)
+// sagaThemePrefix is the theme key the consolidation guard scans for: a saga
+// INVARIANT is any anchor whose parsed ID carries this prefix (the SAGA- family
+// this file consolidates — see knownSagaInvariantIDs).
+const sagaThemePrefix = "SAGA-"
 
 // sagaThemeHit is one saga INVARIANT declaration: its ID and 1-based line.
 type sagaThemeHit struct {
@@ -3965,19 +3961,51 @@ type sagaThemeHit struct {
 }
 
 // scanSagaInvariantDecls returns, keyed by file basename, the saga INVARIANT IDs
-// each content file declares. Pure (no *testing.T) so the RED fixture and the
-// live test share one detection core.
-func scanSagaInvariantDecls(files []ContentContext) map[string][]sagaThemeHit {
+// each content file declares. Detection runs over the *parsed comment groups*
+// (parser.ParseComments → ast.File.Comments → parseInventoryAnchor) — the same
+// canonical anchor path INVENTORY-ANCHOR-VALID-ID-01 uses — NOT a raw line/regex
+// scan. So an "INVARIANT: SAGA-…" token sitting in a string literal or any other
+// non-comment code text is structurally excluded by the Go parser; only genuine
+// `// INVARIANT:` / `// - INVARIANT:` comment declarations count. A "saga
+// INVARIANT" is one whose parsed ID carries sagaThemePrefix.
+//
+// Pure (no *testing.T) so the RED fixture and the live test share one detection
+// core. A parse failure surfaces as an error rather than a silent drop
+// (fail-closed): a file that does not compile cannot quietly evade the scan.
+func scanSagaInvariantDecls(files []ContentContext) (map[string][]sagaThemeHit, error) {
 	out := map[string][]sagaThemeHit{}
 	for _, f := range files {
 		base := path.Base(f.Rel)
-		for i, raw := range strings.Split(string(f.Bytes), "\n") {
-			if m := sagaInvariantHeaderRE.FindStringSubmatch(raw); m != nil {
-				out[base] = append(out[base], sagaThemeHit{id: m[1], line: i + 1})
+		fset := token.NewFileSet()
+		af, err := parser.ParseFile(fset, f.Rel, f.Bytes, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("%s: parse %s for saga invariant scan: %w", sagaInvariantsConsolidatedRule, f.Rel, err)
+		}
+		for _, group := range af.Comments {
+			for _, c := range group.List {
+				ref, ok := parseInventoryAnchor(c.Text)
+				if !ok || !strings.HasPrefix(ref.id, sagaThemePrefix) {
+					continue
+				}
+				out[base] = append(out[base], sagaThemeHit{
+					id:   ref.id,
+					line: fset.Position(c.Pos()).Line,
+				})
 			}
 		}
 	}
-	return out
+	return out, nil
+}
+
+// relOfBases maps each content file's basename to its module-relative path — the
+// lookup sagaConsolidationDiags needs to locate a stray declaration. Shared by
+// the live test and the RED fixture so both feed the diag core identically.
+func relOfBases(files []ContentContext) map[string]string {
+	relOf := make(map[string]string, len(files))
+	for _, f := range files {
+		relOf[path.Base(f.Rel)] = f.Rel
+	}
+	return relOf
 }
 
 // sagaConsolidationDiags is the pure detection core: any saga INVARIANT ID
@@ -4032,11 +4060,9 @@ func TestSagaInvariantsConsolidated(t *testing.T) {
 	files := loadArchtestTestFiles(t, root)
 	require.NotEmpty(t, files, "%s: no archtest test files loaded — scope/loader regression", sagaInvariantsConsolidatedRule)
 
-	relOf := make(map[string]string, len(files))
-	for _, f := range files {
-		relOf[path.Base(f.Rel)] = f.Rel
-	}
-	byFile := scanSagaInvariantDecls(files)
+	relOf := relOfBases(files)
+	byFile, err := scanSagaInvariantDecls(files)
+	require.NoError(t, err, "%s: scan saga invariant declarations", sagaInvariantsConsolidatedRule)
 
 	// Floor guard (non-vacuous): the consolidated file must itself carry the saga
 	// theme, or a rename/empty would let the rule pass vacuously.
@@ -4075,8 +4101,10 @@ func TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1, "expected exactly one %s", sagaConsolidatedFile)
 
+	byFile, err := scanSagaInvariantDecls(files)
+	require.NoError(t, err)
 	present := map[string]bool{}
-	for _, hit := range scanSagaInvariantDecls(files)[sagaConsolidatedFile] {
+	for _, hit := range byFile[sagaConsolidatedFile] {
 		present[hit.id] = true
 	}
 	for _, id := range knownSagaInvariantIDs {
@@ -4086,32 +4114,54 @@ func TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent(t *testing.T) {
 }
 
 // TestSagaInvariantsConsolidated_REDFixture proves the detection core fires on a
-// stray saga invariant and is silent when all are consolidated.
+// stray saga invariant and is silent when all are consolidated. It drives
+// synthetic source files through the SAME entry point as the live test —
+// scanSagaInvariantDecls (parser.ParseComments) → sagaConsolidationDiags — so it
+// exercises the comment parser, not a hand-built parse result. Two properties:
+//
+//   - A SAGA- token inside a string literal (non-comment code text) must NOT be
+//     counted as a declaration: the parser-based scan excludes it structurally.
+//   - A genuine `// INVARIANT: SAGA-…` anchor in a file other than the
+//     consolidated home fires exactly one diagnostic, pinned to the stray file.
 func TestSagaInvariantsConsolidated_REDFixture(t *testing.T) {
 	t.Parallel()
-	relOf := map[string]string{
-		sagaConsolidatedFile: "tools/archtest/" + sagaConsolidatedFile,
-		"saga_stray_test.go": "tools/archtest/saga_stray_test.go",
-	}
 
-	allConsolidated := map[string][]sagaThemeHit{
-		sagaConsolidatedFile: {{id: "SAGA-A-01", line: 2}, {id: "SAGA-B-01", line: 3}, {id: "SAGA-C-01", line: 4}},
+	// Consolidated home: three real anchors (header-list + plain forms) plus a
+	// string literal that mentions a SAGA token — the latter must be ignored.
+	consolidatedSrc := []byte("//   - INVARIANT: SAGA-A-01\n" +
+		"// INVARIANT: SAGA-B-01\n" +
+		"// INVARIANT: SAGA-C-01\n" +
+		"package archtest\n" +
+		"\n" +
+		"// stringLiteralDecoy must not be parsed as an INVARIANT declaration.\n" +
+		"const stringLiteralDecoy = \"INVARIANT: SAGA-NOT-A-DECL-01\"\n")
+
+	consolidatedOnly := []ContentContext{
+		{Rel: "tools/archtest/" + sagaConsolidatedFile, Bytes: consolidatedSrc},
 	}
-	assert.Empty(t, sagaConsolidationDiags(allConsolidated, relOf),
+	byFile, err := scanSagaInvariantDecls(consolidatedOnly)
+	require.NoError(t, err)
+	require.Len(t, byFile[sagaConsolidatedFile], 3,
+		"only the three comment anchors must be counted; the string-literal SAGA token must be excluded by the parser")
+	assert.Empty(t, sagaConsolidationDiags(byFile, relOfBases(consolidatedOnly)),
 		"all saga invariants in the consolidated file must yield zero diags")
 
-	strayed := map[string][]sagaThemeHit{
-		sagaConsolidatedFile: {{id: "SAGA-A-01", line: 2}},
-		"saga_stray_test.go": {{id: "SAGA-STRAY-01", line: 9}},
+	// Stray declaration in a sibling file: a genuine comment anchor.
+	straySrc := []byte("// INVARIANT: SAGA-STRAY-01\n" +
+		"package archtest\n")
+	strayed := []ContentContext{
+		{Rel: "tools/archtest/" + sagaConsolidatedFile, Bytes: consolidatedSrc},
+		{Rel: "tools/archtest/saga_stray_test.go", Bytes: straySrc},
 	}
-	diags := sagaConsolidationDiags(strayed, relOf)
+	byFile, err = scanSagaInvariantDecls(strayed)
+	require.NoError(t, err)
+	diags := sagaConsolidationDiags(byFile, relOfBases(strayed))
 	require.NotEmpty(t, diags, "a saga invariant outside the consolidated file must fire the rule")
-	// Exactly one diag: the consolidated-file hit must be suppressed, only the
+	// Exactly one diag: the consolidated-file hits must be suppressed, only the
 	// stray ID reported — guards against a regression that diags the home file.
 	require.Len(t, diags, 1, "only the stray file's invariant should be reported; consolidated-file hits must be suppressed")
-	for _, d := range diags {
-		assert.NotZero(t, d.Line, "diagnostic must carry a non-zero Line")
-		assert.Equal(t, "tools/archtest/saga_stray_test.go", d.Rel, "diagnostic must point at the stray file")
-		assert.NotEmpty(t, d.Message, "diagnostic must carry a message")
-	}
+	d := diags[0]
+	assert.NotZero(t, d.Line, "diagnostic must carry a non-zero Line")
+	assert.Equal(t, "tools/archtest/saga_stray_test.go", d.Rel, "diagnostic must point at the stray file")
+	assert.Contains(t, d.Message, "SAGA-STRAY-01", "diagnostic must name the stray invariant ID")
 }
