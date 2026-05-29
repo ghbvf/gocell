@@ -664,8 +664,12 @@ func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
 // buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
 // are the funnel's own defense). Empty service/method, a method that is not an
 // exported Go identifier (keyword "func", lower-case "issueCommand", dashed
-// "issue-command"), and a control character (newline) in service or proto — each
-// must error rather than emit a silently-broken or injected stub.
+// "issue-command"), an empty proto path, a proto path not rooted under
+// metadata.GRPCProtoPathPrefix, and a control character (newline) in service or
+// proto — each must error rather than emit a silently-broken or injected stub.
+// The empty/outside-prefix proto cases mirror governance FMT-37
+// (validateFMT37Proto) so the codegen funnel rejects the same proto paths the
+// governance rule would, even though codegen does not run FMT-37.
 func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -677,6 +681,8 @@ func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
 		{"keyword method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "func", Proto: "contracts/grpc/d/c/v1/c.proto"}},
 		{"unexported method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
 		{"dashed method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issue-command", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: ""}},
+		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: "proto/d/c/v1/c.proto"}},
 		{"newline in service", metadata.GRPCTransportMeta{
 			Service: "S\nimport \"os\"", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto",
 		}},

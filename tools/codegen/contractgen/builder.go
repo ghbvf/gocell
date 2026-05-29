@@ -25,8 +25,9 @@ import (
 //   - kind=http but http endpoint missing
 //   - kind=event but payload schemaRef missing
 //   - kind=grpc but endpoints.grpc missing, service/method empty, method not an
-//     exported Go identifier, service/proto carrying a control character, or a
-//     non-unary streamingType (streaming codegen deferred to PR 10)
+//     exported Go identifier, proto empty or not rooted under
+//     metadata.GRPCProtoPathPrefix, service/proto carrying a control character,
+//     or a non-unary streamingType (streaming codegen deferred to PR 10)
 func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID string) (*ContractGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen build: project is nil")
@@ -607,6 +608,11 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 //     requires the uppercase initial that lets another package implement the
 //     interface. Without this the breakage is silent (gofmt/gofumpt accept it)
 //     or an opaque downstream parse error.
+//   - Proto must be present and rooted under metadata.GRPCProtoPathPrefix
+//     (contracts/grpc/). This mirrors governance FMT-37 (validateFMT37Proto):
+//     codegen never runs FMT-37, so the funnel rejects the same proto paths the
+//     governance rule would, keeping the generated doc comment's proto reference
+//     a real contracts-relative path rather than an empty or stray string.
 //   - Service and Proto are rendered into the interface doc comment; a control
 //     rune (notably a newline) would break out of the // comment and inject
 //     arbitrary text into the generated source that goimports/gofumpt accept
@@ -630,6 +636,14 @@ func buildGRPCSpec(spec *ContractGenSpec, contract *metadata.ContractMeta) error
 	}
 	if i := strings.IndexFunc(g.Service, unicode.IsControl); i >= 0 {
 		return fmt.Errorf("contractgen build: contract %q grpc service contains a control character at byte %d", contract.ID, i)
+	}
+	if g.Proto == "" {
+		return fmt.Errorf("contractgen build: contract %q grpc block requires proto", contract.ID)
+	}
+	if !strings.HasPrefix(g.Proto, metadata.GRPCProtoPathPrefix) {
+		return fmt.Errorf(
+			"contractgen build: contract %q grpc proto %q must be rooted under %q",
+			contract.ID, g.Proto, metadata.GRPCProtoPathPrefix)
 	}
 	if i := strings.IndexFunc(g.Proto, unicode.IsControl); i >= 0 {
 		return fmt.Errorf("contractgen build: contract %q grpc proto path contains a control character at byte %d", contract.ID, i)
