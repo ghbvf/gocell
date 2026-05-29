@@ -10,6 +10,9 @@
 // Control-plane receiver-type confinement self-checks (per ai-robust.md §"盲区自检"):
 //   - control_plane_method_passes: GREEN — FuncDecls that are methods of
 //     controlPlaneClock in runtime/command/ produce 0 violations.
+//   - control_plane_reconcile_passes: GREEN — methods of controlPlaneClock in
+//     the kernel/reconcile/ host (newProbeTimer / newRequeueTimer / now) produce
+//     0 violations (RECONCILE-LOOP-CLOCK-CARVEOUT-01).
 //   - control_plane_wrong_path_violates: RED — same controlPlaneClock receiver
 //     type but file outside runtime/command/; the path gate must still flag it.
 //   - control_plane_wrong_receiver_type_violates: RED — method of otherClock
@@ -83,6 +86,7 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		// Control-plane receiver-type confinement self-checks
 		// (per ai-robust.md §"盲区自检" / PROD-CLOCK-INJECTION-01 godoc).
 		"control_plane_method_passes",                // GREEN: controlPlaneClock method in runtime/command/
+		"control_plane_reconcile_passes",             // GREEN: controlPlaneClock method in kernel/reconcile/ (RECONCILE-LOOP-CLOCK-CARVEOUT-01)
 		"control_plane_wrong_path_violates",          // RED: controlPlaneClock method outside runtime/command/
 		"control_plane_wrong_receiver_type_violates", // RED: wrong receiver type in runtime/command/
 		"control_plane_no_marker_violates",           // RED: free function in runtime/command/ (no receiver)
