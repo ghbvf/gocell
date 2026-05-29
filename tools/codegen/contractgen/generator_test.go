@@ -117,6 +117,35 @@ func setupEventRoot(t *testing.T) (string, *metadata.ProjectMeta) {
 	return root, p
 }
 
+// synthGRPCMinimalFixture returns the absolute path to the synth_grpc_minimal
+// testdata fixture (a single kind=grpc contract).
+func synthGRPCMinimalFixture(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
+	if err != nil {
+		t.Fatalf("abs path synth_grpc_minimal: %v", err)
+	}
+	return abs
+}
+
+// setupGRPCMinimalRoot copies the synth_grpc_minimal fixture into a fresh
+// t.TempDir() and parses it. Returns (root, project).
+func setupGRPCMinimalRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	fixture := synthGRPCMinimalFixture(t)
+	root := t.TempDir()
+	copyDirIntoTemp(t, fixture, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_grpc_minimal from tmp: %v", err)
+	}
+	return root, p
+}
+
 // mustGenerate is a helper that calls Generate and fails the test on error.
 func mustGenerate(t *testing.T, root string, p *metadata.ProjectMeta, opts Options) Result {
 	t.Helper()
@@ -530,6 +559,43 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"} {
 		if !fileNames[want] {
 			t.Errorf("missing artifact: %s", want)
+		}
+	}
+}
+
+// TestRenderContractArtifacts_GRPC verifies that the production
+// RenderContractArtifacts path emits EXACTLY types_gen.go + iface_gen.go for a
+// grpc contract — and explicitly NOT handler_gen.go / spec_gen.go /
+// subscription_gen.go. grpc relies on falling through generator.go's http and
+// event kind gates; this is the regression guard that a future change to that
+// gating cannot start emitting extra artifacts for grpc unnoticed (the golden
+// test is file-name-driven and would not enumerate a new file).
+func TestRenderContractArtifacts_GRPC(t *testing.T) {
+	t.Parallel()
+	root, p := setupGRPCMinimalRoot(t)
+
+	artifacts, err := RenderContractArtifacts(root, p, "grpc.device.command.v1", "github.com/ghbvf/gocell")
+	if err != nil {
+		t.Fatalf("RenderContractArtifacts: %v", err)
+	}
+	if len(artifacts) != 2 {
+		t.Errorf("expected 2 artifacts for grpc contract, got %d", len(artifacts))
+	}
+	fileNames := make(map[string]bool)
+	for _, a := range artifacts {
+		fileNames[filepath.Base(a.Path)] = true
+		if len(a.Content) == 0 {
+			t.Errorf("artifact %s has empty content", a.Path)
+		}
+	}
+	for _, want := range []string{"types_gen.go", "iface_gen.go"} {
+		if !fileNames[want] {
+			t.Errorf("missing artifact: %s", want)
+		}
+	}
+	for _, unwanted := range []string{"handler_gen.go", "spec_gen.go", "subscription_gen.go"} {
+		if fileNames[unwanted] {
+			t.Errorf("grpc contract must not produce %s", unwanted)
 		}
 	}
 }

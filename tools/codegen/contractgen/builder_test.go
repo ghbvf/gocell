@@ -545,6 +545,176 @@ func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
 	}
 }
 
+// TestBuildContractSpec_GRPCKind_PlaceholderInterface verifies that a kind=grpc
+// contract projects endpoints.grpc into spec.GRPC with the derived Go interface
+// name ("Server") + the proto method name, leaving HTTP/event fields nil, and
+// resolves the generated package path/name kind-generically.
+func TestBuildContractSpec_GRPCKind_PlaceholderInterface(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc.device.command.v1": {
+				ID:      "grpc.device.command.v1",
+				Kind:    "grpc",
+				Codegen: true,
+				File:    "contracts/grpc/device/command/v1/contract.yaml",
+				Endpoints: metadata.EndpointsMeta{
+					Server: "devicecell",
+					GRPC: &metadata.GRPCTransportMeta{
+						Service: "device.command.v1.DeviceCommandService",
+						Method:  "IssueCommand",
+						Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+					},
+				},
+			},
+		},
+	}
+	spec, err := buildContractSpec("", p, "grpc.device.command.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec should not error for kind=grpc, got: %v", err)
+	}
+	if spec.Kind != "grpc" {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, "grpc")
+	}
+	if spec.Endpoint != nil {
+		t.Errorf("spec.Endpoint should be nil for kind=grpc, got non-nil")
+	}
+	if spec.Event != nil {
+		t.Errorf("spec.Event should be nil for kind=grpc, got non-nil")
+	}
+	if spec.GRPC == nil {
+		t.Fatal("spec.GRPC should be non-nil for kind=grpc")
+	}
+	if spec.GRPC.InterfaceName != "Server" {
+		t.Errorf("spec.GRPC.InterfaceName = %q, want %q", spec.GRPC.InterfaceName, "Server")
+	}
+	if spec.GRPC.MethodName != "IssueCommand" {
+		t.Errorf("spec.GRPC.MethodName = %q, want %q", spec.GRPC.MethodName, "IssueCommand")
+	}
+	if spec.GRPC.ServiceFQN != "device.command.v1.DeviceCommandService" {
+		t.Errorf("spec.GRPC.ServiceFQN = %q, want %q", spec.GRPC.ServiceFQN, "device.command.v1.DeviceCommandService")
+	}
+	if spec.GRPC.ProtoPath != "contracts/grpc/device/command/v1/device_command.proto" {
+		t.Errorf("spec.GRPC.ProtoPath = %q", spec.GRPC.ProtoPath)
+	}
+	if spec.PackageName != "command" {
+		t.Errorf("spec.PackageName = %q, want %q", spec.PackageName, "command")
+	}
+	if spec.PackagePath != "generated/contracts/grpc/device/command/v1" {
+		t.Errorf("spec.PackagePath = %q, want %q", spec.PackagePath, "generated/contracts/grpc/device/command/v1")
+	}
+}
+
+// TestBuildContractSpec_GRPCKind_MissingEndpoint verifies the fail-closed guard:
+// kind=grpc with no endpoints.grpc block is an error, not a silent empty stub.
+func TestBuildContractSpec_GRPCKind_MissingEndpoint(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc.device.command.v1": {
+				ID:      "grpc.device.command.v1",
+				Kind:    "grpc",
+				Codegen: true,
+				File:    "contracts/grpc/device/command/v1/contract.yaml",
+			},
+		},
+	}
+	_, err := buildContractSpec("", p, "grpc.device.command.v1")
+	if err == nil {
+		t.Fatal("buildContractSpec should error for kind=grpc with no endpoints.grpc block")
+	}
+}
+
+// TestBuildContractSpec_GRPCKind_NonUnaryRejected verifies the PR-10 deferral:
+// a non-unary streamingType is rejected rather than emitting a misleading unary
+// []byte placeholder.
+func TestBuildContractSpec_GRPCKind_NonUnaryRejected(t *testing.T) {
+	t.Parallel()
+	for _, st := range []string{"server-stream", "client-stream", "bidi"} {
+		t.Run(st, func(t *testing.T) {
+			t.Parallel()
+			p := &metadata.ProjectMeta{
+				Contracts: map[string]*metadata.ContractMeta{
+					"grpc.device.watch.v1": {
+						ID:      "grpc.device.watch.v1",
+						Kind:    "grpc",
+						Codegen: true,
+						File:    "contracts/grpc/device/watch/v1/contract.yaml",
+						Endpoints: metadata.EndpointsMeta{
+							Server: "devicecell",
+							GRPC: &metadata.GRPCTransportMeta{
+								Service:       "device.watch.v1.DeviceWatchService",
+								Method:        "WatchCommands",
+								Proto:         "contracts/grpc/device/watch/v1/device_watch.proto",
+								StreamingType: st,
+							},
+						},
+					},
+				},
+			}
+			_, err := buildContractSpec("", p, "grpc.device.watch.v1")
+			if err == nil {
+				t.Fatalf("buildContractSpec should reject non-unary streamingType %q (PR-10 deferral)", st)
+			}
+		})
+	}
+}
+
+// TestBuildContractSpec_GRPCKind_RejectsMalformed exercises the fail-closed
+// buildGRPCSpec guards (the golden path does not run governance FMT-37, so these
+// are the funnel's own defense). Empty service/method, a method that is not an
+// exported Go identifier (keyword "func", lower-case "issueCommand", dashed
+// "issue-command"), an empty proto path, a proto path not rooted under
+// metadata.GRPCProtoPathPrefix, and a control character (newline) in service or
+// proto — each must error rather than emit a silently-broken or injected stub.
+// The empty/outside-prefix proto cases mirror governance FMT-37
+// (validateFMT37Proto) so the codegen funnel rejects the same proto paths the
+// governance rule would, even though codegen does not run FMT-37.
+func TestBuildContractSpec_GRPCKind_RejectsMalformed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		grpc metadata.GRPCTransportMeta
+	}{
+		{"empty service", metadata.GRPCTransportMeta{Service: "", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"empty method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"keyword method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "func", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"unexported method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issueCommand", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"dashed method", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "issue-command", Proto: "contracts/grpc/d/c/v1/c.proto"}},
+		{"empty proto", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: ""}},
+		{"proto outside prefix", metadata.GRPCTransportMeta{Service: "d.c.v1.S", Method: "IssueCommand", Proto: "proto/d/c/v1/c.proto"}},
+		{"newline in service", metadata.GRPCTransportMeta{
+			Service: "S\nimport \"os\"", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto",
+		}},
+		{"newline in proto", metadata.GRPCTransportMeta{
+			Service: "d.c.v1.S", Method: "IssueCommand", Proto: "contracts/grpc/d/c/v1/c.proto\nvar _ = 1",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			grpc := tc.grpc
+			p := &metadata.ProjectMeta{
+				Contracts: map[string]*metadata.ContractMeta{
+					"grpc.device.command.v1": {
+						ID:      "grpc.device.command.v1",
+						Kind:    "grpc",
+						Codegen: true,
+						File:    "contracts/grpc/device/command/v1/contract.yaml",
+						Endpoints: metadata.EndpointsMeta{
+							Server: "devicecell",
+							GRPC:   &grpc,
+						},
+					},
+				},
+			}
+			if _, err := buildContractSpec("", p, "grpc.device.command.v1"); err == nil {
+				t.Fatalf("buildContractSpec should reject malformed grpc input %q", tc.name)
+			}
+		})
+	}
+}
+
 // --- BuildHTTPEndpointSpec HasBody tests ---
 
 // TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that
