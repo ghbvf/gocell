@@ -72,6 +72,8 @@ func firstCallNamed(t *testing.T, file *ast.File, name string) *ast.CallExpr {
 
 func calleeTrailingName(fun ast.Expr) string {
 	switch v := fun.(type) {
+	case *ast.ParenExpr:
+		return calleeTrailingName(v.X)
 	case *ast.SelectorExpr:
 		if v.Sel != nil {
 			return v.Sel.Name
@@ -137,6 +139,20 @@ func use() {
 	_ = Foo[int]()
 	_ = Pair[int, string]()
 }`
+	// parenthesized callees: (hmac.New)(...) and (Foo[int])() must resolve the
+	// same as their unparenthesized forms (unwrapCallee strips ParenExpr).
+	const parenQualified = `package p
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+)
+func use(key []byte) []byte {
+	m := (hmac.New)(sha256.New, key)
+	return m.Sum(nil)
+}`
+	const parenGeneric = `package p
+func Foo[T any]() int { return 0 }
+func use() { _ = (Foo[int])() }`
 	const method = `package p
 type T struct{}
 func (T) New() int { return 0 }
@@ -163,6 +179,8 @@ func use(v T) { _ = v.New() }`
 		{"wrong-name", qualified, "New", "crypto/hmac", "Equal", false},
 		{"wrong-pkg", qualified, "New", "crypto/subtle", "New", false},
 		{"method-call-not-pkg-func", method, "New", "synthetic", "New", false},
+		{"paren-qualified", parenQualified, "New", "crypto/hmac", "New", true},
+		{"paren-generic", parenGeneric, "Foo", "synthetic", "Foo", true},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -313,9 +331,10 @@ func TestWalkFuncDecls_NilSafe(t *testing.T) {
 	WalkFuncDecls([]*ast.File{f}, nil, fset, nil, nil)
 }
 
-// TestUnwrapCallee directly exercises the generic-unwrap helper, including the
-// default→nil branch (a parenthesized callee, which IsCallToPkgFunc then treats
-// as a non-match — mirroring the donor unwrapCalleeForResolve semantics).
+// TestUnwrapCallee directly exercises the generic/paren-unwrap helper. Paren and
+// generic-instantiation wrappers (including interleaved forms) reduce to the
+// inner selector/ident; genuinely unresolvable callee shapes hit the default→nil
+// branch, which IsCallToPkgFunc then treats as a non-match.
 func TestUnwrapCallee(t *testing.T) {
 	t.Parallel()
 	mustExpr := func(s string) ast.Expr {
@@ -325,14 +344,21 @@ func TestUnwrapCallee(t *testing.T) {
 		}
 		return e
 	}
-	nonNil := []string{"pkg.Foo", "Foo", "pkg.Foo[int]", "pkg.Foo[int, string]"}
+	// Wrappers (paren / generic-instantiation, at any nesting) → non-nil inner.
+	nonNil := []string{
+		"pkg.Foo", "Foo",
+		"pkg.Foo[int]", "pkg.Foo[int, string]",
+		"(pkg.Foo)", "(Foo)", "((pkg.Foo))",
+		"(pkg.Foo)[int]", "(pkg.Foo[int])",
+	}
 	for _, s := range nonNil {
 		if unwrapCallee(mustExpr(s)) == nil {
 			t.Errorf("unwrapCallee(%q) = nil, want non-nil", s)
 		}
 	}
-	// default branch: ParenExpr (and any other shape) is not unwrapped → nil.
-	if got := unwrapCallee(mustExpr("(pkg.Foo)")); got != nil {
-		t.Errorf("unwrapCallee parenthesized callee = %T, want nil (default branch)", got)
+	// default branch: a callee that is neither selector/ident nor a strippable
+	// wrapper (here a CallExpr `f()`) → nil.
+	if got := unwrapCallee(mustExpr("f()")); got != nil {
+		t.Errorf("unwrapCallee(%q) = %T, want nil (default branch)", "f()", got)
 	}
 }

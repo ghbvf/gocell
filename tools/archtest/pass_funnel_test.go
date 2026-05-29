@@ -1180,9 +1180,9 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 	// the exact "instead of <callresolverPkgPath>.<sym>" clause (the replacement
 	// string says "archtest.<sym>", so this does not collide with the helper
 	// names embedded in every message's replacement). The 3 funcs each appear in
-	// 2 forms (qualified + alias) → ≥1 per symbol; FuncDeclContext (the
-	// *types.TypeName struct-literal ref) is exact-count == 2 (qualified + alias),
-	// mirroring the ImportBan TypeName lock.
+	// 3 forms (qualified + alias + dot-import) → ≥1 per symbol; FuncDeclContext
+	// (the *types.TypeName struct-literal ref) is exact-count == 3 (qualified +
+	// alias + dot-import bare Ident), mirroring the ImportBan TypeName 3-form lock.
 	callresolverFuncs := []string{"WalkFuncDecls", "IsCallToPkgFunc", "HasReceiver"}
 	perCRCount := make(map[string]int, len(callresolverFuncs))
 	var crFuncDeclContextCount int
@@ -1205,10 +1205,10 @@ func TestPassFunnel_FixtureCoverage(t *testing.T) {
 				sym)
 		}
 	}
-	const wantCRFuncDeclContextCount = 2
+	const wantCRFuncDeclContextCount = 3
 	if crFuncDeclContextCount != wantCRFuncDeclContextCount {
 		t.Errorf("PASS-FUNNEL-RESOLVE-01: callresolver.FuncDeclContext diagnostics on red fixture = %d, want %d "+
-			"(qualified + alias struct-literal refs must each trip the *types.TypeName branch)",
+			"(qualified + alias + dot-import struct-literal refs must each trip the *types.TypeName branch)",
 			crFuncDeclContextCount, wantCRFuncDeclContextCount)
 	}
 

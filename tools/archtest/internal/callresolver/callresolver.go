@@ -100,13 +100,28 @@ func IsCallToPkgFunc(info *types.Info, call *ast.CallExpr, pkgPath, name string)
 	return ok && p == pkgPath && n == name
 }
 
-// unwrapCallee strips IndexExpr / IndexListExpr wrappers added by explicit
-// generic type arguments (`Foo[T](...)` / `Foo[T, U](...)`) so the underlying
-// SelectorExpr / Ident can be passed to ResolvePackageRef. Returns nil for any
-// other callee shape. (Consolidated from serviceowned_handler_owner_check_test
-// .go::unwrapCalleeForResolve.)
+// unwrapCallee normalizes a call's Fun expression down to the underlying
+// SelectorExpr / Ident that ResolvePackageRef understands, stripping at any
+// nesting level:
+//   - ParenExpr: a parenthesized callee, e.g. `(hmac.New)(key)` — without this
+//     a parenthesized real call silently fails to resolve (a false negative in
+//     every funnel built on IsCallToPkgFunc).
+//   - IndexExpr / IndexListExpr: explicit generic instantiation, e.g.
+//     `Foo[T](...)` / `Foo[T, U](...)`.
+//
+// The recursion handles interleaved forms — `(pkg.Foo)[int]` (IndexExpr over
+// ParenExpr) and `(pkg.Foo[int])` (ParenExpr over IndexExpr) both reduce to the
+// inner selector. Returns nil for any other callee shape (e.g. a CallExpr or a
+// literal), which IsCallToPkgFunc then treats as a non-match.
+//
+// Mirrors the stdlib idiom go/ast.Unparen + x/tools typeutil.Callee, which
+// unparenthesize before resolving generic-instantiation and ident/selector
+// callees. (Consolidated from serviceowned_handler_owner_check_test.go::
+// unwrapCalleeForResolve, kept there for its expr-returning BFS/ownership uses.)
 func unwrapCallee(fun ast.Expr) ast.Expr {
 	switch v := fun.(type) {
+	case *ast.ParenExpr:
+		return unwrapCallee(v.X)
 	case *ast.SelectorExpr, *ast.Ident:
 		return v
 	case *ast.IndexExpr:

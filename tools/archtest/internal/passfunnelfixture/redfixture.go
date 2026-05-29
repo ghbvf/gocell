@@ -55,9 +55,12 @@ import (
 	te "github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 
 	// VIOLATION sources for PASS-FUNNEL-RESOLVE-01 — callresolver helpers
-	// (qualified + alias forms; a typeseval-style dot-import conflict does not
-	// apply, but two forms suffice — same coverage shape as the typeseval helpers).
+	// (qualified + alias + dot-import; unlike typeseval, callresolver exports no
+	// name that collides with the scanner dot-import, so all 3 forms coexist —
+	// the dot-import form locks resolveBarePkgSymbol's *types.Func + *types.TypeName
+	// branches for callresolver directly).
 	"github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
+	. "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
 	cr "github.com/ghbvf/gocell/tools/archtest/internal/callresolver"
 )
 
@@ -150,6 +153,12 @@ var (
 	_ = cr.IsCallToPkgFunc             // alias-import
 	_ = cr.HasReceiver                 // alias-import
 	_ = cr.FuncDeclContext{}           // alias-import
+	// dot-import (bare Ident) — resolveBarePkgSymbol *types.Func (funcs) +
+	// *types.TypeName (FuncDeclContext) branches for callresolver.
+	_ = WalkFuncDecls     // dot-import
+	_ = IsCallToPkgFunc   // dot-import
+	_ = HasReceiver       // dot-import
+	_ = FuncDeclContext{} // dot-import (TypeName bare Ident)
 )
 
 // PASS-FUNNEL-FIXTURE-TAG-01 V' RED — type-aware (callee, arg) form-uniqueness.

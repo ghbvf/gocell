@@ -1238,9 +1238,10 @@ func calleeIdentName(ref ast.Expr) string {
 	return ""
 }
 
-// unwrapCalleeForResolve strips IndexExpr / IndexListExpr wrappers added by
-// explicit generic type arguments so the underlying SelectorExpr / Ident can
-// be passed to ResolvePackageRef.
+// unwrapCalleeForResolve strips ParenExpr (parenthesized callee) and
+// IndexExpr / IndexListExpr (explicit generic type arguments) wrappers, at any
+// nesting level, so the underlying SelectorExpr / Ident can be passed to
+// ResolvePackageRef.
 //
 // NOTE: callresolver.IsCallToPkgFunc folds the unwrap+resolve+(pkg,name)-compare
 // shape, and the errcode-ctor sites here were migrated to it. This local copy is
@@ -1259,6 +1260,10 @@ func calleeIdentName(ref ast.Expr) string {
 // produces IndexListExpr; the branch is defensive only.
 func unwrapCalleeForResolve(fun ast.Expr) ast.Expr {
 	switch v := fun.(type) {
+	case *ast.ParenExpr:
+		// Parenthesized callee, e.g. `(auth.CheckOwner)(...)` — strip parens at
+		// any nesting level (mirrors go/ast.Unparen + callresolver.unwrapCallee).
+		return unwrapCalleeForResolve(v.X)
 	case *ast.SelectorExpr, *ast.Ident:
 		return v
 	case *ast.IndexExpr:
