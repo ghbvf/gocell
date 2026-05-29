@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -413,7 +414,7 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 }
 
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
-// closed set (http | event | command | projection) returns an error.
+// closed set (http | event | saga | command | projection) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
@@ -777,6 +778,176 @@ func TestBuildSagaSpec_CompensationOrderRejected(t *testing.T) {
 	}
 }
 
+// synthSagaContractDir returns (rootDir, contractDir) for the synth_saga
+// fixture so buildSagaSpec can resolve the committed output schema files.
+func synthSagaContractDir(t *testing.T) (string, string) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_saga"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	return root, "contracts/saga/orderfulfillment/v1"
+}
+
+// TestBuildContractSpec_SagaSingleStep covers the step-0-only path: a one-step
+// saga whose single step takes no typed input and (default) compensates.
+func TestBuildContractSpec_SagaSingleStep(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{
+				{Name: "reserveInventory", Output: "reserve-inventory.output.schema.json"},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind, PackageName: "orderfulfillment"}
+	if err := buildSagaSpec(spec, root, c, contractDir); err != nil {
+		t.Fatalf("buildSagaSpec: %v", err)
+	}
+	if len(spec.Saga.Steps) != 1 {
+		t.Fatalf("steps = %d, want 1", len(spec.Saga.Steps))
+	}
+	s0 := spec.Saga.Steps[0]
+	if !s0.IsFirst || s0.InputGoType != "" {
+		t.Errorf("single step must be first with empty input: IsFirst=%v input=%q", s0.IsFirst, s0.InputGoType)
+	}
+	if !s0.HasCompensate {
+		t.Error("step with no compensate field should default to HasCompensate=true")
+	}
+	// Render saga_gen.go and assert the Impl interface has Run but no other Run methods.
+	out := string(renderFile(t, spec, "saga_gen.go"))
+	if !strings.Contains(out, "RunReserveInventory(ctx context.Context, inst *saga.Instance) (ReserveInventoryOutput, error)") {
+		t.Errorf("single-step Impl Run signature missing/incorrect:\n%s", out)
+	}
+}
+
+// TestBuildContractSpec_SagaAllCompensateFalse covers the all-no-compensation
+// path: every step opts out, so the Impl exposes zero Compensate methods.
+func TestBuildContractSpec_SagaAllCompensateFalse(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	no := false
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{
+				{Name: "reserveInventory", Output: "reserve-inventory.output.schema.json", Compensate: &no},
+				{Name: "chargePayment", Output: "charge-payment.output.schema.json", Compensate: &no},
+				{Name: "createShipment", Output: "create-shipment.output.schema.json", Compensate: &no},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind, PackageName: "orderfulfillment"}
+	if err := buildSagaSpec(spec, root, c, contractDir); err != nil {
+		t.Fatalf("buildSagaSpec: %v", err)
+	}
+	for i, s := range spec.Saga.Steps {
+		if s.HasCompensate {
+			t.Errorf("step[%d] %q: HasCompensate=true, want false", i, s.Name)
+		}
+	}
+	out := string(renderFile(t, spec, "saga_gen.go"))
+	// "Compensate" appears in the Impl godoc prose; assert the absence of the
+	// actual wired field and interface method instead.
+	if strings.Contains(out, "Compensate: func(") {
+		t.Errorf("all-compensate-false saga must wire no saga.Step.Compensate field:\n%s", out)
+	}
+	if strings.Contains(out, "\tCompensateReserveInventory(") {
+		t.Errorf("all-compensate-false saga must emit no Compensate Impl methods:\n%s", out)
+	}
+}
+
+// TestBuildSagaSpec_RejectsTraversalOutput asserts the path-traversal guard:
+// an output ref escaping the contract directory is rejected at build time.
+func TestBuildSagaSpec_RejectsTraversalOutput(t *testing.T) {
+	root, contractDir := synthSagaContractDir(t)
+	c := &metadata.ContractMeta{
+		ID: "saga.orderfulfillment.v1", Kind: "saga",
+		File: contractDir + "/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			Steps: []metadata.SagaStepMeta{
+				{Name: "evil", Output: "../../../../../etc/passwd"},
+			},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind}
+	err := buildSagaSpec(spec, root, c, contractDir)
+	if err == nil {
+		t.Fatal("expected error for traversal output path, got nil")
+	}
+	if !strings.Contains(err.Error(), "contract-relative") {
+		t.Errorf("error should explain the contract-relative constraint: %v", err)
+	}
+}
+
+// TestRenderSaga_RejectsNonSagaContract mirrors renderSpec/renderSubscription's
+// kind-gate: feeding a non-saga spec to renderSaga is a programmer error.
+func TestRenderSaga_RejectsNonSagaContract(t *testing.T) {
+	_, err := renderSaga(&ContractGenSpec{ContractID: "http.x.v1", Kind: "http"})
+	if err == nil {
+		t.Fatal("expected error rendering saga for non-saga contract")
+	}
+	if !strings.Contains(err.Error(), "not saga") {
+		t.Errorf("error should mention 'not saga': %v", err)
+	}
+}
+
+// TestSagaGoldenCompiles is the permanent guard the golden-diff alone cannot
+// provide: it compiles the generated saga package (types_gen.go + saga_gen.go)
+// against the real kernel/saga, catching type-level template breakage (wrong
+// method signatures, missing imports) that a byte-diff would miss.
+func TestSagaGoldenCompiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go-build compile guard in -short mode")
+	}
+	root := repoRoot(t) // worktree module root (has go.mod for github.com/ghbvf/gocell)
+	absTestDir, contractDir := synthSagaContractDir(t)
+	_ = contractDir
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	spec, err := buildContractSpec(absTestDir, p, "saga.orderfulfillment.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	dir := t.TempDir()
+	writeFile := func(name string, content []byte) {
+		// #nosec G703 G304 -- test-internal: dir is t.TempDir(), name is a literal.
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	writeFile("types_gen.go", renderFile(t, spec, "types_gen.go"))
+	writeFile("saga_gen.go", renderFile(t, spec, "saga_gen.go"))
+	// Self-contained module that resolves the in-repo kernel/saga via a local
+	// replace. Reuse the worktree's `go` directive so the temp main module is
+	// not older than the replaced dependency (else go build refuses).
+	goDirective := "go 1.25"
+	// #nosec G304 -- test-internal: root is the repo module root, not user input.
+	if data, rerr := os.ReadFile(filepath.Join(root, "go.mod")); rerr == nil {
+		for _, ln := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(ln, "go ") {
+				goDirective = strings.TrimSpace(ln)
+				break
+			}
+		}
+	}
+	gomod := "module sagagoldencompile\n\n" + goDirective +
+		"\n\nrequire github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => " + root + "\n"
+	writeFile("go.mod", []byte(gomod))
+
+	cmd := exec.Command("go", "build", "./...")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated saga package failed to compile: %v\n%s", err, out)
+	}
+}
+
 // TestDurationExpr covers the duration→Go-expression helper.
 func TestDurationExpr(t *testing.T) {
 	cases := []struct {
@@ -791,6 +962,8 @@ func TestDurationExpr(t *testing.T) {
 		{"100ms", "100 * time.Millisecond", false},
 		{"2h", "2 * time.Hour", false},
 		{"1500ms", "1500 * time.Millisecond", false},
+		{"500us", "500 * time.Microsecond", false},
+		{"750ns", "750 * time.Nanosecond", false},
 		{"-1s", "", true},
 		{"notaduration", "", true},
 	}

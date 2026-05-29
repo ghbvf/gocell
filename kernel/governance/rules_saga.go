@@ -39,12 +39,20 @@ package governance
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/idutil"
 )
+
+// sagaStepNameRe is the legal step-name shape: a Go-identifier-safe camelCase
+// token. It is STRICTER than idutil.IsSafeID (which permits ._:/-) because the
+// step name flows through contractgen's goPascalCase into generated Go method
+// names (Run<Name> / Compensate<Name>) and type names (<Name>Output); a name
+// containing '.', ':' or '/' would emit uncompilable Go. Kept byte-identical to
+// the saga.steps[].name pattern in schemas/contract.schema.json.
+var sagaStepNameRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9]*$`)
 
 // validateSAGACONTRACTSTEPSNONEMPTY01 enforces SAGA-CONTRACT-STEPS-NONEMPTY-01:
 // every saga contract must declare at least one step under saga.steps[].
@@ -72,12 +80,14 @@ func (v *Validator) validateSAGACONTRACTSTEPSNONEMPTY01() []ValidationResult {
 }
 
 // validateSAGACONTRACTSTEPNAMEVALID01 enforces SAGA-CONTRACT-STEP-NAME-VALID-01:
-// every step in a saga contract must have a non-empty name that is a valid
-// SafeID (ASCII letters, digits, and the separators ._:/-).
+// every step in a saga contract must have a name matching sagaStepNameRe
+// (^[a-zA-Z][a-zA-Z0-9]*$) — a Go-identifier-safe camelCase token.
 //
-// Step names surface in runtime observability (metrics labels, span
-// attributes, journal event kinds). An unsafe name breaks downstream
-// log injection safety guarantees (idutil.IsSafeID invariant).
+// This is the CI gate that keeps step names codegen-safe: contractgen turns
+// each name into generated Go identifiers (Run<Name>, Compensate<Name>,
+// <Name>Output) via goPascalCase, which does not sanitize '.', ':' or '/'. A
+// name like "charge.v2" would generate uncompilable Go, so it is rejected here
+// (stricter than idutil.IsSafeID; kept in lockstep with the schema pattern).
 func (v *Validator) validateSAGACONTRACTSTEPNAMEVALID01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -94,17 +104,17 @@ func (v *Validator) validateSAGACONTRACTSTEPNAMEVALID01() []ValidationResult {
 func (v *Validator) checkSagaStepNames(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
 	for i, step := range c.Saga.Steps {
-		if step.Name == "" || !idutil.IsSafeID(step.Name) {
+		if !sagaStepNameRe.MatchString(step.Name) {
 			results = append(results, v.newError(
 				codeSAGACONTRACTSTEPNAMEVALID01, IssueInvalid,
 				contractFile(c),
 				fmt.Sprintf("saga.steps[%d].name", i),
 				fmt.Sprintf(
 					"saga contract %q step[%d] has invalid name %q; "+
-						"step names must be non-empty SafeIDs",
+						"step names must match ^[a-zA-Z][a-zA-Z0-9]*$ (codegen turns them into Go identifiers)",
 					c.ID, i, step.Name,
 				),
-				"use a non-empty step name that is a valid SafeID (letters, digits, ._:/-)",
+				"use a camelCase step name (letters and digits only, starting with a letter), e.g. reserveInventory",
 			))
 		}
 	}
@@ -185,7 +195,7 @@ func (v *Validator) checkSagaStepOutputRefs(c *metadata.ContractMeta) []Validati
 					"saga contract %q step[%d] %q has no output schema $ref",
 					c.ID, i, step.Name,
 				),
-				"add an output schema $ref for this step",
+				"add an output schema $ref (path relative to this contract.yaml), e.g. reserve-inventory.output.schema.json",
 			))
 		}
 	}

@@ -123,6 +123,9 @@ func TestSagaStepsNonempty01(t *testing.T) {
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
 				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
 			}
 		})
 	}
@@ -156,13 +159,24 @@ func TestSagaStepNameValid01(t *testing.T) {
 			wantField:    "saga.steps[0].name",
 		},
 		{
-			name: "valid SafeID names → no error",
+			name: "valid camelCase names → no error",
 			steps: []metadata.SagaStepMeta{
 				{Name: "reserve", Output: "schemas/reserve.json"},
+				{Name: "chargePayment", Output: "schemas/charge.json"},
+				{Name: "step3", Output: "schemas/step3.json"},
+			},
+			wantErrCount: 0,
+		},
+		{
+			// SafeID permits ._:/- but those break goPascalCase → uncompilable
+			// Go; the rule is stricter than IsSafeID. Both must be rejected.
+			name: "dot/dash names (valid SafeID but codegen-unsafe) → error",
+			steps: []metadata.SagaStepMeta{
 				{Name: "charge.v2", Output: "schemas/charge.json"},
 				{Name: "step-3", Output: "schemas/step3.json"},
 			},
-			wantErrCount: 0,
+			wantErrCount: 2,
+			wantField:    "saga.steps[0].name",
 		},
 		{
 			name:  "nil Saga → no error (skip)",
@@ -195,6 +209,9 @@ func TestSagaStepNameValid01(t *testing.T) {
 				}
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
 				}
 			}
 		})
@@ -264,6 +281,9 @@ func TestSagaStepNameUnique01(t *testing.T) {
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
 				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
 			}
 		})
 	}
@@ -329,6 +349,9 @@ func TestSagaStepSchemaRef01(t *testing.T) {
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
 				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
 			}
 		})
 	}
@@ -390,6 +413,9 @@ func TestSagaCompensationOrder01(t *testing.T) {
 				}
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
 				}
 			}
 		})
@@ -499,6 +525,9 @@ func TestSagaConsistencyL301(t *testing.T) {
 				}
 				if r.Field != tc.wantField {
 					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
 				}
 			}
 		})

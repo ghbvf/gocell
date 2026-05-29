@@ -656,29 +656,39 @@ func buildSagaStep(
 			"contractgen build: contract %q saga step %d (%q) missing output schema $ref",
 			contract.ID, i, st.Name)
 	}
+	// The output ref must be a contract-relative path; reject absolute paths and
+	// ".." traversal so a contract.yaml cannot drive the schema loader outside
+	// its own directory (defense-in-depth — contract.yaml is repo-trusted, but
+	// the guard keeps generation hermetic). filepath.IsLocal (Go 1.20+) rejects
+	// both forms.
+	if !filepath.IsLocal(st.Output) {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %d (%q) output %q must be a contract-relative path (no '..' or absolute)",
+			contract.ID, i, st.Name, st.Output)
+	}
 	goName := goPascalCase(st.Name)
 	outType := goName + "Output"
 
 	schema, err := Parse(rootDir, filepath.Join(contractDir, st.Output))
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %q output schema: %w", contract.ID, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output schema: %w", contract.ID, i, st.Name, err)
 	}
 	dtos, err := schemaToDTOs(outType, schema)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %q output DTOs: %w", contract.ID, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) output DTOs: %w", contract.ID, i, st.Name, err)
 	}
 
 	timeoutExpr, err := durationExpr(st.Timeout)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %q timeout: %w", contract.ID, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) timeout: %w", contract.ID, i, st.Name, err)
 	}
 	retry, err := sagaRetrySpec(st.Retries)
 	if err != nil {
 		return SagaStepSpec{}, nil, fmt.Errorf(
-			"contractgen build: contract %q saga step %q retries: %w", contract.ID, st.Name, err)
+			"contractgen build: contract %q saga step %d (%q) retries: %w", contract.ID, i, st.Name, err)
 	}
 
 	compensate := true

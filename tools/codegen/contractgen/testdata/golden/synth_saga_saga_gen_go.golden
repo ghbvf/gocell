@@ -18,10 +18,15 @@ const DefinitionID idutil.SafeID = "saga.orderfulfillment.v1"
 
 // Impl is the typed business interface the orchestrating cell implements for
 // saga.orderfulfillment.v1. Per kernel/saga's StepFunc contract, each step receives the
-// previous step's output (the first step takes no typed input — the runtime
-// feeds nil prevState to step 0); a step exposes a Compensate method only when
-// it declares compensation. BuildDefinition adapts these to the untyped
+// previous step's output; a step exposes a Compensate method only when it
+// declares compensation. BuildDefinition adapts these to the untyped
 // saga.StepFunc / saga.CompensateFunc via JSON (un)marshal of the step outputs.
+//
+// The first step takes no typed input — the runtime feeds nil prevState to step
+// 0. There is no saga-launch input payload in v1; the orchestrating cell loads
+// the saga's initial business context by looking up domain state keyed by
+// inst.ID (the correlation id chosen when the instance was enrolled). Later
+// steps thread state forward via their typed outputs.
 type Impl interface {
 	RunReserveInventory(ctx context.Context, inst *saga.Instance) (ReserveInventoryOutput, error)
 	CompensateReserveInventory(ctx context.Context, inst *saga.Instance, out ReserveInventoryOutput) error
@@ -96,8 +101,11 @@ func BuildDefinition(impl Impl) *saga.Definition {
 	}
 }
 
-// Register builds the definition for saga.orderfulfillment.v1 and returns a one-saga
-// saga.InMemoryRegistry holding it (which runs Definition.Validate).
+// Register is the single-saga convenience: use it when saga.orderfulfillment.v1 is the
+// only saga in your registry. It returns a saga.InMemoryRegistry holding this
+// one definition (which runs Definition.Validate). For a registry that hosts
+// multiple sagas, call BuildDefinition here and pass the result to
+// saga.NewInMemoryRegistry alongside the other definitions instead.
 func Register(impl Impl) (*saga.InMemoryRegistry, error) {
 	return saga.NewInMemoryRegistry(BuildDefinition(impl))
 }

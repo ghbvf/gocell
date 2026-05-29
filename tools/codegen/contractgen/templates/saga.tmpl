@@ -19,10 +19,15 @@ const DefinitionID idutil.SafeID = {{printf "%q" .Saga.DefinitionID}}
 
 // Impl is the typed business interface the orchestrating cell implements for
 // {{.ContractID}}. Per kernel/saga's StepFunc contract, each step receives the
-// previous step's output (the first step takes no typed input — the runtime
-// feeds nil prevState to step 0); a step exposes a Compensate method only when
-// it declares compensation. BuildDefinition adapts these to the untyped
+// previous step's output; a step exposes a Compensate method only when it
+// declares compensation. BuildDefinition adapts these to the untyped
 // saga.StepFunc / saga.CompensateFunc via JSON (un)marshal of the step outputs.
+//
+// The first step takes no typed input — the runtime feeds nil prevState to step
+// 0. There is no saga-launch input payload in v1; the orchestrating cell loads
+// the saga's initial business context by looking up domain state keyed by
+// inst.ID (the correlation id chosen when the instance was enrolled). Later
+// steps thread state forward via their typed outputs.
 type Impl interface {
 {{- range .Saga.Steps}}
 {{- if .IsFirst}}
@@ -87,8 +92,11 @@ func BuildDefinition(impl Impl) *saga.Definition {
 	}
 }
 
-// Register builds the definition for {{.ContractID}} and returns a one-saga
-// saga.InMemoryRegistry holding it (which runs Definition.Validate).
+// Register is the single-saga convenience: use it when {{.ContractID}} is the
+// only saga in your registry. It returns a saga.InMemoryRegistry holding this
+// one definition (which runs Definition.Validate). For a registry that hosts
+// multiple sagas, call BuildDefinition here and pass the result to
+// saga.NewInMemoryRegistry alongside the other definitions instead.
 func Register(impl Impl) (*saga.InMemoryRegistry, error) {
 	return saga.NewInMemoryRegistry(BuildDefinition(impl))
 }

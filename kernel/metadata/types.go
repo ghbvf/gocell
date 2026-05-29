@@ -299,15 +299,19 @@ type EndpointsMeta struct {
 }
 
 // SagaMeta is the orchestration block of a kind=saga contract.yaml. Steps run
-// in slice order; each step's typed Run input is the previous step's output
-// (the first step takes no typed input — the runtime feeds nil prevState).
-// CompensationOrder is "reverse" (the only supported value; empty = reverse).
+// in slice order; each step's typed Run input is the previous step's output.
+// The first step takes no typed input — the runtime feeds nil prevState. There
+// is no saga-launch input payload in v1: the orchestrating cell loads the
+// saga's initial business context by looking up domain state keyed by the
+// enrolled Instance.ID (the correlation id).
 type SagaMeta struct {
 	// Timeout is the saga-wide deadline as a Go duration string (e.g. "30s").
 	// Empty means no saga-level ceiling (per-step timeouts still apply).
 	Timeout string `yaml:"timeout,omitempty"`
-	// CompensationOrder selects the rollback walk; only "reverse" is supported.
-	// Empty is treated as "reverse".
+	// CompensationOrder selects the rollback walk. v1 limitation: only "reverse"
+	// is supported (empty is treated as "reverse"); any other value is rejected
+	// by governance SAGA-CONTRACT-COMPENSATION-ORDER-01. Forward/custom orders
+	// are not yet modeled.
 	CompensationOrder string `yaml:"compensationOrder,omitempty"`
 	// Retries is the saga-wide default retry policy; each step inherits it
 	// unless the step sets its own.
