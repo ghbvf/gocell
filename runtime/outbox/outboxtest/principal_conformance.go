@@ -10,8 +10,11 @@ import (
 )
 
 // principalRoundTripCreatedAt is a fixed UTC seal time for the principal
-// round-trip seed. Deterministic so the assertion is reproducible.
-var principalRoundTripCreatedAt = time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+// round-trip seed. The specific instant is arbitrary — any constant works;
+// it is pinned only so the assertion is deterministic and independent of the
+// CI runner clock (the seed has no nextRetryAt, so absolute time never affects
+// claimability).
+var principalRoundTripCreatedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // principalRoundTripSkew offsets OccurredAt behind CreatedAt so the conformance
 // proves the two timestamps are carried as independent fields (ADR-1042), not
