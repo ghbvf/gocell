@@ -47,7 +47,7 @@ type Service struct {
 	sessionStore session.Store             `gocell:"required"`
 	refreshStore refresh.Store             `gocell:"required"`
 	txRunner     persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	clk          clock.Clock               `gocell:"required" gocellErr:"sessionlogout.NewService: clock.Clock required"`     //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk          clock.Clock               `gocell:"required" gocellErr:"sessionlogout.NewService: clock.Clock required"`      //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter      outbox.CellEmitter
 	logger       *slog.Logger
 }

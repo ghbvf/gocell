@@ -33,13 +33,13 @@ func TestOutboxWriter_Write_NoTx(t *testing.T) {
 	w := NewOutboxWriter(clock.Real())
 	now := time.Now()
 	entry := mustScanEntry(outbox.EntryScan{
-		ID:         "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		ID:            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		AggregateID:   "agg-1",
 		AggregateType: "order",
-		EventType:  "order.created",
-		Payload:    []byte(`{"id":"1"}`),
-		CreatedAt:  now,
-		OccurredAt: now,
+		EventType:     "order.created",
+		Payload:       []byte(`{"id":"1"}`),
+		CreatedAt:     now,
+		OccurredAt:    now,
 	})
 
 	err := w.Write(context.Background(), entry)
@@ -57,14 +57,14 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 	ctx := CtxWithTx(context.Background(), tx)
 	now := time.Now()
 	entry := mustScanEntry(outbox.EntryScan{
-		ID:         "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+		ID:            "b2c3d4e5-f6a7-8901-bcde-f12345678901",
 		AggregateID:   "agg-2",
 		AggregateType: "order",
-		EventType:  "order.shipped",
-		Payload:    []byte(`{"shipped":true}`),
-		CreatedAt:  now,
-		OccurredAt: now,
-		Metadata:   map[string]string{"source": "test"},
+		EventType:     "order.shipped",
+		Payload:       []byte(`{"shipped":true}`),
+		CreatedAt:     now,
+		OccurredAt:    now,
+		Metadata:      map[string]string{"source": "test"},
 	})
 
 	err := w.Write(ctx, entry)
@@ -97,14 +97,14 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 	ctx := CtxWithTx(context.Background(), tx)
 	now := time.Now()
 	entry := mustScanEntry(outbox.EntryScan{
-		ID:         "c3d4e5f6-a7b8-9012-cdef-123456789012",
+		ID:            "c3d4e5f6-a7b8-9012-cdef-123456789012",
 		AggregateID:   "agg-t",
 		AggregateType: "device",
-		EventType:  "device.enrolled",
-		Topic:      "custom.topic.v1",
-		Payload:    []byte(`{"enrolled":true}`),
-		CreatedAt:  now,
-		OccurredAt: now,
+		EventType:     "device.enrolled",
+		Topic:         "custom.topic.v1",
+		Payload:       []byte(`{"enrolled":true}`),
+		CreatedAt:     now,
+		OccurredAt:    now,
 	})
 
 	err := w.Write(ctx, entry)
@@ -335,8 +335,14 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 
 	now := time.Now()
 	entries := []outbox.Entry{
-		mustScanEntry(outbox.EntryScan{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t1", Payload: []byte(`{"a":1}`), CreatedAt: now, OccurredAt: now}),
-		mustScanEntry(outbox.EntryScan{ID: "b2c3d4e5-f6a7-8901-bcde-f12345678901", Topic: "t2", Payload: []byte(`{"b":2}`), CreatedAt: now, OccurredAt: now}),
+		mustScanEntry(outbox.EntryScan{
+			ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t1",
+			Payload: []byte(`{"a":1}`), CreatedAt: now, OccurredAt: now,
+		}),
+		mustScanEntry(outbox.EntryScan{
+			ID: "b2c3d4e5-f6a7-8901-bcde-f12345678901", Topic: "t2",
+			Payload: []byte(`{"b":2}`), CreatedAt: now, OccurredAt: now,
+		}),
 	}
 
 	err := w.WriteBatch(ctx, entries)
@@ -422,8 +428,8 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 	t.Run("empty ID", func(t *testing.T) {
 		// Zero-value entry has empty ID.
 		entries := []outbox.Entry{
-			outbox.Entry{},
-			outbox.Entry{},
+			{},
+			{},
 		}
 		err := w.WriteBatch(ctx, entries)
 		require.Error(t, err)
@@ -441,7 +447,10 @@ func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
 
 	now := time.Now()
 	entries := []outbox.Entry{
-		mustScanEntry(outbox.EntryScan{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"), CreatedAt: now, OccurredAt: now}),
+		mustScanEntry(outbox.EntryScan{
+			ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t",
+			Payload: []byte("{}"), CreatedAt: now, OccurredAt: now,
+		}),
 	}
 
 	err := w.WriteBatch(ctx, entries)
@@ -495,15 +504,15 @@ func TestOutboxWriter_Write_MetadataLimit_ValidSizeSucceeds(t *testing.T) {
 	}
 	now := time.Now()
 	entry := mustScanEntry(outbox.EntryScan{
-		ID:         "f1f2f3f4-f5f6-7890-abcd-ef1234567890",
+		ID:            "f1f2f3f4-f5f6-7890-abcd-ef1234567890",
 		AggregateID:   "agg-small",
 		AggregateType: "order",
-		EventType:  "order.created",
-		Payload:    []byte(`{"id":"small"}`),
-		Topic:      "order.created",
-		Metadata:   map[string]string{"small": string(smallVal)},
-		CreatedAt:  now,
-		OccurredAt: now,
+		EventType:     "order.created",
+		Payload:       []byte(`{"id":"small"}`),
+		Topic:         "order.created",
+		Metadata:      map[string]string{"small": string(smallVal)},
+		CreatedAt:     now,
+		OccurredAt:    now,
 	})
 
 	err := w.Write(CtxWithTx(context.Background(), tx), entry)

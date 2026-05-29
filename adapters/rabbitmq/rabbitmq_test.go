@@ -562,7 +562,7 @@ func mustNewEntry(t *testing.T, eventType string, payload []byte, opts ...outbox
 
 // newIDEntry builds a valid entry carrying the given idempotency ID. The
 // eventType/payload are dummy-but-valid placeholders for tests that only assert
-// on the entry ID (e.g. ConsumerBase claim-key behaviour).
+// on the entry ID (e.g. ConsumerBase claim-key behavior).
 func newIDEntry(t *testing.T, id string) outbox.Entry {
 	t.Helper()
 	return mustNewEntry(t, "test.event", []byte(`{}`), outbox.WithID(id))
@@ -4398,7 +4398,8 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 			return outbox.Requeue(assert.AnError)
 		})
 
-	entry := mustNewEntry(t, "test.retry", []byte(`{"retry":"unit"}`), outbox.WithID("evt-retry-unit-001"), outbox.WithCreatedAt(time.Now().UTC()))
+	entry := mustNewEntry(t, "test.retry", []byte(`{"retry":"unit"}`),
+		outbox.WithID("evt-retry-unit-001"), outbox.WithCreatedAt(time.Now().UTC()))
 
 	res, _ := wrappedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, res.Disposition,

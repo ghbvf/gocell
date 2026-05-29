@@ -150,6 +150,13 @@ var safeIDExemptFields = map[string]map[string]string{
 // entry point.
 var safeIDBlindSpotAllowlist = map[string]struct{}{
 	"Entry": {},
+	// EntryScan is the storage-adapter reconstruction funnel (issue #1229): it
+	// carries exported string ID-shaped scan-target fields populated from DB
+	// columns, then ToEntry() runs full Entry.Validate (SafeID enforcement). It
+	// has NO wire role — wireMessage remains the only json.Unmarshal envelope —
+	// so it is not a parallel wire decode entry point. Same category as Entry
+	// (post-validation in-memory representation), reviewer-judged not-a-wire-decoder.
+	"EntryScan": {},
 }
 
 // wireMessageCanonicalFields is the canonical field set wireMessage MUST

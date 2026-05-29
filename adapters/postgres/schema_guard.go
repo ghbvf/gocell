@@ -331,7 +331,7 @@ var expectedColumns = []expectedColumn{
 	{Table: "outbox_entries", Column: "metadata", Type: "jsonb", NotNull: false},
 	{Table: "outbox_entries", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "outbox_entries", Column: "observability", Type: "jsonb", NotNull: false},
-	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},   // 044 NEW
+	{Table: "outbox_entries", Column: "principal", Type: "jsonb", NotNull: true},      // 044 NEW
 	{Table: "outbox_entries", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true}, // 044 NEW
 	// users (017_users.sql + 022_users_password_version.sql)
 	{Table: "users", Column: "id", Type: "uuid", NotNull: true},

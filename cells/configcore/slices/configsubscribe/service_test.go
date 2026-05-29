@@ -509,8 +509,8 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name: "invalid upsert records permanent error",
-			entry: outboxtest.NewEntry(domain.TopicConfigEntryUpserted, []byte(`not-json{`)),
+			name:       "invalid upsert records permanent error",
+			entry:      outboxtest.NewEntry(domain.TopicConfigEntryUpserted, []byte(`not-json{`)),
 			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
@@ -585,8 +585,8 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name: "invalid delete records permanent error",
-			entry: outboxtest.NewEntry(domain.TopicConfigEntryDeleted, []byte(`not-json{`)),
+			name:       "invalid delete records permanent error",
+			entry:      outboxtest.NewEntry(domain.TopicConfigEntryDeleted, []byte(`not-json{`)),
 			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,

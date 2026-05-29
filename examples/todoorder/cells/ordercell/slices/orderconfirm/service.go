@@ -70,7 +70,7 @@ func WithTxManager(tx persistence.CellTxManager) Option {
 // runs through the same Emitter + TxRunner code path.
 type Service struct {
 	repo     domain.OrderRepository    `gocell:"required"`
-	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"orderconfirm: TxRunner required"`           //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"orderconfirm: TxRunner required"`               //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	clk      clock.Clock               `gocell:"required" gocellErr:"orderconfirm.NewService: clock.Clock required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter  outbox.CellEmitter
 	logger   *slog.Logger

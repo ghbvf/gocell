@@ -116,7 +116,7 @@ func TestPrincipalSealedFieldFrozen01_NegativeControl(t *testing.T) {
 
 	// A drifted shape: field renamed + tag changed + bare string type.
 	type driftedPrincipal struct {
-		Actor     string `json:"actor_id"`
+		Actor     string        `json:"actor_id"`
 		SubjectID idutil.SafeID `json:"subjectId,omitempty"`
 		TenantID  idutil.SafeID `json:"tenantId,omitempty"`
 		SessionID idutil.SafeID `json:"sessionId,omitempty"`

@@ -156,7 +156,10 @@ func TestFakeStore_SeedOverwrite(t *testing.T) {
 
 	ow1Now := time.Now()
 	ow1a, _ := kout.EntryScan{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{}`), CreatedAt: ow1Now, OccurredAt: ow1Now}.ToEntry()
-	ow1b, _ := kout.EntryScan{ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{"overwrite":true}`), CreatedAt: ow1Now, OccurredAt: ow1Now}.ToEntry()
+	ow1b, _ := kout.EntryScan{
+		ID: "ow-1", EventType: "ev", Topic: "ev", Payload: []byte(`{"overwrite":true}`),
+		CreatedAt: ow1Now, OccurredAt: ow1Now,
+	}.ToEntry()
 	s.Seed(outbox.ClaimedEntry{Entry: ow1a, Attempts: 0})
 	s.Seed(outbox.ClaimedEntry{Entry: ow1b, Attempts: 3})
 

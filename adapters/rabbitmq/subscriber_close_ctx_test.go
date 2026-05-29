@@ -105,7 +105,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 
 	// Enqueue deliveries before starting Subscribe.
 	for i := range numDeliveries {
-		body := makeDeliveryBody(t, mustNewEntry(t, "f6.ack.order", []byte(`{}`), outbox.WithID("f6-e2e-" + string(rune('a'+i)))))
+		body := makeDeliveryBody(t, mustNewEntry(t, "f6.ack.order", []byte(`{}`), outbox.WithID("f6-e2e-"+string(rune('a'+i)))))
 		atCh.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
