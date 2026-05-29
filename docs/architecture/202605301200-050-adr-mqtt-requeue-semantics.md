@@ -1,6 +1,7 @@
 # ADR 050 — MQTT Subscriber Requeue semantics (design, decision pending)
 
 - **Status**: Proposed — decision pending (no code change yet; options enumerated for alignment)
+- **Tracked**: #1286 (decision record); **decided & implemented in PR-4 #1142** (option A depends on PR-4's `$dead` DLT path)
 - **Scope**: `adapters/mqtt` consume path; relationship between `outbox.Disposition` (Ack/Requeue/Reject) and MQTT v5 QoS1 manual-ack
 - **Supersedes the "back-pressure caveat" framing** in ADR 048 §"QoS1 Disposition mapping" / §3 / receive-path threat review (those paragraphs are rewritten in ADR 048 §Amendment 2026-05-30 to reference this ADR)
 
