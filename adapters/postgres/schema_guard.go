@@ -51,6 +51,9 @@ import (
 //   - saga_events        (040)  append-only saga event log
 //                                 + PK(instance_id, version) + FK→saga_instances(id) ON DELETE CASCADE
 //                                 + saga_events_kind_range, saga_events_version_positive CHECK
+//   - projection_checkpoints (044)  CQRS projection harness consumed-offset store
+//                                 + PK(cell_id, projection_id)
+//                                 + owner column reserved (v1 unread/unwritten; ADR §Q5)
 //
 // Drift between this comment and verifyChecks/verifyIndexes/... registries is
 // caught by archtest SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01.
@@ -422,6 +425,14 @@ var expectedColumns = []expectedColumn{
 	{Table: "saga_events", Column: "step_name", Type: "text", NotNull: false},
 	{Table: "saga_events", Column: "payload", Type: "bytea", NotNull: false},
 	{Table: "saga_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	// projection_checkpoints (044_create_projection_checkpoints.sql) — CQRS projection
+	// harness consumed-offset store. owner is reserved for v1.1 multi-pod claim and is
+	// NOT written by the v1 adapter (PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01).
+	{Table: "projection_checkpoints", Column: "cell_id", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "projection_id", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "offset_seq", Type: "bigint", NotNull: true},
+	{Table: "projection_checkpoints", Column: "owner", Type: "text", NotNull: true},
+	{Table: "projection_checkpoints", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // forbiddenColumns are legacy columns that must NOT exist after migration.
@@ -448,6 +459,8 @@ var expectedPKs = []expectedPK{
 	{Table: "saga_instances", Columns: []string{"id"}},
 	// saga_events: composite PK (instance_id, version) (040_create_saga_tables.sql).
 	{Table: "saga_events", Columns: []string{"instance_id", "version"}},
+	// projection_checkpoints: composite PK (cell_id, projection_id) (044_create_projection_checkpoints.sql).
+	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.

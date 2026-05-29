@@ -66,9 +66,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// (#1210 C6 — adds KindSagaCompensationFailed / StatusCompensationFailed);
 	// 043 rebuilds audit_entries (DROP+CREATE) with 5 new NOT NULL columns
 	// (subject_id / tenant_id / session_id / correlation_id / occurred_at) for
-	// the 12-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition).
-	assert.Equal(t, int64(43), v,
-		"expected version should be exactly 43 (current migration max — 043 audit_entries v2)")
+	// the 12-field canonical-JSON HMAC chain (#1228, supersedes PR #1218 W0 transition);
+	// 044 creates projection_checkpoints for the CQRS projection harness PG CheckpointStore
+	// (#1174 / W10 PR-02 — owner column reserved, v1 unread/unwritten).
+	assert.Equal(t, int64(44), v,
+		"expected version should be exactly 44 (current migration max — 044 projection_checkpoints)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {
