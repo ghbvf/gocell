@@ -470,9 +470,11 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 // using its own self-owned ShutdownTimeout budget (via context.WithoutCancel +
 // cfg.ShutdownTimeout), then returns ctx.Err() == context.Canceled.
 //
-// This is the only integration path NOT covered by the Close / Worker().Stop
-// family of tests. It exercises the mirror of the runtime/websocket Hub
-// external-cancel shutdown pattern documented in server.go.
+// It covers the external-ctx-cancel trigger of serve()'s ctx.Done branch — the
+// path reached when the parent ctx is canceled while serve is blocked (not via
+// Close/Worker().Stop, which drive the same gracefulStop through their own ctx).
+// It exercises the mirror of the runtime/websocket Hub external-cancel shutdown
+// pattern documented in server.go.
 func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 	t.Parallel()
 
@@ -521,8 +523,8 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 
 	// serve() must return context.Canceled (the ctx.Err() from the canceled ctx).
 	serveErr := testwait.Deterministic(t, serveDone, integServeTimeout, "serve-returns-on-ctx-cancel")
-	assert.True(t, errors.Is(serveErr, context.Canceled),
-		"serve must return context.Canceled on external ctx cancel, got: %v", serveErr)
+	assert.ErrorIs(t, serveErr, context.Canceled,
+		"serve must return context.Canceled on external ctx cancel")
 
 	// After serve returns, gracefulStop has completed and serving must be false.
 	probes := srv.Probes()
