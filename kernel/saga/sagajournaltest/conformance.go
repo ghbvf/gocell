@@ -83,11 +83,9 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"Heartbeat_WrongLease_FalseNil", conformHeartbeatWrongLease},
 		{"Heartbeat_CorrectLease_TrueNil", conformHeartbeatCorrectLease},
 		{"Heartbeat_ExtendsLease_DoesNotExpire", conformHeartbeatExtendsLease},
-		// 16: MarkTerminal happy paths (Pending→Failed, Running→Succeeded,
-		// Compensating→Compensated) + illegal-transition rejection.
-		{"MarkTerminal_PendingToFailed_TerminalEventAppended_LeaseReleased", conformMarkTerminalHappy},
-		{"MarkTerminal_RunningToSucceeded", conformMarkTerminalSucceeded},
-		{"MarkTerminal_CompensatingToCompensated", conformCompensationPath},
+		// 16: MarkTerminal illegal-transition rejection. (Terminal happy paths are
+		// driven from the terminalHappyPaths registry via runTerminalCoverage —
+		// SAGA-STATUS-FANOUT-COVERAGE-01 — not from this table.)
 		{"MarkTerminal_IllegalTransition_Error", conformMarkTerminalIllegalTransition},
 		// Append status-projection invariant: StepCompensated outside Compensating rejected.
 		{"Append_StepCompensatedOutsideCompensating_Rejected", conformStepCompensatedOutsideCompensating},
@@ -111,9 +109,8 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 		{"Append_KindStepCompleted_PendingToRunning", conformAppendStepCompletedPendingToRunning},
 		{"Append_KindStepFailed_PendingToRunning", conformAppendStepFailedPendingToRunning},
 		{"MarkTerminal_RunningToFailed", conformMarkTerminalRunningToFailed},
-		{"MarkTerminal_RunningToExpired", conformMarkTerminalRunningToExpired},
-		// C6 (#1210): Compensating → CompensationFailed replaces Compensating → Failed.
-		{"MarkTerminal_CompensatingToCompensationFailed", conformMarkTerminalCompensatingToFailed},
+		// C6 (#1210): Compensating → Failed is rejected; the valid terminal is
+		// CompensationFailed (covered by runTerminalCoverage).
 		{"MarkTerminal_CompensatingToFailed_Rejected", conformMarkTerminalCompensatingToFailedRejected},
 		{"MarkTerminal_CompensatingToExpired", conformMarkTerminalCompensatingToExpired},
 		{"MarkTerminal_CompensatingToSucceeded_KindInvalid", conformMarkTerminalCompensatingToSucceededIllegal},
@@ -144,6 +141,12 @@ func RunConformanceSuite(t *testing.T, factory Factory) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, factory) })
 	}
+
+	// Terminal happy-path coverage is driven from the terminalHappyPaths registry
+	// (a compile-time exhaustiveness gate; see terminal_coverage_gen.go) rather
+	// than ad-hoc table rows, so a newly-added terminal saga.Status cannot ship
+	// without a happy-path driver. SAGA-STATUS-FANOUT-COVERAGE-01.
+	runTerminalCoverage(t, factory)
 }
 
 // ---------------------------------------------------------------------------
@@ -981,104 +984,150 @@ func conformHeartbeatExtendsLease(t *testing.T, factory Factory) {
 }
 
 // ---------------------------------------------------------------------------
-// Category 16 — MarkTerminal happy path + transition validation
+// Terminal happy-path coverage — SAGA-STATUS-FANOUT-COVERAGE-01
 //
-// The Journal advances the non-terminal projection status as a function of the
-// appended event kind (see Journal.Append godoc): the first forward step event
-// moves Pending→Running, KindCompensationStarted moves Running→Compensating.
-// MarkTerminal then commits a terminal status legal from the current one. These
-// tests exercise all three reachable happy paths:
-//   - Pending → Failed     (no step events; saga abandoned before starting)
-//   - Running → Succeeded  (after a forward step event)
-//   - Compensating → Compensated (after StepStarted + CompensationStarted + StepCompensated)
+// terminalHappyPaths registers, per TERMINAL saga.Status, the driver that drives
+// a saga to that terminal via a SUCCESSFUL MarkTerminal. It is a KEYLESS literal
+// of terminalCoverage (terminal_coverage_gen.go), so adding a terminal status
+// const → `gocell generate saga-coverage` adds a struct field → this literal
+// fails to compile ("too few values in struct literal") until a driver is
+// supplied. That is the compile-time exhaustiveness gate. runTerminalCoverage
+// runs each driver and the HARNESS — not the driver — asserts the happy-path
+// outcome, so a negative or mis-mapped driver is caught at runtime (got != want
+// || !ok). Illegal-transition / fencing MarkTerminal cases stay in the cases
+// table; only happy paths belong here.
+//
+// The legal source phase per terminal derives from statusTransitions, not from
+// the const, so the drivers are hand-written (not codegen):
+//   - Pending → Failed                  (no step events)
+//   - Running → Succeeded               (after a forward step event)
+//   - Compensating → Compensated        (StepStarted + CompensationStarted + StepCompensated)
+//   - Running → Expired                 (after a forward step event)
+//   - Compensating → CompensationFailed (rollback itself failed)
 // ---------------------------------------------------------------------------
 
-func conformMarkTerminalHappy(t *testing.T, factory Factory) {
+// terminalDriver drives a freshly-claimed saga to a terminal MarkTerminal call
+// and returns the instance ID, the status it targeted, and the call outcome.
+// terminalCoverage (terminal_coverage_gen.go) is the field-per-terminal struct
+// whose keyless literal below is the exhaustiveness gate.
+type terminalDriver func(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error)
+
+//go:generate gocell generate saga-coverage
+var terminalHappyPaths = terminalCoverage{
+	driveSucceeded,
+	driveFailed,
+	driveCompensated,
+	driveExpired,
+	driveCompensationFailed,
+}
+
+// runTerminalCoverage drives every terminal happy path and asserts the uniform
+// success contract: MarkTerminal returns (true, nil), the driver reached the
+// status its registry slot promises, the log carries the matching terminal event
+// kind, and the lease is released (the terminal instance is not re-claimable).
+func runTerminalCoverage(t *testing.T, factory Factory) {
+	t.Helper()
+	drivers := terminalHappyPaths.drivers()
+	for i, drv := range drivers {
+		want := terminalCoverageWant[i]
+		t.Run("TerminalHappyPath_"+want.String(), func(t *testing.T) {
+			assertTerminalHappyPath(t, factory, drv, want)
+		})
+	}
+}
+
+// assertTerminalHappyPath runs one driver and asserts the uniform happy-path
+// contract: MarkTerminal succeeds, the driver reached the status its registry
+// slot promises, the log carries the matching terminal event kind, and the lease
+// is released.
+func assertTerminalHappyPath(t *testing.T, factory Factory, drv terminalDriver, want saga.Status) {
 	t.Helper()
 	j, clk, cleanup := factory(t)
 	defer cleanup()
 
-	ci := claimOne(t, j, clk, "inst-mark-terminal")
-
-	// Transition: Pending → Failed (legal per statusTransitions, no step events).
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	instID, got, ok, err := drv(t, j, clk)
 	if err != nil {
-		t.Fatalf("MarkTerminal(Pending→Failed): %v", err)
+		t.Fatalf("MarkTerminal(→%v): unexpected error: %v", want, err)
 	}
 	if !ok {
-		t.Fatal("MarkTerminal(Pending→Failed): expected ok=true")
+		t.Fatalf("MarkTerminal(→%v): expected ok=true", want)
 	}
-
-	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal did not append a terminal event")
+	if got != want {
+		t.Fatalf("driver returned got=%v, want %v (terminalHappyPaths slot mis-mapped)", got, want)
 	}
+	gotKind := loadTerminalKind(t, j, instID)
+	wantKind, okKind := journal.TerminalEventKind(want)
+	if !okKind || gotKind != wantKind {
+		t.Fatalf("terminal event kind=%v, want %v (journal.TerminalEventKind(%v) ok=%v)", gotKind, wantKind, want, okKind)
+	}
+	assertTerminalLeaseReleased(t, j, clk, instID)
+}
 
-	// Lease released + terminal: a later ClaimPending (after any lease window
-	// expires) must not return the now-terminal instance.
-	clk.Advance(shortLease + time.Second)
+// assertTerminalLeaseReleased asserts a terminal instance is not re-claimable
+// after its lease window expires.
+func assertTerminalLeaseReleased(t *testing.T, j journal.Journal, clk *clockmock.FakeClock, instID idutil.SafeID) {
+	t.Helper()
+	clk.Advance(wellPastLease)
 	nextClaimed, _, err := j.ClaimPending(context.Background(), 10, shortLease)
 	if err != nil {
-		t.Fatalf("ClaimPending after MarkTerminal: %v", err)
+		t.Fatalf("ClaimPending after terminal: %v", err)
 	}
 	for _, c := range nextClaimed {
-		if c.Instance.ID == ci.Instance.ID {
-			t.Error("terminal instance must not be returned by ClaimPending")
+		if c.Instance.ID == instID {
+			t.Error("terminal instance must not be returned by ClaimPending after its lease expires")
 		}
 	}
 }
 
-// conformMarkTerminalSucceeded drives Pending→Running via a forward step event,
-// then commits Running→Succeeded.
-func conformMarkTerminalSucceeded(t *testing.T, factory Factory) {
+// driveFailed drives Pending → Failed (no step events; saga abandoned before
+// starting).
+func driveFailed(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error) {
 	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
-
-	ci := claimOne(t, j, clk, "inst-succeeded")
-
-	// Forward step event moves Pending → Running.
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted)
-
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
-	if err != nil {
-		t.Fatalf("MarkTerminal(Running→Succeeded): %v", err)
-	}
-	if !ok {
-		t.Fatal("MarkTerminal(Running→Succeeded): expected ok=true")
-	}
-	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Succeeded) did not append a terminal event")
-	}
+	ci := claimOne(t, j, clk, "inst-mark-terminal")
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusFailed)
+	return ci.Instance.ID, saga.StatusFailed, ok, err
 }
 
-// conformCompensationPath drives Pending→Running→Compensating via step events,
-// then commits Compensating→Compensated.
-func conformCompensationPath(t *testing.T, factory Factory) {
+// driveSucceeded drives Running → Succeeded (after a forward step event).
+func driveSucceeded(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error) {
 	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
-
-	ci := claimOne(t, j, clk, "inst-compensated")
-
+	ci := claimOne(t, j, clk, "inst-succeeded")
 	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
-	_, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusSucceeded)
+	return ci.Instance.ID, saga.StatusSucceeded, ok, err
+}
+
+// driveCompensated drives Compensating → Compensated.
+func driveCompensated(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error) {
+	t.Helper()
+	ci := claimOne(t, j, clk, "inst-compensated")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	if _, err := j.Append(context.Background(), ci.Instance.ID, ci.LeaseID, journal.Event{
 		Kind: journal.KindCompensationStarted, // Running → Compensating (no StepName needed)
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf(fmtAppendCompErr, err)
 	}
 	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepCompensated) // legal while Compensating
-
 	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensated)
-	if err != nil {
-		t.Fatalf("MarkTerminal(Compensating→Compensated): %v", err)
-	}
-	if !ok {
-		t.Fatal("MarkTerminal(Compensating→Compensated): expected ok=true")
-	}
-	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensated) did not append a terminal event")
-	}
+	return ci.Instance.ID, saga.StatusCompensated, ok, err
+}
+
+// driveExpired drives Running → Expired (after a forward step event).
+func driveExpired(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error) {
+	t.Helper()
+	ci := claimOne(t, j, clk, "inst-running-expired")
+	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusExpired)
+	return ci.Instance.ID, saga.StatusExpired, ok, err
+}
+
+// driveCompensationFailed drives Compensating → CompensationFailed (the rollback
+// phase itself encountered a step failure).
+func driveCompensationFailed(t *testing.T, j journal.Journal, clk *clockmock.FakeClock) (idutil.SafeID, saga.Status, bool, error) {
+	t.Helper()
+	ci := driveToCompensating(t, j, clk, "inst-compensating-failed")
+	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensationFailed)
+	return ci.Instance.ID, saga.StatusCompensationFailed, ok, err
 }
 
 // conformStepCompensatedOutsideCompensating asserts that KindStepCompensated
@@ -1261,8 +1310,9 @@ func conformMarkTerminalWrongLease(t *testing.T, factory Factory) {
 // A's lease expires and B claims, A's later operations are rejected while B
 // can drive to terminal.
 
-// Category 18 is covered by conformMarkTerminalHappy (terminal not reclaimed
-// after MarkTerminal succeeds).
+// Category 18 is also covered by runTerminalCoverage (every terminal driver
+// asserts the instance is not reclaimed after MarkTerminal succeeds); the
+// dedicated test below pins the property in isolation.
 
 // ---------------------------------------------------------------------------
 // Category 18 — Terminal instance not re-claimable (dedicated test)
@@ -1533,27 +1583,6 @@ func conformMarkTerminalRunningToFailed(t *testing.T, factory Factory) {
 	}
 }
 
-// conformMarkTerminalRunningToExpired verifies Running → Expired is a valid terminal path.
-func conformMarkTerminalRunningToExpired(t *testing.T, factory Factory) {
-	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
-
-	ci := claimOne(t, j, clk, "inst-running-expired")
-	appendStep(t, j, ci.Instance.ID, ci.LeaseID, journal.KindStepStarted) // Pending → Running
-
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusExpired)
-	if err != nil {
-		t.Fatalf("MarkTerminal(Running→Expired): %v", err)
-	}
-	if !ok {
-		t.Fatal("MarkTerminal(Running→Expired): expected ok=true")
-	}
-	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Running→Expired) did not append a terminal event")
-	}
-}
-
 // driveToCompensating is a shared setup helper that drives a newly-claimed
 // instance from Pending through Running to Compensating, returning the
 // ClaimedInstance. Deduplicates the setup portion shared by the
@@ -1569,30 +1598,6 @@ func driveToCompensating(t *testing.T, j journal.Journal, clk *clockmock.FakeClo
 		t.Fatalf(fmtAppendCompErr, err)
 	}
 	return ci
-}
-
-// conformMarkTerminalCompensatingToFailed verifies Compensating → CompensationFailed is the valid
-// terminal path for a saga whose rollback itself encountered step errors.
-// StatusFailed is no longer reachable from StatusCompensating (#1210 C6 — the
-// two root causes are structurally distinct: CompensationFailed = rollback
-// failed; Failed = forward failed / no rollback).
-func conformMarkTerminalCompensatingToFailed(t *testing.T, factory Factory) {
-	t.Helper()
-	j, clk, cleanup := factory(t)
-	defer cleanup()
-
-	ci := driveToCompensating(t, j, clk, "inst-compensating-failed")
-
-	ok, err := j.MarkTerminal(context.Background(), ci.Instance.ID, ci.LeaseID, saga.StatusCompensationFailed)
-	if err != nil {
-		t.Fatalf("MarkTerminal(Compensating→CompensationFailed): %v", err)
-	}
-	if !ok {
-		t.Fatal("MarkTerminal(Compensating→CompensationFailed): expected ok=true")
-	}
-	if !loadHasTerminal(t, j, ci.Instance.ID) {
-		t.Error("MarkTerminal(Compensating→CompensationFailed) did not append a terminal event")
-	}
 }
 
 // conformMarkTerminalCompensatingToFailedRejected verifies that

@@ -105,6 +105,18 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		},
 		run: func(_ context.Context, a []string) error { return generateSharedSchema(a) },
 	},
+	{
+		name: "saga-coverage",
+		help: []string{
+			"Render the saga fanout artifacts from the saga.Status /",
+			"journal.EventKind const sets (single source of truth for",
+			"SAGA-STATUS-FANOUT-COVERAGE-01):",
+			"  kernel/saga/sagajournaltest/terminal_coverage_gen.go,",
+			"  the readyz.md status table + alerting-rules.md kind legend.",
+			"[--dry-run]",
+		},
+		run: func(_ context.Context, a []string) error { return generateSagaCoverage(a) },
+	},
 }
 
 // runGenerate dispatches `gocell generate <type>` through the
