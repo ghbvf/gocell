@@ -47,8 +47,8 @@
 //     all distinct packages from kernel/outbox), so Go visibility cannot express
 //     "only these packages may call an exported func/method". This is the same
 //     permanent ceiling documented for SPAN-SETATTR-HOLDER-SEAL (#851) and
-//     HEALTHZ-HOLDER-SEAL (#893 won't-do). The downstream archtest is the
-//     enforcement; the ceiling is documented, not silently accepted.
+//     HEALTHZ-HOLDER-SEAL (#893 won't-do); tracked here as #1282. The downstream
+//     archtest is the enforcement; the ceiling is documented, not silently accepted.
 //
 // # Detection is REFERENCE-based, not call-based
 //

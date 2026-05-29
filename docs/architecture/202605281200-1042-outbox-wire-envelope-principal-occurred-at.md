@@ -475,7 +475,7 @@ producer 触达即可伪造审计身份（actor/subject/tenant/session/occurredA
   永久天花板**（不是延期 TODO）：reconstruction 与 ctx-write 本质跨包（kernel ↔ runtime
   ↔ adapters 互为不同包，且 `kernel` 不可 import `runtime/auth`），Go 包可见性无法表达
   「仅某几个包可调某导出符号」。同 `SPAN-SETATTR-HOLDER-SEAL`(#851) /
-  `HEALTHZ-HOLDER-SEAL`(#893) 的天花板形态，gh issue 跟踪见本 PR body。
+  `HEALTHZ-HOLDER-SEAL`(#893) 的天花板形态，gh issue **#1282** 跟踪（won't-do）。
 - `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` 文案就地重写（§6 表 + archtest godoc）：
   「type-system Hard」明确限定到字面量向量，并新增 SoleReconstructionSurface 子检查
   锁定「唯一产出 `Entry` 的导出 func = `NewEntry`+`UnmarshalEnvelope`，唯一重建 mirror

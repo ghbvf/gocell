@@ -54,7 +54,7 @@
 //     BOTH writers (different packages) to call — Go visibility cannot express
 //     "only runtime/auth + kernel/outbox may call this exported func". Same
 //     permanent ceiling as SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL
-//     (#893 won't-do). The downstream archtest is the enforcement.
+//     (#893 won't-do); tracked here as #1282. The downstream archtest is the enforcement.
 //
 // # Detection is REFERENCE-based, not call-based
 //
