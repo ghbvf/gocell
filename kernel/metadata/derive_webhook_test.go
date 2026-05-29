@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
@@ -461,32 +462,42 @@ func TestDeriveWebhookEndpoints_DispatchForbiddenHandler(t *testing.T) {
 	assert.Error(t, err, "webhook-dispatch with handler set must fail derivation")
 }
 
-// TestContractUsage_WebhookReceiveFieldsUnmarshal verifies that the new
-// SourceID and TargetSelector fields on ContractUsage round-trip through YAML.
+// TestContractUsage_WebhookReceiveFieldsUnmarshal verifies that the SourceID
+// field on ContractUsage maps from the slice.yaml `sourceID` key (yaml tag
+// round-trip). Constructing via real yaml.Unmarshal — rather than a struct
+// literal — is what makes a tag typo (e.g. `source_id`) fail here instead of
+// only surfacing downstream in cellgen/contractgen.
 func TestContractUsage_WebhookReceiveFieldsUnmarshal(t *testing.T) {
-	// This test directly constructs a ContractUsage struct using the new fields
-	// (SourceID, TargetSelector) that the impl agent will add to types.go.
-	cu := metadata.ContractUsage{
-		Contract: "webhook.stripe.events.v1",
-		Role:     "webhook-receive",
-		Handler:  "HandleStripeEvent",
-		SourceID: "stripe",
-	}
-	assert.Equal(t, "stripe", cu.SourceID)
+	const y = `
+contract: webhook.stripe.events.v1
+role: webhook-receive
+handler: HandleStripeEvent
+sourceID: stripe
+`
+	var cu metadata.ContractUsage
+	require.NoError(t, yaml.Unmarshal([]byte(y), &cu))
+	assert.Equal(t, "webhook.stripe.events.v1", cu.Contract)
+	assert.Equal(t, "webhook-receive", cu.Role)
 	assert.Equal(t, "HandleStripeEvent", cu.Handler)
+	assert.Equal(t, "stripe", cu.SourceID)
 }
 
 // TestContractUsage_WebhookDispatchFieldsUnmarshal verifies that the
-// TargetSelector field on ContractUsage is accessible.
+// TargetSelector and SourceID fields map from the slice.yaml `targetSelector` /
+// `sourceID` keys (yaml tag round-trip).
 func TestContractUsage_WebhookDispatchFieldsUnmarshal(t *testing.T) {
-	cu := metadata.ContractUsage{
-		Contract:       "webhook.shopify.dispatch.v1",
-		Role:           "webhook-dispatch",
-		TargetSelector: "ShopifyTarget",
-		SourceID:       "shopify",
-	}
-	assert.Equal(t, "shopify", cu.SourceID)
+	const y = `
+contract: webhook.shopify.dispatch.v1
+role: webhook-dispatch
+targetSelector: ShopifyTarget
+sourceID: shopify
+`
+	var cu metadata.ContractUsage
+	require.NoError(t, yaml.Unmarshal([]byte(y), &cu))
+	assert.Equal(t, "webhook.shopify.dispatch.v1", cu.Contract)
+	assert.Equal(t, "webhook-dispatch", cu.Role)
 	assert.Equal(t, "ShopifyTarget", cu.TargetSelector)
+	assert.Equal(t, "shopify", cu.SourceID)
 }
 
 // ---------------------------------------------------------------------------

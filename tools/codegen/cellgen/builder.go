@@ -50,6 +50,16 @@ var webhookSourceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 const msgUndeclaredListener = "cellgen build: route references undeclared listener" +
 	" (declare with +cell:listener marker in cell.go, or remove the +slice:route marker)"
 
+// Contract-usage role names cellgen recognizes when scanning slice.yaml.
+// They mirror the kernel/cellvocab role vocabulary but are declared locally
+// because cellgen does not import cellvocab (the whole package resolves roles
+// via bare slice.yaml strings). Each value is used ≥3 times across builder.go.
+const (
+	roleSubscribe       = "subscribe"
+	roleWebhookReceive  = "webhook-receive"
+	roleWebhookDispatch = "webhook-dispatch"
+)
+
 // BuildCellSpec projects (cell.yaml + markergen.WireBundle + fieldIndex) into
 // the CellGenSpec consumed by cell.tmpl. It is the single bridge between
 // parsed metadata and the renderer.
@@ -192,7 +202,7 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	// the handler interface block is rendered conditionally when Handlers is non-empty.
 	seen := make(map[string]bool)
 	for _, cu := range s.ContractUsages {
-		if cu.Role != "subscribe" {
+		if cu.Role != roleSubscribe {
 			continue
 		}
 		if seen[cu.Handler] {
@@ -254,7 +264,7 @@ func buildSpecsFromSlices[T any](
 // converts each contractUsage[role=subscribe] entry into a SubscriptionGenSpec,
 // sorted by SliceID then ContractID.
 func buildSubscriptionsFromSlices(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]SubscriptionGenSpec, error) {
-	return buildSpecsFromSlices(p, cellID, "subscribe", fieldIndex, buildSubscriptionSpecFromCU,
+	return buildSpecsFromSlices(p, cellID, roleSubscribe, fieldIndex, buildSubscriptionSpecFromCU,
 		func(s SubscriptionGenSpec) string { return s.SliceID },
 		func(s SubscriptionGenSpec) string { return s.ContractID })
 }
@@ -282,7 +292,7 @@ func buildSubscriptionSpecFromCU(
 			))
 	}
 
-	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID)
+	fieldName, err := fieldIndex.resolveSliceField(cu.Field, cellID, sliceID, roleSubscribe)
 	if err != nil {
 		return SubscriptionGenSpec{}, err
 	}
@@ -338,7 +348,7 @@ func buildSubscriptionSpecFromCU(
 func buildWebhookReceiversFromSlices(
 	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
 ) ([]WebhookReceiverGenSpec, error) {
-	return buildSpecsFromSlices(p, cellID, "webhook-receive", fieldIndex, buildWebhookReceiverSpecFromCU,
+	return buildSpecsFromSlices(p, cellID, roleWebhookReceive, fieldIndex, buildWebhookReceiverSpecFromCU,
 		func(s WebhookReceiverGenSpec) string { return s.SliceID },
 		func(s WebhookReceiverGenSpec) string { return s.ContractID })
 }
@@ -355,7 +365,7 @@ func resolveWebhookField(
 	cellID, sliceID, role, contractID, explicitField string,
 	fieldIndex *CellFieldIndex,
 ) (string, error) {
-	fieldName, err := fieldIndex.resolveSliceField(explicitField, cellID, sliceID)
+	fieldName, err := fieldIndex.resolveSliceField(explicitField, cellID, sliceID, role)
 	if err != nil {
 		return "", err
 	}
@@ -423,14 +433,14 @@ func buildWebhookReceiverSpecFromCU(
 		return WebhookReceiverGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: webhook-receive SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
 			errcode.WithDetails(
-				errcode.PublicString("role", "webhook-receive"),
+				errcode.PublicString("role", roleWebhookReceive),
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("sourceID", cu.SourceID),
 				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
 			))
 	}
-	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-receive", cu.Contract, cu.Field, fieldIndex)
+	fieldName, err := resolveWebhookField(p, cellID, sliceID, roleWebhookReceive, cu.Contract, cu.Field, fieldIndex)
 	if err != nil {
 		return WebhookReceiverGenSpec{}, err
 	}
@@ -448,7 +458,7 @@ func buildWebhookReceiverSpecFromCU(
 func buildWebhookDispatchesFromSlices(
 	p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex,
 ) ([]WebhookDispatchGenSpec, error) {
-	return buildSpecsFromSlices(p, cellID, "webhook-dispatch", fieldIndex, buildWebhookDispatchSpecFromCU,
+	return buildSpecsFromSlices(p, cellID, roleWebhookDispatch, fieldIndex, buildWebhookDispatchSpecFromCU,
 		func(s WebhookDispatchGenSpec) string { return s.SliceID },
 		func(s WebhookDispatchGenSpec) string { return s.ContractID })
 }
@@ -480,14 +490,14 @@ func buildWebhookDispatchSpecFromCU(
 		return WebhookDispatchGenSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build: webhook-dispatch SourceID must match ^[a-z][a-z0-9_-]{0,63}$",
 			errcode.WithDetails(
-				errcode.PublicString("role", "webhook-dispatch"),
+				errcode.PublicString("role", roleWebhookDispatch),
 				errcode.PublicString("cellID", cellID),
 				errcode.PublicString("sliceID", sliceID),
 				errcode.PublicString("sourceID", cu.SourceID),
 				errcode.PublicString("pattern", webhookSourceIDPattern.String()),
 			))
 	}
-	fieldName, err := resolveWebhookField(p, cellID, sliceID, "webhook-dispatch", cu.Contract, cu.Field, fieldIndex)
+	fieldName, err := resolveWebhookField(p, cellID, sliceID, roleWebhookDispatch, cu.Contract, cu.Field, fieldIndex)
 	if err != nil {
 		return WebhookDispatchGenSpec{}, err
 	}

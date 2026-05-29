@@ -1629,6 +1629,69 @@ func (v *Validator) validateFMT36() []ValidationResult {
 	return results
 }
 
+// validateFMT37 enforces webhook contract-side required fields at
+// `gocell validate` time — the live parity counterpart to FMT-04 (event/projection
+// required fields). The same constraints live in contract.schema.json's
+// kind==webhook if/then block, but that schema is not run by `gocell validate`
+// (see kernel/metadata/schemas/embed.go — "planned Phase 2"). Without this rule
+// an inbound webhook contract that omits its signature/payload block, or
+// declares an unsupported signature algorithm, passes `gocell validate`
+// silently (fail-open), unlike its event counterpart.
+//
+//   - direction==inbound → signature block AND payload block required (the
+//     receiver landing in PR-3 cannot verify without them).
+//   - whenever a signature block is present (inbound: required; outbound:
+//     optional), signature.algorithm MUST equal the sole supported value
+//     hmac-sha256 — no downgrade path.
+//
+// direction itself is validated fail-closed at parse time
+// (kernel/metadata.finalizeWebhookContract), so a bad/empty direction never
+// reaches this rule.
+//
+// fmt37WebhookAlgorithm is the sole supported signature algorithm. It is a
+// local literal rather than an import of kernel/webhook.AlgorithmHMACSHA256:
+// kernel/governance must not depend on kernel/webhook (KERNEL-INTERNAL-DAG-01
+// forbids the governance→webhook edge). The value is kept in lock-step with the
+// runtime const by the test-only cross-check TestFMT37AlgorithmMatchesKernel
+// (a _test.go import of kernel/webhook is not a production DAG edge).
+const fmt37WebhookAlgorithm = "hmac-sha256"
+
+func (v *Validator) validateFMT37() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c == nil || c.Kind != string(cellvocab.ContractWebhook) {
+			continue
+		}
+		if c.Direction == "inbound" {
+			if c.Signature == nil {
+				results = append(results, v.newError(
+					codeFMT37, IssueRequired,
+					contractFile(c), "signature",
+					fmt.Sprintf("inbound webhook contract %q must declare a signature block", c.ID),
+					"add a signature block (algorithm, headers, signedStringForm) to the inbound webhook contract",
+				))
+			}
+			if c.Payload == nil {
+				results = append(results, v.newError(
+					codeFMT37, IssueRequired,
+					contractFile(c), "payload",
+					fmt.Sprintf("inbound webhook contract %q must declare a payload block", c.ID),
+					"add a payload block (contentType, maxBodyBytes) to the inbound webhook contract",
+				))
+			}
+		}
+		if c.Signature != nil && c.Signature.Algorithm != fmt37WebhookAlgorithm {
+			results = append(results, v.newError(
+				codeFMT37, IssueInvalid,
+				contractFile(c), "signature.algorithm",
+				fmt.Sprintf("webhook contract %q signature.algorithm=%q is not a supported value", c.ID, c.Signature.Algorithm),
+				fmt.Sprintf("set signature.algorithm to %q (the sole supported HMAC algorithm)", fmt37WebhookAlgorithm),
+			))
+		}
+	}
+	return results
+}
+
 // sliceMixesHTTPVisibility reports whether s serves at least one public
 // (/api/*) HTTP contract and at least one internal (/internal/v1) HTTP
 // contract via role=serve usages — the SLICE-HTTP-VISIBILITY-SEGREGATION-01

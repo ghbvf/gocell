@@ -69,6 +69,24 @@ payload:
   maxBodyBytes: 1048576            # 1 MB
 ```
 
+`outbound` 方向字段集更精简——dispatcher 用业务侧 selector 给出 target URL，无 `endpoints.inbound`；
+`signature` / `payload` 对 outbound **非必填**（dispatcher 用自己配置的密钥签名）：
+
+```yaml
+id: webhook.shopify.orders.v1
+kind: webhook
+direction: outbound                # inbound | outbound
+ownerCell: ordercore
+lifecycle: active
+# outbound 无 endpoints.inbound；签名密钥来源由 slice.yaml 的 sourceID 指定。
+# 若声明 signature 块，algorithm 仍只能是 hmac-sha256（FMT-37 校验）。
+```
+
+> **inbound 必填字段（FMT-37 live 校验）**：`direction: inbound` 的契约**必须**声明 `signature`
+> 块（`algorithm: hmac-sha256` 为唯一合法值）+ `payload` 块——否则 `gocell validate` 报 error
+> （与 event 的 FMT-04 必填对等，闭合 fail-open）。`algorithm` 的值集封闭由 contract.schema.json
+> 的 `enum: [hmac-sha256]` 与 FMT-37 双重守卫。
+
 `endpoints.receivers` / `endpoints.dispatchers` 是**派生字段**（`yaml:"-"`，由 parser 从
 slice.yaml 的 `contractUsages[role=webhook-receive|webhook-dispatch]` 的 `belongsToCell`
 计算），**禁止手写**——KnownFields 严格解码会拒绝。archtest
@@ -85,6 +103,11 @@ contractUsages:
     role: webhook-receive          # 新 role
     handler: HandleStripeEvent     # 必填，业务消费 handler 方法名
     sourceID: stripe               # 必填，密钥隔离键（须 == contract.endpoints.inbound.sourceID）
+verify:
+  contract:
+    # 必填——VERIFY-01 强制每个 contractUsage 有对应 verify.contract 条目（或 waiver）。
+    # key 格式 contract.<contractID>.<role>，role 用完整角色名 webhook-receive（非 receive）。
+    - contract.webhook.stripe.payment-events.v1.webhook-receive
 
 # outbound
 contractUsages:
@@ -92,7 +115,14 @@ contractUsages:
     role: webhook-dispatch         # 新 role
     targetSelector: ShopifyTarget  # 必填，target URL 选择器方法名
     sourceID: shopify              # 必填，签名密钥来源
+verify:
+  contract:
+    - contract.webhook.shopify.orders.v1.webhook-dispatch
 ```
+
+> **verify.contract 必填**：与 subscribe 同范式，VERIFY-01 对每个 webhook contractUsage 强制
+> 一条 `contract.<contractID>.<role>` 条目（断言该角色有可执行的 receive/dispatch contract
+> 测试），无测试时用 waiver 记录缺口。漏写 = `gocell validate` 报 error。
 
 新建订阅 slice 时，cell.go 结构体须声明对应 `*<sliceID>.Service` 字段（与 subscribe 同范式，
 cellgen 按「字段指针类型包名 == sliceID」解析 handler 表达式）。

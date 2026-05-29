@@ -72,7 +72,8 @@
       "properties": {
         "algorithm": {
           "type": "string",
-          "description": "HMAC algorithm used to verify the webhook signature (e.g. 'hmac-sha256')."
+          "enum": ["hmac-sha256"],
+          "description": "HMAC algorithm used to verify the webhook signature. 'hmac-sha256' is the sole supported value (aligns with runtime kernel/webhook AlgorithmHMACSHA256; no downgrade path)."
         },
         "toleranceSeconds": {
           "type": "integer",

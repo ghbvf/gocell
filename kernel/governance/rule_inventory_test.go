@@ -99,6 +99,9 @@ func goldenRuleIDs() []string {
 		"FMT-35",
 		// FMT-36: cell.requires ∈ closed enum {postgres,redis,rabbitmq}, no dups (Design Y, #855).
 		"FMT-36",
+		// FMT-37: webhook contract-side required fields — inbound→signature+payload;
+		// signature.algorithm==hmac-sha256 (live parity with FMT-04; #1265).
+		"FMT-37",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

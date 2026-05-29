@@ -33,7 +33,7 @@ func TestWebhookContractSchemaValid(t *testing.T) {
 			"deliveryIDHeader": "svix-id",
 			"timestampHeader": "svix-timestamp",
 			"signatureHeader": "svix-signature",
-			"signedStringForm": "${deliveryId}.${timestamp}.${body}"
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
 		},
 		"payload": {
 			"contentType": "application/json",
@@ -68,7 +68,7 @@ func TestWebhookContractSchema_MissingDirectionFails(t *testing.T) {
 			"deliveryIDHeader": "svix-id",
 			"timestampHeader": "svix-timestamp",
 			"signatureHeader": "svix-signature",
-			"signedStringForm": "${deliveryId}.${timestamp}.${body}"
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
 		},
 		"payload": {
 			"contentType": "application/json",
@@ -108,6 +108,45 @@ func TestWebhookContractSchema_InboundMissingSignatureFails(t *testing.T) {
 
 	assert.Error(t, schema.Validate(doc),
 		"inbound webhook contract without signature must be rejected (signature is required for inbound)")
+}
+
+// TestWebhookContractSchema_InvalidAlgorithmFails verifies that a webhook
+// signature declaring an algorithm other than hmac-sha256 is rejected by the
+// enum constraint (aligns with runtime kernel/webhook AlgorithmHMACSHA256, the
+// sole supported value; no downgrade path to weaker MACs).
+func TestWebhookContractSchema_InvalidAlgorithmFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha1",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"webhook signature with algorithm other than hmac-sha256 must be rejected by the enum constraint")
 }
 
 // TestWebhookContractSchema_HandWrittenReceiversFails verifies that a
@@ -178,7 +217,7 @@ func TestWebhookReceiveSliceCUValid(t *testing.T) {
 		],
 		"verify": {
 			"unit": ["unit.webhookingest.handle"],
-			"contract": ["contract.webhook.stripe.events.v1.receive"]
+			"contract": ["contract.webhook.stripe.events.v1.webhook-receive"]
 		}
 	}`), &doc))
 
@@ -205,7 +244,7 @@ func TestWebhookDispatchSliceCUValid(t *testing.T) {
 		],
 		"verify": {
 			"unit": ["unit.webhookdispatch.dispatch"],
-			"contract": ["contract.webhook.shopify.dispatch.v1.dispatch"]
+			"contract": ["contract.webhook.shopify.dispatch.v1.webhook-dispatch"]
 		}
 	}`), &doc))
 
@@ -288,7 +327,7 @@ func TestWebhookReceiveSliceCU_WithFieldPasses(t *testing.T) {
 		],
 		"verify": {
 			"unit": ["unit.webhookingest.handle"],
-			"contract": ["contract.webhook.stripe.events.v1.receive"]
+			"contract": ["contract.webhook.stripe.events.v1.webhook-receive"]
 		}
 	}`), &doc))
 
