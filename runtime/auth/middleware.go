@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -136,8 +137,51 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// Inject the unified Principal (F7 wiring).
 	p := jwtClaimsToPrincipal(claims)
 	ctx := WithPrincipal(r.Context(), p)
+	ctx = injectPrincipalCtxKeys(ctx, p)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// injectPrincipalCtxKeys writes the authenticated principal identity into the
+// pkg/ctxkeys typed keys so that any outbox.NewEntry constructed downstream in
+// the same request carries the principal across the async boundary (NewEntry
+// reads these keys at its single injection trust boundary via
+// outbox.ContextPrincipal). This is the producer-side half of the
+// principal-propagation contract; the consumer-side restore lives in
+// SubscriberWithMiddleware.
+//
+// Mapping:
+//   - actor_id   = actorOf(p) — the impersonator. develop has no "act" claim,
+//     so it equals the subject (see actorOf).
+//   - subject_id = p.Subject  — the subject-of-record (JWT "sub").
+//   - session_id = p.Claims["sid"] — server-side session binding, when present.
+//   - tenant_id  is intentionally NOT written: auth.Principal carries no tenant
+//     field on develop (no source yet), so the key stays unset/empty.
+//
+// Only non-empty values are written so anonymous / sessionless tokens do not
+// stamp empty principal fields onto produced entries.
+func injectPrincipalCtxKeys(ctx context.Context, p *Principal) context.Context {
+	if actor := actorOf(p); actor != "" {
+		ctx = ctxkeys.WithActorID(ctx, actor)
+	}
+	if p.Subject != "" {
+		ctx = ctxkeys.WithSubjectID(ctx, p.Subject)
+	}
+	if sid := p.Claims["sid"]; sid != "" {
+		ctx = ctxkeys.WithSessionID(ctx, sid)
+	}
+	// TenantID has no source on develop — see godoc above.
+	return ctx
+}
+
+// actorOf returns the impersonation actor for the principal. RFC 8693 §4.1
+// expresses delegation via an "act" claim ("act.sub" = the acting party);
+// GoCell does not issue or verify an "act" claim on develop, so there is no
+// impersonation chain and the actor is identically the subject-of-record.
+// When an "act" claim is introduced, this is the single place to derive the
+// actor from it.
+func actorOf(p *Principal) string {
+	return p.Subject
 }
 
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED

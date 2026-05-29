@@ -1036,7 +1036,7 @@ func (c *Coordinator) commitStepCompleted(txCtx context.Context, a commitStepArg
 	}); err != nil {
 		return err
 	}
-	if err := koutbox.Emit(txCtx, c.outboxEmit,
+	if err := koutbox.Emit(txCtx, c.clock, c.outboxEmit,
 		stepCompletedTopic(a.defID),
 		StepCompletedEvent{InstanceID: a.instanceID, Step: a.step.Name}); err != nil {
 		return err

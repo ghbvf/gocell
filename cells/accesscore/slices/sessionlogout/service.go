@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -46,6 +47,7 @@ type Service struct {
 	sessionStore session.Store             `gocell:"required"`
 	refreshStore refresh.Store             `gocell:"required"`
 	txRunner     persistence.CellTxManager `gocell:"required" gocellErr:"sessionlogout: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clk          clock.Clock               `gocell:"required" gocellErr:"sessionlogout.NewService: clock.Clock required"`     //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	emitter      outbox.CellEmitter
 	logger       *slog.Logger
 }
@@ -54,17 +56,20 @@ type Service struct {
 // that logout also revokes the refresh-token chain for the session — without
 // this, a stolen refresh token would survive logout.
 func NewService(
+	clk clock.Clock,
 	sessionStore session.Store,
 	refreshStore refresh.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	clock.MustHaveClock(clk, "sessionlogout.NewService")
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
 		sessionStore: sessionStore,
 		refreshStore: refreshStore,
+		clk:          clk,
 		emitter:      outbox.DemoCellEmitter(),
 		logger:       logger,
 	}
@@ -169,7 +174,7 @@ func (s *Service) revokeAndPublish(txCtx context.Context, sessionID, callerUserI
 	if err := s.refreshStore.RevokeSession(txCtx, sessionID); err != nil {
 		return fmt.Errorf("session-logout: revoke refresh chain: %w", err)
 	}
-	return outbox.Emit(txCtx, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
+	return outbox.Emit(txCtx, s.clk, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
 		SessionID: sessionID,
 		UserID:    callerUserID,
 	})

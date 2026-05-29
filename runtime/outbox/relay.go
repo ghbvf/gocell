@@ -601,8 +601,8 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 			slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
 				slog.Int("completed", i),
 				slog.Int("remaining", remaining),
-				slog.String("entry_id", res.entry.ID),
-				slog.String("event_type", res.entry.EventType),
+				slog.String("entry_id", res.entry.ID()),
+				slog.String("event_type", res.entry.EventType()),
 				slog.Any("error", err))
 			return stats, err
 		}
@@ -620,7 +620,7 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 	if err := kout.Transition(kout.StateClaiming, kout.StatePublished); err != nil {
 		return err
 	}
-	updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
+	updated, err := r.store.MarkPublished(ctx, res.entry.ID(), res.entry.LeaseID)
 	if err != nil {
 		return err
 	}
@@ -633,7 +633,7 @@ func (r *Relay) writeBackOne(ctx context.Context, res publishResult, stats *poll
 		stats.skipped++
 		slog.Warn(
 			"outbox relay: stale lease lost write-back",
-			slog.String("entry_id", res.entry.ID),
+			slog.String("entry_id", res.entry.ID()),
 			slog.String("lease_id", res.entry.LeaseID),
 			slog.String("outcome", "published"),
 		)
@@ -659,7 +659,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		if err := kout.Transition(kout.StateClaiming, kout.StateDead); err != nil {
 			return err
 		}
-		updated, err := r.store.MarkDead(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, errMsg)
+		updated, err := r.store.MarkDead(ctx, res.entry.ID(), res.entry.LeaseID, newAttempts, errMsg)
 		if err != nil {
 			return err
 		}
@@ -667,7 +667,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			stats.lost++
 			slog.Warn(
 				"outbox relay: stale lease lost fail-write",
-				slog.String("entry_id", res.entry.ID),
+				slog.String("entry_id", res.entry.ID()),
 				slog.String("lease_id", res.entry.LeaseID),
 				slog.String("outcome", "dead"),
 			)
@@ -676,9 +676,9 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		stats.dead++
 		slog.Error(
 			"outbox relay: entry dead-lettered",
-			slog.String("entry_id", res.entry.ID),
-			slog.String("event_type", res.entry.EventType),
-			slog.String("aggregate_id", res.entry.AggregateID),
+			slog.String("entry_id", res.entry.ID()),
+			slog.String("event_type", res.entry.EventType()),
+			slog.String("aggregate_id", res.entry.AggregateID()),
 			slog.Int("attempts", newAttempts),
 			slog.String("last_error", errMsg),
 		)
@@ -692,7 +692,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 	}
 	delay := r.retryDelay(newAttempts)
 	nextRetryAt := r.clk().Now().Add(delay)
-	updated, err := r.store.MarkRetry(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, nextRetryAt, errMsg)
+	updated, err := r.store.MarkRetry(ctx, res.entry.ID(), res.entry.LeaseID, newAttempts, nextRetryAt, errMsg)
 	if err != nil {
 		return err
 	}
@@ -700,7 +700,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		stats.lost++
 		slog.Warn(
 			"outbox relay: stale lease lost fail-write",
-			slog.String("entry_id", res.entry.ID),
+			slog.String("entry_id", res.entry.ID()),
 			slog.String("lease_id", res.entry.LeaseID),
 			slog.String("outcome", "retry"),
 		)

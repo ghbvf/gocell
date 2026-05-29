@@ -124,7 +124,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
-		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
+		return outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
 			Key:      key,
 			ConfigID: entry.ID,
 			Version:  version.Version,
@@ -205,7 +205,7 @@ func (s *Service) rollbackInTx(
 	// Metadata-only: event carries key+version only.
 	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
-	if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 		Key:     key,
 		Version: updated.Version,
 		ActorID: actor,
@@ -213,7 +213,7 @@ func (s *Service) rollbackInTx(
 		return nil, err
 	}
 
-	if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
+	if err := outbox.Emit(txCtx, s.clock, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
 		Key:           key,
 		TargetVersion: targetVersion,
 		NewVersion:    updated.Version,

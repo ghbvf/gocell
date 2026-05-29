@@ -426,6 +426,7 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		EventType     string          `json:"eventType"`
 		Topic         string          `json:"topic"`
 		Payload       json.RawMessage `json:"payload"`
+		OccurredAt    string          `json:"occurredAt"`
 		CreatedAt     string          `json:"createdAt"`
 	}
 	msg := wireMsg{
@@ -434,7 +435,10 @@ func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 		EventType:     topic,
 		Topic:         topic,
 		Payload:       json.RawMessage(payload),
-		CreatedAt:     "2024-01-01T00:00:00Z",
+		// occurredAt is required since issue #1229 (Entry.Validate rejects zero);
+		// UnmarshalEnvelope would reject an envelope without it.
+		OccurredAt: "2024-01-01T00:00:00Z",
+		CreatedAt:  "2024-01-01T00:00:00Z",
 	}
 	out, err := json.Marshal(msg)
 	if err != nil {

@@ -210,7 +210,7 @@ func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry
 	// Metadata-only: event carries key+version only.
 	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
-	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
+	return outbox.Emit(ctx, s.clock, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 		Key:     entry.Key,
 		Version: entry.Version,
 		ActorID: actor,
@@ -220,7 +220,7 @@ func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry
 func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry, actor string) error {
 	// Metadata-only: event carries key+version of the deleted entry.
 	// Subscribers use version for monotonic tombstone protection against stale upsert replays.
-	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, configevents.EntryDeleted{
+	return outbox.Emit(ctx, s.clock, s.emitter, domain.TopicConfigEntryDeleted, configevents.EntryDeleted{
 		Key:     entry.Key,
 		Version: entry.Version,
 		ActorID: actor,
