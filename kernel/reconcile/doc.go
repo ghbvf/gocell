@@ -58,15 +58,21 @@
 //
 // # Enforced invariants (tools/archtest)
 //
-//   - RECONCILE-INTERFACE-FROZEN-01: Reconciler's method set is exactly
+// Each invariant is tagged with the stacked PR that delivers it (A1←A2←A3 merge
+// independently; an invariant is CI-enforced for this package only once its
+// delivering PR is on develop):
+//
+//   - RECONCILE-INTERFACE-FROZEN-01 (PR-A2): Reconciler's method set is exactly
 //     Reconcile(context.Context, Request) (Result, error).
-//   - RECONCILE-REQUEST-FIELDS-FROZEN-01: Request's field set is exactly
+//   - RECONCILE-REQUEST-FIELDS-FROZEN-01 (PR-A2): Request's field set is exactly
 //     { EntityID string }.
-//   - RECONCILE-RESULT-FIELDS-FROZEN-01: Result's field set is exactly
+//   - RECONCILE-RESULT-FIELDS-FROZEN-01 (PR-A2): Result's field set is exactly
 //     { RequeueAfter time.Duration } (no Requeue bool / Priority int).
-//   - PROD-CLOCK-INJECTION-01: the Loop's control-plane ticker / probe timers
-//     are confined to the sealed controlPlaneClock type; kernel/reconcile is a
-//     sanctioned control-plane host alongside runtime/command.
+//   - PROD-CLOCK-INJECTION-01 (PR-A3): the Loop's control-plane ticker / probe
+//     timers are confined to the sealed controlPlaneClock type; kernel/reconcile
+//     becomes a sanctioned control-plane host (alongside runtime/command) when
+//     the Loop + clock carve-out land in PR-A3 — it is NOT yet enforced for this
+//     package at the PR-A2 commit.
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md
