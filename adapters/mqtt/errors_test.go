@@ -229,7 +229,7 @@ func TestClassifySubackReason(t *testing.T) {
 		{"topic-filter-invalid-0x8F", 0x8F, ErrAdapterMQTTSubscribe, errcode.KindInternal},
 		{"quota-exceeded-0x97", 0x97, ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable},
 		{"shared-subs-unsupported-0x9E", 0x9E, ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal},
-		{"sub-ids-unsupported-0xA1", 0xA1, ErrAdapterMQTTSubscribe, errcode.KindInternal},
+		{"sub-ids-unsupported-0xA1", 0xA1, ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal},
 		{"wildcard-subs-unsupported-0xA2", 0xA2, ErrAdapterMQTTSubscribe, errcode.KindInternal},
 		{"unknown-error-0x83", 0x83, ErrAdapterMQTTSubscribe, errcode.KindInternal},
 		{"unknown-error-0xFF", 0xFF, ErrAdapterMQTTSubscribe, errcode.KindInternal},

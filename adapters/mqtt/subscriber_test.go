@@ -642,7 +642,7 @@ func TestSubscriber_DispatchAck_AckFailsAfterCommit(t *testing.T) {
 
 	settlement := &recordingSettlement{} // commitErr nil → Commit succeeds
 	pb, entry := dispatchAckEntry("test/ackfail/x")
-	sub.dispatchAck(context.Background(), pb, settlement, entry, time.Now())
+	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
 	commit, release := settlement.counts()
@@ -667,7 +667,7 @@ func TestSubscriber_DispatchAck_CommitFails(t *testing.T) {
 
 	settlement := &recordingSettlement{commitErr: errors.New("lease expired")}
 	pb, entry := dispatchAckEntry("test/commitfail/x")
-	sub.dispatchAck(context.Background(), pb, settlement, entry, time.Now())
+	sub.dispatchAck(context.Background(), pb, outbox.Ack(), settlement, entry, time.Now())
 
 	success, failure, lastReason := coll.snapshot()
 	commit, release := settlement.counts()
@@ -732,4 +732,73 @@ func TestSubscriber_StopIntake_DrainTimeout(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ErrAdapterMQTTSubscriberCloseTimeout, ec.Code,
 		"drain timeout must be ErrAdapterMQTTSubscriberCloseTimeout, not ErrAdapterMQTTClosed")
+}
+
+// ---------------------------------------------------------------------------
+// QoS validation (F10): QoS 2 rejected at construction (fail-closed)
+// ---------------------------------------------------------------------------
+
+func TestNewSubscriber_RejectsQoS2(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("test")
+	require.NoError(t, err)
+	// QoS 2 is unsupported by the manual-ack idempotency model; NewSubscriber must
+	// fail-closed rather than silently SUBSCRIBE at QoS 2. No broker needed — the
+	// guard runs before any connection use.
+	_, err = NewSubscriber(clock.Real(), &Connection{}, ns, SubscriberConfig{QoS: 2})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// SettlementObserver notification (F4): every broker-settlement path notifies
+// the HandleResult's SettlementObservers (parity with rabbitmq + eventbus).
+// ---------------------------------------------------------------------------
+
+// TestSubscriber_NotifySettlement_FiresObservers is a white-box test driving
+// dispatchDisposition directly (no broker): it asserts that a SettlementObserver
+// attached to the HandleResult is invoked exactly once with the expected
+// Disposition + SettlementResult on the Ack / Reject / Requeue paths.
+func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		disp       outbox.Disposition
+		wantResult outbox.SettlementResult
+	}{
+		{name: "ack", disp: outbox.DispositionAck, wantResult: outbox.SettlementResultSuccess},
+		{name: "reject", disp: outbox.DispositionReject, wantResult: outbox.SettlementResultSuccess},
+		{name: "requeue", disp: outbox.DispositionRequeue, wantResult: outbox.SettlementResultSuccess},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			coll := newRecordingSubCollector()
+			// fakeAckConn(nil): conn.ack (Ack path) and ackPoison (Reject path)
+			// both succeed, so the success branches are exercised.
+			sub := newDispatchAckSubscriber(t, nil, coll)
+
+			// dispatchDisposition is synchronous and invokes the observer inline,
+			// so a plain counter is race-free here.
+			var count int
+			var gotObs outbox.SettlementObservation
+			obs := outbox.SettlementObserverFunc(func(_ context.Context, o outbox.SettlementObservation) {
+				count++
+				gotObs = o
+			})
+			res := outbox.HandleResult{
+				Disposition:         tc.disp,
+				SettlementObservers: []outbox.SettlementObserver{obs},
+			}
+			pb, entry := dispatchAckEntry("test/notify/" + tc.name)
+			sub.dispatchDisposition(context.Background(), pb, res, &recordingSettlement{}, entry, time.Now())
+
+			require.Equal(t, 1, count, "SettlementObserver must fire exactly once")
+			assert.Equal(t, tc.disp, gotObs.Disposition, "observation Disposition")
+			assert.Equal(t, tc.wantResult, gotObs.Result, "observation SettlementResult")
+		})
+	}
 }

@@ -32,6 +32,13 @@ const (
 	// in-flight handlers to settle. Mirrors rabbitmq's drain deadline (30s).
 	defaultStopIntakeDrainTimeout = 30 * time.Second
 
+	// stopIntakeInflightPollInterval is the cadence StopIntake polls the inflight
+	// counter while draining. Polling (vs sync.WaitGroup.Wait) avoids the
+	// Add-after-Wait panic (makeReceive runs in autopaho's read-loop callback);
+	// 20ms keeps shutdown latency imperceptible. Mirrors adapters/rabbitmq
+	// stopIntakeInflightPollInterval.
+	stopIntakeInflightPollInterval = 20 * time.Millisecond
+
 	// defaultSubscriberQoS is the MQTT QoS used for SUBSCRIBE when SubscriberConfig
 	// leaves QoS unset. QoS 1 (at-least-once) pairs with the publisher's QoS 1 and
 	// the manual-ack idempotency model.
@@ -110,14 +117,15 @@ type Subscriber struct {
 	config    SubscriberConfig
 	collector SubscriberCollector
 
-	wg     sync.WaitGroup
 	closed atomic.Bool
 
-	// inflight tracks the number of in-flight delivery goroutines for
-	// observability only. wg is the actual drain primitive (sync.WaitGroup has no
-	// readable counter), so inflight is incremented/decremented alongside
-	// wg.Add(1)/wg.Done() purely so the drain-timeout Warn can report the residual
-	// handler count.
+	// inflight is the StopIntake drain primitive: the count of in-flight delivery
+	// callbacks. makeReceive increments it BEFORE the stopIntakeCh check and
+	// decrements via defer; StopIntake polls it to zero. A sync.WaitGroup is
+	// intentionally NOT used — makeReceive runs in autopaho's read-loop callback,
+	// so wg.Add(1) would race StopIntake's wg.Wait ("Add called concurrently with
+	// Wait" panic). Mirrors adapters/rabbitmq's inflight-counter poll-drain
+	// (waitInflightDrain).
 	inflight atomic.Int64
 
 	// closeCh is closed by Close to signal all blocked Subscribe calls to return.
@@ -129,10 +137,14 @@ type Subscriber struct {
 	stopIntakeCh   chan struct{}
 	stopIntakeOnce sync.Once
 
-	// readyMu guards readyChans, the per-topic ready-signal registry. Ready
-	// returns the channel for a topic (creating it lazily); Subscribe closes it
-	// once the SUBSCRIBE for that topic confirms (SUBACK). This is correct even if
-	// Ready is called before Subscribe — both lazily create the same channel.
+	// readyMu guards readyChans, the per-(consumerGroup, topic) ready-signal
+	// registry. Ready returns the channel for a subscription (creating it lazily);
+	// Subscribe closes it once that subscription's SUBSCRIBE confirms (SUBACK).
+	// The key is (consumerGroup, topic), NOT topic alone: two subscriptions on the
+	// same topic with different consumer groups are distinct $share subscriptions
+	// and must have independent ready signals (else group B's Ready would close
+	// when group A's SUBACK arrives). Correct even if Ready is called before
+	// Subscribe — both lazily create the same channel.
 	readyMu    sync.Mutex
 	readyChans map[string]chan struct{}
 
@@ -173,6 +185,14 @@ func NewSubscriber(
 		return nil, errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidTopicNamespace,
 			"mqtt: NewSubscriber requires non-zero TopicNamespace")
 	}
+	// QoS 2 is not supported by the manual-ack idempotency model (which relies on
+	// at-least-once + idempotency keys, not the QoS-2 exactly-once handshake).
+	// Reject it fail-closed at construction rather than silently subscribing at
+	// QoS 2. QoS 0 is permitted (setDefaults promotes it to 1).
+	if config.QoS > 1 {
+		return nil, errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
+			"mqtt: SubscriberConfig.QoS must be 0 or 1; QoS 2 is unsupported by the manual-ack idempotency model")
+	}
 	config.setDefaults()
 	s := &Subscriber{
 		clk:          clk,
@@ -208,24 +228,34 @@ func (s *Subscriber) Setup(_ context.Context, sub outbox.Subscription) error {
 // lazily resolve the same per-topic channel, and Subscribe closes it after
 // conn.Subscribe returns.
 func (s *Subscriber) Ready(sub outbox.Subscription) <-chan struct{} {
-	return s.readyChan(sub.Topic)
+	return s.readyChan(sub.ConsumerGroup, sub.Topic)
 }
 
-// readyChan returns the ready channel for topic, creating it on first access.
-func (s *Subscriber) readyChan(topic string) chan struct{} {
+// readyKey composes the per-subscription ready-registry key. The separator is
+// NUL ("\x00"), which MQTT v5 forbids in topic names/filters (§1.5.4) and which
+// the consumer-group charset (^[a-z0-9_-]+$) excludes, so distinct
+// (group, topic) pairs never collide.
+func readyKey(consumerGroup, topic string) string {
+	return consumerGroup + "\x00" + topic
+}
+
+// readyChan returns the ready channel for (consumerGroup, topic), creating it on
+// first access.
+func (s *Subscriber) readyChan(consumerGroup, topic string) chan struct{} {
+	key := readyKey(consumerGroup, topic)
 	s.readyMu.Lock()
 	defer s.readyMu.Unlock()
-	ch, ok := s.readyChans[topic]
+	ch, ok := s.readyChans[key]
 	if !ok {
 		ch = make(chan struct{})
-		s.readyChans[topic] = ch
+		s.readyChans[key] = ch
 	}
 	return ch
 }
 
-// signalReady closes the ready channel for topic exactly once.
-func (s *Subscriber) signalReady(topic string) {
-	ch := s.readyChan(topic)
+// signalReady closes the ready channel for (consumerGroup, topic) exactly once.
+func (s *Subscriber) signalReady(consumerGroup, topic string) {
+	ch := s.readyChan(consumerGroup, topic)
 	select {
 	case <-ch:
 		// already closed
@@ -267,7 +297,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	}
 	defer cancel()
 	s.trackCancel(cancel)
-	s.signalReady(sub.Topic)
+	s.signalReady(sub.ConsumerGroup, sub.Topic)
 
 	// Block until ctx canceled / subscriber closed. Clean exit returns nil.
 	<-subCtx.Done()
@@ -287,6 +317,13 @@ func (s *Subscriber) trackCancel(cancel func()) {
 // rather than processed during shutdown.
 func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.SubscriberHandler) receiveHandler {
 	return func(ctx context.Context, pb *paho.Publish) {
+		// Count this delivery in-flight BEFORE the stopIntakeCh check so the
+		// StopIntake poll-drain can never read a zero count while a delivery is
+		// mid-flight: inflight is incremented, then decremented via defer, around
+		// the drop decision. This ordering invariant is what lets an atomic
+		// counter replace sync.WaitGroup (whose Add-after-Wait would panic).
+		s.inflight.Add(1)
+		defer s.inflight.Add(-1)
 		select {
 		case <-s.stopIntakeCh:
 			// Intake stopped: do not process or ack. Leaving the message unacked
@@ -297,12 +334,6 @@ func (s *Subscriber) makeReceive(subCtx context.Context, handler outbox.Subscrib
 			return
 		default:
 		}
-		s.wg.Add(1)
-		s.inflight.Add(1)
-		defer func() {
-			s.inflight.Add(-1)
-			s.wg.Done()
-		}()
 		// Prefer the connection-supplied ctx (subscription-scoped); fall back to
 		// subCtx if the read loop hands a nil ctx.
 		deliveryCtx := ctx
@@ -327,7 +358,13 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.Any("error", err))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnmarshal)
-		s.ackPoison(ctx, pb, "unmarshal")
+		// ackPoison logs its own ack failure. The unmarshal path has no Settlement
+		// or SettlementObservers to notify (the handler was never invoked); if the
+		// poison ack itself fails, record a distinct ack-failed metric (the broker
+		// will redeliver the un-decodable message and it will be re-acked).
+		if ackErr := s.ackPoison(ctx, pb, "unmarshal"); ackErr != nil {
+			s.collector.RecordConsumeFailure(ctx, consumeReasonAckFailed)
+		}
 		return
 	}
 
@@ -344,7 +381,7 @@ func (s *Subscriber) dispatchDisposition(
 ) {
 	switch res.Disposition {
 	case outbox.DispositionAck:
-		s.dispatchAck(ctx, pb, settlement, entry, start)
+		s.dispatchAck(ctx, pb, res, settlement, entry, start)
 	case outbox.DispositionReject:
 		// Permanent failure: ack-as-poison (PR-4 adds $dead publish first).
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, acking poison (PR-4 will route to $dead)",
@@ -354,7 +391,11 @@ func (s *Subscriber) dispatchDisposition(
 			slog.Any("error", res.Err))
 		s.releaseSettlement(ctx, settlement, entry, "reject")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonReject)
-		s.ackPoison(ctx, pb, "reject")
+		if ackErr := s.ackPoison(ctx, pb, "reject"); ackErr != nil {
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultAckFailed, ackErr)
+		} else {
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
+		}
 	case outbox.DispositionRequeue:
 		// Transient failure: leave unacked so the broker redelivers; Release the
 		// claim so redelivery can re-enter the Claim cycle cleanly.
@@ -365,6 +406,7 @@ func (s *Subscriber) dispatchDisposition(
 			slog.Any("error", res.Err))
 		s.releaseSettlement(ctx, settlement, entry, "requeue")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonRequeue)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	default:
 		// Zero / invalid Disposition: treat as Requeue (leave unacked) + Release.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unknown disposition, leaving unacked (treated as requeue)",
@@ -374,6 +416,7 @@ func (s *Subscriber) dispatchDisposition(
 			slog.String("disposition", res.Disposition.String()))
 		s.releaseSettlement(ctx, settlement, entry, "unknown")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnknownDisposition)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	}
 }
 
@@ -381,7 +424,10 @@ func (s *Subscriber) dispatchDisposition(
 // is token-guarded and called BEFORE the broker ack: if Commit fails (lease
 // expired), the message is left unacked (broker redelivers) and the claim is
 // released so another holder retries — mirroring rabbitmq dispatchAck.
-func (s *Subscriber) dispatchAck(ctx context.Context, pb *paho.Publish, settlement outbox.Settlement, entry outbox.Entry, start time.Time) {
+func (s *Subscriber) dispatchAck(
+	ctx context.Context, pb *paho.Publish, res outbox.HandleResult,
+	settlement outbox.Settlement, entry outbox.Entry, start time.Time,
+) {
 	if settlement != nil {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.config.SettlementTimeout)
 		commitErr := settlement.Commit(rctx)
@@ -394,6 +440,9 @@ func (s *Subscriber) dispatchAck(ctx context.Context, pb *paho.Publish, settleme
 				slog.Any("error", commitErr))
 			s.releaseSettlement(ctx, settlement, entry, "commit_failed")
 			s.collector.RecordConsumeFailure(ctx, consumeReasonCommitFailed)
+			// Commit failure → message left unacked (broker redelivers). Mirrors
+			// rabbitmq: report as Requeue/commit_failed to settlement observers.
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 			return
 		}
 	}
@@ -406,22 +455,28 @@ func (s *Subscriber) dispatchAck(ctx context.Context, pb *paho.Publish, settleme
 			slog.String(logKeyEventID, entry.ID),
 			slog.Any("error", ackErr))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonAckFailed)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultAckFailed, ackErr)
 		return
 	}
 	s.collector.RecordConsumeSuccess(ctx, s.clk.Since(start))
+	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 }
 
 // ackPoison acks a message that must be consumed-as-poison (unmarshal failure or
 // DispositionReject) so it cannot block intake forever. PR-4 will publish to
-// $dead/<topic> before this ack. Ack errors are logged, not returned.
-func (s *Subscriber) ackPoison(ctx context.Context, pb *paho.Publish, reason string) {
+// $dead/<topic> before this ack. The ack error is logged here and also returned
+// so callers on the Reject path can classify the settlement outcome
+// (SettlementResultAckFailed vs Success) for SettlementObservers.
+func (s *Subscriber) ackPoison(ctx context.Context, pb *paho.Publish, reason string) error {
 	if ackErr := s.conn.ack(pb); ackErr != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: ack of poison message failed",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.String("reason", reason),
 			slog.Any("error", ackErr))
+		return ackErr
 	}
+	return nil
 }
 
 // releaseSettlement releases the idempotency settlement bounded by
@@ -445,36 +500,44 @@ func (s *Subscriber) releaseSettlement(ctx context.Context, settlement outbox.Se
 }
 
 // StopIntake stops new deliveries from being processed (makeReceive drops them
-// for redelivery), cancels active subscriptions (UNSUBSCRIBE), then waits for
-// in-flight handlers to drain bounded by StopIntakeDrainTimeout. Idempotent.
+// for redelivery), cancels active subscriptions (UNSUBSCRIBE), then polls the
+// inflight counter to zero bounded by StopIntakeDrainTimeout. Idempotent.
+//
+// Drain polls the atomic inflight counter rather than sync.WaitGroup.Wait:
+// makeReceive's inflight.Add(1) runs in autopaho's read-loop callback and would
+// race a WaitGroup.Wait ("Add called concurrently with Wait" panic). An atomic
+// counter has no such contract (mirrors adapters/rabbitmq waitInflightDrain).
 //
 // On timeout it returns a wrapped error and logs a Warn with the residual count;
-// unfinished handler goroutines are NOT killed (Go has no goroutine cancel) —
-// Close finalizes via wg.Wait under its own ctx budget.
+// unfinished handler goroutines are NOT killed (Go has no goroutine cancel).
 func (s *Subscriber) StopIntake(ctx context.Context) error {
 	s.stopIntakeOnce.Do(func() { close(s.stopIntakeCh) })
 	s.cancelActiveRoutes(ctx)
 
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-
+	if s.inflight.Load() == 0 {
+		return nil
+	}
 	drainTimer := s.clk.NewTimerAt(s.clk.Now().Add(s.config.StopIntakeDrainTimeout))
 	defer drainTimer.Stop()
-	select {
-	case <-done:
-		return nil
-	case <-drainTimer.C():
-		slog.Warn("mqtt: StopIntake drain timeout, returning fail-closed",
-			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.Duration("budget", s.config.StopIntakeDrainTimeout),
-			slog.Int64("residual", s.inflight.Load()))
-		return errcode.New(errcode.KindInternal, ErrAdapterMQTTSubscriberCloseTimeout,
-			"mqtt: StopIntake drain budget exceeded")
-	case <-ctx.Done():
-		return ctx.Err()
+	for {
+		pollTimer := s.clk.NewTimerAt(s.clk.Now().Add(stopIntakeInflightPollInterval))
+		select {
+		case <-pollTimer.C():
+			if s.inflight.Load() == 0 {
+				return nil
+			}
+		case <-drainTimer.C():
+			pollTimer.Stop()
+			slog.Warn("mqtt: StopIntake drain timeout, returning fail-closed",
+				slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+				slog.Duration("budget", s.config.StopIntakeDrainTimeout),
+				slog.Int64("residual", s.inflight.Load()))
+			return errcode.New(errcode.KindInternal, ErrAdapterMQTTSubscriberCloseTimeout,
+				"mqtt: StopIntake drain budget exceeded")
+		case <-ctx.Done():
+			pollTimer.Stop()
+			return ctx.Err()
+		}
 	}
 }
 

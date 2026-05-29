@@ -307,12 +307,12 @@ func (t publishableTopic) String() string { return t.topic }
 // a filter through SubscribeOK. The single sanctioned holder + sealed
 // construction Hard funnel pattern, same as publishableTopic.
 //
-// Two shapes are retained because the broker delivers PUBLISH packets stripped
-// of the "$share/{group}/" prefix (MQTT v5 §4.8.2), so route matching must use
-// matchFilter, while the SUBSCRIBE packet must carry the full wireFilter.
+// Only the SUBSCRIBE wire form is carried: the broker strips "$share/{group}/"
+// before delivery (MQTT v5 §4.8.2) and tags each PUBLISH with the route's MQTT v5
+// Subscription Identifier, so onPublishReceived routes by sub-id rather than by
+// re-matching the delivered topic against a bare filter.
 type subscribableFilter struct {
-	matchFilter string // broker-delivered topic shape (no $share prefix) — used for route matching
-	wireFilter  string // SUBSCRIBE-packet shape: "$share/{group}/{filter}"
+	wireFilter string // SUBSCRIBE-packet shape: "$share/{group}/{filter}"
 }
 
 // sharedSubPrefix is the MQTT v5 §4.8.2 shared-subscription wire prefix. It is
@@ -322,9 +322,7 @@ const sharedSubPrefix = "$share/"
 
 // MintFilter validates filter against this namespace via SubscribeOK and returns
 // a subscribableFilter whose wireFilter is the MQTT v5 shared-subscription form
-// "$share/{consumerGroup}/{filter}". The matchFilter is the bare filter (the
-// shape the broker delivers, with the $share prefix stripped). consumerGroup
-// must be non-empty.
+// "$share/{consumerGroup}/{filter}". consumerGroup must be non-empty.
 //
 // Returns ErrAdapterMQTTInvalidSubscribeFilter for an empty consumerGroup, or
 // the SubscribeOK error (ErrAdapterMQTTInvalidSubscribeFilter /
@@ -351,8 +349,7 @@ func (n TopicNamespace) MintFilter(consumerGroup, filter string) (subscribableFi
 		return subscribableFilter{}, err
 	}
 	return subscribableFilter{
-		matchFilter: filter,
-		wireFilter:  sharedSubPrefix + consumerGroup + "/" + filter,
+		wireFilter: sharedSubPrefix + consumerGroup + "/" + filter,
 	}, nil
 }
 

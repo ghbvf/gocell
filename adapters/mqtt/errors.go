@@ -184,7 +184,73 @@ const (
 	// subscriber to classify poison messages: the bytes are permanently
 	// undecodable, so the message must be dead-lettered rather than retried.
 	ErrAdapterMQTTUnmarshalEnvelope errcode.Code = "ERR_ADAPTER_MQTT_UNMARSHAL_ENVELOPE"
+
+	// ErrAdapterMQTTAck signals a manual-acknowledgement failure on the receive
+	// path: either no delivering client is available to ack through, or the
+	// broker rejected the manual PUBACK. Distinct from ErrAdapterMQTTSubscribe (a
+	// SUBSCRIBE/SUBACK failure) — ack is a separate operational domain
+	// (post-delivery settlement) and must be classified independently for
+	// operator alerting / metrics. Classified KindUnavailable (transient): the
+	// message will be redelivered and the idempotency key guards reprocessing.
+	ErrAdapterMQTTAck errcode.Code = "ERR_ADAPTER_MQTT_ACK"
+
+	// ErrAdapterMQTTSubscriptionIDsUnsupported signals that the broker returned
+	// SUBACK reason code 0xA1 (Subscription Identifiers Not Supported). GoCell's
+	// subscriber routes each delivered PUBLISH to its originating subscription via
+	// the MQTT v5 Subscription Identifier; a broker that does not support them
+	// cannot disambiguate overlapping consumer-group subscriptions on one
+	// connection, so this is a fail-fast deployment misconfiguration
+	// (KindInternal).
+	ErrAdapterMQTTSubscriptionIDsUnsupported errcode.Code = "ERR_ADAPTER_MQTT_SUBSCRIPTION_IDS_UNSUPPORTED"
 )
+
+// reasonDetailKeyCode / reasonDetailKeyName are the public/internal detail keys
+// carrying an MQTT reason code and its spec name.
+const (
+	reasonDetailKeyCode = "reasonCode"
+	reasonDetailKeyName = "reasonName"
+)
+
+// reasonDetailOptions is the single funnel for constructing errcode details that
+// carry an MQTT reason code + its spec name (CONNACK / SUBACK / PUBACK error
+// builders all route through it). For auth-related reason codes the
+// human-readable name is moved to the Internal channel (server-log only) so it
+// does not help an attacker enumerate "credentials wrong vs authz missing"; only
+// the numeric reasonCode stays in Public details. For non-auth codes both are
+// Public for operator diagnostics.
+//
+// archtest REASON-NAME-REDACTION-01 bans PublicString("reasonName", …) anywhere
+// in adapters/mqtt outside this function, so the auth-redaction decision cannot
+// be re-introduced (or forgotten) per-packet.
+func reasonDetailOptions(reasonCode int, reasonName string, isAuth bool) []errcode.Option {
+	if isAuth {
+		return []errcode.Option{
+			errcode.WithDetails(errcode.PublicInt(reasonDetailKeyCode, reasonCode)),
+			errcode.WithInternal(errcode.InternalAttr(reasonDetailKeyName, reasonName)),
+		}
+	}
+	return []errcode.Option{
+		errcode.WithDetails(
+			errcode.PublicInt(reasonDetailKeyCode, reasonCode),
+			errcode.PublicString(reasonDetailKeyName, reasonName),
+		),
+	}
+}
+
+// isAuthRelatedSubackCode reports whether a SUBACK reason code is auth-related.
+// The only auth-related SUBACK code is 0x87 (Not Authorized); its reason name is
+// moved to the Internal channel by reasonDetailOptions (parallel to the CONNACK
+// auth-code redaction in isAuthRelatedConnackCode).
+func isAuthRelatedSubackCode(code byte) bool {
+	return code == 0x87
+}
+
+// isAuthRelatedPubackCode reports whether a PUBACK reason code is auth-related.
+// The only auth-related PUBACK code is 0x87 (Not Authorized); its reason name is
+// moved to the Internal channel by reasonDetailOptions.
+func isAuthRelatedPubackCode(code byte) bool {
+	return code == 0x87
+}
 
 // connackClass classifies an OnConnectError into one of three categories.
 // The classification drives autopaho reconnect behavior and the readyz probe.
@@ -369,9 +435,9 @@ func pubackReasonName(code byte) string {
 //	0x87 NotAuthorized                     → (ErrAdapterMQTTSubscribeNotAuthorized, KindInternal)   — ACL config; fail-fast
 //	0x8F TopicFilterInvalid                → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
 //	0x97 QuotaExceeded                     → (ErrAdapterMQTTSubscribeRateLimited,  KindUnavailable) — transient
-//	0x9E SharedSubsNotSupported            → (ErrAdapterMQTTSharedSubsUnsupported, KindInternal)    — fail-fast
-//	0xA1 SubscriptionIdsNotSupported       → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
-//	0xA2 WildcardSubsNotSupported          → (ErrAdapterMQTTSubscribe,             KindInternal)    — fail-fast
+//	0x9E SharedSubsNotSupported            → (ErrAdapterMQTTSharedSubsUnsupported,      KindInternal) — fail-fast
+//	0xA1 SubscriptionIdsNotSupported       → (ErrAdapterMQTTSubscriptionIDsUnsupported, KindInternal) — fail-fast (sub-id routing required)
+//	0xA2 WildcardSubsNotSupported          → (ErrAdapterMQTTSubscribe,                  KindInternal) — fail-fast
 //	default (>= 0x80)                       → (ErrAdapterMQTTSubscribe,             KindInternal)
 //
 // Reason bytes < 0x80 are granted-QoS success values (0x00/0x01/0x02); the caller
@@ -391,8 +457,8 @@ func classifySubackReason(code byte) (errcode.Code, errcode.Kind) {
 		return ErrAdapterMQTTSubscribeRateLimited, errcode.KindUnavailable
 	case 0x9E: // Shared Subscriptions Not Supported
 		return ErrAdapterMQTTSharedSubsUnsupported, errcode.KindInternal
-	case 0xA1: // Subscription Identifiers Not Supported
-		return ErrAdapterMQTTSubscribe, errcode.KindInternal
+	case 0xA1: // Subscription Identifiers Not Supported — fail-fast (sub-id routing is required)
+		return ErrAdapterMQTTSubscriptionIDsUnsupported, errcode.KindInternal
 	case 0xA2: // Wildcard Subscriptions Not Supported
 		return ErrAdapterMQTTSubscribe, errcode.KindInternal
 	default:

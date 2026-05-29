@@ -19,54 +19,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// topicFilterMatches table (pure unit, no broker)
-// ---------------------------------------------------------------------------
-
-func TestTopicFilterMatches(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name   string
-		filter string
-		topic  string
-		want   bool
-	}{
-		// exact
-		{"exact-single-level", "ns", "ns", true},
-		{"exact-multi-level", "ns/a/b", "ns/a/b", true},
-		{"exact-mismatch", "ns/a/b", "ns/a/c", false},
-		{"exact-extra-topic-level", "ns/a", "ns/a/b", false},
-		{"exact-extra-filter-level", "ns/a/b", "ns/a", false},
-		// "+" single-level wildcard
-		{"plus-middle", "ns/+/b", "ns/x/b", true},
-		{"plus-head", "+/a/b", "ns/a/b", true},
-		{"plus-tail", "ns/a/+", "ns/a/x", true},
-		{"plus-must-be-single-level", "ns/+", "ns/a/b", false},
-		{"plus-no-level-to-match", "ns/+/b", "ns", false},
-		{"plus-empty-level-matches", "ns/+/b", "ns//b", true},
-		// "#" multi-level wildcard
-		{"hash-tail-matches-deeper", "ns/#", "ns/a/b/c", true},
-		{"hash-tail-matches-one", "ns/#", "ns/a", true},
-		{"hash-matches-parent-level", "ns/#", "ns", true},
-		{"hash-root", "#", "anything/at/all", true},
-		{"hash-after-plus", "ns/+/#", "ns/a/b/c", true},
-		{"hash-after-plus-needs-plus-level", "ns/+/#", "ns", false},
-		// non-match across namespaces
-		{"different-namespace", "ns/#", "other/a", false},
-		{"different-first-level", "ns/a", "other/a", false},
-	}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := topicFilterMatches(tc.filter, tc.topic)
-			if got != tc.want {
-				t.Errorf("topicFilterMatches(%q, %q) = %v, want %v", tc.filter, tc.topic, got, tc.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // route registry (register/deregister) — pure unit, no broker
 // ---------------------------------------------------------------------------
 
@@ -113,37 +65,64 @@ func TestConnection_RouteRegistry(t *testing.T) {
 // onPublishReceived dispatch — pure unit, no broker
 // ---------------------------------------------------------------------------
 
+// pubWithSubID builds a delivered PUBLISH carrying the given MQTT v5 Subscription
+// Identifier (or none when subID == 0).
+func pubWithSubID(topic string, subID int) *paho.Publish {
+	pb := &paho.Publish{Topic: topic, Payload: []byte("x")}
+	if subID != 0 {
+		id := subID
+		pb.Properties = &paho.PublishProperties{SubscriptionIdentifier: &id}
+	}
+	return pb
+}
+
+// TestConnection_OnPublishReceived_Dispatch verifies sub-id routing: a delivered
+// PUBLISH is dispatched to the SINGLE route whose subID matches the delivered
+// Subscription Identifier — the F1 regression guard. Two routes on the SAME
+// topic with DIFFERENT consumer groups (distinct subIDs) must NOT both fire for
+// one delivery (the old matchFilter fanout bug).
 func TestConnection_OnPublishReceived_Dispatch(t *testing.T) {
 	t.Parallel()
 	ns, err := ParseTopicNamespace("ns")
 	require.NoError(t, err)
-	f, err := ns.MintFilter("cg", "ns/+/temp")
+	fA, err := ns.MintFilter("cg-a", "ns/+/temp")
+	require.NoError(t, err)
+	fB, err := ns.MintFilter("cg-b", "ns/+/temp") // same topic filter, different group
 	require.NoError(t, err)
 
 	var mu sync.Mutex
-	var got []string
-	dispatch := func(pb *paho.Publish) {
-		mu.Lock()
-		got = append(got, pb.Topic)
-		mu.Unlock()
-	}
-
+	var gotA, gotB []string
 	c := &Connection{}
-	c.registerRoute(mqttRoute{filter: f, dispatch: dispatch})
+	c.registerRoute(mqttRoute{subID: 1, filter: fA, dispatch: func(pb *paho.Publish) {
+		mu.Lock()
+		gotA = append(gotA, pb.Topic)
+		mu.Unlock()
+	}})
+	c.registerRoute(mqttRoute{subID: 2, filter: fB, dispatch: func(pb *paho.Publish) {
+		mu.Lock()
+		gotB = append(gotB, pb.Topic)
+		mu.Unlock()
+	}})
 
-	// Matching topic — handler invoked, returns matched=true.
-	matched, hErr := c.onPublishReceived(paho.PublishReceived{
-		Packet: &paho.Publish{Topic: "ns/room1/temp", Payload: []byte("x")},
-	})
+	// Delivery tagged with sub-id 1 → ONLY route A fires (no fanout to B).
+	matched, hErr := c.onPublishReceived(paho.PublishReceived{Packet: pubWithSubID("ns/room1/temp", 1)})
 	require.NoError(t, hErr)
-	assert.True(t, matched, "expected matched=true for matching topic")
+	assert.True(t, matched)
 
-	// Non-matching topic — no handler call, matched=false.
-	matched, hErr = c.onPublishReceived(paho.PublishReceived{
-		Packet: &paho.Publish{Topic: "ns/room1/humidity", Payload: []byte("y")},
-	})
+	// Delivery tagged with sub-id 2 → ONLY route B fires.
+	matched, hErr = c.onPublishReceived(paho.PublishReceived{Packet: pubWithSubID("ns/room2/temp", 2)})
 	require.NoError(t, hErr)
-	assert.False(t, matched, "expected matched=false for non-matching topic")
+	assert.True(t, matched)
+
+	// Unknown sub-id (route deregistered) → dropped, matched=false.
+	matched, hErr = c.onPublishReceived(paho.PublishReceived{Packet: pubWithSubID("ns/room1/temp", 99)})
+	require.NoError(t, hErr)
+	assert.False(t, matched, "unknown sub-id must not dispatch")
+
+	// Missing sub-id → fail-closed drop (would risk cross-group misdelivery).
+	matched, hErr = c.onPublishReceived(paho.PublishReceived{Packet: pubWithSubID("ns/room1/temp", 0)})
+	require.NoError(t, hErr)
+	assert.False(t, matched, "missing sub-id must fail-closed (no dispatch)")
 
 	// Nil packet — defensive no-op.
 	matched, hErr = c.onPublishReceived(paho.PublishReceived{Packet: nil})
@@ -152,7 +131,8 @@ func TestConnection_OnPublishReceived_Dispatch(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, []string{"ns/room1/temp"}, got)
+	assert.Equal(t, []string{"ns/room1/temp"}, gotA, "route A fired exactly once (sub-id 1 only)")
+	assert.Equal(t, []string{"ns/room2/temp"}, gotB, "route B fired exactly once (sub-id 2 only)")
 }
 
 // fakeAcker records the publishes it was asked to ack and can be configured to
@@ -187,7 +167,7 @@ func TestConnection_Ack_RoutesThroughAckClient(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
-		assert.Equal(t, ErrAdapterMQTTSubscribe, ec.Code)
+		assert.Equal(t, ErrAdapterMQTTAck, ec.Code)
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -208,7 +188,7 @@ func TestConnection_Ack_RoutesThroughAckClient(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.True(t, errors.As(err, &ec))
-		assert.Equal(t, ErrAdapterMQTTSubscribe, ec.Code)
+		assert.Equal(t, ErrAdapterMQTTAck, ec.Code)
 	})
 
 	t.Run("closed-connection", func(t *testing.T) {
@@ -276,6 +256,56 @@ func TestSubackError(t *testing.T) {
 			assert.Equal(t, tc.wantCode, ec.Code)
 		})
 	}
+}
+
+// TestSubackError_AuthCodeRedaction (F11) verifies the SUBACK error path applies
+// the same auth-code reasonName redaction as CONNACK: for 0x87 (Not Authorized)
+// the human-readable reasonName is moved to the Internal channel (server logs
+// only) and only the numeric reasonCode stays in Public details; for non-auth
+// codes the reasonName stays Public for operator diagnostics.
+func TestSubackError_AuthCodeRedaction(t *testing.T) {
+	t.Parallel()
+
+	t.Run("auth-0x87-reasonName-internal-only", func(t *testing.T) {
+		t.Parallel()
+		err := subackError(&paho.Suback{Reasons: []byte{0x87}})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		_, hasName := ec.FindAttr("reasonName")
+		assert.False(t, hasName, "auth-related SUBACK reasonName must NOT be in Public details")
+		_, hasCode := ec.FindAttr("reasonCode")
+		assert.True(t, hasCode, "numeric reasonCode must remain in Public details")
+		// reasonName must still be server-side observable via the Internal channel.
+		assert.Contains(t, ec.Error(), "NotAuthorized",
+			"reasonName must be carried in the Internal channel (server logs)")
+	})
+
+	t.Run("non-auth-0x9E-reasonName-public", func(t *testing.T) {
+		t.Parallel()
+		err := subackError(&paho.Suback{Reasons: []byte{0x9E}})
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec))
+		_, hasName := ec.FindAttr("reasonName")
+		assert.True(t, hasName, "non-auth SUBACK reasonName stays in Public details for diagnostics")
+	})
+}
+
+// TestConnection_Health_SurfacesResubscribeError (F8) verifies that a
+// resubscribe-after-reconnect failure makes Health report degraded even while
+// the connection phase is phaseConnected — so readyz does not show green while
+// the broker has no subscription for a route.
+func TestConnection_Health_SurfacesResubscribeError(t *testing.T) {
+	t.Parallel()
+	c := &Connection{phase: phaseConnected}
+	require.NoError(t, c.Health(context.Background()), "connected + no resubscribe error → healthy")
+
+	wantErr := errcode.New(errcode.KindInternal, ErrAdapterMQTTSubscribe, "mqtt: resubscribe failed")
+	c.lastResubscribeErr = wantErr
+	got := c.Health(context.Background())
+	require.Error(t, got, "resubscribe failure must surface as a degraded Health result")
+	assert.Equal(t, wantErr, got)
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +455,12 @@ func TestConnection_Subscribe_ResubscribeOnReconnect(t *testing.T) {
 	require.NoError(t, subErr)
 	defer cancel()
 
+	// Pre-seed a stale resubscribe error to prove a successful resubscribe clears
+	// it (F8: Health must not stay degraded after recovery).
+	conn.mu.Lock()
+	conn.lastResubscribeErr = errors.New("stale-precondition")
+	conn.mu.Unlock()
+
 	// Simulate a reconnect: onConnectionUp re-arms every route via resubscribeAll.
 	// This is the same path autopaho invokes on a real reconnect. It must not
 	// panic / deadlock and must leave the route subscribed.
@@ -434,6 +470,9 @@ func TestConnection_Subscribe_ResubscribeOnReconnect(t *testing.T) {
 	conn.subMu.RLock()
 	require.Len(t, conn.routes, 1)
 	conn.subMu.RUnlock()
+
+	// A fully-successful resubscribe pass clears lastResubscribeErr → Health nil.
+	require.NoError(t, conn.Health(ctx), "successful resubscribe must clear the degraded Health signal")
 
 	// Delivery still works after the resubscribe.
 	pt, err := ns.Mint("test/resub/x")

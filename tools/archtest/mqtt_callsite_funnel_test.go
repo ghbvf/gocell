@@ -101,9 +101,8 @@
 //     attributes it to the Subscribe FuncDecl.
 //   - S3 MintFilter construction allowlist (Medium): `subscribableFilter{...}`
 //     composite literal in adapters/mqtt production files ⊆ {TopicNamespace.MintFilter
-//     body} + field-assignment blind-spot (no `x.matchFilter = …` / `x.wireFilter = …`
-//     outside MintFilter) + reflect field-freeze (NumField()==2, fields
-//     "matchFilter"/"wireFilter", both string, unexported).
+//     body} + field-assignment blind-spot (no `x.wireFilter = …` outside MintFilter)
+//   - reflect field-freeze (NumField()==1, field "wireFilter", string, unexported).
 //   - S4 method-value blind-spot (Hard reverse self-check): no `cm.Subscribe` /
 //     `cm.Unsubscribe` as non-call SelectorExpr in production AST.
 //   - S5 method-expression blind-spot (Hard reverse self-check): no
@@ -587,14 +586,14 @@ func TestMQTTPublishCallsiteFunnel_A2b_NoFieldAssignmentBypass(t *testing.T) {
 }
 
 // TestMQTTSubscribeCallsiteFunnel_S3_NoFieldAssignmentBypass bans any assignment
-// to a subscribableFilter matchFilter/wireFilter field outside the MintFilter body.
+// to a subscribableFilter wireFilter field outside the MintFilter body.
 func TestMQTTSubscribeCallsiteFunnel_S3_NoFieldAssignmentBypass(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	diags := scanMQTTTokenFieldAssignment(t, "subscribableFilter",
-		[]string{"matchFilter", "wireFilter"}, "MintFilter", "MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
+		[]string{"wireFilter"}, "MintFilter", "MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 	assert.Empty(t, diags,
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3: subscribableFilter field assignment outside MintFilter detected")
 }
@@ -732,15 +731,17 @@ func TestMQTTPublishCallsiteFunnel_A3_PublishableTopicFieldFreeze(t *testing.T) 
 }
 
 // TestMQTTSubscribeCallsiteFunnel_S3_SubscribableFilterFieldFreeze locks the
-// shape of subscribableFilter: NumFields==2, fields "matchFilter"/"wireFilter",
-// both string, unexported.
+// shape of subscribableFilter: NumFields==1, field "wireFilter", string,
+// unexported. (matchFilter was removed when dispatch moved to MQTT v5
+// Subscription Identifiers — the broker matches the topic, the client routes by
+// sub-id, so a client-side bare-filter shape is no longer carried.)
 func TestMQTTSubscribeCallsiteFunnel_S3_SubscribableFilterFieldFreeze(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	mqttAssertTokenFieldFreeze(t, "subscribableFilter",
-		[]mqttFieldSpec{{name: "matchFilter"}, {name: "wireFilter"}},
+		[]mqttFieldSpec{{name: "wireFilter"}},
 		"MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01/S3")
 }
 
