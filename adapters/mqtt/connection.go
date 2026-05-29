@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,55 @@ type Connection struct {
 	// firstUp tracks whether the first OnConnectionUp has fired (for reconnect
 	// metric: the very first successful connection is NOT counted as a reconnect).
 	firstUp bool
+
+	// subMu guards the routes slice. It is a DEDICATED mutex (not c.mu) so that
+	// onConnectionUp can snapshot routes and resubscribe without contending with
+	// the connectivity state machine, and so the onPublishReceived callback path
+	// (called by autopaho's read loop) never blocks on c.mu.
+	subMu sync.RWMutex
+	// routes is the registry of active subscriptions. onPublishReceived fans an
+	// incoming PUBLISH out to every route whose matchFilter matches the topic;
+	// onConnectionUp re-arms every route after a reconnect.
+	routes []mqttRoute
+
+	// ackClient is the paho.Client that delivered the most recent PUBLISH. The
+	// autopaho v0.23.0 ConnectionManager does NOT expose Ack; manual
+	// acknowledgement is performed via the *paho.Client carried on the received
+	// PublishReceived. onPublishReceived captures it under subMu so
+	// (*Connection).ack — the sole sanctioned ack callsite — can route through
+	// it. ackClient is refreshed on every delivery (the client instance is
+	// stable for the lifetime of a connection and replaced on reconnect).
+	ackClient mqttAcker
+}
+
+// mqttAcker is the minimal manual-acknowledgement surface GoCell needs from a
+// paho client (paho.Client implements it via Ack(*paho.Publish) error). It is
+// an interface so unit tests can substitute a fake without a live broker
+// connection, and so (*Connection).ack depends only on the ack capability.
+type mqttAcker interface {
+	Ack(pb *paho.Publish) error
+}
+
+// receiveHandler is invoked for each received PUBLISH that matches a route's
+// filter. ctx is the subscription ctx captured at Subscribe time. The handler
+// must NOT block the autopaho read loop for long; it is the subscriber's
+// responsibility to hand off to a worker if processing is slow. The handler is
+// also responsible for acking via Connection.ack (this layer does not ack).
+type receiveHandler func(ctx context.Context, pb *paho.Publish)
+
+// mqttRoute is one registered subscription: the validated filter, the requested
+// QoS (used to re-arm the SUBSCRIBE on reconnect), and a dispatch closure that
+// fans a matching PUBLISH to the user handler.
+//
+// The subscription ctx is intentionally NOT stored as a struct field — GoCell
+// forbids context.Context in production struct fields (golangci containedctx,
+// active repo-wide). Subscribe captures the ctx into the dispatch closure
+// instead, so the handler still observes subscription-scoped cancellation while
+// the struct stays ctx-free.
+type mqttRoute struct {
+	qos      byte
+	filter   subscribableFilter
+	dispatch func(pb *paho.Publish)
 }
 
 // ConnectionOption configures optional behavior of a Connection.
@@ -166,8 +216,12 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 		OnConnectionDown:     c.onConnectionDown,
 		OnConnectError:       c.onConnectError,
 		ClientConfig: paho.ClientConfig{
-			ClientID:           cfg.ClientID.String(),
-			OnServerDisconnect: c.onServerDisconnect,
+			ClientID:                   cfg.ClientID.String(),
+			OnServerDisconnect:         c.onServerDisconnect,
+			EnableManualAcknowledgment: true,
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
+				c.onPublishReceived,
+			},
 		},
 	}
 
@@ -273,6 +327,37 @@ func (c *Connection) onConnectionUp(_ *autopaho.ConnectionManager, _ *paho.Conna
 	slog.Info("mqtt: connection established",
 		slog.String("client_id", c.cfg.ClientID.String()),
 		slog.Bool("reconnect", isReconnect))
+
+	// Re-arm all registered subscriptions. autopaho does not replay SUBSCRIBE
+	// packets on reconnect (a clean session loses the broker-side subscription
+	// state), so we resend every route. This runs for the first Up too — but at
+	// that point routes is empty (Subscribe has not been called yet), so it is a
+	// no-op. MUST run without holding c.mu or subMu during the cm.Subscribe call.
+	c.resubscribeAll()
+}
+
+// resubscribeAll snapshots the route registry under subMu.RLock, releases the
+// lock, then re-sends a SUBSCRIBE for each route via sendSubscribe. It is called
+// from onConnectionUp to recover subscriptions after a reconnect. Errors are
+// logged (no caller to return them to); the route stays registered so a later
+// reconnect retries it.
+func (c *Connection) resubscribeAll() {
+	c.subMu.RLock()
+	snapshot := make([]mqttRoute, len(c.routes))
+	copy(snapshot, c.routes)
+	c.subMu.RUnlock()
+
+	for _, route := range snapshot {
+		// Reconnect recovery is connection-scoped, not subscription-scoped, so a
+		// background ctx is used for the resubscribe round-trip (autopaho's
+		// per-call PacketTimeout still bounds it).
+		if err := c.sendSubscribe(context.Background(), route.filter, route.qos); err != nil {
+			slog.Warn("mqtt: resubscribe after reconnect failed; will retry on next reconnect",
+				slog.String("client_id", c.cfg.ClientID.String()),
+				slog.String("filter", route.filter.String()),
+				slog.Any("error", redactErr(err)))
+		}
+	}
 }
 
 // onConnectionDown is called by autopaho when an established connection is lost.
@@ -452,6 +537,213 @@ func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []
 	})
 }
 
+// onPublishReceived is the global received-PUBLISH callback wired into
+// paho.ClientConfig.OnPublishReceived. It snapshots the route registry under
+// subMu.RLock and dispatches the packet to every route whose matchFilter
+// matches the packet topic. It returns (true, nil) if at least one route
+// matched (signaling to autopaho that the packet was handled), else
+// (false, nil). It does NOT ack — the subscriber acks via Connection.ack after
+// processing, since EnableManualAcknowledgment is true.
+func (c *Connection) onPublishReceived(pr paho.PublishReceived) (bool, error) {
+	pb := pr.Packet
+	if pb == nil {
+		return false, nil
+	}
+	c.subMu.Lock()
+	if pr.Client != nil {
+		c.ackClient = pr.Client
+	}
+	snapshot := make([]mqttRoute, len(c.routes))
+	copy(snapshot, c.routes)
+	c.subMu.Unlock()
+
+	matched := false
+	for _, route := range snapshot {
+		if topicFilterMatches(route.filter.matchFilter, pb.Topic) {
+			matched = true
+			route.dispatch(pb)
+		}
+	}
+	return matched, nil
+}
+
+// topicFilterMatches reports whether an MQTT topic-filter matches a concrete
+// topic. It implements MQTT v5 §4.7 wildcard semantics:
+//   - "+" matches exactly one topic level
+//   - "#" matches the remaining levels (must be the last level in the filter)
+//   - all other level tokens must match exactly
+//
+// filter here is the bare matchFilter (the broker strips "$share/{group}/"
+// before delivery, so no shared-subscription prefix appears).
+func topicFilterMatches(filter, topic string) bool {
+	fLevels := strings.Split(filter, "/")
+	tLevels := strings.Split(topic, "/")
+
+	for i, fl := range fLevels {
+		if fl == "#" {
+			// "#" matches the rest (including zero levels); must be last.
+			return true
+		}
+		if i >= len(tLevels) {
+			// Filter has more levels than the topic and the current level is
+			// not "#": no match.
+			return false
+		}
+		if fl == "+" {
+			continue // single-level wildcard matches any one level
+		}
+		if fl != tLevels[i] {
+			return false
+		}
+	}
+	// All filter levels consumed; match iff the topic has no extra levels.
+	return len(fLevels) == len(tLevels)
+}
+
+// sendSubscribe is the SOLE callsite of c.cm.Subscribe in this package. Both
+// (*Connection).Subscribe (initial subscribe) and resubscribeAll (reconnect
+// recovery) route through here so the cm.Subscribe literal lives in exactly one
+// function body — keeping the MQTT subscribe callsite funnel single-site.
+// It sends a SUBSCRIBE for f.wireFilter at the requested QoS and inspects the
+// returned SUBACK reasons: any reason byte >= 0x80 is mapped via
+// classifySubackReason into an errcode error. It does NOT touch the route
+// registry (callers own registration).
+func (c *Connection) sendSubscribe(ctx context.Context, f subscribableFilter, qos byte) error {
+	suback, err := c.cm.Subscribe(ctx, &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{{Topic: f.wireFilter, QoS: qos}},
+	})
+	if err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
+			"mqtt: subscribe request failed", err)
+	}
+	return subackError(suback)
+}
+
+// subackError inspects a SUBACK's reason bytes and returns a classified error
+// for the first reason byte >= 0x80, or nil if all reasons are granted-QoS
+// success values. Extracted to keep sendSubscribe's cognitive complexity low.
+func subackError(suback *paho.Suback) error {
+	if suback == nil {
+		return nil
+	}
+	for _, reason := range suback.Reasons {
+		if reason < 0x80 {
+			continue
+		}
+		code, kind := classifySubackReason(reason)
+		return errcode.New(kind, code,
+			"mqtt: broker rejected subscription",
+			errcode.WithDetails(
+				errcode.PublicInt("reasonCode", int(reason)),
+				errcode.PublicString("reasonName", subackReasonName(reason)),
+			))
+	}
+	return nil
+}
+
+// Subscribe registers a route and sends a SUBSCRIBE for the (already validated)
+// subscribableFilter. It is the public entry for the receive path. The
+// subscribableFilter argument carries a filter that has already been validated
+// against the caller's TopicNamespace via TopicNamespace.MintFilter.
+//
+// On success it returns a cancel closure that deregisters the route and sends an
+// UNSUBSCRIBE for the filter's wire form. The cancel closure is idempotent-safe
+// to call once; calling Close also unsubscribes all routes.
+//
+// On SUBACK rejection (reason byte >= 0x80) or transport failure, the route is
+// deregistered and a classified error is returned.
+//
+// ctx is captured into the route's dispatch closure and passed to the handler on
+// each delivery; callers should pass a ctx whose cancellation should stop
+// handler dispatch.
+func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos byte, h receiveHandler) (cancel func(), err error) {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+			"mqtt: connection is closed")
+	}
+
+	// Capture the subscription ctx + handler into a dispatch closure so the
+	// route struct stays ctx-free (containedctx convention) while the handler
+	// still observes subscription-scoped cancellation.
+	route := mqttRoute{
+		qos:    qos,
+		filter: f,
+		dispatch: func(pb *paho.Publish) {
+			h(ctx, pb)
+		},
+	}
+	c.registerRoute(route)
+
+	if subErr := c.sendSubscribe(ctx, f, qos); subErr != nil {
+		c.deregisterRoute(f.wireFilter)
+		return nil, subErr
+	}
+
+	cancel = func() {
+		c.deregisterRoute(f.wireFilter)
+		if _, unsubErr := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{
+			Topics: []string{f.wireFilter},
+		}); unsubErr != nil {
+			slog.Warn("mqtt: unsubscribe on cancel failed",
+				slog.String("client_id", c.cfg.ClientID.String()),
+				slog.String("filter", f.String()),
+				slog.Any("error", redactErr(unsubErr)))
+		}
+	}
+	return cancel, nil
+}
+
+// registerRoute appends a route under subMu.Lock.
+func (c *Connection) registerRoute(route mqttRoute) {
+	c.subMu.Lock()
+	c.routes = append(c.routes, route)
+	c.subMu.Unlock()
+}
+
+// deregisterRoute removes the route whose filter wire form equals wireFilter,
+// under subMu.Lock. No-op if not found.
+func (c *Connection) deregisterRoute(wireFilter string) {
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+	for i := range c.routes {
+		if c.routes[i].filter.wireFilter == wireFilter {
+			c.routes = append(c.routes[:i], c.routes[i+1:]...)
+			return
+		}
+	}
+}
+
+// ack is the SOLE manual-acknowledgement callsite in this package. The
+// subscriber calls it after successfully processing a received PUBLISH
+// (EnableManualAcknowledgment is true). autopaho v0.23.0's ConnectionManager
+// does not expose Ack, so ack routes through the *paho.Client captured by
+// onPublishReceived (stored in c.ackClient). It is unexported; the subscriber
+// (later PR) holds a *Connection.
+func (c *Connection) ack(pb *paho.Publish) error {
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+			"mqtt: connection is closed")
+	}
+	c.subMu.RLock()
+	acker := c.ackClient
+	c.subMu.RUnlock()
+	if acker == nil {
+		return errcode.New(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
+			"mqtt: no delivering client available for ack")
+	}
+	if err := acker.Ack(pb); err != nil {
+		return errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTSubscribe,
+			"mqtt: manual ack failed", err)
+	}
+	return nil
+}
+
 // Health returns the current readiness of the connection:
 //   - nil         — phaseConnected and no permanent error
 //   - ErrClosed   — the Connection has been explicitly closed (non-transient)
@@ -498,9 +790,34 @@ func (c *Connection) Close(ctx context.Context) error {
 	c.broadcastStateLocked()
 	c.mu.Unlock()
 
+	c.unsubscribeAll(ctx)
+
 	return adapterutil.CloseWithDeadline(ctx, "mqtt", func() error {
 		return c.cm.Disconnect(ctx)
 	})
+}
+
+// unsubscribeAll best-effort sends an UNSUBSCRIBE for every registered route's
+// wire filter before disconnect. It is one of the two sanctioned callsites of
+// c.cm.Unsubscribe (the other is the cancel closure returned by Subscribe).
+// Errors are logged, not returned — Close proceeds to Disconnect regardless.
+func (c *Connection) unsubscribeAll(ctx context.Context) {
+	c.subMu.Lock()
+	filters := make([]string, 0, len(c.routes))
+	for i := range c.routes {
+		filters = append(filters, c.routes[i].filter.wireFilter)
+	}
+	c.routes = nil
+	c.subMu.Unlock()
+
+	if len(filters) == 0 {
+		return
+	}
+	if _, err := c.cm.Unsubscribe(ctx, &paho.Unsubscribe{Topics: filters}); err != nil {
+		slog.Warn("mqtt: unsubscribe-all on close failed",
+			slog.String("client_id", c.cfg.ClientID.String()),
+			slog.Any("error", redactErr(err)))
+	}
 }
 
 // Probes returns the singleton readiness probe for the MQTT connection.

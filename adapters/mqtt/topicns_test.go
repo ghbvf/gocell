@@ -397,6 +397,161 @@ func TestTopicNamespace_Mint_ZeroNS(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// subscribableFilter / TopicNamespace.MintFilter tests (PR-3 foundation)
+// ---------------------------------------------------------------------------
+
+// TestTopicNamespace_MintFilter_Success verifies that MintFilter returns a
+// subscribableFilter whose matchFilter is the bare filter and whose wireFilter
+// is the MQTT v5 "$share/{group}/{filter}" shared-subscription form.
+func TestTopicNamespace_MintFilter_Success(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		group     string
+		filter    string
+		wantMatch string
+		wantWire  string
+	}{
+		{"exact", "cg1", "ns", "ns", "$share/cg1/ns"},
+		{"subpath", "cg1", "ns/a/b", "ns/a/b", "$share/cg1/ns/a/b"},
+		{"single-level-wildcard", "cg2", "ns/+/x", "ns/+/x", "$share/cg2/ns/+/x"},
+		{"multi-level-wildcard", "cg3", "ns/#", "ns/#", "$share/cg3/ns/#"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, err := ns.MintFilter(tc.group, tc.filter)
+			if err != nil {
+				t.Fatalf("MintFilter(%q,%q) unexpected error: %v", tc.group, tc.filter, err)
+			}
+			if f.matchFilter != tc.wantMatch {
+				t.Errorf("matchFilter = %q, want %q", f.matchFilter, tc.wantMatch)
+			}
+			if f.wireFilter != tc.wantWire {
+				t.Errorf("wireFilter = %q, want %q", f.wireFilter, tc.wantWire)
+			}
+			if f.String() != tc.wantWire {
+				t.Errorf("String() = %q, want %q", f.String(), tc.wantWire)
+			}
+		})
+	}
+}
+
+// TestTopicNamespace_MintFilter_EmptyGroup verifies that an empty consumerGroup
+// is rejected with ErrAdapterMQTTInvalidSubscribeFilter.
+func TestTopicNamespace_MintFilter_EmptyGroup(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	f, err := ns.MintFilter("", "ns/a")
+	if err == nil {
+		t.Fatal("MintFilter(empty group) expected error, got nil")
+	}
+	if f != (subscribableFilter{}) {
+		t.Errorf("MintFilter(empty group) returned non-zero filter: %v", f)
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidSubscribeFilter {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidSubscribeFilter)
+	}
+}
+
+// TestTopicNamespace_MintFilter_SubscribeOKFailure verifies that a filter
+// rejected by SubscribeOK (wildcard misplacement / outside namespace) returns
+// the zero subscribableFilter and a non-nil error.
+func TestTopicNamespace_MintFilter_SubscribeOKFailure(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	cases := []struct {
+		name     string
+		filter   string
+		wantCode errcode.Code
+	}{
+		{"hash-not-at-tail", "ns/#/x", ErrAdapterMQTTInvalidSubscribeFilter},
+		{"outside-namespace", "other/#", ErrAdapterMQTTTopicOutsideNamespace},
+		{"empty-filter", "", ErrAdapterMQTTInvalidSubscribeFilter},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, err := ns.MintFilter("cg", tc.filter)
+			if err == nil {
+				t.Fatalf("MintFilter(%q) expected error, got nil", tc.filter)
+			}
+			if f != (subscribableFilter{}) {
+				t.Errorf("MintFilter(%q) returned non-zero filter: %v", tc.filter, f)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != tc.wantCode {
+				t.Errorf("code = %s, want %s", ec.Code, tc.wantCode)
+			}
+		})
+	}
+}
+
+// TestTopicNamespace_MintFilter_ZeroNS verifies that MintFilter on a zero-value
+// namespace returns ErrAdapterMQTTInvalidTopicNamespace (via SubscribeOK's
+// zero-receiver guard).
+func TestTopicNamespace_MintFilter_ZeroNS(t *testing.T) {
+	t.Parallel()
+	var ns TopicNamespace
+	_, err := ns.MintFilter("cg", "x")
+	if err == nil {
+		t.Fatal("MintFilter on zero-value namespace expected error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidTopicNamespace {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidTopicNamespace)
+	}
+}
+
+// TestSubscribableFilter_FieldFreeze locks the subscribableFilter struct shape:
+// exactly two unexported string fields (matchFilter, wireFilter). Any drift
+// (rename, type change, export, new field) fails this test before it could
+// silently break the sealed-construction invariant.
+func TestSubscribableFilter_FieldFreeze(t *testing.T) {
+	t.Parallel()
+	rt := reflect.TypeOf(subscribableFilter{})
+	if rt.NumField() != 2 {
+		t.Fatalf("subscribableFilter NumField = %d, want 2", rt.NumField())
+	}
+	wantNames := []string{"matchFilter", "wireFilter"}
+	for i, want := range wantNames {
+		f := rt.Field(i)
+		if f.Name != want {
+			t.Errorf("field[%d].Name = %q, want %q", i, f.Name, want)
+		}
+		if f.Type.Kind() != reflect.String {
+			t.Errorf("field[%d].Type = %v, want string", i, f.Type.Kind())
+		}
+		if f.IsExported() {
+			t.Errorf("field[%d] is exported; want unexported", i)
+		}
+	}
+}
+
 // TestPublishableTopic_FieldFreeze locks the publishableTopic struct shape:
 // exactly one field named "topic" of type string, unexported. Any accidental
 // drift (rename, type change, export, new field) fails this test before it

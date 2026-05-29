@@ -17,6 +17,7 @@ const (
 	msgPublishTopicWildcard     = "mqtt publish topic must not contain + or # wildcards"
 	msgEmptyTopic               = "mqtt publish topic must not be empty (MQTT v5 §4.7.3)"
 	msgEmptyFilter              = "mqtt subscribe filter must not be empty"
+	msgEmptyConsumerGroup       = "mqtt subscribe consumer group must not be empty (shared subscription requires a group)"
 	msgZeroNamespaceReceiver    = "mqtt topic namespace receiver is zero-value; construct via ParseTopicNamespace"
 
 	// detailKeyNamespace / detailKeyTopic / detailKeyFilter are extracted
@@ -275,3 +276,62 @@ func (n TopicNamespace) Mint(topic string) (publishableTopic, error) {
 // for the internal Publish path to read the topic when constructing the
 // paho.Publish packet.
 func (t publishableTopic) String() string { return t.topic }
+
+// subscribableFilter carries a filter validated against a TopicNamespace via
+// SubscribeOK plus its $share wire form. Package-unexported and constructed
+// exclusively by TopicNamespace.MintFilter — the only way to obtain a
+// subscribableFilter is to call MintFilter, which internally calls SubscribeOK.
+// This mirrors publishableTopic: any callsite that accepts a subscribableFilter
+// is guaranteed (at compile time) that the filter has passed namespace
+// validation and carries a well-formed shared-subscription wire form.
+//
+// The Connection.Subscribe method (mqtt internal funnel) accepts only
+// subscribableFilter, so no other package can drive a subscribe without minting
+// a filter through SubscribeOK. The single sanctioned holder + sealed
+// construction Hard funnel pattern, same as publishableTopic.
+//
+// Two shapes are retained because the broker delivers PUBLISH packets stripped
+// of the "$share/{group}/" prefix (MQTT v5 §4.8.2), so route matching must use
+// matchFilter, while the SUBSCRIBE packet must carry the full wireFilter.
+type subscribableFilter struct {
+	matchFilter string // broker-delivered topic shape (no $share prefix) — used for route matching
+	wireFilter  string // SUBSCRIBE-packet shape: "$share/{group}/{filter}"
+}
+
+// sharedSubPrefix is the MQTT v5 §4.8.2 shared-subscription wire prefix. It is
+// lowercase per spec; mosquitto requires lowercase. Extracted as a const since
+// it composes the wireFilter and is referenced from tests.
+const sharedSubPrefix = "$share/"
+
+// MintFilter validates filter against this namespace via SubscribeOK and returns
+// a subscribableFilter whose wireFilter is the MQTT v5 shared-subscription form
+// "$share/{consumerGroup}/{filter}". The matchFilter is the bare filter (the
+// shape the broker delivers, with the $share prefix stripped). consumerGroup
+// must be non-empty.
+//
+// Returns ErrAdapterMQTTInvalidSubscribeFilter for an empty consumerGroup, or
+// the SubscribeOK error (ErrAdapterMQTTInvalidSubscribeFilter /
+// ErrAdapterMQTTTopicOutsideNamespace / ErrAdapterMQTTInvalidTopicNamespace) on
+// filter / namespace violations.
+//
+// ref: adapters/mqtt/topicns.go Mint/publishableTopic
+func (n TopicNamespace) MintFilter(consumerGroup, filter string) (subscribableFilter, error) {
+	if consumerGroup == "" {
+		return subscribableFilter{}, errcode.New(
+			errcode.KindInvalid, ErrAdapterMQTTInvalidSubscribeFilter,
+			msgEmptyConsumerGroup,
+			errcode.WithDetails(errcode.PublicString(detailKeyFilter, filter)),
+		)
+	}
+	if err := n.SubscribeOK(filter); err != nil {
+		return subscribableFilter{}, err
+	}
+	return subscribableFilter{
+		matchFilter: filter,
+		wireFilter:  sharedSubPrefix + consumerGroup + "/" + filter,
+	}, nil
+}
+
+// String returns the SUBSCRIBE-packet wire form ("$share/{group}/{filter}").
+// Provided for slog logging; the struct fields stay unexported.
+func (f subscribableFilter) String() string { return f.wireFilter }
