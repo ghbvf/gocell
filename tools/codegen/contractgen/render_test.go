@@ -24,7 +24,7 @@ import (
 // to memory — goimports path-aware import resolution disabled), matching the
 // committed goldens.
 func renderTypes(spec *ContractGenSpec) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "types.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -34,7 +34,7 @@ func renderTypes(spec *ContractGenSpec) ([]byte, error) {
 }
 
 func renderIface(spec *ContractGenSpec) ([]byte, error) {
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "iface.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -47,7 +47,7 @@ func renderHandler(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "http" {
 		return nil, fmt.Errorf("contractgen render handler: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "handler.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func renderSpec(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "event" {
 		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "spec.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func renderSubscription(spec *ContractGenSpec) ([]byte, error) {
 	if spec.Kind != "event" {
 		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
 	}
-	b, err := codegen.Render(codegen.RenderOptions{
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "subscription.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
 	})
 	if err != nil {
@@ -263,6 +263,39 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 	}
 }
 
+// TestRender_ExternalModulePath proves modulePath flows through contractgen
+// rendering: rendering the subscription template (which imports framework
+// kernel packages) under an EXTERNAL module path produces valid Go, and the
+// framework kernel import is grouped as third-party (#1083). In an external
+// repo, github.com/ghbvf/gocell/kernel/... is a go-get dependency, not local.
+func TestRender_ExternalModulePath(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["event.order-created.v1"].Codegen = true
+	spec, err := buildContractSpec(root, p, "event.order-created.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	const extMod = "github.com/acme/svc"
+	out, err := codegen.Render(extMod, codegen.RenderOptions{
+		TemplateName: "subscription.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		t.Fatalf("Render with external module path: %v", err)
+	}
+	// The framework kernel import must still be present (it is a real dependency
+	// of the generated code) and must NOT be pinned into a local block keyed to
+	// the external module — i.e. rendering did not hardcode github.com/ghbvf/gocell
+	// as the local prefix.
+	if !bytes.Contains(out, []byte("github.com/ghbvf/gocell/kernel/")) {
+		t.Errorf("expected framework kernel import in rendered subscription, got:\n%s", out)
+	}
+	if bytes.Contains(out, []byte(extMod)) {
+		t.Errorf("did not expect external module %q to appear in subscription output:\n%s", extMod, out)
+	}
+}
+
 // TestBuildContractSpec_ContractNotFound tests error on missing contract.
 func TestBuildContractSpec_ContractNotFound(t *testing.T) {
 	root := repoRoot(t)
@@ -367,7 +400,7 @@ func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 }
 
 // TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
-// closed set (http | event | command | projection) returns an error.
+// closed set (http | event | command | projection | grpc) returns an error.
 func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
@@ -600,6 +633,46 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 			}
 			content := renderFile(t, spec, outFile)
 			goldenFile := goldenFilePath("synth_event", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// TestRender_Golden_Synth_GRPC tests the grpc placeholder-stub fixture. A
+// kind=grpc contract emits the universal types_gen.go (near-empty: no JSON-schema
+// DTOs — proto is the schema, deferred to PR 6) + iface_gen.go (the []byte
+// placeholder Server interface). No handler/spec/subscription artifacts.
+func TestRender_Golden_Synth_GRPC(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_grpc_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["grpc.device.command.v1"]
+	if contract == nil {
+		t.Fatal("grpc.device.command.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := buildContractSpec(absTestDir, p, "grpc.device.command.v1")
+			if err != nil {
+				t.Fatalf("buildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_grpc_minimal", outFile)
 
 			if *updateGolden {
 				writeGolden(t, goldenFile, content)
@@ -1012,7 +1085,7 @@ func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	fileNames := make(map[string]bool)
 	for _, path := range res.Generated {

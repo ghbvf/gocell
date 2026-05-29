@@ -17,7 +17,7 @@ import "fmt"
 func {{.Fn}}() string { return fmt.Sprintf("hi %s", "world") }
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "simple",
 		Templates:    tpl,
 		Data:         map[string]string{"Pkg": "demo", "Fn": "Hello"},
@@ -46,7 +46,7 @@ func TestRender_GoimportsAddsMissingImport(t *testing.T) {
 func F() { fmt.Println("hi") }
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "noimport",
 		Templates:    tpl,
 		Data:         nil,
@@ -69,7 +69,7 @@ import "fmt"
 func F() {}
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "unused",
 		Templates:    tpl,
 		Data:         nil,
@@ -90,7 +90,7 @@ func TestRender_FormatFailureReturnsRawAndError(t *testing.T) {
 func ( bogus syntax {{.X}}
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "broken",
 		Templates:    tpl,
 		Data:         map[string]string{"X": "bad"},
@@ -108,7 +108,7 @@ func ( bogus syntax {{.X}}
 
 func TestRender_NilTemplatesIsError(t *testing.T) {
 	t.Parallel()
-	_, err := codegen.Render(codegen.RenderOptions{TemplateName: "x"})
+	_, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{TemplateName: "x"})
 	if err == nil {
 		t.Fatal("expected error for nil Templates")
 	}
@@ -117,7 +117,7 @@ func TestRender_NilTemplatesIsError(t *testing.T) {
 func TestRender_EmptyTemplateNameIsError(t *testing.T) {
 	t.Parallel()
 	tpl := template.Must(template.New("x").Parse(`package x`))
-	_, err := codegen.Render(codegen.RenderOptions{Templates: tpl})
+	_, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{Templates: tpl})
 	if err == nil {
 		t.Fatal("expected error for empty TemplateName")
 	}
@@ -126,7 +126,7 @@ func TestRender_EmptyTemplateNameIsError(t *testing.T) {
 func TestRender_TemplateExecutionError(t *testing.T) {
 	t.Parallel()
 	tpl := template.Must(template.New("missing").Parse(`{{.X.Y.Z}}`))
-	_, err := codegen.Render(codegen.RenderOptions{
+	_, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "missing",
 		Templates:    tpl,
 		Data:         struct{}{},

@@ -235,7 +235,7 @@ func TestDEP02_UnknownKindWarning(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{
 			"bad.kind.v1": {
 				ID:   "bad.kind.v1",
-				Kind: "grpc", // unknown kind
+				Kind: "websocket", // unknown kind
 				Endpoints: metadata.EndpointsMeta{
 					Server: metadatatest.CellIDCellA,
 				},
@@ -606,14 +606,14 @@ func TestValidatorGraph_PropagatesValidationErrors(t *testing.T) {
 				ID:            "slice-x",
 				BelongsToCell: metadatatest.NewCellID("cellx"),
 				ContractUsages: []metadata.ContractUsage{
-					{Contract: "grpc.unknown.v1", Role: "serve"},
+					{Contract: "websocket.unknown.v1", Role: "serve"},
 				},
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
-			"grpc.unknown.v1": {
-				ID:   "grpc.unknown.v1",
-				Kind: "grpc", // unknown kind → consumers resolution fails
+			"websocket.unknown.v1": {
+				ID:   "websocket.unknown.v1",
+				Kind: "websocket", // unknown kind → consumers resolution fails
 				Endpoints: metadata.EndpointsMeta{
 					Server: metadatatest.NewCellID("cellx"),
 				},

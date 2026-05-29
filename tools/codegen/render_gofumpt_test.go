@@ -39,7 +39,7 @@ func F(t assert.TestingT) {
 }
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "groups",
 		Templates:    tpl,
 		Filename:     "demo.go",
@@ -81,7 +81,7 @@ func F() {
 }
 `))
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "blank",
 		Templates:    tpl,
 		Filename:     "demo.go",
@@ -90,7 +90,10 @@ func F() {
 		t.Fatalf("Render: %v", err)
 	}
 
-	canonical, err := gofumpt.Source(out, codegen.GofumptOptions)
+	canonical, err := gofumpt.Source(out, gofumpt.Options{
+		LangVersion: codegen.LangVersion,
+		ModulePath:  "github.com/ghbvf/gocell",
+	})
 	if err != nil {
 		t.Fatalf("gofumpt.Source on rendered output: %v", err)
 	}

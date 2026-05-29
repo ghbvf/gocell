@@ -533,7 +533,7 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 	project := buildTestProject()
 	project.Contracts["unknown.kind.v1"] = &metadata.ContractMeta{
 		ID:        "unknown.kind.v1",
-		Kind:      "grpc", // unknown kind
+		Kind:      "websocket", // unknown kind
 		OwnerCell: metadatatest.CellIDAccessCore,
 		Endpoints: metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 	}

@@ -10,12 +10,12 @@
     "id": {
       "type": "string",
       "description": "Unique contract identifier in the form {kind}.{domain-path}.{version}.",
-      "pattern": "^(http|event|command|projection)\\..+\\.v[0-9]+$"
+      "pattern": "^(http|event|command|projection|grpc)\\..+\\.v[0-9]+$"
     },
     "kind": {
       "type": "string",
       "description": "Contract kind that determines the endpoint structure.",
-      "enum": ["http", "event", "command", "projection"]
+      "enum": ["http", "event", "command", "projection", "grpc"]
     },
     "ownerCell": {
       "type": "string",
@@ -414,6 +414,70 @@
                 "type": "array",
                 "description": "Cells or actors that read this projection.",
                 "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "grpc" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "required": ["server", "clients", "grpc"],
+            "additionalProperties": false,
+            "properties": {
+              "server": {
+                "type": "string",
+                "description": "The cell that serves this gRPC service (provider). gRPC mirrors http: provider=server, consumers=clients."
+              },
+              "clients": {
+                "type": "array",
+                "description": "Cells or actors that call this gRPC service.",
+                "items": { "type": "string" }
+              },
+              "grpc": {
+                "type": "object",
+                "description": "Transport metadata elevating proto service, method, streaming pattern, and proto file location to first-class contract fields. Parallel to endpoints.http.",
+                "required": ["service", "method", "proto"],
+                "additionalProperties": false,
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "description": "Proto fully-qualified service name, e.g. device.command.v1.DeviceCommandService."
+                  },
+                  "method": {
+                    "type": "string",
+                    "description": "Proto method name served by this contract, e.g. IssueCommand."
+                  },
+                  "streamingType": {
+                    "type": "string",
+                    "enum": ["unary", "server-stream", "client-stream", "bidi"],
+                    "description": "RPC streaming pattern. Omitted is treated as unary by codegen."
+                  },
+                  "proto": {
+                    "type": "string",
+                    "pattern": "^contracts/grpc/",
+                    "description": "Contracts-relative path to the .proto file; must resolve under contracts/grpc/."
+                  },
+                  "auth": {
+                    "type": "object",
+                    "description": "RPC-level authentication overrides, mirroring http.auth.public.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "public": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, the RPC is mounted without listener auth (no JWT required)."
+                      }
+                    }
+                  }
+                }
               }
             }
           }

@@ -1,10 +1,7 @@
 package cellgen
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -394,40 +391,6 @@ func buildRouteGroupsFromBundle(
 	return out
 }
 
-// readModulePath reads the Go module path from the go.mod file at root.
-// Returns ("", err) if go.mod is missing or malformed.
-func readModulePath(root string) (string, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod")))
-	if err != nil {
-		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "cellgen: open go.mod", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if rest, ok := strings.CutPrefix(line, "module "); ok {
-			return strings.TrimSpace(rest), nil
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "cellgen: read go.mod", err)
-	}
-	return "", errcode.New(errcode.KindInternal, errcode.ErrInternal,
-		"cellgen: module directive not found in go.mod")
-}
-
-// contractIDToImportPath converts a contract id to its generated package import path.
-// "event.order-created.v1" → "<module>/generated/contracts/event/order-created/v1"
-// "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
-// "http.internal.foo.v1" → "<module>/generated/contracts/http/internalapi/foo/v1"
-//
-// Delegates internal→internalapi rewriting to pkg/contractpath —
-// single source of truth shared with contractgen, kernel/governance, and archtest.
-func contractIDToImportPath(modulePath, contractID string) string {
-	return modulePath + "/" + contractpath.ContractIDToPackagePath(contractID)
-}
-
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and
 // SubscriptionAlias on each subscription in the spec using the module path
 // derived from go.mod at root. This is a post-build step; BuildCellSpec does
@@ -439,7 +402,7 @@ func contractIDToImportPath(modulePath, contractID string) string {
 func EnrichSubscriptionsWithModulePath(spec *CellGenSpec, modulePath string) {
 	for i := range spec.Subscriptions {
 		sub := &spec.Subscriptions[i]
-		sub.SubscriptionPackage = contractIDToImportPath(modulePath, sub.ContractID)
+		sub.SubscriptionPackage = contractpath.ContractIDToImportPath(modulePath, sub.ContractID)
 		sub.SubscriptionAlias = fmt.Sprintf("sub%d", i)
 	}
 }

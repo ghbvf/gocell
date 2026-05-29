@@ -76,6 +76,107 @@ func TestSchemaConstantsMatchSchemaLiterals(t *testing.T) {
 			"schemas/cell.schema.json requires.items.enum drifted from metadata.CapabilityEnum: schema=%v const=%v",
 			got, metadata.CapabilityEnum)
 	})
+
+	// gRPC streamingType enum: the schema if/then literal is locked byte-equal
+	// to metadata.GRPCStreamingTypeEnum so schema, governance FMT-37, and runtime
+	// contractspec.validateGRPC share one source for the accepted streaming
+	// patterns.
+	t.Run("contract.schema.json#GRPCStreamingTypeEnum", func(t *testing.T) {
+		t.Parallel()
+		leaf := walkGRPCEndpointField(t, "streamingType", "enum")
+		got := asStringSlice(t, leaf)
+		require.True(t, reflect.DeepEqual(metadata.GRPCStreamingTypeEnum, got),
+			"schemas/contract.schema.json grpc streamingType enum drifted from metadata.GRPCStreamingTypeEnum: schema=%v const=%v",
+			got, metadata.GRPCStreamingTypeEnum)
+	})
+
+	// gRPC proto path prefix: the schema proto.pattern is an anchored literal
+	// prefix ("^"+prefix). GRPCProtoPathPrefix contains no regex metacharacters,
+	// so equality with "^"+const is an exact byte lock.
+	t.Run("contract.schema.json#GRPCProtoPathPrefix", func(t *testing.T) {
+		t.Parallel()
+		leaf := walkGRPCEndpointField(t, "proto", "pattern")
+		got, ok := leaf.(string)
+		require.True(t, ok, "grpc proto.pattern is not a string: %T", leaf)
+		require.Equal(t, "^"+metadata.GRPCProtoPathPrefix, got,
+			"schemas/contract.schema.json grpc proto.pattern drifted from metadata.GRPCProtoPathPrefix")
+	})
+}
+
+// walkGRPCEndpointField returns the leaf value at
+// then.properties.endpoints.properties.grpc.properties.<field>.<leaf> inside the
+// contract.schema.json allOf branch guarded by kind=grpc. The branch is located
+// by its if.properties.kind.const == "grpc" guard rather than a fixed allOf
+// index, so reordering the allOf array does not break this test.
+func walkGRPCEndpointField(t *testing.T, field, leaf string) any {
+	t.Helper()
+	branch := findContractKindBranch(t, "grpc")
+	cur := descend(t, branch,
+		"then", "properties", "endpoints", "properties", "grpc",
+		"properties", field, leaf)
+	return cur
+}
+
+// findContractKindBranch returns the allOf entry of contract.schema.json whose
+// if.properties.kind.const equals kindConst.
+func findContractKindBranch(t *testing.T, kindConst string) map[string]any {
+	t.Helper()
+	raw, err := schemas.FS.ReadFile("contract.schema.json")
+	require.NoError(t, err, "read contract.schema.json")
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(raw, &doc), "unmarshal contract.schema.json")
+	allOf, ok := doc["allOf"].([]any)
+	require.True(t, ok, "contract.schema.json allOf is not an array: %T", doc["allOf"])
+	for _, entry := range allOf {
+		branch, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		ifBlock, ok := branch["if"].(map[string]any)
+		if !ok {
+			continue
+		}
+		props, ok := ifBlock["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, ok := props["kind"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if c, _ := kind["const"].(string); c == kindConst {
+			return branch
+		}
+	}
+	t.Fatalf("contract.schema.json: no allOf branch with if.properties.kind.const == %q", kindConst)
+	return nil
+}
+
+// descend walks map keys from cur, failing the test if any key is missing or a
+// non-object is encountered mid-path.
+func descend(t *testing.T, cur any, keys ...string) any {
+	t.Helper()
+	for _, key := range keys {
+		obj, ok := cur.(map[string]any)
+		require.True(t, ok, "expected object before key %q, got %T", key, cur)
+		cur, ok = obj[key]
+		require.True(t, ok, "key %q missing", key)
+	}
+	return cur
+}
+
+// asStringSlice coerces a JSON array leaf into []string.
+func asStringSlice(t *testing.T, leaf any) []string {
+	t.Helper()
+	arr, ok := leaf.([]any)
+	require.True(t, ok, "leaf is not an array: %T", leaf)
+	out := make([]string, 0, len(arr))
+	for i, v := range arr {
+		s, ok := v.(string)
+		require.True(t, ok, "leaf[%d] is not a string: %T", i, v)
+		out = append(out, s)
+	}
+	return out
 }
 
 // readSchemaString walks the JSON path and returns the string at the leaf.

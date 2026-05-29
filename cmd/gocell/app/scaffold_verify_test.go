@@ -285,9 +285,9 @@ func TestRunGenerateAssembly_MissingID(t *testing.T) {
 }
 
 func TestRunGenerateAssembly_WithModule(t *testing.T) {
-	// generateAssembly with a valid --id and --module exercises the full code
-	// path up to the point where project metadata or assembly lookup fails.
-	err := runGenerate(context.Background(), []string{"assembly", "--id=test", "--module=example.com/test"})
+	// generateAssembly with a valid --id and --module-path exercises the full
+	// code path up to the point where project metadata or assembly lookup fails.
+	err := runGenerate(context.Background(), []string{"assembly", "--id=test", "--module-path=example.com/test"})
 	require.Error(t, err)
 	assert.Regexp(t, `metadata parse|project root|cannot find|generate entrypoint|assembly`,
 		err.Error(), "error should originate from the generate-assembly pipeline")

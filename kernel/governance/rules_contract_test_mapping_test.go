@@ -14,9 +14,11 @@ import (
 
 // --- CONTRACT-ENDPOINT-TEST-MAPPING-01 ---
 //
-// Rule: every active HTTP contract must be referenced by at least one slice in
-// the server cell's verify.contract list as "contract.<id>.serve".
-// Exemptions: examples/ contracts and non-active lifecycle.
+// Rule: every active serve-style (http/grpc) contract must be referenced by at
+// least one slice in the server cell's verify.contract list as
+// "contract.<id>.serve".
+// Exemptions: examples/ contracts, non-active lifecycle, and non-serve-style
+// kinds (event/command/projection).
 
 func TestCONTRACTENDPOINTTESTMAPPING01_Happy(t *testing.T) {
 	// 1 active HTTP contract + 1 slice verify.contract contains .serve → no result.
@@ -81,14 +83,14 @@ func TestCONTRACTENDPOINTTESTMAPPING01_DeprecatedExempt(t *testing.T) {
 }
 
 func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
-	// kind = "event" → exempt (event contracts are handled by ADV-06).
+	// kind = "event" → exempt: event is not a serve-style kind (handled by ADV-06).
 	pm := minimalHTTPProject()
 	pm.Contracts["http.auth.login.v1"].Kind = "event"
 	// No serve entry added.
 
 	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
-	assert.Empty(t, got, "non-HTTP (event) contracts must not trigger this rule")
+	assert.Empty(t, got, "non-serve-style (event) contracts must not trigger this rule")
 }
 
 // TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract guards direction B
@@ -121,7 +123,7 @@ func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract(t *testing.T) {
 
 // TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract guards direction B
 // case 2: slice's .serve entry references an event-kind contract. The .serve role
-// is HTTP-only; event contracts use ADV-06.
+// applies to serve-style (http/grpc) contracts only; event contracts use ADV-06.
 func TestCONTRACTENDPOINTTESTMAPPING01_SliceServeNonHTTPContract(t *testing.T) {
 	pm := minimalHTTPProject()
 	const eventID = "event.session.created.v1"
@@ -366,9 +368,75 @@ func TestCONTRACTENDPOINTTESTMAPPING01_Integrated(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 }
 
+// TestCONTRACTENDPOINTTESTMAPPING01_GRPCServeAccepted guards the C2 fix: a slice
+// declaring "contract.grpc.x.v1.serve" for an active grpc contract whose
+// endpoints.server matches the slice's cell must NOT be rejected. gRPC mirrors
+// http (provider in endpoints.server, role serve). Before the serve-style
+// generalization, direction B step 2 rejected this with kind "must be http".
+func TestCONTRACTENDPOINTTESTMAPPING01_GRPCServeAccepted(t *testing.T) {
+	pm := minimalHTTPProject()
+	const grpcID = "grpc.auth.session.verify.v1"
+	addActiveGRPCContract(pm, grpcID)
+	// Cover both contracts so direction A is satisfied for each; the only thing
+	// under test is direction B accepting the grpc serve entry.
+	addServeToSlice(pm, "http.auth.login.v1")
+	addServeToSlice(pm, grpcID)
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	assert.Empty(t, got, "active grpc contract served by a slice (serve role) must produce no findings; got: %v", got)
+}
+
+// TestCONTRACTENDPOINTTESTMAPPING01_GRPCMissingServe proves direction A now
+// requires .serve coverage for active grpc contracts, symmetric with http:
+// grpc is serve-style, so an uncovered active grpc contract is a finding.
+func TestCONTRACTENDPOINTTESTMAPPING01_GRPCMissingServe(t *testing.T) {
+	pm := minimalHTTPProject()
+	const grpcID = "grpc.auth.session.verify.v1"
+	addActiveGRPCContract(pm, grpcID)
+	// http gets serve coverage; grpc deliberately does not.
+	addServeToSlice(pm, "http.auth.login.v1")
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	var found bool
+	for _, r := range got {
+		if r.IssueType == IssueRequired && strings.Contains(r.Message, grpcID) {
+			assert.Equal(t, SeverityError, r.Severity)
+			assert.Contains(t, r.Message, "grpc contract",
+				"direction A message must name the grpc kind; got: %s", r.Message)
+			found = true
+		}
+	}
+	assert.True(t, found, "direction A must require serve coverage for active grpc contracts; got: %v", got)
+}
+
 // =============================================================================
 // helpers specific to this rule's tests
 // =============================================================================
+
+// addActiveGRPCContract injects an active grpc contract owned by accesscore so
+// its endpoints.server matches minimalHTTPProject's session-login slice cell.
+func addActiveGRPCContract(pm *metadata.ProjectMeta, id string) {
+	pm.Contracts[id] = &metadata.ContractMeta{
+		ID:               id,
+		Kind:             "grpc",
+		OwnerCell:        metadatatest.CellIDAccessCore,
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints: metadata.EndpointsMeta{
+			Server:  metadatatest.CellIDAccessCore,
+			Clients: []string{},
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "auth.session.v1.SessionVerifyService",
+				Method:  "Verify",
+				Proto:   "contracts/grpc/auth/session/verify/v1/session_verify.proto",
+			},
+		},
+		Dir:  "contracts/grpc/auth/session/verify/v1",
+		File: "contracts/grpc/auth/session/verify/v1/contract.yaml",
+	}
+}
 
 // minimalHTTPProject returns a ProjectMeta with one active HTTP contract
 // (http.auth.login.v1) owned by the platform "accesscore" cell and one slice

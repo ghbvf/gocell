@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // ownerTeamPattern is the whitelist regex for OwnerTeam values written into
@@ -23,11 +24,6 @@ var ownerTeamPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // ownerRolePattern is the whitelist regex for OwnerRole values written into
 // cell.yaml owner.role. Same character class as ownerTeamPattern.
 var ownerRolePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
-// modulePathPattern validates Go module paths (e.g. "github.com/owner/repo").
-// Allows letters, digits, hyphens, underscores, dots, and forward slashes.
-// Prohibits backslash, "..", and leading/trailing slashes.
-var modulePathPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-/]*[a-zA-Z0-9]$`)
 
 // validCellTypes is the authoritative list of cell type values, derived from
 // kernel/metadata/schemas/cell.schema.json "type" enum.
@@ -126,14 +122,14 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	// Always render templates to catch template/input errors early (even on dry-run).
 	// cellTemplateData embeds spec and adds ListenerMarker so the template can
 	// reference {{.ListenerMarker}} (SCAFFOLD-LISTENER-MARKER-TYPED-CONST-01).
-	cellGoContent, err := renderTemplate(cellGoTemplate, cellTemplateData{
+	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellTemplateData{
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
 	}, true)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
-	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
+	cellYAMLContent, err := renderTemplate(spec.ModulePath, cellYAMLTemplate, spec, false)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
@@ -221,18 +217,11 @@ func validateIdentifierFields(spec ScaffoldSpec) error {
 
 // validateModulePath validates the ModulePath field.
 func validateModulePath(spec ScaffoldSpec) error {
-	if spec.ModulePath == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"scaffold cell: ModulePath is required")
-	}
-	if strings.Contains(spec.ModulePath, "..") || strings.Contains(spec.ModulePath, `\`) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"scaffold cell: ModulePath contains path traversal or backslash")
-	}
-	if len(spec.ModulePath) > 1 && !modulePathPattern.MatchString(spec.ModulePath) {
+	if err := gomodutil.ValidateModulePath(spec.ModulePath); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: ModulePath is not a valid Go module path",
-			errcode.WithDetails(errcode.PublicString("modulePath", spec.ModulePath)))
+			errcode.WithDetails(errcode.PublicString("modulePath", spec.ModulePath)),
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
 	}
 	return nil
 }
@@ -300,13 +289,13 @@ func containsString(slice []string, target string) bool {
 // (goimports → gofumpt) so scaffolded files match the CI formatter gate
 // (.golangci.yml gofumpt) and template bugs surface at scaffold time rather
 // than producing invalid Go that breaks at compile time.
-func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
+func renderTemplate(modulePath string, tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	if isGoSource {
-		formatted, err := codegen.FormatGoSource("", buf.Bytes())
+		formatted, err := codegen.FormatGoSource(modulePath, "", buf.Bytes())
 		if err != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "rendered Go source is not valid", err)
 		}

@@ -42,7 +42,7 @@ func TestScaffoldCell_OutputIsGofumptClean(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
-		canonical, fmtErr := gofumpt.Source(got, codegen.GofumptOptions)
+		canonical, fmtErr := gofumpt.Source(got, gofumpt.Options{LangVersion: codegen.LangVersion, ModulePath: "github.com/ghbvf/gocell"})
 		if fmtErr != nil {
 			t.Errorf("gofumpt.Source on %s: %v", path, fmtErr)
 			return nil

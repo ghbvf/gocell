@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"unicode"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/pathsafe"
@@ -105,9 +106,10 @@ func validateContractFlags(id, kind, owner string) ([]string, error) {
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--owner value=%q pattern=%s",
 				owner, scaffoldid.IdentifierPattern))))
 	}
-	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
-	if !validKinds[kind] {
-		return nil, fmt.Errorf("scaffold contract: --kind must be one of [http event command projection], got %q", kind)
+	// Kind validity derives from the single canonical source cellvocab.ParseContractKind
+	// (no duplicate kind list here — adding a kind there is the only edit needed).
+	if _, err := cellvocab.ParseContractKind(kind); err != nil {
+		return nil, fmt.Errorf("scaffold contract: --kind %q is not a recognized contract kind (http|event|command|projection|grpc)", kind)
 	}
 	parts := strings.Split(id, ".")
 	if len(parts) < 3 {
@@ -412,6 +414,7 @@ func scaffoldCell(root string, args []string) error {
 	team := fs.String("team", "", "owner team (required)")
 	role := fs.String("role", "", "owner role, e.g. cell-owner (required)")
 	structName := fs.String("struct", "", "Go struct name (default: PascalCase of --id)")
+	modulePath := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateCellUsage)
 	withHTTP := fs.Bool(withHTTPFlag, false, withHTTPUsage)
@@ -429,9 +432,9 @@ func scaffoldCell(root string, args []string) error {
 		resolvedStruct = cellIDToPascalCase(*id)
 	}
 
-	mod, err := readModule(root)
+	mod, err := resolveModule(root, *modulePath)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: read module path: %w", err)
+		return fmt.Errorf("scaffold cell: resolve module path: %w", err)
 	}
 
 	cellID, err := scaffoldid.Parse(*id)
@@ -650,7 +653,7 @@ func scaffoldSlice(root string, args []string) error {
 func scaffoldContract(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold contract", flag.ContinueOnError)
 	id := fs.String("id", "", "contract ID (required)")
-	kind := fs.String("kind", "", "contract kind: http|event|command|projection (required)")
+	kind := fs.String("kind", "", "contract kind: http|event|command|projection|grpc (required)")
 	owner := fs.String("owner", "", "owner cell ID (required)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
@@ -857,6 +860,17 @@ endpoints:
 {{- else if eq .Kind "projection"}}
   provider: {{.OwnerCell}}
   readers: []
+{{- else if eq .Kind "grpc"}}
+  server: {{.OwnerCell}}
+  clients: []
+  grpc:
+    # TODO: replace the placeholders below with the real proto service/method/path.
+    service: {{.OwnerCell}}.v1.ExampleService
+    method: ExampleMethod
+    streamingType: unary
+    proto: contracts/grpc/{{.OwnerCell}}/v1/example.proto
+    auth:
+      public: false
 {{- end}}
 `))
 

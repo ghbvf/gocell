@@ -11,7 +11,7 @@ var generateContractSpec = codegenSpec[contractgen.Result]{
 	AllFlagDesc:     "generate for every contract with codegen=true",
 	PluralNoun:      "contract DTOs",
 	SourceArtifacts: "contract.yaml / schema files",
-	Generate: func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only string) (contractgen.Result, error) {
+	Generate: func(root string, p *metadata.ProjectMeta, dryRun, verify bool, only, modulePath string) (contractgen.Result, error) {
 		var scope contractgen.Scope
 		if only != "" {
 			scope = contractgen.ScopeContracts([]string{only})
@@ -19,7 +19,7 @@ var generateContractSpec = codegenSpec[contractgen.Result]{
 			scope = contractgen.ScopeAll{}
 		}
 		return contractgen.Generate(root, p, contractgen.Options{
-			DryRun: dryRun, Verify: verify, Scope: scope,
+			DryRun: dryRun, Verify: verify, Scope: scope, ModulePath: modulePath,
 		})
 	},
 }

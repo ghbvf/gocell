@@ -83,6 +83,15 @@ func testProject() *metadata.ProjectMeta {
 					Readers:  []string{metadatatest.CellIDAccessCore, metadatatest.CellIDConfigCore},
 				},
 			},
+			"grpc-access-session-verify-v1": {
+				ID:        "grpc-access-session-verify-v1",
+				Kind:      "grpc",
+				OwnerCell: metadatatest.CellIDAccessCore,
+				Endpoints: metadata.EndpointsMeta{
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDAuditCore},
+				},
+			},
 		},
 	}
 }
@@ -126,7 +135,8 @@ func TestContractRegistry_ByKind(t *testing.T) {
 		{"event contracts", "event", 1},
 		{"command contracts", "command", 1},
 		{"projection contracts", "projection", 1},
-		{"unknown kind", "grpc", 0},
+		{"grpc contracts", "grpc", 1},
+		{"unknown kind", "websocket", 0},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -143,7 +153,7 @@ func TestContractRegistry_ByOwner(t *testing.T) {
 		cellID string
 		count  int
 	}{
-		{"accesscore owns 2", "accesscore", 2},
+		{"accesscore owns 3", "accesscore", 3},
 		{"auditcore owns 2", "auditcore", 2},
 		{"unknown cell", "configcore", 0},
 	}
@@ -156,6 +166,77 @@ func TestContractRegistry_ByOwner(t *testing.T) {
 	}
 }
 
+// TestContractRegistry_ByKind_DeepCopiesGRPC asserts that a ContractMeta
+// returned by ByKind carries an independent GRPCTransportMeta — mutating the
+// returned copy must not alias-mutate the registry's backing entry.
+func TestContractRegistry_ByKind_DeepCopiesGRPC(t *testing.T) {
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc-x-y-v1": {
+				ID:   "grpc-x-y-v1",
+				Kind: "grpc",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  metadatatest.CellIDAccessCore,
+					Clients: []string{metadatatest.CellIDAuditCore},
+					GRPC:    &metadata.GRPCTransportMeta{Service: "x.v1.S", Method: "M", Proto: "contracts/grpc/x/v1/x.proto"},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	first := reg.ByKind("grpc")
+	require.Len(t, first, 1)
+	require.NotNil(t, first[0].Endpoints.GRPC)
+	first[0].Endpoints.GRPC.Service = "MUTATED"
+
+	second := reg.ByKind("grpc")
+	require.Len(t, second, 1)
+	require.NotNil(t, second[0].Endpoints.GRPC)
+	assert.Equal(t, "x.v1.S", second[0].Endpoints.GRPC.Service,
+		"ByKind must deep-copy GRPCTransportMeta; backing entry was alias-mutated")
+}
+
+// TestContractRegistry_ByKind_DeepCopiesHTTP asserts that a returned http
+// ContractMeta carries independent HTTPTransportMeta + its maps — mutating the
+// returned copy's transport fields/maps must not alias the backing entry.
+func TestContractRegistry_ByKind_DeepCopiesHTTP(t *testing.T) {
+	reqd := true
+	proj := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http-x-y-v1": {
+				ID:   "http-x-y-v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server: metadatatest.CellIDAccessCore,
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:      "GET",
+						Path:        "/api/v1/x/{id}",
+						PathParams:  map[string]metadata.ParamSchema{"id": {Type: "string", Required: &reqd}},
+						QueryParams: map[string]metadata.ParamSchema{"limit": {Type: "integer"}},
+						Responses:   map[int]metadata.HTTPResponseMeta{404: {Description: "not found", SchemaRef: "err.json"}},
+					},
+				},
+			},
+		},
+	}
+	reg := registry.NewContractRegistry(proj)
+	first := reg.ByKind("http")
+	require.Len(t, first, 1)
+	require.NotNil(t, first[0].Endpoints.HTTP)
+	first[0].Endpoints.HTTP.Method = "MUTATED"
+	first[0].Endpoints.HTTP.PathParams["id"] = metadata.ParamSchema{Type: "MUTATED"}
+	first[0].Endpoints.HTTP.QueryParams["limit"] = metadata.ParamSchema{Type: "MUTATED"}
+	first[0].Endpoints.HTTP.Responses[404] = metadata.HTTPResponseMeta{Description: "MUTATED"}
+
+	second := reg.ByKind("http")
+	require.Len(t, second, 1)
+	require.NotNil(t, second[0].Endpoints.HTTP)
+	assert.Equal(t, "GET", second[0].Endpoints.HTTP.Method, "Method must be deep-copied")
+	assert.Equal(t, "string", second[0].Endpoints.HTTP.PathParams["id"].Type, "PathParams map must be deep-copied")
+	assert.Equal(t, "integer", second[0].Endpoints.HTTP.QueryParams["limit"].Type, "QueryParams map must be deep-copied")
+	assert.Equal(t, "not found", second[0].Endpoints.HTTP.Responses[404].Description, "Responses map must be deep-copied")
+}
+
 func TestContractRegistry_Provider(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -166,6 +247,7 @@ func TestContractRegistry_Provider(t *testing.T) {
 		{"event provider is publisher", "event-session-created-v1", "accesscore"},
 		{"command provider is handler", "command-audit-archive-v1", "auditcore"},
 		{"projection provider is provider", "projection-audit-summary-v1", "auditcore"},
+		{"grpc provider is server", "grpc-access-session-verify-v1", "accesscore"},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -194,6 +276,7 @@ func TestContractRegistry_Consumers(t *testing.T) {
 		{"event consumers are subscribers", "event-session-created-v1", []string{"auditcore", "configcore"}},
 		{"command consumers are invokers", "command-audit-archive-v1", []string{"accesscore"}},
 		{"projection consumers are readers", "projection-audit-summary-v1", []string{"accesscore", "configcore"}},
+		{"grpc consumers are clients", "grpc-access-session-verify-v1", []string{"auditcore"}},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -218,6 +301,7 @@ func TestContractRegistry_AllIDs(t *testing.T) {
 	expected := []string{
 		"command-audit-archive-v1",
 		"event-session-created-v1",
+		"grpc-access-session-verify-v1",
 		"http-auth-login-v1",
 		"projection-audit-summary-v1",
 	}
@@ -226,7 +310,7 @@ func TestContractRegistry_AllIDs(t *testing.T) {
 
 func TestContractRegistry_Count(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
-	assert.Equal(t, 4, reg.Count())
+	assert.Equal(t, 5, reg.Count())
 }
 
 func TestContractRegistry_EmptyProject(t *testing.T) {
@@ -340,41 +424,41 @@ func TestCellRegistry_EmptyProject(t *testing.T) {
 func TestContractRegistry_Provider_UnknownKind(t *testing.T) {
 	proj := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
-			"grpc-unknown-v1": {
-				ID:   "grpc-unknown-v1",
-				Kind: "grpc",
+			"websocket-unknown-v1": {
+				ID:   "websocket-unknown-v1",
+				Kind: "websocket",
 			},
 		},
 	}
 	reg := registry.NewContractRegistry(proj)
-	got, err := reg.Provider("grpc-unknown-v1")
+	got, err := reg.Provider("websocket-unknown-v1")
 	require.Error(t, err)
 	assert.Equal(t, "", got)
 
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "grpc")
+	assert.Contains(t, err.Error(), "websocket")
 }
 
 func TestContractRegistry_Consumers_UnknownKind(t *testing.T) {
 	proj := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
-			"grpc-unknown-v1": {
-				ID:   "grpc-unknown-v1",
-				Kind: "grpc",
+			"websocket-unknown-v1": {
+				ID:   "websocket-unknown-v1",
+				Kind: "websocket",
 			},
 		},
 	}
 	reg := registry.NewContractRegistry(proj)
-	got, err := reg.Consumers("grpc-unknown-v1")
+	got, err := reg.Consumers("websocket-unknown-v1")
 	require.Error(t, err)
 	assert.Nil(t, got)
 
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "grpc")
+	assert.Contains(t, err.Error(), "websocket")
 }
 
 func TestContractRegistry_NilContractInMap(t *testing.T) {

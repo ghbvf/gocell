@@ -62,6 +62,7 @@ var (
 		string(cellvocab.ContractEvent):      true,
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
+		string(cellvocab.ContractGRPC):       true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
@@ -304,6 +305,8 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				field = "endpoints.handler"
 			case cellvocab.ContractProjection:
 				field = "endpoints.provider"
+			case cellvocab.ContractGRPC:
+				field = "endpoints.server"
 			default:
 				field = "endpoints"
 			}
@@ -319,7 +322,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 	return results
 }
 
-// validateFMT09 checks that contract.kind is one of {http, event, command, projection}.
+// validateFMT09 checks that contract.kind is one of {http, event, command, projection, grpc}.
 func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -328,8 +331,8 @@ func (v *Validator) validateFMT09() []ValidationResult {
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
-				"set kind to http, event, command, or projection",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, or grpc)", c.ID, c.Kind),
+				"set kind to http, event, command, projection, or grpc",
 			))
 		}
 	}
@@ -797,6 +800,122 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 	}
 
 	return results
+}
+
+// validateFMT37 checks gRPC transport metadata (endpoints.grpc) — the grpc-kind
+// sibling of FMT-13 (HTTP transport). Two cases are checked, mirroring FMT-13:
+//   - kind=grpc with nil endpoints.grpc → Error: required block missing.
+//   - any kind with non-nil endpoints.grpc → delegate to validateFMT37ForContract,
+//     which rejects non-grpc contracts declaring endpoints.grpc and validates the
+//     block's internal consistency for grpc contracts.
+//
+// Internal consistency mirrors the contract.schema.json grpc if/then block and
+// kernel/contractspec.validateGRPC; the streamingType enum and proto prefix are
+// single-sourced from metadata.GRPCStreamingTypeEnum / metadata.GRPCProtoPathPrefix
+// so schema, governance, and runtime never drift on the accepted value sets.
+//
+// Without this rule, schema-aware tooling validates endpoints.grpc but
+// `gocell validate` accepts any grpc block (service/method/proto missing,
+// out-of-enum streamingType, proto outside contracts/grpc/), and a non-grpc
+// contract could silently carry endpoints.grpc — leaving CLI users a different
+// contract than the schema declares (review C1).
+//
+// AI-robust: Medium (governance YAML-metadata validate layer, same tier as
+// FMT-13). Value-presence ceiling; the streamingType/proto value sets are
+// Hard-locked to the schema literal via TestSchemaConstantsMatchSchemaLiterals.
+func (v *Validator) validateFMT37() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		isGRPC := cellvocab.ContractKind(c.Kind) == cellvocab.ContractGRPC
+		if isGRPC && c.Endpoints.GRPC == nil {
+			results = append(results, v.newError(
+				codeFMT37, IssueRequired,
+				contractFile(c),
+				"endpoints.grpc",
+				fmt.Sprintf("grpc contract %q must declare endpoints.grpc", c.ID),
+				"add endpoints.grpc with service, method, and proto",
+			))
+			continue
+		}
+		if c.Endpoints.GRPC == nil {
+			// Non-grpc contract without endpoints.grpc — nothing to validate.
+			continue
+		}
+		// endpoints.grpc is non-nil: validate it (validateFMT37ForContract also
+		// rejects non-grpc contracts that erroneously declare endpoints.grpc).
+		results = append(results, v.validateFMT37ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT37ForContract validates a single contract's gRPC transport metadata.
+func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []ValidationResult {
+	g := c.Endpoints.GRPC
+	file := contractFile(c)
+
+	if cellvocab.ContractKind(c.Kind) != cellvocab.ContractGRPC {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueInvalid,
+			file,
+			"endpoints.grpc",
+			fmt.Sprintf("contract %q can only declare endpoints.grpc when kind is grpc", c.ID),
+			"remove endpoints.grpc or change the contract kind to grpc",
+		)}
+	}
+
+	var results []ValidationResult
+	if g.Service == "" {
+		results = append(results, v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.service",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.service", c.ID),
+			"add service: the proto fully-qualified service name (e.g. device.command.v1.DeviceCommandService)",
+		))
+	}
+	if g.Method == "" {
+		results = append(results, v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.method",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.method", c.ID),
+			"add method: the proto method name (e.g. IssueCommand)",
+		))
+	}
+	results = append(results, v.validateFMT37Proto(c, g, file)...)
+	results = append(results, v.validateFMT37Streaming(c, g, file)...)
+	return results
+}
+
+// validateFMT37Proto enforces that endpoints.grpc.proto is present and rooted
+// under metadata.GRPCProtoPathPrefix (contracts/grpc/). Mirrors the schema
+// proto.pattern; the prefix is the single source shared with contractspec.
+func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
+	if g.Proto == "" {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.proto", c.ID),
+			"add proto: the contracts-relative .proto path under contracts/grpc/",
+		)}
+	}
+	if !strings.HasPrefix(g.Proto, metadata.GRPCProtoPathPrefix) {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueInvalid, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q proto %q must be rooted under %q", c.ID, g.Proto, metadata.GRPCProtoPathPrefix),
+			"set proto to a path under contracts/grpc/",
+		)}
+	}
+	return nil
+}
+
+// validateFMT37Streaming enforces that endpoints.grpc.streamingType, when
+// present, is one of metadata.GRPCStreamingTypeEnum. An omitted/empty value is
+// the unary default and is accepted.
+func (v *Validator) validateFMT37Streaming(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
+	if g.StreamingType == "" || metadata.IsKnownGRPCStreamingType(g.StreamingType) {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT37, IssueInvalid, file, "endpoints.grpc.streamingType",
+		fmt.Sprintf("grpc contract %q streamingType %q is not one of %v", c.ID, g.StreamingType, metadata.GRPCStreamingTypeEnum),
+		"use one of unary, server-stream, client-stream, bidi (or omit for unary)",
+	)}
 }
 
 // validateFMT26 checks that auth.public and auth.passwordResetExempt are not

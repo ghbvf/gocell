@@ -117,6 +117,35 @@ func setupEventRoot(t *testing.T) (string, *metadata.ProjectMeta) {
 	return root, p
 }
 
+// synthGRPCMinimalFixture returns the absolute path to the synth_grpc_minimal
+// testdata fixture (a single kind=grpc contract).
+func synthGRPCMinimalFixture(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_grpc_minimal"))
+	if err != nil {
+		t.Fatalf("abs path synth_grpc_minimal: %v", err)
+	}
+	return abs
+}
+
+// setupGRPCMinimalRoot copies the synth_grpc_minimal fixture into a fresh
+// t.TempDir() and parses it. Returns (root, project).
+func setupGRPCMinimalRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	fixture := synthGRPCMinimalFixture(t)
+	root := t.TempDir()
+	copyDirIntoTemp(t, fixture, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_grpc_minimal from tmp: %v", err)
+	}
+	return root, p
+}
+
 // mustGenerate is a helper that calls Generate and fails the test on error.
 func mustGenerate(t *testing.T, root string, p *metadata.ProjectMeta, opts Options) Result {
 	t.Helper()
@@ -142,7 +171,7 @@ func TestGenerate_DryRun_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true, ModulePath: "github.com/ghbvf/gocell"})
 
 	// DryRun should report paths in Generated (ActionWouldWrite → Generated).
 	if len(res.Generated) == 0 {
@@ -162,7 +191,7 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
 	if len(res.Generated) != 3 {
@@ -193,7 +222,7 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	// Event contract → 4 files: types, iface, spec, subscription.
 	if len(res.Generated) != 4 {
@@ -240,10 +269,10 @@ func TestGenerate_IdempotentSecondRun(t *testing.T) {
 	root, p := setupHTTPMinimalRoot(t)
 
 	// First run: write files.
-	mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	// Second run: should report unchanged (still in Generated), no Drifted.
-	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if len(res2.Drifted) != 0 {
 		t.Errorf("second run should not report drift, got: %v", res2.Drifted)
 	}
@@ -257,9 +286,9 @@ func TestGenerate_VerifyClean(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if len(res.Drifted) != 0 {
 		t.Errorf("verify after clean write should have no drift, got: %v", res.Drifted)
 	}
@@ -270,7 +299,7 @@ func TestGenerate_VerifyDrift(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res1 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res1 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	// Tamper with one of the written files.
 	tampered := false
@@ -287,7 +316,7 @@ func TestGenerate_VerifyDrift(t *testing.T) {
 		t.Fatal("could not find types_gen.go to tamper")
 	}
 
-	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
+	res2 := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if len(res2.Drifted) == 0 {
 		t.Error("verify should detect drift after tamper")
 	}
@@ -300,7 +329,7 @@ func TestGenerate_VerifyMissingFile(t *testing.T) {
 	root, p := setupHTTPMinimalRoot(t)
 
 	// Verify without writing first — all files are missing → all drifted.
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if len(res.Drifted) == 0 {
 		t.Error("verify with no prior write should report drift (files missing)")
 	}
@@ -312,7 +341,7 @@ func TestGenerate_OnlyContract_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 
 	// Should still get 3 files for the HTTP contract.
 	if len(res.Generated) != 3 {
@@ -362,7 +391,7 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 		merged.Contracts[id] = &cp
 	}
 
-	res, err := Generate(mergedRoot, merged, Options{Scope: ScopeAll{}})
+	res, err := Generate(mergedRoot, merged, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -385,7 +414,9 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 func TestGenerate_OnlyContract_OnMissingContract_FailsWithNotFoundMessage(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{}}
-	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.does.not.exist.v1"})})
+	_, err := Generate(t.TempDir(), p, Options{
+		Scope: ScopeContracts([]string{"http.does.not.exist.v1"}), ModulePath: "github.com/ghbvf/gocell",
+	})
 	if err == nil {
 		t.Fatal("expected error for non-existent contract")
 	}
@@ -407,7 +438,7 @@ func TestGenerate_OnlyContract_CodegenFalse(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.foo.bar.v1"})})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeContracts([]string{"http.foo.bar.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for Codegen=false contract")
 	}
@@ -419,7 +450,7 @@ func TestGenerate_OnlyContract_CodegenFalse(t *testing.T) {
 // TestGenerate_NilProject verifies that a nil project returns an error.
 func TestGenerate_NilProject(t *testing.T) {
 	t.Parallel()
-	_, err := Generate(t.TempDir(), nil, Options{Scope: ScopeAll{}})
+	_, err := Generate(t.TempDir(), nil, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for nil project")
 	}
@@ -428,7 +459,7 @@ func TestGenerate_NilProject(t *testing.T) {
 // TestGenerate_EmptyRoot verifies that an empty root returns an error.
 func TestGenerate_EmptyRoot(t *testing.T) {
 	t.Parallel()
-	_, err := Generate("", &metadata.ProjectMeta{}, Options{Scope: ScopeAll{}})
+	_, err := Generate("", &metadata.ProjectMeta{}, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for empty root")
 	}
@@ -448,7 +479,7 @@ func TestGenerate_BuildSpecError(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error propagated from buildContractSpec")
 	}
@@ -467,7 +498,7 @@ func TestGenerate_NoCodegenContracts(t *testing.T) {
 			},
 		},
 	}
-	res, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
+	res, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -484,7 +515,7 @@ func TestRenderContractArtifacts_HTTP(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	artifacts, err := RenderContractArtifacts(root, p, "http.order.ping.v1")
+	artifacts, err := RenderContractArtifacts(root, p, "http.order.ping.v1", "github.com/ghbvf/gocell")
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
@@ -511,7 +542,7 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	artifacts, err := RenderContractArtifacts(root, p, "event.item-created.v1")
+	artifacts, err := RenderContractArtifacts(root, p, "event.item-created.v1", "github.com/ghbvf/gocell")
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
@@ -532,6 +563,43 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 	}
 }
 
+// TestRenderContractArtifacts_GRPC verifies that the production
+// RenderContractArtifacts path emits EXACTLY types_gen.go + iface_gen.go for a
+// grpc contract — and explicitly NOT handler_gen.go / spec_gen.go /
+// subscription_gen.go. grpc relies on falling through generator.go's http and
+// event kind gates; this is the regression guard that a future change to that
+// gating cannot start emitting extra artifacts for grpc unnoticed (the golden
+// test is file-name-driven and would not enumerate a new file).
+func TestRenderContractArtifacts_GRPC(t *testing.T) {
+	t.Parallel()
+	root, p := setupGRPCMinimalRoot(t)
+
+	artifacts, err := RenderContractArtifacts(root, p, "grpc.device.command.v1", "github.com/ghbvf/gocell")
+	if err != nil {
+		t.Fatalf("RenderContractArtifacts: %v", err)
+	}
+	if len(artifacts) != 2 {
+		t.Errorf("expected 2 artifacts for grpc contract, got %d", len(artifacts))
+	}
+	fileNames := make(map[string]bool)
+	for _, a := range artifacts {
+		fileNames[filepath.Base(a.Path)] = true
+		if len(a.Content) == 0 {
+			t.Errorf("artifact %s has empty content", a.Path)
+		}
+	}
+	for _, want := range []string{"types_gen.go", "iface_gen.go"} {
+		if !fileNames[want] {
+			t.Errorf("missing artifact: %s", want)
+		}
+	}
+	for _, unwanted := range []string{"handler_gen.go", "spec_gen.go", "subscription_gen.go"} {
+		if fileNames[unwanted] {
+			t.Errorf("grpc contract must not produce %s", unwanted)
+		}
+	}
+}
+
 // TestRenderContractArtifacts_CodegenFalse verifies that contracts with
 // Codegen=false return (nil, nil).
 func TestRenderContractArtifacts_CodegenFalse(t *testing.T) {
@@ -545,7 +613,7 @@ func TestRenderContractArtifacts_CodegenFalse(t *testing.T) {
 			},
 		},
 	}
-	artifacts, err := RenderContractArtifacts(t.TempDir(), p, "http.foo.bar.v1")
+	artifacts, err := RenderContractArtifacts(t.TempDir(), p, "http.foo.bar.v1", "github.com/ghbvf/gocell")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -558,7 +626,7 @@ func TestRenderContractArtifacts_CodegenFalse(t *testing.T) {
 func TestRenderContractArtifacts_OnMissingContract_FailsWithNotFoundMessage(t *testing.T) {
 	t.Parallel()
 	p := &metadata.ProjectMeta{Contracts: map[string]*metadata.ContractMeta{}}
-	_, err := RenderContractArtifacts(t.TempDir(), p, "http.ghost.v1")
+	_, err := RenderContractArtifacts(t.TempDir(), p, "http.ghost.v1", "github.com/ghbvf/gocell")
 	if err == nil {
 		t.Fatal("expected error for non-existent contract")
 	}
@@ -570,7 +638,7 @@ func TestRenderContractArtifacts_OnMissingContract_FailsWithNotFoundMessage(t *t
 // TestRenderContractArtifacts_NilProject verifies error for nil project.
 func TestRenderContractArtifacts_NilProject(t *testing.T) {
 	t.Parallel()
-	_, err := RenderContractArtifacts(t.TempDir(), nil, "http.foo.v1")
+	_, err := RenderContractArtifacts(t.TempDir(), nil, "http.foo.v1", "github.com/ghbvf/gocell")
 	if err == nil {
 		t.Fatal("expected error for nil project")
 	}
@@ -582,7 +650,7 @@ func TestRenderContractArtifacts_RelativePaths(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	artifacts, err := RenderContractArtifacts(root, p, "http.order.ping.v1")
+	artifacts, err := RenderContractArtifacts(root, p, "http.order.ping.v1", "github.com/ghbvf/gocell")
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
@@ -599,7 +667,7 @@ func TestGenerate_DryRun_DoesNotCreateDirectory(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true})
+	mustGenerate(t, root, p, Options{Scope: ScopeAll{}, DryRun: true, ModulePath: "github.com/ghbvf/gocell"})
 
 	genDir := filepath.Join(root, "generated")
 	if _, err := os.Stat(genDir); !os.IsNotExist(err) {
@@ -657,7 +725,7 @@ func TestGenerate_WriteMode_HTTPFull(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPFullRoot(t)
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 
 	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
 	if len(res.Generated) != 3 {
@@ -724,7 +792,7 @@ func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
 		t.Errorf("PackageName = %q, want configdelete", spec.PackageName)
 	}
 
-	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}})
+	res := mustGenerate(t, root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	// DELETE contract → 3 files (types, iface, handler).
 	if len(res.Generated) != 3 {
 		t.Errorf("expected 3 generated files for keyword-conflict contract, got %d: %v", len(res.Generated), res.Generated)
@@ -762,7 +830,7 @@ func TestGenerate_RequiresErrorStatus(t *testing.T) {
 	pingContract.Endpoints.HTTP.Responses = nil
 	t.Cleanup(func() { pingContract.Endpoints.HTTP.Responses = origResponses })
 
-	_, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
+	_, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for contract with no 4xx/5xx responses, got nil")
 	}
@@ -801,7 +869,7 @@ func TestGenerate_PropagatesBuildSpecError_C5(t *testing.T) {
 			},
 		},
 	}
-	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}})
+	_, err := Generate(t.TempDir(), p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected C5 error for 3xx in responses[], got nil")
 	}
@@ -816,7 +884,7 @@ func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
 	t.Parallel()
 	root, p := setupOneOfRoot(t)
 
-	_, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	_, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for contract with oneOf in request schema")
 	}
@@ -835,7 +903,7 @@ func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
 func TestGenerate_Options_ScopeNilFailFast(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
-	_, err := Generate(root, p, Options{Scope: nil})
+	_, err := Generate(root, p, Options{Scope: nil, ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for nil Scope, got nil")
 	}
@@ -851,7 +919,7 @@ func TestGenerate_Options_ScopeContractsLimitsToList(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 	// http.order.ping.v1 → 3 files.
-	res, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"})})
+	res, err := Generate(root, p, Options{Scope: ScopeContracts([]string{"http.order.ping.v1"}), ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate with ScopeContracts: %v", err)
 	}
@@ -868,7 +936,7 @@ func TestGenerate_Options_ScopeAllProcessesAll(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 	// ScopeAll should produce same result as default (all opted-in contracts).
-	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate with ScopeAll: %v", err)
 	}

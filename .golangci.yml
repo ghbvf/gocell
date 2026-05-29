@@ -817,17 +817,22 @@ formatters:
     - gofumpt
     - goimports
   settings:
-    # Keep the gofumpt config aligned with tools/codegen/render.go
-    # GofumptOptions so `golangci-lint fmt` (verify-gofumpt.sh / CI lint
-    # shard) and the producer-side codegen formatter agree byte-for-byte on
-    # import-locality grouping.
-    #   - module-path: golangci-lint here vs render.go GofumptOptions.ModulePath.
-    #     SYNC: must equal the module path on go.mod line 1.
+    # Keep this gofumpt config aligned with tools/codegen/render.go so
+    # `golangci-lint fmt` (verify-gofumpt.sh / CI lint shard) and the
+    # producer-side codegen formatter agree byte-for-byte on import-locality
+    # grouping.
+    #   - module-path / local-prefixes: this is the FRAMEWORK repo's OWN lint
+    #     config and must equal this repo's go.mod module (github.com/ghbvf/gocell).
+    #     The producer-side codegen no longer hardcodes a module path: render.go's
+    #     FormatGoSource/Render derive it PER-CALL from the target repo's go.mod
+    #     (#1083), so an external repo developing cells uses its own go.mod +
+    #     .golangci.yml. In the framework repo the resolved module path equals the
+    #     literal below, so producer output stays byte-identical.
     #   - LangVersion: golangci-lint auto-injects it from the go.mod `go`
-    #     directive (go1.25); render.go hardcodes GofumptOptions.LangVersion.
-    #     These are two manual truth points — when the go.mod `go` directive
-    #     changes, render.go's literal must be updated in lockstep (the
-    #     render.go godoc carries the matching SYNC note).
+    #     directive (go1.25); render.go's exported `LangVersion` const is a second
+    #     manual truth point — when the go.mod `go` directive changes, render.go's
+    #     literal must be updated in lockstep (the render.go LangVersion godoc
+    #     carries the matching SYNC note).
     gofumpt:
       module-path: github.com/ghbvf/gocell
     goimports:
