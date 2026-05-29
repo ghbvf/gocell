@@ -3,23 +3,27 @@
 | 字段 | 值 |
 |------|---|
 | ADR ID | 661 |
-| 状态 | **Accepted（设计冻结）；实施 A1–A3 ahead-of-trigger 验证落地，A4–A10 PARKED-ON-TRIGGER（详见 §6）** |
+| 状态 | **Accepted（设计冻结）；A1–A3 ahead-of-trigger 验证 stack 依次合入 develop，A4–A10 PARKED-ON-TRIGGER（详见 §6）** |
 | 日期 | 2026-05-29 |
 | Issue | [#661](https://github.com/ghbvf/gocell/issues/661)（父）/ [#1162](https://github.com/ghbvf/gocell/issues/1162)（PR-A1） |
 | Spec | `docs/plans/specs/202605262359-661-kernel-reconcile-{spec,plan,tasks}.md` |
 | 一致性级别 | **L4 DeviceLatent**（issue 第一性原理重评结论） |
 
-> 本 ADR 是 `kernel/reconcile` 的设计权威源。本 PR（PR-A1）随附 PR-A2/A3 的可运行实现
-> （3 件套最小核 + Loop 调度骨架）一起落地，因此本文档记录的是**经代码验证的设计**，
-> 而非纯前瞻推演——`§2 ≥80% reuse`、`§3 接口形态`、`§7 panic 隔离`等论断均有 PR-A2/A3
-> 的编译 + 测试（`go test -race ./kernel/reconcile/`，coverage 90.8%）背书。
-> 设计与实现产生分歧时以本 ADR 为准，并在同 PR 内修正实现或修订本 ADR。
+> 本 ADR 是 `kernel/reconcile` 的设计权威源。其设计经本 stack 的 PR-A2（3 件套最小核）+
+> PR-A3（Loop 调度骨架）可运行实现验证（同 stack 开发，`go test -race ./kernel/reconcile/`
+> 通过、coverage 90.8%），故本文记录的是**经代码验证的设计**而非纯前瞻推演——`§2 ≥80%
+> reuse`、`§3 接口形态`、`§7 panic 隔离`等论断均有该实现背书。
+> A1–A3 是 **stacked PR，按 A1（base develop）← A2 ← A3 依次合入**（plan.md「每 PR merge
+> 后 trunk 可发布」）；本文用「由 PR-Ax 交付」标注每条论断的承载 PR——读者在 develop 上看到
+> 的实现取决于已合入到哪一 PR：单独合入 A1 时 develop 上尚无 A2/A3 代码，因此 A2/A3 交付的
+> 形态/数值（接口、Loop、metrics、archtest 等）是「设计 + 该 PR 兑现」而非 A1 合入即存在。
+> 设计与实现分歧时以本 ADR 为准，并在同 PR 内修正实现或修订本 ADR。
 
 ---
 
 ## §0 决策摘要
 
-**3 件套最小核**（PR-A2 已落地，archtest frozen）：
+**3 件套最小核**（由 PR-A2 交付，archtest frozen）：
 
 | 件 | 形态 | 对标 controller-runtime |
 |----|------|------------------------|
@@ -40,9 +44,11 @@
 `PermanentError`/`IsPermanent` ≈ 30 LoC（`reconciler.go` 45 + `result.go` 类型部分）；
 controller-runtime `pkg/reconcile`+`pkg/builder` 公开面 ≥800 LoC，简化 ≥4x。
 
-**落地状态**：PR-A1（本 ADR）+ PR-A2（接口 + 3 frozen archtest）+ PR-A3（Loop 调度骨架 +
-4 metrics + clock carve-out）已实现并验证；PR-A4–A10（Trigger / Backoff / LeaderElector /
-Builder / 迁移 / 文档）受 §6 trigger gate 封存。
+**交付划分**：本 stack 分三 PR——PR-A1（本 ADR）/ PR-A2（接口 + 3 frozen archtest）/
+PR-A3（Loop 调度骨架 + 4 metrics + clock carve-out），各经 `go test -race` + 90.8% coverage
+验证后依次合入 develop（A1←A2←A3）。下文「由 PR-Ax 交付」标注每条论断的承载 PR——某论断
+背书的代码只有在其承载 PR 合入后才存在于 develop。PR-A4–A10（Trigger / Backoff /
+LeaderElector / Builder / 迁移 / 文档）受 §6 trigger gate 封存。
 
 ---
 
@@ -140,7 +146,7 @@ for i := 0; i < c.MaxConcurrentReconciles; i++ {
   success→`Queue.Forget`；terminal error→记 metric 不重排；
 - `RecoverPanic`（默认开）：`Reconcile` 内 panic 被 recover → 转 `fmt.Errorf("panic: %v")`。
 
-**GoCell 适配（PR-A3 已落地）**：`Loop` 起 `MaxConcurrentReconciles` 个 worker（默认 1）从
+**GoCell 适配（由 PR-A3 交付）**：`Loop` 起 `MaxConcurrentReconciles` 个 worker（默认 1）从
 内部 queue 取 `Request`；`process()` 做同 ID 串行（`sync.Map` inflight，level-triggered
 下重复触发安全丢弃 = `resultSkipped`）+ panic recovery（`safeReconcile`，单实体 panic 不杀
 worker，转 transient）+ 按 `Result`/error 重排。**未采纳 workqueue 的 dirty/processing 去重 +
@@ -206,7 +212,7 @@ spec SC-002 原文「451 中迁移 ≥360」按「整体平移」估算，实测
 
 ## §3 接口设计
 
-### 3.1 Reconciler / Request / Result（PR-A2 已落地，frozen）
+### 3.1 Reconciler / Request / Result（由 PR-A2 交付，frozen）
 
 ```go
 // INVARIANT: RECONCILE-INTERFACE-FROZEN-01
@@ -234,7 +240,7 @@ func ChannelTrigger(in <-chan Request) Trigger       // outbox 事件唤醒
 产出的原始 channel 接缝（A3 测试直接注入 channel，A4 由 Trigger 产出）。Loop 控制面时钟走
 `controlPlaneClock` carve-out（见 §7 T-CLOCK）。
 
-### 3.3 PermanentError 来源裁决（PR-A2 已落地）
+### 3.3 PermanentError 来源裁决（由 PR-A2 交付）
 
 ```go
 type permanentError struct{ err error }       // unexported sealed marker
@@ -291,7 +297,7 @@ funnel：`Loop` 公开构造私有化（PR-A7 把 A3 的 exported `Loop{}` 字�
 私有化；下游 Hard = callsite allowlist）。**注**：PR-A3 阶段 `Loop` 字段 exported（支持
 struct 字面量构造，供测试 + kernel/command 迁移过渡）；A7 收口为私有 + Builder。
 
-### 3.6 Metrics（PR-A3 已落地）
+### 3.6 Metrics（由 PR-A3 交付）
 
 `RegisterMetrics(p Provider) (Metrics, error)` 单源注册 4 件：`reconcile_total{reconciler,result}`
 （result ∈ success/transient/permanent/skipped）/ `reconcile_duration_seconds{reconciler}` /
@@ -387,11 +393,11 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 
 | ID | 威胁 | 缓解 | 评级 |
 |----|------|------|------|
-| **T-IFACE** | 接口被错误泛化（加 namespace / Priority / Requeue bool，重新引入 K8s 残留） | `RECONCILE-{INTERFACE,REQUEST-FIELDS,RESULT-FIELDS}-FROZEN-01` reflect golden 锁字段/方法集 + 显式拒残留 + 反向盲区自检（PR-A2 已落地） | **Hard**（违反不可表达——加字段即 CI 红，无 string-anchor 逃逸） |
-| **T-CLOCK** | 控制面 ticker/probe/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（PR-A3 已落地） | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
-| **T-LEAK** | Loop goroutine（worker / pump / requeue 定时）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）；per-requeue goroutine 双 select runCtx.Done。`goleak.VerifyNone` 守 6 个生命周期测试（PR-A3 已落地，`-race` 通过） | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
-| **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `safeReconcile` recover → 转 transient error → 记 metric → 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` 守（PR-A3 已落地）。A5 细化 panic 分类/taxonomy | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
-| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | `LeaderElector` 单实例保证（§4，PR-A6）；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，PR-A3 已落地，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试）；跨副本 leader **设计**（A6 落地后补 conformance） |
+| **T-IFACE** | 接口被错误泛化（加 namespace / Priority / Requeue bool，重新引入 K8s 残留） | `RECONCILE-{INTERFACE,REQUEST-FIELDS,RESULT-FIELDS}-FROZEN-01` reflect golden 锁字段/方法集 + 显式拒残留 + 反向盲区自检（由 PR-A2 交付） | **Hard**（违反不可表达——加字段即 CI 红，无 string-anchor 逃逸） |
+| **T-CLOCK** | 控制面 ticker/probe/duration 被注入非实时（fake）clock → Start 死锁 / 时间错乱 | `controlPlaneClock` 包私有 sealed type（包外不可构造/替换）+ `PROD-CLOCK-INJECTION-01` host-set 扩 `kernel/reconcile/`（gate(a) + (method,callee) form-uniqueness：`newProbeTimer/newRequeueTimer→NewTimer`、`now→Now`）+ GREEN/RED fixtures（由 PR-A3 交付） | **Medium**（永久天花板——stdlib `time.NewTimer`/`Now` free function 在 Go 不可 uncallable；receiver-type 限制 + form-uniqueness 是该形状可达上限，同 runtime/command controlPlaneClock 自评） |
+| **T-LEAK** | Loop goroutine（worker / pump / requeue 定时）在 Stop/owner-cancel 后泄漏 | 全 goroutine 由 runCtx 派生 + `WaitGroup` 跟踪 + `done` channel；`Stop` cancel→等 done（StopTimeout budget）；per-requeue goroutine 双 select runCtx.Done。`goleak.VerifyNone` 守 6 个生命周期测试（由 PR-A3 交付，`-race` 通过） | **Medium**（runtime guard + goleak 测试；Go 无法在类型层表达「无 goroutine 泄漏」） |
+| **T-PANIC** | 单实体 Reconcile panic 杀 worker goroutine → 整进程崩 / 其他实体停摆 | `safeReconcile` recover → 转 transient error → 记 metric → 不影响其他实体；`TestLoop_PanicRecoveredAndOtherEntitiesUnaffected` 守（由 PR-A3 交付）。A5 细化 panic 分类/taxonomy | **Medium**（runtime recover guard + 测试；对标 controller-runtime `RecoverPanic`） |
+| **T-DUAL** | 多 cell / 多副本并发扫描 → 重复驱动（mdmcell 重发命令） | `LeaderElector` 单实例保证（§4，PR-A6）；同实例内同 EntityID 由 `inflight` sync.Map 串行（level-triggered 丢重复=skipped，由 PR-A3 交付，`TestLoop_SameEntityIDSerial` 守） | 同实例串行 **Medium**（runtime guard + 测试）；跨副本 leader **设计**（A6 落地后补 conformance） |
 | **T-LEADER** | leader 流转失败（双 leader / 长期空窗） | lease/renew/token 模型（§4）；fail-closed（lease 故障 follower 不抢）；RTO ≤ LeaseDuration+1s；2 adapter conformance（PR-A6） | **设计**（A6 落地 + real-failure-injection conformance 后定级） |
 | **T-BUILDER** | 消费方裸构造 Loop 绕过 metric/leader/backoff wiring | Builder funnel：`Loop` 构造私有化 + `RECONCILE-BUILDER-FUNNEL-01`（PR-A7） | **设计**（A7 落地后：上游 Hard 构造私有化 + 下游 Hard callsite） |
 
