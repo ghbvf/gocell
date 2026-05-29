@@ -101,6 +101,11 @@ func (s *Server) ServiceRegistrar() grpc.ServiceRegistrar {
 // Probes implements lifecycle.ManagedResource. It returns a single probe named
 // ProbeReady ("grpc_ready") that reports healthy (nil) when the server is
 // actively serving and unhealthy when stopped or not yet started.
+//
+// The serving flag is set immediately after grpcServer.Serve starts (before the
+// first Accept). A sub-millisecond window exists between the flag flip and the
+// server being ready to accept connections; at typical readiness-probe polling
+// intervals this window is invisible in practice.
 func (s *Server) Probes() []healthz.Probe {
 	return []healthz.Probe{
 		healthz.NewProbe(ProbeReady, func(_ context.Context) error {
@@ -123,7 +128,9 @@ func (s *Server) Worker() worker.Worker {
 
 // Close implements lifecycle.ManagedResource. It is equivalent to Worker().Stop()
 // but may be called independently for LIFO teardown. Idempotent — safe to call
-// multiple times or concurrently with Worker().Stop().
+// multiple times or concurrently with Worker().Stop(). The second concurrent
+// caller always returns nil even if the first caller's ctx expired (hard-stop
+// path); this matches the LIFO bootstrap teardown contract.
 func (s *Server) Close(ctx context.Context) error {
 	return s.gracefulStop(ctx)
 }
@@ -132,6 +139,12 @@ func (s *Server) Close(ctx context.Context) error {
 func (s *Server) serveAddr(ctx context.Context) error {
 	lis, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
+		// Log at Error: infrastructure failure prevents the server from accepting
+		// any connections. Addr is kept out of the wire message (InternalAttr) to
+		// avoid leaking internal network topology; it is visible in the slog output.
+		slog.Error("grpc: net.Listen failed",
+			slog.String("addr", s.cfg.Addr),
+			slog.Any("error", err))
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCListen,
 			"grpc: net.Listen failed", err,
 			errcode.WithInternal(errcode.InternalAttr("addr", s.cfg.Addr)))
@@ -180,6 +193,11 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 // gracefulStop initiates a graceful drain of in-flight RPCs bounded by ctx.
 // The body runs exactly once via stopOnce. If ctx expires before GracefulStop
 // completes, grpcServer.Stop() is called for an immediate hard stop.
+//
+// Concurrency note: concurrent callers (Worker.Stop and Close on second call)
+// block on stopOnce until the first caller's body exits, then both return nil.
+// This is the documented idempotency: the second caller always returns nil even
+// when the first caller's ctx expired (hard-stop path).
 func (s *Server) gracefulStop(ctx context.Context) error {
 	var stopErr error
 	s.stopOnce.Do(func() {
@@ -191,12 +209,17 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 
 		select {
 		case <-graceDone:
-			// Clean drain completed.
+			// Clean drain completed — goroutine has already exited.
 		case <-s.serveDone:
-			// Serve already returned — nothing left to drain.
+			// Serve already returned — GracefulStop will return immediately;
+			// drain graceDone to unblock the goroutine and avoid a leak.
+			<-graceDone
 		case <-ctx.Done():
-			// Budget exceeded; hard stop.
+			// Budget exceeded; hard stop unblocks GracefulStop.
 			s.grpcServer.Stop()
+			// Wait for the GracefulStop goroutine to finish before returning
+			// so no goroutine outlives this call.
+			<-graceDone
 			stopErr = ctx.Err()
 		}
 		s.serving.Store(false)
@@ -225,12 +248,14 @@ func buildCredentials(t TLSConfig) (credentials.TransportCredentials, error) {
 	if len(t.ClientCAPEM) > 0 {
 		pool, err := tlsutil.NewClientCAPool(t.ClientCAPEM)
 		if err != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCTLSConfig,
+			// Caller-supplied bad PEM — KindInvalid (HTTP 400 semantic).
+			return nil, errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCTLSConfig,
 				"grpc: failed to build client CA pool for mTLS", err)
 		}
 		cfg, err := tlsutil.NewServerMTLSConfig(t.CertPEM, t.KeyPEM, pool)
 		if err != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCTLSConfig,
+			// Caller-supplied bad cert/key — KindInvalid.
+			return nil, errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCTLSConfig,
 				"grpc: failed to build mTLS server config", err)
 		}
 		return credentials.NewTLS(cfg), nil
@@ -238,7 +263,8 @@ func buildCredentials(t TLSConfig) (credentials.TransportCredentials, error) {
 
 	cfg, err := tlsutil.NewServerTLSConfig(t.CertPEM, t.KeyPEM)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterGRPCTLSConfig,
+		// Caller-supplied bad cert/key PEM — KindInvalid.
+		return nil, errcode.Wrap(errcode.KindInvalid, ErrAdapterGRPCTLSConfig,
 			"grpc: failed to build TLS server config", err)
 	}
 	return credentials.NewTLS(cfg), nil

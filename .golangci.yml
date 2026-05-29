@@ -260,6 +260,11 @@ linters:
               desc: |
                 adapters/grpc must never import cells/; cells depend on adapters
                 through interfaces, not the reverse. GRPC-ADAPTER-LAYER-01.
+                This rule is belt-and-suspenders self-documentation: cells/ is
+                already excluded by adapters-isolation (which denies all cells/
+                imports in adapters/). The explicit deny here remains so that any
+                future relaxation of adapters-isolation scope does not silently
+                re-open this specific boundary.
         adapters-isolation:
           # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
           # Cell-internal `cells/*/internal/adapters/**` is owned by the cell

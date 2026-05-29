@@ -13,6 +13,9 @@ const (
 
 // TLSConfig holds PEM-encoded TLS materials for the gRPC server.
 //
+// Zero value TLSConfig{} is invalid and is rejected by Config.validate() with
+// ErrAdapterGRPCConfigInvalid (V5 fail-closed — neither plaintext nor TLS).
+//
 // Three modes are supported:
 //   - Plaintext (dev-only): set AllowInsecure = true; leave all PEM fields nil.
 //   - Server-side TLS: set CertPEM + KeyPEM; leave ClientCAPEM nil.
@@ -58,9 +61,9 @@ func (c *Config) applyDefaults() {
 // validate checks the configuration for required fields and conflicting options.
 // It does NOT perform network I/O; TLS credential building happens in New.
 func (c *Config) validate() error {
-	// V1: Addr is required.
+	// V1: Addr is required — caller error.
 	if c.Addr == "" {
-		return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: Addr is required; set Config.Addr to a listen address (e.g. \":9000\")")
 	}
 
@@ -68,31 +71,31 @@ func (c *Config) validate() error {
 	hasKey := len(c.TLS.KeyPEM) > 0
 	hasCA := len(c.TLS.ClientCAPEM) > 0
 
-	// V2: AllowInsecure and TLS material are mutually exclusive.
+	// V2: AllowInsecure and TLS material are mutually exclusive — caller error.
 	if c.TLS.AllowInsecure && (hasCert || hasKey || hasCA) {
-		return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+		return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 			"grpc: AllowInsecure and TLS material (CertPEM/KeyPEM/ClientCAPEM) are mutually exclusive; "+
 				"use AllowInsecure for plaintext-only mode or supply PEM material for TLS")
 	}
 
 	if !c.TLS.AllowInsecure {
-		// V5: fail-closed — neither plaintext nor TLS configured.
+		// V5: fail-closed — neither plaintext nor TLS configured — caller error.
 		if !hasCert && !hasKey && !hasCA {
-			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev-only) "+
 					"or supply CertPEM+KeyPEM for TLS")
 		}
 
-		// V3: CertPEM required when any TLS material is present.
+		// V3: CertPEM required when any TLS material is present — caller error.
 		if !hasCert {
-			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 				"grpc: TLS.CertPEM is required when configuring TLS; "+
 					"supply the PEM-encoded server certificate")
 		}
 
-		// V4: KeyPEM required when any TLS material is present.
+		// V4: KeyPEM required when any TLS material is present — caller error.
 		if !hasKey {
-			return errcode.New(errcode.KindInternal, ErrAdapterGRPCConfigInvalid,
+			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
 				"grpc: TLS.KeyPEM is required when configuring TLS; "+
 					"supply the PEM-encoded server private key")
 		}

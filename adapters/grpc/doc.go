@@ -27,7 +27,14 @@
 // # Readiness probe
 //
 // ProbeReady ("grpc_ready") is healthy while grpcServer.Serve is active.
-// Register it via lifecycle.ManagedResource.Probes() drain in bootstrap.
+// The serving flag is set after grpcServer.Serve starts its accept loop, so
+// there is a sub-millisecond window between flag flip and the first Accept.
+// At typical readiness-probe polling intervals (≥100 ms) this window is
+// invisible. Wire it via lifecycle.ManagedResource.Probes() drain in bootstrap:
+//
+//	srv, _ := grpc.New(cfg)
+//	grpc_health_v1.RegisterHealthServer(srv.ServiceRegistrar(), healthSrv)
+//	bootstrap.WithManagedResource(srv)
 //
 // # Scope boundary
 //

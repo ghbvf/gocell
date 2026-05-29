@@ -11,6 +11,19 @@ import (
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	// testShutdownTimeout is the ShutdownTimeout used in unit-test configs that
+	// exercise the hard-stop path. A short value keeps the test fast; it must be
+	// larger than the ctx deadline supplied to Close so graceful drain has no
+	// budget and hard stop is forced immediately.
+	testShutdownTimeout = testtime.D50ms
+
+	// testCloseWatchdog is the time.After deadline in TestClose_ContextTimeoutForcesHardStop
+	// used to detect a hung Close. Large enough to survive any scheduler jitter.
+	testCloseWatchdog = testtime.SelectShutdown
 )
 
 // ─── Config.applyDefaults ────────────────────────────────────────────────────
@@ -235,7 +248,7 @@ func TestClose_ContextTimeoutForcesHardStop(t *testing.T) {
 	t.Parallel()
 	cfg := grpcadapter.Config{
 		Addr:            ":0",
-		ShutdownTimeout: 50 * time.Millisecond,
+		ShutdownTimeout: testShutdownTimeout,
 		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
 	}
 	srv, err := grpcadapter.New(cfg)
@@ -253,7 +266,52 @@ func TestClose_ContextTimeoutForcesHardStop(t *testing.T) {
 	select {
 	case <-done:
 		// OK — returned promptly.
-	case <-time.After(2 * time.Second):
-		t.Fatal("Close did not return within 2s after ctx deadline exceeded")
+	case <-time.After(testCloseWatchdog):
+		t.Fatalf("Close did not return within %v after ctx deadline exceeded", testCloseWatchdog)
+	}
+}
+
+// ─── New — invalid PEM (V6 buildCredentials error path) ──────────────────────
+
+// TestNew_InvalidPEM verifies that New returns ErrAdapterGRPCTLSConfig when the
+// supplied PEM bytes are syntactically invalid. This exercises the buildCredentials
+// error aggregation path (V6).
+func TestNew_InvalidPEM(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cert []byte
+		key  []byte
+	}{
+		{
+			name: "bad_cert_pem",
+			cert: []byte("not a pem"),
+			key:  []byte("not a pem"),
+		},
+		{
+			name: "bad_cert_only",
+			cert: []byte("not a pem"),
+			key:  func() []byte { chain := genIntegChain(t); return chain.serverKeyPEM }(),
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := grpcadapter.Config{
+				Addr: ":0",
+				TLS: grpcadapter.TLSConfig{
+					CertPEM: tc.cert,
+					KeyPEM:  tc.key,
+				},
+			}
+			_, err := grpcadapter.New(cfg)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "expected *errcode.Error, got %T: %v", err, err)
+			assert.Equal(t, grpcadapter.ErrAdapterGRPCTLSConfig, ec.Code,
+				"expected ErrAdapterGRPCTLSConfig from invalid PEM")
+		})
 	}
 }

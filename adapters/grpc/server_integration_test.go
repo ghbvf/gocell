@@ -17,8 +17,11 @@ import (
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 const (
@@ -46,16 +49,13 @@ func startServing(t *testing.T, srv *grpcadapter.Server, lis net.Listener) (stop
 // dialInsecure dials the given address with insecure (plaintext) credentials.
 func dialInsecure(t *testing.T, addr string) *grpc.ClientConn {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), integDialTimeout)
-	defer cancel()
 	cc, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
-	// Force a connect attempt.
+	// Force a connect attempt; actual readiness is verified by the caller via
+	// healthCheck or waitForServing — grpc.NewClient does not accept a ctx.
 	cc.Connect()
-	// Wait for the connection to be ready via a health check.
-	_ = ctx
 	return cc
 }
 
@@ -278,10 +278,18 @@ func TestIntegration_MTLS_NoClientCert(t *testing.T) {
 	_, err = healthCheck(t, cc)
 	require.Error(t, err, "mTLS server must reject client without certificate")
 
-	st := status.Code(err)
-	assert.True(t,
-		st == codes.Unavailable || st == codes.Unknown,
-		"expected Unavailable or Unknown from TLS handshake failure, got %v", st)
+	// Empirically observed on Go 1.22+ / grpc-go: the TLS handshake failure
+	// surfaces as codes.Unavailable with a message containing "tls: certificate
+	// required". The gRPC transport layer wraps OS-level TLS alerts as Unavailable
+	// rather than Unauthenticated because the rejection happens at the transport
+	// handshake before any RPC frame is exchanged.
+	st := status.FromContextError(err)
+	code := status.Code(err)
+	assert.Equal(t, codes.Unavailable, code,
+		"expected Unavailable from mTLS handshake failure, got %v", code)
+	assert.Contains(t, st.Message(), "tls",
+		"error message should reference TLS handshake failure")
+	_ = st
 }
 
 // TestIntegration_GracefulDrain verifies that in-flight RPCs complete before Close returns.
@@ -334,19 +342,75 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 	assert.Error(t, probes[0].Check(context.Background()), "probe must be unhealthy after Close")
 }
 
+// TestIntegration_WorkerStopAndCloseConcurrent verifies that calling Worker().Stop()
+// and Close() concurrently is safe: both must return without panic or deadlock,
+// and the probe must report unhealthy afterwards (the declared stopOnce invariant).
+func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
+	t.Parallel()
+
+	cfg := grpcadapter.Config{
+		Addr:            "127.0.0.1:0",
+		ShutdownTimeout: integServeTimeout,
+		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
+	}
+	srv, err := grpcadapter.New(cfg)
+	require.NoError(t, err)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	serveCtx, serveCancel := context.WithTimeout(context.Background(), integServeTimeout)
+	defer serveCancel()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- srv.ServeListenerForTest(serveCtx, lis)
+	}()
+
+	waitForServing(t, srv)
+
+	// Fire Worker().Stop() and Close() simultaneously from two goroutines.
+	teardownCtx, teardownCancel := context.WithTimeout(context.Background(), integServeTimeout)
+	defer teardownCancel()
+
+	stopDone := make(chan error, 1)
+	closeDone := make(chan error, 1)
+	go func() { stopDone <- srv.Worker().Stop(teardownCtx) }()
+	go func() { closeDone <- srv.Close(teardownCtx) }()
+
+	stopErr := testwait.Deterministic(t, stopDone, integServeTimeout, "worker-stop")
+	closeErr := testwait.Deterministic(t, closeDone, integServeTimeout, "close")
+
+	// Both callers must not return a non-nil error in the happy path.
+	// The second caller always returns nil (stopOnce semantic).
+	assert.NoError(t, stopErr, "Worker().Stop() must not error on concurrent teardown")
+	assert.NoError(t, closeErr, "Close() must not error on concurrent teardown")
+
+	// Probe must be unhealthy after teardown regardless of which call won the Once.
+	probes := srv.Probes()
+	require.Len(t, probes, 1)
+	assert.Error(t, probes[0].Check(context.Background()),
+		"probe must be unhealthy after concurrent Stop+Close")
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // waitForServing polls srv.Probes()[0].Check until it returns nil or times out.
+// Uses testwait.External because the probe state transitions inside a goroutine
+// managed by grpcServer.Serve — no channel signal is producible by the caller.
 func waitForServing(t *testing.T, srv *grpcadapter.Server) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
 	probes := srv.Probes()
 	require.Len(t, probes, 1)
-	for time.Now().Before(deadline) {
-		if err := probes[0].Check(context.Background()); err == nil {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("server did not start serving within 2s")
+	probe := probes[0]
+	testwait.External(t, "grpc-server-probe-healthy",
+		func() bool { return probe.Check(context.Background()) == nil },
+		testtime.EventuallyDefault, testtime.FastPoll,
+		"server did not start serving within %v", testtime.EventuallyDefault,
+	)
+}
+
+// newBufconnListener creates an in-process bufconn listener with the given
+// buffer size. Used by plaintext integration tests to avoid OS-level networking.
+func newBufconnListener(bufSize int) *bufconn.Listener {
+	return bufconn.Listen(bufSize)
 }
