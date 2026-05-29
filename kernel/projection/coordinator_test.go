@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -868,12 +869,14 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		},
 	}
 
-	// Negative test: non-event spec (kind:projection, no Topic) must be rejected
-	// by fakeRegistrar (mirrors RegistryRecorder.Subscribe validation). This proves
-	// the registrar-side kind check is exercised end-to-end through
-	// Coordinator.Subscribe — ContractSpec.Validate() permits kind:projection
-	// without a Topic, so the rejection comes from reg.Subscribe, not spec.Validate().
-	t.Run("non-event spec rejected by registrar", func(t *testing.T) {
+	// Negative test (F4): a non-event spec (kind:projection) must be rejected by
+	// Coordinator.Subscribe's own fail-fast kind guard, BEFORE reaching the
+	// registrar. ContractSpec.Validate() permits kind:projection without a Topic,
+	// so without the guard the rejection would only come from reg.Subscribe; the
+	// guard makes the documented "spec.Kind must be event" precondition
+	// self-enforcing (same trust-boundary principle as the pos<1 guard in applyOne).
+	// The fakeRegistrar mirror is defense-in-depth, unreached here.
+	t.Run("non-event spec rejected by Subscribe kind guard", func(t *testing.T) {
 		t.Parallel()
 		reg := &fakeRegistrar{}
 		c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
@@ -892,9 +895,17 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		if subscribeErr == nil {
 			t.Fatal("expected error for non-event spec, got nil")
 		}
-		// fakeRegistrar rejects kind:projection before incrementing subscribeCalls.
+		var ec *errcode.Error
+		if !errors.As(subscribeErr, &ec) || ec.Kind != errcode.KindInvalid {
+			t.Errorf("error = %v, want *errcode.Error KindInvalid", subscribeErr)
+		}
+		// The guard fired (its message), not the registrar mirror, and short-circuited
+		// before the registrar was ever called.
+		if !strings.Contains(subscribeErr.Error(), "projection.Subscribe: spec.Kind") {
+			t.Errorf("error %q, want the projection.Subscribe kind-guard message (not the registrar's)", subscribeErr)
+		}
 		if reg.subscribeCalls != 0 {
-			t.Errorf("subscribeCalls = %d, want 0 (registrar must reject before recording the call)", reg.subscribeCalls)
+			t.Errorf("subscribeCalls = %d, want 0 (kind guard must reject before reaching the registrar)", reg.subscribeCalls)
 		}
 	})
 

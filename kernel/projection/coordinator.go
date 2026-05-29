@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -144,6 +145,17 @@ func (c *Coordinator) Subscribe(
 	if apply == nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.Subscribe: apply required")
+	}
+	// Fail fast at the trust boundary: a projection consumes an event-kind input
+	// stream (the "projection" kind is a slice-level concept, not the kind of the
+	// subscribed contract). The registrar also enforces this, but self-enforcing
+	// the documented precondition here gives a projection-specific error and makes
+	// the godoc contract executable (same trust-boundary principle as the pos<1
+	// guard in applyOne). Both checks assert the identical invariant, so they
+	// cannot diverge harmfully.
+	if spec.Kind != cellvocab.ContractEvent {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.Subscribe: spec.Kind must be \"event\"; a projection consumes an event-kind input stream")
 	}
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("projection.Subscribe[%s]: invalid spec: %w", projectionID, err)
