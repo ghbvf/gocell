@@ -721,12 +721,14 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 // gated on obj.Pkg().Path() == "time" and obj.Name() in forbiddenTimeFns.
 // This makes the check immune to import aliases and dot-imports.
 //
-// Control-plane carve-out (receiver-type confinement, #619 upgrade):
-// A FuncDecl is exempt from PROD-CLOCK-INJECTION-01 only if it is a METHOD
-// whose receiver type name is "controlPlaneClock" AND the file's module-relative
-// path is under "runtime/command/". This replaces the former comment-marker +
-// hand-maintained allowlist-map form (which was AI-abusable: any marked
-// FuncDecl in any allowlisted file could self-exempt by adding the comment).
+// Control-plane carve-out (host-scoped (host, method, callee) triple, #619 +
+// #1275 F1): a FuncDecl is exempt from PROD-CLOCK-INJECTION-01 only if it is a
+// METHOD whose receiver type name is "controlPlaneClock", whose file is under a
+// sanctioned host (controlPlaneClockCarveOut keys: runtime/command/ or
+// kernel/reconcile/), AND whose name maps to the exact stdlib callee listed for
+// THAT host. This replaces the former comment-marker + hand-maintained
+// allowlist-map form (which was AI-abusable: any marked FuncDecl in any
+// allowlisted file could self-exempt by adding the comment).
 //
 // The exemption does NOT extend to closures/FuncLits within an exempt method
 // body. enclosingFuncDeclKey explicitly rejects positions inside FuncLit nodes.
@@ -743,12 +745,15 @@ func enclosingFuncDeclKey(fset *token.FileSet, file *ast.File, pos token.Pos) st
 //     function's closure calling time.NewTicker is flagged.
 //     Reverse self-check B: control_plane_exempt_func_closure_violates — a
 //     closure inside an exempt controlPlaneClock method is still flagged.
-//  2. A struct named "controlPlaneClock" with methods outside runtime/command/:
-//     the path gate prevents exemption.
+//  2. A struct named "controlPlaneClock" with methods outside any sanctioned
+//     host: the path gate prevents exemption.
 //     Reverse self-check: control_plane_wrong_path_violates fixture.
-//  3. A receiver type other than "controlPlaneClock" inside runtime/command/:
-//     only the exact type name matches; wrong receiver type is NOT exempt.
+//  3. A receiver type other than "controlPlaneClock" inside a host: only the
+//     exact type name matches; wrong receiver type is NOT exempt.
 //     Reverse self-check: control_plane_wrong_receiver_type_violates fixture.
+//  4. A host using another host's sanctioned method (e.g. kernel/reconcile
+//     declaring runtime/command's "newTicker"): the host-scoped table denies it.
+//     Reverse self-check: control_plane_cross_host_method_violates fixture.
 //
 // ref: docs/architecture/202605170000-adr-control-plane-business-plane-decouple.md §D-A
 // ref: docs/architecture/202605270000-adr-clock-positional-injection-funnel.md
@@ -799,16 +804,17 @@ func isAllowedRealClockPath(rel string) bool {
 // violation Diagnostics for every reference to one of the forbidden stdlib
 // time functions.
 //
-// Control-plane carve-out: if the forbidden reference sits inside a top-level
-// *ast.FuncDecl that is a METHOD on receiver type "controlPlaneClock" AND the
-// file's module-relative path is under "runtime/command/", that reference is
-// exempt. The carve-out is method-level only — closures within the exempt
-// method body are NOT exempt (enclosingFuncDeclKey rejects positions in FuncLit
-// nodes). Other methods in the same file with a different receiver type are
-// still checked.
+// Control-plane carve-out: a forbidden reference is exempt only if it sits in a
+// top-level *ast.FuncDecl that is a METHOD on receiver type "controlPlaneClock",
+// in a file under a sanctioned host (controlPlaneClockCarveOut keys:
+// runtime/command/ or kernel/reconcile/), AND the method/callee match the exact
+// (host, method, callee) triple listed for that host. The carve-out is
+// method-level only — closures within the exempt method body are NOT exempt
+// (enclosingFuncDeclKey rejects positions in FuncLit nodes). Other methods in
+// the same file with a different receiver type are still checked.
 //
-// AI-robust grade: Medium (receiver-type confinement; see godoc of
-// clockControlPlaneAllowedMethods for the permanent ceiling rationale).
+// AI-robust grade: Medium ((host, method, callee) triple confinement; see godoc
+// of clockControlPlaneAllowedMethods for the permanent ceiling rationale).
 //
 // scanProdClockInjectionAST is exported within the archtest package so the
 // fixture-based regression tests in prod_clock_injection_fixtures_test.go can

@@ -129,9 +129,14 @@ type Loop struct {
 	// Metrics holds optional pre-bound instruments (nil-safe).
 	Metrics Metrics
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	done     chan struct{}
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+	// gen is the run generation, bumped under mu on each Start. Each run's
+	// done-watcher captures its generation and only writes the leader gauge /
+	// clears state if it is still the active generation — so a slow watcher from
+	// an old run cannot reset a newer run's leader=1 (generation ownership).
+	gen      uint64
 	inflight sync.Map // EntityID(string) -> struct{}: same-entity serial guard
 }
 
@@ -159,6 +164,8 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	if l.cancel != nil {
 		return nil // already started — idempotent
 	}
+	l.gen++
+	gen := l.gen
 
 	runCtx, cancel := context.WithCancel(ownerCtx)
 	queue := make(chan Request, queueBuffer)
@@ -181,38 +188,61 @@ func (l *Loop) Start(ownerCtx context.Context) error {
 	}
 
 	done := make(chan struct{})
-	//nolint:gosec // G118: by the time the loop drains, runCtx is already
-	// canceled; the leader-reset metric record must run under a live ctx, so
-	// context.Background() below is deliberate (same rationale as Stop's reset).
-	go func() {
-		wg.Wait()
-		// Single reset site for the leader gauge: when every goroutine has
-		// drained, this instance no longer holds leadership. Resetting here
-		// (rather than in Stop) covers ALL drain paths uniformly — explicit
-		// Stop, owner-ctx cancel without Stop (assembly shutdown), and the
-		// awaitProbe pre-cancel path — so the gauge can never stay stuck at 1.
-		// Background ctx because runCtx is canceled by the time we drain.
-		l.Metrics.setLeader(context.Background(), l.reconcilerID(), 0)
-		close(done)
-	}()
+	//nolint:gosec // G118: watchDrain resets the leader gauge after the run has
+	// drained (runCtx canceled by then), so its metric record must use a live ctx
+	// (context.Background) rather than the dead runCtx — deliberate, see watchDrain.
+	go l.watchDrain(gen, done, &wg)
 	l.cancel = cancel
 	l.done = done
-
-	// Single-process Loop: this instance is the (only) leader. Real lease gating
-	// is the leader-election PR's concern. The matching reset to 0 happens in the
-	// done-watcher above when the loop drains (any path).
-	l.Metrics.setLeader(runCtx, l.reconcilerID(), 1)
 
 	if err := l.awaitProbe(runCtx, cancel, ready); err != nil {
 		return err
 	}
+	// Claim leadership only on the confirmed path. awaitProbe clears l.cancel on
+	// its pre-cancel branch, so a nil l.cancel here means "owner ctx was canceled
+	// before we confirmed running" — we do NOT set leader=1 then (watchDrain will
+	// hold it at 0). This write is under l.mu (held for the whole Start body), so
+	// it strictly precedes this run's watchDrain reset to 0, which can only
+	// acquire l.mu after Start returns — closing the #1292 r2 ordering race.
 	if l.cancel != nil {
+		l.Metrics.setLeader(runCtx, l.reconcilerID(), 1)
 		l.logger().Info("reconcile: loop started",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()),
 			slog.Int("workers", workers))
 	}
 	return nil
+}
+
+// watchDrain waits for run gen's goroutines to finish, then — if gen is still
+// the active generation — resets the leader gauge to 0 and clears run state, and
+// finally closes done. It is the single site that resets leader / clears state
+// on drain, covering every path uniformly: explicit Stop, owner-ctx cancel
+// without Stop (assembly shutdown), and the awaitProbe pre-cancel branch.
+//
+// Two invariants make the leader gauge race-free (#1292 r2):
+//   - Ordering: it takes l.mu, which Start holds for its entire body, so this
+//     reset to 0 can only run after Start has returned — i.e. after Start's
+//     confirmed-path setLeader(1). The optimistic-then-reset window that let the
+//     gauge end at 1 under -count=1000 is gone.
+//   - Generation ownership: the reset is gated on l.gen == gen, so a slow
+//     watcher from a superseded run cannot clobber a newer run's leader=1.
+//
+// close(done) is sequenced after the reset, so a Stop observing <-done sees the
+// gauge already at 0 (happens-before).
+func (l *Loop) watchDrain(gen uint64, done chan struct{}, wg *sync.WaitGroup) {
+	wg.Wait()
+	l.mu.Lock()
+	if l.gen == gen {
+		// context.Background: the run has drained (runCtx canceled), so the
+		// leader-reset record must use a live ctx. The G118 nolint sits on the
+		// `go l.watchDrain(...)` launch in Start (that is where gosec reports it).
+		l.Metrics.setLeader(context.Background(), l.reconcilerID(), 0)
+		l.cancel = nil
+		l.done = nil
+	}
+	l.mu.Unlock()
+	close(done)
 }
 
 // pump copies Source into the internal queue until the run ctx is canceled.
@@ -345,24 +375,27 @@ func (l *Loop) scheduleRequeue(runCtx context.Context, req Request, after time.D
 
 // awaitProbe waits for the worker pool to confirm it is running, returning nil
 // in all non-error cases:
-//   - owner ctx already canceled before we got here: log Warn, clear state so a
-//     later Stop is a no-op, and let the workers self-exit via runCtx.Done().
-//     Checked FIRST (before the select) so this path is deterministic — `ready`
-//     closes at worker spawn and would otherwise race the cancellation, leaving
-//     this branch ~unreachable (and untestable).
+//   - owner ctx already canceled before we got here: log Warn, clear l.cancel so
+//     Start skips the leader=1 claim (and a later Stop is a no-op), and let the
+//     workers self-exit via runCtx.Done(). Checked FIRST (before the select) so
+//     this path is deterministic — `ready` closes at worker spawn and would
+//     otherwise race the cancellation, leaving this branch ~unreachable (and
+//     untestable).
 //   - ready closed: a worker started — confirmed.
 //   - probe window elapsed: defensive fallback if a worker is slow to schedule;
 //     workers are spawned, so return anyway (fast-return OnStart contract).
+//
+// Runs under Start's l.mu, so clearing l.cancel/l.done here needs no extra lock.
 func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, ready <-chan struct{}) error {
 	if runCtx.Err() != nil {
 		l.logger().Warn("reconcile: owner ctx canceled before loop confirmed running",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()))
 		cancel()
-		// The leader gauge (optimistically set to 1 in Start) is reset by the
-		// done-watcher once the spawned workers drain via runCtx.Done(); no reset
-		// here (single reset site — see Start). We only clear cancel/done so a
-		// later Stop is a no-op.
+		// Clear l.cancel so Start's post-probe check skips the leader=1 claim:
+		// the gauge is never raised on this path, so there is nothing to reset
+		// and no setLeader(1)/setLeader(0) ordering race. watchDrain still runs
+		// (gen-guarded) and leaves the gauge at 0.
 		l.cancel = nil
 		l.done = nil
 		return nil
@@ -380,15 +413,15 @@ func (l *Loop) awaitProbe(runCtx context.Context, cancel context.CancelFunc, rea
 // Stop cancels the Loop and waits for all goroutines (workers, pump, pending
 // requeues) to exit within ctx's budget.
 //
-// State (l.cancel / l.done) is cleared ONLY after the goroutines actually drain.
-// Until then the fields stay set so that (a) a concurrent Start remains a no-op
-// — it never spawns a second pool racing the one still unwinding — and (b) a
-// Stop that exhausts ctx's budget can simply be called again to keep waiting.
-// cancel() is idempotent, so a retried Stop re-selects on the same done channel
-// without harm. The leader gauge is reset to 0 by the done-watcher (see Start)
-// when the loop drains — sequenced before close(done), so by the time this Stop
-// observes <-done the gauge is already 0. A timed-out Stop is "not yet stopped",
-// so leader stays 1 until a later Stop (or owner-ctx cancel) drains it.
+// State (l.cancel / l.done) is cleared by watchDrain ONLY after the goroutines
+// actually drain. Until then the fields stay set so that (a) a concurrent Start
+// remains a no-op — it never spawns a second pool racing the one still unwinding
+// — and (b) a Stop that exhausts ctx's budget can simply be called again to keep
+// waiting. cancel() is idempotent, so a retried Stop re-selects on the same done
+// channel without harm. The leader gauge is reset to 0 by watchDrain (sequenced
+// before close(done)), so by the time this Stop observes <-done the gauge is
+// already 0. A timed-out Stop is "not yet stopped", so leader stays 1 until a
+// later Stop (or owner-ctx cancel) drains it.
 func (l *Loop) Stop(ctx context.Context) error {
 	if l == nil {
 		return nil
@@ -405,13 +438,9 @@ func (l *Loop) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		// Drained: the done-watcher has already reset the leader gauge to 0
-		// (sequenced before close(done)). Clear state so a later Start can
-		// restart the loop.
-		l.mu.Lock()
-		l.cancel = nil
-		l.done = nil
-		l.mu.Unlock()
+		// Drained: watchDrain has already reset the leader gauge to 0 and cleared
+		// l.cancel/l.done (sequenced before close(done)), so a later Start can
+		// restart the loop. Nothing left to do but log.
 		l.logger().Info("reconcile: loop stopped",
 			slog.String("loop", l.name()),
 			slog.String("reconciler", l.reconcilerID()))

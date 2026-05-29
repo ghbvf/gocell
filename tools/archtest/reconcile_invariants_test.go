@@ -318,24 +318,36 @@ func TestReconcileStructShape_ReverseBlindSpot(t *testing.T) {
 // charter permits with an open tracking issue (#661 / A7), named here so a
 // reviewer can follow the upgrade path.
 //
-// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"):
+// Blind spots (per ai-robust.md §"工具选定后强制盲区自检"), each with a RED
+// fixture form in tools/archtest/internal/reconcileloopredfixture/:
 //   - Import alias (`import rc ".../kernel/reconcile"; rc.Loop{}`): the type
-//     resolver keys on the resolved *types.Named obj package path, not the
-//     source alias, so aliasing does not hide the literal.
+//     resolver keys on the resolved obj package path, not the source alias, so
+//     aliasing does not hide the literal. Covered by redLoopViaImportAlias.
+//   - Type alias (`type LoopAlias = reconcile.Loop; LoopAlias{}`): under Go
+//     1.23+ gotypesalias=1 this denotes a *types.Alias, so isReconcileLoopType
+//     MUST call types.Unalias before the *types.Named assertion or it slips past
+//     (#1292 r2 F2). Covered by redLoopViaTypeAlias; the RED test's ≥3-hit
+//     assertion fails if Unalias regresses.
 //   - Address-of (`&reconcile.Loop{}`): EachInSubtree visits the inner
 //     CompositeLit regardless of the enclosing UnaryExpr, so `&Loop{}` is caught.
 //   - Reflection construction (`reflect.New(...)`): out of scope, same theoretical
 //     gap accepted by BASESLICE-CTOR-FUNNEL-01.
 //   - Zero-field literal `reconcile.Loop{}`: still a CompositeLit of the type —
-//     flagged; the RED fixture below uses exactly this shape to prove the
-//     detector is non-vacuous.
+//     flagged; the RED fixture's direct form (redLoopLiteral) uses exactly this
+//     shape to prove the detector is non-vacuous.
 
 // reconcileLoopLiteralMsg is the diagnostic for a forbidden reconcile.Loop
 // composite literal. Extracted as a const to keep callsites within the line cap.
 const reconcileLoopLiteralMsg = "forbidden composite literal reconcile.Loop{...} outside kernel/reconcile" +
 	" — construct via the package Builder (PR-A7); the exported-field form skips metric/leader/backoff wiring"
 
-// isReconcileLoopType reports whether expr names reconcile.Loop from reconcilePkgPath.
+// isReconcileLoopType reports whether expr names reconcile.Loop from
+// reconcilePkgPath, seeing through type aliases. types.Unalias is required
+// because under Go 1.23+ (gotypesalias=1, the default) a `type LoopAlias =
+// reconcile.Loop` denotes a *types.Alias, not a *types.Named — so a bare
+// tv.Type.(*types.Named) assertion would let `LoopAlias{}` slip past the funnel
+// (#1292 r2 F2). Unalias peels the alias chain to the underlying named type and
+// is a no-op when tv.Type is already a *types.Named.
 func isReconcileLoopType(info *types.Info, expr ast.Expr, reconcilePkgPath string) bool {
 	if info == nil || expr == nil {
 		return false
@@ -344,7 +356,7 @@ func isReconcileLoopType(info *types.Info, expr ast.Expr, reconcilePkgPath strin
 	if !ok || tv.Type == nil {
 		return false
 	}
-	named, ok := tv.Type.(*types.Named)
+	named, ok := types.Unalias(tv.Type).(*types.Named)
 	if !ok {
 		return false
 	}
@@ -407,8 +419,11 @@ func TestReconcileLoopConstructionAllowlist01(t *testing.T) {
 }
 
 // TestReconcileLoopConstructionAllowlist01_RedFixture proves the detector is
-// non-vacuous: a fixture package outside the allowlist that composes
-// reconcile.Loop{} must be flagged at least once.
+// non-vacuous AND alias-aware. The fixture package (outside the allowlist)
+// composes reconcile.Loop three ways — direct `&reconcile.Loop{}`, import-aliased
+// `&rc.Loop{}`, and Go 1.23 type-alias `&loopTypeAlias{}`. All three must be
+// flagged; the type-alias form in particular only fires when the scanner calls
+// types.Unalias (#1292 r2 F2), so the ≥3 assertion is what guards that fix.
 func TestReconcileLoopConstructionAllowlist01_RedFixture(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -431,8 +446,10 @@ func TestReconcileLoopConstructionAllowlist01_RedFixture(t *testing.T) {
 			hits++
 		}
 	}
-	if hits == 0 {
-		t.Errorf("RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01 RED fixture: scanner found 0 hits; " +
-			"expected ≥ 1 from reconcileloopredfixture — the detector may be broken")
+	const wantForms = 3 // direct + import-alias + type-alias
+	if hits < wantForms {
+		t.Errorf("RECONCILE-LOOP-CONSTRUCTION-ALLOWLIST-01 RED fixture: scanner found %d hits, "+
+			"want ≥ %d (direct + import-alias + type-alias). A shortfall means the type-alias "+
+			"form slipped past — check that isReconcileLoopType calls types.Unalias.", hits, wantForms)
 	}
 }
