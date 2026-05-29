@@ -625,6 +625,7 @@ func (c *Coordinator) driveOne(ctx context.Context, ci journal.ClaimedInstance) 
 		c.logger.WarnContext(ctx, "saga: fold failed, marking terminal",
 			slog.String("instance_id", string(ci.Instance.ID)),
 			slog.String("definition_id", string(ci.Instance.DefinitionID)),
+			slog.String("lease_id", string(ci.LeaseID)),
 			slog.Any("error", foldErr))
 		return c.markTerminal(ctx, ci.Instance.ID, ci.LeaseID, ksaga.StatusFailed)
 	}
@@ -846,7 +847,8 @@ func (c *Coordinator) reverseWalkCompensate(
 		if !found {
 			c.logger.WarnContext(hbCtx, "saga: compensation: unknown committed step name, skipping",
 				slog.String("instance_id", string(ci.Instance.ID)),
-				slog.String("step_name", string(cs.name)))
+				slog.String("step_name", string(cs.name)),
+				slog.String("lease_id", string(ci.LeaseID)))
 			continue
 		}
 		if compensateErr := c.compensateOneStep(hbCtx, ci, step, cs.payload); compensateErr != nil {
@@ -958,12 +960,13 @@ func (c *Coordinator) compensateOneStep(
 	if step.Compensate == nil {
 		return nil
 	}
-	compensateErr := c.executor.Compensate(ctx, &ci.Instance, step, committedPayload)
+	compensateErr := c.executor.Compensate(ctx, &ci.Instance, ci.LeaseID, step, committedPayload)
 	if compensateErr != nil {
 		c.logger.WarnContext(ctx, "saga: compensation: step compensate failed, continuing",
 			slog.String("instance_id", string(ci.Instance.ID)),
 			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(ci.LeaseID)),
 			slog.Any("error", redaction.RedactAny(compensateErr)))
 		if txErr := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 			_, aErr := c.journal.Append(txCtx, ci.Instance.ID, ci.LeaseID, journal.Event{
@@ -977,6 +980,7 @@ func (c *Coordinator) compensateOneStep(
 				slog.String("instance_id", string(ci.Instance.ID)),
 				slog.String("definition_id", string(ci.Instance.DefinitionID)),
 				slog.String("step_name", string(step.Name)),
+				slog.String("lease_id", string(ci.LeaseID)),
 				slog.Any("error", txErr))
 		}
 		return compensateErr
@@ -996,6 +1000,7 @@ func (c *Coordinator) compensateOneStep(
 			slog.String("instance_id", string(ci.Instance.ID)),
 			slog.String("definition_id", string(ci.Instance.DefinitionID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(ci.LeaseID)),
 			slog.Any("error", txErr))
 	}
 	return nil

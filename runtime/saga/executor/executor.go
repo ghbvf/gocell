@@ -165,19 +165,19 @@ func (e *Executor) safeObserveOutcome(
 	outcome Outcome,
 	attempts int,
 ) {
-	e.callObserverBounded(ctx, "ObserveOutcome", func() {
+	e.callObserverBounded(ctx, instanceID, leaseID, "ObserveOutcome", func() {
 		e.observer.ObserveOutcome(ctx, instanceID, leaseID, defID, stepName, outcome, attempts)
 	})
 }
 
 func (e *Executor) safeObserveRetry(ctx context.Context, instanceID, leaseID idutil.SafeID, defID, stepName string) {
-	e.callObserverBounded(ctx, "ObserveRetry", func() {
+	e.callObserverBounded(ctx, instanceID, leaseID, "ObserveRetry", func() {
 		e.observer.ObserveRetry(ctx, instanceID, leaseID, defID, stepName)
 	})
 }
 
 func (e *Executor) safeObserveHeartbeatFailure(ctx context.Context, instanceID, leaseID idutil.SafeID, reason HeartbeatFailureReason) {
-	e.callObserverBounded(ctx, "ObserveHeartbeatFailure", func() {
+	e.callObserverBounded(ctx, instanceID, leaseID, "ObserveHeartbeatFailure", func() {
 		e.observer.ObserveHeartbeatFailure(ctx, instanceID, leaseID, reason)
 	})
 }
@@ -188,11 +188,17 @@ func (e *Executor) safeObserveHeartbeatFailure(ctx context.Context, instanceID, 
 // observer call from outside). Used by all three safeObserve* helpers so the
 // Observer "MUST NOT block" contract is enforced at the boundary rather than
 // trusted on faith.
-func (e *Executor) callObserverBounded(ctx context.Context, method string, call func()) {
+//
+// instanceID/leaseID are carried only into the timeout/panic log lines so an
+// operator can correlate an observer-boundary failure back to the specific
+// instance and ClaimPending cycle it occurred under (every per-instance saga
+// log carries lease_id; the observer boundary is no exception). The three
+// safeObserve* callers all hold both, so plumbing them here is uniform.
+func (e *Executor) callObserverBounded(ctx context.Context, instanceID, leaseID idutil.SafeID, method string, call func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer e.recoverObserverPanic(ctx, method)
+		defer e.recoverObserverPanic(ctx, instanceID, leaseID, method)
 		call()
 	}()
 	timer := e.clk.NewTimerAt(e.clk.Now().Add(e.observerCallDeadline))
@@ -201,6 +207,8 @@ func (e *Executor) callObserverBounded(ctx context.Context, method string, call 
 	case <-done:
 	case <-timer.C():
 		e.logger.WarnContext(ctx, "saga executor: observer call exceeded deadline; continuing",
+			slog.String("instance_id", string(instanceID)),
+			slog.String("lease_id", string(leaseID)),
 			slog.String("method", method),
 			slog.Duration("deadline", e.observerCallDeadline),
 		)
@@ -212,9 +220,14 @@ func (e *Executor) callObserverBounded(ctx context.Context, method string, call 
 // reaching slog so a panic value carrying user data (sensitive headers, JWT
 // fragments) does not leak into operator logs (#1181 F10, mirrors
 // .claude/rules/gocell/observability.md §Span Error Redaction).
-func (e *Executor) recoverObserverPanic(ctx context.Context, method string) {
+//
+// instanceID/leaseID are logged for the same claim-cycle correlation as the
+// timeout branch in callObserverBounded.
+func (e *Executor) recoverObserverPanic(ctx context.Context, instanceID, leaseID idutil.SafeID, method string) {
 	if r := recover(); r != nil {
 		e.logger.WarnContext(ctx, "saga executor: observer call panicked, ignoring",
+			slog.String("instance_id", string(instanceID)),
+			slog.String("lease_id", string(leaseID)),
 			slog.String("method", method),
 			slog.Any("panic", redaction.RedactAny(r)),
 		)
@@ -444,7 +457,7 @@ func (e *Executor) executeInner(
 	stopAndJoin := func() { stopHB(); hbWG.Wait() }
 
 	for attempt := 1; ; attempt++ {
-		result, done := e.runAttempt(runCtx, inst, step, policy, prevState, attempt)
+		result, done := e.runAttempt(runCtx, inst, leaseID, step, policy, prevState, attempt)
 		if done {
 			stopAndJoin()
 			return result
@@ -578,9 +591,16 @@ func (e *Executor) RunWithHeartbeat(
 // a parent/lease cancellation propagates down and fires stepCtx too. We MUST
 // check context.Cause(runCtx) BEFORE the per-step timeout, otherwise a lease
 // loss or parent cancel could be misreported as a step-timeout Expired.
+//
+// leaseID is the fence token identifying the current coordinator's claim. Like
+// Compensate it is NOT forwarded to any Heartbeat call here (the heartbeat
+// goroutine owns lease renewal); it is carried only into the "retry budget
+// exhausted" log line so an operator can correlate that terminal-failure entry
+// back to the ClaimPending cycle that drove it.
 func (e *Executor) runAttempt(
 	runCtx context.Context,
 	inst *ksaga.Instance,
+	leaseID idutil.SafeID,
 	step ksaga.Step,
 	policy resolvedPolicy,
 	prevState []byte,
@@ -610,6 +630,7 @@ func (e *Executor) runAttempt(
 		e.logger.WarnContext(runCtx, "saga executor: retry budget exhausted",
 			slog.String("instance_id", string(inst.ID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(leaseID)),
 			slog.Int("attempts", attempt),
 			slog.String("outcome", OutcomeFailed.String()),
 			slog.Any("error", runErr),
@@ -669,9 +690,15 @@ func (e *Executor) buildStepCtx(runCtx context.Context, step ksaga.Step) (contex
 // by step.Timeout (deliberate, mirrors Temporal's lack of CompensateTimeout).
 // The only bound is the saga-level ctx (parent deadline) plus the heartbeat
 // goroutine's lease-loss cancel (~heartbeatInterval granularity).
+//
+// leaseID is the fence token identifying the current coordinator's claim. Unlike
+// Execute it is NOT forwarded to any Heartbeat call (Compensate runs no
+// heartbeat); it is carried only into the compensation log lines so an operator
+// can correlate a compensation entry back to the ClaimPending cycle that drove it.
 func (e *Executor) Compensate(
 	ctx context.Context,
 	inst *ksaga.Instance,
+	leaseID idutil.SafeID,
 	step ksaga.Step,
 	committedState []byte,
 ) error {
@@ -690,11 +717,13 @@ func (e *Executor) Compensate(
 	e.logger.InfoContext(ctx, "saga executor: compensating step",
 		slog.String("instance_id", string(inst.ID)),
 		slog.String("step_name", string(step.Name)),
+		slog.String("lease_id", string(leaseID)),
 	)
 	if err := safeRunCompensate(ctx, step.Compensate, inst, committedState); err != nil {
 		e.logger.WarnContext(ctx, "saga executor: compensate failed",
 			slog.String("instance_id", string(inst.ID)),
 			slog.String("step_name", string(step.Name)),
+			slog.String("lease_id", string(leaseID)),
 			slog.Any("error", err),
 		)
 		// Redact before recording — see ObserveOutcome rationale above.
