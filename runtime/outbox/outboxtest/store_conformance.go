@@ -130,6 +130,7 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("OldestEligibleAt_Published_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtPublished(t, factory) })
 	t.Run("OldestEligibleAt_Dead_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtDead(t, factory) })
 	t.Run("OldestEligibleAt_InvalidStatus_ReturnsError", func(t *testing.T) { conformOldestEligibleAtInvalid(t, factory) })
+	t.Run("Principal_OccurredAt_RoundTrip", func(t *testing.T) { RunPrincipalRoundTripConformance(t, factory) })
 }
 
 func conformClaimPendingEmpty(t *testing.T, factory StoreFactory) {

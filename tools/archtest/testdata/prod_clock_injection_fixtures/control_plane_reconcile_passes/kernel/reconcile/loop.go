@@ -1,9 +1,10 @@
 // Package reconcile is the GREEN control-plane receiver-type confinement fixture
 // for the kernel/reconcile host of PROD-CLOCK-INJECTION-01
 // (RECONCILE-LOOP-CLOCK-CARVEOUT-01). It mirrors the real kernel/reconcile/ path
-// so the rel-gate (controlPlaneClockHosts includes "kernel/reconcile/") plus
-// receiver type name "controlPlaneClock" plus the (method, callee) pairs
-// newProbeTimer→NewTimer / newRequeueTimer→NewTimer / now→Now yield 0 violations.
+// so the rel-gate (controlPlaneClockCarveOut includes "kernel/reconcile/") plus
+// receiver type name "controlPlaneClock" plus the host-scoped (method, callee)
+// pairs newProbeTimer→NewTimer / newRequeueTimer→NewTimer / now→Now yield 0
+// violations.
 package reconcile
 
 import "time"

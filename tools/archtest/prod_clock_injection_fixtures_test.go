@@ -24,6 +24,10 @@
 //   - control_plane_exempt_func_closure_violates: RED — blind-spot-A closure
 //     self-check: time.* inside a FuncLit within an exempt (controlPlaneClock)
 //     method is NOT exempt; still flagged (1 violation).
+//   - control_plane_cross_host_method_violates: RED — blind-spot-6 self-check
+//     (#1275 F1): kernel/reconcile declaring runtime/command's "newTicker" gets
+//     no carve-out (host-scoped controlPlaneClockCarveOut); the borrowed
+//     method's time.NewTicker is flagged (1 violation).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 package archtest
@@ -92,8 +96,9 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		"control_plane_no_marker_violates",           // RED: free function in runtime/command/ (no receiver)
 		"control_plane_closure_violates",             // RED: closure inside non-exempt func
 		"control_plane_exempt_func_closure_violates", // RED: closure inside exempt controlPlaneClock method
-		"control_plane_wrong_method_name_violates",   // RED: new controlPlaneClock method not in exactSanctionedTimeCalls
+		"control_plane_wrong_method_name_violates",   // RED: new controlPlaneClock method in no host carve-out set
 		"control_plane_wrong_callee_violates",        // RED: sanctioned method calls wrong time.* function
+		"control_plane_cross_host_method_violates",   // RED: host borrows another host's method (#1275 F1)
 	}
 
 	for _, dir := range dirs {

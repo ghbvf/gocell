@@ -390,16 +390,19 @@ Implementations:
 Conformance test:
   - runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip (PR-A1)
   - runtime/audit/ledger.TestProtocol_AllElevenFieldsAffectHash (PR-A1)
-  - kernel/outbox/outboxtest.RunPrincipalRoundTripConformance (PR-A2)
+  - runtime/outbox/outboxtest.RunPrincipalRoundTripConformance (FP2, #1291 — wired into RunStoreConformanceSuite; FakeStore + PG)
   - cells/auditcore/internal/appender 全套测试（hash 期望 regen 含 12-字段 HMAC）(PR-A1 zero / PR-A2 真值)
 Repro:
   PR-A1 verify:
     go test ./runtime/audit/ledger/... ./adapters/postgres/... ./cells/auditcore/...
     go test ./tools/archtest/ -run 'AuditHashInputFrozen'
     bash hack/verify-archtest-invariants.sh
-  PR-A2 verify (future):
+  PR-A2 verify:
     go test ./kernel/outbox/... ./pkg/ctxkeys/... ./kernel/wrapper/...
     go test ./tools/archtest/ -run 'PRINCIPAL|SAFEID-WIREMESSAGE|SAFEID-UPSTREAM'
+  FP2 verify (#1291 — principal/occurredAt store round-trip conformance):
+    go test ./runtime/outbox/... -run 'ConformanceSuite/Principal_OccurredAt_RoundTrip'
+    go test -tags=integration ./adapters/postgres/ -run 'PGOutboxStore_ConformanceSuite/Principal_OccurredAt_RoundTrip'
 Dependent contracts (governance scan): none — 三族字段集是 framework 横切，不进 contract.yaml payload.schema.json
 Invariant inventory (DROP COLUMN 043_audit_entries_v2.sql):
   - 6-field hash chain → 12-field canonical JSON via auditHashInput unexported struct + AUDIT-HASH-INPUT-FROZEN-01 双向 Hard 锁
@@ -566,6 +569,39 @@ map key」无法编译期不可表达，runtime 拒绝是唯一形态，full-Har
 
 > 本 amendment 不改动任何生产运行时行为（key 集本就是 11，无新增/删除 reserved key）；纯
 > 文档真值订正 + 测试守护补强 + 测试 helper 单源化。
+
+## Amendment 2026-05-30 — FP2 conformance landed + location corrected (issue #1291)
+
+PR #1272 (PR-A2) shipped the sealed `Entry` + Principal/OccurredAt fields, but the
+Implementation-matrix "Conformance test:" row for the outbox side named a **phantom**
+symbol: `kernel/outbox/outboxtest.RunPrincipalRoundTripConformance` — it was never
+implemented, so the matrix claimed coverage that did not exist, and the outbox-side
+principal/occurredAt **store round-trip had zero conformance coverage**. #1291 FP2 closes this.
+
+**Location corrected (`kernel/outbox/outboxtest` → `runtime/outbox/outboxtest`).** The
+original location is layering-illegal: `kernel/outbox/outboxtest` sits under `kernel/`, which
+the depguard `kernel-isolation` rule forbids from importing `runtime/outbox.Store` — where
+both `FakeStore` and `PGOutboxStore` live. A store-backed conformance therefore **cannot** live
+there. The conformance is store-factory-based (mirroring the audit analog
+`runtime/audit/ledger/storetest.RunPrincipalFieldsRoundTrip` and the existing
+`RunStoreConformanceSuite`), so it lives in `runtime/outbox/outboxtest`. Per ai-robust "ADR
+amendment 落地必查", matrix line 376 and the PR-A2 repro block were rewritten in this same PR
+(no two-truth-source carryover).
+
+**Enrollment is suite-coupled, not opt-in.** `RunPrincipalRoundTripConformance` is invoked from
+inside `RunStoreConformanceSuite` (subtest `Principal_OccurredAt_RoundTrip`), which both store
+impls already run — FakeStore (`fake_store_test.go`) and PG (`outbox_store_integration_test.go`,
+`//go:build integration`). A future 3rd `outbox.Store` impl that runs the mandatory suite gets
+principal round-trip coverage automatically; there is no separate call site to forget — the same
+"claimed-but-absent coverage" failure class this Amendment closes. The seed Entry is built via
+`mustEntry` → `EntryScan.ToEntry` (the sealed reconstruction funnel, already in the conformance
+package), so the harness populates Principal without touching the funnel-locked
+`ctxkeys.With*ID` setters (`CTXKEYS-PRINCIPAL-WRITE-CALLER-01`).
+
+**Threat-matrix re-eval:** no row in §威胁矩阵 degrades. This Amendment is purely additive test
+coverage — it adds no production code path, no new wire field, no new attack surface. It *raises*
+assurance on the existing "principal/occurredAt 端到端携带" guarantee (previously locked only by
+`outbox_fullchain_test.go` at the broker layer) by adding a focused store-layer round-trip check.
 
 ## References
 
