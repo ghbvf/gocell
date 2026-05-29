@@ -35,6 +35,11 @@ import (
 const (
 	// fullchainD20s is used as the subscriber receive timeout; not in testtime table.
 	fullchainD20s = 20 * time.Second
+	// occurredAtSkew is how far OccurredAt (producer-domain event time) is set
+	// before CreatedAt (store/seal time) in the round-trip, proving the two
+	// timestamps are carried independently end-to-end. Extracted to a
+	// package-level const per TEST-TIME-LITERAL-01.
+	occurredAtSkew = 90 * time.Minute
 )
 
 type queueInspector interface {
@@ -256,7 +261,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// — so Step 8 proves the two timestamps are carried INDEPENDENTLY end-to-end
 	// and OccurredAt is not silently collapsed onto CreatedAt (review F7b).
 	entryCreatedAt := time.Now().UTC().Truncate(time.Microsecond)
-	entryOccurredAt := entryCreatedAt.Add(-90 * time.Minute)
+	entryOccurredAt := entryCreatedAt.Add(-occurredAtSkew)
 	// Construct with publishCtx so NewEntry injects observability + principal
 	// from context (NewEntry replaced the old write-time inject path).
 	entry, err := outbox.NewEntry(clock.Real(), publishCtx, topic,

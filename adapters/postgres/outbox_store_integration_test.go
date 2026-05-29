@@ -150,13 +150,22 @@ func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 	// Batched INSERT keeps the test under a couple seconds even at 1500 rows.
 	tx, err := pool.DB().Begin(ctx)
 	require.NoError(t, err)
+	// Roll back if any seed INSERT fails mid-loop. Without this, a require
+	// failure mid-seed Goexits with the tx still holding a pooled connection,
+	// hanging the per-test pool's Close (puddle WaitGroup.Wait) until the test
+	// deadline instead of failing cleanly.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	staleAt := time.Now().Add(-time.Hour)
 	for i := 0; i < seedCount; i++ {
+		// principal + occurred_at are NOT NULL (migration 044); the direct seed
+		// INSERT must supply them. principal '{}' decodes to a zero
+		// PrincipalMetadata; occurred_at reuses the stale timestamp.
 		_, execErr := tx.Exec(ctx,
 			`INSERT INTO outbox_entries
-			(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
-			VALUES ($1, 'agg-stale', 'test', 'ev', 't', $2, NULL, $3, 'claiming', $3, gen_random_uuid())`,
+			(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, principal, occurred_at, created_at, status, claimed_at, lease_id)
+			VALUES ($1, 'agg-stale', 'test', 'ev', 't', $2, NULL, '{}', $3, $3, 'claiming', $3, gen_random_uuid())`,
 			"e-stale-"+strconv.Itoa(i), []byte(`{"i":`+strconv.Itoa(i)+`}`),
-			time.Now().Add(-time.Hour))
+			staleAt)
 		require.NoError(t, execErr)
 	}
 	require.NoError(t, tx.Commit(ctx))
