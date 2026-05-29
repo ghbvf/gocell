@@ -143,12 +143,12 @@ func (T) New() int { return 0 }
 func use(v T) { _ = v.New() }`
 
 	cases := []struct {
-		name       string
-		src        string
-		callee     string
-		pkgPath    string
-		fnName     string
-		want       bool
+		name    string
+		src     string
+		callee  string
+		pkgPath string
+		fnName  string
+		want    bool
 	}{
 		{"qualified-hmac-new", qualified, "New", "crypto/hmac", "New", true},
 		{"alias-hmac-new", aliased, "New", "crypto/hmac", "New", true},
