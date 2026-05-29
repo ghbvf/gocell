@@ -554,10 +554,11 @@ func TestSubscriber_Close_StopsBlockedSubscribe(t *testing.T) {
 
 	subscription := newSubscription("test/block/+", "block-cg-"+uuid.NewString())
 	subDone := make(chan error, 1)
+	ackHandler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.Ack(), nil
+	}
 	go func() {
-		subDone <- sub.Subscribe(context.Background(), subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-			return outbox.Ack(), nil
-		})
+		subDone <- sub.Subscribe(context.Background(), subscription, ackHandler)
 	}()
 	select {
 	case <-sub.Ready(subscription):
