@@ -381,6 +381,69 @@ func TestFMT38_InboundZeroMaxBody_Rejected(t *testing.T) {
 	assertResultsContainCode(t, results, codeFMT38, "payload.maxBodyBytes")
 }
 
+// TestFMT38_InboundEmptyDeliveryIDHeader_Rejected verifies that an inbound
+// webhook whose signature block is present but carries an empty
+// deliveryIDHeader is rejected — the runtime HMAC verifier cannot build the
+// signed string without it (a partially-hollow shell is fail-open).
+func TestFMT38_InboundEmptyDeliveryIDHeader_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Signature.DeliveryIDHeader = ""
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.deliveryIDHeader")
+}
+
+// TestFMT38_InboundEmptyTimestampHeader_Rejected verifies that an inbound
+// webhook signature block with an empty timestampHeader is rejected.
+func TestFMT38_InboundEmptyTimestampHeader_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Signature.TimestampHeader = ""
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.timestampHeader")
+}
+
+// TestFMT38_InboundEmptySignatureHeader_Rejected verifies that an inbound
+// webhook signature block with an empty signatureHeader is rejected.
+func TestFMT38_InboundEmptySignatureHeader_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Signature.SignatureHeader = ""
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.signatureHeader")
+}
+
+// TestFMT38_InboundEmptySignedStringForm_Rejected verifies that an inbound
+// webhook signature block with an empty signedStringForm template is rejected.
+func TestFMT38_InboundEmptySignedStringForm_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Signature.SignedStringForm = ""
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.signedStringForm")
+}
+
+// TestFMT38_InboundEmptyContentType_Rejected verifies that an inbound webhook
+// whose payload block is present but carries an empty contentType is rejected —
+// the receiver cannot enforce a Content-Type without it.
+func TestFMT38_InboundEmptyContentType_Rejected(t *testing.T) {
+	project := minimalGovernanceProject()
+	c := inboundWebhookContractMeta()
+	c.Payload.ContentType = ""
+	project.Contracts["webhook.stripe.events.v1"] = c
+
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "payload.contentType")
+}
+
 // TestFMT38_OutboundWithoutSignaturePayload_Passes verifies outbound webhooks do
 // NOT require signature/payload (the dispatcher signs with its own key).
 func TestFMT38_OutboundWithoutSignaturePayload_Passes(t *testing.T) {

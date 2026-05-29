@@ -1766,6 +1766,15 @@ func (v *Validator) validateFMT36() []ValidationResult {
 //     the replay-attack window — fail-open) AND payload.maxBodyBytes MUST be
 //     >= 1 (0 is an unbounded-body DoS surface). The runtime HMAC verifier
 //     likewise rejects a non-positive tolerance.
+//   - direction==inbound → every signed-string ingredient on the (now-required)
+//     signature block MUST be non-empty: signature.deliveryIDHeader,
+//     signature.timestampHeader, signature.signatureHeader, and
+//     signature.signedStringForm. A partially-hollow shell (block present but
+//     headers/template empty) leaves the PR-3 runtime HMAC verifier unable to
+//     build the signed string → fail-open; reject it at declaration.
+//   - direction==inbound → payload.contentType on the (now-required) payload
+//     block MUST be non-empty so the receiver can enforce a Content-Type on
+//     incoming deliveries. payload.schemaRef stays optional.
 //   - whenever a signature block is present (inbound: required; outbound:
 //     optional), signature.algorithm MUST equal the sole supported value
 //     hmac-sha256 — no downgrade path.
@@ -1804,9 +1813,13 @@ func (v *Validator) validateFMT38() []ValidationResult {
 }
 
 // fmt38InboundChecks returns the FMT-38 findings specific to an inbound webhook
-// contract: signature + payload blocks are required, and their fail-open knobs
-// (toleranceSeconds, maxBodyBytes) must carry a positive value. Split out of
-// validateFMT38 to keep each function under the cognitive-complexity ceiling.
+// contract: signature + payload blocks are required, their fail-open knobs
+// (toleranceSeconds, maxBodyBytes) must carry a positive value, and — when the
+// block is present — every field the PR-3 runtime HMAC verifier needs to build
+// the signed string (delivery/timestamp/signature headers, signedStringForm,
+// contentType) must be non-empty. The per-field checks are split into
+// fmt38SignatureFieldChecks / fmt38PayloadFieldChecks to keep each function
+// under the cognitive-complexity ceiling.
 func (v *Validator) fmt38InboundChecks(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
 	switch {
@@ -1827,6 +1840,7 @@ func (v *Validator) fmt38InboundChecks(c *metadata.ContractMeta) []ValidationRes
 				"the runtime HMAC verifier also requires a positive tolerance",
 		))
 	}
+	results = append(results, v.fmt38SignatureFieldChecks(c)...)
 	switch {
 	case c.Payload == nil:
 		results = append(results, v.newError(
@@ -1844,7 +1858,61 @@ func (v *Validator) fmt38InboundChecks(c *metadata.ContractMeta) []ValidationRes
 			"set payload.maxBodyBytes to a positive byte limit (e.g. 1048576 for 1 MB)",
 		))
 	}
+	results = append(results, v.fmt38PayloadFieldChecks(c)...)
 	return results
+}
+
+// fmt38SignatureFieldChecks flags each empty signed-string ingredient on an
+// inbound webhook signature block (delivery/timestamp/signature headers,
+// signedStringForm). Without all four the PR-3 runtime HMAC verifier cannot
+// build the signed string and the route fails open. Only runs when a signature
+// block is present (the missing-block case is handled by fmt38InboundChecks).
+func (v *Validator) fmt38SignatureFieldChecks(c *metadata.ContractMeta) []ValidationResult {
+	if c.Signature == nil {
+		return nil
+	}
+	type fieldCheck struct {
+		value string
+		field string
+		human string
+	}
+	checks := []fieldCheck{
+		{c.Signature.DeliveryIDHeader, "signature.deliveryIDHeader", "deliveryIDHeader"},
+		{c.Signature.TimestampHeader, "signature.timestampHeader", "timestampHeader"},
+		{c.Signature.SignatureHeader, "signature.signatureHeader", "signatureHeader"},
+		{c.Signature.SignedStringForm, "signature.signedStringForm", "signedStringForm"},
+	}
+	var results []ValidationResult
+	for _, ch := range checks {
+		if ch.value != "" {
+			continue
+		}
+		results = append(results, v.newError(
+			codeFMT38, IssueRequired,
+			contractFile(c), ch.field,
+			fmt.Sprintf("inbound webhook contract %q must declare a non-empty signature.%s; "+
+				"the runtime HMAC verifier cannot build the signed string without it (fail-open)", c.ID, ch.human),
+			fmt.Sprintf("set signature.%s to the header/template value the webhook source uses", ch.human),
+		))
+	}
+	return results
+}
+
+// fmt38PayloadFieldChecks flags an empty payload.contentType on an inbound
+// webhook payload block. Without it the receiver cannot enforce a Content-Type
+// on incoming deliveries. Only runs when a payload block is present (the
+// missing-block case is handled by fmt38InboundChecks).
+func (v *Validator) fmt38PayloadFieldChecks(c *metadata.ContractMeta) []ValidationResult {
+	if c.Payload == nil || c.Payload.ContentType != "" {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT38, IssueRequired,
+		contractFile(c), "payload.contentType",
+		fmt.Sprintf("inbound webhook contract %q must declare a non-empty payload.contentType; "+
+			"the receiver cannot enforce a Content-Type on incoming deliveries without it", c.ID),
+		"set payload.contentType to the expected MIME type (e.g. application/json)",
+	)}
 }
 
 // sliceMixesHTTPVisibility reports whether s serves at least one public

@@ -282,6 +282,300 @@ func TestWebhookContractSchema_ZeroMaxBodyFails(t *testing.T) {
 		"payload.maxBodyBytes=0 must be rejected by minimum:1 (unbounded body is a DoS surface)")
 }
 
+// TestWebhookContractSchema_InboundMissingDeliveryIDHeaderFails verifies that an
+// inbound webhook signature block omitting deliveryIDHeader is rejected — every
+// signed-string ingredient is required on inbound so the runtime HMAC verifier
+// can build the signed string (fail-closed at declaration).
+func TestWebhookContractSchema_InboundMissingDeliveryIDHeaderFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook signature without deliveryIDHeader must be rejected (required for inbound)")
+}
+
+// TestWebhookContractSchema_InboundMissingTimestampHeaderFails verifies that an
+// inbound webhook signature block omitting timestampHeader is rejected.
+func TestWebhookContractSchema_InboundMissingTimestampHeaderFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook signature without timestampHeader must be rejected (required for inbound)")
+}
+
+// TestWebhookContractSchema_InboundMissingSignatureHeaderFails verifies that an
+// inbound webhook signature block omitting signatureHeader is rejected.
+func TestWebhookContractSchema_InboundMissingSignatureHeaderFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook signature without signatureHeader must be rejected (required for inbound)")
+}
+
+// TestWebhookContractSchema_InboundMissingSignedStringFormFails verifies that an
+// inbound webhook signature block omitting signedStringForm is rejected.
+func TestWebhookContractSchema_InboundMissingSignedStringFormFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook signature without signedStringForm must be rejected (required for inbound)")
+}
+
+// TestWebhookContractSchema_InboundEmptyDeliveryIDHeaderFails verifies that an
+// inbound webhook signature block with an empty-string deliveryIDHeader is
+// rejected by the minLength:1 constraint (a hollow shell is fail-open).
+func TestWebhookContractSchema_InboundEmptyDeliveryIDHeaderFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "application/json",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook signature with empty deliveryIDHeader must be rejected by minLength:1")
+}
+
+// TestWebhookContractSchema_InboundMissingContentTypeFails verifies that an
+// inbound webhook payload block omitting contentType is rejected — the receiver
+// cannot enforce a Content-Type on incoming deliveries without it.
+func TestWebhookContractSchema_InboundMissingContentTypeFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook payload without contentType must be rejected (required for inbound)")
+}
+
+// TestWebhookContractSchema_InboundEmptyContentTypeFails verifies that an
+// inbound webhook payload block with an empty-string contentType is rejected by
+// the minLength:1 constraint.
+func TestWebhookContractSchema_InboundEmptyContentTypeFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300,
+			"deliveryIDHeader": "svix-id",
+			"timestampHeader": "svix-timestamp",
+			"signatureHeader": "svix-signature",
+			"signedStringForm": "{deliveryID}.{timestamp}.{body}"
+		},
+		"payload": {
+			"contentType": "",
+			"maxBodyBytes": 524288
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"inbound webhook payload with empty contentType must be rejected by minLength:1")
+}
+
+// TestWebhookContractSchema_PartiallyHollowShellFails is the regression test for
+// the verified gap: an inbound contract whose signature block carries only
+// algorithm+toleranceSeconds and whose payload block carries only maxBodyBytes
+// (all headers / signedStringForm / contentType empty) was previously accepted
+// by both the schema and FMT-38. It must now be rejected at the schema layer.
+func TestWebhookContractSchema_PartiallyHollowShellFails(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "webhook.stripe.events.v1",
+		"kind": "webhook",
+		"ownerCell": "paymentcore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"direction": "inbound",
+		"endpoints": {
+			"inbound": {
+				"pathPattern": "/webhooks/stripe/events",
+				"sourceID": "stripe"
+			}
+		},
+		"signature": {
+			"algorithm": "hmac-sha256",
+			"toleranceSeconds": 300
+		},
+		"payload": {
+			"maxBodyBytes": 1048576
+		}
+	}`), &doc))
+
+	assert.Error(t, schema.Validate(doc),
+		"partially-hollow inbound shell (no headers/signedStringForm/contentType) must be rejected by the inbound required constraints")
+}
+
 // TestWebhookContractSchema_HandWrittenReceiversFails verifies that a
 // contract.yaml with a hand-written "receivers" key under endpoints is
 // rejected by additionalProperties:false (receivers is derived, yaml:"-").

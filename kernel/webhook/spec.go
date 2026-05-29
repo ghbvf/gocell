@@ -1,6 +1,36 @@
 package webhook
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// WebhookReceiveHandler is the inbound-webhook handler signature cellgen emits
+// as the second argument to reg.RegisterWebhookReceiver. The runtime resolves
+// the verified payload of an inbound webhook request and hands it to the
+// handler; a non-nil error signals the receiver runtime to reject the delivery.
+//
+// PR-2 record-only seam: this signature is intentionally minimal (stdlib types
+// only) because PR-2 closes the cellgen ↔ Registrar compile gap without wiring
+// any runtime. The PR-3 receiver runtime MAY refine the signature (e.g. carry a
+// richer Delivery value instead of raw []byte) — GoCell carries no
+// backward-compat burden (CLAUDE.md), so PR-3 is free to evolve this type in
+// lockstep with the cellgen template and the generated method values it binds.
+type WebhookReceiveHandler func(ctx context.Context, payload []byte) error
+
+// WebhookDispatchSelector is the outbound-webhook target-selector signature
+// cellgen emits as the second argument to reg.RegisterWebhookDispatch. Given an
+// outbound payload it returns the target identifier the dispatcher runtime uses
+// to route and sign the request; a non-nil error signals the dispatcher to skip
+// or fail the dispatch.
+//
+// PR-2 record-only seam: like [WebhookReceiveHandler] this is intentionally
+// minimal (stdlib types only). The PR-5 dispatcher runtime MAY refine the
+// signature (e.g. return a structured Target rather than a bare string) —
+// GoCell carries no backward-compat burden (CLAUDE.md), so PR-5 is free to
+// evolve this type alongside the cellgen template.
+type WebhookDispatchSelector func(ctx context.Context, payload []byte) (string, error)
 
 // ReceiverSpec is the pure-data descriptor cellgen emits into cell_gen.go to
 // register an inbound webhook receiver. It carries only identifiers known at

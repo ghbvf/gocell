@@ -510,7 +510,32 @@
             "then": {
               "required": ["signature", "payload"],
               "properties": {
-                "endpoints": { "required": ["inbound"] }
+                "endpoints": { "required": ["inbound"] },
+                "signature": {
+                  "description": "Inbound signature block: every field the PR-3 runtime HMAC verifier needs to build the signed string is required and non-empty (fail-closed at declaration). algorithm is also constrained to the sole supported value by the base enum + FMT-38. Scoped to the inbound then-branch so outbound (which signs with its own key) is not over-constrained.",
+                  "required": [
+                    "algorithm",
+                    "toleranceSeconds",
+                    "deliveryIDHeader",
+                    "timestampHeader",
+                    "signatureHeader",
+                    "signedStringForm"
+                  ],
+                  "properties": {
+                    "algorithm": { "minLength": 1 },
+                    "deliveryIDHeader": { "minLength": 1 },
+                    "timestampHeader": { "minLength": 1 },
+                    "signatureHeader": { "minLength": 1 },
+                    "signedStringForm": { "minLength": 1 }
+                  }
+                },
+                "payload": {
+                  "description": "Inbound payload block: contentType and maxBodyBytes are required and non-empty so the receiver can enforce a Content-Type and a bounded body. schemaRef stays optional. Scoped to the inbound then-branch.",
+                  "required": ["contentType", "maxBodyBytes"],
+                  "properties": {
+                    "contentType": { "minLength": 1 }
+                  }
+                }
               }
             }
           }
