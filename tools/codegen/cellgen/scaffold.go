@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/pathsafe"
 	"github.com/ghbvf/gocell/pkg/scaffoldid"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // ownerTeamPattern is the whitelist regex for OwnerTeam values written into
@@ -23,11 +24,6 @@ var ownerTeamPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // ownerRolePattern is the whitelist regex for OwnerRole values written into
 // cell.yaml owner.role. Same character class as ownerTeamPattern.
 var ownerRolePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
-// modulePathPattern validates Go module paths (e.g. "github.com/owner/repo").
-// Allows letters, digits, hyphens, underscores, dots, and forward slashes.
-// Prohibits backslash, "..", and leading/trailing slashes.
-var modulePathPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-/]*[a-zA-Z0-9]$`)
 
 // validCellTypes is the authoritative list of cell type values, derived from
 // kernel/metadata/schemas/cell.schema.json "type" enum.
@@ -221,18 +217,11 @@ func validateIdentifierFields(spec ScaffoldSpec) error {
 
 // validateModulePath validates the ModulePath field.
 func validateModulePath(spec ScaffoldSpec) error {
-	if spec.ModulePath == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"scaffold cell: ModulePath is required")
-	}
-	if strings.Contains(spec.ModulePath, "..") || strings.Contains(spec.ModulePath, `\`) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"scaffold cell: ModulePath contains path traversal or backslash")
-	}
-	if len(spec.ModulePath) > 1 && !modulePathPattern.MatchString(spec.ModulePath) {
+	if err := gomodutil.ValidateModulePath(spec.ModulePath); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"scaffold cell: ModulePath is not a valid Go module path",
-			errcode.WithDetails(errcode.PublicString("modulePath", spec.ModulePath)))
+			errcode.WithDetails(errcode.PublicString("modulePath", spec.ModulePath)),
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
 	}
 	return nil
 }

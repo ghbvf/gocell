@@ -86,6 +86,16 @@ func TestReadModulePath(t *testing.T) {
 			goMod:   "go 1.25\n",
 			wantErr: true,
 		},
+		{
+			name:    "invalid trailing slash module path",
+			goMod:   "module github.com/acme/svc/\n\ngo 1.25\n",
+			wantErr: true,
+		},
+		{
+			name:    "invalid backslash module path",
+			goMod:   "module github.com\\acme\n\ngo 1.25\n",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

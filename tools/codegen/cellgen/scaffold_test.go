@@ -769,6 +769,42 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "invalid ModulePath with trailing slash",
+			spec: ScaffoldSpec{
+				CellID:     mustID(t, "foo"),
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app/",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
+			},
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "ModulePath") {
+					t.Errorf("expected message to contain 'ModulePath', got: %s", ec.Message)
+				}
+			},
+		},
+		{
+			name: "invalid ModulePath with double slash",
+			spec: ScaffoldSpec{
+				CellID:     mustID(t, "foo"),
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com//example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
+			},
+			wantCode: errcode.ErrValidationFailed,
+			checkErr: func(t *testing.T, ec *errcode.Error) {
+				t.Helper()
+				if !strings.Contains(ec.Message, "ModulePath") {
+					t.Errorf("expected message to contain 'ModulePath', got: %s", ec.Message)
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -53,5 +53,8 @@ func ReadModulePath(root string) (string, error) {
 	if mod == "" {
 		return "", fmt.Errorf("go.mod at %s has no module directive", root)
 	}
+	if err := ValidateModulePath(mod); err != nil {
+		return "", fmt.Errorf("go.mod at %s has invalid module path: %w", root, err)
+	}
 	return mod, nil
 }

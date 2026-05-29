@@ -175,9 +175,9 @@ func generateAssembly(args []string) error {
 	return nil
 }
 
-// resolveModule returns the module path from the flag value or go.mod. A
-// non-empty flag value is validated (it flows into generated import paths and
-// the goimports/gofumpt formatter); go.mod-derived values are trusted as-is.
+// resolveModule returns the module path from the flag value or go.mod. Both
+// sources are validated by gomodutil because the value flows into generated
+// import paths and the goimports/gofumpt formatter.
 func resolveModule(root, flagValue string) (string, error) {
 	if flagValue != "" {
 		if err := gomodutil.ValidateModulePath(flagValue); err != nil {
