@@ -115,7 +115,8 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		return device, nil
 	}
 	// WithOccurredAt pins the domain event time to the device registration
-	// instant, matching the todoorder example's ordercreate/orderconfirm pattern.
+	// instant (device.LastSeen is set to s.clock.Now() above, == registration
+	// time here), matching the todoorder example's ordercreate/orderconfirm pattern.
 	// Without it occurredAt would default to the entry's seal time; both examples
 	// stamp the domain time explicitly so the published wire envelope carries the
 	// business event time, not the outbox INSERT time.

@@ -37,10 +37,11 @@ side** beyond the DB-row count.
    the step-2 count. Stop the relay and consumers gracefully so their in-flight
    deliveries settle before the rebuild:
 
-   - The RabbitMQ subscriber drains via `StopIntake` → `drainRemaining`
-     (`adapters/rabbitmq/subscriber.go`): it stops pulling new deliveries and
-     waits up to `defaultRMQDrainDeadline` (30s wall-clock) for in-flight ones to
-     Ack/Requeue/Reject.
+   - The RabbitMQ subscriber's `StopIntake` phase
+     (`adapters/rabbitmq/subscriber.go`) stops pulling new deliveries and waits
+     up to `SubscriberConfig.StopIntakeDrainTimeout` (default 30s wall-clock)
+     for in-flight ones to Ack/Requeue/Reject. Tune that field if your handlers
+     need longer to settle.
    - On Kubernetes this is the normal graceful-shutdown path; size
      `terminationGracePeriodSeconds` per `docs/ops/graceful-shutdown-k8s.md` so
      SIGKILL does not truncate the drain.
