@@ -100,7 +100,7 @@ func PlanCellBundleScaffold(realRoot string, spec ScaffoldSpec) ([]pathsafe.Plan
 	// The staging lifecycle (MkdirTemp + RemoveAll) is encapsulated in
 	// appendDerivedCodegenStaged (stage_render.go) — os calls are not in
 	// scaffold_bundle.go which is in the depguard scaffold-os-ban list.
-	return appendDerivedCodegenStaged(realRoot, spec.CellID.String(), skeletonPlan)
+	return appendDerivedCodegenStaged(realRoot, spec.CellID.String(), spec.ModulePath, skeletonPlan)
 }
 
 // minCellConsistencyLevel returns the minimum cell consistency level required

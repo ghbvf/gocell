@@ -2,6 +2,7 @@ package codegen_test
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -81,4 +82,56 @@ func F(t assert.TestingT) {
 			t.Fatal("expected error for empty modulePath, got nil")
 		}
 	})
+}
+
+// TestFormatGoSource_ConcurrentModulePaths stresses the importsMu mutex: many
+// goroutines format concurrently, each with a DIFFERENT module path, and each
+// must see ITS OWN module's import grouped locally. Run under -race to catch a
+// regression where the imports.LocalPrefix global is read by goroutine A after
+// goroutine B overwrote it. (render.go importsMu godoc invariant.)
+func TestFormatGoSource_ConcurrentModulePaths(t *testing.T) {
+	t.Parallel()
+	mods := []string{
+		"github.com/acme/alpha",
+		"github.com/acme/bravo",
+		"github.com/ghbvf/gocell",
+		"example.com/charlie",
+	}
+	const iterations = 30
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(mods)*iterations)
+	for _, mod := range mods {
+		for i := 0; i < iterations; i++ {
+			wg.Add(1)
+			go func(mod string) {
+				defer wg.Done()
+				// Source imports stdlib + the goroutine's OWN module package.
+				src := []byte("package demo\n\nimport (\n\t\"fmt\"\n\t\"" + mod + "/widget\"\n)\n\nfunc F() { fmt.Println(widget.Name) }\n")
+				out, err := codegen.FormatGoSource(mod, "demo.go", src)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				// The module's own import must be grouped in the local block:
+				// preceded by a blank line separating it from the stdlib block.
+				if !bytes.Contains(out, []byte("\n\n\t\""+mod+"/widget\"")) {
+					errCh <- &groupingError{mod: mod, out: string(out)}
+				}
+			}(mod)
+		}
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+}
+
+type groupingError struct {
+	mod string
+	out string
+}
+
+func (e *groupingError) Error() string {
+	return "module " + e.mod + " import not grouped locally under concurrent formatting:\n" + e.out
 }

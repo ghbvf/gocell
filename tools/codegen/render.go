@@ -32,7 +32,9 @@ const LangVersion = "go1.25"
 // imports.LocalPrefix is a package global in golang.org/x/tools/imports with no
 // per-call alternative; codegen runs single-threaded in production (uncontended),
 // but tests may format concurrently — the lock keeps the set-then-use critical
-// section race-free under -race.
+// section race-free under -race. imports.Process itself performs single-threaded
+// resolution (no internal goroutines reading LocalPrefix), so holding the lock
+// across the set + Process call is sufficient to serialize concurrent callers.
 var importsMu sync.Mutex
 
 // FormatGoSource normalizes Go source bytes through goimports → gofumpt and

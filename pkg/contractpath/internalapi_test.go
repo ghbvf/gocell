@@ -88,6 +88,15 @@ func TestContractIDToImportPath(t *testing.T) {
 			contractID: "http.internal.devicecommands.v1",
 			want:       "github.com/acme/svc/generated/contracts/http/internalapi/devicecommands/v1",
 		},
+		{
+			// Documents the caller-contract: ContractIDToImportPath does not
+			// validate inputs; an empty modulePath yields a leading slash.
+			// Callers must supply a non-empty modulePath (formatter is the guard).
+			name:       "empty modulePath yields leading slash (caller contract)",
+			modulePath: "",
+			contractID: "event.session.created.v1",
+			want:       "/generated/contracts/event/session/created/v1",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

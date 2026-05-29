@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -37,7 +38,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"<derived>/main.go and <derived>/modules_gen.go must",
 			"carry the gocell generated header or generation",
 			"aborts to protect your edits.",
-			"--id=<assemblyID> | --all [--module=<module>]",
+			"--id=<assemblyID> | --all [--module-path=<module>]",
 		},
 		run: func(_ context.Context, a []string) error { return generateAssembly(a) },
 	},
@@ -133,13 +134,13 @@ func generateAssembly(args []string) error {
 	fs := flag.NewFlagSet("generate assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
 	all := fs.Bool("all", false, "generate for every assembly")
-	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	module := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *id == "" && !*all {
-		return fmt.Errorf("usage: gocell generate assembly --id=<assemblyID> | --all [--module=<module>]")
+		return fmt.Errorf("usage: gocell generate assembly --id=<assemblyID> | --all [--module-path=<module>]")
 	}
 	if *id != "" && *all {
 		return fmt.Errorf("--id and --all are mutually exclusive")
@@ -172,9 +173,14 @@ func generateAssembly(args []string) error {
 	return nil
 }
 
-// resolveModule returns the module path from the flag value or go.mod.
+// resolveModule returns the module path from the flag value or go.mod. A
+// non-empty flag value is validated (it flows into generated import paths and
+// the goimports/gofumpt formatter); go.mod-derived values are trusted as-is.
 func resolveModule(root, flagValue string) (string, error) {
 	if flagValue != "" {
+		if err := gomodutil.ValidateModulePath(flagValue); err != nil {
+			return "", fmt.Errorf("invalid --module-path: %w", err)
+		}
 		return flagValue, nil
 	}
 	mod, err := readModule(root)

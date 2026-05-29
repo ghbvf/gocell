@@ -130,7 +130,9 @@ func parseCodegenFlags[R CodegenResult](
 	all := fs.Bool("all", true, spec.AllFlagDesc)
 	dr := fs.Bool("dry-run", false, "print would-write file paths without writing")
 	ver := fs.Bool("verify", false, "diff against disk, exit non-zero on drift, no write")
-	mp := fs.String("module-path", "", "Go module path for generated import grouping (default: read from go.mod)")
+	mp := fs.String("module-path", "",
+		"consuming repo's Go module path (e.g. github.com/acme/svc); drives local "+
+			"import grouping in generated files. Default: read from go.mod")
 	layout, manifestPath := addLocatorFlags(fs)
 	if perr := fs.Parse(args); perr != nil {
 		return false, false, "", "", nil, perr

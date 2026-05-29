@@ -63,7 +63,7 @@ var verifySubcommands = []subcommand[func(ctx context.Context, args []string) er
 			"Verify assembly entrypoints, boundary.yaml, and",
 			"metrics-schema.yaml against metadata-derived",
 			"expectations and HEAD. Fails on stale, staged-only,",
-			"or unexpected committed artifacts. [--module=<module>]",
+			"or unexpected committed artifacts. [--module-path=<module>]",
 		},
 		run: verifyGenerated,
 	},
@@ -312,7 +312,7 @@ func verifyTargets(_ context.Context, args []string) error {
 
 func verifyGenerated(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("verify generated", flag.ContinueOnError)
-	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	module := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -326,12 +326,9 @@ func verifyGenerated(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	mod := *module
-	if mod == "" {
-		mod, err = readModule(root)
-		if err != nil {
-			return fmt.Errorf("cannot read module from go.mod: %w", err)
-		}
+	mod, err := resolveModule(root, *module)
+	if err != nil {
+		return err
 	}
 
 	result, err := generatedverify.Verify(ctx, root, mod, project)

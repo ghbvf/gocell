@@ -24,7 +24,7 @@ func generateCatalog(args []string) error {
 	out := fs.String("out", "", "output .go file path (required)")
 	pkg := fs.String("package", "", "Go package declaration name (required)")
 	root := fs.String("root", "", "project root directory; empty triggers go.mod auto-detection")
-	module := fs.String("module-path", "", "Go module path (default: read from go.mod)")
+	module := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

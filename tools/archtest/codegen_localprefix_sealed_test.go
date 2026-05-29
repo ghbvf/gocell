@@ -16,14 +16,21 @@
 // FormatGoSource/Render require modulePath as a positional argument, so
 // "format without a module path" is a compile error (no setter, no default).
 //
-// AI-robust (funnel, double-locked):
+// AI-robust (funnel, Hard downstream / Medium upstream):
 //   - Downstream Hard: modulePath is a required positional arg on the single
 //     formatter outlet — omission is unrepresentable (compile error), mirroring
 //     CLOCK-POSITIONAL-INJECTION-01.
-//   - Upstream Hard: this archtest makes any `imports.LocalPrefix = …` write
-//     outside the sanctioned render.go callsite fail CI. Combined, the funnel
-//     has no bypass: you cannot reach the global except through render.go, and
-//     you cannot reach render.go's formatter without supplying a module path.
+//   - Upstream Medium: this archtest (an AST scan) makes any
+//     `imports.LocalPrefix = …` write outside the sanctioned render.go callsite
+//     fail CI. It is Medium, not Hard, because `imports.LocalPrefix` is an
+//     exported package-level var in golang.org/x/tools/imports — Go's type
+//     system cannot make an external package's exported var unwritable, so a
+//     foreign write is not *unrepresentable*, only archtest-detectable. The
+//     Medium→Hard ceiling and its (Go-level-infeasible) mitigation path are
+//     tracked in gh issue #1270, per ai-robust.md "Medium 上游 + Hard 下游 必须
+//     开 gh issue 跟踪". Combined, the funnel still has no practical bypass: you
+//     cannot reach render.go's formatter without supplying a module path, and
+//     any other write to the global is caught in CI.
 //
 // Blind-spot self-check: detector form-uniqueness is validated by
 // TestCODEGEN_LOCALPREFIX_SEALED_01_DetectsForeignWrite, which parses a

@@ -8,6 +8,39 @@ import (
 	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
+func TestValidateModulePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "valid github path", input: "github.com/acme/svc", wantErr: false},
+		{name: "valid versioned path", input: "example.com/m/v2", wantErr: false},
+		{name: "single segment", input: "foo", wantErr: false},
+		{name: "empty", input: "", wantErr: true},
+		{name: "dotdot", input: "../foo", wantErr: true},
+		{name: "backslash", input: `foo\bar`, wantErr: true},
+		{name: "newline", input: "foo\nbar", wantErr: true},
+		{name: "tab", input: "foo\tbar", wantErr: true},
+		{name: "space", input: "foo bar", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := gomodutil.ValidateModulePath(tt.input)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateModulePath(%q) = nil, want error", tt.input)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateModulePath(%q) unexpected error: %v", tt.input, err)
+			}
+		})
+	}
+}
+
 func TestReadModulePath(t *testing.T) {
 	t.Parallel()
 

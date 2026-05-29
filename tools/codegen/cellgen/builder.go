@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/contractpath"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
-	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // stubTopicPattern matches scaffold-generated stub topic strings that look
@@ -390,17 +389,6 @@ func buildRouteGroupsFromBundle(
 		})
 	}
 	return out
-}
-
-// readModulePath reads the Go module path from the go.mod file at root,
-// wrapping gomodutil.ReadModulePath (the single shared parser) in cellgen's
-// errcode convention. Returns ("", err) if go.mod is missing or malformed.
-func readModulePath(root string) (string, error) {
-	mod, err := gomodutil.ReadModulePath(root)
-	if err != nil {
-		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "cellgen: read go.mod", err)
-	}
-	return mod, nil
 }
 
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and

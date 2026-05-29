@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -240,7 +239,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	// to what `gocell generate cell --all` would write — drift detection
 	// then works as a stale-content check + missing-file check + reverse
 	// enumeration check, all from the same single source of truth.
-	cellgenArtifacts, err := expectedCellgenArtifacts(root, project)
+	cellgenArtifacts, err := expectedCellgenArtifacts(root, module, project)
 	if err != nil {
 		return nil, fmt.Errorf("expected cellgen artifacts: %w", err)
 	}
@@ -252,7 +251,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 	// `codegen: false` in contract.yaml to opt out). Reuse
 	// contractgen.RenderContractArtifacts so the manifest stays byte-identical
 	// to what `gocell generate contract --all` would write.
-	contractgenArtifacts, err := expectedContractgenArtifacts(root, project)
+	contractgenArtifacts, err := expectedContractgenArtifacts(root, module, project)
 	if err != nil {
 		return nil, fmt.Errorf("expected contractgen artifacts: %w", err)
 	}
@@ -280,7 +279,7 @@ func ExpectedArtifacts(ctx context.Context, root, module string, project *metada
 // one Artifact per produced file. Cells without GoStructName are not
 // opted into codegen and contribute nothing to the manifest — matching
 // the cellgen.Generate() skip semantics.
-func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+func expectedCellgenArtifacts(root, modulePath string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	cellIDs := make([]string, 0, len(project.Cells))
 	for id, c := range project.Cells {
 		if c.GoStructName.IsZero() {
@@ -289,11 +288,6 @@ func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Art
 		cellIDs = append(cellIDs, id)
 	}
 	sort.Strings(cellIDs)
-
-	modulePath, err := gomodutil.ReadModulePath(root)
-	if err != nil {
-		return nil, fmt.Errorf("generatedverify: %w", err)
-	}
 
 	artifacts := make([]Artifact, 0, len(cellIDs)*2)
 	for _, id := range cellIDs {
@@ -348,7 +342,7 @@ func expectedRequiredDepsArtifacts(root string) ([]Artifact, error) {
 // renders the would-be content via contractgen and emits one Artifact per
 // produced file. Contracts with codegen=false are not opted in and
 // contribute nothing — matching the contractgen.Generate() skip semantics.
-func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+func expectedContractgenArtifacts(root, modulePath string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	contractIDs := make([]string, 0, len(project.Contracts))
 	for id, c := range project.Contracts {
 		if !c.Codegen {
@@ -357,11 +351,6 @@ func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([
 		contractIDs = append(contractIDs, id)
 	}
 	sort.Strings(contractIDs)
-
-	modulePath, err := gomodutil.ReadModulePath(root)
-	if err != nil {
-		return nil, fmt.Errorf("generatedverify: %w", err)
-	}
 
 	artifacts := make([]Artifact, 0, len(contractIDs)*3)
 	for _, id := range contractIDs {

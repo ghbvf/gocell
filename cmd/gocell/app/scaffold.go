@@ -412,6 +412,7 @@ func scaffoldCell(root string, args []string) error {
 	team := fs.String("team", "", "owner team (required)")
 	role := fs.String("role", "", "owner role, e.g. cell-owner (required)")
 	structName := fs.String("struct", "", "Go struct name (default: PascalCase of --id)")
+	modulePath := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	skipGenerate := fs.Bool(skipGenerateFlag, false, skipGenerateCellUsage)
 	withHTTP := fs.Bool(withHTTPFlag, false, withHTTPUsage)
@@ -429,9 +430,9 @@ func scaffoldCell(root string, args []string) error {
 		resolvedStruct = cellIDToPascalCase(*id)
 	}
 
-	mod, err := readModule(root)
+	mod, err := resolveModule(root, *modulePath)
 	if err != nil {
-		return fmt.Errorf("scaffold cell: read module path: %w", err)
+		return fmt.Errorf("scaffold cell: resolve module path: %w", err)
 	}
 
 	cellID, err := scaffoldid.Parse(*id)

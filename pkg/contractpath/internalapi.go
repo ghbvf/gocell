@@ -56,6 +56,11 @@ func ContractIDToPackagePath(id string) string {
 // Single source of truth shared by cellgen (subscription import enrichment) and
 // archtest (adapter return-type import resolution). modulePath comes from the
 // target repo's go.mod — never hardcode the framework module (#1083).
+//
+// It does NOT validate its inputs: an empty modulePath yields a leading-slash
+// path ("/generated/contracts/..."). Callers must supply a non-empty modulePath
+// (the formatter codegen.FormatGoSource is the fail-closed guard; CLI callers
+// validate via gomodutil.ValidateModulePath).
 func ContractIDToImportPath(modulePath, id string) string {
 	return modulePath + "/" + ContractIDToPackagePath(id)
 }
