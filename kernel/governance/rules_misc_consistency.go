@@ -625,8 +625,11 @@ func findHelperTopicParamIndex(body *ast.BlockStmt, paramNames []string, pkgCons
 	return findReceiverEmitViaEntryParam(body, paramNames, pkgConsts)
 }
 
-// findOutboxEmitTopicParam checks if the body contains outbox.Emit(ctx, e, topicParam, ...)
-// where topicParam is a parameter identifier. Returns the parameter index on match.
+// findOutboxEmitTopicParam checks if the body contains
+// outbox.Emit(ctx, clk, e, topicParam, ...) where topicParam is a parameter
+// identifier. Returns the parameter index on match. The topic is Args[3]:
+// the Emit[T] signature is Emit(ctx, clk, emitter, topic, payload) since the
+// clock became a mandatory positional argument (issue #1229).
 func findOutboxEmitTopicParam(body *ast.BlockStmt, paramNames []string, pkgConsts cellPkgConsts) (int, bool) {
 	dummyConsts := pkgConstMap{}
 	var foundIdx int
@@ -636,10 +639,10 @@ func findOutboxEmitTopicParam(body *ast.BlockStmt, paramNames []string, pkgConst
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
-		if !ok || !isOutboxEmitCall(call) || len(call.Args) < 3 {
+		if !ok || !isOutboxEmitCall(call) || len(call.Args) < 4 {
 			return true
 		}
-		topicArg := call.Args[2]
+		topicArg := call.Args[3]
 		ident, ok := topicArg.(*ast.Ident)
 		if !ok {
 			return true
@@ -1102,7 +1105,7 @@ func scanNodeForEmitCalls(node ast.Node, ctx emitScanContext, state *emitScanSta
 
 func collectEmitCallTopics(call *ast.CallExpr, ctx emitScanContext, state *emitScanState) []ValidationResult {
 	var results []ValidationResult
-	if isOutboxEmitCall(call) && len(call.Args) >= 3 {
+	if isOutboxEmitCall(call) && len(call.Args) >= 4 {
 		return collectOutboxEmitTopic(call, ctx, state)
 	}
 	if isReceiverEmitCall(call) && len(call.Args) >= 2 {
@@ -1163,7 +1166,8 @@ func collectOutboxEmitTopic(
 	ctx emitScanContext,
 	_ *emitScanState, // unused here; kept for signature parity with sibling collectors
 ) []ValidationResult {
-	topicExpr := call.Args[2]
+	// outbox.Emit signature is Emit(ctx, clk, emitter, topic, payload): topic is Args[3].
+	topicExpr := call.Args[3]
 	topic, resolved := resolveTopicExpr(topicExpr, ctx.pkgConsts, ctx.fileConsts)
 	if resolved {
 		ctx.topics[topic] = struct{}{}
