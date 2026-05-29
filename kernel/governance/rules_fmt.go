@@ -48,14 +48,15 @@ var (
 		string(cellvocab.CellTypeSupport): true,
 	}
 	validRoles = map[string]bool{
-		string(cellvocab.RoleServe):     true,
-		string(cellvocab.RoleCall):      true,
-		string(cellvocab.RolePublish):   true,
-		string(cellvocab.RoleSubscribe): true,
-		string(cellvocab.RoleHandle):    true,
-		string(cellvocab.RoleInvoke):    true,
-		string(cellvocab.RoleProvide):   true,
-		string(cellvocab.RoleRead):      true,
+		string(cellvocab.RoleServe):       true,
+		string(cellvocab.RoleCall):        true,
+		string(cellvocab.RolePublish):     true,
+		string(cellvocab.RoleSubscribe):   true,
+		string(cellvocab.RoleHandle):      true,
+		string(cellvocab.RoleInvoke):      true,
+		string(cellvocab.RoleProvide):     true,
+		string(cellvocab.RoleRead):        true,
+		string(cellvocab.RoleOrchestrate): true,
 	}
 	validKinds = map[string]bool{
 		string(cellvocab.ContractHTTP):       true,
@@ -63,6 +64,7 @@ var (
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
 		string(cellvocab.ContractGRPC):       true,
+		string(cellvocab.ContractSaga):       true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,

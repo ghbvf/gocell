@@ -18,6 +18,7 @@ func TestValidRolesForKind(t *testing.T) {
 		{cellvocab.ContractCommand, []cellvocab.ContractRole{cellvocab.RoleHandle, cellvocab.RoleInvoke}},
 		{cellvocab.ContractProjection, []cellvocab.ContractRole{cellvocab.RoleProvide, cellvocab.RoleRead}},
 		{cellvocab.ContractGRPC, []cellvocab.ContractRole{cellvocab.RoleServe, cellvocab.RoleCall}},
+		{cellvocab.ContractSaga, []cellvocab.ContractRole{cellvocab.RoleOrchestrate}},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.kind), func(t *testing.T) {
@@ -41,6 +42,7 @@ func TestIsProviderRole(t *testing.T) {
 		{cellvocab.RolePublish, true},
 		{cellvocab.RoleHandle, true},
 		{cellvocab.RoleProvide, true},
+		{cellvocab.RoleOrchestrate, true},
 		{cellvocab.RoleCall, false},
 		{cellvocab.RoleSubscribe, false},
 		{cellvocab.RoleInvoke, false},
@@ -67,6 +69,7 @@ func TestIsConsumerRole(t *testing.T) {
 		{cellvocab.RolePublish, false},
 		{cellvocab.RoleHandle, false},
 		{cellvocab.RoleProvide, false},
+		{cellvocab.RoleOrchestrate, false},
 		{cellvocab.ContractRole("unknown"), false},
 	}
 	for _, tt := range tests {

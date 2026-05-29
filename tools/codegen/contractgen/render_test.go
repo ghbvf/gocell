@@ -82,6 +82,19 @@ func renderSubscription(spec *ContractGenSpec) ([]byte, error) {
 	return b, nil
 }
 
+func renderSaga(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "saga" {
+		return nil, fmt.Errorf("contractgen render saga: contract %q is kind=%q, not saga", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "saga.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render saga: %w", err)
+	}
+	return b, nil
+}
+
 // update flag: run with -update to regenerate golden files.
 var updateGolden = flag.Bool("update", false, "update golden files")
 
@@ -643,6 +656,162 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 	}
 }
 
+func TestRender_Golden_Synth_Saga(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_saga")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["saga.orderfulfillment.v1"]
+	if contract == nil {
+		t.Fatal("saga.orderfulfillment.v1 not found in synth fixture")
+	}
+
+	// types_gen.go = step output DTOs; iface_gen.go = empty (no http Service);
+	// saga_gen.go = DefinitionID + Impl + BuildDefinition + Register.
+	outputs := []string{"types_gen.go", "iface_gen.go", "saga_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := buildContractSpec(absTestDir, p, "saga.orderfulfillment.v1")
+			if err != nil {
+				t.Fatalf("buildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_saga", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// TestBuildContractSpec_Saga asserts the saga IR: step output DTOs, the
+// chained input types (step N input = step N-1 output; step 0 has none), and
+// per-step compensate derivation (createShipment opts out with compensate:false).
+func TestBuildContractSpec_Saga(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_saga")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	spec, err := buildContractSpec(absTestDir, p, "saga.orderfulfillment.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	if spec.Saga == nil {
+		t.Fatal("spec.Saga is nil for kind=saga")
+	}
+	if got, want := len(spec.Saga.Steps), 3; got != want {
+		t.Fatalf("steps: got %d want %d", got, want)
+	}
+
+	steps := spec.Saga.Steps
+	// Step 0 takes no typed input; later steps chain the prior output type.
+	if !steps[0].IsFirst || steps[0].InputGoType != "" {
+		t.Errorf("step0: IsFirst=%v InputGoType=%q; want first with empty input", steps[0].IsFirst, steps[0].InputGoType)
+	}
+	if steps[0].OutputGoType != "ReserveInventoryOutput" {
+		t.Errorf("step0 output: got %q", steps[0].OutputGoType)
+	}
+	if steps[1].InputGoType != "ReserveInventoryOutput" {
+		t.Errorf("step1 input: got %q want ReserveInventoryOutput", steps[1].InputGoType)
+	}
+	if steps[2].InputGoType != "ChargePaymentOutput" {
+		t.Errorf("step2 input: got %q want ChargePaymentOutput", steps[2].InputGoType)
+	}
+	// compensate defaults true; createShipment opts out.
+	if !steps[0].HasCompensate || !steps[1].HasCompensate {
+		t.Errorf("steps 0,1 should compensate: %v %v", steps[0].HasCompensate, steps[1].HasCompensate)
+	}
+	if steps[2].HasCompensate {
+		t.Error("step2 (createShipment) declared compensate:false but HasCompensate=true")
+	}
+	// Output DTOs are emitted for every step (rendered by types.tmpl).
+	for _, want := range []string{"ReserveInventoryOutput", "ChargePaymentOutput", "CreateShipmentOutput"} {
+		if !hasDTONamed(spec.DTOs, want) {
+			t.Errorf("missing output DTO %q in spec.DTOs", want)
+		}
+	}
+	// Durations parsed into readable Go exprs.
+	if spec.Saga.TimeoutExpr != "30 * time.Second" {
+		t.Errorf("saga timeout expr: got %q want %q", spec.Saga.TimeoutExpr, "30 * time.Second")
+	}
+	if !spec.Saga.NeedsTime {
+		t.Error("NeedsTime should be true (durations present)")
+	}
+}
+
+// TestBuildSagaSpec_CompensationOrderRejected asserts a non-reverse
+// compensationOrder fails the build (the only supported value is "reverse").
+func TestBuildSagaSpec_CompensationOrderRejected(t *testing.T) {
+	c := &metadata.ContractMeta{
+		ID:   "saga.x.v1",
+		Kind: "saga",
+		File: "contracts/saga/x/v1/contract.yaml",
+		Saga: &metadata.SagaMeta{
+			CompensationOrder: "forward",
+			Steps:             []metadata.SagaStepMeta{{Name: "a", Output: "a.json"}},
+		},
+	}
+	spec := &ContractGenSpec{ContractID: c.ID, Kind: c.Kind}
+	err := buildSagaSpec(spec, ".", c, "contracts/saga/x/v1")
+	if err == nil {
+		t.Fatal("expected error for compensationOrder=forward, got nil")
+	}
+	if !strings.Contains(err.Error(), "compensationOrder") {
+		t.Errorf("error should mention compensationOrder: %v", err)
+	}
+}
+
+// TestDurationExpr covers the duration→Go-expression helper.
+func TestDurationExpr(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "", false},
+		{"0s", "", false},
+		{"30s", "30 * time.Second", false},
+		{"5m", "5 * time.Minute", false},
+		{"100ms", "100 * time.Millisecond", false},
+		{"2h", "2 * time.Hour", false},
+		{"1500ms", "1500 * time.Millisecond", false},
+		{"-1s", "", true},
+		{"notaduration", "", true},
+	}
+	for _, tc := range cases {
+		got, err := durationExpr(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("durationExpr(%q): expected error, got %q", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("durationExpr(%q): unexpected error %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("durationExpr(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // --- helpers ---
 
 // loadTodoorderProject parses the todoorder example project metadata.
@@ -692,6 +861,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderSpec(spec)
 	case "subscription_gen.go":
 		content, err = renderSubscription(spec)
+	case "saga_gen.go":
+		content, err = renderSaga(spec)
 	default:
 		t.Fatalf("unknown output file: %s", outFile)
 	}

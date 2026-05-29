@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -65,6 +66,10 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		if err := buildEventSpec(spec, rootDir, contract, contractDir); err != nil {
 			return nil, err
 		}
+	case "saga":
+		if err := buildSagaSpec(spec, rootDir, contract, contractDir); err != nil {
+			return nil, err
+		}
 	case "command", "projection":
 		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
 		// not yet have dedicated generators. buildContractSpec accepts them so that
@@ -73,7 +78,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		// When a full generator is added, add the corresponding case here.
 	default:
 		return nil, fmt.Errorf(
-			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)",
+			"contractgen build: contract %q has unsupported kind %q (http|event|saga|command|projection)",
 			contractID, contract.Kind)
 	}
 
@@ -581,6 +586,202 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 		DeliverySemantics: contract.DeliverySemantics,
 	}
 	return nil
+}
+
+// buildSagaSpec projects a kind=saga contract's saga block into spec.Saga and
+// appends each step's output-schema DTOs to spec.DTOs. The typed input of a
+// step is the previous step's output (the first step takes no typed input —
+// the runtime feeds nil prevState to step 0; see kernel/saga StepFunc +
+// runtime/saga foldEvents). Reuses Parse + schemaToDTOs (no bundleSchemaRefs:
+// saga steps validate at the domain layer, not in generated code).
+func buildSagaSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
+	sm := contract.Saga
+	if sm == nil {
+		return fmt.Errorf("contractgen build: contract %q is kind=saga but has no saga block", contract.ID)
+	}
+	if len(sm.Steps) == 0 {
+		return fmt.Errorf("contractgen build: contract %q saga has no steps", contract.ID)
+	}
+	if sm.CompensationOrder != "" && sm.CompensationOrder != "reverse" {
+		return fmt.Errorf("contractgen build: contract %q saga compensationOrder %q unsupported (only \"reverse\")",
+			contract.ID, sm.CompensationOrder)
+	}
+
+	timeoutExpr, err := durationExpr(sm.Timeout)
+	if err != nil {
+		return fmt.Errorf("contractgen build: contract %q saga timeout: %w", contract.ID, err)
+	}
+	retry, err := sagaRetrySpec(sm.Retries)
+	if err != nil {
+		return fmt.Errorf("contractgen build: contract %q saga retries: %w", contract.ID, err)
+	}
+
+	out := &SagaSpec{
+		DefinitionID:      contract.ID,
+		TimeoutExpr:       timeoutExpr,
+		RetryPolicy:       retry,
+		CompensationOrder: "reverse",
+	}
+
+	var prevOutput string
+	var allDTOs []DTOSpec
+	for i := range sm.Steps {
+		step, dtos, err := buildSagaStep(rootDir, contract, contractDir, i, prevOutput)
+		if err != nil {
+			return err
+		}
+		allDTOs = append(allDTOs, dtos...)
+		out.Steps = append(out.Steps, step)
+		prevOutput = step.OutputGoType
+	}
+
+	out.NeedsTime = sagaNeedsTime(out)
+	spec.DTOs = allDTOs
+	spec.Saga = out
+	return nil
+}
+
+// buildSagaStep projects one saga step into a SagaStepSpec and its output DTOs.
+// prevOutput is the previous step's OutputGoType ("" for the first step).
+func buildSagaStep(
+	rootDir string,
+	contract *metadata.ContractMeta,
+	contractDir string,
+	i int,
+	prevOutput string,
+) (SagaStepSpec, []DTOSpec, error) {
+	st := contract.Saga.Steps[i]
+	if strings.TrimSpace(st.Output) == "" {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %d (%q) missing output schema $ref",
+			contract.ID, i, st.Name)
+	}
+	goName := goPascalCase(st.Name)
+	outType := goName + "Output"
+
+	schema, err := Parse(rootDir, filepath.Join(contractDir, st.Output))
+	if err != nil {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %q output schema: %w", contract.ID, st.Name, err)
+	}
+	dtos, err := schemaToDTOs(outType, schema)
+	if err != nil {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %q output DTOs: %w", contract.ID, st.Name, err)
+	}
+
+	timeoutExpr, err := durationExpr(st.Timeout)
+	if err != nil {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %q timeout: %w", contract.ID, st.Name, err)
+	}
+	retry, err := sagaRetrySpec(st.Retries)
+	if err != nil {
+		return SagaStepSpec{}, nil, fmt.Errorf(
+			"contractgen build: contract %q saga step %q retries: %w", contract.ID, st.Name, err)
+	}
+
+	compensate := true
+	if st.Compensate != nil {
+		compensate = *st.Compensate
+	}
+
+	return SagaStepSpec{
+		Name:          st.Name,
+		GoName:        goName,
+		OutputGoType:  outType,
+		InputGoType:   prevOutput,
+		IsFirst:       i == 0,
+		HasCompensate: compensate,
+		TimeoutExpr:   timeoutExpr,
+		RetryPolicy:   retry,
+	}, dtos, nil
+}
+
+// retryPolicySpec converts a non-nil SagaRetryMeta into a RetryPolicySpec.
+// Callers guard the nil case (a nil meta means "no retry override" → omit the
+// field). The kernel zero value means "inherit", so an all-zero meta yields a
+// RetryPolicySpec with empty exprs (the template renders an empty literal,
+// equivalent to inheriting).
+func retryPolicySpec(m *metadata.SagaRetryMeta) (*RetryPolicySpec, error) {
+	if m.MaxAttempts < 0 {
+		return nil, fmt.Errorf("maxAttempts must be >= 0, got %d", m.MaxAttempts)
+	}
+	base, err := durationExpr(m.BaseInterval)
+	if err != nil {
+		return nil, fmt.Errorf("baseInterval: %w", err)
+	}
+	maxI, err := durationExpr(m.MaxInterval)
+	if err != nil {
+		return nil, fmt.Errorf("maxInterval: %w", err)
+	}
+	return &RetryPolicySpec{MaxAttempts: m.MaxAttempts, BaseIntervalExpr: base, MaxIntervalExpr: maxI}, nil
+}
+
+// sagaRetrySpec resolves an optional SagaRetryMeta to a *RetryPolicySpec,
+// returning nil (omit the field) when the meta is absent.
+func sagaRetrySpec(m *metadata.SagaRetryMeta) (*RetryPolicySpec, error) {
+	if m == nil {
+		return nil, nil //nolint:nilnil // nil meta = "no retry override"; absence, not error
+	}
+	return retryPolicySpec(m)
+}
+
+// durationExpr parses a Go duration string and returns a readable Go expression
+// (e.g. "30 * time.Second"). Empty input and "0" return "" (field omitted).
+// Negative durations are rejected.
+func durationExpr(s string) (string, error) {
+	if strings.TrimSpace(s) == "" {
+		return "", nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	if d < 0 {
+		return "", fmt.Errorf("duration %q must be >= 0", s)
+	}
+	return goDurationExpr(d), nil
+}
+
+// goDurationExpr renders a non-negative time.Duration as a readable Go
+// expression using the largest exact unit. Zero returns "" (caller omits).
+func goDurationExpr(d time.Duration) string {
+	switch {
+	case d == 0:
+		return ""
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%d * time.Hour", d/time.Hour)
+	case d%time.Minute == 0:
+		return fmt.Sprintf("%d * time.Minute", d/time.Minute)
+	case d%time.Second == 0:
+		return fmt.Sprintf("%d * time.Second", d/time.Second)
+	case d%time.Millisecond == 0:
+		return fmt.Sprintf("%d * time.Millisecond", d/time.Millisecond)
+	case d%time.Microsecond == 0:
+		return fmt.Sprintf("%d * time.Microsecond", d/time.Microsecond)
+	default:
+		return fmt.Sprintf("%d * time.Nanosecond", int64(d))
+	}
+}
+
+// sagaNeedsTime reports whether any duration expression is present, so saga.tmpl
+// imports the time package only when it is actually referenced.
+func sagaNeedsTime(s *SagaSpec) bool {
+	if s.TimeoutExpr != "" || retryNeedsTime(s.RetryPolicy) {
+		return true
+	}
+	for _, st := range s.Steps {
+		if st.TimeoutExpr != "" || retryNeedsTime(st.RetryPolicy) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryNeedsTime reports whether a RetryPolicySpec carries a duration expr.
+func retryNeedsTime(r *RetryPolicySpec) bool {
+	return r != nil && (r.BaseIntervalExpr != "" || r.MaxIntervalExpr != "")
 }
 
 // mergeParamsIntoRequest injects pre-computed path and query params as fields

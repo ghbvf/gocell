@@ -1,0 +1,25 @@
+id: saga.orderfulfillment.v1
+kind: saga
+ownerCell: ordercell
+consistencyLevel: L3
+lifecycle: active
+endpoints:
+  server: ordercell
+codegen: true
+saga:
+  timeout: "30s"
+  compensationOrder: reverse
+  retries:
+    maxAttempts: 3
+    baseInterval: "100ms"
+  steps:
+    - name: reserveInventory
+      output: reserve-inventory.output.schema.json
+      timeout: "5s"
+    - name: chargePayment
+      output: charge-payment.output.schema.json
+      retries:
+        maxAttempts: 2
+    - name: createShipment
+      output: create-shipment.output.schema.json
+      compensate: false
