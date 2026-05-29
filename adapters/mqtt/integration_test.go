@@ -428,13 +428,13 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 			topic := prefix + "/" + uuid.NewString()
 			itestPublish(t, conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
 
-			deadline := time.Now().Add(10 * time.Second)
+			deadline := time.Now().Add(testtime.D10s)
 			for time.Now().Before(deadline) {
 				s, f, _ := coll.snapshot()
 				if s+f >= 1 {
 					break
 				}
-				time.Sleep(10 * time.Millisecond) //archtest:allow:test-sleep poll-loop: real broker delivery latency
+				time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
 			}
 			success, failure, reason := coll.snapshot()
 			commit, release := settlement.counts()
@@ -552,7 +552,7 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	// conn1.Close (that unsubscribes-all). Canceling ctx1 tears down the manager,
 	// leaving the persistent session + subscription on the broker.
 	cancel1()
-	time.Sleep(testtime.D1s) // let the TCP teardown settle before publishing
+	time.Sleep(testtime.D1s) //archtest:allow:test-sleep teardown-settle: wall-clock must elapse for the broker to observe the unclean TCP drop before offline publish (no client-side signal to poll)
 
 	// Publish while offline. On some brokers/timings the persistent session +
 	// $share subscription offline-queue these and redeliver on resume; this is
@@ -616,12 +616,12 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	// HARD assertion (deterministic, can-go-RED): the resumed persistent session
 	// MUST deliver a message published while it is online. This fails if session
 	// resume or subscription re-arm is broken.
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(testtime.D15s)
 	for time.Now().Before(deadline) {
 		if onlineReceived.Load() >= 1 {
 			break
 		}
-		time.Sleep(20 * time.Millisecond) //archtest:allow:test-sleep poll-loop: real broker delivery latency
+		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
 	}
 	if onlineReceived.Load() < 1 {
 		t.Fatalf("resumed persistent session did not deliver an online message "+
@@ -719,13 +719,13 @@ func TestIntegration_Subscriber_ClientIDConflict(t *testing.T) {
 	// is NOT skipped — a broker that never evicts the first session is a real
 	// regression this test exists to catch.
 	observedUnhealthy := false
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testtime.D10s)
 	for time.Now().Before(deadline) {
 		if conn1.Health(context.Background()) != nil {
 			observedUnhealthy = true
 			break
 		}
-		time.Sleep(50 * time.Millisecond) //archtest:allow:test-sleep poll-loop: wait for broker session-takeover disconnect
+		time.Sleep(testtime.D50ms) //archtest:allow:test-sleep poll-loop: wait for broker session-takeover disconnect
 	}
 	if !observedUnhealthy {
 		t.Fatalf("conn1 never transitioned to unhealthy after a same-clientId reconnect; " +
