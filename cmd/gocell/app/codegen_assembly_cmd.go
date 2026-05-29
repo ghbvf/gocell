@@ -41,20 +41,21 @@ var assemblyCodegenSpec = codegenSpec[assemblyDriftResult]{
 // generateAssemblyModulesGen is the Generate func for assemblyCodegenSpec.
 // When verify=true it diffs in-memory content against disk; when verify=false
 // it writes (or no-ops if byte-equal). The `only` and `dryRun` params are
-// ignored—assembly codegen has no per-id scoping and no dry-run mode.
-func generateAssemblyModulesGen(root string, project *metadata.ProjectMeta, _, verify bool, _ string) (assemblyDriftResult, error) {
-	mod, err := readModule(root)
-	if err != nil {
-		return assemblyDriftResult{}, fmt.Errorf("cannot read module from go.mod: %w", err)
-	}
-
+// ignored—assembly codegen has no per-id scoping and no dry-run mode. modulePath
+// is the caller-resolved module path (flag-or-go.mod); kernel/assembly's
+// generator formats independently of tools/codegen, so it is used only as the
+// generator's module input, not threaded to a formatter.
+func generateAssemblyModulesGen(
+	root string, project *metadata.ProjectMeta,
+	_, verify bool, _, modulePath string,
+) (assemblyDriftResult, error) {
 	ids := make([]string, 0, len(project.Assemblies))
 	for id := range project.Assemblies {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 
-	gen := assembly.NewGenerator(project, mod, root)
+	gen := assembly.NewGenerator(project, modulePath, root)
 	var result assemblyDriftResult
 	for _, asmID := range ids {
 		asm := project.Assemblies[asmID]

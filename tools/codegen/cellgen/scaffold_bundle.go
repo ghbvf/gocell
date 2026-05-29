@@ -100,7 +100,7 @@ func PlanCellBundleScaffold(realRoot string, spec ScaffoldSpec) ([]pathsafe.Plan
 	// The staging lifecycle (MkdirTemp + RemoveAll) is encapsulated in
 	// appendDerivedCodegenStaged (stage_render.go) — os calls are not in
 	// scaffold_bundle.go which is in the depguard scaffold-os-ban list.
-	return appendDerivedCodegenStaged(realRoot, spec.CellID.String(), skeletonPlan)
+	return appendDerivedCodegenStaged(realRoot, spec.CellID.String(), spec.ModulePath, skeletonPlan)
 }
 
 // minCellConsistencyLevel returns the minimum cell consistency level required
@@ -226,11 +226,11 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 		ScaffoldSpec:   spec,
 		ListenerMarker: ListenerMarker,
 	}
-	cellGoContent, err := renderTemplate(cellGoTemplate, cellData, true)
+	cellGoContent, err := renderTemplate(spec.ModulePath, cellGoTemplate, cellData, true)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.go failed", err)
 	}
-	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
+	cellYAMLContent, err := renderTemplate(spec.ModulePath, cellYAMLTemplate, spec, false)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "scaffold cell: render cell.yaml failed", err)
 	}
@@ -246,7 +246,7 @@ func planCell(realRoot string, spec ScaffoldSpec) ([]pathsafe.PlannedFile, error
 		{AbsPath: filepath.Join(absDir, "cell.yaml"), Content: cellYAMLContent},
 	}
 
-	archLayers, err := planInternalArchLayers(realRoot, spec.CellID.String())
+	archLayers, err := planInternalArchLayers(realRoot, spec.CellID.String(), spec.ModulePath)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ var mandatoryInternalLayers = []struct{ pkg, summary string }{
 // architecture layer and returns them as PlannedFiles (written via the same
 // pathsafe.WritePlannedFiles funnel as the rest of the bundle, per
 // SCAFFOLD-WRITE-FUNNEL-01).
-func planInternalArchLayers(realRoot, cellID string) ([]pathsafe.PlannedFile, error) {
+func planInternalArchLayers(realRoot, cellID, modulePath string) ([]pathsafe.PlannedFile, error) {
 	items := make([]pathsafe.PlannedFile, 0, len(mandatoryInternalLayers))
 	for _, l := range mandatoryInternalLayers {
 		targetDir := filepath.Join("cells", cellID, "internal", l.pkg)
@@ -287,7 +287,7 @@ func planInternalArchLayers(realRoot, cellID string) ([]pathsafe.PlannedFile, er
 				"scaffold cell: internal layer path failed", err)
 		}
 		src := fmt.Sprintf("// Package %s %s\npackage %s\n", l.pkg, fmt.Sprintf(l.summary, cellID), l.pkg)
-		formatted, err := codegen.FormatGoSource("", []byte(src))
+		formatted, err := codegen.FormatGoSource(modulePath, "", []byte(src))
 		if err != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold cell: format internal layer doc.go failed", err)
@@ -320,11 +320,11 @@ func planHTTPExampleArtifacts(realRoot string, spec ScaffoldSpec, cellNoDash, sl
 		ContractID:     fmt.Sprintf("http.%s.example.v1", cellNoDash),
 		ListenerMarker: ListenerMarker,
 	}
-	sliceItems, err := planExampleSlice(realRoot, bd)
+	sliceItems, err := planExampleSlice(realRoot, spec.ModulePath, bd)
 	if err != nil {
 		return nil, err
 	}
-	contractItems, err := planExampleContract(realRoot, bd, "http", cellNoDash)
+	contractItems, err := planExampleContract(realRoot, spec.ModulePath, bd, "http", cellNoDash)
 	if err != nil {
 		return nil, err
 	}
@@ -351,11 +351,11 @@ func planEventExampleArtifacts(
 		ContractID:     fmt.Sprintf("event.%s.example.v1", cellNoDash),
 		ListenerMarker: ListenerMarker,
 	}
-	sliceItems, err := planExampleSlice(realRoot, bd)
+	sliceItems, err := planExampleSlice(realRoot, spec.ModulePath, bd)
 	if err != nil {
 		return nil, err
 	}
-	contractItems, err := planExampleContract(realRoot, bd, "event", cellNoDash)
+	contractItems, err := planExampleContract(realRoot, spec.ModulePath, bd, "event", cellNoDash)
 	if err != nil {
 		return nil, err
 	}
@@ -376,17 +376,17 @@ func sliceBundleFiles() []bundleFileSpec {
 // planExampleSlice renders the slice triple (slice.yaml + service.go +
 // service_test.go) under cells/{cellID}/slices/{sliceID}/ and returns them
 // as PlannedFiles. No filesystem writes occur here.
-func planExampleSlice(realRoot string, bd bundleData) ([]pathsafe.PlannedFile, error) {
+func planExampleSlice(realRoot, modulePath string, bd bundleData) ([]pathsafe.PlannedFile, error) {
 	targetDir := filepath.Join("cells", bd.CellID, "slices", bd.SliceID)
 	files := sliceBundleFiles()
-	return planBundleFiles(realRoot, targetDir, files, sliceBundleTemplate, bd, "slice")
+	return planBundleFiles(realRoot, modulePath, targetDir, files, sliceBundleTemplate, bd, "slice")
 }
 
 // planBundleFiles is the shared render→format→plan pipeline for slice and
 // contract bundle outputs. The kindLabel ("slice" / "contract") is used in
 // error messages. Returns PlannedFiles without touching the filesystem.
 func planBundleFiles(
-	realRoot, targetDir string,
+	realRoot, modulePath, targetDir string,
 	files []bundleFileSpec,
 	tpl *template.Template,
 	data any,
@@ -399,7 +399,7 @@ func planBundleFiles(
 			errcode.WithDetails(errcode.PublicString("kind", kindLabel)))
 	}
 
-	rendered, err := renderBundleSections(tpl, files, data, kindLabel)
+	rendered, err := renderBundleSections(modulePath, tpl, files, data, kindLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +416,9 @@ func planBundleFiles(
 
 // renderBundleSections runs each file spec's template section through
 // (Execute → optional FormatGoSource) and returns a map keyed by file name.
-func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data any, kindLabel string) (map[string][]byte, error) {
+func renderBundleSections(
+	modulePath string, tpl *template.Template, files []bundleFileSpec, data any, kindLabel string,
+) (map[string][]byte, error) {
 	rendered := make(map[string][]byte, len(files))
 	for _, f := range files {
 		var buf bytes.Buffer
@@ -430,7 +432,7 @@ func renderBundleSections(tpl *template.Template, files []bundleFileSpec, data a
 		}
 		out := buf.Bytes()
 		if f.IsGoSource {
-			formatted, err := codegen.FormatGoSource("", out)
+			formatted, err := codegen.FormatGoSource(modulePath, "", out)
 			if err != nil {
 				return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 					"scaffold bundle: format artifact failed", err,
@@ -459,13 +461,13 @@ type bundleFileSpec struct {
 // planExampleContract renders contract.yaml + JSON schemas under
 // contracts/{kind}/{cellPathSegment}/example/v1/ and returns them as
 // PlannedFiles. K#09 funnel: contract.yaml never embeds the `codegen:` field.
-func planExampleContract(realRoot string, bd bundleData, kind, cellPathSegment string) ([]pathsafe.PlannedFile, error) {
+func planExampleContract(realRoot, modulePath string, bd bundleData, kind, cellPathSegment string) ([]pathsafe.PlannedFile, error) {
 	targetDir := filepath.Join("contracts", kind, cellPathSegment, "example", "v1")
 	files, err := contractBundleFiles(kind)
 	if err != nil {
 		return nil, err
 	}
-	return planBundleFiles(realRoot, targetDir, files, contractBundleTemplate, bd, "contract")
+	return planBundleFiles(realRoot, modulePath, targetDir, files, contractBundleTemplate, bd, "contract")
 }
 
 // contractBundleFiles returns the canonical files emitted for an example

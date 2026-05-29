@@ -48,6 +48,12 @@ type Options struct {
 	// OnlyCell, when non-empty, restricts generation to a single cell id.
 	// Empty = generate for every cell in project.
 	OnlyCell string
+	// ModulePath is the consuming repo's Go module path (from its go.mod),
+	// threaded to the formatter so generated files group module-local imports
+	// the way the target repo's golangci-lint gate expects (#1083). Required:
+	// Generate rejects an empty ModulePath. The CLI resolves it via
+	// resolveModule (flag-or-go.mod); RenderCellArtifacts resolves it from root.
+	ModulePath string
 }
 
 // Result aggregates per-call outcomes for CLI reporting.
@@ -85,6 +91,10 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 	if project == nil {
 		return res, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen generate: project is nil")
+	}
+	if opts.ModulePath == "" {
+		return res, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen generate: ModulePath is required (resolve from go.mod or --module-path)")
 	}
 
 	cellIDs := selectCellIDs(project, opts.OnlyCell)
@@ -159,15 +169,15 @@ func generateOneCell(
 	if err != nil {
 		return err
 	}
-	// Enrich subscriptions with generated-package import paths derived from go.mod.
+	// Enrich subscriptions with generated-package import paths from the resolved
+	// module path (opts.ModulePath; required, validated in Generate).
 	if len(spec.Subscriptions) > 0 {
-		modulePath, modErr := readModulePath(root)
-		if modErr != nil {
-			return modErr
-		}
-		EnrichSubscriptionsWithModulePath(spec, modulePath)
+		EnrichSubscriptionsWithModulePath(spec, opts.ModulePath)
 	}
-	if err := renderAndWrite(root, "cell.tmpl", spec, cellGenPath(root, cell), opts, res, "cellgen generate: render "+cell.ID); err != nil {
+	if err := renderAndWrite(
+		root, opts.ModulePath, "cell.tmpl", spec, cellGenPath(root, cell),
+		opts, res, "cellgen generate: render "+cell.ID,
+	); err != nil {
 		return err
 	}
 
@@ -177,7 +187,7 @@ func generateOneCell(
 		SourceFile: cell.File,
 	}
 	if err := renderAndWrite(
-		root, "healthz_gen.tmpl", healthzSpec,
+		root, opts.ModulePath, "healthz_gen.tmpl", healthzSpec,
 		healthzGenPath(root, cell), opts, res,
 		"cellgen generate: render healthz "+cell.ID,
 	); err != nil {
@@ -195,7 +205,7 @@ func generateOneCell(
 		// found), both of which surface as explicit errors above.
 		slice := project.Slices[cell.ID+"/"+sid]
 		errPrefix := "cellgen generate: render slice " + cell.ID + "/" + sid
-		if err := renderAndWrite(root, "slice.tmpl", sliceSpec, sliceGenPath(root, slice), opts, res, errPrefix); err != nil {
+		if err := renderAndWrite(root, opts.ModulePath, "slice.tmpl", sliceSpec, sliceGenPath(root, slice), opts, res, errPrefix); err != nil {
 			return err
 		}
 	}
@@ -221,15 +231,24 @@ type CellArtifact struct {
 // cell_gen.go plus one slice_gen.go per slice with subscribes). Cells
 // without GoStructName return (nil, nil) — same opt-in semantics as Generate.
 //
+// modulePath is the consuming repo's module path, threaded to the formatter and
+// subscription import enrichment (#1083). It is required and supplied by the
+// caller — callers resolve it from the real repo's go.mod (the render root may
+// be a staging dir without a go.mod, e.g. scaffold staging in stage_render.go).
+//
 // Implementation note: render must be ordered cell→slices in a single pass
 // because the cell template's imports are inferred from per-slice subscribes;
 // extracting per-slice render into a helper duplicates the import accumulator.
 //
 //nolint:gocognit,funlen,cyclop // render+slices in one pass; splitting duplicates import accumulator (see comment above)
-func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
+func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID, modulePath string) ([]CellArtifact, error) {
 	if project == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen render artifacts: project is nil")
+	}
+	if modulePath == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen render artifacts: modulePath is required (resolve from go.mod or --module-path)")
 	}
 	cell, ok := project.Cells[cellID]
 	if !ok {
@@ -262,16 +281,12 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	if err != nil {
 		return nil, err
 	}
-	// Enrich subscriptions with generated-package import paths derived from go.mod.
+	// Enrich subscriptions with generated-package import paths from modulePath.
 	if len(cellSpec.Subscriptions) > 0 {
-		modulePath, modErr := readModulePath(root)
-		if modErr != nil {
-			return nil, modErr
-		}
 		EnrichSubscriptionsWithModulePath(cellSpec, modulePath)
 	}
 	cellAbs := cellGenPath(root, cell)
-	cellContent, err := codegen.Render(codegen.RenderOptions{
+	cellContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         cellSpec,
@@ -295,7 +310,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		SourceFile: cell.File,
 	}
 	healthzAbs := healthzGenPath(root, cell)
-	healthzContent, err := codegen.Render(codegen.RenderOptions{
+	healthzContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "healthz_gen.tmpl",
 		Templates:    templates,
 		Data:         healthzSpec,
@@ -320,7 +335,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		}
 		slice := project.Slices[cellID+"/"+sid]
 		sliceAbs := sliceGenPath(root, slice)
-		sliceContent, err := codegen.Render(codegen.RenderOptions{
+		sliceContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: "slice.tmpl",
 			Templates:    templates,
 			Data:         sliceSpec,
@@ -359,8 +374,8 @@ func relFromRoot(root, abs string) (string, error) {
 
 // renderAndWrite is the shared (render → write → record) tail used by both
 // the cell and slice render paths.
-func renderAndWrite(root, tmpl string, data any, path string, opts Options, res *Result, errPrefix string) error {
-	content, err := codegen.Render(codegen.RenderOptions{
+func renderAndWrite(root, modulePath, tmpl string, data any, path string, opts Options, res *Result, errPrefix string) error {
+	content, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: tmpl,
 		Templates:    templates,
 		Data:         data,
