@@ -55,9 +55,9 @@ func (e *permanentError) Unwrap() error {
 	return e.err
 }
 
-// PermanentError wraps err to tell the Loop the entity must NOT be retried:
-// retrying cannot change the outcome (revoked cert, malformed row, policy
-// rejection). The Loop records a dead-letter metric and stops scheduling the
+// PermanentError wraps err to mark the entity non-retryable: retrying cannot
+// change the outcome (revoked cert, malformed row, policy rejection). Once the
+// Loop lands (PR-A3) it records a dead-letter metric and stops scheduling the
 // entity until a fresh trigger re-observes it. PermanentError(nil) returns nil
 // (no spurious wrapper).
 func PermanentError(err error) error {
@@ -67,9 +67,19 @@ func PermanentError(err error) error {
 	return &permanentError{err: err}
 }
 
-// IsPermanent reports whether err, or any error it wraps, was marked by
-// PermanentError. It sees through fmt.Errorf %w chains.
+// IsPermanent reports whether err, or any error it wraps, is the sealed
+// permanentError marker created by PermanentError. It sees through fmt.Errorf
+// %w chains and errors.Join multi-error trees.
+//
+// The pe != nil guard is load-bearing for the seal (see permanentError's
+// godoc), NOT a redundant check: errors.As also reports a match when a foreign
+// error's As(any) bool hook merely returns true, but such a hook cannot set pe
+// to a non-nil *permanentError — the type is unexported and no exported
+// function returns it — so a foreign error cannot spoof the classification. pe
+// is non-nil only when a genuine marker that passed through PermanentError is
+// found in the tree, which is what keeps "permanent" unrepresentable outside
+// this package.
 func IsPermanent(err error) bool {
 	var pe *permanentError
-	return errors.As(err, &pe)
+	return errors.As(err, &pe) && pe != nil
 }

@@ -1,7 +1,12 @@
-// Package reconcile is GoCell's L4 desired-state convergence harness: a
+// Package reconcile is GoCell's L4 desired-state convergence harness, a
 // level-triggered control loop modeled on Kubernetes controller-runtime's
-// Reconciler, reduced to a three-piece minimal core plus a scheduling Loop
-// transplanted from runtime/command.SweeperLifecycle.
+// Reconciler. It is delivered across stacked PRs: PR-A2 lands the minimal core
+// documented below (the Reconciler interface, Request / Result, and the
+// PermanentError classifier); the scheduling Loop — transplanted from
+// runtime/command.SweeperLifecycle — lands in PR-A3 and is NOT present at this
+// commit. Comments here describe how each type is consumed by that Loop to pin
+// its contract; any Loop runtime behavior they mention refers to the PR-A3
+// component, not to anything in this commit.
 //
 // # When to use
 //
@@ -13,15 +18,15 @@
 // #1079). See the design ADR for the boundary.
 //
 // The convergence authority is the consuming cell's, not the framework's: the
-// framework provides this Loop harness; the cell exercises write authority over
-// its own entity table inside Reconcile. This is distinct from GoCell's own
-// compile/CI-time self-convergence (ADR 202605041430 §3.3), which this package
-// does not touch.
+// framework provides the Loop harness (PR-A3); the cell exercises write
+// authority over its own entity table inside Reconcile. This is distinct from
+// GoCell's own compile/CI-time self-convergence (ADR 202605041430 §3.3), which
+// this package does not touch.
 //
 // # Three-piece minimal core
 //
-// A consumer implements Reconciler and wires a Loop. The whole public surface a
-// consumer must learn is:
+// A consumer implements Reconciler and, once PR-A3 lands, wires a Loop. The
+// whole public surface a consumer must learn at PR-A2 is:
 //
 //	Reconciler  — Reconcile(ctx, Request) (Result, error)
 //	Request     — { EntityID string }

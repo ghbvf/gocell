@@ -59,6 +59,45 @@ func TestIsPermanent_SeesThroughWrapping(t *testing.T) {
 	}
 }
 
+// foreignAsSpoof is an error that never passed through PermanentError but
+// implements the errors.As As(any) bool hook to lie. It exists to prove the
+// sealed-marker funnel holds: IsPermanent must classify it as NOT permanent.
+// (A naive errors.As-based IsPermanent would be spoofed into reporting true —
+// this test is also the regression guard against reverting to errors.As.)
+type foreignAsSpoof struct{}
+
+func (foreignAsSpoof) Error() string { return "foreign spoof" }
+func (foreignAsSpoof) As(any) bool   { return true }
+
+// TestIsPermanent_RejectsForeignAsSpoof asserts a foreign error cannot spoof the
+// permanent classification via the errors.As As(any) bool hook — "permanent"
+// stays unrepresentable outside this package.
+func TestIsPermanent_RejectsForeignAsSpoof(t *testing.T) {
+	t.Parallel()
+	if IsPermanent(foreignAsSpoof{}) {
+		t.Fatal("IsPermanent must NOT be spoofable by a foreign error's As(any) bool hook; " +
+			"only errors that passed through PermanentError may classify permanent")
+	}
+	if IsPermanent(fmt.Errorf("ctx: %w", foreignAsSpoof{})) {
+		t.Fatal("IsPermanent must not be spoofed through a %w chain either")
+	}
+}
+
+// TestIsPermanent_SeesThroughJoinMultiTree asserts classification survives an
+// errors.Join multi-error tree (Unwrap() []error): if any joined cause is
+// permanent the aggregate is permanent (retrying cannot resolve the permanent
+// branch), and a join of only transient causes stays transient.
+func TestIsPermanent_SeesThroughJoinMultiTree(t *testing.T) {
+	t.Parallel()
+	pe := PermanentError(errors.New("revoked"))
+	if !IsPermanent(errors.Join(errors.New("transient"), pe)) {
+		t.Fatal("IsPermanent must see through errors.Join multi-error trees")
+	}
+	if IsPermanent(errors.Join(errors.New("a"), errors.New("b"))) {
+		t.Fatal("errors.Join of only transient errors must classify transient")
+	}
+}
+
 // TestResult_NormalizedRequeueAfter_NegativeClampedToZero asserts FR-002 /
 // SC test T03: a negative RequeueAfter (programmer error) is treated as 0
 // (== default tick) rather than panicking or scheduling in the past.

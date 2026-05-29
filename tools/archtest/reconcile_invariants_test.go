@@ -31,8 +31,10 @@ package archtest
 // below (non-vacuous proof the detectors flag malformed shapes):
 //   - Embedding: an anonymous field would smuggle a whole struct's surface past
 //     a name-keyed check → guarded explicitly (f.Anonymous → violation).
-//   - Type alias re-shape: reflect resolves to the underlying type, so the exact
-//     field/method-set check still fires.
+//   - Type alias re-shape: reflect resolves an alias to its underlying type, so
+//     an alias of the same type (type D = time.Duration) is not a re-shape and is
+//     not flagged, while a distinct named type (type D time.Duration) IS flagged
+//     — both directions proven by the alias-same-type / named-retype self-checks.
 //   - Wrong type / unexported / extra / missing field or method: covered by the
 //     exact name→type maps + NumField / NumMethod checks.
 
@@ -223,6 +225,15 @@ func TestReconcileStructShape_ReverseBlindSpot(t *testing.T) {
 		t.Errorf("RECONCILE-RESULT self-test: detector flagged a conforming Result (vacuous-pass risk): %v", v)
 	}
 
+	// Type-alias re-shape blind spot, proven non-vacuous in both directions: an
+	// alias to the SAME underlying type resolves back via reflect and must NOT be
+	// flagged (over-fire guard) ...
+	type aliasDuration = time.Duration
+	type aliasResult struct{ RequeueAfter aliasDuration }
+	if v := checkReconcileStructShape(reflect.TypeOf(aliasResult{}), reconcileResultWantFields); len(v) != 0 {
+		t.Errorf("RECONCILE-RESULT self-test: detector flagged an alias-of-same-type Result (vacuous over-fire): %v", v)
+	}
+
 	type requeueBoolResidue struct {
 		RequeueAfter time.Duration
 		Requeue      bool
@@ -241,12 +252,18 @@ func TestReconcileStructShape_ReverseBlindSpot(t *testing.T) {
 	type unexportedRequest struct{ entityID string }
 	_ = unexportedRequest{}.entityID // read the field so 'unused' is satisfied; the shape check flags its unexported visibility
 	type wrongTypeResult struct{ RequeueAfter int64 }
+	// ... while a distinct named type (NOT an alias) over the same underlying
+	// kind IS a re-shape and MUST be flagged — reflect reports its declared name,
+	// not time.Duration, so the exact-type check fires.
+	type namedDuration time.Duration
+	type namedRetypeResult struct{ RequeueAfter namedDuration }
 
 	badResult := map[string]reflect.Type{
 		"requeue-bool-residue": reflect.TypeOf(requeueBoolResidue{}),
 		"priority-residue":     reflect.TypeOf(priorityResidue{}),
 		"embedded-field":       reflect.TypeOf(embeddedResult{}),
 		"wrong-type":           reflect.TypeOf(wrongTypeResult{}),
+		"named-retype":         reflect.TypeOf(namedRetypeResult{}),
 	}
 	for name, dt := range badResult {
 		if v := checkReconcileStructShape(dt, reconcileResultWantFields); len(v) == 0 {
