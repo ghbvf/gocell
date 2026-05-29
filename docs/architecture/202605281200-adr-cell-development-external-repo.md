@@ -364,7 +364,7 @@ locator funnel 的两个方向分别评级，对齐 `.claude/rules/gocell/ai-rob
 （`tools/archtest/locator_discovery_funnel_test.go`），含 A1/A2a/A2b/A5 四条子规则；
 符号清单活在该 archtest 的 package godoc，不在本 ADR 复制。
 
-> 外部仓库在 M3 (#1084 archtest library-isation) 落地前不受 `LOCATOR-DISCOVERY-FUNNEL-01` archtest 守护，依赖文档约定。
+> 外部仓库在 M3 (#1084 archtest library-isation) 落地前不受 `LOCATOR-DISCOVERY-FUNNEL-01` archtest 守护，依赖文档约定。M3 PR-1 起 archtest 已可外部 import（见下 §"M3 archtest library-isation 落地形态"），但 `LOCATOR-DISCOVERY-FUNNEL-01` 本身尚未迁入外部规则集（仍在 76 条迁移 backlog 中，PR-2..N 收口）；在它迁入前，外部仓库通过 `RunStandardCellRules` 获得的是 `PANIC-REGISTERED-01` 等已迁移规则，locator funnel 仍依赖文档约定。
 
 ### ENTERING funnel（path-prefix 比较，A1/A2 轴）
 
@@ -398,6 +398,58 @@ Locator 输出派生路径，不得通过 `filepath.Join("cells", id)` 等形式
 
 ---
 
+## M3 archtest library-isation 落地形态（Amendment 2026-05-30）
+
+M3 (#1084) 解 R1：让外部 Cell 仓库 `go get github.com/ghbvf/gocell/tools/archtest`
+后在自有 `go test` 中运行 gocell 的架构不变量。**探查纠正了 R1 原始前提**：
+`tools/archtest/module_root.go` 并未硬编码 module path（经 `gomodutil.ReadModulePath`
+从 go.mod 动态读取），`package archtest` 本就可被 `go get`。真正阻塞是
+**~158 条规则全活在 `_test.go`**——Go 永不为依赖编译 `_test.go`，外部仓库拿不到；
+且无可编程入口。
+
+### 落地分层（拆 PR，全量迁移）
+
+| 项 | 形态 | 落地 PR |
+|----|------|---------|
+| 可 import API（`external.go`） | `CellRule{ID,Run}` 描述符 + `ConfigForExternalCell{ProductionMainPkgs,ExtraRules}` + `StandardCellRules() []*CellRule` + `RunStandardCellRules(t,cfg)` + `PlatformModulePath` const | **PR-1** |
+| 第一批迁移 exemplar | `PANIC-REGISTERED-01` 逻辑 MOVE 到 `panic_invariants.go`（非 test），platform 路径经 `PlatformModulePath` 派生，scan scope 由 driver 供给；gocell `_test.go` dogfood 同一 `CheckPanicRegistered`（单源） | **PR-1** |
+| 迁移收敛 ratchet | `ARCHTEST-MODULE-PATH-FUNNEL-01`（`module_path_funnel_test.go`）+ golden（PR-1 基线 **76 文件** backlog） | **PR-1** |
+| 剩余 ~76 规则族迁移 | errcode / span / saga / outbox / cell / layer-05..10 / `LOCATOR-DISCOVERY-FUNNEL-01` … 逐 PR 缩 golden 至空 | **PR-2..N**（#1302） |
+| 净新 `PROD-MAIN-WIRING-NOOP-REJECT-01`（reviewer P0 #3） | 扫 `ProductionMainPkgs` composition-root noop/in-memory wiring | #1303 |
+| FreezingArchRule baseline（外部既有库增量采纳） | `BaselinePath` + CI 只读 + 修复自动收缩 | #1304 |
+| 独立 module 抽取 `…/archtest` | go.work 多 module | #1304 |
+| ratchet 上游 Hard 化（golden 清空后纯 ban） | #1302 完成后 ARCHTEST-MODULE-PATH-FUNNEL-01 退化为 Hard | #1304 |
+
+### 核心不变式：platform-vs-scan 路径拆分
+
+规则对 **GoCell 平台符号路径**（errcode / redaction / panicregister，外部仓库作依赖在固定
+路径导入）的引用保持锚定 `PlatformModulePath`；规则的**扫描范围**（扫哪个 module 找违规）
+由 driver（`RunTyped`→`findModuleRoot` 从运行 module 的 go.mod 解析）供给。二者对应
+`go/analysis` 中 `printf` 硬编码 `"fmt.Printf"` / `copylock` 硬编码 `"sync"`（稳定依赖路径）
+vs `pass.Pkg`（被分析目标）的标准分离。
+
+### AI-robust 评级（ARCHTEST-MODULE-PATH-FUNNEL-01，funnel 双向锁）
+
+| 方向 | 形态 | 评级 |
+|------|------|------|
+| 下游 Hard | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；sanctioned 形态 `PlatformModulePath+"/x"` 的 BasicLit 片段为 `/x`，结构上不命中——form-uniqueness，无 string-anchor / 注释豁免 | **Hard** |
+| 上游 Medium | Go 无法阻止包内写 bare 字面量；golden baseline（fail-on-new + 手动缩，ArchUnit FreezingArchRule 范式）兜底；Hard 终态 = golden 清空后纯 ban | **Medium（过渡）** |
+
+Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；Hard 化路径
+= 完成全量迁移使 golden 清空 → 纯 ban，由 follow-up issue 跟踪。符号清单 + 盲区自检活在
+`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
+
+### 开源对标（`ref:` 见 commit）
+
+- `golang.org/x/tools/go/analysis`：`Pass{Fset,Files,Pkg,TypesInfo}` 同构；`Analyzer` 值 +
+  `multichecker.Main([]*Analyzer)` slice（无 registry）+ `analysistest.Run(t,dir,a,patterns)`
+  driver 供 target；printf/copylock 平台路径固定。
+- ArchUnit：`rule.check(importedClasses)` 分离供给、`ArchTests.in(StandardRules.class)`
+  预定义集、`FreezingArchRule`/ViolationStore 增量采纳、custom rule 同接口无 registry。
+- arch-go：`config.Load(modulePath)`。
+
+---
+
 ## 威胁矩阵 / 边界条件
 
 | 场景 | 风险 | 处置 |
@@ -410,6 +462,9 @@ Locator 输出派生路径，不得通过 `filepath.Join("cells", id)` 等形式
 | manifest `modules[*].path` 指向不存在目录 | WalkDir 报 `*PathError` | `NewLocator` / `NewLocatorFS` 在构造阶段对每个 `path` 调用 `fs.Stat` fail-fast，而非推迟到 `Discover()` 调用时 |
 | go.work 中 use 的 module 不在 manifest modules 列表中 | manifest 遗漏子 module，相关 cell 不被扫描 | 本 ADR 不强制 go.work 与 manifest 对齐；M2 codegen module path 注入会在 codegen 阶段捕获不一致；long-term M11 指南补充手动校验步骤 |
 | Workspace 多模块均声明 `actors` 字段 | workspace-level singleton 重复声明 | `Locator` 解析 manifest 时 fail-fast，返回 `ErrDuplicateWorkspaceSingleton`，明确指出重复的模块路径 |
+| M3：外部仓库 import archtest 后触达 loader 原语绕过 Pass funnel | 外部代码 `packages.Load` + 手配 `*types.Info` 重建 INV-1 跨 load 配对 bug | **不削弱**：`Pass.Pkg` 仍是 `*types.Package`（非 `*packages.Package`，无 `.Syntax`）；loader 原语在 `tools/archtest/internal/`（外部不可 import）；外部仅经 `RunTyped`/`RunStandardCellRules` 安全 façade。Hard 三线防御对外部 import 与对内一致 |
+| M3：外部仓库的 `_test.go` 调 `RunStandardCellRules`，`findModuleRoot` 误解析到 gocell 依赖根 | 扫描目标错成 gocell 而非外部 module | `findModuleRoot` 从测试进程 cwd 向上回溯，外部 `go test` 的 cwd 在外部 module 内 → 命中外部 go.mod；gocell 依赖在 module cache（只读，非 cwd 祖先），不会被误命中 |
+| M3：迁移 PR 改规则逻辑引入行为漂移（漏报违规） | 安全规则静默失效 | 每条迁移单源 dogfood（gocell `_test.go` 与外部走同一 `Check*`）+ Test* 名不变（ARCHTEST-VERIFY-COVERAGE-01 不漂移）+ RED fixture golden 锁违规检出 |
 
 ---
 
