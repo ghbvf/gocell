@@ -54,7 +54,7 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 		}},
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -98,7 +98,7 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 		}},
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -136,7 +136,7 @@ func TestRenderCell_EmptySubPathDirectMount(t *testing.T) {
 		}},
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -169,7 +169,7 @@ func TestRenderSlice_ProducesServiceInterface(t *testing.T) {
 		},
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "slice.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -192,7 +192,7 @@ func TestGenerate_DryRunDoesNotWriteFile(t *testing.T) {
 	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
-	res, err := Generate(root, project, Options{OnlyCell: "demo", DryRun: true})
+	res, err := Generate(root, project, Options{OnlyCell: "demo", DryRun: true, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestGenerate_VerifyDriftWhenFileMissing(t *testing.T) {
 	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
-	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
+	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -226,10 +226,10 @@ func TestGenerate_WriteThenVerifyClean(t *testing.T) {
 	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
-	if _, err := Generate(root, project, Options{OnlyCell: "demo"}); err != nil {
+	if _, err := Generate(root, project, Options{OnlyCell: "demo", ModulePath: "github.com/ghbvf/gocell"}); err != nil {
 		t.Fatalf("Generate write: %v", err)
 	}
-	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
+	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate verify: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestGenerate_WriteThenVerifyClean(t *testing.T) {
 func TestGenerate_OnlyCellNotFound(t *testing.T) {
 	t.Parallel()
 	project := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
-	_, err := Generate(t.TempDir(), project, Options{OnlyCell: "ghost"})
+	_, err := Generate(t.TempDir(), project, Options{OnlyCell: "ghost", ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
 	}
@@ -249,7 +249,7 @@ func TestGenerate_OnlyCellNotFound(t *testing.T) {
 
 func TestGenerate_NilProject(t *testing.T) {
 	t.Parallel()
-	_, err := Generate(t.TempDir(), nil, Options{})
+	_, err := Generate(t.TempDir(), nil, Options{ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for nil project")
 	}
@@ -257,7 +257,7 @@ func TestGenerate_NilProject(t *testing.T) {
 
 func TestGenerate_EmptyRoot(t *testing.T) {
 	t.Parallel()
-	_, err := Generate("", &metadata.ProjectMeta{}, Options{})
+	_, err := Generate("", &metadata.ProjectMeta{}, Options{ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected error for empty root")
 	}
@@ -270,7 +270,7 @@ func TestGenerate_SkipsCellsWithoutGoStructName(t *testing.T) {
 			"untouched": {ID: "untouched", Dir: "untouched", File: "cells/untouched/cell.yaml"},
 		},
 	}
-	res, err := Generate(t.TempDir(), project, Options{})
+	res, err := Generate(t.TempDir(), project, Options{ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("// hand-written\npackage demo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Generate(root, buildSyntheticProject(), Options{OnlyCell: "demo"})
+	_, err := Generate(root, buildSyntheticProject(), Options{OnlyCell: "demo", ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected refusal to overwrite user file")
 	}
@@ -311,7 +311,7 @@ func TestGenerate_CellGoAbsentWithSubscribeCU(t *testing.T) {
 	}
 	// cell.go is intentionally absent — IndexCellStructFields will error → fieldIndex=nil.
 	project := buildSyntheticProject() // has a subscribe CU on alpha slice
-	_, err := Generate(root, project, Options{OnlyCell: "demo"})
+	_, err := Generate(root, project, Options{OnlyCell: "demo", ModulePath: "github.com/ghbvf/gocell"})
 	if err == nil {
 		t.Fatal("expected build error when cell.go absent and subscribe CU present, got nil")
 	}
@@ -334,7 +334,7 @@ func TestRenderCell_GoldenSynth(t *testing.T) {
 	}
 	// Enrich subscription import paths (mirrors Generate's behavior).
 	EnrichSubscriptionsWithModulePath(spec, "github.com/ghbvf/gocell")
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -367,14 +367,14 @@ func TestGenerate_VerifyDriftAfterManualEdit(t *testing.T) {
 	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
-	if _, err := Generate(root, project, Options{OnlyCell: "demo"}); err != nil {
+	if _, err := Generate(root, project, Options{OnlyCell: "demo", ModulePath: "github.com/ghbvf/gocell"}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "cells", "demo", "cell_gen.go")
 	content := fileutil.MustReadFile(t, path)
 	tampered := strings.Replace(string(content), "Init", "InitX", 1)
 	fileutil.MustWriteFile(t, path, []byte(tampered))
-	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
+	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestRenderHealthzGen_GoldenSynth(t *testing.T) {
 		CellID:     "demo",
 		SourceFile: "cells/demo/cell.yaml",
 	}
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "healthz_gen.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -564,7 +564,7 @@ func TestRenderHealthzGen_HappyPath(t *testing.T) {
 		CellID:     "mycell",
 		SourceFile: "cells/mycell/cell.yaml",
 	}
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "healthz_gen.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -602,7 +602,7 @@ func TestRenderHealthzGen_UnderscoreCellID(t *testing.T) {
 		CellID:     "my_cell",
 		SourceFile: "cells/my_cell/cell.yaml",
 	}
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "healthz_gen.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -621,7 +621,7 @@ func TestRenderHealthzGen_FileBasename(t *testing.T) {
 	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
-	res, err := Generate(root, project, Options{OnlyCell: "demo", DryRun: true})
+	res, err := Generate(root, project, Options{OnlyCell: "demo", DryRun: true, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestCellGen_SubscribeBlockUsesGeneratedPackage(t *testing.T) {
 		}},
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,

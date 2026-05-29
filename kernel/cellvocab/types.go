@@ -30,6 +30,7 @@ const (
 	ContractCommand    ContractKind = "command"
 	ContractProjection ContractKind = "projection"
 	ContractWebhook    ContractKind = "webhook"
+	ContractGRPC       ContractKind = "grpc"
 )
 
 // ContractRole describes how a Slice participates in a Contract.
@@ -92,6 +93,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractProjection, nil
 	case "webhook":
 		return ContractWebhook, nil
+	case "grpc":
+		return ContractGRPC, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid contract kind",

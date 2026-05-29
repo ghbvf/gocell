@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
@@ -575,5 +577,107 @@ func TestNewExecutor_NilObserver_DefaultsToNop(t *testing.T) {
 	}
 	if _, ok := exec.observer.(NopObserver); !ok {
 		t.Errorf("observer = %T, want NopObserver after WithObserver(nil)", exec.observer)
+	}
+}
+
+// panicObserver is an out-of-contract Observer that panics in every callback.
+// Used to exercise recoverObserverPanic's correlation-logging path (F1).
+type panicObserver struct{}
+
+func (panicObserver) ObserveOutcome(_ context.Context, _, _ idutil.SafeID, _, _ string, _ Outcome, _ int) {
+	panic("observe outcome boom")
+}
+
+func (panicObserver) ObserveRetry(_ context.Context, _, _ idutil.SafeID, _, _ string) {
+	panic("observe retry boom")
+}
+
+func (panicObserver) ObserveHeartbeatFailure(_ context.Context, _, _ idutil.SafeID, _ HeartbeatFailureReason) {
+	panic("observe hb boom")
+}
+
+// TestObserverCall_Timeout_LogsCorrelation asserts the bounded-wait timeout log
+// (callObserverBounded) carries instance_id + lease_id + method so an operator
+// can correlate an observer-deadline breach back to the instance / ClaimPending
+// cycle it occurred under. F1: observer-boundary logs previously carried only
+// method, breaking the "all per-instance saga logs carry lease_id" invariant.
+func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	hb := &staleHeartbeater{} // preflight returns ok=false → blocks on observer
+	obs := newBlockingObserver()
+	defer close(obs.release) // unblock the leaked observer goroutine on test exit
+	buf := sloghelper.NewSyncBuffer()
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	exec, err := NewExecutor(hb, fc,
+		WithLogger(logger),
+		WithHeartbeatInterval(testtime.D5s),
+		WithLeaseDuration(testtime.D30s),
+		WithObserver(obs),
+		WithObserverCallDeadline(testtime.D20ms),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- exec.RunWithHeartbeat(context.Background(), newTestInstance(), "lease-timeout-log",
+			func(_ context.Context) error { return nil })
+	}()
+
+	// Wait for the observer call to enter so the bounded timer exists, then
+	// advance past its deadline to fire the timeout branch.
+	testwait.Deterministic(t, obs.hbEntered, testtime.EventuallyShort, "observer-call-entered")
+	fc.Advance(testtime.D50ms)
+	_ = testwait.Deterministic(t, errCh, testtime.EventuallyShort, "RunWithHeartbeat must return")
+
+	entry := sloghelper.FindLogEntry(buf.String(), "observer call exceeded deadline")
+	if entry == nil {
+		t.Fatalf("expected an observer-deadline WARN log; logs=%s", buf.String())
+	}
+	if entry["instance_id"] != "test-instance-id" {
+		t.Errorf("timeout log instance_id = %v, want test-instance-id", entry["instance_id"])
+	}
+	if entry["lease_id"] != "lease-timeout-log" {
+		t.Errorf("timeout log lease_id = %v, want lease-timeout-log", entry["lease_id"])
+	}
+	if entry["method"] != "ObserveHeartbeatFailure" {
+		t.Errorf("timeout log method = %v, want ObserveHeartbeatFailure", entry["method"])
+	}
+}
+
+// TestObserverCall_Panic_LogsCorrelation asserts the recoverObserverPanic log
+// carries instance_id + lease_id + method (F1, panic branch). Uses a direct
+// safeObserveOutcome call with a panicking observer — recovery is synchronous,
+// so no clock dance is needed: callObserverBounded returns via <-done only
+// after recoverObserverPanic (deferred LIFO before close(done)) has logged.
+func TestObserverCall_Panic_LogsCorrelation(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	hb := &alwaysOKHeartbeater{}
+	buf := sloghelper.NewSyncBuffer()
+	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	exec, err := NewExecutor(hb, fc, WithLogger(logger), WithObserver(panicObserver{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exec.safeObserveOutcome(context.Background(), "test-instance-id", "lease-panic-log",
+		"test-def-id", "step-x", OutcomeSucceeded, 1)
+
+	entry := sloghelper.FindLogEntry(buf.String(), "observer call panicked")
+	if entry == nil {
+		t.Fatalf("expected an observer-panic WARN log; logs=%s", buf.String())
+	}
+	if entry["instance_id"] != "test-instance-id" {
+		t.Errorf("panic log instance_id = %v, want test-instance-id", entry["instance_id"])
+	}
+	if entry["lease_id"] != "lease-panic-log" {
+		t.Errorf("panic log lease_id = %v, want lease-panic-log", entry["lease_id"])
+	}
+	if entry["method"] != "ObserveOutcome" {
+		t.Errorf("panic log method = %v, want ObserveOutcome", entry["method"])
 	}
 }

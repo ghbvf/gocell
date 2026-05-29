@@ -65,7 +65,7 @@ func TestParseContractKindRejectsUnknownIncludingWebhookSimilar(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"uppercase webhook", "Webhook"},
-		{"grpc — unrelated unknown", "grpc"},
+		{"graphql — unrelated unknown", "graphql"},
 		{"websocket — near-miss", "websocket"},
 	}
 	for _, tt := range tests {

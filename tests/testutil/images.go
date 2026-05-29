@@ -21,6 +21,11 @@ const (
 	// (verified from image labels: release="RELEASE.2025-09-07T16-13-09Z") and
 	// the @sha256 digest is the immutable content reference and authoritative pin.
 	MinIOImage = "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+
+	// MosquittoImage is the eclipse-mosquitto v2.0.22 MQTT broker image pinned by digest.
+	// Used by adapters/mqtt integration tests.
+	// Patch version confirmed via `docker image inspect eclipse-mosquitto:2.0 .Config.Labels["org.opencontainers.image.version"]`.
+	MosquittoImage = "eclipse-mosquitto:2.0.22@sha256:914f529386804c8278a4e581526b9be5e1604df44b30daabc70aa97dcefe5268"
 )
 
 // RedisClusterTestAddrsEnv is the discovery env consumed by

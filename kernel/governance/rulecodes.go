@@ -111,6 +111,7 @@ const (
 	codeFMT35 RuleCode = "FMT-35"
 	codeFMT36 RuleCode = "FMT-36"
 	codeFMT37 RuleCode = "FMT-37"
+	codeFMT38 RuleCode = "FMT-38"
 	codeFMTA1 RuleCode = "FMT-A1"
 	codeFMTC1 RuleCode = "FMT-C1"
 

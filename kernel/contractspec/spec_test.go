@@ -100,6 +100,114 @@ func TestContractSpec_CommandProjection_Validate(t *testing.T) {
 	}
 }
 
+// TestContractSpec_GRPCSpec_Validate verifies ContractSpec validation for
+// grpc kind: Service + Method + Proto are required (nested GRPCEndpointSpec),
+// Proto must be rooted under contracts/grpc/, StreamingType (when present) must
+// be one of the metadata enum, and HTTP/event fields are rejected on a grpc
+// spec. These mirror the contract.schema.json grpc if/then block and governance
+// FMT-37 so the three validation surfaces agree.
+func TestContractSpec_GRPCSpec_Validate(t *testing.T) {
+	t.Parallel()
+	const proto = "contracts/grpc/device/command/v1/device_command.proto"
+	full := func() *contractspec.GRPCEndpointSpec {
+		return &contractspec.GRPCEndpointSpec{
+			Service: "device.command.v1.DeviceCommandService",
+			Method:  "IssueCommand", Proto: proto,
+		}
+	}
+	cases := []struct {
+		name    string
+		spec    contractspec.ContractSpec
+		wantErr bool
+	}{
+		{"happy — full grpc spec", contractspec.ContractSpec{
+			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: full(),
+		}, false},
+		{"happy — explicit streamingType", contractspec.ContractSpec{
+			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{
+				Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "server-stream",
+			},
+		}, false},
+		{"happy — explicit unary streamingType", contractspec.ContractSpec{
+			// "unary" is a real enum member, distinct from the omitted default;
+			// both must be accepted (see metadata.GRPCStreamingTypeEnum).
+			ID: "grpc.device.command.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{
+				Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "unary",
+			},
+		}, false},
+		{"grpc kind requires GRPC block", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+		}, true},
+		{"grpc kind requires service", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Method: "IssueCommand", Proto: proto},
+		}, true},
+		{"grpc kind requires method", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Proto: proto},
+		}, true},
+		{"grpc kind requires proto", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M"},
+		}, true},
+		{"grpc proto must be rooted under contracts/grpc/", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M", Proto: "proto/x.proto"},
+		}, true},
+		{"grpc invalid streamingType rejected", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s.v1.S", Method: "M", Proto: proto, StreamingType: "duplex"},
+		}, true},
+		{"grpc spec with http Method rejected", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc", Method: "POST",
+			GRPC: full(),
+		}, true},
+		{"grpc spec with event Topic rejected", contractspec.ContractSpec{
+			ID: "a", Kind: cellvocab.ContractGRPC, Transport: "grpc", Topic: "t",
+			GRPC: full(),
+		}, true},
+		{"http spec carrying GRPC block rejected", contractspec.ContractSpec{
+			ID: "http.a.b.v1", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "GET", Path: "/x",
+			GRPC: full(),
+		}, true},
+		{"event spec carrying GRPC block rejected", contractspec.ContractSpec{
+			ID: "event.a.b.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "t",
+			GRPC: full(),
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.spec.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %+v, got nil", tc.spec)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error %v for %+v", err, tc.spec)
+			}
+		})
+	}
+}
+
+// TestContractSpec_GRPCInfo verifies the GRPCInfo accessor returns the nested
+// grpc endpoint spec for a grpc contract and nil otherwise.
+func TestContractSpec_GRPCInfo(t *testing.T) {
+	t.Parallel()
+	grpcSpec := &contractspec.GRPCEndpointSpec{Service: "s", Method: "m"}
+	withGRPC := contractspec.ContractSpec{
+		ID: "grpc.x.y.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc", GRPC: grpcSpec,
+	}
+	if got := withGRPC.GRPCInfo(); got != grpcSpec {
+		t.Fatalf("GRPCInfo() = %v, want %v", got, grpcSpec)
+	}
+	httpSpec := contractspec.ContractSpec{ID: "http.a.b.v1", Kind: cellvocab.ContractHTTP, Transport: "http", Method: "GET", Path: "/x"}
+	if got := httpSpec.GRPCInfo(); got != nil {
+		t.Fatalf("GRPCInfo() on http spec = %v, want nil", got)
+	}
+}
+
 // TestContractSpec_UnknownKind_Validate verifies that an unrecognized kind
 // is rejected with a kind-specific error message.
 func TestContractSpec_UnknownKind_Validate(t *testing.T) {

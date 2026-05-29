@@ -269,26 +269,26 @@ func TestFMT35_NonWebhookRole_SourceIDAndTargetSelectorForbidden(t *testing.T) {
 	assertResultsContainCode(t, results, codeFMT35, "contractUsages[0].targetSelector")
 }
 
-// --- FMT-37 webhook contract-side required fields (live parity with FMT-04) ---
+// --- FMT-38 webhook contract-side required fields (live parity with FMT-04) ---
 //
 // These guard the fail-open gap where an inbound webhook contract that omits
 // signature/payload, or declares an unsupported signature algorithm, would pass
 // `gocell validate` (the schema if/then encoding the rule is not run — Phase 2),
 // unlike event contracts whose required fields are live-enforced by FMT-04.
 
-// TestFMT37AlgorithmMatchesKernel is the single-source cross-check: the FMT-37
+// TestFMT38AlgorithmMatchesKernel is the single-source cross-check: the FMT-38
 // local algorithm literal MUST equal the runtime kernel/webhook canonical const.
 // kernel/governance cannot import kernel/webhook in production (KERNEL-INTERNAL-DAG-01
 // forbids the governance→webhook edge), so the value is duplicated as a local
 // literal and pinned here. This _test.go import of kernel/webhook is test-only
 // and therefore not counted as a production DAG edge (loadModule uses tests=false).
-func TestFMT37AlgorithmMatchesKernel(t *testing.T) {
-	assert.Equal(t, string(webhook.AlgorithmHMACSHA256), fmt37WebhookAlgorithm,
-		"FMT-37 local algorithm literal must stay in lock-step with kernel/webhook.AlgorithmHMACSHA256")
+func TestFMT38AlgorithmMatchesKernel(t *testing.T) {
+	assert.Equal(t, string(webhook.AlgorithmHMACSHA256), fmt38WebhookAlgorithm,
+		"FMT-38 local algorithm literal must stay in lock-step with kernel/webhook.AlgorithmHMACSHA256")
 }
 
 // inboundWebhookContractMeta builds a well-formed inbound webhook ContractMeta
-// (signature with the sole supported algorithm + payload) for FMT-37 tests.
+// (signature with the sole supported algorithm + payload) for FMT-38 tests.
 func inboundWebhookContractMeta() *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:        "webhook.stripe.events.v1",
@@ -299,7 +299,7 @@ func inboundWebhookContractMeta() *metadata.ContractMeta {
 			Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
 		},
 		Signature: &metadata.WebhookSignatureMeta{
-			Algorithm:        fmt37WebhookAlgorithm,
+			Algorithm:        fmt38WebhookAlgorithm,
 			DeliveryIDHeader: "svix-id",
 			TimestampHeader:  "svix-timestamp",
 			SignatureHeader:  "svix-signature",
@@ -310,54 +310,54 @@ func inboundWebhookContractMeta() *metadata.ContractMeta {
 	}
 }
 
-// TestFMT37_InboundValid_Passes verifies a well-formed inbound webhook contract
-// (signature with hmac-sha256 + payload) produces no FMT-37 finding.
-func TestFMT37_InboundValid_Passes(t *testing.T) {
+// TestFMT38_InboundValid_Passes verifies a well-formed inbound webhook contract
+// (signature with hmac-sha256 + payload) produces no FMT-38 finding.
+func TestFMT38_InboundValid_Passes(t *testing.T) {
 	project := minimalGovernanceProject()
 	project.Contracts["webhook.stripe.events.v1"] = inboundWebhookContractMeta()
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertNoCode(t, results, codeFMT37)
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertNoCode(t, results, codeFMT38)
 }
 
-// TestFMT37_InboundMissingSignature_Rejected verifies signature is required for
+// TestFMT38_InboundMissingSignature_Rejected verifies signature is required for
 // inbound (a receiver cannot verify without it).
-func TestFMT37_InboundMissingSignature_Rejected(t *testing.T) {
+func TestFMT38_InboundMissingSignature_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
 	c := inboundWebhookContractMeta()
 	c.Signature = nil
 	project.Contracts["webhook.stripe.events.v1"] = c
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertResultsContainCode(t, results, codeFMT37, "signature")
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature")
 }
 
-// TestFMT37_InboundMissingPayload_Rejected verifies payload is required for inbound.
-func TestFMT37_InboundMissingPayload_Rejected(t *testing.T) {
+// TestFMT38_InboundMissingPayload_Rejected verifies payload is required for inbound.
+func TestFMT38_InboundMissingPayload_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
 	c := inboundWebhookContractMeta()
 	c.Payload = nil
 	project.Contracts["webhook.stripe.events.v1"] = c
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertResultsContainCode(t, results, codeFMT37, "payload")
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "payload")
 }
 
-// TestFMT37_InvalidAlgorithm_Rejected verifies a signature algorithm other than
+// TestFMT38_InvalidAlgorithm_Rejected verifies a signature algorithm other than
 // hmac-sha256 is rejected (no downgrade path).
-func TestFMT37_InvalidAlgorithm_Rejected(t *testing.T) {
+func TestFMT38_InvalidAlgorithm_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
 	c := inboundWebhookContractMeta()
 	c.Signature.Algorithm = "hmac-sha1"
 	project.Contracts["webhook.stripe.events.v1"] = c
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertResultsContainCode(t, results, codeFMT37, "signature.algorithm")
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.algorithm")
 }
 
-// TestFMT37_OutboundWithoutSignaturePayload_Passes verifies outbound webhooks do
+// TestFMT38_OutboundWithoutSignaturePayload_Passes verifies outbound webhooks do
 // NOT require signature/payload (the dispatcher signs with its own key).
-func TestFMT37_OutboundWithoutSignaturePayload_Passes(t *testing.T) {
+func TestFMT38_OutboundWithoutSignaturePayload_Passes(t *testing.T) {
 	project := minimalGovernanceProject()
 	project.Contracts["webhook.shopify.dispatch.v1"] = &metadata.ContractMeta{
 		ID:        "webhook.shopify.dispatch.v1",
@@ -367,13 +367,13 @@ func TestFMT37_OutboundWithoutSignaturePayload_Passes(t *testing.T) {
 		File:      "contracts/webhook/shopify/dispatch/v1/contract.yaml",
 	}
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertNoCode(t, results, codeFMT37)
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertNoCode(t, results, codeFMT38)
 }
 
-// TestFMT37_OutboundWithBadAlgorithm_Rejected verifies the algorithm check
+// TestFMT38_OutboundWithBadAlgorithm_Rejected verifies the algorithm check
 // applies whenever a signature block is present, including on outbound contracts.
-func TestFMT37_OutboundWithBadAlgorithm_Rejected(t *testing.T) {
+func TestFMT38_OutboundWithBadAlgorithm_Rejected(t *testing.T) {
 	project := minimalGovernanceProject()
 	project.Contracts["webhook.shopify.dispatch.v1"] = &metadata.ContractMeta{
 		ID:        "webhook.shopify.dispatch.v1",
@@ -384,6 +384,6 @@ func TestFMT37_OutboundWithBadAlgorithm_Rejected(t *testing.T) {
 		File:      "contracts/webhook/shopify/dispatch/v1/contract.yaml",
 	}
 
-	results := NewValidator(project, "", clock.Real()).validateFMT37()
-	assertResultsContainCode(t, results, codeFMT37, "signature.algorithm")
+	results := NewValidator(project, "", clock.Real()).validateFMT38()
+	assertResultsContainCode(t, results, codeFMT38, "signature.algorithm")
 }

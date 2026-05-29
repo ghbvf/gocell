@@ -248,13 +248,14 @@ func assertErrCode(t *testing.T, err error, want errcode.Code) {
 
 // TestConnection_ReconnectMetric_Counted verifies that RecordReconnect is
 // called when a second connection event fires (first up does NOT count), and
-// increments to ≥1 after a reconnection.
+// increments to >=1 after a reconnection.
 //
-// Strategy: start a restartable broker on a fixed random port, connect, stop
-// the broker (triggers autopaho reconnect loop), restart on the same port, and
-// poll until the collector count reaches ≥1.
+// Strategy: start a live broker, connect, ask the broker to disconnect that
+// client, and poll until autopaho reconnects to the same broker. Keeping the
+// broker alive avoids racing mochi Server.Close with an in-flight client
+// disconnect, which can deadlock inside mochi's Clients lock.
 func TestConnection_ReconnectMetric_Counted(t *testing.T) {
-	addr, srv := startRestartableBroker(t)
+	addr, srv := startControlledBroker(t)
 
 	clk := clock.Real()
 	cfg := newValidConfig(addr)
@@ -267,38 +268,35 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 	collector := &fakeCollector{}
 	conn, err := mqtt.Open(ctx, clk, cfg, mqtt.WithConnectionCollector(collector))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck // test cleanup; error not relevant
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer closeCancel()
+		require.NoError(t, conn.Close(closeCtx), "connection cleanup")
+		testwait.External(t, "mqtt-reconnect-broker-client-drained", func() bool {
+			return srv.Clients.Len() == 0
+		}, testtime.D2s, testtime.D10ms)
+		require.NoError(t, srv.Close(), "broker cleanup")
+	}()
 
 	// Initial connection must not count as a reconnect.
 	assert.Equal(t, int64(0), collector.count.Load(),
 		"first connection must not increment reconnect counter")
 
-	// Stop the broker to trigger a disconnect in autopaho.
-	require.NoError(t, srv.Close(), "broker close")
+	var client *mqttserver.Client
+	testwait.External(t, "mqtt-broker-observes-client", func() bool {
+		var ok bool
+		client, ok = srv.Clients.Get(cfg.ClientID.String())
+		return ok && !client.Closed()
+	}, testtime.D2s, testtime.D10ms)
+
+	require.NoError(t, srv.DisconnectClient(client, packets.CodeDisconnect),
+		"server-initiated disconnect")
 
 	// Wait until autopaho detects the TCP close and enters the reconnect loop.
 	// We poll until onConnectionDown has fired (conn.Health returns non-nil).
 	testwait.External(t, "autopaho-detects-disconnect", func() bool {
 		return conn.Health(context.Background()) != nil
 	}, testtime.D5s, testtime.D20ms)
-
-	// Restart the broker on the same address so autopaho can reconnect.
-	srv2 := mqttserver.New(&mqttserver.Options{InlineClient: false})
-	require.NoError(t, srv2.AddHook(new(auth.AllowHook), nil))
-	tcp2 := listeners.NewTCP(listeners.Config{ID: "allow-tcp-restart", Address: addr})
-	require.NoError(t, srv2.AddListener(tcp2))
-	go func() { _ = srv2.Serve() }()
-	t.Cleanup(func() { _ = srv2.Close() })
-
-	// Wait until the restarted broker accepts TCP connections.
-	testwait.External(t, "mqtt-broker-restarted", func() bool {
-		c, err := net.Dial("tcp", addr)
-		if err != nil {
-			return false
-		}
-		_ = c.Close()
-		return true
-	}, testtime.D5s, testtime.D50ms)
 
 	// Poll until RecordReconnect is called (count >= 1) or timeout.
 	testwait.External(t, "reconnect-metric-fires", func() bool {
@@ -309,11 +307,10 @@ func TestConnection_ReconnectMetric_Counted(t *testing.T) {
 		"reconnect counter must increment after reconnection")
 }
 
-// startRestartableBroker starts a mochi broker on a random port and returns
-// the address and the server handle so it can be stopped and restarted in tests.
-// The caller is responsible for closing the returned server; no t.Cleanup is
-// registered so the caller can explicitly stop and restart without double-close.
-func startRestartableBroker(t *testing.T) (addr string, srv *mqttserver.Server) {
+// startControlledBroker starts a mochi broker on a random port and returns
+// the address and server handle so tests can drive server-side client actions.
+// The caller is responsible for closing the returned server.
+func startControlledBroker(t *testing.T) (addr string, srv *mqttserver.Server) {
 	t.Helper()
 	srv = mqttserver.New(&mqttserver.Options{InlineClient: false})
 	require.NoError(t, srv.AddHook(new(auth.AllowHook), nil))
@@ -324,11 +321,11 @@ func startRestartableBroker(t *testing.T) (addr string, srv *mqttserver.Server) 
 	addr = ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	tcp := listeners.NewTCP(listeners.Config{ID: "allow-tcp-restartable", Address: addr})
+	tcp := listeners.NewTCP(listeners.Config{ID: "allow-tcp-controlled", Address: addr})
 	require.NoError(t, srv.AddListener(tcp))
 	go func() { _ = srv.Serve() }()
 
-	testwait.External(t, "mqtt-broker-accepts-connections", func() bool {
+	testwait.External(t, "mqtt-controlled-broker-accepts-connections", func() bool {
 		c, derr := net.Dial("tcp", addr)
 		if derr != nil {
 			return false

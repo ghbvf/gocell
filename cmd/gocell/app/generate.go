@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -37,7 +38,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"<derived>/main.go and <derived>/modules_gen.go must",
 			"carry the gocell generated header or generation",
 			"aborts to protect your edits.",
-			"--id=<assemblyID> | --all [--module=<module>]",
+			"--id=<assemblyID> | --all [--module-path=<module>]",
 		},
 		run: func(_ context.Context, a []string) error { return generateAssembly(a) },
 	},
@@ -54,7 +55,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		name: "catalog",
 		help: []string{
 			"Render the project catalog Go source from metadata.",
-			"--out=<path> --package=<pkg>",
+			"--out=<path> --package=<pkg> [--module-path=<module>]",
 		},
 		run: func(_ context.Context, a []string) error { return generateCatalog(a) },
 	},
@@ -64,6 +65,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"Render cell_gen.go and slice_gen.go from cell.yaml /",
 			"slice.yaml. Default: all opted-in cells (goStructName set).",
 			"Optional: [<cellID>] scopes to a single cell.",
+			"[--module-path=<module>] sets the local import prefix (default: go.mod).",
 			verifyDryRunHelpLine,
 			"would-write file paths without writing.",
 			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
@@ -74,7 +76,8 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		name: "contract",
 		help: []string{
 			"Render generated/contracts/**/*_gen.go from contract.yaml",
-			"+ JSON schemas. <contractID> | --all [--dry-run | --verify].",
+			"+ JSON schemas. <contractID> | --all [--dry-run | --verify]",
+			"[--module-path=<module>].",
 			verifyDryRunHelpLine,
 			"would-write paths without writing.",
 			"Default: codegen on; set codegen: false to opt out.",
@@ -105,6 +108,18 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		},
 		run: func(_ context.Context, a []string) error { return generateSharedSchema(a) },
 	},
+	{
+		name: "saga-coverage",
+		help: []string{
+			"Render the saga fanout artifacts from the saga.Status /",
+			"journal.EventKind const sets (single source of truth for",
+			"SAGA-STATUS-FANOUT-COVERAGE-01):",
+			"  kernel/saga/sagajournaltest/terminal_coverage_gen.go,",
+			"  the readyz.md status table + alerting-rules.md kind legend.",
+			"[--dry-run]",
+		},
+		run: func(_ context.Context, a []string) error { return generateSagaCoverage(a) },
+	},
 }
 
 // runGenerate dispatches `gocell generate <type>` through the
@@ -133,13 +148,13 @@ func generateAssembly(args []string) error {
 	fs := flag.NewFlagSet("generate assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (mutually exclusive with --all)")
 	all := fs.Bool("all", false, "generate for every assembly")
-	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	module := fs.String("module-path", "", "consuming repo's Go module path (e.g. github.com/acme/svc); default: read from go.mod")
 	layout, manifestPath := addLocatorFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *id == "" && !*all {
-		return fmt.Errorf("usage: gocell generate assembly --id=<assemblyID> | --all [--module=<module>]")
+		return fmt.Errorf("usage: gocell generate assembly --id=<assemblyID> | --all [--module-path=<module>]")
 	}
 	if *id != "" && *all {
 		return fmt.Errorf("--id and --all are mutually exclusive")
@@ -172,9 +187,14 @@ func generateAssembly(args []string) error {
 	return nil
 }
 
-// resolveModule returns the module path from the flag value or go.mod.
+// resolveModule returns the module path from the flag value or go.mod. Both
+// sources are validated by gomodutil because the value flows into generated
+// import paths and the goimports/gofumpt formatter.
 func resolveModule(root, flagValue string) (string, error) {
 	if flagValue != "" {
+		if err := gomodutil.ValidateModulePath(flagValue); err != nil {
+			return "", fmt.Errorf("invalid --module-path: %w", err)
+		}
 		return flagValue, nil
 	}
 	mod, err := readModule(root)

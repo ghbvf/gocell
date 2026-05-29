@@ -31,11 +31,12 @@ type ContractSpec struct {
 	// contract.yaml file identified by Kind + path.
 	ID string
 
-	// Kind is one of ContractHTTP | ContractEvent | ContractCommand | ContractProjection | ContractWebhook.
+	// Kind is one of ContractHTTP | ContractEvent | ContractCommand |
+	// ContractProjection | ContractWebhook | ContractGRPC.
 	Kind cellvocab.ContractKind
 
-	// Transport names the wire protocol: "http" for Kind=="http",
-	// "amqp" / "internal" / ... for event/command/projection.
+	// Transport names the wire protocol: "http" for Kind=="http", "grpc" for
+	// Kind=="grpc", "amqp" / "internal" / ... for event/command/projection.
 	Transport string
 
 	// HTTP-specific fields; required when Kind == "http", rejected otherwise.
@@ -51,6 +52,25 @@ type ContractSpec struct {
 	// empty for non-internal paths. The list is mirrored in contract.yaml
 	// endpoints.clients and enforced at runtime by auth.RequireCallerCell.
 	Clients []string
+
+	// GRPC carries the grpc transport details; required (non-nil) when
+	// Kind == "grpc", rejected otherwise.
+	GRPC *GRPCEndpointSpec
+}
+
+// GRPCEndpointSpec is the grpc-kind transport descriptor carried by
+// ContractSpec.GRPC. It mirrors metadata.GRPCTransportMeta but is the runtime
+// value type (kernel/contractspec is dependency-free of metadata parsing at the
+// registration boundary). Service + Method are the wire identity; ProtoPackage
+// is the proto file's `package` declaration (populated by codegen in PR 6).
+type GRPCEndpointSpec struct {
+	Service       string // proto FQ service name, e.g. "device.command.v1.DeviceCommandService"
+	Method        string // proto method name, e.g. "IssueCommand"
+	StreamingType string // unary | server-stream | client-stream | bidi (empty → unary)
+	Proto         string // contracts-relative .proto path
+	// ProtoPackage is the proto `package` declaration (e.g. "device.command.v1").
+	// Populated by codegen in PR 6; empty in PR 1–5 and must not be relied upon.
+	ProtoPackage string
 }
 
 // Validate returns an error if the spec is malformed. Validation is separate
@@ -67,17 +87,29 @@ func (s ContractSpec) Validate() error {
 		return fmt.Errorf("contractspec.ContractSpec: Transport must not be empty")
 	}
 
+	// Cross-field exclusivity for the grpc transport block: the GRPC subtree is
+	// the only field group introduced after the original http/event split, so
+	// the foreign-block rejection lives here at the dispatch point (one guard
+	// covers http, event, command, projection, and unknown kinds) rather than
+	// being duplicated into each non-grpc validator. validateGRPC itself rejects
+	// the inverse leakage (http Method/Path or event Topic on a grpc spec).
+	if s.Kind != cellvocab.ContractGRPC && s.GRPC != nil {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: %s kind must not carry a GRPC block", s.ID, s.Kind)
+	}
+
 	switch s.Kind {
 	case cellvocab.ContractHTTP:
 		return s.validateHTTP()
 	case cellvocab.ContractEvent:
 		return s.validateEvent()
+	case cellvocab.ContractGRPC:
+		return s.validateGRPC()
 	case cellvocab.ContractCommand, cellvocab.ContractProjection, cellvocab.ContractWebhook:
 		// Allowed but no additional validation yet — future PRs add
 		// command/projection/webhook transports.
 		return nil
 	default:
-		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|webhook)", s.Kind)
+		return fmt.Errorf("contractspec.ContractSpec: Kind %q not recognized (http|event|command|projection|webhook|grpc)", s.Kind)
 	}
 }
 
@@ -126,4 +158,46 @@ func (s ContractSpec) validateEvent() error {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
 	return nil
+}
+
+func (s ContractSpec) validateGRPC() error {
+	if s.GRPC == nil {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires GRPC block", s.ID)
+	}
+	if s.GRPC.Service == "" {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Service", s.ID)
+	}
+	if s.GRPC.Method == "" {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Method", s.ID)
+	}
+	if s.GRPC.Proto == "" {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind requires Proto", s.ID)
+	}
+	if !strings.HasPrefix(s.GRPC.Proto, metadata.GRPCProtoPathPrefix) {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc Proto %q must be rooted under %q",
+			s.ID, s.GRPC.Proto, metadata.GRPCProtoPathPrefix)
+	}
+	// StreamingType is optional; empty is the unary default. When present it must
+	// be one of metadata.GRPCStreamingTypeEnum — the same single source the
+	// contract.schema.json enum and governance FMT-37 consume, so the three
+	// validation surfaces never disagree.
+	if s.GRPC.StreamingType != "" && !metadata.IsKnownGRPCStreamingType(s.GRPC.StreamingType) {
+		return fmt.Errorf(
+			"contractspec.ContractSpec[%s]: grpc StreamingType %q not recognized (unary|server-stream|client-stream|bidi, or omit for unary)",
+			s.ID, s.GRPC.StreamingType)
+	}
+	if s.Method != "" || s.Path != "" || s.Topic != "" {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Method/Path or event Topic", s.ID)
+	}
+	return nil
+}
+
+// GRPCInfo returns the grpc transport descriptor for a grpc-kind spec, or nil
+// for any other kind. Callers use it to read service/method without a type
+// switch on Kind.
+func (s ContractSpec) GRPCInfo() *GRPCEndpointSpec {
+	if s.Kind != cellvocab.ContractGRPC {
+		return nil
+	}
+	return s.GRPC
 }

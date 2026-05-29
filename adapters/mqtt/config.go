@@ -2,10 +2,12 @@ package mqtt
 
 import (
 	"crypto/tls"
+	"log/slog"
 	"net/url"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
@@ -45,6 +47,7 @@ const (
 	msgConfigNoBrokers                = "mqtt: config requires at least one broker"
 	msgConfigBadBrokerURL             = "mqtt: broker URL is invalid or uses an unsupported scheme"
 	msgConfigTLSRequired              = "mqtt: TLS config required for tls broker"
+	msgConfigTLSInsecureSkipVerify    = "mqtt: TLS InsecureSkipVerify is forbidden (certificate verification must not be disabled)"
 	msgConfigPlaintextRemote          = "mqtt: plaintext broker scheme requires loopback host"
 	msgConfigConnectTimeout           = "mqtt: ConnectTimeout must be > 0"
 	msgConfigKeepAlive                = "mqtt: KeepAlive must be > 0"
@@ -53,6 +56,7 @@ const (
 	msgConfigSessionExpiryBelowSecond = "mqtt: SessionExpiry > 0 must be >= 1s (uint32 seconds wire field truncates sub-second values to 0)"
 	msgConfigSessionExpiryRange       = "mqtt: SessionExpiry must be >= 0 and <= uint32 max seconds"
 	msgConfigBackoffInvalid           = "mqtt: Backoff.BaseDelay must be > 0 and MaxDelay >= BaseDelay"
+	msgConfigPublishTimeoutNegative   = "mqtt: PublishTimeout must be >= 0"
 
 	// PublicDetail key constants — extracted per go-standards.md
 	// "同义字符串重复 ≥ 3 次抽常量". keepAlive / sessionExpiry / broker
@@ -70,6 +74,22 @@ type AuthConfig struct {
 	Password []byte // autopaho ConnectPassword is []byte
 }
 
+// LogValue implements slog.LogValuer so the broker password is never emitted in
+// structured logs. Any slog call that resolves an AuthConfig (directly, or as a
+// nested Attr) sees the username and a redacted password placeholder instead of
+// the raw bytes. Defensive: AuthConfig is not logged on any current path, but
+// this seals the credential against future logging wiring.
+func (a AuthConfig) LogValue() slog.Value {
+	pw := ""
+	if len(a.Password) > 0 {
+		pw = redaction.Mask
+	}
+	return slog.GroupValue(
+		slog.String("username", a.Username),
+		slog.String("password", pw),
+	)
+}
+
 // BackoffConfig controls reconnect back-off behavior.
 type BackoffConfig struct {
 	BaseDelay time.Duration // first retry delay
@@ -85,15 +105,27 @@ type BackoffConfig struct {
 // typed errcode details so callers can surface them in structured logs without
 // PII leaking into messages (MESSAGE-CONST-LITERAL-01).
 type Config struct {
-	ClientID          ClientID      // sealed type from clientid.go; zero value invalid
-	Brokers           []string      // e.g. "tcp://127.0.0.1:1883", "tls://broker.example.com:8883"
-	TLS               *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
-	SessionExpiry     time.Duration // 0 = clean session
-	Auth              AuthConfig
-	Backoff           BackoffConfig
-	MaximumPacketSize uint32        // 0 = broker default; non-zero is wired into the CONNECT packet
+	ClientID      ClientID      // sealed type from clientid.go; zero value invalid
+	Brokers       []string      // e.g. "tcp://127.0.0.1:1883", "tls://broker.example.com:8883"
+	TLS           *tls.Config   // optional; required when any broker uses tls/ssl/mqtts/wss scheme
+	SessionExpiry time.Duration // 0 = clean session
+	Auth          AuthConfig
+	Backoff       BackoffConfig
+	// MaximumPacketSize controls both the INBOUND limit advertised to the broker
+	// (via CONNECT packet Properties) AND the OUTBOUND client-side guard in
+	// Publisher.Publish (payloads exceeding this size return
+	// ErrAdapterMQTTPayloadTooLarge immediately without network round-trip).
+	//
+	// 0 = no client-declared limit (broker default applies) AND no outbound
+	// guard in Publisher.
+	MaximumPacketSize uint32
 	ConnectTimeout    time.Duration // per-attempt; must be > 0
 	KeepAlive         time.Duration // > 0, <= 65535s (uint16 wire field)
+	// PublishTimeout caps the wall-clock time for a single Publish call (per-
+	// publish; the publisher's WithTimeout child ctx fires after this duration).
+	// 0 = no adapter-imposed timeout — Publisher uses the caller-provided ctx's
+	// deadline as-is. < 0 rejected by Validate.
+	PublishTimeout time.Duration
 }
 
 // Validate checks all fields for internal consistency and returns the first
@@ -116,7 +148,10 @@ func (c Config) Validate() error {
 	if err := c.validateTimings(); err != nil {
 		return err
 	}
-	return c.validateBackoff()
+	if err := c.validateBackoff(); err != nil {
+		return err
+	}
+	return c.validatePublishTimeout()
 }
 
 // validateBrokers checks the Brokers slice and each individual broker URL.
@@ -150,6 +185,13 @@ func (c Config) validateBrokers() error {
 	}
 	if needsTLS && c.TLS == nil {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSRequired)
+	}
+	// Fail-closed: a TLS config that disables certificate verification is never
+	// acceptable, regardless of scheme. InsecureSkipVerify would let a MITM
+	// present any certificate; reject it at construction rather than shipping a
+	// silently-insecure broker connection.
+	if c.TLS != nil && c.TLS.InsecureSkipVerify {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSInsecureSkipVerify)
 	}
 	return nil
 }
@@ -213,6 +255,19 @@ func (c Config) validateBackoff() error {
 				errcode.PublicDuration("baseDelay", c.Backoff.BaseDelay),
 				errcode.PublicDuration("maxDelay", c.Backoff.MaxDelay),
 			))
+	}
+	return nil
+}
+
+// validatePublishTimeout checks that PublishTimeout is non-negative.
+// 0 is accepted — it means the Publisher uses the caller-provided ctx deadline
+// as-is with no additional adapter-imposed timeout. Negative values are always
+// rejected because they would immediately cancel any publish ctx.
+func (c Config) validatePublishTimeout() error {
+	if c.PublishTimeout < 0 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig,
+			msgConfigPublishTimeoutNegative,
+			errcode.WithDetails(errcode.PublicDuration("publishTimeout", c.PublishTimeout)))
 	}
 	return nil
 }

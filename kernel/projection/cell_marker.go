@@ -37,7 +37,9 @@ func (internalCellCheckpointStore) sealedCellCheckpointStore() {}
 // when present. Required by SEALED-MARKER-NOOP-TRANSPARENCY-01 (every kernel
 // internalCell* sealed marker must forward Noop) so a demo/in-memory checkpoint
 // store's noop signal is not hidden from durable-mode rejection. The interface
-// is matched structurally — kernel/projection does not import kernel/cell.
+// is matched structurally — cell_marker.go itself does not import kernel/cell
+// (the Noop interface is duck-typed); coordinator.go imports kernel/cell for
+// reg.Subscribe.
 func (i internalCellCheckpointStore) Noop() bool {
 	type nooper interface{ Noop() bool }
 	if n, ok := i.CheckpointStore.(nooper); ok {
@@ -54,8 +56,9 @@ func (i internalCellCheckpointStore) Noop() bool {
 // nil, silently bypassing Init() fail-fast guards. Mirror of
 // outbox.WrapPublisherForCell.
 //
-// Allowed callers (enforced by archtest CELL-RAW-INFRA-WRAPPER-LOCATION-01 once
-// PR-02/PR-04 wire real callers):
+// Allowed callers are enforced by archtest CELL-RAW-INFRA-WRAPPER-LOCATION-01
+// (tools/archtest/wrapper_location_test.go — this function is already in the
+// production allowlist):
 //   - cmd/* composition roots
 //   - examples/<demo>/main.go, examples/<demo>/app.go, examples/<demo>/run.go
 //   - *_test.go in any layer

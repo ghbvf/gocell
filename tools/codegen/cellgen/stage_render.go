@@ -206,14 +206,14 @@ func materializeSkeletonStage(realRoot string, skeletonPlan []pathsafe.PlannedFi
 // appends to skeletonPlan with ForceOverwrite=true, and removes the staging dir.
 // Called from scaffold_bundle.go (which is in the depguard scaffold-os-ban list
 // and therefore cannot import "os" directly).
-func appendDerivedCodegenStaged(realRoot, cellID string, skeletonPlan []pathsafe.PlannedFile) ([]pathsafe.PlannedFile, error) {
+func appendDerivedCodegenStaged(realRoot, cellID, modulePath string, skeletonPlan []pathsafe.PlannedFile) ([]pathsafe.PlannedFile, error) {
 	stageRoot, err := materializeSkeletonStage(realRoot, skeletonPlan)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(stageRoot) }()
 
-	return appendDerivedCodegen(realRoot, stageRoot, cellID, skeletonPlan)
+	return appendDerivedCodegen(realRoot, stageRoot, cellID, modulePath, skeletonPlan)
 }
 
 // appendDerivedCodegen parses the staging root, renders contractgen and cellgen
@@ -221,7 +221,12 @@ func appendDerivedCodegenStaged(realRoot, cellID string, skeletonPlan []pathsafe
 // and appends them to mergedPlan with AbsPaths rebased to realRoot and
 // ForceOverwrite=true. The staging root is managed by the caller
 // (appendDerivedCodegenStaged), which defers RemoveAll.
-func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []pathsafe.PlannedFile) ([]pathsafe.PlannedFile, error) {
+func appendDerivedCodegen(
+	realRoot, stageRoot, cellID, modulePath string, mergedPlan []pathsafe.PlannedFile,
+) ([]pathsafe.PlannedFile, error) {
+	// modulePath is the scaffold-resolved module path (flag-or-go.mod from the
+	// REAL repo — the staging dir has no go.mod); it drives formatter import
+	// grouping + subscription import paths (#1083).
 	project, err := metadata.NewParser(stageRoot).Parse()
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
@@ -233,7 +238,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	// Contract artifacts first so generated DTO types are available for cellgen.
 	contractIDs := contractgen.ContractIDsForCell(project, cellID)
 	for _, cid := range contractIDs {
-		artifacts, artErr := contractgen.RenderContractArtifacts(stageRoot, project, cid)
+		artifacts, artErr := contractgen.RenderContractArtifacts(stageRoot, project, cid, modulePath)
 		if artErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 				"scaffold stage: render contract artifacts", artErr,
@@ -253,7 +258,7 @@ func appendDerivedCodegen(realRoot, stageRoot, cellID string, mergedPlan []paths
 	}
 
 	// Cell artifacts (cell_gen.go + slice_gen.go).
-	cellArtifacts, err := RenderCellArtifacts(stageRoot, project, cellID)
+	cellArtifacts, err := RenderCellArtifacts(stageRoot, project, cellID, modulePath)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
 			"scaffold stage: render cell artifacts", err,

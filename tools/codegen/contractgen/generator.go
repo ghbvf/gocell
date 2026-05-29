@@ -24,6 +24,13 @@ type Options struct {
 	// behavior, ScopeContracts for a specific ID list, or ScopeCell to restrict
 	// to one cell's contracts.
 	Scope Scope
+	// ModulePath is the consuming repo's Go module path (from its go.mod),
+	// threaded to the formatter so generated files group module-local imports
+	// the way the target repo's golangci-lint gate expects (#1083). Required:
+	// Generate rejects an empty ModulePath. The CLI resolves it via
+	// resolveModule (flag-or-go.mod); RenderContractArtifacts resolves it from
+	// root itself.
+	ModulePath string
 }
 
 // Result reports the outcome of Generate.
@@ -69,6 +76,9 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 	}
 	if opts.Scope == nil {
 		return res, fmt.Errorf("contractgen generate: Scope is required; use ScopeAll{} for all contracts")
+	}
+	if opts.ModulePath == "" {
+		return res, fmt.Errorf("contractgen generate: ModulePath is required (resolve from go.mod or --module-path)")
 	}
 
 	contractIDs, err := selectContractIDsByScope(p, opts)
@@ -172,7 +182,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 // renderWriteContract renders one template to content, then writes (or
 // dry-runs / verifies) to path, recording the outcome in res.
 func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path string, opts Options, res *Result, errPrefix string) error {
-	content, err := codegen.Render(codegen.RenderOptions{
+	content, err := codegen.Render(opts.ModulePath, codegen.RenderOptions{
 		TemplateName: tmplName,
 		Templates:    templates,
 		Data:         spec,
@@ -200,13 +210,21 @@ func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path stri
 // Used by manifest projection / verify pipelines (mirrors cellgen.RenderCellArtifacts).
 // Returns (nil, nil) when the contract is not opted in (Codegen=false).
 //
+// modulePath is the consuming repo's module path, threaded to the formatter
+// (#1083). It is required and supplied by the caller — callers resolve it from
+// the real repo's go.mod (the render root may be a staging dir without a
+// go.mod, e.g. scaffold staging in cellgen/stage_render.go).
+//
 // Mirrors generateOneContract on the same kind × artifact matrix; the high
 // cognitive complexity is structural orchestration, not nested business logic.
 //
 //nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
-func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID string) ([]CodegenArtifact, error) {
+func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, modulePath string) ([]CodegenArtifact, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen render artifacts: project is nil")
+	}
+	if modulePath == "" {
+		return nil, fmt.Errorf("contractgen render artifacts: modulePath is required (resolve from go.mod or --module-path)")
 	}
 	contract, ok := p.Contracts[contractID]
 	if !ok {
@@ -235,7 +253,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 
 	// types_gen.go
 	typesPath := filepath.Join(pkgDir, "types_gen.go")
-	typesContent, err := codegen.Render(codegen.RenderOptions{
+	typesContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "types.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -252,7 +270,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 
 	// iface_gen.go
 	ifacePath := filepath.Join(pkgDir, "iface_gen.go")
-	ifaceContent, err := codegen.Render(codegen.RenderOptions{
+	ifaceContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 		TemplateName: "iface.tmpl",
 		Templates:    templates,
 		Data:         spec,
@@ -270,7 +288,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 	// handler_gen.go — only for kind=http.
 	if spec.Kind == "http" {
 		handlerPath := filepath.Join(pkgDir, "handler_gen.go")
-		handlerContent, err := codegen.Render(codegen.RenderOptions{
+		handlerContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: "handler.tmpl",
 			Templates:    templates,
 			Data:         spec,
@@ -289,7 +307,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 	// spec_gen.go + subscription_gen.go — only for kind=event.
 	if spec.Kind == "event" {
 		specPath := filepath.Join(pkgDir, "spec_gen.go")
-		specContent, err := codegen.Render(codegen.RenderOptions{
+		specContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: "spec.tmpl",
 			Templates:    templates,
 			Data:         spec,
@@ -305,7 +323,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 		out = append(out, CodegenArtifact{Path: specRel, Content: specContent})
 
 		subPath := filepath.Join(pkgDir, "subscription_gen.go")
-		subContent, err := codegen.Render(codegen.RenderOptions{
+		subContent, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: "subscription.tmpl",
 			Templates:    templates,
 			Data:         spec,

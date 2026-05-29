@@ -6,8 +6,6 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -208,46 +206,6 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 				"auth middleware installation")
 		})
 	}
-}
-
-// ─── TestMtlsMiddleware_PeerCertPresence ──────────────────────────────────────
-
-func TestMtlsMiddleware_PeerCertPresence(t *testing.T) {
-	t.Parallel()
-
-	mw := mtlsMiddleware()
-	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	t.Run("no_TLS_state_returns_401", func(t *testing.T) {
-		t.Parallel()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		// req.TLS is nil by default
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-	})
-
-	t.Run("TLS_with_no_peer_certs_returns_401", func(t *testing.T) {
-		t.Parallel()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.TLS = &tls.ConnectionState{} // empty, no peer certs
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code)
-	})
-
-	t.Run("TLS_with_peer_cert_returns_200", func(t *testing.T) {
-		t.Parallel()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.TLS = &tls.ConnectionState{
-			PeerCertificates: []*x509.Certificate{{}}, // presence is enough
-		}
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
 }
 
 // ─── TestVerboseTokenMiddleware_QueryParamBoundary ────────────────────────────

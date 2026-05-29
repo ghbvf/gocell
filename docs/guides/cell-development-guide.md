@@ -704,9 +704,8 @@ gocell validate --layout=conventional
 
 Conventional layout 下，`slice.yaml::belongsToCell` 可省略，由路径 `cells/<X>/slices/<Y>/slice.yaml` 中的 `<X>` 自动派生。Manifest 模式下，如果 slice 包含的 includes pattern 不遵循 `cells/<X>/slices/<Y>/` 结构，**Locator 无法派生 cellID，slice.yaml 必须显式声明 `belongsToCell`**，否则 parse 失败。
 
-### 限制（M1 范围）
+### 限制
 
-- M2 (#1083) 之前，archtest / codegen 的 module path 仍硬编码 `github.com/ghbvf/gocell/...`——外部仓库需要 M2 完工后才能跑完整 archtest。
 - M11 (#1092) 之前没有 starter repo template。当前 quickstart 见 `docs/guides/cell-external-repo-quickstart.md`。
 
 详见 ADR `docs/architecture/202605281200-adr-cell-development-external-repo.md`。

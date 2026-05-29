@@ -677,9 +677,9 @@ WHERE instance_id = '<instance_id>'
 ORDER BY version ASC;
 ```
 
-`kind` 速查：1=step_started，2=step_completed，3=step_failed，4=step_compensated，
-5=compensation_started，6=saga_succeeded，7=saga_failed，8=saga_compensated，
-9=saga_expired，10=step_compensation_failed，11=saga_compensation_failed。
+<!-- gocell:generated:saga-event-kind-legend — DO NOT EDIT (regen: gocell generate saga-coverage) -->
+`kind` 速查：1=step_started，2=step_completed，3=step_failed，4=step_compensated，5=compensation_started，6=saga_succeeded，7=saga_failed，8=saga_compensated，9=saga_expired，10=step_compensation_failed，11=saga_compensation_failed。
+<!-- /gocell:generated:saga-event-kind-legend -->
 
 **决策树**:
 

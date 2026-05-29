@@ -25,7 +25,7 @@ import "github.com/ghbvf/gocell/kernel/metadata"
 
 var _ = %s
 `, lit)
-	formatted, err := codegen.FormatGoSource("", []byte(src))
+	formatted, err := codegen.FormatGoSource("github.com/ghbvf/gocell", "", []byte(src))
 	if err != nil {
 		t.Fatalf("fmtLiteral: FormatGoSource error: %v\nraw source:\n%s", err, src)
 	}

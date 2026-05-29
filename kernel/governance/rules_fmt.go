@@ -65,6 +65,7 @@ var (
 		string(cellvocab.ContractCommand):    true,
 		string(cellvocab.ContractProjection): true,
 		string(cellvocab.ContractWebhook):    true,
+		string(cellvocab.ContractGRPC):       true,
 	}
 	validHTTPMethods = map[string]bool{
 		"GET":    true,
@@ -313,6 +314,8 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				// derived fields populated after parse time and cannot be the
 				// canonical provider field for FMT-07.
 				field = "ownerCell"
+			case cellvocab.ContractGRPC:
+				field = "endpoints.server"
 			default:
 				field = "endpoints"
 			}
@@ -328,7 +331,7 @@ func (v *Validator) validateFMT07() []ValidationResult {
 	return results
 }
 
-// validateFMT09 checks that contract.kind is one of {http, event, command, projection}.
+// validateFMT09 checks that contract.kind is one of {http, event, command, projection, grpc}.
 func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -337,8 +340,8 @@ func (v *Validator) validateFMT09() []ValidationResult {
 				codeFMT09, IssueInvalid,
 				contractFile(c),
 				"kind",
-				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, or webhook)", c.ID, c.Kind),
-				"set kind to http, event, command, projection, or webhook",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, projection, webhook, or grpc)", c.ID, c.Kind),
+				"set kind to http, event, command, projection, webhook, or grpc",
 			))
 		}
 	}
@@ -806,6 +809,122 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 	}
 
 	return results
+}
+
+// validateFMT37 checks gRPC transport metadata (endpoints.grpc) — the grpc-kind
+// sibling of FMT-13 (HTTP transport). Two cases are checked, mirroring FMT-13:
+//   - kind=grpc with nil endpoints.grpc → Error: required block missing.
+//   - any kind with non-nil endpoints.grpc → delegate to validateFMT37ForContract,
+//     which rejects non-grpc contracts declaring endpoints.grpc and validates the
+//     block's internal consistency for grpc contracts.
+//
+// Internal consistency mirrors the contract.schema.json grpc if/then block and
+// kernel/contractspec.validateGRPC; the streamingType enum and proto prefix are
+// single-sourced from metadata.GRPCStreamingTypeEnum / metadata.GRPCProtoPathPrefix
+// so schema, governance, and runtime never drift on the accepted value sets.
+//
+// Without this rule, schema-aware tooling validates endpoints.grpc but
+// `gocell validate` accepts any grpc block (service/method/proto missing,
+// out-of-enum streamingType, proto outside contracts/grpc/), and a non-grpc
+// contract could silently carry endpoints.grpc — leaving CLI users a different
+// contract than the schema declares (review C1).
+//
+// AI-robust: Medium (governance YAML-metadata validate layer, same tier as
+// FMT-13). Value-presence ceiling; the streamingType/proto value sets are
+// Hard-locked to the schema literal via TestSchemaConstantsMatchSchemaLiterals.
+func (v *Validator) validateFMT37() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		isGRPC := cellvocab.ContractKind(c.Kind) == cellvocab.ContractGRPC
+		if isGRPC && c.Endpoints.GRPC == nil {
+			results = append(results, v.newError(
+				codeFMT37, IssueRequired,
+				contractFile(c),
+				"endpoints.grpc",
+				fmt.Sprintf("grpc contract %q must declare endpoints.grpc", c.ID),
+				"add endpoints.grpc with service, method, and proto",
+			))
+			continue
+		}
+		if c.Endpoints.GRPC == nil {
+			// Non-grpc contract without endpoints.grpc — nothing to validate.
+			continue
+		}
+		// endpoints.grpc is non-nil: validate it (validateFMT37ForContract also
+		// rejects non-grpc contracts that erroneously declare endpoints.grpc).
+		results = append(results, v.validateFMT37ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT37ForContract validates a single contract's gRPC transport metadata.
+func (v *Validator) validateFMT37ForContract(c *metadata.ContractMeta) []ValidationResult {
+	g := c.Endpoints.GRPC
+	file := contractFile(c)
+
+	if cellvocab.ContractKind(c.Kind) != cellvocab.ContractGRPC {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueInvalid,
+			file,
+			"endpoints.grpc",
+			fmt.Sprintf("contract %q can only declare endpoints.grpc when kind is grpc", c.ID),
+			"remove endpoints.grpc or change the contract kind to grpc",
+		)}
+	}
+
+	var results []ValidationResult
+	if g.Service == "" {
+		results = append(results, v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.service",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.service", c.ID),
+			"add service: the proto fully-qualified service name (e.g. device.command.v1.DeviceCommandService)",
+		))
+	}
+	if g.Method == "" {
+		results = append(results, v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.method",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.method", c.ID),
+			"add method: the proto method name (e.g. IssueCommand)",
+		))
+	}
+	results = append(results, v.validateFMT37Proto(c, g, file)...)
+	results = append(results, v.validateFMT37Streaming(c, g, file)...)
+	return results
+}
+
+// validateFMT37Proto enforces that endpoints.grpc.proto is present and rooted
+// under metadata.GRPCProtoPathPrefix (contracts/grpc/). Mirrors the schema
+// proto.pattern; the prefix is the single source shared with contractspec.
+func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
+	if g.Proto == "" {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueRequired, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q must specify endpoints.grpc.proto", c.ID),
+			"add proto: the contracts-relative .proto path under contracts/grpc/",
+		)}
+	}
+	if !strings.HasPrefix(g.Proto, metadata.GRPCProtoPathPrefix) {
+		return []ValidationResult{v.newError(
+			codeFMT37, IssueInvalid, file, "endpoints.grpc.proto",
+			fmt.Sprintf("grpc contract %q proto %q must be rooted under %q", c.ID, g.Proto, metadata.GRPCProtoPathPrefix),
+			"set proto to a path under contracts/grpc/",
+		)}
+	}
+	return nil
+}
+
+// validateFMT37Streaming enforces that endpoints.grpc.streamingType, when
+// present, is one of metadata.GRPCStreamingTypeEnum. An omitted/empty value is
+// the unary default and is accepted.
+func (v *Validator) validateFMT37Streaming(c *metadata.ContractMeta, g *metadata.GRPCTransportMeta, file string) []ValidationResult {
+	if g.StreamingType == "" || metadata.IsKnownGRPCStreamingType(g.StreamingType) {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeFMT37, IssueInvalid, file, "endpoints.grpc.streamingType",
+		fmt.Sprintf("grpc contract %q streamingType %q is not one of %v", c.ID, g.StreamingType, metadata.GRPCStreamingTypeEnum),
+		"use one of unary, server-stream, client-stream, bidi (or omit for unary)",
+	)}
 }
 
 // validateFMT26 checks that auth.public and auth.passwordResetExempt are not
@@ -1629,7 +1748,7 @@ func (v *Validator) validateFMT36() []ValidationResult {
 	return results
 }
 
-// validateFMT37 enforces webhook contract-side required fields at
+// validateFMT38 enforces webhook contract-side required fields at
 // `gocell validate` time — the live parity counterpart to FMT-04 (event/projection
 // required fields). The same constraints live in contract.schema.json's
 // kind==webhook if/then block, but that schema is not run by `gocell validate`
@@ -1637,6 +1756,9 @@ func (v *Validator) validateFMT36() []ValidationResult {
 // an inbound webhook contract that omits its signature/payload block, or
 // declares an unsupported signature algorithm, passes `gocell validate`
 // silently (fail-open), unlike its event counterpart.
+//
+// (FMT-37 is the sibling grpc-transport rule; webhook landed second and took the
+// next free code FMT-38.)
 //
 //   - direction==inbound → signature block AND payload block required (the
 //     receiver landing in PR-3 cannot verify without them).
@@ -1648,15 +1770,15 @@ func (v *Validator) validateFMT36() []ValidationResult {
 // (kernel/metadata.finalizeWebhookContract), so a bad/empty direction never
 // reaches this rule.
 //
-// fmt37WebhookAlgorithm is the sole supported signature algorithm. It is a
+// fmt38WebhookAlgorithm is the sole supported signature algorithm. It is a
 // local literal rather than an import of kernel/webhook.AlgorithmHMACSHA256:
 // kernel/governance must not depend on kernel/webhook (KERNEL-INTERNAL-DAG-01
 // forbids the governance→webhook edge). The value is kept in lock-step with the
-// runtime const by the test-only cross-check TestFMT37AlgorithmMatchesKernel
+// runtime const by the test-only cross-check TestFMT38AlgorithmMatchesKernel
 // (a _test.go import of kernel/webhook is not a production DAG edge).
-const fmt37WebhookAlgorithm = "hmac-sha256"
+const fmt38WebhookAlgorithm = "hmac-sha256"
 
-func (v *Validator) validateFMT37() []ValidationResult {
+func (v *Validator) validateFMT38() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c == nil || c.Kind != string(cellvocab.ContractWebhook) {
@@ -1665,7 +1787,7 @@ func (v *Validator) validateFMT37() []ValidationResult {
 		if c.Direction == "inbound" {
 			if c.Signature == nil {
 				results = append(results, v.newError(
-					codeFMT37, IssueRequired,
+					codeFMT38, IssueRequired,
 					contractFile(c), "signature",
 					fmt.Sprintf("inbound webhook contract %q must declare a signature block", c.ID),
 					"add a signature block (algorithm, headers, signedStringForm) to the inbound webhook contract",
@@ -1673,19 +1795,19 @@ func (v *Validator) validateFMT37() []ValidationResult {
 			}
 			if c.Payload == nil {
 				results = append(results, v.newError(
-					codeFMT37, IssueRequired,
+					codeFMT38, IssueRequired,
 					contractFile(c), "payload",
 					fmt.Sprintf("inbound webhook contract %q must declare a payload block", c.ID),
 					"add a payload block (contentType, maxBodyBytes) to the inbound webhook contract",
 				))
 			}
 		}
-		if c.Signature != nil && c.Signature.Algorithm != fmt37WebhookAlgorithm {
+		if c.Signature != nil && c.Signature.Algorithm != fmt38WebhookAlgorithm {
 			results = append(results, v.newError(
-				codeFMT37, IssueInvalid,
+				codeFMT38, IssueInvalid,
 				contractFile(c), "signature.algorithm",
 				fmt.Sprintf("webhook contract %q signature.algorithm=%q is not a supported value", c.ID, c.Signature.Algorithm),
-				fmt.Sprintf("set signature.algorithm to %q (the sole supported HMAC algorithm)", fmt37WebhookAlgorithm),
+				fmt.Sprintf("set signature.algorithm to %q (the sole supported HMAC algorithm)", fmt38WebhookAlgorithm),
 			))
 		}
 	}

@@ -37,7 +37,7 @@ func TestGenerate_Webhook_KindRecognized(t *testing.T) {
 	t.Parallel()
 	root, p := setupWebhookRoot(t)
 
-	_, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	_, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate with webhook contract must not error (kind not recognized?): %v", err)
 	}
@@ -52,7 +52,7 @@ func TestGenerate_Webhook_ZeroArtifacts(t *testing.T) {
 	t.Parallel()
 	root, p := setupWebhookRoot(t)
 
-	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRenderContractArtifacts_Webhook_ZeroArtifacts(t *testing.T) {
 	t.Parallel()
 	root, p := setupWebhookRoot(t)
 
-	artifacts, err := RenderContractArtifacts(root, p, "webhook.stripe.payment-events.v1")
+	artifacts, err := RenderContractArtifacts(root, p, "webhook.stripe.payment-events.v1", "github.com/ghbvf/gocell")
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestGenerate_HTTP_ProducesArtifacts_Contrast(t *testing.T) {
 	t.Parallel()
 	root, p := setupHTTPMinimalRoot(t)
 
-	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestGenerate_Event_ProducesArtifacts_Contrast(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
-	res, err := Generate(root, p, Options{Scope: ScopeAll{}})
+	res, err := Generate(root, p, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

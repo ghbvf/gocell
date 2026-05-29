@@ -99,9 +99,14 @@ func goldenRuleIDs() []string {
 		"FMT-35",
 		// FMT-36: cell.requires ∈ closed enum {postgres,redis,rabbitmq}, no dups (Design Y, #855).
 		"FMT-36",
-		// FMT-37: webhook contract-side required fields — inbound→signature+payload;
-		// signature.algorithm==hmac-sha256 (live parity with FMT-04; #1265).
+		// FMT-37: grpc transport metadata (endpoints.grpc) — sibling of FMT-13
+		// (HTTP transport) for the grpc kind. Validates service/method/proto/
+		// streamingType, rejects endpoints.grpc on non-grpc contracts, requires
+		// the block on grpc contracts.
 		"FMT-37",
+		// FMT-38: webhook contract-side required fields — inbound→signature+payload;
+		// signature.algorithm==hmac-sha256 (live parity with FMT-04; #1265).
+		"FMT-38",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

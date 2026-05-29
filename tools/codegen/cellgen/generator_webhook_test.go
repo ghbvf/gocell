@@ -41,7 +41,7 @@ func TestRenderCell_GoldenWebhook(t *testing.T) {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
 
-	out, err := codegen.Render(codegen.RenderOptions{
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
 		Data:         spec,

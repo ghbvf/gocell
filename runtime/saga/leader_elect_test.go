@@ -498,6 +498,11 @@ func TestLogLeaderSkip_Levels(t *testing.T) {
 			if !strings.Contains(logs, "leader-elect skip") {
 				t.Errorf("missing skip message; logs=%s", logs)
 			}
+			// lease_id (journal fencing token) correlates the skip back to the
+			// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
+			if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
+				t.Errorf("skip log missing lease_id; logs=%s", logs)
+			}
 		})
 	}
 }
@@ -531,6 +536,11 @@ func TestAcquireLead_ReleaseFail_LogsWarn(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"definition_id":"def1"`) {
 		t.Errorf("release-failed log missing definition_id; logs=%s", logs)
+	}
+	// lease_id (journal fencing token) correlates the release failure back to the
+	// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
+	if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
+		t.Errorf("release-failed log missing lease_id; logs=%s", logs)
 	}
 }
 

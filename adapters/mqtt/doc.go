@@ -5,11 +5,15 @@
 //
 // # What ships in each PR
 //
-// PR-1 (this PR): connection infrastructure, sealed-struct identity funnels
+// PR-1 (merged): connection infrastructure, sealed-struct identity funnels
 // (ClientID, TopicNamespace), Config, metrics skeleton, pkg/redaction wiring,
 // and the archtest funnels that lock the sealed-struct shapes.
 //
-// PR-2: Publisher (outbox.Publisher).
+// PR-2 (this PR): Publisher (outbox.Publisher), QoS-1 PUBACK error classification
+// (classifyPubackReason), publisher metrics (mqtt_publish_failed_total closed-set
+// reason labels), and the MQTT-PUBLISH-CALLSITE-FUNNEL-01 callsite archtest that
+// locks all cm.Publish calls inside (*Connection).Publish.
+//
 // PR-3: Subscriber (outbox.Subscriber) + ConsumerBase integration.
 // PR-4: DLT routing ($dead/<topic>), outbox conformance suite.
 // PR-5: examples/iotdevice MQTT demo path.
@@ -21,10 +25,12 @@
 // Two types carry the "illegal state unrepresentable" guarantee:
 //
 // ClientID is a sealed struct with a single unexported field `value string`.
-// The only way to obtain a non-zero ClientID is ParseClientID, which validates
-// the "{cellID}-{role}-{uuid}" format before constructing. Callers who receive
-// a ClientID are guaranteed it passed validation. Go's visibility rules make
-// outside-package struct-literal construction a compile error.
+// The only way to obtain a non-zero ClientID is ParseEphemeralClientID or
+// ParseStableClientID, which validate the "{cellID}-{role}-{uuid}" format before
+// constructing. ParseEphemeralClientID generates the uuid internally (clean-session
+// use); ParseStableClientID accepts a caller-supplied instanceID (persistent-session
+// use). Callers who receive a ClientID are guaranteed it passed validation. Go's
+// visibility rules make outside-package struct-literal construction a compile error.
 //
 //	// INVARIANT: MQTT-CLIENT-ID-NAMESPACE-01
 //	// tools/archtest/mqtt_funnel_test.go locks the field shape (A1), the
@@ -39,9 +45,10 @@
 //	// INVARIANT: MQTT-TOPIC-NAMESPACE-01
 //	// tools/archtest/mqtt_funnel_test.go locks the field shape (A1), the
 //	// construction allowlist inside adapters/mqtt (A2), and the absence of
-//	// type aliases (A3). Downstream callsite enforcement (publish/subscribe
-//	// args must route through PublishOK/SubscribeOK) is deferred to PR-2/3
-//	// and tracked by gh issue #1225.
+//	// type aliases (A3). Downstream callsite enforcement (all cm.Publish calls
+//	// must route through (*Connection).Publish, which gates on PublishOK) is
+//	// implemented in PR-2 and locked by MQTT-PUBLISH-CALLSITE-FUNNEL-01
+//	// (tools/archtest/mqtt_callsite_funnel_test.go).
 //
 // # Readiness probe
 //
@@ -55,7 +62,8 @@
 //   - ClientID upstream Hard (package-external): Go compile error.
 //   - ClientID upstream Medium (package-internal): archtest A2 AST scan.
 //   - TopicNamespace: same grading as ClientID.
-//   - Downstream callsite funnel: deferred to PR-2/3 (#1225).
+//   - Downstream callsite funnel: MQTT-PUBLISH-CALLSITE-FUNNEL-01 landed in PR-2
+//     (tools/archtest/mqtt_callsite_funnel_test.go A1–A4). gh issue #1225 closed.
 //
 // # Reference
 //

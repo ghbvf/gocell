@@ -80,6 +80,30 @@ func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 	// deriveWebhookEndpoints) so a copy cannot alias the registry's source.
 	cp.Endpoints.Receivers = append([]string(nil), c.Endpoints.Receivers...)
 	cp.Endpoints.Dispatchers = append([]string(nil), c.Endpoints.Dispatchers...)
+	// Deep copy the transport-subtree pointers so a returned ContractMeta cannot
+	// alias-mutate the registry's backing entry. GRPCTransportMeta is all scalar
+	// (struct copy suffices); HTTPTransportMeta carries maps that need their own copy.
+	if c.Endpoints.GRPC != nil {
+		g := *c.Endpoints.GRPC
+		cp.Endpoints.GRPC = &g
+	}
+	if c.Endpoints.HTTP != nil {
+		h := *c.Endpoints.HTTP
+		h.PathParams = copyParamSchemaMap(c.Endpoints.HTTP.PathParams)
+		h.QueryParams = copyParamSchemaMap(c.Endpoints.HTTP.QueryParams)
+		h.Responses = copyHTTPResponseMap(c.Endpoints.HTTP.Responses)
+		cp.Endpoints.HTTP = &h
+	}
+	// Deep copy webhook signature/payload pointers — same alias-mutate guard as
+	// the transport pointers above; webhook contracts carry these on ContractMeta.
+	if c.Signature != nil {
+		s := *c.Signature
+		cp.Signature = &s
+	}
+	if c.Payload != nil {
+		p := *c.Payload
+		cp.Payload = &p
+	}
 	// Deep copy Replayable pointer.
 	if c.Replayable != nil {
 		v := *c.Replayable
@@ -99,6 +123,28 @@ func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
 		cp.Payload = &v
 	}
 	return &cp
+}
+
+func copyParamSchemaMap(src map[string]metadata.ParamSchema) map[string]metadata.ParamSchema {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]metadata.ParamSchema, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func copyHTTPResponseMap(src map[int]metadata.HTTPResponseMeta) map[int]metadata.HTTPResponseMeta {
+	if src == nil {
+		return nil
+	}
+	out := make(map[int]metadata.HTTPResponseMeta, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // Provider returns the provider actor ID for a contract.
@@ -123,6 +169,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 		return c.Endpoints.Provider, nil
 	case "webhook":
 		return c.OwnerCell, nil
+	case "grpc":
+		return c.Endpoints.Server, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",
@@ -132,9 +180,9 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 
 // Consumers returns the consumer actor IDs for a contract.
 // For http: clients, event: subscribers, command: invokers, projection: readers,
-// webhook: receivers (the inbound consumer cells; matches governance
-// contractConsumers/consumerFieldName). Dispatchers are outbound senders, not
-// consumers, so they are not returned here.
+// grpc: clients, webhook: receivers (the inbound consumer cells; matches
+// governance contractConsumers/consumerFieldName). Dispatchers are outbound
+// senders, not consumers, so they are not returned here.
 // Returns an error if the contract is not found or the kind is unknown.
 func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
@@ -154,6 +202,8 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 		return append([]string(nil), c.Endpoints.Readers...), nil
 	case "webhook":
 		return append([]string(nil), c.Endpoints.Receivers...), nil
+	case "grpc":
+		return append([]string(nil), c.Endpoints.Clients...), nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"unknown contract kind",

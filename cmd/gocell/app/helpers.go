@@ -1,15 +1,13 @@
 package app
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // findRoot walks up from the current working directory to find the nearest
@@ -66,29 +64,10 @@ func hasRootMarker(dir string) bool {
 }
 
 // readModule reads the module path from go.mod in the given root directory.
+// Delegates to gomodutil.ReadModulePath — the single shared parser used by
+// codegen, scaffold, the CLI, and archtest.
 func readModule(root string) (string, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod")))
-	if err != nil {
-		return "", fmt.Errorf("open go.mod: %w", err)
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			slog.Warn("close go.mod", slog.String("err", cerr.Error()))
-		}
-	}()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if rest, ok := strings.CutPrefix(line, "module "); ok {
-			return strings.TrimSpace(rest), nil
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read go.mod: %w", err)
-	}
-
-	return "", fmt.Errorf("module directive not found in go.mod")
+	return gomodutil.ReadModulePath(root)
 }
 
 // buildLocatorOptions translates the --layout and --manifest flags into

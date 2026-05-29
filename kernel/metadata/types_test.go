@@ -521,7 +521,12 @@ func TestContractMeta_ProviderEndpoint(t *testing.T) {
 			metadata.ContractMeta{Kind: "projection", Endpoints: metadata.EndpointsMeta{Provider: metadatatest.NewCellID("celld")}},
 			metadatatest.NewCellID("celld"),
 		},
-		{"unknown kind returns empty", metadata.ContractMeta{Kind: "grpc"}, ""},
+		{
+			"grpc returns server",
+			metadata.ContractMeta{Kind: "grpc", Endpoints: metadata.EndpointsMeta{Server: metadatatest.NewCellID("celle")}},
+			metadatatest.NewCellID("celle"),
+		},
+		{"unknown kind returns empty", metadata.ContractMeta{Kind: "websocket"}, ""},
 		{"empty kind returns empty", metadata.ContractMeta{}, ""},
 		{
 			"webhook with ownerCell returns ownerCell",
