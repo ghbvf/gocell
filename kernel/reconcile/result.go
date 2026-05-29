@@ -1,9 +1,6 @@
 package reconcile
 
-import (
-	"errors"
-	"time"
-)
+import "time"
 
 // Result is the scheduling hint a Reconciler returns to the Loop. Unlike
 // controller-runtime's reconcile.Result { Requeue bool; RequeueAfter Duration },
@@ -34,13 +31,25 @@ func (r Result) normalizedRequeueAfter() time.Duration {
 	return r.RequeueAfter
 }
 
-// permanentError is the sealed marker wrapping a non-retryable error. It is
-// unexported on purpose: PermanentError is the only constructor and IsPermanent
-// is the only classifier, so "a permanent error that did not pass through
-// PermanentError" is unrepresentable outside this package (typed-marker funnel,
-// not a string/sentinel compare). This intentionally does NOT reuse
-// kernel/outbox.PermanentError: reconcile must not couple to the outbox domain
-// (and outbox already keeps its marker exported for its own broker semantics).
+// permanentError is the sealed marker wrapping a non-retryable error. The seal
+// has two layers, because in Go type identity alone is NOT proof of
+// construction: reflect.New can instantiate this unexported type (its
+// reflect.Type is reachable via the public constructor's return value) and
+// inject it through a foreign As hook or Unwrap. So:
+//
+//  1. The type is unexported — no package-external struct literal.
+//  2. The non-nil err field is a construction proof — reflect cannot set an
+//     unexported field (reflect.Value.CanSet is false), and PermanentError(nil)
+//     returns nil, so a genuine marker ALWAYS has a non-nil cause while any
+//     reflect-forged value has a nil one.
+//
+// IsPermanent matches only a *permanentError WITH a non-nil err and never
+// consults a foreign As/Is hook, so within Go's type system a permanent
+// classification cannot be reached without passing through PermanentError.
+//
+// This intentionally does NOT reuse kernel/outbox.PermanentError: reconcile
+// must not couple to the outbox domain (and outbox already keeps its marker
+// exported for its own broker semantics).
 type permanentError struct {
 	err error
 }
@@ -59,7 +68,8 @@ func (e *permanentError) Unwrap() error {
 // change the outcome (revoked cert, malformed row, policy rejection). Once the
 // Loop lands (PR-A3) it records a dead-letter metric and stops scheduling the
 // entity until a fresh trigger re-observes it. PermanentError(nil) returns nil
-// (no spurious wrapper).
+// (no spurious wrapper) — this nil-guard is load-bearing for IsPermanent's
+// construction proof: a genuine permanentError always has a non-nil cause.
 func PermanentError(err error) error {
 	if err == nil {
 		return nil
@@ -67,19 +77,36 @@ func PermanentError(err error) error {
 	return &permanentError{err: err}
 }
 
-// IsPermanent reports whether err, or any error it wraps, is the sealed
-// permanentError marker created by PermanentError. It sees through fmt.Errorf
-// %w chains and errors.Join multi-error trees.
+// IsPermanent reports whether err, or any error it structurally wraps, is a
+// genuinely-constructed permanentError. It walks the unwrap tree itself —
+// single (Unwrap() error) and multi (Unwrap() []error, e.g. errors.Join) — so
+// it sees through fmt.Errorf %w chains.
 //
-// The pe != nil guard is load-bearing for the seal (see permanentError's
-// godoc), NOT a redundant check: errors.As also reports a match when a foreign
-// error's As(any) bool hook merely returns true, but such a hook cannot set pe
-// to a non-nil *permanentError — the type is unexported and no exported
-// function returns it — so a foreign error cannot spoof the classification. pe
-// is non-nil only when a genuine marker that passed through PermanentError is
-// found in the tree, which is what keeps "permanent" unrepresentable outside
-// this package.
+// It deliberately does NOT use errors.As. errors.As honors a foreign error's
+// As(any) bool hook, which a foreign error can use (directly, or via reflect to
+// set the unexported target) to report permanent without passing through
+// PermanentError; this walk never consults that hook. Matching the
+// *permanentError type is necessary but not sufficient — reflect can forge the
+// unexported type and inject it via a foreign Unwrap — so the err != nil check
+// is the construction proof (see permanentError's godoc).
 func IsPermanent(err error) bool {
-	var pe *permanentError
-	return errors.As(err, &pe) && pe != nil
+	for {
+		switch x := err.(type) { //nolint:errorlint // concrete-type walk by design; see IsPermanent godoc
+		case nil:
+			return false
+		case *permanentError:
+			return x.err != nil // construction proof: reflect-forged zero value has a nil cause
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, e := range x.Unwrap() {
+				if IsPermanent(e) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
 }
