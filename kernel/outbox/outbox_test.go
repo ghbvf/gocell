@@ -999,7 +999,19 @@ func TestEntry_Validate_MetadataWithinLimits(t *testing.T) {
 }
 
 func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
-	for _, k := range ReservedMetadataKeys {
+	// Independent hardcoded want-set (NOT ranging over ReservedMetadataKeys
+	// itself — that would be a self-referential tautology: a key silently
+	// dropped from the production slice is simply never iterated, so the test
+	// stays green). Each listed key MUST be rejected by Entry.Validate. The set
+	// membership vs the production slice is frozen separately by archtest
+	// OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01; this test is the behavioral
+	// witness that each named key actually triggers rejection (issue #1291 FP1).
+	wantRejected := []string{
+		"trace_id", "traceparent", "trace_state", "tracestate", "span_id",
+		"request_id", "correlation_id",
+		"actor_id", "subject_id", "tenant_id", "session_id",
+	}
+	for _, k := range wantRejected {
 		t.Run(k, func(t *testing.T) {
 			e := Entry{
 				id:         "test",

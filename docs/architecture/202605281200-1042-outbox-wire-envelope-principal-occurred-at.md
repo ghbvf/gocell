@@ -163,15 +163,25 @@ amendment 2026-05-29 全面替代为 DROP+CREATE 一刀切（**migration 043 文
 约束。PR-A2 引入 outbox.Entry.Principal/OccurredAt 后，appender 改读真实源
 即可，audit schema 不再变。
 
-### 5. ReservedMetadataKeys 扩展 5 key （PR-A2）
+### 5. ReservedMetadataKeys 扩展 4 key （PR-A2；§Amendment 2026-05-30 reconcile 12→11）
 
-阻断业务通过 `outbox.Entry.Metadata` 伪造 Principal / OccurredAt：
+阻断业务通过 `outbox.Entry.Metadata` 伪造 Principal：
 
 - `actor_id` / `subject_id` / `tenant_id` / `session_id`（Principal）
-- `occurred_at`（Time-Causality）
 
-12 key total（7 existing observability + 5 new）。`outbox.Entry.Validate()`
+**11 key total（7 observability + 4 principal）**。`outbox.Entry.Validate()`
 fail-fast 拒绝。
+
+> **occurred_at 刻意不纳入 ReservedMetadataKeys**（issue #1291 FP1 reconcile，
+> 原文「12 key / 5 new」含 `occurred_at` 系误写，已订正为 11/4）。理由：reserved
+> 的 11 个 key 全部有 **ctxkeys round-trip**（consumer 侧 `RestoreToContext`
+> 把它们重注入 handler ctx，与同名 ctxkey 存在命名空间冲突面），保留 metadata
+> key 是真实的命名空间卫生 + 防伪造；`occurred_at` 则是无 ctxkeys 往返的 typed
+> `time.Time` 标量，且 `Entry` 已 sealed-construction（producer 无法构造/篡改该
+> 字段），写 `Metadata["occurred_at"]` 对真实 `OccurredAt` 字段完全 inert——把它
+> 列为 reserved 是不产生任何防御价值的 scope-creep，故不加。membership 由
+> archtest `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（hardcoded want-set，
+> anti-tautology）冻结。
 
 ### 6. archtest Hard funnel 双向锁 （audit: PR-A1 / outbox: PR-A2）
 
@@ -184,6 +194,9 @@ fail-fast 拒绝。
 | `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01`（新增，as-built） | reflect 反向自检：`outbox.Entry` 全字段 unexported（外部 populated 字面量编译不可表达 = type-system Hard 上游）；getter read surface 完整；SoleReconstructionSurface 子检查锁「唯一产出 Entry 的导出 func = NewEntry+UnmarshalEnvelope，唯一 mirror = EntryScan」。**只封闭「字面量伪造」向量**（见 §Amendment 2026-05-29 round-2）。 | Hard 上游（type-system，**仅字面量向量**） | PR-A2 |
 | `OUTBOX-RECONSTRUCTION-CALLER-01`（新增，round-2） | caller-allowlist：`UnmarshalEnvelope` / `EntryScan.ToEntry` 生产引用点（call+value，go/types 解析）⊆ {storage adapter / wire+consumer 解码 / store conformance helper}。封闭「reconstruction 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
 | `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`（新增，round-2） | caller-allowlist：principal ctxkeys setter（`WithActorID/SubjectID/TenantID/SessionID`）生产引用点 ⊆ {auth 请求桥 `runtime/auth/middleware.go` / consumer `RestoreToContext`}。封闭「ctx-注入 伪造」向量。 | Hard 下游 + Medium 上游（Go ceiling） | PR-A2 round-2 |
+| `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`（新增，FP1） | reflect 读 `outbox.ReservedMetadataKeys` 与 hardcoded want-set（11 key）双向 exact 比对（缺/多即红）+ negative-control 反向自检。取代旧自指 tautology（`TestEntry_Validate_RejectsReservedMetadataKeys` range 生产 slice 本身，检测不到「少一个 key」——FP1 同步改为独立 want-set 的行为见证）；落实原 godoc 自称却不存在的 `reservedMetadataKeyMembership invariant test`。 | Hard 下游 + Medium 上游（package-var Go ceiling，同 `PRINCIPAL-SEALED-FIELD-FROZEN-01`，不另开 issue） | FP1 |
+
+> **F28（FP1）**：conformance helper `kernel/outbox/outboxtest/helpers.go::wrapV1Envelope` 原手搓平行 `wireMsg` struct 镜像生产 `wireMessage`，已改为直接走 `outbox.NewEntry + outbox.MarshalEnvelope`（删平行 struct）。单一真值源后 wire-schema drift **结构上不可能**，无需新增 drift-guard archtest。
 
 **as-built 修正（见 §Amendment 2026-05-29 + §Amendment 2026-05-29 round-2）**：原 ADR 此处称「不引入 INJECTION-FUNNEL，业务构造 `outbox.Entry{Principal: ..., OccurredAt: ...}` 字面量是合法形态」。PR-A2 **撤回该论述**——实际落地把 `Entry` 全字段 unexported（sealed construction），所以 `outbox.Entry{<field>: ...}` populated 字面量在 `kernel/outbox` 包外**编译不可表达**（type-system Hard 上游，`OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` 反向自检守卫）。唯一构造路径是 `NewEntry`（producer）/ `UnmarshalEnvelope`（wire decode）/ `EntryScan.ToEntry`（storage 重建），三者均在包内。Principal/Observability 仅由 `NewEntry` 从 ctx 注入（单一信任边界，无 producer-facing inject API——导出的 `InjectObservabilityFromContext` 已删，从未导出 `InjectPrincipalFromContext`）。因此「INJECTION-FUNNEL callsite uniqueness archtest」确实不需要——但根因是 type system 让伪造不可表达，**不是**「字面量合法 + archtest 够用」。
 
@@ -443,7 +456,8 @@ cell regressed ✅→⚠️/❌:
 |------|---------------|---------------|
 | Principal 4 字段 wire 携带 / ctx 还原 / span redact | ✅ | ✅ 不变（NewEntry 注入 + SubscribeEntry 还原 + entry_attrs span，session_id 经 IsSensitiveKey mask） |
 | OccurredAt 携带 / redact | ✅ | ✅ 不变（wire required，typed int64 span attr 绕 string redactor） |
-| ReservedMetadataKeys 伪造（actor_id 等经 Metadata 写入） | ✅ `validateMetadata` 拒 | ✅ **强化**：除 validateMetadata 拒 12 reserved key 外，`Entry{...}` populated 字面量本身编译不可表达（type-system Hard），伪造面从「runtime Validate 拒」升级为「compile 不可表达」 |
+| ReservedMetadataKeys 伪造（actor_id 等经 Metadata 写入） | ✅ `validateMetadata` 拒 | ✅ **强化**：除 validateMetadata 拒 **11** reserved key 外（§Amendment 2026-05-30 reconcile 12→11，occurred_at 移出），`Entry{...}` populated 字面量本身编译不可表达（type-system Hard），伪造面从「runtime Validate 拒」升级为「compile 不可表达」 |
+| OccurredAt 经 Metadata 伪造（`Metadata["occurred_at"]`） | （原列入 ReservedMetadataKeys，PR-A2 计 12 key） | N/A → 移出 reserved（§Amendment 2026-05-30）。补偿：`occurredAt` 是 sealed `Entry` 的 typed `time.Time` 字段，仅 `NewEntry`/`WithOccurredAt` 可写，`Metadata["occurred_at"]` 对真实字段 inert（无 ctxkeys round-trip，consumer 不读 metadata 还原时间）——伪造面本就不存在，移出不引入回归 |
 | Principal 注入空壳（producer 漏注入） | （原 ADR 未列） | ⚠️→缓解：生产桥（auth middleware 写 ctxkeys）是非空壳前提，已落地 ActorID/SubjectID/SessionID；无 auth ctx 的事件 Principal 空（acceptable，audit actor 源自 payload）。TenantID 无源（develop 无 tenant 概念）——已知缺口，非回归 |
 | auditquery 跨租户读 | （issue §4 目标） | ✅ type-system Hard by absence（无 tenantId queryParam，codegen 不生成字段，编译不可表达跨租户） |
 | auditquery sessionId 泄漏 | （issue §4 目标） | ✅ DTO 不含 sessionId 值（命中 redaction sensitive-key set） |
@@ -515,6 +529,39 @@ producer 触达即可伪造审计身份（actor/subject/tenant/session/occurredA
 | migration 044 forward TRUNCATE 误删未投递行 | （未列） | ⚠️→✅ round-1 runbook 用 `CountPending==0`（排除 backoff），且复用 down GUC；F4 改精确判据 + 专属 forward GUC + archtest |
 
 无 round-1 ✅ 因 round-2 退化为 ⚠️/❌ 而未补偿者；上表每个收紧格子均给出 round-2 落地措施。
+
+## Amendment 2026-05-30 — ReservedMetadataKeys reconcile 12→11 + membership archtest + wrapV1Envelope 单源化（issue #1291 FP1，findings F1/F2/F28）
+
+PR #1272 合并后六维度 review 发现本 ADR §5 与实现漂移 + 两处 phantom 守护，FP1 收口：
+
+1. **F1/F2 — §5 12→11 reconcile（code wins）**：实现 `kernel/outbox.ReservedMetadataKeys` 实测
+   **11 key**（7 observability + 4 principal），本 ADR §5 原写 12 key（含 `occurred_at` 作第 12）。
+   裁定**以代码为准订正 ADR 为 11**（§5 + 上方威胁矩阵 ReservedMetadataKeys 行已就地重写）。
+   `occurred_at` 移出 reserved 的理由见 §5 引用块：它是无 ctxkeys round-trip 的 typed
+   `time.Time` 标量，`Entry` sealed-construction 已使该字段不可伪造，`Metadata["occurred_at"]`
+   对真实字段 inert——列为 reserved 无防御价值。威胁矩阵新增「OccurredAt 经 Metadata 伪造」
+   行，标 N/A 并给补偿论证（per ai-robust §"ADR amendment 落地必查"逐行重评）。
+
+2. **phantom 守护落地 + anti-tautology**：原 `ReservedMetadataKeys` godoc 自称受
+   `reservedMetadataKeyMembership invariant test` 守护，但该测试全仓不存在；且
+   `TestEntry_Validate_RejectsReservedMetadataKeys` range 生产 slice 本身（自指 tautology，
+   检测不到「少一个 key」）。FP1 新增 archtest `OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01`
+   （reflect 读生产 var vs hardcoded want-set 双向比对 + negative-control 反向自检），并把行为
+   测试改为独立 want-set 见证。godoc 改指向真 archtest ID。
+
+3. **F28 — wrapV1Envelope 单源化**：conformance helper 原手搓平行 `wireMsg` struct 镜像生产
+   `wireMessage`，原始理由「avoid importing runtime/outbox」已失效（marshaling 居 kernel/outbox，
+   outboxtest 已 import）。改用 `outbox.NewEntry + outbox.MarshalEnvelope`，删平行 struct——
+   wire-schema drift 结构上不可能，无需新增 guard archtest（详见 §6 表下注）。
+
+**AI-robust 诚实评级（不 over-claim 为全链 Hard）**：F28 单源化 = 真 Hard（drift 编译不可表达）；
+membership archtest = Hard 下游 / Medium 上游（package-var Go 天花板，同 `PRINCIPAL-SEALED-FIELD-FROZEN-01`
+先例，无低成本升 Hard 路径，不另开 issue，但 godoc 显式写明天花板）；reject 行为
+（`validateMetadata`）= 结构性 Medium（Metadata 是设计上的开放 `map[string]string`，「禁用某
+map key」无法编译期不可表达，runtime 拒绝是唯一形态，full-Hard 不可达且可辩护）。
+
+> 本 amendment 不改动任何生产运行时行为（key 集本就是 11，无新增/删除 reserved key）；纯
+> 文档真值订正 + 测试守护补强 + 测试 helper 单源化。
 
 ## References
 

@@ -410,41 +410,26 @@ func (h *pubSubHarness) publishAndWait(payload []byte) {
 	}
 }
 
-// wrapV1Envelope constructs a minimal v1 wire envelope JSON for the given topic
-// and business payload. Used by conformance helpers so implementations that
-// enforce schemaVersion:"v1" (e.g. InMemoryEventBus after P1-14) can receive
-// test messages. The subscriber will receive the unwrapped business payload.
+// wrapV1Envelope constructs a v1 wire envelope JSON for the given topic and
+// business payload via the canonical producer path (outbox.NewEntry +
+// outbox.MarshalEnvelope), so conformance subscribers that enforce
+// schemaVersion:"v1" receive a real envelope. The subscriber receives the
+// unwrapped business payload after UnmarshalEnvelope.
 //
-// Constructed manually to avoid importing runtime/outbox from the kernel layer.
+// It deliberately reuses the production marshaler rather than hand-rolling a
+// parallel wire struct: the kernel-layer concern that once justified the manual
+// build is gone (envelope marshaling lives in kernel/outbox, which this package
+// already imports), so a single source of truth makes wire-schema drift between
+// the helper and production structurally impossible (issue #1291 FP1, F28).
 func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
 	t.Helper()
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	id := "conf-" + hex.EncodeToString(b)
-
-	type wireMsg struct {
-		SchemaVersion string          `json:"schemaVersion"`
-		ID            string          `json:"id"`
-		EventType     string          `json:"eventType"`
-		Topic         string          `json:"topic"`
-		Payload       json.RawMessage `json:"payload"`
-		OccurredAt    string          `json:"occurredAt"`
-		CreatedAt     string          `json:"createdAt"`
-	}
-	msg := wireMsg{
-		SchemaVersion: "v1",
-		ID:            id,
-		EventType:     topic,
-		Topic:         topic,
-		Payload:       json.RawMessage(payload),
-		// occurredAt is required since issue #1229 (Entry.Validate rejects zero);
-		// UnmarshalEnvelope would reject an envelope without it.
-		OccurredAt: "2024-01-01T00:00:00Z",
-		CreatedAt:  "2024-01-01T00:00:00Z",
-	}
-	out, err := json.Marshal(msg)
+	e, err := outbox.NewEntry(clock.Real(), context.Background(), topic, payload, outbox.WithTopic(topic))
 	if err != nil {
-		t.Fatalf("wrapV1Envelope: %v", err)
+		t.Fatalf("wrapV1Envelope: new entry: %v", err)
+	}
+	out, err := outbox.MarshalEnvelope(e)
+	if err != nil {
+		t.Fatalf("wrapV1Envelope: marshal envelope: %v", err)
 	}
 	return out
 }

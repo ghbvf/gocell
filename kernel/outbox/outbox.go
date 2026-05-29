@@ -48,7 +48,12 @@ const (
 //
 // The list is exhaustive — these are the only keys the kernel bridges map in
 // either direction. Adding a new bridge field requires extending this list
-// (caught by reservedMetadataKeyMembership invariant test).
+// (the membership is frozen by archtest OUTBOX-RESERVED-METADATA-KEYS-FROZEN-01
+// against an independent want-set; each key's rejection is exercised by
+// TestEntry_Validate_RejectsReservedMetadataKeys). occurred_at is deliberately
+// NOT a reserved key: it is a typed time.Time scalar with no ctxkeys round-trip
+// (unlike the keys below, which RestoreToContext re-injects) and the field is
+// unforgeable under sealed construction — see ADR 202605281200-1042 §5.
 var ReservedMetadataKeys = []string{
 	"trace_id",
 	"traceparent",
