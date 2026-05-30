@@ -14,9 +14,29 @@ one-shot TRUNCATE + schema upgrade is the correct pattern (mirrors
 `043_audit_entries_v2`).
 
 The SQL header carries the canonical step list; this runbook is its discoverable
-ops home and adds the two caveats that the SQL comment does not spell out: the
-GUC guard is **not** a privilege boundary, and the relay drain has a **broker
-side** beyond the DB-row count.
+ops home and adds the caveats that the SQL comment does not spell out: the relay
+drain has a **broker side** beyond the DB-row count, and the **data-aware gate**
+behaves differently on a fresh database vs an existing one.
+
+## Gate mechanism — `ForwardRebuildPermit` typed channel
+
+Since issue #1248, the forward-rebuild gate is enforced in Go by
+`Migrator.ForwardRebuild` + `ForwardRebuildPermit` (not by a SQL GUC). The
+gate is **data-aware**:
+
+- If `outbox_entries` does not exist (e.g. fresh provision — table not yet
+  created by earlier migrations) → **allowed automatically** (`to_regclass`
+  probe returns NULL → safe).
+- If `outbox_entries` exists but is empty → **allowed automatically** (no data
+  to lose).
+- If `outbox_entries` exists and holds **any row** (including rows with
+  `status='published'` awaiting retention cleanup) → **refused unless** an
+  explicit `ForwardRebuildPermit` is supplied.
+
+Note: the gate checks for **any row**, not just undelivered rows. This is
+intentionally more conservative than the previous SQL guard (which only checked
+`status <> 'published'`). In practice, published-but-not-yet-cleaned rows are
+safe to discard; the coarser Go gate treats them uniformly.
 
 ## Operator steps
 
@@ -61,46 +81,63 @@ side** beyond the DB-row count.
      redelivery.
 
 4. **Confirm all relay instances are stopped** so no row re-enters `claiming`
-   between the check and `goose up`.
+   between the check and the migration run.
 
-5. **Run `goose up`.** The Up block fails closed if any non-`published` row
-   remains (see GUC note below).
+5. **Run the migration with an explicit rebuild permit.** Use the
+   `tools/pg-migrate` CLI with the `-rebuild` flag:
 
-## GUC guard — fail-closed, **not** a privilege boundary
+   ```bash
+   pg-migrate -dsn "$GOCELL_PG_DSN" -rebuild "44:<reason>"
+   ```
 
-The Up block raises an exception if undelivered rows exist, **unless** the
-operator sets a dedicated forward-rebuild GUC:
+   Replace `<reason>` with a concise incident-grade description of why data loss
+   is accepted (e.g. `"drain-verified-zero-undelivered-2026-05-31"`).
 
-```sql
-SET gocell.allow_outbox_rebuild = 'true';  -- accept loss of undelivered rows
-```
+   The reason is logged and kept in the typed permit struct for audit
+   traceability — treat supplying it as an incident-grade decision: record who
+   ran it and why.
 
-This GUC is decoupled from `gocell.allow_destructive_down` (which gates the Down
-section) so that "I am rolling back" and "I am rebuilding forward" never share
-one switch — same decoupling `043` established for `audit_entries`.
+   Alternatively, call the Go API directly:
 
-> **Caveat (review F11): the GUC is an honor-system guard, not an authorization
-> control.** `current_setting('gocell.allow_outbox_rebuild', true)` reads a
-> custom GUC that **any** role running the migration can set in its own session
-> (and a superuser trivially so). It exists to force a deliberate, auditable
-> "yes, I accept data loss" action — it does **not** stop a privileged operator
-> from destroying undelivered rows. The real safety boundary is the drain
-> (steps 2–3) plus who is permitted to run migrations at all. Treat setting this
-> GUC as an incident-grade decision: record who set it and why, because the
-> fail-closed exception is the only thing standing between a non-drained outbox
-> and silent event loss.
+   ```go
+   permit, err := postgres.AllowForwardRebuild(44, reason)
+   if err != nil { /* handle */ }
+   if err := migrator.ForwardRebuild(ctx, permit); err != nil { /* handle */ }
+   ```
+
+   If `outbox_entries` has any rows and no permit is supplied (plain `Up()`),
+   the migration fails closed with:
+
+   ```
+   postgres: forward-rebuild refused: target table is non-empty and no permit was supplied
+   ```
+
+   If the table is empty or does not yet exist, `Up()` proceeds without needing
+   a permit (fresh provision path).
 
 ## Down (rollback)
 
 The Down block drops both columns, permanently deleting all principal identity
-and `occurred_at` data. It is gated by `gocell.allow_destructive_down` (shared
-with `001`/`003`/etc.). **Back up `outbox_entries` before rolling back in
-production** — the same honor-system caveat applies to this GUC.
+and `occurred_at` data. Use `Migrator.Down` with an explicit `DestructiveDownPermit`:
+
+```go
+permit, err := postgres.AllowDestructiveDown("reason for rollback")
+if err != nil { /* handle */ }
+if err := migrator.Down(ctx, permit); err != nil { /* handle */ }
+```
+
+**Back up `outbox_entries` before rolling back in production.** Rolling back
+drops the columns and all their data irreversibly.
 
 ## Cross-references
 
 - SQL: `adapters/postgres/migrations/044_outbox_entries_principal.sql`
+- Go gate implementation: `adapters/postgres/migrator.go` (`ForwardRebuildPermit`,
+  `AllowForwardRebuild`, `Migrator.ForwardRebuild`, `gatePendingRebuilds`,
+  `tableHasRows`)
+- CLI tool: `tools/pg-migrate/main.go` (`-rebuild` flag)
 - Schema guard inventory: `adapters/postgres/schema_guard.go` (`outbox_entries (001/044)`)
 - Graceful shutdown / drain budget: `docs/ops/graceful-shutdown-k8s.md`
-- ADR: `docs/architecture/202605281200-1042-outbox-wire-envelope-principal-occurred-at.md`
+- ADR (principal envelope): `docs/architecture/202605281200-1042-outbox-wire-envelope-principal-occurred-at.md`
+- ADR (permit typed channel): `docs/architecture/202605310200-1122-adr-migrator-permit-typed-channel.md`
 - Sibling rebuild: `043_audit_entries_v2.sql`

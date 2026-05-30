@@ -265,23 +265,21 @@ helper 写入 delivery span：
   3. **hash 格式 CHECK**：`ck_audit_hash_format` CHECK 约束在 DB 层强制 prev_hash / hash 是 64-char 小写 hex（seq_no-coupled，genesis row 例外），作为 wire-format 的最后一道防线。
 - **替代证明**：
   - **chain SoR**（替代原 invariant #1）：migration 043_audit_entries_v2 在
-    +goose Up 阶段 DROP TABLE audit_entries（配合 **专属** GUC
-    `gocell.allow_audit_rebuild` fail-closed guard，与 destructive-down GUC
-    解耦以避免语义混用；发现表已存在且含 row 时拒绝迁移；以 `pg_class`
+    +goose Up 阶段 DROP TABLE audit_entries（发现表已存在且含 row 时由 Go
+    phase0 gate 拒绝迁移——见 §Amendment 2026-05-31 / ADR-1122；以 `pg_class`
     探测表存在以避免 `information_schema` 权限盲区），然后 CREATE TABLE
-    重建。DROP 之后表不存在 → `TailVerify` SELECT 取不到任何旧 row（结果集为
-    空）→ `RestartRecoveryStrictTailVerify` 自动从 `prevHash=""`, `seqNo=1`
+    重建。DROP 之后表不存在 → `TailVerify` SELECT 取不到任何旧 row（结果集
+    为空）→ `RestartRecoveryStrictTailVerify` 自动从 `prevHash=""`, `seqNo=1`
     重建 chain 起点（与首次部署语义等价），无 W0 detection / sentinel 检测
     路径。旧 row 的 hash 无法被新 ComputeHash 验证（12-field 与 6-field
     字节不同），但由于行已被 DROP，不存在「旧 hash 与新 hash 共存」二义性。
-    Down 块走标准 destructive-down GUC
-    (`gocell.allow_destructive_down`，与 020/021 等同形态)，与 Migrator
-    framework 的 `Migrator.Down(ctx, permit)` typed permit channel 对齐；
-    Up forward-rebuild 用专属 GUC (`gocell.allow_audit_rebuild`) 与
-    destructive-down 解耦，使 rebuild 审批与 rollback 审批语义边界明确。
-    **Hardness ceiling**：goose SQL 只能读 GUC 字符串；typed `MigratorPermit`
-    是更 Hard 的形态但需要把 forward-rebuild 搬到 Go 侧（独立 backlog
-    跟踪 — #1248）。
+    Down 块通过 `Migrator.Down(ctx, DestructiveDownPermit)` typed permit channel
+    执行，与 forward-rebuild 审批语义边界明确分离（两者由各自独立的 typed
+    permit interface 守卫，见 issue #1248 / ADR-1122）。
+    **注**：原文此处描述的专属 GUC `gocell.allow_audit_rebuild` 在 PR #1248
+    中已退役，forward-rebuild 门控迁移至 Go phase0（`ForwardRebuildPermit`
+    typed interface）；GUC 方案的 Hardness ceiling 分析见 ADR-1122 §"诚实的
+    档位迁移声明"。
   - **DB-level dedup**（替代原 invariant #2）：043 line 101 `CREATE UNIQUE INDEX
     uq_audit_namespace_event_id ON audit_entries (namespace, event_id)` 复刻
     021 的 UNIQUE 约束。schema_guard `expectedIndexes` 同步注册该索引名 +
@@ -511,12 +509,14 @@ producer 触达即可伪造审计身份（actor/subject/tenant/session/occurredA
   helper；service principal 的 actor_id = CallerCellID）。round-1「auth middleware 是
   非空壳前提」对 service-token 路径**实为空壳**——内部 `/internal/v1/access/roles/assign`
   等 service-token 触发的 outbox 事件 round-1 Principal 全空。已修。
-- **F4/C2**：migration 044 forward TRUNCATE 改用专属 forward GUC
-  `gocell.allow_outbox_rebuild`（不再混用 `allow_destructive_down`，对齐 043
-  `allow_audit_rebuild` 的解耦），Up 守卫精确到 `status <> 'published'` 未投递行，
-  runbook drain 判据从误导的 `CountPending==0`（排除 backoff 行）改为
+- **F4/C2**（历史叙述，GUC 已退役）：round-2 中 migration 044 forward TRUNCATE
+  改用了专属 forward GUC `gocell.allow_outbox_rebuild`（替代误用的
+  `allow_destructive_down`），runbook drain 判据从误导的 `CountPending==0` 改为
   `count(status<>'published')==0`；新增 `MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01`
-  archtest 锁「whole-table forward 销毁必带专属 rebuild GUC」（绑定 012/043/044）。
+  archtest。**上述 GUC 与 archtest 在 issue #1248（ADR-1122）中全部退役**——GUC
+  方案被 `ForwardRebuildPermit` typed channel 取代；`MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01`
+  被 `MIGRATION-FORWARD-REBUILD-ANNOTATION-01` + `MIGRATION-NO-GUC-RESIDUE-01` 取代；
+  drain 判据的粗化（published 行也需 permit）见 ADR-1122 §"044 行为粗化说明"。
 - **F5/C3**：PG scan 对 principal JSONB 列补 `maxPrincipalJSONBytes` size cap，与
   observability 对称（`kernel/outbox.MaxPrincipalTotalSize`）。
 - **F6**：auditquery 出口 occurredAt + timestamp 改 `time.RFC3339Nano`（亚秒精度是
@@ -536,7 +536,7 @@ producer 触达即可伪造审计身份（actor/subject/tenant/session/occurredA
 | Principal 注入空壳 — service-token 路径 | ⚠️ round-1 称 auth 桥非空壳 | ❌→✅ round-1 对 service-token **实为空壳**（漏桥），F3 已补；现 JWT + service-token 双路径均桥接 |
 | occurredAt 证据精度（auditquery 出口） | （未列） | ⚠️→✅ round-1 用 RFC3339 截断亚秒，F6 改 RFC3339Nano |
 | 读侧 principal 列无界分配 | （未列） | ⚠️→✅ round-1 principal scan 无 size cap（observability 有），F5 对称补齐 |
-| migration 044 forward TRUNCATE 误删未投递行 | （未列） | ⚠️→✅ round-1 runbook 用 `CountPending==0`（排除 backoff），且复用 down GUC；F4 改精确判据 + 专属 forward GUC + archtest |
+| migration 044 forward TRUNCATE 误删未投递行 | （未列） | ⚠️→✅ round-2 F4 改精确判据 + 专属 forward GUC + archtest；**ADR-1122（#1248）进一步升级**：GUC 门退役，Go phase0 `ForwardRebuildPermit` typed channel 取代（授权 Soft→Hard）；判据粗化为「任意行」（更保守）。无新回归 |
 
 无 round-1 ✅ 因 round-2 退化为 ⚠️/❌ 而未补偿者；上表每个收紧格子均给出 round-2 落地措施。
 
@@ -606,6 +606,58 @@ coverage — it adds no production code path, no new wire field, no new attack s
 assurance on the existing "principal/occurredAt 端到端携带" guarantee (previously locked only by
 `outbox_fullchain_test.go` at the broker layer) by adding a focused store-layer round-trip check.
 
+
+## Amendment 2026-05-31 — forward-rebuild GUC 退役，迁移至 typed permit channel（issue #1248 / ADR-1122）
+
+PR #1248 落地，将本 ADR §Decision B §chain SoR 与 §Amendment round-2 F4/C2 中所描述的三个专属
+forward-rebuild GUC（`gocell.allow_audit_rebuild` / `gocell.allow_outbox_rebuild` /
+`gocell.allow_destructive_refresh_tokens_rebuild`）全部退役，forward-rebuild 门控迁移至
+Go 层 `ForwardRebuildPermit` typed channel。
+
+**落地内容：**
+
+1. **GUC 守卫删除**：012/043/044（及相关 migration）Up 段中的 `DO $$ RAISE EXCEPTION` GUC
+   守卫块全部删除。SQL 文件仅保留机器可读注解 `-- +gocell forward-rebuild target=<table>`。
+   `MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01` / `MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01`
+   两条 archtest 同步退役。
+
+2. **`ForwardRebuildPermit` typed interface**（`adapters/postgres/migrator.go`）：
+   unexported marker `forwardRebuildPermit()` 使包外代码编译不可实现——授权从 GUC 字符串
+   约定（Soft）升级至 type-system（Hard）。
+
+3. **Go phase0 gate**（`gatePendingRebuilds`）：data-aware 探针（`tableHasRows` 两步：
+   `to_regclass` 存在性 + `EXISTS(SELECT 1 FROM <ident>)` 行数）——缺表/空表自动放行
+   （fresh provision），有行且无 permit 则 fail-closed。误配检测（permit 引用非 pending
+   forward-rebuild）fail-fast 报错。
+
+4. **新增 archtest**：`MIGRATION-FORWARD-REBUILD-ANNOTATION-01`（每个含 TRUNCATE/DROP TABLE
+   的 Up 段必须有注解；Medium）、`MIGRATION-NO-GUC-RESIDUE-01`（SQL 文件不含已退役 GUC 名；
+   Medium）、`MIGRATOR-PROVIDER-UP-CALLSITE-01`（`m.provider.Up` 只能在 `forwardRun`/`Down`
+   中调用；包外 Hard + 包内 Medium；gh #1335 跟踪包内 Hard 化——won't-do）。
+
+5. **044 行为粗化**：旧 GUC 守卫仅对 `status <> 'published'` 行（未投递）触发；新 Go gate
+   粗化为「任意行」（含已 published 的历史行）。更保守、fail-closed。运维 runbook 已同步。
+
+**威胁矩阵逐行重评（ai-robust §"ADR amendment 落地必查"）**：
+
+| 威胁 | 上次评估 | 本 amendment 重评 |
+|------|---------|-----------------|
+| forward-rebuild 授权伪造（GUC SET 可绕过） | ⚠️ 原 Soft（honor system） | ✅ **升 Hard**：`ForwardRebuildPermit` marker 不可伪造 |
+| 包外直接调 `m.provider.Up` 绕 phase0 | 原 SQL RAISE（DB Hard） | ✅ `provider` unexported → 包外编译不可引用（**包外 Hard 升**） |
+| 包内绕过 phase0 | 原 SQL RAISE（不依赖调用方路径） | ⚠️ **包内从 DB Hard → archtest Medium**（`MIGRATOR-PROVIDER-UP-CALLSITE-01`）；gh #1335 |
+| 直连 psql 绕过 Go gate | 原 SQL RAISE（DB 引擎强制） | ⚠️ **降**：GUC 删后裸 SQL 无 gate；GoCell 无 shipped goose CLI，唯一路径 = Go binary，该向量 moot |
+| GUC 名拼写错误静默 fail-open | 存在（custom GUC 返回空串） | ✅ **消除**：类型系统不接受错误名 |
+| 043 forward-rebuild 误删审计行（此前本 ADR 范围） | ✅ round-2 F4 partial cover | ✅ **完全覆盖**：`ForwardRebuildPermit` 统一守 043 |
+
+无 ✅ 退化为 ⚠️/❌ 而无补偿者（⚠️ 包内 Medium 与直连 psql 降格已给补偿说明）。
+
+**原文就地改写**（同 PR，无两套真理源）：
+- §Decision B §chain SoR（行 267-284）：GUC 描述改写为指向 Go phase0 + 注明 GUC 退役
+- §Amendment round-2 §F4/C2：标注为历史叙述，说明 GUC 与旧 archtest 已退役
+- §威胁矩阵 round-2 最后一行（migration 044 那行）：更新为含 ADR-1122 的完整评估
+
+**完整设计见**：`docs/architecture/202605310200-1122-adr-migrator-permit-typed-channel.md`
+
 ## References
 
 - 实施：PR-A1（issue #1228 — 撤回 PR #1218 重做：audit_entries v2 + HMAC canonical rewrite）
@@ -615,7 +667,7 @@ assurance on the existing "principal/occurredAt 端到端携带" guarantee (prev
 - 重构 backlog（PR #1239 round-3 派生）：
   - #1245 SignedDomainContext 跨 audit/outbox/jwt 三层签名上下文统一化
   - #1246 tools/archtest/internal/callresolver 通用 callsite 解析框架
-  - #1248 MigratorPermit typed channel — forward-rebuild 移到 Go 侧
+  - #1248 MigratorPermit typed channel — **已落地**（issue #1248 / ADR-1122 `docs/architecture/202605310200-1122-adr-migrator-permit-typed-channel.md`）
   - #1249 storetest property-based fuzzing — Entry 字段 / payload binary corpus
   - #1241 RestartRecoveryStrictTailVerify sealed type 未触发实际 Verify
   - won't-do: HMAC key GC finalizer（Go 语言约束，已知 docs-only 议题）

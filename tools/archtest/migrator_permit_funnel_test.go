@@ -29,7 +29,8 @@
 //   - Upstream Medium (package-internal): archtest A1 below locks "every
 //     provider.Up/Down call inside migrator.go must be in an allowlisted method";
 //     a new func inside the same package can still call it — archtest CI catches
-//     this, but Go's type system cannot.
+//     this, but Go's type system cannot. Permanent Medium ceiling (goose.Provider
+//     is a third-party type that cannot be sealed); tracked won't-do in gh #1335.
 //   - Downstream: no separate downstream axis (provider.Up is a third-party
 //     method, not a callsite we can seal).
 //
