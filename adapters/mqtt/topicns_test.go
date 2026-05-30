@@ -398,6 +398,137 @@ func TestTopicNamespace_Mint_ZeroNS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TopicNamespace.MintDeadLetter tests (PR-4: $dead/<topic> app-level DLT)
+// ---------------------------------------------------------------------------
+
+// TestTopicNamespace_MintDeadLetter_Success verifies that MintDeadLetter
+// validates the ORIGINAL topic against the namespace and returns a
+// publishableTopic for the "$dead/<originalTopic>" sink.
+func TestTopicNamespace_MintDeadLetter_Success(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	pt, err := ns.MintDeadLetter("ns/foo/bar")
+	if err != nil {
+		t.Fatalf("MintDeadLetter(%q) unexpected error: %v", "ns/foo/bar", err)
+	}
+	if pt.String() != "$dead/ns/foo/bar" {
+		t.Errorf("publishableTopic.String() = %q, want %q", pt.String(), "$dead/ns/foo/bar")
+	}
+}
+
+// TestTopicNamespace_MintDeadLetter_ExactNamespace verifies that the
+// exact-namespace topic (prefix == topic) is accepted and prefixed.
+func TestTopicNamespace_MintDeadLetter_ExactNamespace(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	pt, err := ns.MintDeadLetter("ns")
+	if err != nil {
+		t.Fatalf("MintDeadLetter(%q) unexpected error: %v", "ns", err)
+	}
+	if pt.String() != "$dead/ns" {
+		t.Errorf("publishableTopic.String() = %q, want %q", pt.String(), "$dead/ns")
+	}
+}
+
+// TestTopicNamespace_MintDeadLetter_OutsideNamespace verifies that an
+// out-of-namespace original topic is rejected fail-closed (the poison topic is
+// untrusted broker-delivered input), returning ErrAdapterMQTTTopicOutsideNamespace.
+func TestTopicNamespace_MintDeadLetter_OutsideNamespace(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns1")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	pt, err := ns.MintDeadLetter("ns2/x")
+	if err == nil {
+		t.Fatalf("MintDeadLetter(out-of-namespace) expected error, got nil")
+	}
+	if pt != (publishableTopic{}) {
+		t.Errorf("MintDeadLetter(out-of-namespace) returned non-zero publishableTopic: %v", pt)
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTTopicOutsideNamespace {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTTopicOutsideNamespace)
+	}
+}
+
+// TestTopicNamespace_MintDeadLetter_Wildcard verifies that a wildcard in the
+// original topic is rejected (fail-closed) with ErrAdapterMQTTInvalidPublishTopic
+// — a poison topic carrying "+"/"#" must never become a publish target.
+func TestTopicNamespace_MintDeadLetter_Wildcard(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	for _, wc := range []string{"ns/+", "ns/#", "ns/a/+"} {
+		wc := wc
+		t.Run(wc, func(t *testing.T) {
+			t.Parallel()
+			_, err := ns.MintDeadLetter(wc)
+			if err == nil {
+				t.Fatalf("MintDeadLetter(%q) expected error, got nil", wc)
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+				t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
+			}
+		})
+	}
+}
+
+// TestTopicNamespace_MintDeadLetter_Empty verifies that an empty original topic
+// returns ErrAdapterMQTTInvalidPublishTopic.
+func TestTopicNamespace_MintDeadLetter_Empty(t *testing.T) {
+	t.Parallel()
+	ns, err := ParseTopicNamespace("ns")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, err = ns.MintDeadLetter("")
+	if err == nil {
+		t.Fatal("MintDeadLetter(empty) expected error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidPublishTopic {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidPublishTopic)
+	}
+}
+
+// TestTopicNamespace_MintDeadLetter_ZeroNS verifies that MintDeadLetter on a
+// zero-value TopicNamespace returns ErrAdapterMQTTInvalidTopicNamespace.
+func TestTopicNamespace_MintDeadLetter_ZeroNS(t *testing.T) {
+	t.Parallel()
+	var ns TopicNamespace
+	_, err := ns.MintDeadLetter("x")
+	if err == nil {
+		t.Fatal("MintDeadLetter on zero-value namespace expected error, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != ErrAdapterMQTTInvalidTopicNamespace {
+		t.Errorf("code = %s, want %s", ec.Code, ErrAdapterMQTTInvalidTopicNamespace)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // subscribableFilter / TopicNamespace.MintFilter tests (PR-3 foundation)
 // ---------------------------------------------------------------------------
 

@@ -323,12 +323,12 @@ type ConsumeFailureReason string
 const (
 	// consumeReasonUnmarshal means the received PUBLISH payload could not be
 	// decoded into the v1 outbox wire envelope (poison message). The message is
-	// acked-as-consumed so it cannot block intake forever; PR-4 will route to
-	// $dead/<topic> before the ack.
+	// routed to $dead/<topic> then acked-as-consumed so it cannot block intake
+	// forever (see deadletter.go routeDeadLetter).
 	consumeReasonUnmarshal ConsumeFailureReason = "unmarshal"
 	// consumeReasonReject means the handler returned DispositionReject (permanent
-	// failure). The message is acked-as-poison; PR-4 adds the $dead/<topic>
-	// publish before the ack.
+	// failure). The message is routed to $dead/<topic> then acked-as-poison (see
+	// deadletter.go routeDeadLetter).
 	consumeReasonReject ConsumeFailureReason = "reject"
 	// consumeReasonRequeue means the handler returned DispositionRequeue (transient
 	// failure). The message is left unacked so the broker redelivers on session
@@ -365,6 +365,10 @@ type SubscriberCollector interface {
 	// Implementations MUST NOT panic on any reason value; the closed set is
 	// enforced by the call site, not the collector.
 	RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason)
+	// RecordDeadLetter increments the dead-letter counter for a message routed to
+	// the app-level $dead/<topic> sink. reason ∈ {unmarshal, reject} (poison or
+	// permanent failure). Implementations MUST NOT panic on any reason value.
+	RecordDeadLetter(ctx context.Context, reason ConsumeFailureReason)
 }
 
 // NoopSubscriberCollector is the default collector used when no observability is
@@ -379,6 +383,10 @@ func (NoopSubscriberCollector) RecordConsumeSuccess(_ context.Context, _ time.Du
 func (NoopSubscriberCollector) RecordConsumeFailure(_ context.Context, _ ConsumeFailureReason) { /* no-op */
 }
 
+// RecordDeadLetter is a no-op.
+func (NoopSubscriberCollector) RecordDeadLetter(_ context.Context, _ ConsumeFailureReason) { /* no-op */
+}
+
 // Compile-time interface check.
 var _ SubscriberCollector = NoopSubscriberCollector{}
 
@@ -389,6 +397,7 @@ var _ SubscriberCollector = NoopSubscriberCollector{}
 //
 //	mqtt_consume_total              (counter,   labels: cell)
 //	mqtt_consume_failed_total       (counter,   labels: cell, reason)
+//	mqtt_dlx_total                  (counter,   labels: cell, reason)
 //	mqtt_consume_duration_seconds   (histogram, labels: cell; buckets 1ms–10s)
 //
 // ref: adapters/mqtt/metrics.go providerPublisherCollector — same inject-at-
@@ -397,6 +406,7 @@ type providerSubscriberCollector struct {
 	cellID        string
 	consumeTotal  metrics.CounterVec
 	consumeFailed metrics.CounterVec
+	dlxTotal      metrics.CounterVec
 	consumeDur    metrics.HistogramVec
 }
 
@@ -456,6 +466,19 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 	}
 	registered = append(registered, consumeFailed)
 
+	dlxTotal, err := p.CounterVec(metrics.CounterOpts{
+		Name: "mqtt_dlx_total",
+		Help: "Total number of messages routed to the app-level dead-letter sink $dead/<topic>. " +
+			"reason ∈ {unmarshal, reject} — closed set (poison / permanent failure). " +
+			"Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell", "reason"},
+	})
+	if err != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx counter", err))
+	}
+	registered = append(registered, dlxTotal)
+
 	consumeDur, err := p.HistogramVec(metrics.HistogramOpts{
 		Name: "mqtt_consume_duration_seconds",
 		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
@@ -475,6 +498,7 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		cellID:        cellID,
 		consumeTotal:  consumeTotal,
 		consumeFailed: consumeFailed,
+		dlxTotal:      dlxTotal,
 		consumeDur:    consumeDur,
 	}, nil
 }
@@ -490,4 +514,10 @@ func (c *providerSubscriberCollector) RecordConsumeSuccess(ctx context.Context, 
 // mqtt_consume_total is NOT incremented — failure is not counted as success.
 func (c *providerSubscriberCollector) RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason) {
 	c.consumeFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
+}
+
+// RecordDeadLetter increments mqtt_dlx_total{cell, reason} when a message is
+// routed to the app-level $dead/<topic> sink (poison or permanent reject).
+func (c *providerSubscriberCollector) RecordDeadLetter(ctx context.Context, reason ConsumeFailureReason) {
+	c.dlxTotal.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
 }

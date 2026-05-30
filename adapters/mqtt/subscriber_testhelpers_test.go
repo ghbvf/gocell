@@ -90,6 +90,10 @@ func (c *recordingSubCollector) RecordConsumeFailure(_ context.Context, reason C
 	c.failureCounts[reason]++
 }
 
+// RecordDeadLetter satisfies SubscriberCollector; B1 (deadletter_test.go) replaces
+// this no-op with dead-letter recording + a reader once it asserts on $dead routing.
+func (c *recordingSubCollector) RecordDeadLetter(_ context.Context, _ ConsumeFailureReason) {}
+
 func (c *recordingSubCollector) snapshot() (success, failure int, last ConsumeFailureReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
