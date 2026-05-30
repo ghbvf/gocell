@@ -865,8 +865,10 @@ func TestMigrator_ForwardRebuild_PopulatedTable_UpFailClosed(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
 	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
-	// Verify details contain migration number.
-	assert.Contains(t, upErr.Error(), "12", "error should reference migration 12")
+	// Verify the public detail carries migration=12.
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(12), migDetail.Value(), "migration detail value must be 12")
 }
 
 // TestMigrator_ForwardRebuild_PopulatedTable_WithPermit verifies that
@@ -926,6 +928,177 @@ func TestMigrator_ForwardRebuild_MisconfiguredPermit(t *testing.T) {
 	require.True(t, errors.As(rebuildErr, &ec), "error must wrap *errcode.Error")
 	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
 	assert.Contains(t, rebuildErr.Error(), "999", "error should reference the misconfigured migration number")
+}
+
+// ---------------------------------------------------------------------------
+// Migration 043 gate integration tests (#4)
+// ---------------------------------------------------------------------------
+
+// TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries verifies the
+// fail-closed gate for migration 043 (audit_entries v2 rebuild) when the
+// audit_entries table has rows, and that ForwardRebuild with the correct
+// permit succeeds.
+func TestMigrator_ForwardRebuild_Migration043_PopulatedAuditEntries(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 042 so audit_entries (from 020) exists.
+	mfs042 := migrationsUpToFS(t, 42)
+	prep, err := NewMigrator(pool, mfs042, "schema_migrations_043_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 042 must succeed")
+
+	// Insert a row into audit_entries to make migration 043 dangerous.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO audit_entries
+			(id, namespace, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash)
+		VALUES
+			(gen_random_uuid(), 'auditcore', 1, 'evt-001', 'test.event', 'actor-1',
+			 now(), '\x7b7d', '', 'aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd')
+	`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-043 audit_entries")
+
+	// Up() must fail-closed: 043 is pending and audit_entries has rows.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 043 target audit_entries has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(43), migDetail.Value(), "migration detail value must be 43")
+
+	// ForwardRebuild with the correct permit must succeed.
+	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_043_prep")
+	require.NoError(t, err)
+
+	permit := mustAllowForwardRebuild(t, 43, "043 audit_entries v2 rebuild integration test")
+	require.NoError(t, migrator2.ForwardRebuild(ctx, permit),
+		"ForwardRebuild with permit for migration 043 must succeed")
+
+	// Verify migration 043's subject_id column was created.
+	var subjectIDExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'audit_entries' AND column_name = 'subject_id'
+		)`).Scan(&subjectIDExists)
+	require.NoError(t, err)
+	assert.True(t, subjectIDExists, "audit_entries must have subject_id column after migration 043")
+}
+
+// TestMigrator_ForwardRebuild_Migrations043And044_DualPermit verifies that
+// when both audit_entries and outbox_entries have rows, ForwardRebuild requires
+// both permits and succeeds when both are provided. Omitting either permit
+// must fail-closed.
+func TestMigrator_ForwardRebuild_Migrations043And044_DualPermit(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 042 so audit_entries and outbox_entries exist.
+	mfs042 := migrationsUpToFS(t, 42)
+	prep, err := NewMigrator(pool, mfs042, "schema_migrations_044_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 042 must succeed")
+
+	// Insert a row into audit_entries.
+	_, auditErr := pool.DB().Exec(ctx, `
+		INSERT INTO audit_entries
+			(id, namespace, seq_no, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash)
+		VALUES
+			(gen_random_uuid(), 'auditcore', 1, 'evt-dual-001', 'test.event', 'actor-1',
+			 now(), '\x7b7d', '', 'aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd')
+	`)
+	require.NoError(t, auditErr, "must be able to insert a row into pre-043 audit_entries")
+
+	// Insert a row into outbox_entries (making 044 dangerous).
+	entryID := "dual-test-entry-01"
+	_, outboxErr := pool.DB().Exec(ctx, `
+		INSERT INTO outbox_entries
+			(id, aggregate_id, aggregate_type, event_type, payload, status, created_at, next_retry_at)
+		VALUES ($1, 'agg-1', 'test_agg', 'test.event', '{}', 'published', now(), now())
+	`, entryID)
+	require.NoError(t, outboxErr, "must be able to insert a row into pre-044 outbox_entries")
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	require.NoError(t, err)
+
+	// Up() without permits: must fail-closed.
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when both 043 and 044 targets have rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec))
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+
+	// ForwardRebuild with only permit 43 must fail-closed (044 still needs one).
+	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	require.NoError(t, err)
+	permit43Only := mustAllowForwardRebuild(t, 43, "043 dual-test permit")
+	onlyPermit43Err := migrator2.ForwardRebuild(ctx, permit43Only)
+	require.Error(t, onlyPermit43Err, "ForwardRebuild with only permit 43 must refuse when 044 target has rows")
+	var ec2 *errcode.Error
+	require.True(t, errors.As(onlyPermit43Err, &ec2))
+	assert.Equal(t, ErrAdapterPGMigrate, ec2.Code)
+
+	// ForwardRebuild with both permits must succeed.
+	migrator3, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_prep")
+	require.NoError(t, err)
+	permit43 := mustAllowForwardRebuild(t, 43, "043 dual-test permit final")
+	permit44 := mustAllowForwardRebuild(t, 44, "044 outbox_entries principal dual-test permit")
+	require.NoError(t, migrator3.ForwardRebuild(ctx, permit43, permit44),
+		"ForwardRebuild with both permits must succeed")
+
+	// Verify 044's principal column was added.
+	var principalExists bool
+	err = pool.DB().QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'outbox_entries' AND column_name = 'principal'
+		)`).Scan(&principalExists)
+	require.NoError(t, err)
+	assert.True(t, principalExists, "outbox_entries must have principal column after migration 044")
+}
+
+// ---------------------------------------------------------------------------
+// #16: tableHasRows error-path fail-closed test
+// ---------------------------------------------------------------------------
+
+// TestMigrator_TableHasRows_DBError_FailClosed verifies that when the DB probe
+// returns an error (e.g., cancelled context), Up() / ForwardRebuild() fails
+// closed and does not apply the migration.
+func TestMigrator_TableHasRows_DBError_FailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 011 so refresh_tokens exists and can be populated.
+	mfs011 := migrationsUpToFS(t, 11)
+	prep, err := NewMigrator(pool, mfs011, "schema_migrations_dbfail_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
+
+	// Insert a row so migration 012 is dangerous.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO refresh_tokens (id, token, session_id, subject_id, created_at, last_used, expires_at)
+		VALUES (1, 'tok-fail', 'sess-fail', 'subj-fail', now(), now(), now() + interval '1 hour')
+	`)
+	require.NoError(t, execErr)
+
+	// Cancel context before calling Up() to simulate DB probe error.
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel() // immediately cancel
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_dbfail_prep")
+	require.NoError(t, err)
+
+	// ForwardRebuild with cancelled context must fail — either due to context
+	// cancellation during the tableHasRows probe or the provider.Up call.
+	// Either way it must not succeed silently.
+	rebuildErr := migrator.ForwardRebuild(cancelCtx,
+		mustAllowForwardRebuild(t, 12, "dbfail test permit"))
+	require.Error(t, rebuildErr, "ForwardRebuild with cancelled context must return an error (fail-closed)")
 }
 
 // Target: adapters/postgres coverage >= 80%

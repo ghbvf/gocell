@@ -61,6 +61,9 @@ func main() {
 	rebuild := flag.String("rebuild", "",
 		"comma-separated list of <migrationNumber>:<reason> permits for destructive forward-rebuild "+
 			"(e.g. \"43:audit v2 cutover,44:outbox principal cutover\"); "+
+			"migrationNumber is the integer version prefix of the SQL filename with leading zeros stripped "+
+			"(e.g. 043_*.sql → 43); reason may contain spaces but must not contain commas "+
+			"(commas are the pair separator); "+
 			"only needed when the target table is already populated — fresh DB use default Up instead")
 	flag.Parse()
 

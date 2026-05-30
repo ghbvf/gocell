@@ -102,6 +102,29 @@ DROP INDEX CONCURRENTLY <index_name>;
 
 已有示例：`025_drop_sessions_authz_epoch_at_issue.sql`（S4b Batch 1C）。
 
+### 如何新增 forward-rebuild migration
+
+forward-rebuild migration 在 Up 路径执行 TRUNCATE 或 DROP TABLE，需要额外的注解和开发流程配合：
+
+1. 在 `-- +goose Up` 后、首条 SQL 前（同行或紧接下一行）添加机器可读注解：
+   ```sql
+   -- +goose Up
+   -- +gocell forward-rebuild target=<table_name>
+   ```
+   注解格式由 archtest `MIGRATION-FORWARD-REBUILD-ANNOTATION-01` 校验；漏写导致 CI 红。
+
+2. **fresh DB**（表不存在或为空）：`Migrator.Up(ctx)` 的 phase0 gate 自动探测并放行，无需额外操作。
+
+3. **已填充表**（升级场景）：调用 `Migrator.ForwardRebuild(ctx, permits...)` 并传入对应的 `ForwardRebuildPermit`：
+   ```go
+   permit, err := postgres.AllowForwardRebuild(44, "outbox rebuild: add principal columns")
+   // ...
+   err = migrator.ForwardRebuild(ctx, permit)
+   ```
+   或使用 CLI：`tools/pg-migrate -rebuild "44:<reason>"`
+
+4. archtest 守卫：`MIGRATION-FORWARD-REBUILD-ANNOTATION-01`（注解存在性，Medium）；`MIGRATION-NO-GUC-RESIDUE-01`（禁止已退役 GUC 名 `gocell.allow_*_rebuild` 残留，Medium）。SQL 文件中**禁止**出现已退役的 `DO $$ RAISE EXCEPTION ... IF current_setting(...) ...` GUC 守卫块——门控职责已由 Go phase0 承担（ADR-1122）。
+
 ## 参考
 
 - [pressly/goose 官方文档](https://github.com/pressly/goose#transactions)：`-- +goose no transaction` 用法

@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	postgres "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -106,9 +107,9 @@ func isAtLeastMigration017(filename string) bool {
 
 // forwardRebuildAnnotationRE matches the required +gocell annotation in the
 // raw (un-stripped) Up section. The target must be a valid SQL identifier.
-var forwardRebuildAnnotationRE = regexp.MustCompile(
-	`(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`,
-)
+// It uses postgres.ForwardRebuildAnnotationPattern as the single source of truth
+// so the archtest regex stays in sync with the runtime gate in migrator.go.
+var forwardRebuildAnnotationRE = regexp.MustCompile(postgres.ForwardRebuildAnnotationPattern)
 
 // TestArchtest_MigrationForwardRebuildAnnotation asserts that every migration
 // whose Up section contains TRUNCATE or DROP TABLE (after stripping line

@@ -265,9 +265,11 @@ helper 写入 delivery span：
   3. **hash 格式 CHECK**：`ck_audit_hash_format` CHECK 约束在 DB 层强制 prev_hash / hash 是 64-char 小写 hex（seq_no-coupled，genesis row 例外），作为 wire-format 的最后一道防线。
 - **替代证明**：
   - **chain SoR**（替代原 invariant #1）：migration 043_audit_entries_v2 在
-    +goose Up 阶段 DROP TABLE audit_entries（发现表已存在且含 row 时由 Go
-    phase0 gate 拒绝迁移——见 §Amendment 2026-05-31 / ADR-1122；以 `pg_class`
-    探测表存在以避免 `information_schema` 权限盲区），然后 CREATE TABLE
+    +goose Up 阶段执行 DROP TABLE audit_entries，门控由 Go phase0 `ForwardRebuildPermit`
+    typed channel 承担（见 ADR-1122）——phase0 `gatePendingRebuilds` 以
+    `to_regclass($1) IS NOT NULL` 探测表是否存在，再以 `EXISTS(SELECT 1 FROM <table>)`
+    探测是否有行；缺表或空表自动放行（fresh provision），有行且无 permit 则
+    fail-closed。持有 `ForwardRebuildPermit` 后执行 DROP TABLE，然后 CREATE TABLE
     重建。DROP 之后表不存在 → `TailVerify` SELECT 取不到任何旧 row（结果集
     为空）→ `RestartRecoveryStrictTailVerify` 自动从 `prevHash=""`, `seqNo=1`
     重建 chain 起点（与首次部署语义等价），无 W0 detection / sentinel 检测
@@ -276,10 +278,6 @@ helper 写入 delivery span：
     Down 块通过 `Migrator.Down(ctx, DestructiveDownPermit)` typed permit channel
     执行，与 forward-rebuild 审批语义边界明确分离（两者由各自独立的 typed
     permit interface 守卫，见 issue #1248 / ADR-1122）。
-    **注**：原文此处描述的专属 GUC `gocell.allow_audit_rebuild` 在 PR #1248
-    中已退役，forward-rebuild 门控迁移至 Go phase0（`ForwardRebuildPermit`
-    typed interface）；GUC 方案的 Hardness ceiling 分析见 ADR-1122 §"诚实的
-    档位迁移声明"。
   - **DB-level dedup**（替代原 invariant #2）：043 line 101 `CREATE UNIQUE INDEX
     uq_audit_namespace_event_id ON audit_entries (namespace, event_id)` 复刻
     021 的 UNIQUE 约束。schema_guard `expectedIndexes` 同步注册该索引名 +

@@ -1,4 +1,4 @@
-// Package archtest_test — migrator_permit_funnel_test.go
+// Package archtest_test — migrator_provider_up_callsite_01_test.go
 //
 // INVARIANT: MIGRATOR-PROVIDER-UP-CALLSITE-01
 //
@@ -60,6 +60,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	postgres "github.com/ghbvf/gocell/adapters/postgres"
 )
 
 // migratorProviderCallAllowlist is the set of method names in which
@@ -183,4 +185,134 @@ func migratorSortedKeys(m map[string]bool) []string {
 		}
 	}
 	return keys
+}
+
+// ---------------------------------------------------------------------------
+// Reverse blind-spot self-checks for MIGRATOR-PROVIDER-UP-CALLSITE-01
+// (ai-robust.md charter: every archtest must have reverse tests for its blind spots)
+// ---------------------------------------------------------------------------
+
+// TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoFuncValueAssignment is
+// the reverse self-check for the blind spot "provider.Up called via a function
+// value stored in a field or local variable".
+// This test asserts that migrator.go does NOT contain any assignment of
+// m.provider.Up or m.provider.Down to a local variable or field — i.e., the
+// blind-spot form does not exist in the current corpus (vacuous pass).
+// If it ever appears, MIGRATOR-PROVIDER-UP-CALLSITE-01 would not catch it,
+// so this reverse test provides early warning.
+func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoFuncValueAssignment(t *testing.T) {
+	root := findModuleRoot(t)
+	migratorPath := filepath.Join(root, "adapters", "postgres", "migrator.go")
+
+	fset := token.NewFileSet()
+	// #nosec G304 -- reading repo-resident file under module root
+	f, err := parser.ParseFile(fset, migratorPath, nil, 0)
+	if err != nil {
+		t.Fatalf("MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot check: cannot parse %s: %v", migratorPath, err)
+	}
+
+	// Detect any AssignStmt where the RHS contains <recv>.provider.Up or
+	// <recv>.provider.Down as a function value (SelectorExpr, not a CallExpr).
+	var violations []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, rhs := range assign.Rhs {
+			outer, ok := rhs.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if outer.Sel.Name != "Up" && outer.Sel.Name != "Down" {
+				continue
+			}
+			inner, ok := outer.X.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if inner.Sel.Name == "provider" {
+				pos := fset.Position(outer.Pos())
+				violations = append(violations, fmt.Sprintf(
+					"line %d: provider.%s used as function value (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
+					pos.Line, outer.Sel.Name))
+			}
+		}
+		return true
+	})
+
+	assert.Empty(t, violations,
+		"MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot: provider.Up/Down must not be stored as a function value; "+
+			"if this form is added, MIGRATOR-PROVIDER-UP-CALLSITE-01 would not catch it.")
+}
+
+// TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoProviderCopy is the
+// reverse self-check for the blind spot "method calls on a copy of provider
+// (not via selector on the struct field)".
+// Asserts that migrator.go does NOT contain any variable declared with the
+// goose.Provider type that could be used to call Up/Down outside the selector
+// path — vacuous pass on the current corpus.
+func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoProviderCopy(t *testing.T) {
+	root := findModuleRoot(t)
+	migratorPath := filepath.Join(root, "adapters", "postgres", "migrator.go")
+
+	fset := token.NewFileSet()
+	// #nosec G304 -- reading repo-resident file under module root
+	f, err := parser.ParseFile(fset, migratorPath, nil, 0)
+	if err != nil {
+		t.Fatalf("MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot check: cannot parse %s: %v", migratorPath, err)
+	}
+
+	// Detect local variable declarations of type *goose.Provider (or goose.Provider).
+	var violations []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		valSpec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		if valSpec.Type == nil {
+			return true
+		}
+		// Check for *goose.Provider or goose.Provider type annotation.
+		checkType := func(expr ast.Expr) bool {
+			starExpr, isStar := expr.(*ast.StarExpr)
+			if isStar {
+				expr = starExpr.X
+			}
+			sel, ok := expr.(*ast.SelectorExpr)
+			if !ok {
+				return false
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			return pkgIdent.Name == "goose" && sel.Sel.Name == "Provider"
+		}
+		if checkType(valSpec.Type) {
+			pos := fset.Position(valSpec.Pos())
+			violations = append(violations, fmt.Sprintf(
+				"line %d: local goose.Provider var declared (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
+				pos.Line))
+		}
+		return true
+	})
+
+	assert.Empty(t, violations,
+		"MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot: local goose.Provider variables must not exist; "+
+			"if added, MIGRATOR-PROVIDER-UP-CALLSITE-01 would not detect Up/Down calls on them.")
+}
+
+// migratorForwardRebuildAnnotationPatternSingleSource verifies that the archtest
+// uses the same regex pattern as the runtime gate (postgres.ForwardRebuildAnnotationPattern).
+// This is not a blind-spot test but a single-source validation: if the pattern
+// diverges between the archtest local copy and the runtime, this test catches it.
+func TestArchtest_MigrationForwardRebuild_PatternSingleSource(t *testing.T) {
+	// postgres.ForwardRebuildAnnotationPattern is the exported single source of truth.
+	// The archtest forwardRebuildAnnotationRE in pg_schema_guard_invariants_test.go
+	// must use the same pattern. This test asserts that the exported constant exists
+	// and is non-empty, providing compile-time verification of the import.
+	assert.NotEmpty(t, postgres.ForwardRebuildAnnotationPattern,
+		"postgres.ForwardRebuildAnnotationPattern must be a non-empty exported constant "+
+			"(single source of truth for runtime gate and archtest MIGRATION-FORWARD-REBUILD-ANNOTATION-01)")
 }

@@ -50,6 +50,8 @@ type ForwardRebuildPermit interface {
 
 `AllowForwardRebuild(num int64, reason string) (ForwardRebuildPermit, error)` 是唯一构造器，强制 `num > 0` 且 `reason` 非空。包外代码无法实现 `forwardRebuildPermit()` marker，因此无法伪造一个 `ForwardRebuildPermit` 值——类型系统在编译期封闭授权。
 
+`MigrationNumber()` 返回类型为 `int64`，而 issue #1248 原描述写的是 `migrationNumber string`。实现采用 `int64` 有三点理由：对齐 goose `Source.Version` 的 `int64` 类型（避免调用方转换）；构造器可做 `num > 0` 有意义的有界校验（字符串无法天然排序或范围验证）；CLI 解析时 `strconv.ParseInt` 提供范围校验，拒绝非数字和溢出输入。
+
 `DestructiveDownPermit`（PR #1239 已引入）保留不变，`Down(ctx, permit)` 签名不改。
 
 ### 2. Migrator.ForwardRebuild + forwardRun 共享逻辑
@@ -134,7 +136,7 @@ tools/pg-migrate -rebuild "44:<reason>,12:<reason>"
 
 - **例外条件**（用户已批准）：pre-v1.0、gocell 无外部部署、无生产 DB。
 - **操作安全性**：本次修改**不改变结果 schema shape**（DDL 语句不变，表结构相同），仅去掉 `DO $$ RAISE $$` runtime 门语义。等价于：在同一个 DB 上跑改前版本与改后版本，最终 schema 完全一致。
-- **理由记录**：go-standards.md 的不可变原则保护「schema shape 不被意外改变」；删 GUC 守卫不触碰 schema shape，例外可辩护。
+- **理由记录**：go-standards.md 的不可变原则保护「schema shape 不被意外改变」；删 GUC 守卫不触碰 schema shape，例外可辩护。goose 不重跑已 applied migration，故删守卫对已 apply 旧版的本地/CI 测试 DB 无副作用（schema shape 不变是隐含前提，这里显式化）：已 applied 的 012/043/044 在目标 DB 上保持原有 schema，本次改动仅影响尚未执行过这些 migration 的库——它们将以无 GUC 守卫的新版本执行，最终 schema 与旧版完全一致。
 
 ## data-aware gate：为何不能粗暴拒绝（详论）
 
@@ -214,6 +216,7 @@ tools/pg-migrate -rebuild "44:<reason>,12:<reason>"
 | 直连 psql / goose CLI 绕过 Go gate | SQL RAISE EXCEPTION（DB 引擎强制） | GUC 守卫已删，裸 SQL 无 gate | **⚠️ 降** | GoCell migration 嵌入 Go 二进制，无 shipped goose CLI，唯一执行路径 = `tools/pg-migrate` Go binary；该向量在当前架构下 moot |
 | GUC 名拼写错误导致静默放行（fail-open） | 存在（`current_setting` 读不到自定义 GUC 返回空串） | 不存在（Go 类型系统不接受错误名称） | **✅ 升** | — |
 | fresh provision 误拒（空库无法 Up） | 不存在（GUC 仅在表有非 published 行时 RAISE） | data-aware phase0 探针：缺表 / 空表 → 放行 | **✅ 等价** | `tableHasRows` 两步探针 + 集成测试覆盖 |
+| gate-to-execution TOCTOU | 探针与 DDL 非同锁：phase0 探针通过后、`provider.Up` 执行 DDL 前，另一进程可能向目标表插行，行随 DROP/TRUNCATE 被静默删除 | ⚠️ | 补偿 = 运维 runbook 要求 migration 期停 producer / drain relay；goose advisory lock（`goose_db_version` 表锁）阻止并发 migration，但不阻业务写；单写部署下该窗口事实上 moot |
 
 ## Consequences
 

@@ -1,11 +1,13 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // identifierRe matches valid SQL identifiers: start with letter or underscore,
@@ -225,6 +228,7 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 	if _, err := m.provider.Up(ctx); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}
+	slog.InfoContext(ctx, "postgres: migrations applied")
 	return nil
 }
 
@@ -250,9 +254,16 @@ func (m *Migrator) checkNoInvalidIndexes(ctx context.Context) error {
 	return nil
 }
 
+// ForwardRebuildAnnotationPattern is the regex pattern used both by the runtime
+// permit gate (forwardRebuildTarget) and by the archtest
+// MIGRATION-FORWARD-REBUILD-ANNOTATION-01. Exporting it as a single const
+// ensures the two places stay in sync — any change here automatically applies
+// to both the Go gate and the CI archtest.
+const ForwardRebuildAnnotationPattern = `(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`
+
 // forwardRebuildAnnotationRE matches the per-migration declaration that marks a
 // forward-rebuild and names the table whose row-count gates the permit.
-var forwardRebuildAnnotationRE = regexp.MustCompile(`(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`)
+var forwardRebuildAnnotationRE = regexp.MustCompile(ForwardRebuildAnnotationPattern)
 
 func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardRebuildPermit) error {
 	pending, err := m.collectPendingForwardRebuilds(ctx)
@@ -262,7 +273,13 @@ func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardReb
 
 	permitByNum := map[int64]ForwardRebuildPermit{}
 	for _, p := range permits {
-		permitByNum[p.MigrationNumber()] = p
+		num := p.MigrationNumber()
+		if _, dup := permitByNum[num]; dup {
+			return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild misconfiguration: duplicate permit for the same migration",
+				errcode.WithDetails(errcode.PublicInt("migration", num)))
+		}
+		permitByNum[num] = p
 	}
 
 	// Misconfiguration: every supplied permit must reference a pending forward-rebuild.
@@ -319,7 +336,12 @@ func (m *Migrator) requirePermitIfDangerous(
 	if !dangerous {
 		return nil // empty/missing target — safe to rebuild without a permit
 	}
-	if _, ok := permitByNum[version]; ok {
+	permit, ok := permitByNum[version]
+	if ok {
+		slog.InfoContext(ctx, "postgres: forward-rebuild authorized",
+			"migration", version,
+			"target", target,
+			"reason", permit.Reason())
 		return nil
 	}
 	return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
@@ -328,18 +350,27 @@ func (m *Migrator) requirePermitIfDangerous(
 			errcode.PublicInt("migration", version),
 			errcode.PublicString("target", target)),
 		errcode.WithInternal(errcode.InternalAttr("_",
-			fmt.Sprintf("call ForwardRebuild with AllowForwardRebuild(%d, reason)", version))))
+			fmt.Sprintf(
+				"authorize via: pg-migrate -rebuild %d:<reason>  (or AllowForwardRebuild(%d, \"<reason>\") in Go)",
+				version, version))))
 }
 
 // forwardRebuildTarget reads the migration source and extracts the
-// `-- +gocell forward-rebuild target=<table>` annotation, if present.
+// `-- +gocell forward-rebuild target=<table>` annotation from the Up section
+// only. The Down section is excluded so an annotation accidentally placed there
+// does not affect the permit gate.
 func (m *Migrator) forwardRebuildTarget(src *goose.Source) (string, bool, error) {
 	data, err := fs.ReadFile(m.migrations, src.Path)
 	if err != nil {
 		return "", false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
 			"postgres: read migration source for rebuild gate", err)
 	}
-	mch := forwardRebuildAnnotationRE.FindSubmatch(data)
+	// Restrict scan to the Up section: content before the "-- +goose Down" marker.
+	up := data
+	if i := bytes.Index(data, []byte("-- +goose Down")); i >= 0 {
+		up = data[:i]
+	}
+	mch := forwardRebuildAnnotationRE.FindSubmatch(up)
 	if mch == nil {
 		return "", false, nil
 	}
@@ -375,7 +406,11 @@ func (m *Migrator) tableHasRows(ctx context.Context, table string) (bool, error)
 // explicit DestructiveDownPermit because rollback files may drop production
 // data even when they only move the schema back by one version.
 func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error {
-	if permit == nil || strings.TrimSpace(permit.Reason()) == "" {
+	if permit == nil || validation.IsNilInterface(permit) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres: destructive migration down requires explicit permit")
+	}
+	if strings.TrimSpace(permit.Reason()) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres: destructive migration down requires explicit permit")
 	}
