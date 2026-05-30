@@ -76,7 +76,6 @@ tools/archtest/serviceowned_handler_owner_check_test.go
 tools/archtest/session_protocol_composition_root_test.go
 tools/archtest/sessionrefresh_no_session_create_test.go
 tools/archtest/svctoken_caller_cell_test.go
-tools/archtest/taggroup_loop_no_runtyped_test.go
 tools/archtest/test_polling_external_reason_literal_test.go
 tools/archtest/user_repo_conformance_enrollment_test.go
 tools/archtest/webhook_hmac_funnel_test.go
