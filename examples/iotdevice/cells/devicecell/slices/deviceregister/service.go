@@ -114,7 +114,14 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil
 	}
-	entry, err := outbox.NewEntry(s.clock, ctx, TopicDeviceRegistered, payload)
+	// WithOccurredAt pins the domain event time to the device registration
+	// instant (device.LastSeen is set to s.clock.Now() above, == registration
+	// time here), matching the todoorder example's ordercreate/orderconfirm pattern.
+	// Without it occurredAt would default to the entry's seal time; both examples
+	// stamp the domain time explicitly so the published wire envelope carries the
+	// business event time, not the outbox INSERT time.
+	entry, err := outbox.NewEntry(s.clock, ctx, TopicDeviceRegistered, payload,
+		outbox.WithOccurredAt(device.LastSeen))
 	if err != nil {
 		s.logger.Error("device-register: build event failed", slog.Any("error", err))
 		return nil, fmt.Errorf("device-register: build event: %w", err)

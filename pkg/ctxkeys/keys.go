@@ -105,6 +105,19 @@ func RealIPFrom(ctx context.Context) (string, bool) {
 // trust boundary; kernel/outbox.ContextPrincipal reads them at Entry construction
 // time (InjectPrincipalFromContext). kernel may depend on pkg/ctxkeys but not on
 // runtime/auth, so this typed-key pair is the only legal bridge.
+//
+// Write side is a trust boundary, not a convenience API. The four WithXxxID
+// setters carry audit identity end-to-end: forging a principal is an audit
+// impersonation (P1), unlike forging a trace id (harmless). Their production
+// reference sites are therefore pinned by archtest CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+// to at most two callers — the auth request-boundary bridge
+// (runtime/auth/middleware.go::injectPrincipalCtxKeys, shared by JWT +
+// service-token) and the consumer-side restore (kernel/outbox.RestoreToContext).
+// WithTenantID has only the consumer-side restore caller today: auth.Principal
+// carries no tenant field on develop, so the auth bridge never writes it.
+// Business producers (cells/, examples/) must never call them: principal injection
+// is the framework's responsibility (#1229; ADR 202605281200-1042 §Amendment
+// 2026-05-29 round-2). Read side (the XxxIDFrom getters) is unrestricted.
 
 // WithActorID returns a new context carrying the actor identifier (OAuth
 // impersonator — the principal actually triggering the action; in non-
@@ -131,7 +144,9 @@ func SubjectIDFrom(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
-// WithTenantID returns a new context carrying the tenant identifier.
+// WithTenantID returns a new context carrying the tenant identifier (the
+// organization / isolation boundary the action belongs to; empty in
+// single-tenant deployments).
 func WithTenantID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, tenantID, id)
 }
@@ -142,7 +157,13 @@ func TenantIDFrom(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
-// WithSessionID returns a new context carrying the session identifier.
+// WithSessionID returns a new context carrying the session identifier (the
+// authenticated session the request was made under). It is credential-adjacent:
+// it travels in cleartext in the outbox wire envelope (Principal.sessionId is a
+// plain envelope field), and is masked only when surfaced as a telemetry span
+// attribute — the key gocell.principal.session_id hits IsSensitiveKey in
+// adapters/otel/span.go::safeStringAttr, so it does not leak into the trace
+// backend. The wire/broker path itself carries it verbatim.
 func WithSessionID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionID, id)
 }

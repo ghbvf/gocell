@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,11 +15,29 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
+
+// stepClock advances a fixed step on every Now() call. A value captured from an
+// earlier Now() (device.LastSeen) is therefore strictly less than a later
+// default-stamped Now() (NewEntry's occurredAt/createdAt fallback), which is
+// what makes the OccurredAt assertion a real regression guard against dropping
+// WithOccurredAt(device.LastSeen) in registerInternal.
+type stepClock struct {
+	*clockmock.FakeClock
+	step time.Duration
+}
+
+func (c *stepClock) Now() time.Time {
+	now := c.FakeClock.Now() // explicit embedded selector: c.Now() would recurse
+	c.Advance(c.step)
+	return now
+}
 
 // failPublisher is a Publisher that always returns an error.
 type failPublisher struct{}
@@ -178,6 +197,43 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 	require.NotNil(t, warnEntry, "expected warn log for fail-open publish miss")
 	assert.Nil(t, sloghelper.FindLogEntry(logOutput, "event published"),
 		"fail-open path must not log a false published-success message")
+}
+
+// TestService_Register_StampsOccurredAtFromDeviceLastSeen locks the event
+// envelope semantics: the published device.registered event must carry
+// OccurredAt == the device's registration instant (device.LastSeen), not the
+// entry seal time. With the step clock advancing on each Now(), dropping the
+// WithOccurredAt(device.LastSeen) option would default occurredAt to a later
+// Now() inside NewEntry and fail both assertions below.
+func TestService_Register_StampsOccurredAtFromDeviceLastSeen(t *testing.T) {
+	base := time.Date(2026, 1, 2, 3, 4, 5, 600, time.UTC)
+	clk := &stepClock{FakeClock: clockmock.New(base), step: time.Second}
+	repo := mem.NewDeviceRepository()
+	recorder := outboxtest.NewRecorder()
+	svc, err := NewService(clk, repo, slog.Default(), WithEmitter(recorder.CellEmitter()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	resp, err := svc.Register(ctx, &registercontract.Request{Name: "sensor-occurred"})
+	require.NoError(t, err)
+	r := resp.(registercontract.Register201JSONResponse)
+	require.NotNil(t, r.Data)
+
+	stored, err := repo.GetByID(ctx, r.Data.ID)
+	require.NoError(t, err)
+
+	entries := recorder.Entries()
+	require.Len(t, entries, 1)
+	got := entries[0]
+
+	assert.True(t, got.OccurredAt().Equal(stored.LastSeen),
+		"event OccurredAt (%s) must equal device LastSeen (%s) — WithOccurredAt(device.LastSeen) regression",
+		got.OccurredAt(), stored.LastSeen)
+	// The seal time is stamped from a later Now(), proving occurredAt and
+	// createdAt are independently carried (not collapsed to the seal instant).
+	assert.True(t, got.CreatedAt().After(got.OccurredAt()),
+		"CreatedAt (%s) should be strictly later than OccurredAt (%s)",
+		got.CreatedAt(), got.OccurredAt())
 }
 
 func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {

@@ -75,6 +75,12 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		ActorID:   actorID,
 	}
 
+	// Inbound from/to filters parse with RFC3339Nano (RFC3339 with optional
+	// sub-second precision — the fractional-second segment is allowed, not
+	// required): the
+	// query window must resolve at the same sub-second granularity the outbound
+	// projection emits (see toListResponseDataItem), so a caller can round-trip a
+	// returned occurredAt/timestamp verbatim as a filter bound without truncation.
 	if req.From != "" {
 		t, err := time.Parse(time.RFC3339Nano, req.From)
 		if err != nil {
