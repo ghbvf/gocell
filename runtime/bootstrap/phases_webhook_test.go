@@ -228,6 +228,57 @@ func TestPhase5DrainWebhookReceivers_FailsOnCellIDDrift(t *testing.T) {
 	assert.Contains(t, err.Error(), "wrongcell", "drift error must mention the mismatched CellID")
 }
 
+// TestPhase5DrainWebhookReceivers_SkipsMissingSnapshot verifies the defensive
+// branch where a cell ID returned by asm.CellIDs() has no entry in
+// cellSnapshots: the drain loop must `continue` (skip it) rather than panic,
+// and — with no other receivers — return an empty no-op result.
+func TestPhase5DrainWebhookReceivers_SkipsMissingSnapshot(t *testing.T) {
+	t.Parallel()
+	wc := newWebhookCell(whTestSpec(), noopWebhookHandler)
+	s := buildPhaseStateWithWebhookCells(t, wc)
+	// Drop the only cell's snapshot so its ID survives in asm.CellIDs() but the
+	// snapshot lookup misses — exercising the `if !ok { continue }` branch.
+	delete(s.cellSnapshots, whTestCellID)
+
+	b := New(clockmock.New(whFixedNow))
+	groups, err := b.phase5DrainWebhookReceivers(s)
+
+	require.NoError(t, err, "missing snapshot must be skipped, not error")
+	assert.Empty(t, groups, "no resolvable receivers must produce zero groups")
+}
+
+// TestPhase5DrainWebhookReceivers_WrapsBuildError verifies that a receiver
+// request whose spec is invalid (injected past the registry's validation guard
+// to reach the build step) causes BuildRouteGroups to fail and phase5 to wrap
+// the error with the "build webhook route groups" context.
+func TestPhase5DrainWebhookReceivers_WrapsBuildError(t *testing.T) {
+	t.Parallel()
+	wc := newWebhookCell(whTestSpec(), noopWebhookHandler)
+	s := buildPhaseStateWithWebhookCells(t, wc)
+	// Replace the validated request with one whose spec is invalid (empty
+	// PathPattern) but whose CellID still matches the snapshot key — so it
+	// passes the drift check and fails inside BuildRouteGroups → NewReceiver.
+	badSpec := whTestSpec()
+	badSpec.PathPattern = ""
+	snap := s.cellSnapshots[whTestCellID]
+	snap.WebhookReceivers = []cell.WebhookReceiverRequest{{
+		Spec:    badSpec,
+		Handler: noopWebhookHandler,
+	}}
+	s.cellSnapshots[whTestCellID] = snap
+
+	clk := clockmock.New(whFixedNow)
+	b := New(clk)
+	b.webhookSourceStore = whTestStore(t)
+	b.webhookClaimer = idempotency.NewInMemClaimer(clk)
+
+	_, err := b.phase5DrainWebhookReceivers(s)
+
+	require.Error(t, err, "invalid spec must surface as a build error")
+	assert.Contains(t, err.Error(), "build webhook route groups",
+		"phase5 must wrap the BuildRouteGroups failure with its own context")
+}
+
 // TestPhase5DrainWebhookReceivers_HappyPath_ProducesGroups verifies that a
 // well-configured snapshot with one receiver produces one RouteGroup with
 // the correct Listener, Prefix, and CellID.
