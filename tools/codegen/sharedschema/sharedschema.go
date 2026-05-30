@@ -54,6 +54,7 @@ import (
 var Mirrors = map[string][]string{
 	"contracts/shared/errors/error-response-v1.schema.json": {
 		"examples/iotdevice",
+		"examples/orderfulfillment",
 		"examples/todoorder",
 		"tests/contracttest/testdata",
 	},

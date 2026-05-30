@@ -1,0 +1,6 @@
+id: orderfulfillment
+cells:
+  - orderfulfillmentcell
+owner:
+  team: examples
+  role: fulfillment-owner

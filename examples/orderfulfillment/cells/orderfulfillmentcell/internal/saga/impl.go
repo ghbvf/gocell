@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/ports"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"

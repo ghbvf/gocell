@@ -1,0 +1,17 @@
+id: placeorder
+belongsToCell: orderfulfillmentcell
+consistencyLevel: L3
+lifecycle: experimental
+contractUsages:
+  - contract: http.orderfulfillment.placeorder.v1
+    role: serve
+  - contract: saga.orderfulfillment.v1
+    role: orchestrate
+verify:
+  unit:
+    - unit.placeorder.service
+  contract:
+    - contract.http.orderfulfillment.placeorder.v1.serve
+    - contract.saga.orderfulfillment.v1.orchestrate
+allowedFiles:
+  - examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder/**

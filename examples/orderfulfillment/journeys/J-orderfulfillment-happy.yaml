@@ -1,0 +1,26 @@
+id: J-orderfulfillment-happy
+goal: "Place an order via HTTP and observe the L3 saga coordinator drive all four fulfillment steps to KindSagaSucceeded with durable side-effects"
+lifecycle: active
+owner:
+  team: examples
+  role: fulfillment-owner
+cells:
+  - orderfulfillmentcell
+contracts:
+  - http.orderfulfillment.placeorder.v1
+  - saga.orderfulfillment.v1
+passCriteria:
+  - text: "POST /api/v1/orders/ with valid item + amountCents returns 202 Accepted with orderId in the response body"
+    mode: manual
+  - text: "Saga coordinator drives reserveInventory → chargePayment → ship → notifyUser steps to terminal KindSagaSucceeded; verified by integration test TestPlaceOrder_HappyPath"
+    mode: auto
+    checkRef: journey.J-orderfulfillment-happy.saga-succeeded
+  - text: "Inventory is decremented by 1 (reservation held after completion, not released)"
+    mode: auto
+    checkRef: journey.J-orderfulfillment-happy.saga-succeeded
+  - text: "Payment is recorded in PaymentStore (chargePayment step side-effect persists)"
+    mode: auto
+    checkRef: journey.J-orderfulfillment-happy.saga-succeeded
+  - text: "Shipment is recorded in ShipmentStore (ship step side-effect persists)"
+    mode: auto
+    checkRef: journey.J-orderfulfillment-happy.saga-succeeded

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/domain"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 

@@ -1,0 +1,24 @@
+id: http.orderfulfillment.placeorder.v1
+kind: http
+ownerCell: orderfulfillmentcell
+consistencyLevel: L3
+lifecycle: active
+endpoints:
+  server: orderfulfillmentcell
+  http:
+    method: POST
+    path: /api/v1/orders/
+    successStatus: 202
+    noContent: false
+    auth:
+      public: true
+    responses:
+      400:
+        description: "Bad request — malformed JSON body or oversized payload"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

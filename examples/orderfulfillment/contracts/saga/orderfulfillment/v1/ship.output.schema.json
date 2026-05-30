@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "saga.orderfulfillment.v1.ship.output",
+  "type": "object",
+  "properties": {
+    "shipmentId": { "type": "string" }
+  },
+  "required": ["shipmentId"]
+}

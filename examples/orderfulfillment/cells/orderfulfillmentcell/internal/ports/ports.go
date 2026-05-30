@@ -5,7 +5,7 @@ package ports
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/domain"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
 )
 
 // OrderRepository persists and retrieves Order aggregates.

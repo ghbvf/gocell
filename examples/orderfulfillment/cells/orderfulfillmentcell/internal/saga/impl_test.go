@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/domain"
-	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/mem"
-	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/ordercell/internal/saga"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
+	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
+	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/saga"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/pkg/errcode"
