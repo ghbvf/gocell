@@ -10,6 +10,7 @@ dist/
 /gocell
 /ssobff
 /corebundle
+/pg-migrate
 
 # Test
 *.test

@@ -98,6 +98,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "pg-migrate: apply migrations: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Fprintf(os.Stderr, "pg-migrate: migrations applied successfully\n")
 		return
 	}
 
@@ -110,4 +111,5 @@ func main() {
 		fmt.Fprintf(os.Stderr, "pg-migrate: forward-rebuild: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "pg-migrate: forward-rebuild completed successfully (permits: %s)\n", *rebuild)
 }

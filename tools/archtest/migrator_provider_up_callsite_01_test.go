@@ -22,17 +22,20 @@
 // for package-internal enforcement (same pattern as SPAN-SETATTR-HOLDER-SEAL
 // #851 / HEALTHZ-HOLDER-SEAL #893 / GOOSE-SESSION-LOCKER-01 #1131).
 //
-// Funnel upstream Hard / downstream Medium breakdown:
-//   - Upstream Hard (package-external): provider field is unexported (lowercase),
-//     so no code outside package postgres can reference m.provider at all;
-//     Go compiler is the gate.
-//   - Upstream Medium (package-internal): archtest A1 below locks "every
-//     provider.Up/Down call inside migrator.go must be in an allowlisted method";
-//     a new func inside the same package can still call it — archtest CI catches
-//     this, but Go's type system cannot. Permanent Medium ceiling (goose.Provider
-//     is a third-party type that cannot be sealed); tracked won't-do in gh #1335.
-//   - Downstream: no separate downstream axis (provider.Up is a third-party
-//     method, not a callsite we can seal).
+// Funnel axis breakdown (ai-robust §Funnel 双向锁 terms — consistent with the
+// "downstream Medium / package-external Hard" summary above):
+//   - Upstream Hard (package-external): the provider field is unexported, so no
+//     code outside package postgres can reference m.provider; the public API
+//     (Up / ForwardRebuild / Down) all routes through the phase0 gate, and the
+//     Go compiler guarantees external callers cannot bypass it. This is the axis
+//     that "guarantees the callsite necessarily passes through the funnel".
+//   - Downstream Medium (package-internal): archtest A1 below is the caller
+//     allowlist — it locks "every m.provider.Up/Down call in migrator.go must
+//     reside in forwardRun or Down" (forbidding the method being called outside
+//     the funnel). A sibling func in the same package could still call it;
+//     archtest CI catches that, Go's type system cannot. Permanent Medium ceiling
+//     (goose.Provider is third-party, unsealable); tracked won't-do in gh #1335
+//     (same shape as #851 / #893 / #1131).
 //
 // TDD RED confirmation: run
 //
@@ -304,4 +307,53 @@ func TestArchtest_MigrationForwardRebuild_PatternSingleSource(t *testing.T) {
 	assert.NotEmpty(t, postgres.ForwardRebuildAnnotationPattern,
 		"postgres.ForwardRebuildAnnotationPattern must be a non-empty exported constant "+
 			"(single source of truth for runtime gate and archtest MIGRATION-FORWARD-REBUILD-ANNOTATION-01)")
+}
+
+// TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoInterfaceAlias is the
+// reverse self-check for the blind spot "calls through an interface variable
+// aliasing provider". It asserts migrator.go never assigns or passes m.provider
+// as a whole expression — which would let it be aliased into an interface-typed
+// variable and have Up/Down called outside the forwardRun/Down allowlist. A
+// reference is flagged only when the entire assigned/passed expression is
+// `<x>.provider` (Sel=="provider"); `m.provider.Up(...)` is a method call
+// (CallExpr), not an alias, and is not flagged. Vacuous pass on the corpus.
+func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoInterfaceAlias(t *testing.T) {
+	root := findModuleRoot(t)
+	migratorPath := filepath.Join(root, "adapters", "postgres", "migrator.go")
+
+	fset := token.NewFileSet()
+	// #nosec G304 -- reading repo-resident file under module root
+	f, err := parser.ParseFile(fset, migratorPath, nil, 0)
+	if err != nil {
+		t.Fatalf("MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot check: cannot parse %s: %v", migratorPath, err)
+	}
+
+	var violations []string
+	flag := func(e ast.Expr) {
+		if sel, ok := e.(*ast.SelectorExpr); ok && sel.Sel.Name == "provider" {
+			pos := fset.Position(e.Pos())
+			violations = append(violations, fmt.Sprintf(
+				"line %d: m.provider aliased as a whole expression (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
+				pos.Line))
+		}
+	}
+	scanner.EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
+		for _, rhs := range assign.Rhs {
+			flag(rhs)
+		}
+	})
+	scanner.EachInSubtree[ast.ValueSpec](f, func(vs *ast.ValueSpec) {
+		for _, v := range vs.Values {
+			flag(v)
+		}
+	})
+	scanner.EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+		for _, arg := range call.Args {
+			flag(arg)
+		}
+	})
+
+	assert.Empty(t, violations,
+		"MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot: m.provider must not be aliased into a variable "+
+			"or passed as an argument; an interface alias could call Up/Down outside the allowlist.")
 }

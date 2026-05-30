@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -211,9 +210,13 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 // ForwardRebuild applies all unapplied migrations, authorizing the supplied
-// forward-rebuild permits for populated target tables. Each permit names the
-// migration version it authorizes; a permit referencing a migration that is
-// not a pending forward-rebuild is a misconfiguration error.
+// forward-rebuild permits for populated target tables.
+//
+// A permit is only needed when a forward-rebuild migration's target table
+// already holds rows — an empty or missing target is rebuilt automatically by
+// Up alone, so fresh provisioning needs no permit. Supplying more permits than
+// required is fine; a permit that is nil, duplicated, or references a migration
+// which is not a pending forward-rebuild is a misconfiguration error.
 func (m *Migrator) ForwardRebuild(ctx context.Context, permits ...ForwardRebuildPermit) error {
 	return m.forwardRun(ctx, permits)
 }
@@ -225,10 +228,11 @@ func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermi
 	if err := m.gatePendingRebuilds(ctx, permits); err != nil {
 		return err
 	}
-	if _, err := m.provider.Up(ctx); err != nil {
+	results, err := m.provider.Up(ctx)
+	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}
-	slog.InfoContext(ctx, "postgres: migrations applied")
+	slog.InfoContext(ctx, "postgres: migrations applied", "applied", len(results))
 	return nil
 }
 
@@ -254,16 +258,26 @@ func (m *Migrator) checkNoInvalidIndexes(ctx context.Context) error {
 	return nil
 }
 
-// ForwardRebuildAnnotationPattern is the regex pattern used both by the runtime
-// permit gate (forwardRebuildTarget) and by the archtest
-// MIGRATION-FORWARD-REBUILD-ANNOTATION-01. Exporting it as a single const
-// ensures the two places stay in sync — any change here automatically applies
-// to both the Go gate and the CI archtest.
+// ForwardRebuildAnnotationPattern is the single-source regex shared by the
+// runtime permit gate (forwardRebuildTarget) and the archtest
+// MIGRATION-FORWARD-REBUILD-ANNOTATION-01
+// (tools/archtest/pg_schema_guard_invariants_test.go). Exporting it as one const
+// keeps the Go gate and the CI archtest from drifting.
+//
+// WARNING: changing this pattern is a wire-format change to the migration
+// annotation. Every existing `-- +gocell forward-rebuild target=…` line in
+// adapters/postgres/migrations/*.sql must be updated to match, or pending
+// rebuilds silently stop being gated.
 const ForwardRebuildAnnotationPattern = `(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`
 
 // forwardRebuildAnnotationRE matches the per-migration declaration that marks a
 // forward-rebuild and names the table whose row-count gates the permit.
 var forwardRebuildAnnotationRE = regexp.MustCompile(ForwardRebuildAnnotationPattern)
+
+// gooseDownMarkerRE line-anchors the pressly/goose Down section directive so the
+// Up-section scan in forwardRebuildTarget cannot be truncated by a literal
+// "-- +goose Down" appearing inside Up-section prose (fail-open guard).
+var gooseDownMarkerRE = regexp.MustCompile(`(?m)^\s*-- \+goose Down\s*$`)
 
 func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardRebuildPermit) error {
 	pending, err := m.collectPendingForwardRebuilds(ctx)
@@ -271,15 +285,9 @@ func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardReb
 		return err
 	}
 
-	permitByNum := map[int64]ForwardRebuildPermit{}
-	for _, p := range permits {
-		num := p.MigrationNumber()
-		if _, dup := permitByNum[num]; dup {
-			return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
-				"postgres: forward-rebuild misconfiguration: duplicate permit for the same migration",
-				errcode.WithDetails(errcode.PublicInt("migration", num)))
-		}
-		permitByNum[num] = p
+	permitByNum, err := buildPermitMap(permits)
+	if err != nil {
+		return err
 	}
 
 	// Misconfiguration: every supplied permit must reference a pending forward-rebuild.
@@ -298,6 +306,28 @@ func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardReb
 		}
 	}
 	return nil
+}
+
+// buildPermitMap indexes the supplied permits by migration number. It rejects a
+// nil interface value (typed-nil included, mirroring Down's guard) and rejects
+// two permits naming the same migration — both are caller misconfigurations
+// that would otherwise panic or silently last-write-win.
+func buildPermitMap(permits []ForwardRebuildPermit) (map[int64]ForwardRebuildPermit, error) {
+	permitByNum := make(map[int64]ForwardRebuildPermit, len(permits))
+	for _, p := range permits {
+		if p == nil || validation.IsNilInterface(p) {
+			return nil, errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild permit must not be nil")
+		}
+		num := p.MigrationNumber()
+		if _, dup := permitByNum[num]; dup {
+			return nil, errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild misconfiguration: duplicate permit for the same migration",
+				errcode.WithDetails(errcode.PublicInt("migration", num)))
+		}
+		permitByNum[num] = p
+	}
+	return permitByNum, nil
 }
 
 // collectPendingForwardRebuilds returns the version→target map of pending
@@ -351,7 +381,8 @@ func (m *Migrator) requirePermitIfDangerous(
 			errcode.PublicString("target", target)),
 		errcode.WithInternal(errcode.InternalAttr("_",
 			fmt.Sprintf(
-				"authorize via: pg-migrate -rebuild %d:<reason>  (or AllowForwardRebuild(%d, \"<reason>\") in Go)",
+				"authorize via: pg-migrate -dsn \"$GOCELL_PG_DSN\" -rebuild %d:<reason>  "+
+					"(or AllowForwardRebuild(%d, \"<reason>\") in Go)",
 				version, version))))
 }
 
@@ -365,10 +396,15 @@ func (m *Migrator) forwardRebuildTarget(src *goose.Source) (string, bool, error)
 		return "", false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
 			"postgres: read migration source for rebuild gate", err)
 	}
-	// Restrict scan to the Up section: content before the "-- +goose Down" marker.
+	// Restrict scan to the Up section: content before the goose Down marker.
+	// Line-anchored (^...$) so a literal "-- +goose Down" appearing inside
+	// Up-section prose / runbook comments does NOT truncate the scan and silently
+	// drop the annotation (fail-open → populated table rebuilt without a permit).
+	// "-- +goose Down" is a pressly/goose section directive honored only at the
+	// start of a line.
 	up := data
-	if i := bytes.Index(data, []byte("-- +goose Down")); i >= 0 {
-		up = data[:i]
+	if loc := gooseDownMarkerRE.FindIndex(data); loc != nil {
+		up = data[:loc[0]]
 	}
 	mch := forwardRebuildAnnotationRE.FindSubmatch(up)
 	if mch == nil {
@@ -406,11 +442,10 @@ func (m *Migrator) tableHasRows(ctx context.Context, table string) (bool, error)
 // explicit DestructiveDownPermit because rollback files may drop production
 // data even when they only move the schema back by one version.
 func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error {
+	// permit.Reason() is guaranteed non-empty by AllowDestructiveDown — the sole
+	// constructor of the sealed DestructiveDownPermit — so only the nil guard is
+	// needed; a separate empty-reason branch would be unreachable dead code.
 	if permit == nil || validation.IsNilInterface(permit) {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"postgres: destructive migration down requires explicit permit")
-	}
-	if strings.TrimSpace(permit.Reason()) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres: destructive migration down requires explicit permit")
 	}
@@ -420,6 +455,7 @@ func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error
 		}
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
+	slog.InfoContext(ctx, "postgres: migration rolled back", "reason", permit.Reason())
 	return nil
 }
 

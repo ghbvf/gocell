@@ -9,6 +9,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -233,4 +234,180 @@ func TestAllowForwardRebuild(t *testing.T) {
 	assert.Nil(t, permit)
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// [F17·Cx1] TestAllowForwardRebuild_NegativeNumber
+// ---------------------------------------------------------------------------
+
+// TestAllowForwardRebuild_NegativeNumber supplements TestAllowForwardRebuild
+// with a negative migration number edge case — AllowForwardRebuild checks
+// migrationNumber <= 0, so both 0 and negative values must be rejected.
+func TestAllowForwardRebuild_NegativeNumber(t *testing.T) {
+	permit, err := AllowForwardRebuild(-5, "valid reason")
+	require.Error(t, err, "negative migration number must be rejected")
+	assert.Nil(t, permit)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code,
+		"must surface ErrValidationFailed for negative migration number")
+}
+
+// ---------------------------------------------------------------------------
+// [F7·Cx2] TestBuildPermitMap
+// ---------------------------------------------------------------------------
+
+// TestBuildPermitMap tests the unexported buildPermitMap directly.
+// forwardRebuildPermit is a value type (not a pointer), so a typed-nil element
+// cannot be constructed from outside the package; the nil element test uses an
+// untyped nil ([]ForwardRebuildPermit{nil}), which exercises the p == nil
+// branch in buildPermitMap.
+func TestBuildPermitMap(t *testing.T) {
+	makePermit := func(t *testing.T, num int64) ForwardRebuildPermit {
+		t.Helper()
+		p, err := AllowForwardRebuild(num, "test permit")
+		require.NoError(t, err)
+		return p
+	}
+
+	tests := []struct {
+		name        string
+		permits     []ForwardRebuildPermit
+		wantErr     bool
+		wantErrCode errcode.Code
+		wantMsgHint string // substring expected in error message or code description
+		wantLen     int
+		wantKeys    []int64
+	}{
+		{
+			name:        "nil element rejected",
+			permits:     []ForwardRebuildPermit{nil},
+			wantErr:     true,
+			wantErrCode: ErrAdapterPGMigrate,
+		},
+		{
+			name: "duplicate migration number rejected",
+			permits: func() []ForwardRebuildPermit {
+				p1 := makePermit(t, 43)
+				p2 := makePermit(t, 43)
+				return []ForwardRebuildPermit{p1, p2}
+			}(),
+			wantErr:     true,
+			wantErrCode: ErrAdapterPGMigrate,
+		},
+		{
+			name: "two different permits succeed",
+			permits: func() []ForwardRebuildPermit {
+				return []ForwardRebuildPermit{makePermit(t, 43), makePermit(t, 44)}
+			}(),
+			wantErr:  false,
+			wantLen:  2,
+			wantKeys: []int64{43, 44},
+		},
+		{
+			name:    "empty slice returns empty map",
+			permits: []ForwardRebuildPermit{},
+			wantErr: false,
+			wantLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := buildPermitMap(tt.permits)
+			if tt.wantErr {
+				require.Error(t, err)
+				var ec *errcode.Error
+				require.ErrorAs(t, err, &ec)
+				assert.Equal(t, tt.wantErrCode, ec.Code)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, m, tt.wantLen)
+			for _, k := range tt.wantKeys {
+				_, ok := m[k]
+				assert.Truef(t, ok, "expected key %d in permit map", k)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// [F8·Cx2·关键] TestForwardRebuildTarget_UpSectionOnly
+// ---------------------------------------------------------------------------
+
+// TestForwardRebuildTarget_UpSectionOnly verifies that forwardRebuildTarget
+// only scans the Up section and is not tricked by:
+//   - an annotation in the Down section (must not match)
+//   - a literal "-- +goose Down" substring appearing inside Up-section prose
+//     (must not truncate the scan — fail-open guard fixed by line-anchored RE).
+func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
+	tests := []struct {
+		name       string
+		sqlContent string
+		wantTarget string
+		wantOK     bool
+	}{
+		{
+			name: "annotation in Up section returns target",
+			sqlContent: "-- +goose Up\n" +
+				"-- +gocell forward-rebuild target=my_table\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"SELECT 2;\n",
+			wantTarget: "my_table",
+			wantOK:     true,
+		},
+		{
+			name: "annotation only in Down section is ignored",
+			sqlContent: "-- +goose Up\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"-- +gocell forward-rebuild target=down_table\n" +
+				"SELECT 2;\n",
+			wantTarget: "",
+			wantOK:     false,
+		},
+		{
+			// Fail-open regression: a literal "-- +goose Down" substring in Up-section
+			// prose must NOT truncate the scan. Only a line-anchored "^-- +goose Down$"
+			// acts as the section boundary. The annotation appears after the prose
+			// comment and must still be detected.
+			name: "literal +goose Down in Up-section prose does not truncate scan",
+			sqlContent: "-- +goose Up\n" +
+				"-- This runbook references the +goose Down section for rollback steps.\n" +
+				"-- see the +goose Down section for the DROP statement\n" +
+				"-- +gocell forward-rebuild target=real_target\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"SELECT 2;\n",
+			wantTarget: "real_target",
+			wantOK:     true,
+		},
+		{
+			name: "no annotation returns empty and false",
+			sqlContent: "-- +goose Up\n" +
+				"SELECT 1;\n" +
+				"-- +goose Down\n" +
+				"SELECT 2;\n",
+			wantTarget: "",
+			wantOK:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const fileName = "001_test_migration.sql"
+			mfs := fstest.MapFS{
+				fileName: &fstest.MapFile{Data: []byte(tt.sqlContent)},
+			}
+			m := &Migrator{migrations: mfs}
+			src := &goose.Source{Path: fileName, Version: 1}
+
+			target, ok, err := m.forwardRebuildTarget(src)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantTarget, target)
+		})
+	}
 }

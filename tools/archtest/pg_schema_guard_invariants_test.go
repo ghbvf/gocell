@@ -23,6 +23,12 @@ import (
 // gooseDownMarker marks the start of the Down section in a migration file.
 const gooseDownMarker = "-- +goose Down"
 
+// gooseDownMarkerRE line-anchors gooseDownMarker (derived from the same const as
+// its single source) so a literal "-- +goose Down" inside Up-section prose does
+// not split the section. Mirrors the runtime gate's gooseDownMarkerRE in
+// adapters/postgres/migrator.go (C2 fail-open fix — keep the two in step).
+var gooseDownMarkerRE = regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(gooseDownMarker) + `\s*$`)
+
 // stripSQLLineComments removes -- line comments from SQL so destructive-op
 // detection inspects executable statements only, not prose in runbook comments.
 func stripSQLLineComments(sql string) string {
@@ -38,8 +44,8 @@ func stripSQLLineComments(sql string) string {
 // upSectionOf returns the Up section of a migration file (from the start
 // of the file to the -- +goose Down marker, or the whole file if no Down).
 func upSectionOf(content string) string {
-	if idx := strings.Index(content, gooseDownMarker); idx >= 0 {
-		return content[:idx]
+	if loc := gooseDownMarkerRE.FindStringIndex(content); loc != nil {
+		return content[:loc[0]]
 	}
 	return content
 }
@@ -157,6 +163,53 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 					"Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
 				cc.Rel, len(matches),
 			)
+		}
+	})
+}
+
+// blockCommentRE / sqlStringLitRE extract the two SQL lexical regions that
+// stripSQLLineComments does NOT strip — the documented blind spots of
+// MIGRATION-FORWARD-REBUILD-ANNOTATION-01 / MIGRATION-NO-GUC-RESIDUE-01.
+var (
+	blockCommentRE = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	sqlStringLitRE = regexp.MustCompile(`'[^']*'`)
+)
+
+// TestArchtest_MigrationDestructiveToken_NoCommentOrStringBlindSpot is the
+// reverse self-check (ai-robust charter: every blind spot needs a reverse test)
+// for the documented blind spots of MIGRATION-FORWARD-REBUILD-ANNOTATION-01 and
+// MIGRATION-NO-GUC-RESIDUE-01. stripSQLLineComments only removes "-- " line
+// comments, so a TRUNCATE / DROP TABLE token hidden inside a /* block comment */
+// or a '...' string literal would evade the destructive-op detection (and thus
+// the annotation requirement). This test asserts the migration corpus contains
+// no such token in those two regions — making the blind spots vacuous in
+// practice and supplying the Medium rating its required reverse evidence. If a
+// future migration introduces such a form, this fails and the detector must be
+// upgraded to a real SQL lexer.
+func TestArchtest_MigrationDestructiveToken_NoCommentOrStringBlindSpot(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
+	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
+		// Strip -- line comments first: their prose (e.g. "table's identity")
+		// contains apostrophes that would otherwise mis-pair the simple string
+		// regex across statements and swallow real DDL. After stripping, only
+		// genuine SQL string literals and /* */ block comments remain — the
+		// actual blind-spot regions stripSQLLineComments does not cover.
+		content := stripSQLLineComments(string(cc.Bytes))
+		regions := append(
+			blockCommentRE.FindAllString(content, -1),
+			sqlStringLitRE.FindAllString(content, -1)...,
+		)
+		for _, r := range regions {
+			up := strings.ToUpper(r)
+			if strings.Contains(up, "TRUNCATE") || strings.Contains(up, "DROP TABLE") {
+				assert.Fail(t,
+					"destructive token hidden in a block comment or string literal (blind spot)",
+					"file: %s\n  region: %q\n  TRUNCATE / DROP TABLE inside /* */ or '...' evades "+
+						"stripSQLLineComments, so MIGRATION-FORWARD-REBUILD-ANNOTATION-01 would miss it.\n"+
+						"  Upgrade the detector to a SQL lexer.",
+					cc.Rel, r)
+			}
 		}
 	})
 }

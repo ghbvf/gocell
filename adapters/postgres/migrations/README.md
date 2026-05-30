@@ -100,7 +100,13 @@ DROP INDEX CONCURRENTLY <index_name>;
 - 如果未来运行时拓扑需要无停机滚动 DDL，按"两阶段 migration"拆：(a) 先放宽约束 / 让二进制停止写该列；
   (b) 等新二进制全量部署后再 DROP 列。当前 GoCell 仅 ship 自身，无外部 schema 消费方，单 PR + 计划停机更简单。
 
-已有示例：`025_drop_sessions_authz_epoch_at_issue.sql`（S4b Batch 1C）。
+已有示例：`044_outbox_entries_principal.sql`（outbox principal rebuild，参见 `docs/ops/migration-044-outbox-rebuild.md`）。
+
+> **反面教材**：`025_drop_sessions_authz_epoch_at_issue.sql` 在 PR #490 ship 后才
+> 被 review 发现 P1（未列 invariant inventory，DROP COLUMN 论证不充分），由 026
+> 撤回——该文件仅作历史记录保留，**不应效仿**。详见 ADR
+> `docs/architecture/202605101400-adr-credential-session-protocol.md` §0 A1
+> RETRACTED + §A8，以及 `.claude/rules/gocell/contract-fanout.md` §DROP COLUMN 反面教材。
 
 ### 如何新增 forward-rebuild migration
 

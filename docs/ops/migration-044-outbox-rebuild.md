@@ -100,7 +100,9 @@ safe to discard; the coarser Go gate treats them uniformly.
    Alternatively, call the Go API directly:
 
    ```go
-   permit, err := postgres.AllowForwardRebuild(44, reason)
+   import adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+
+   permit, err := adapterpg.AllowForwardRebuild(44, reason)
    if err != nil { /* handle */ }
    if err := migrator.ForwardRebuild(ctx, permit); err != nil { /* handle */ }
    ```

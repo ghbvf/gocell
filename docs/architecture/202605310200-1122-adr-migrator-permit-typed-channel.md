@@ -187,14 +187,15 @@ tools/pg-migrate -rebuild "44:<reason>,12:<reason>"
 - **授权（permit 伪造）**：Soft → Hard（显著改善），GUC 字符串约定被 unexported marker interface 替代
 - **执行（绕过 gate 跑 Up）**：SQL RAISE（DB 引擎 Hard）→ Go phase0（包外 Hard / 包内 Medium）
 
-执行轴存在一个具体的向量降级：原来直连 psql 跑 `goose up` 时，SQL 体内的 RAISE 会在 DB 引擎层强制；现在 GUC 守卫已删除，直连 psql 可以无阻碍地执行 goose。
+执行轴存在一个具体的向量降级：原来直连 psql 跑 `goose up` 时，SQL 体内的 RAISE 会在 DB 引擎层强制；现在 GUC 守卫已删除，直连 psql / `go run github.com/pressly/goose/v3` / 测试代码直接 `Exec` 都可无阻碍执行 migration SQL。
 
-但该向量在 GoCell 架构下实为 moot（无效）：
-1. GoCell 的 migration 嵌入 Go 二进制（`adapters/postgres/migrations` embed.FS），没有独立部署的 goose CLI
-2. 没有 shipped goose CLI；CI/CD 唯一执行路径是 `tools/pg-migrate`（Go binary）
-3. 直连 psql 执行 raw SQL 是运维红线操作，已由部署流程约束
+**诚实评估：该绕过技术上可行，不是 moot。** goose 是 go.mod 直接依赖（`go run` 即可得 CLI），且集成测试自身就用 `pool.DB().Exec` 直接执行 SQL 绕过 gate——「无 shipped goose CLI 故无法绕过」的早期论证不成立。该向量是**已知接受的 Soft 残留**，靠下列运维约束（非类型系统）接受：
 
-因此该向量的防御后退**在当前架构下可接受**，但必须诚实记录。
+1. 生产唯一执行路径是 `tools/pg-migrate`（Go binary，必过 phase0 gate）；migration 嵌入 Go 二进制（embed.FS），无随产品分发的 goose CLI。
+2. 直连 psql / 裸 `go run goose` 执行 raw migration 是**运维红线操作**，由部署流程约束。
+3. forward-rebuild 是 incident-grade 人工操作，044 runbook 强制停 producer cutover。
+
+授权轴的 Hard 化（permit 不可伪造）是本 ADR 的净收益；执行轴这条 Soft 残留是诚实记录的取舍，**不再宣称 moot**。
 
 ### archtest 评级汇总
 
@@ -213,10 +214,10 @@ tools/pg-migrate -rebuild "44:<reason>,12:<reason>"
 | 伪造授权——无审批触发 forward-rebuild | GUC `SET` 字符串约定（Soft，任何具权限 session 可绕过） | `ForwardRebuildPermit` marker 不可伪造（type-system Hard） | **✅ 升** | — |
 | 包外直接调用 `m.provider.Up` 绕过 phase0 | SQL RAISE（DB 引擎在 SQL 执行时强制） | `provider` 字段 unexported，包外引用编译报错（Hard） | **✅ 升**（包外） | — |
 | 包内同包新增函数绕过 phase0 | SQL RAISE（不依赖调用方路径） | `MIGRATOR-PROVIDER-UP-CALLSITE-01` archtest（Medium） | **⚠️ 包内从 DB Hard → archtest Medium** | provider 字段 unexported + archtest CI + gh #1335 (won't-do，同 #851/#893/#1131 形态) |
-| 直连 psql / goose CLI 绕过 Go gate | SQL RAISE EXCEPTION（DB 引擎强制） | GUC 守卫已删，裸 SQL 无 gate | **⚠️ 降** | GoCell migration 嵌入 Go 二进制，无 shipped goose CLI，唯一执行路径 = `tools/pg-migrate` Go binary；该向量在当前架构下 moot |
+| 直连 psql / `go run goose` / 测试 Exec 绕 Go gate | SQL RAISE EXCEPTION（DB 引擎强制） | GUC 守卫已删，裸 SQL 无 gate | **⚠️ 降** | **已知接受的 Soft 残留（非 moot）**：goose 是 go.mod 依赖、集成测试自身 Exec 即可绕过；靠运维约束接受——生产唯一路径 `tools/pg-migrate`（过 gate）、直连 raw 执行是运维红线、forward-rebuild 有 runbook 停写约束（见上文诚实评估） |
 | GUC 名拼写错误导致静默放行（fail-open） | 存在（`current_setting` 读不到自定义 GUC 返回空串） | 不存在（Go 类型系统不接受错误名称） | **✅ 升** | — |
 | fresh provision 误拒（空库无法 Up） | 不存在（GUC 仅在表有非 published 行时 RAISE） | data-aware phase0 探针：缺表 / 空表 → 放行 | **✅ 等价** | `tableHasRows` 两步探针 + 集成测试覆盖 |
-| gate-to-execution TOCTOU | 探针与 DDL 非同锁：phase0 探针通过后、`provider.Up` 执行 DDL 前，另一进程可能向目标表插行，行随 DROP/TRUNCATE 被静默删除 | ⚠️ | 补偿 = 运维 runbook 要求 migration 期停 producer / drain relay；goose advisory lock（`goose_db_version` 表锁）阻止并发 migration，但不阻业务写；单写部署下该窗口事实上 moot |
+| gate-to-execution TOCTOU | 探针与 DDL 非同锁：phase0 探针通过后、`provider.Up` 执行 DDL 前，另一进程可能向目标表插行，行随 DROP/TRUNCATE 被静默删除 | ⚠️ | 补偿 = 044 runbook 要求 migration 期停 producer + drain relay（停写 cutover 下窗口不存在）。goose advisory lock（`goose_db_version`）阻止**并发 migration**，但**不阻业务写**——K8s 多实例滚动部署若未严格停写仍存在窗口，故 runbook 强制停 producer cutover 步骤。probe→DDL 原子化（关闭窗口）评估见 gh #1357（成本高/收益低，倾向 won't-do） |
 
 ## Consequences
 
@@ -229,7 +230,8 @@ tools/pg-migrate -rebuild "44:<reason>,12:<reason>"
 
 **Negative / Known limitations**：
 
-- 直连 psql 运行时无 DB 层 gate（见威胁矩阵 ⚠️ 降格行），当前架构下可接受但已记录
+- 直连 psql / 裸 goose 运行时无 DB 层 gate（**已知接受的 Soft 残留，非 moot**；见威胁矩阵 ⚠️ 降格行 + 上文诚实评估），靠运维约束接受
+- gate-to-execution TOCTOU 窗口（探针与 DDL 非同锁）靠 044 runbook 停写 cutover 约束；probe→DDL 原子化评估见 gh #1357（倾向 won't-do）
 - 包内 Medium 天花板（`MIGRATOR-PROVIDER-UP-CALLSITE-01` 包内上游）无 Go 类型系统闭环路径；gh #1335 记录（won't-do，与 #851/#893/#1131 同形态）
 - 044 判据从"未投递行"粗化到"任意行"——有历史 published 行的库也需要 permit；运维步骤已更新
 

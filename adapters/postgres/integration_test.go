@@ -1104,4 +1104,125 @@ func TestMigrator_TableHasRows_DBError_FailClosed(t *testing.T) {
 	require.Error(t, rebuildErr, "ForwardRebuild with cancelled context must return an error (fail-closed)")
 }
 
+// ---------------------------------------------------------------------------
+// [F10·Cx2] Migration 044 gate three-way integration tests
+// ---------------------------------------------------------------------------
+
+// TestMigrator_ForwardRebuild_Migration044_EmptyTable_Up verifies that a fresh
+// DB (outbox_entries empty after migration 043 TRUNCATE) can run Up() through
+// migration 044 without any permit — the empty-table path is always safe.
+func TestMigrator_ForwardRebuild_Migration044_EmptyTable_Up(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_empty")
+	require.NoError(t, err)
+
+	// Fresh DB: all rebuild targets are empty/missing — Up() must succeed without permits.
+	require.NoError(t, migrator.Up(ctx),
+		"Up() must succeed on a fresh DB (outbox_entries empty after 043 TRUNCATE)")
+
+	// Verify 044's principal and occurred_at columns were added.
+	for _, col := range []string{"principal", "occurred_at"} {
+		col := col
+		t.Run("outbox_entries_has_col_"+col, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = 'outbox_entries' AND column_name = $1
+				)`, col).Scan(&exists)
+			require.NoError(t, err)
+			assert.Truef(t, exists, "outbox_entries must have %q column after migration 044", col)
+		})
+	}
+}
+
+// TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_UpFailClosed verifies
+// that Up() refuses fail-closed when outbox_entries has rows and migration 044
+// is pending (no permit supplied).
+func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_UpFailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 043 (so outbox_entries exists post-043 TRUNCATE).
+	mfs043 := migrationsUpToFS(t, 43)
+	prep, err := NewMigrator(pool, mfs043, "schema_migrations_044_failclosed_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 043 must succeed")
+
+	// Insert a row into outbox_entries to make migration 044 dangerous.
+	entryID := "failclosed-test-entry-044"
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO outbox_entries
+			(id, aggregate_id, aggregate_type, event_type, payload, status, created_at, next_retry_at)
+		VALUES ($1, 'agg-1', 'test_agg', 'test.event', '{}', 'published', now(), now())
+	`, entryID)
+	require.NoError(t, execErr, "must be able to insert a row into post-043 outbox_entries")
+
+	// Up() without permits: must fail-closed.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_failclosed_prep")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when migration 044 target outbox_entries has rows")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	// Use ec.FindAttr to assert migration=44 — errcode public details are NOT
+	// rendered in Error() string, so string-contains assertions would be fragile.
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(44), migDetail.Value(), "migration detail value must be 44")
+}
+
+// TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_WithPermit verifies
+// that ForwardRebuild with permit 44 succeeds when outbox_entries has rows.
+// Only permit 44 is needed because audit_entries is empty after migration 043's
+// TRUNCATE (no rows inserted → not dangerous → no permit 43 required).
+func TestMigrator_ForwardRebuild_Migration044_PopulatedOutbox_WithPermit(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 043.
+	mfs043 := migrationsUpToFS(t, 43)
+	prep, err := NewMigrator(pool, mfs043, "schema_migrations_044_permit_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 043 must succeed")
+
+	// Insert a row into outbox_entries (audit_entries is left empty — not dangerous).
+	entryID := "permit-test-entry-044"
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO outbox_entries
+			(id, aggregate_id, aggregate_type, event_type, payload, status, created_at, next_retry_at)
+		VALUES ($1, 'agg-2', 'test_agg', 'test.event', '{}', 'published', now(), now())
+	`, entryID)
+	require.NoError(t, execErr, "must be able to insert a row into post-043 outbox_entries")
+
+	// ForwardRebuild with only permit 44 must succeed — audit_entries is empty
+	// so migration 043 is not pending-dangerous (no rows → no permit needed).
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_044_permit_prep")
+	require.NoError(t, err)
+
+	permit44 := mustAllowForwardRebuild(t, 44, "044 outbox_entries principal permit integration test")
+	require.NoError(t, migrator.ForwardRebuild(ctx, permit44),
+		"ForwardRebuild with permit 44 must succeed when only outbox_entries has rows")
+
+	// Verify 044's principal and occurred_at columns were added.
+	for _, col := range []string{"principal", "occurred_at"} {
+		col := col
+		t.Run("outbox_entries_has_col_"+col, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = 'outbox_entries' AND column_name = $1
+				)`, col).Scan(&exists)
+			require.NoError(t, err)
+			assert.Truef(t, exists,
+				"outbox_entries must have %q column after ForwardRebuild with permit 44", col)
+		})
+	}
+}
+
 // Target: adapters/postgres coverage >= 80%

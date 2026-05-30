@@ -13,8 +13,9 @@
 --      every non-'published' row is still un-relayed.
 --   2. Confirm all relay instances are stopped (so no row re-enters 'claiming'
 --      between the check and `goose up`).
---   3. Run `goose up`. The Up block gate (forward-rebuild permit) is enforced
---      in Go via Migrator.ForwardRebuild + ForwardRebuildPermit (issue #1248).
+--   3. Run `pg-migrate -dsn "$GOCELL_PG_DSN" -rebuild "44:<reason>"`. The Up
+--      block gate (forward-rebuild permit) is enforced in Go via
+--      Migrator.ForwardRebuild + ForwardRebuildPermit (issue #1248).
 --
 -- Permit decoupling (mirror of migration 043_audit_entries_v2):
 --   This is a forward (Up) destructive rebuild, NOT a rollback. The forward-rebuild
