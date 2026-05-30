@@ -157,22 +157,28 @@ func advHintConstNames(t *testing.T) map[string]struct{} {
 
 	names := map[string]struct{}{}
 	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for _, n := range vs.Names {
-				if strings.HasPrefix(n.Name, "advHint") {
-					names[n.Name] = struct{}{}
-				}
-			}
-		}
+		collectAdvHintNamesFromDecl(decl, names)
 	}
 	require.NotEmpty(t, names, "advisory_hints.go must declare advHint* consts")
 	return names
+}
+
+// collectAdvHintNamesFromDecl adds advHint* const names from a single top-level
+// declaration to the names set.
+func collectAdvHintNamesFromDecl(decl ast.Decl, names map[string]struct{}) {
+	gd, ok := decl.(*ast.GenDecl)
+	if !ok || gd.Tok != token.CONST {
+		return
+	}
+	for _, spec := range gd.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for _, n := range vs.Names {
+			if strings.HasPrefix(n.Name, "advHint") {
+				names[n.Name] = struct{}{}
+			}
+		}
+	}
 }

@@ -993,82 +993,112 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			const contractID = "http.test.uuid.v1"
-			sliceRelDir := "cells/testcell/slices/testslice"
-
-			sliceAbsDir := filepath.Join(root, sliceRelDir)
-			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
-			if !tc.noHandler && tc.handlerSrc != "" {
-				if tc.noAuthMount {
-					// Write handler src without auth.Mount boilerplate to test fail-closed.
-					path := filepath.Join(sliceAbsDir, "handler.go")
-					content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + tc.handlerSrc
-					require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-				} else {
-					writeUUIDHandlerFile(t, sliceAbsDir, contractID, tc.handlerSrc)
-				}
-			}
-
-			project := makeProject(contractID, sliceRelDir)
-			if tc.noHandler {
-				project = &metadata.ProjectMeta{
-					Cells:      map[string]*metadata.CellMeta{},
-					Slices:     map[string]*metadata.SliceMeta{},
-					Contracts:  map[string]*metadata.ContractMeta{},
-					Journeys:   map[string]*metadata.JourneyMeta{},
-					Assemblies: map[string]*metadata.AssemblyMeta{},
-				}
-			}
-
-			// Build a contract with non-uuid params for the "no uuid params" case.
-			var c *metadata.ContractMeta
-			if len(tc.uuidParams) == 0 && !tc.noHandler {
-				c = &metadata.ContractMeta{
-					ID:        contractID,
-					Kind:      "http",
-					OwnerCell: metadatatest.CellIDTestCell,
-					Lifecycle: "active",
-					File:      "contracts/http/test/uuid/v1/contract.yaml",
-					Endpoints: metadata.EndpointsMeta{
-						HTTP: &metadata.HTTPTransportMeta{
-							Method:        "GET",
-							Path:          "/api/v1/config/{key}",
-							SuccessStatus: 200,
-							PathParams: map[string]metadata.ParamSchema{
-								"key": {Type: "string"}, // no format:uuid
-							},
-						},
-					},
-				}
-			} else {
-				c = makeUUIDContract(contractID, "contracts/http/test/uuid/v1/contract.yaml", tc.uuidParams)
-			}
-
-			if c != nil {
-				project.Contracts[contractID] = c
-			}
-			validator := NewValidator(project, root, clock.Real())
-			results := validator.checkCH05()
-
-			var errs []ValidationResult
-			for _, r := range results {
-				if r.Severity == SeverityError {
-					errs = append(errs, r)
-				}
-			}
-
-			require.Len(t, errs, len(tc.wantErrors), "error count mismatch")
-			for i, want := range tc.wantErrors {
-				assert.Contains(t, errs[i].Message, want)
-			}
-
-			if tc.noHandler {
-				assert.Empty(t, results, "expected no findings when no handler exists")
-			}
+			runCheckHTTPPathParamUUIDCase(t, tc.handlerSrc, tc.uuidParams, tc.wantErrors, tc.noHandler, tc.noAuthMount)
 		})
 	}
+}
+
+// runCheckHTTPPathParamUUIDCase sets up a temp dir with handler and contract
+// fixtures for checkCH05 and asserts the expected error messages.
+func runCheckHTTPPathParamUUIDCase(
+	t *testing.T,
+	handlerSrc string,
+	uuidParams []string,
+	wantErrors []string,
+	noHandler bool,
+	noAuthMount bool,
+) {
+	t.Helper()
+	root := t.TempDir()
+	const contractID = "http.test.uuid.v1"
+	sliceRelDir := "cells/testcell/slices/testslice"
+
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+	writeUUIDHandlerIfNeeded(t, sliceAbsDir, contractID, handlerSrc, noHandler, noAuthMount)
+
+	project := buildUUIDTestProject(t, contractID, sliceRelDir, uuidParams, noHandler)
+
+	validator := NewValidator(project, root, clock.Real())
+	results := validator.checkCH05()
+
+	var errs []ValidationResult
+	for _, r := range results {
+		if r.Severity == SeverityError {
+			errs = append(errs, r)
+		}
+	}
+
+	require.Len(t, errs, len(wantErrors), "error count mismatch")
+	for i, want := range wantErrors {
+		assert.Contains(t, errs[i].Message, want)
+	}
+
+	if noHandler {
+		assert.Empty(t, results, "expected no findings when no handler exists")
+	}
+}
+
+// writeUUIDHandlerIfNeeded writes the handler Go source file into sliceAbsDir
+// unless noHandler is set.
+func writeUUIDHandlerIfNeeded(t *testing.T, sliceAbsDir, contractID, handlerSrc string, noHandler, noAuthMount bool) {
+	t.Helper()
+	if noHandler || handlerSrc == "" {
+		return
+	}
+	if noAuthMount {
+		// Write handler src without auth.Mount boilerplate to test fail-closed.
+		path := filepath.Join(sliceAbsDir, "handler.go")
+		content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + handlerSrc
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	} else {
+		writeUUIDHandlerFile(t, sliceAbsDir, contractID, handlerSrc)
+	}
+}
+
+// buildUUIDTestProject returns the ProjectMeta for a CH-05 test case.
+func buildUUIDTestProject(t *testing.T, contractID, sliceRelDir string, uuidParams []string, noHandler bool) *metadata.ProjectMeta {
+	t.Helper()
+	if noHandler {
+		return &metadata.ProjectMeta{
+			Cells:      map[string]*metadata.CellMeta{},
+			Slices:     map[string]*metadata.SliceMeta{},
+			Contracts:  map[string]*metadata.ContractMeta{},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+	}
+
+	project := makeProject(contractID, sliceRelDir)
+	project.Contracts[contractID] = buildUUIDContract(contractID, uuidParams)
+	return project
+}
+
+// buildUUIDContract returns a ContractMeta for the given uuidParams set. When
+// uuidParams is empty, returns a contract with a non-uuid path param instead.
+func buildUUIDContract(contractID string, uuidParams []string) *metadata.ContractMeta {
+	if len(uuidParams) == 0 {
+		return &metadata.ContractMeta{
+			ID:        contractID,
+			Kind:      "http",
+			OwnerCell: metadatatest.CellIDTestCell,
+			Lifecycle: "active",
+			File:      "contracts/http/test/uuid/v1/contract.yaml",
+			Endpoints: metadata.EndpointsMeta{
+				HTTP: &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/config/{key}",
+					SuccessStatus: 200,
+					PathParams: map[string]metadata.ParamSchema{
+						"key": {Type: "string"}, // no format:uuid
+					},
+				},
+			},
+		}
+	}
+	return makeUUIDContract(contractID, "contracts/http/test/uuid/v1/contract.yaml", uuidParams)
 }
 
 func TestCheckHTTPPathParamUUID_GeneratedHandlerInternalSegment(t *testing.T) {

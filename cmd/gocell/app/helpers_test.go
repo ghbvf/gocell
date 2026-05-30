@@ -65,24 +65,31 @@ func TestBuildLocatorOptions(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			opts, err := buildLocatorOptions(tc.layout, tc.manifest)
-			if tc.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
-				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(opts) != tc.wantOptCount {
-				t.Errorf("option count = %d, want %d", len(opts), tc.wantOptCount)
-			}
+			runBuildLocatorOptionsCase(t, tc.layout, tc.manifest, tc.wantErr, tc.wantOptCount)
 		})
+	}
+}
+
+// runBuildLocatorOptionsCase is a helper for TestBuildLocatorOptions.
+func runBuildLocatorOptionsCase(t *testing.T, layout, manifest, wantErr string, wantOptCount int) {
+	t.Helper()
+	opts, err := buildLocatorOptions(layout, manifest)
+	if wantErr != "" {
+		if err == nil {
+			t.Fatalf("expected error containing %q, got nil", wantErr)
+		}
+		if !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("error %q does not contain %q", err.Error(), wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(opts) != wantOptCount {
+		t.Errorf("option count = %d, want %d", len(opts), wantOptCount)
 	}
 }
 
@@ -93,73 +100,49 @@ func TestBuildLocatorOptions_ModeApplied(t *testing.T) {
 	manifestContent := []byte("version: v1\nmodules:\n  - path: .\n")
 
 	t.Run("conventional overrides manifest file auto-detect", func(t *testing.T) {
-		opts, err := buildLocatorOptions("conventional", "")
-		if err != nil {
-			t.Fatalf("buildLocatorOptions: %v", err)
-		}
 		// fsys has .gocell/manifest.yaml — auto would pick Manifest;
 		// WithLocatorMode(Conventional) must override that.
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		loc, err := metadata.NewLocatorFS(fsys, opts...)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		if loc.Mode() != metadata.LocatorConventional {
-			t.Errorf("mode = %v, want LocatorConventional", loc.Mode())
-		}
+		requireLocatorMode(t, "conventional", "", fsys, metadata.LocatorConventional)
 	})
 
 	t.Run("manifest forces manifest mode", func(t *testing.T) {
-		opts, err := buildLocatorOptions("manifest", "")
-		if err != nil {
-			t.Fatalf("buildLocatorOptions: %v", err)
-		}
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		loc, err := metadata.NewLocatorFS(fsys, opts...)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		if loc.Mode() != metadata.LocatorManifest {
-			t.Errorf("mode = %v, want LocatorManifest", loc.Mode())
-		}
+		requireLocatorMode(t, "manifest", "", fsys, metadata.LocatorManifest)
 	})
 
 	t.Run("auto without manifest → conventional", func(t *testing.T) {
-		opts, err := buildLocatorOptions("", "")
-		if err != nil {
-			t.Fatalf("buildLocatorOptions: %v", err)
-		}
 		// No .gocell/manifest.yaml → auto-detect falls back to conventional.
-		fsys := fstest.MapFS{}
-		loc, err := metadata.NewLocatorFS(fsys, opts...)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		if loc.Mode() != metadata.LocatorConventional {
-			t.Errorf("mode = %v, want LocatorConventional", loc.Mode())
-		}
+		requireLocatorMode(t, "", "", fstest.MapFS{}, metadata.LocatorConventional)
 	})
 
 	t.Run("auto with manifest → manifest mode", func(t *testing.T) {
-		opts, err := buildLocatorOptions("auto", "")
-		if err != nil {
-			t.Fatalf("buildLocatorOptions: %v", err)
-		}
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		loc, err := metadata.NewLocatorFS(fsys, opts...)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		if loc.Mode() != metadata.LocatorManifest {
-			t.Errorf("mode = %v, want LocatorManifest", loc.Mode())
-		}
+		requireLocatorMode(t, "auto", "", fsys, metadata.LocatorManifest)
 	})
+}
+
+// requireLocatorMode builds locator options from layout/manifest, creates a
+// NewLocatorFS with fsys, and asserts the resolved mode equals wantMode.
+func requireLocatorMode(t *testing.T, layout, manifest string, fsys fstest.MapFS, wantMode metadata.LocatorMode) {
+	t.Helper()
+	opts, err := buildLocatorOptions(layout, manifest)
+	if err != nil {
+		t.Fatalf("buildLocatorOptions: %v", err)
+	}
+	loc, err := metadata.NewLocatorFS(fsys, opts...)
+	if err != nil {
+		t.Fatalf("NewLocatorFS: %v", err)
+	}
+	if loc.Mode() != wantMode {
+		t.Errorf("mode = %v, want %v", loc.Mode(), wantMode)
+	}
 }
 
 // TestAddLocatorFlags verifies that addLocatorFlags registers --layout and
@@ -169,25 +152,12 @@ func TestAddLocatorFlags(t *testing.T) {
 	t.Run("defaults are empty strings", func(t *testing.T) {
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		layout, manifestPath := addLocatorFlags(fs)
-
-		if layout == nil {
-			t.Fatal("layout pointer is nil")
-		}
-		if manifestPath == nil {
-			t.Fatal("manifestPath pointer is nil")
-		}
-		if *layout != "" {
-			t.Errorf("default layout = %q, want empty string", *layout)
-		}
-		if *manifestPath != "" {
-			t.Errorf("default manifestPath = %q, want empty string", *manifestPath)
-		}
+		requireFlagsDefaultEmpty(t, layout, manifestPath)
 	})
 
 	t.Run("flags parse correctly", func(t *testing.T) {
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		layout, manifestPath := addLocatorFlags(fs)
-
 		if err := fs.Parse([]string{"--layout=manifest", "--manifest=custom/manifest.yaml"}); err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
@@ -218,21 +188,45 @@ func TestAddLocatorFlags(t *testing.T) {
 	t.Run("invalid layout value: Parse accepts, buildLocatorOptions rejects", func(t *testing.T) {
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
 		layout, manifestPath := addLocatorFlags(fs)
-
-		// Phase 1: FlagSet accepts any string — no error expected here.
-		if err := fs.Parse([]string{"--layout=bogus"}); err != nil {
-			t.Fatalf("FlagSet.Parse unexpected error for unknown layout string: %v", err)
-		}
-
-		// Phase 2: semantic validation rejects the unknown mode.
-		_, err := buildLocatorOptions(*layout, *manifestPath)
-		if err == nil {
-			t.Fatal("buildLocatorOptions: expected error for layout=bogus, got nil")
-		}
-		if want := "unknown locator mode"; !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not contain %q", err.Error(), want)
-		}
+		requireTwoPhaseLayoutRejection(t, fs, layout, manifestPath)
 	})
+}
+
+// requireFlagsDefaultEmpty asserts that both layout and manifestPath pointers
+// are non-nil and point to empty strings.
+func requireFlagsDefaultEmpty(t *testing.T, layout, manifestPath *string) {
+	t.Helper()
+	if layout == nil {
+		t.Fatal("layout pointer is nil")
+	}
+	if manifestPath == nil {
+		t.Fatal("manifestPath pointer is nil")
+	}
+	if *layout != "" {
+		t.Errorf("default layout = %q, want empty string", *layout)
+	}
+	if *manifestPath != "" {
+		t.Errorf("default manifestPath = %q, want empty string", *manifestPath)
+	}
+}
+
+// requireTwoPhaseLayoutRejection exercises the two-phase validation contract:
+// FlagSet.Parse accepts any string value (phase 1), but buildLocatorOptions
+// rejects unknown mode values (phase 2).
+func requireTwoPhaseLayoutRejection(t *testing.T, fs *flag.FlagSet, layout, manifestPath *string) {
+	t.Helper()
+	// Phase 1: FlagSet accepts any string — no error expected here.
+	if err := fs.Parse([]string{"--layout=bogus"}); err != nil {
+		t.Fatalf("FlagSet.Parse unexpected error for unknown layout string: %v", err)
+	}
+	// Phase 2: semantic validation rejects the unknown mode.
+	_, err := buildLocatorOptions(*layout, *manifestPath)
+	if err == nil {
+		t.Fatal("buildLocatorOptions: expected error for layout=bogus, got nil")
+	}
+	if want := "unknown locator mode"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q does not contain %q", err.Error(), want)
+	}
 }
 
 // TestFindRootFrom verifies that findRootFrom walks up from a starting directory
@@ -240,65 +234,55 @@ func TestAddLocatorFlags(t *testing.T) {
 func TestFindRootFrom(t *testing.T) {
 	cases := []struct {
 		name    string
-		setup   func(base string) string // returns starting dir
-		wantRel string                   // expected root relative to base; "" means base itself
-		wantErr string                   // non-empty → expect error containing this substring
+		setup   func(t *testing.T, base string) string // returns starting dir
+		wantRel string                                  // expected root relative to base; "" means base itself
+		wantErr string                                  // non-empty → expect error containing this substring
 	}{
 		{
 			name: "only go.mod → root found",
-			setup: func(base string) string {
-				if err := os.WriteFile(filepath.Join(base, "go.mod"), []byte("module example.com/m\n"), 0o600); err != nil {
-					t.Fatalf("WriteFile go.mod: %v", err)
-				}
+			setup: func(t *testing.T, base string) string {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(base, "go.mod"), "module example.com/m\n")
 				return base
 			},
 			wantRel: ".",
 		},
 		{
 			name: "only go.work → root found",
-			setup: func(base string) string {
-				if err := os.WriteFile(filepath.Join(base, "go.work"), []byte("go 1.22\n"), 0o600); err != nil {
-					t.Fatalf("WriteFile go.work: %v", err)
-				}
+			setup: func(t *testing.T, base string) string {
+				t.Helper()
+				mustWriteFile(t, filepath.Join(base, "go.work"), "go 1.22\n")
 				return base
 			},
 			wantRel: ".",
 		},
 		{
 			name: "only .gocell/manifest.yaml → root found",
-			setup: func(base string) string {
-				if err := os.MkdirAll(filepath.Join(base, ".gocell"), 0o750); err != nil {
-					t.Fatalf("MkdirAll .gocell: %v", err)
-				}
-				if err := os.WriteFile(filepath.Join(base, ".gocell", "manifest.yaml"), []byte("version: v1\n"), 0o600); err != nil {
-					t.Fatalf("WriteFile manifest.yaml: %v", err)
-				}
+			setup: func(t *testing.T, base string) string {
+				t.Helper()
+				mustMkdirAll(t, filepath.Join(base, ".gocell"))
+				mustWriteFile(t, filepath.Join(base, ".gocell", "manifest.yaml"), "version: v1\n")
 				return base
 			},
 			wantRel: ".",
 		},
 		{
 			name: "nested: lower go.mod found before upper go.work",
-			setup: func(base string) string {
+			setup: func(t *testing.T, base string) string {
+				t.Helper()
 				// base/  has go.work
 				// base/sub/ has go.mod  ← nearest wins
-				if err := os.WriteFile(filepath.Join(base, "go.work"), []byte("go 1.22\n"), 0o600); err != nil {
-					t.Fatalf("WriteFile go.work: %v", err)
-				}
+				mustWriteFile(t, filepath.Join(base, "go.work"), "go 1.22\n")
 				sub := filepath.Join(base, "sub")
-				if err := os.MkdirAll(sub, 0o750); err != nil {
-					t.Fatalf("MkdirAll sub: %v", err)
-				}
-				if err := os.WriteFile(filepath.Join(sub, "go.mod"), []byte("module example.com/sub\n"), 0o600); err != nil {
-					t.Fatalf("WriteFile sub/go.mod: %v", err)
-				}
+				mustMkdirAll(t, sub)
+				mustWriteFile(t, filepath.Join(sub, "go.mod"), "module example.com/sub\n")
 				return sub
 			},
 			wantRel: "sub",
 		},
 		{
 			name: "no marker anywhere → error with new message",
-			setup: func(base string) string {
+			setup: func(_ *testing.T, base string) string {
 				return base
 			},
 			wantErr: "no project root marker",
@@ -306,31 +290,54 @@ func TestFindRootFrom(t *testing.T) {
 	}
 
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			base := t.TempDir()
-			startDir := tc.setup(base)
-
-			got, err := findRootFrom(startDir)
-			if tc.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
-				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			wantAbs := filepath.Join(base, tc.wantRel)
-			if tc.wantRel == "." {
-				wantAbs = base
-			}
-			if got != wantAbs {
-				t.Errorf("findRootFrom(%q) = %q, want %q", startDir, got, wantAbs)
-			}
+			startDir := tc.setup(t, base)
+			runFindRootCase(t, startDir, base, tc.wantRel, tc.wantErr)
 		})
+	}
+}
+
+// runFindRootCase runs findRootFrom(startDir) and asserts the result against
+// wantRel (relative to base) or wantErr.
+func runFindRootCase(t *testing.T, startDir, base, wantRel, wantErr string) {
+	t.Helper()
+	got, err := findRootFrom(startDir)
+	if wantErr != "" {
+		if err == nil {
+			t.Fatalf("expected error containing %q, got nil", wantErr)
+		}
+		if !strings.Contains(err.Error(), wantErr) {
+			t.Errorf("error %q does not contain %q", err.Error(), wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantAbs := filepath.Join(base, wantRel)
+	if wantRel == "." {
+		wantAbs = base
+	}
+	if got != wantAbs {
+		t.Errorf("findRootFrom(%q) = %q, want %q", startDir, got, wantAbs)
+	}
+}
+
+// mustWriteFile writes content to path, fataling on error.
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
+
+// mustMkdirAll creates dir and any parents, fataling on error.
+func mustMkdirAll(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("MkdirAll %s: %v", dir, err)
 	}
 }
 

@@ -42,26 +42,34 @@ func TestNewCellID_PanicsOnInvalid(t *testing.T) {
 		{"space", "foo bar"},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatalf("NewCellID(%q) did not panic", tc.in)
-				}
-				err, ok := r.(*errcode.Error)
-				if !ok {
-					t.Fatalf("NewCellID(%q) panic value type = %T, want *errcode.Error", tc.in, r)
-				}
-				if err.Code != errcode.ErrInternal {
-					t.Fatalf("NewCellID(%q) panic err.Code = %s, want %s", tc.in, err.Code, errcode.ErrInternal)
-				}
-				if !strings.HasPrefix(err.Message, "metadatatest: invalid cell id ") {
-					t.Fatalf("NewCellID(%q) panic message = %q, want prefix %q", tc.in, err.Message, "metadatatest: invalid cell id ")
-				}
-			}()
-			_ = metadatatest.NewCellID(tc.in)
+			assertCellIDPanic(t, tc.in)
 		})
 	}
+}
+
+// assertCellIDPanic calls metadatatest.NewCellID(in) and asserts that it panics
+// with an *errcode.Error carrying ErrInternal and the expected message prefix.
+func assertCellIDPanic(t *testing.T, in string) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("NewCellID(%q) did not panic", in)
+		}
+		err, ok := r.(*errcode.Error)
+		if !ok {
+			t.Fatalf("NewCellID(%q) panic value type = %T, want *errcode.Error", in, r)
+		}
+		if err.Code != errcode.ErrInternal {
+			t.Fatalf("NewCellID(%q) panic err.Code = %s, want %s", in, err.Code, errcode.ErrInternal)
+		}
+		if !strings.HasPrefix(err.Message, "metadatatest: invalid cell id ") {
+			t.Fatalf("NewCellID(%q) panic message = %q, want prefix %q", in, err.Message, "metadatatest: invalid cell id ")
+		}
+	}()
+	_ = metadatatest.NewCellID(in)
 }
 
 func TestPredefinedConstants(t *testing.T) {

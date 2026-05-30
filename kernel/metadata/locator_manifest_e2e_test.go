@@ -181,23 +181,14 @@ func TestLocatorManifest_E2E_CellIDDerivation(t *testing.T) {
 		writeFile(t, filepath.Join(root, "cells", "wallet", "cell.yaml"),
 			cellYAML("wallet", "fin", "wallets"))
 
-		loc, err := NewLocator(root, WithLocatorMode(LocatorManifest))
-		if err != nil {
-			t.Fatalf("NewLocator: %v", err)
+		sources := requireE2EDiscover(t, root)
+		s := findSourceByKindPath(sources, SourceCell, "cells/wallet/cell.yaml")
+		if s == nil {
+			t.Fatal("SourceCell for wallet not found")
 		}
-		sources, err := loc.Discover()
-		if err != nil {
-			t.Fatalf("Discover: %v", err)
+		if s.CellID != "wallet" {
+			t.Errorf("CellID = %q, want %q", s.CellID, "wallet")
 		}
-		for _, s := range sources {
-			if s.Kind == SourceCell && s.Path == "cells/wallet/cell.yaml" {
-				if s.CellID != "wallet" {
-					t.Errorf("CellID = %q, want %q", s.CellID, "wallet")
-				}
-				return
-			}
-		}
-		t.Fatal("SourceCell for wallet not found")
 	})
 
 	t.Run("non-conventional layout SourceCell is discoverable", func(t *testing.T) {
@@ -212,30 +203,57 @@ func TestLocatorManifest_E2E_CellIDDerivation(t *testing.T) {
 			filepath.Join(root, "services", "payments", "cells", "charge", "cell.yaml"),
 			cellYAML("charge", "pay", "charges"))
 
-		loc, err := NewLocator(root, WithLocatorMode(LocatorManifest))
-		if err != nil {
-			t.Fatalf("NewLocator: %v", err)
+		sources := requireE2EDiscover(t, root)
+		s := findSourceByKind(sources, SourceCell)
+		if s == nil {
+			t.Fatal("SourceCell not found for non-conventional layout fixture")
 		}
-		sources, err := loc.Discover()
-		if err != nil {
-			t.Fatalf("Discover: %v", err)
+		// Non-conventional layout: the Locator cannot derive CellID
+		// from a path that does not match cells/<id>/cell.yaml.
+		// MetadataSource.CellID must be empty; callers must read
+		// the cell.yaml `id` field or require slice.yaml to declare
+		// belongsToCell explicitly (per MetadataSource.CellID godoc).
+		if s.CellID != "" {
+			t.Errorf("non-conventional layout source CellID = %q, want empty"+
+				" (only conventional walk can derive it)", s.CellID)
 		}
-		for _, s := range sources {
-			if s.Kind == SourceCell {
-				// Non-conventional layout: the Locator cannot derive CellID
-				// from a path that does not match cells/<id>/cell.yaml.
-				// MetadataSource.CellID must be empty; callers must read
-				// the cell.yaml `id` field or require slice.yaml to declare
-				// belongsToCell explicitly (per MetadataSource.CellID godoc).
-				if s.CellID != "" {
-					t.Errorf("non-conventional layout source CellID = %q, want empty"+
-						" (only conventional walk can derive it)", s.CellID)
-				}
-				return
-			}
-		}
-		t.Fatal("SourceCell not found for non-conventional layout fixture")
 	})
+}
+
+// requireE2EDiscover creates a manifest-mode Locator rooted at root, calls
+// Discover, and fatals on any error.
+func requireE2EDiscover(t *testing.T, root string) []MetadataSource {
+	t.Helper()
+	loc, err := NewLocator(root, WithLocatorMode(LocatorManifest))
+	if err != nil {
+		t.Fatalf("NewLocator: %v", err)
+	}
+	sources, err := loc.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	return sources
+}
+
+// findSourceByKindPath returns the first MetadataSource with the given kind and
+// path, or nil if not found.
+func findSourceByKindPath(sources []MetadataSource, kind SourceKind, path string) *MetadataSource {
+	for i := range sources {
+		if sources[i].Kind == kind && sources[i].Path == path {
+			return &sources[i]
+		}
+	}
+	return nil
+}
+
+// findSourceByKind returns the first MetadataSource with the given kind, or nil.
+func findSourceByKind(sources []MetadataSource, kind SourceKind) *MetadataSource {
+	for i := range sources {
+		if sources[i].Kind == kind {
+			return &sources[i]
+		}
+	}
+	return nil
 }
 
 // cellKeys returns sorted cell IDs from a ProjectMeta, used in error messages.

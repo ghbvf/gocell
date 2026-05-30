@@ -149,30 +149,35 @@ func TestProjectionConsistency01(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			v := NewValidator(tc.project, "", clock.Real())
-			results := v.validateProjectionConsistency()
-
-			// filter to PROJECTION-CONSISTENCY-01 results
-			var got []ValidationResult
-			for _, r := range results {
-				if r.Code == codePROJECTIONCONSISTENCY01 {
-					got = append(got, r)
-				}
-			}
-
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s) with code %s, got %d: %v",
-					tc.wantErrCount, codePROJECTIONCONSISTENCY01, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-			}
+			runProjectionConsistencyCase(t, tc.project, tc.wantErrCount, tc.wantField)
 		})
+	}
+}
+
+// runProjectionConsistencyCase is a helper for TestProjectionConsistency01.
+func runProjectionConsistencyCase(t *testing.T, project *metadata.ProjectMeta, wantErrCount int, wantField string) {
+	t.Helper()
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateProjectionConsistency()
+
+	var got []ValidationResult
+	for _, r := range results {
+		if r.Code == codePROJECTIONCONSISTENCY01 {
+			got = append(got, r)
+		}
+	}
+
+	if len(got) != wantErrCount {
+		t.Fatalf("expected %d result(s) with code %s, got %d: %v",
+			wantErrCount, codePROJECTIONCONSISTENCY01, len(got), got)
+	}
+	if wantErrCount > 0 {
+		r := got[0]
+		if r.Severity != SeverityError {
+			t.Errorf("expected SeverityError, got %s", r.Severity)
+		}
+		if r.Field != wantField {
+			t.Errorf("expected field %q, got %q", wantField, r.Field)
+		}
 	}
 }
