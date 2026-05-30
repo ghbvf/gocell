@@ -1,8 +1,8 @@
 // Package archtest_test — pg_schema_guard_invariants_test.go
 //
 // File invariants:
-//   - INVARIANT: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01
-//   - INVARIANT: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01
+//   - INVARIANT: MIGRATION-FORWARD-REBUILD-ANNOTATION-01
+//   - INVARIANT: MIGRATION-NO-GUC-RESIDUE-01
 //   - INVARIANT: SCHEMA-GUARD-COVERS-EVERY-OWNED-TABLE-01
 
 package archtest
@@ -19,185 +19,8 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-// ---------------------------------------------------------------------------
-// INVARIANT: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01 (Medium AI-robust)
-//
-// Every migration Down section that contains a destructive DDL operation
-// (DROP TABLE, DROP COLUMN, DROP CONSTRAINT, DROP INDEX, DROP TRIGGER,
-// DROP FUNCTION, TRUNCATE, DELETE FROM) must include the GUC fail-closed
-// guard: current_setting('gocell.allow_destructive_down', ...).
-//
-// Rationale: the Go-layer DestructiveDownPermit already protects the
-// Migrator.Down code path; this archtest ensures the SQL layer cannot be
-// bypassed by direct goose CLI / psql usage. Any migration that lacks the
-// guard is caught at archtest time, not at runtime.
-//
-// AI-robust: Medium — string pattern match on SQL content caught at test time.
-// ---------------------------------------------------------------------------
-
-// destructiveOps are the DDL tokens that classify a Down section as
-// "data-destructive" — operations that delete row-level or column-level data
-// and require the SQL-side fail-closed GUC guard.
-//
-// Scope rationale:
-//   - DROP TABLE: destroys all row data in the table. Operator opt-in required.
-//   - TRUNCATE: destroys all row data in the table. Operator opt-in required.
-//   - DELETE FROM: destroys row data matching a predicate. Operator opt-in required.
-//   - DROP COLUMN: destroys all data stored in the column. Operator opt-in required;
-//     a rollback that drops a column is irreversible without a DB restore or
-//     manual backfill. Included alongside DROP TABLE / TRUNCATE for consistency.
-//
-// Schema-only operations (DROP INDEX, DROP CONSTRAINT, DROP TRIGGER,
-// DROP FUNCTION) are NOT in this set — they alter schema shape but do not
-// delete stored row or column data; binding them to the same gate would
-// over-pressurize routine schema evolution.
-var destructiveOps = []string{
-	"DROP TABLE",
-	"DROP COLUMN",
-	"TRUNCATE",
-	"DELETE FROM",
-}
-
-// gucGuardRE matches the required GUC check pattern in the Down section.
-var gucGuardRE = regexp.MustCompile(`current_setting\s*\(\s*'gocell\.allow_destructive_down'`)
-
 // gooseDownMarker marks the start of the Down section in a migration file.
 const gooseDownMarker = "-- +goose Down"
-
-// gucGuardGrandfatheredMigrations is intentionally empty.
-//
-// S3F retrofits the GUC fail-closed guard on every pre-S3F migration whose
-// Down section drops row-level data (007, 012, 014/015 already share the
-// refresh_tokens GUC predecessor; 001/004/008/020 retrofitted by S3F). All
-// data-destructive Down sections in the repository now carry the guard.
-//
-// This map remains as a typed extension point: if a future migration
-// genuinely cannot host the guard (e.g. requires a non-postgres dialect),
-// add it here with a concrete reason. An empty map is the intended steady
-// state — every entry that appears later must close cleanly, not stay as
-// a permanent carve-out (per CLAUDE.md "no soft fallback" guidance).
-var gucGuardGrandfatheredMigrations = map[string]string{}
-
-// TestArchtest_MigrationDestructiveDownGUCGuard asserts that every migration
-// file with a destructive Down section contains the GUC fail-closed guard,
-// unless it is in the grandfathered allowlist.
-//
-// Migrations in gucGuardGrandfatheredMigrations are temporarily exempt (pre-S3F).
-// Any migration 022+ must include the guard for destructive Down sections.
-//
-// To confirm this test catches violations (TDD RED):
-//  1. After Agent A adds guards to 007/017/018/019, temporarily remove the
-//     GUC guard block from 017_users.sql Down section.
-//  2. Run: go test ./tools/archtest/... -run TestArchtest_MigrationDestructiveDownGUCGuard
-//  3. Test must FAIL. Restore the guard, test must PASS.
-func TestArchtest_MigrationDestructiveDownGUCGuard(t *testing.T) {
-	root := findModuleRoot(t)
-	// DirsScope takes paths relative to the module root.
-	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
-	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
-		base := filepath.Base(cc.AbsPath)
-
-		// Skip grandfathered pre-S3F migrations.
-		if reason, grandfathered := gucGuardGrandfatheredMigrations[base]; grandfathered {
-			t.Logf("MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01: %s grandfathered (%s)", base, reason)
-			return
-		}
-
-		content := string(cc.Bytes)
-
-		// Split into Up and Down sections.
-		downIdx := strings.Index(content, gooseDownMarker)
-		if downIdx < 0 {
-			// No Down section — skip.
-			return
-		}
-		downSection := content[downIdx+len(gooseDownMarker):]
-
-		// Check if the Down section has any destructive operations (case-insensitive).
-		upperDown := strings.ToUpper(downSection)
-		isDestructive := false
-		for _, op := range destructiveOps {
-			if strings.Contains(upperDown, op) {
-				isDestructive = true
-				break
-			}
-		}
-		if !isDestructive {
-			return
-		}
-
-		// Destructive Down must have the GUC guard.
-		if !gucGuardRE.MatchString(downSection) {
-			assert.Fail(t,
-				"migration Down section is destructive but lacks the GUC fail-closed guard",
-				"file: %s\n"+
-					"  Down section contains destructive DDL but no current_setting('gocell.allow_destructive_down') check.\n"+
-					"  Add the guard block at the top of the -- +goose Down section:\n"+
-					"    DO $$ BEGIN\n"+
-					"      IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN\n"+
-					"        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';\n"+
-					"      END IF;\n"+
-					"    END $$;\n"+
-					"  This ensures direct goose CLI / psql usage cannot bypass the Go-layer DestructiveDownPermit.\n"+
-					"  Rule: MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01",
-				cc.Rel,
-			)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// INVARIANT: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01 (Medium AI-robust)
-//
-// Every migration Up (forward) section that destroys an entire table's data
-// (TRUNCATE or DROP TABLE) MUST gate behind a DEDICATED forward-rebuild GUC of
-// the shape current_setting('gocell.allow_<domain>_rebuild', ...). It MUST NOT
-// rely on the destructive-DOWN GUC (gocell.allow_destructive_down) for a forward
-// operation: conflating "I am rolling back" with "I am rebuilding forward" is a
-// semantic-mixing footgun that hides the blast radius of a forward TRUNCATE
-// behind a rollback toggle.
-//
-// Rationale (Strong-Migrations philosophy): a forward migration that wipes a
-// whole table is "dangerous by default" and must carry an explicit operator
-// opt-in distinct from the rollback opt-in. Migration 043_audit_entries_v2
-// established the dedicated-GUC pattern (gocell.allow_audit_rebuild) precisely
-// to decouple forward rebuild from destructive-down; this archtest makes that
-// decoupling a machine rule so a later forward-TRUNCATE migration cannot silently
-// reuse the down GUC (issue #1229 review F4/C2).
-//
-// Scope: whole-table destroyers only (TRUNCATE, DROP TABLE). Column-grained ops
-// (DROP COLUMN) and predicate deletes (DELETE FROM) are a different, finer risk
-// class and are intentionally out of scope — they are not table rebuilds.
-//
-// Bound set today: {012_refresh_tokens_rebuild, 043_audit_entries_v2,
-// 044_outbox_entries_principal}, all of which carry a dedicated allow_*_rebuild
-// GUC. No grandfathering — an empty steady state is the intended shape.
-//
-// AI-robust: Medium — string/regex match on SQL content caught at test time
-// (sibling of MIGRATION-DESTRUCTIVE-DOWN-GUC-GUARD-01). The runtime gate itself
-// (the GUC fail-closed RAISE EXCEPTION in the SQL) is the Hard backstop; this
-// archtest is the regression guard that the gate is present and uses the
-// dedicated forward GUC.
-//
-// Tool blind spot: a destructive op token appearing inside a SQL comment must
-// NOT trigger the requirement (e.g. 040 mentions "TRUNCATE saga_events" in a
-// comment). stripSQLLineComments removes -- line comments before the scan; a
-// destructive token hidden inside a quoted string literal is not handled (no
-// such case exists in the migration corpus today) — documented, not enforced.
-// ---------------------------------------------------------------------------
-
-// forwardRebuildOps are the whole-table data-destroying DDL tokens that, when
-// present in a forward (Up) section, require the dedicated forward-rebuild GUC.
-var forwardRebuildOps = []string{
-	"TRUNCATE",
-	"DROP TABLE",
-}
-
-// forwardRebuildGUCRE matches the required dedicated forward-rebuild GUC in an
-// Up section: current_setting('gocell.allow_<domain>_rebuild', ...). It does NOT
-// match gocell.allow_destructive_down (the rollback GUC), which is the whole
-// point — a forward destructive rebuild must use its own opt-in.
-var forwardRebuildGUCRE = regexp.MustCompile(`current_setting\s*\(\s*'gocell\.allow_[a-z_]*rebuild'`)
 
 // stripSQLLineComments removes -- line comments from SQL so destructive-op
 // detection inspects executable statements only, not prose in runbook comments.
@@ -211,50 +34,181 @@ func stripSQLLineComments(sql string) string {
 	return strings.Join(lines, "\n")
 }
 
-// TestArchtest_MigrationDestructiveUpRebuildGUCGuard asserts that every migration
-// whose Up section TRUNCATEs or DROPs a whole table gates behind a dedicated
-// forward-rebuild GUC (gocell.allow_*_rebuild), not the destructive-down GUC.
+// upSectionOf returns the Up section of a migration file (from the start
+// of the file to the -- +goose Down marker, or the whole file if no Down).
+func upSectionOf(content string) string {
+	if idx := strings.Index(content, gooseDownMarker); idx >= 0 {
+		return content[:idx]
+	}
+	return content
+}
+
+// isAtLeastMigration017 reports whether a migration filename's numeric prefix
+// is >= 17 (e.g. "017_users.sql" → true, "016_refresh_tokens_idle_grace.sql" → false).
+func isAtLeastMigration017(filename string) bool {
+	migVersionRe := regexp.MustCompile(`^(\d+)_`)
+	m := migVersionRe.FindStringSubmatch(filename)
+	if m == nil {
+		return false
+	}
+	// Trim leading zeros for comparison.
+	numStr := strings.TrimLeft(m[1], "0")
+	if numStr == "" {
+		numStr = "0"
+	}
+	var n int
+	for _, ch := range numStr {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n >= 17
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT: MIGRATION-FORWARD-REBUILD-ANNOTATION-01 (Medium AI-robust)
 //
-// To confirm this test catches violations (TDD RED):
-//  1. In 044_outbox_entries_principal.sql Up block, change
-//     current_setting('gocell.allow_outbox_rebuild', ...) to
-//     current_setting('gocell.allow_destructive_down', ...).
-//  2. Run: go test ./tools/archtest/... -run TestArchtest_MigrationDestructiveUpRebuildGUCGuard
-//  3. Test must FAIL. Restore the dedicated GUC, test must PASS.
-func TestArchtest_MigrationDestructiveUpRebuildGUCGuard(t *testing.T) {
+// Every migration Up section that contains a whole-table destructive operation
+// (TRUNCATE or DROP TABLE, after stripping line comments) MUST carry exactly
+// one annotation of the form:
+//
+//	-- +gocell forward-rebuild target=<table_name>
+//
+// in the original (un-stripped) Up text. The annotation acts as the
+// machine-readable contract between the SQL file and the Go phase0 permit
+// gate: phase0 parses pending migrations, extracts forward-rebuild targets,
+// and fails-closed if no matching ForwardRebuildPermit is provided by the
+// caller. This archtest is the regression guard that the annotation is present
+// and syntactically valid (target is a legal identifier) — it does NOT test
+// the runtime gate itself.
+//
+// AI-robust: Medium — SQL text regex, caught at test time. The runtime gate
+// (Go phase0 permit check) is the Hard backstop; this archtest ensures the
+// annotation is always present so phase0 has something to act on.
+//
+// Blind spot: destructive token inside a quoted string literal is not
+// stripped (no such case in the corpus today) — documented, not enforced.
+// A TRUNCATE / DROP TABLE hidden in a block comment (/* ... */) is also not
+// stripped; stripSQLLineComments only removes -- line comments.
+//
+// TDD RED confirmation: run
+//
+//	go test ./tools/archtest/... -run TestArchtest_MigrationForwardRebuildAnnotation
+//
+// Before the SQL files are updated (012/043/044 still carry GUC guards, no
+// +gocell forward-rebuild annotation), the test must FAIL because:
+//   - 012_refresh_tokens_rebuild.sql has TRUNCATE with no annotation
+//   - 043_audit_entries_v2.sql has TRUNCATE with no annotation
+//   - 044_outbox_entries_principal.sql has TRUNCATE with no annotation
+//
+// ---------------------------------------------------------------------------
+
+// forwardRebuildAnnotationRE matches the required +gocell annotation in the
+// raw (un-stripped) Up section. The target must be a valid SQL identifier.
+var forwardRebuildAnnotationRE = regexp.MustCompile(
+	`(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`,
+)
+
+// TestArchtest_MigrationForwardRebuildAnnotation asserts that every migration
+// whose Up section contains TRUNCATE or DROP TABLE (after stripping line
+// comments) carries exactly one -- +gocell forward-rebuild target=<table>
+// annotation in the raw Up text.
+//
+// Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01
+func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
 	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
-		upSection := stripSQLLineComments(upSectionOf(string(cc.Bytes)))
-		upperUp := strings.ToUpper(upSection)
+		content := string(cc.Bytes)
+		rawUp := upSectionOf(content)
 
-		isWholeTableDestructive := false
-		for _, op := range forwardRebuildOps {
-			if strings.Contains(upperUp, op) {
-				isWholeTableDestructive = true
-				break
-			}
-		}
+		// Detect whole-table destructive ops in the stripped Up section only.
+		strippedUp := stripSQLLineComments(rawUp)
+		upperStripped := strings.ToUpper(strippedUp)
+		isWholeTableDestructive := strings.Contains(upperStripped, "TRUNCATE") ||
+			strings.Contains(upperStripped, "DROP TABLE")
 		if !isWholeTableDestructive {
 			return
 		}
 
-		if !forwardRebuildGUCRE.MatchString(upSection) {
+		// Check raw (un-stripped) Up section for the annotation.
+		matches := forwardRebuildAnnotationRE.FindAllStringSubmatch(rawUp, -1)
+		if len(matches) == 0 {
 			assert.Fail(t,
-				"forward (Up) section destroys a whole table but lacks a dedicated forward-rebuild GUC",
+				"forward (Up) section destroys a whole table but lacks the +gocell forward-rebuild annotation",
 				"file: %s\n"+
 					"  Up section contains TRUNCATE / DROP TABLE but no "+
-					"current_setting('gocell.allow_<domain>_rebuild') guard.\n"+
-					"  A forward destructive rebuild MUST use its own opt-in GUC, NOT "+
-					"gocell.allow_destructive_down (the rollback gate). Add a guard block "+
-					"at the top of the -- +goose Up section, e.g.:\n"+
-					"    DO $$ BEGIN\n"+
-					"      IF <undelivered rows exist>\n"+
-					"         AND current_setting('gocell.allow_outbox_rebuild', true) IS DISTINCT FROM 'true' THEN\n"+
-					"        RAISE EXCEPTION 'rebuild blocked: GUC gocell.allow_outbox_rebuild not set';\n"+
-					"      END IF;\n"+
-					"    END $$;\n"+
-					"  Rule: MIGRATION-DESTRUCTIVE-UP-REBUILD-GUC-01",
+					"'-- +gocell forward-rebuild target=<table>' annotation.\n"+
+					"  Add exactly one annotation at the top of the -- +goose Up section, e.g.:\n"+
+					"    -- +gocell forward-rebuild target=audit_entries\n"+
+					"  The Go phase0 gate (ForwardRebuildPermit) uses this annotation to fail-closed\n"+
+					"  when no matching permit is provided by the caller.\n"+
+					"  Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
+				cc.Rel,
+			)
+			return
+		}
+		if len(matches) > 1 {
+			assert.Fail(t,
+				"forward (Up) section has more than one +gocell forward-rebuild annotation",
+				"file: %s has %d annotations; expected exactly one per migration.\n"+
+					"Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01",
+				cc.Rel, len(matches),
+			)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT: MIGRATION-NO-GUC-RESIDUE-01 (Medium AI-robust)
+//
+// No migration SQL file (Up or Down section, including comments) may contain
+// the substring "gocell.allow_" (case-insensitive). The four GUC variables
+// that previously guarded destructive operations:
+//
+//	gocell.allow_destructive_down
+//	gocell.allow_audit_rebuild
+//	gocell.allow_outbox_rebuild
+//	gocell.allow_destructive_refresh_tokens_rebuild
+//
+// have been replaced by the typed Go ForwardRebuildPermit / DestructiveDownPermit
+// channel. Any residual reference — whether in current_setting(), set_config(),
+// or a comment — is a stale artefact that should be removed.
+//
+// AI-robust: Medium — substring scan on SQL text, caught at test time.
+//
+// TDD RED confirmation: run
+//
+//	go test ./tools/archtest/... -run TestArchtest_MigrationNoGUCResidue
+//
+// Before the SQL files are updated, the test must FAIL because multiple
+// migration files still contain "gocell.allow_" strings (001, 002, 003, 007,
+// 008, 012, 014, 016, 043, 044, etc.).
+//
+// ---------------------------------------------------------------------------
+
+// TestArchtest_MigrationNoGUCResidue asserts that no migration SQL file
+// contains "gocell.allow_" (case-insensitive), confirming the four legacy GUC
+// variables have been fully removed and replaced by the typed permit channel.
+//
+// Rule: MIGRATION-NO-GUC-RESIDUE-01
+func TestArchtest_MigrationNoGUCResidue(t *testing.T) {
+	root := findModuleRoot(t)
+	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
+	scanner.EachContentFile(t, scope, []string{".sql"}, func(t *testing.T, cc scanner.ContentContext) {
+		content := string(cc.Bytes)
+		if strings.Contains(strings.ToLower(content), "gocell.allow_") {
+			assert.Fail(t,
+				"migration SQL file contains residual GUC reference",
+				"file: %s\n"+
+					"  Contains 'gocell.allow_' which is a reference to the legacy GUC variables\n"+
+					"  (gocell.allow_destructive_down / gocell.allow_audit_rebuild /\n"+
+					"   gocell.allow_outbox_rebuild / gocell.allow_destructive_refresh_tokens_rebuild).\n"+
+					"  These GUC variables have been replaced by the typed Go permit channel\n"+
+					"  (ForwardRebuildPermit / DestructiveDownPermit). Remove all references,\n"+
+					"  including current_setting() calls, set_config() calls, and comments.\n"+
+					"  Rule: MIGRATION-NO-GUC-RESIDUE-01",
 				cc.Rel,
 			)
 		}
@@ -379,36 +333,4 @@ func TestArchtest_SchemaGuardCoversEveryOwnedTable(t *testing.T) {
 				"verify it is a pre-017 table or update the registry", guardedTable)
 		}
 	}
-}
-
-// isAtLeastMigration017 reports whether a migration filename's numeric prefix
-// is >= 17 (e.g. "017_users.sql" → true, "016_refresh_tokens_idle_grace.sql" → false).
-func isAtLeastMigration017(filename string) bool {
-	migVersionRe := regexp.MustCompile(`^(\d+)_`)
-	m := migVersionRe.FindStringSubmatch(filename)
-	if m == nil {
-		return false
-	}
-	// Trim leading zeros for comparison.
-	numStr := strings.TrimLeft(m[1], "0")
-	if numStr == "" {
-		numStr = "0"
-	}
-	var n int
-	for _, ch := range numStr {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-		n = n*10 + int(ch-'0')
-	}
-	return n >= 17
-}
-
-// upSectionOf returns the Up section of a migration file (from the start
-// of the file to the -- +goose Down marker, or the whole file if no Down).
-func upSectionOf(content string) string {
-	if idx := strings.Index(content, gooseDownMarker); idx >= 0 {
-		return content[:idx]
-	}
-	return content
 }

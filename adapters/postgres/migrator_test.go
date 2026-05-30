@@ -211,3 +211,26 @@ func TestMigrator_Down_RequiresDestructiveDownPermit(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
+
+func TestAllowForwardRebuild(t *testing.T) {
+	permit, err := AllowForwardRebuild(43, "  audit_entries v2 populated rebuild  ")
+	require.NoError(t, err)
+	assert.Equal(t, int64(43), permit.MigrationNumber())
+	assert.Equal(t, "audit_entries v2 populated rebuild", permit.Reason(),
+		"reason must be trimmed, matching AllowDestructiveDown")
+
+	// Empty reason is rejected — every break-glass permit must carry an audit trail.
+	permit, err = AllowForwardRebuild(43, " \t ")
+	require.Error(t, err)
+	assert.Nil(t, permit)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+
+	// Non-positive migration number is rejected — goose Source.Version starts at 1.
+	permit, err = AllowForwardRebuild(0, "valid reason")
+	require.Error(t, err)
+	assert.Nil(t, permit)
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
