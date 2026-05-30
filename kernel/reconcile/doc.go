@@ -3,11 +3,13 @@
 // Reconciler. It is delivered across stacked PRs: PR-A2 landed the minimal core
 // documented below (the Reconciler interface, Request / Result, and the
 // PermanentError classifier); PR-A3 landed the scheduling Loop — transplanted
-// from runtime/command.SweeperLifecycle — which is present from that commit on.
+// from runtime/command.SweeperLifecycle — which is present from that commit on;
+// PR-A4 landed the Trigger source abstraction (TickerTrigger / ChannelTrigger).
 // Comments here describe how each type is consumed by the Loop to pin its
 // contract. Later PRs refine scheduling (PR-A5 adds a rate-limited delaying
 // queue + dirty dedup) and construction (PR-A7 privatizes the Loop constructor
-// behind a Builder); see the design ADR for the staged plan.
+// behind a Builder, wiring a Trigger's output into the Loop's queue); see the
+// design ADR for the staged plan.
 //
 // # When to use
 //
@@ -35,10 +37,25 @@
 //	PermanentError / IsPermanent — non-retryable error classification
 //
 // controller-runtime abstractions deliberately dropped: Informer / CRD watch,
-// Predicate, Manager, Source, Builder.For·Owns·Watches, Result.Requeue (bool),
-// Result.Priority. GoCell entities live in a cell-local table addressed by a
-// single opaque EntityID — there is no namespace dimension and no K8s control
-// plane to watch.
+// Predicate, Manager, Source.Informer (informer-bound watch),
+// Builder.For·Owns·Watches, Result.Requeue (bool), Result.Priority. GoCell
+// entities live in a cell-local table addressed by a single opaque EntityID —
+// there is no namespace dimension and no K8s control plane to watch.
+//
+// # Trigger (PR-A4)
+//
+// A Trigger is the source of reconcile work — GoCell's minimal analog of
+// controller-runtime's source.Source, feeding Requests into the Loop's queue:
+//
+//	Trigger       — Start(ctx, chan<- Request) error  (non-blocking; block-don't-drop)
+//	TickerTrigger — emits a zero-value Request{} resync pulse every interval, off
+//	                an injected clock.Clock (deterministically testable; replaces
+//	                the informer resync GoCell lacks)
+//	ChannelTrigger— forwards Requests from an external <-chan (e.g. an outbox
+//	                consumer waking specific entities)
+//
+// The Loop's Source field is the seam a Trigger feeds; the Builder (PR-A7) wires
+// a Trigger's output channel into it.
 //
 // # Reconciler implementation pattern
 //
@@ -74,11 +91,15 @@
 //     { EntityID string }.
 //   - RECONCILE-RESULT-FIELDS-FROZEN-01 (PR-A2): Result's field set is exactly
 //     { RequeueAfter time.Duration } (no Requeue bool / Priority int).
-//   - PROD-CLOCK-INJECTION-01 (PR-A3): the Loop's control-plane ticker / probe
+//   - PROD-CLOCK-INJECTION-01 (PR-A3): the Loop's control-plane probe / requeue
 //     timers are confined to the sealed controlPlaneClock type; kernel/reconcile
 //     becomes a sanctioned control-plane host (alongside runtime/command) when
 //     the Loop + clock carve-out land in PR-A3 — it is NOT yet enforced for this
-//     package at the PR-A2 commit.
+//     package at the PR-A2 commit. The TickerTrigger (PR-A4) does NOT use this
+//     carve-out: its cadence is driven by an injected clock.Clock, so it makes
+//     no stdlib time.* call.
+//   - RECONCILE-TRIGGER-INTERFACE-FROZEN-01 (PR-A4): Trigger's method set is
+//     exactly Start(context.Context, chan<- Request) error (send-only sink).
 //
 // ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 // ref: docs/architecture/202605291600-661-adr-kernel-reconcile-design.md
