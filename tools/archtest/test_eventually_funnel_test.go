@@ -1,6 +1,7 @@
 package archtest
 
 // INVARIANT: TEST-EVENTUALLY-FUNNEL-01
+//   - INVARIANT: TEST-DETERMINISTIC-NO-TIMEOUT-PARAM-01
 //
 // test_eventually_funnel_test.go — Hard upstream funnel for
 // pkg/testutil/testwait.External, paired with the Hard downstream
@@ -738,4 +739,160 @@ func scanFileForIndirectEventuallyReferences(
 	}
 
 	return out
+}
+
+// TestEventuallyFunnel_DeterministicNoTimeoutParam locks the signature of
+// testwait.Deterministic: its non-variadic parameters must not include a
+// time.Duration argument. This enforces the design decision that Deterministic
+// is a deterministic-signal wait, not a latency-budget wait — any
+// caller-supplied timeout would be a latency budget (the root cause of
+// race-CI flakes in observer_test.go, issue #1320).
+//
+// AI-robust grading:
+//   - Hard downstream: archtest resolves the *types.Signature of Deterministic
+//     via go/types and fails immediately if any non-variadic parameter has type
+//     time.Duration. The (callee, form) check is unique — no other shape can
+//     introduce a timeout parameter without tripping this test.
+//   - Medium upstream: "forbid adding a new parameter" is a Go-language ceiling.
+//     The axis "who may declare a given function's parameters" is not expressible
+//     in the Go type system; no type-level gate can prevent a PR from adding
+//     `timeout time.Duration` to the Deterministic signature. This is the same
+//     permanent ceiling shape as #851 (SPAN-SETATTR-HOLDER-SEAL),
+//     #893 (HEALTHZ-HOLDER-SEAL), and #1282 (OUTBOX-RECONSTRUCTION-CALLER);
+//     tracked as gh issue #1352 (won't-do).
+//
+// Blind spots of this archtest tool (per ai-robust §"工具选定后强制盲区自检"):
+//
+//  1. Type alias bypass: `type Budget = time.Duration` — does types.Identical
+//     cover aliases? Yes: types.Identical uses structural identity for named
+//     types and resolves aliases to their underlying type, so
+//     `types.Identical(param.Type(), timeDurationType)` returns true for both
+//     `time.Duration` and any alias thereof. This blind spot is CLOSED.
+//  2. New wrapper function: a PR could add a new exported function
+//     DeterministicWithTimeout(t TB, signal <-chan T, timeout time.Duration)
+//     that internally calls Deterministic. This archtest only locks
+//     Deterministic's own signature, not wrapper patterns; adding such a
+//     wrapper would not be caught. This is a known open blind spot — mitigation
+//     requires a broader "no exported testwait function may accept time.Duration"
+//     rule, which would require scanning all exported funcs in the package.
+//     Accepted as low risk: the exported API of pkg/testutil/testwait is small
+//     and reviewed on every PR.
+//  3. Deterministic renamed: if the function is renamed, this archtest silently
+//     stops guarding it. Mitigated by the fact that any rename is a breaking
+//     change visible in diff and reviewed.
+//
+// Tool: RunTyped + *types.Package.Scope().Lookup + *types.Signature parameter
+// iteration. Reuses the existing module-wide typed load.
+func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
+	t.Parallel()
+
+	const (
+		deterministicFuncName = "Deterministic"
+		timePkgPath           = "time"
+		durationTypeName      = "Duration"
+		ruleID                = "TEST-DETERMINISTIC-NO-TIMEOUT-PARAM-01"
+	)
+	// Module-path-agnostic (ARCHTEST-MODULE-PATH-FUNNEL-01 / #1302): derive the
+	// testwait import path from the single sanctioned PlatformModulePath const
+	// (external.go) instead of hard-coding "github.com/ghbvf/gocell/..." so an
+	// external Cell repo can run this rule against its own module.
+	testwaitPkgPath := PlatformModulePath + "/pkg/testutil/testwait"
+
+	var (
+		sigFound         bool
+		violations       []string
+		timeDurationType types.Type
+	)
+
+	scan := func(p *Pass) []Diagnostic {
+		if p.Pkg == nil {
+			return nil
+		}
+
+		// Locate time.Duration type once from any package that imports "time".
+		if timeDurationType == nil {
+			for _, imp := range p.Pkg.Imports() {
+				if imp.Path() == timePkgPath {
+					obj := imp.Scope().Lookup(durationTypeName)
+					if obj != nil {
+						timeDurationType = obj.Type()
+					}
+					break
+				}
+			}
+		}
+
+		// Locate the testwait package and inspect Deterministic's signature.
+		if p.Pkg.Path() != testwaitPkgPath {
+			return nil
+		}
+
+		obj := p.Pkg.Scope().Lookup(deterministicFuncName)
+		if obj == nil {
+			violations = append(violations,
+				"testwait.Deterministic not found in package scope — function renamed?")
+			return nil
+		}
+		sigFound = true
+
+		fn, ok := obj.(*types.Func)
+		if !ok {
+			violations = append(violations,
+				"testwait.Deterministic is not a *types.Func")
+			return nil
+		}
+
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok {
+			violations = append(violations,
+				"testwait.Deterministic has no *types.Signature")
+			return nil
+		}
+
+		// Walk non-variadic parameters. The variadic tail (...any for msgAndArgs)
+		// is excluded: sig.Params() includes all params; sig.Variadic() tells us
+		// the last one is variadic. We check all but the last when variadic.
+		params := sig.Params()
+		paramCount := params.Len()
+		checkUpTo := paramCount
+		if sig.Variadic() && paramCount > 0 {
+			checkUpTo = paramCount - 1
+		}
+
+		if timeDurationType == nil {
+			// time package not yet loaded; will be resolved on a later pass.
+			// Return nil and rely on the post-scan check below.
+			sigFound = false // reset so we re-check
+			return nil
+		}
+
+		for i := range checkUpTo {
+			param := params.At(i)
+			if types.Identical(param.Type(), timeDurationType) {
+				violations = append(violations, fmt.Sprintf(
+					"%s: Deterministic non-variadic param %d (%q) has type time.Duration — "+
+						"Deterministic must not accept a caller-facing timeout; it is a "+
+						"deterministic-signal wait. Caller-supplied timeouts are latency "+
+						"budgets (root cause of race-CI flakes, issue #1320). "+
+						"Use External(t, reason, cond, timeout, tick) for latency-budget waits.",
+					ruleID, i, param.Name(),
+				))
+			}
+		}
+		return nil
+	}
+
+	_ = RunTyped(t, TypedOpts{Tests: true}, []string{"./..."}, scan)
+
+	if !sigFound {
+		t.Errorf("%s: testwait.Deterministic signature not resolved — "+
+			"package %q not loaded or function not found. "+
+			"Check that the package path is correct and the module compiles.",
+			ruleID, testwaitPkgPath)
+		return
+	}
+
+	for _, v := range violations {
+		t.Errorf("%s: %s", ruleID, v)
+	}
 }

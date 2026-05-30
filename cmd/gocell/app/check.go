@@ -299,28 +299,32 @@ func checkSliceCoverage(args []string) error {
 		}
 	}
 
-	var results []governance.ValidationResult
-	cellCount := 0
-	sliceCount := 0
-	if *cellID != "" {
+	results, cellCount, sliceCount := collectSliceCoverageResults(root, project, *cellID)
+	return printAndCheck(*format, results, cmdSliceCoverage,
+		fmt.Sprintf("PASS: slice coverage OK (checked %d slices across %d cells)", sliceCount, cellCount))
+}
+
+// collectSliceCoverageResults gathers validation results and counts for either a
+// single cell (when filterCellID is non-empty) or all cells in the project.
+func collectSliceCoverageResults(
+	root string, project *metadata.ProjectMeta, filterCellID string,
+) (results []governance.ValidationResult, cellCount, sliceCount int) {
+	if filterCellID != "" {
 		cellCount = 1
-		// Count slices for this cell.
 		for _, sl := range project.Slices {
-			if sl.BelongsToCell == *cellID {
+			if sl.BelongsToCell == filterCellID {
 				sliceCount++
 			}
 		}
-		results = sliceCoverageForCell(root, project, *cellID)
-	} else {
-		cellCount = len(project.Cells)
-		sliceCount = len(project.Slices)
-		for cid := range project.Cells {
-			results = append(results, sliceCoverageForCell(root, project, cid)...)
-		}
+		results = sliceCoverageForCell(root, project, filterCellID)
+		return results, cellCount, sliceCount
 	}
-
-	return printAndCheck(*format, results, cmdSliceCoverage,
-		fmt.Sprintf("PASS: slice coverage OK (checked %d slices across %d cells)", sliceCount, cellCount))
+	cellCount = len(project.Cells)
+	sliceCount = len(project.Slices)
+	for cid := range project.Cells {
+		results = append(results, sliceCoverageForCell(root, project, cid)...)
+	}
+	return results, cellCount, sliceCount
 }
 
 // sliceCoverageForCell runs the slice-coverage checks for a single cell.

@@ -109,7 +109,7 @@ func TestHeartbeat_TickerFiresOnAdvance(t *testing.T) {
 
 	// Advance one interval: exactly one heartbeat.
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "heartbeat-tick-1")
+	testwait.Deterministic(t, hb.beat, "heartbeat-tick-1")
 
 	if got := hb.CallCount(); got != 1 {
 		t.Errorf("after one Advance: CallCount = %d, want 1", got)
@@ -117,9 +117,9 @@ func TestHeartbeat_TickerFiresOnAdvance(t *testing.T) {
 
 	// Advance two more intervals.
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "heartbeat-tick-2")
+	testwait.Deterministic(t, hb.beat, "heartbeat-tick-2")
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "heartbeat-tick-3")
+	testwait.Deterministic(t, hb.beat, "heartbeat-tick-3")
 
 	if got := hb.CallCount(); got != 3 {
 		t.Errorf("after three Advances: CallCount = %d, want 3", got)
@@ -193,7 +193,7 @@ func TestHeartbeat_StaleLease(t *testing.T) {
 
 	// First tick → ok=false → goroutine returns.
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "stale-first-tick")
+	testwait.Deterministic(t, hb.beat, "stale-first-tick")
 	wg.Wait() // goroutine should have exited
 
 	callsAfterStale := hb.CallCount()
@@ -249,7 +249,7 @@ func TestHeartbeat_StaleLease_InvokesOnStale(t *testing.T) {
 	fc.Advance(interval)
 	// onStale must fire on the stale tick. If it never fires (e.g. the ok=false
 	// branch only logs+returns) this Deterministic times out → test fails.
-	testwait.Deterministic(t, staleCh, testtime.EventuallyShort, "onstale-invoked")
+	testwait.Deterministic(t, staleCh, "onstale-invoked")
 	wg.Wait()
 }
 
@@ -282,11 +282,11 @@ func TestHeartbeat_TransientError(t *testing.T) {
 
 	// First tick → error (but goroutine keeps going).
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "transient-tick-1")
+	testwait.Deterministic(t, hb.beat, "transient-tick-1")
 
 	// Second tick → success.
 	fc.Advance(interval)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "transient-tick-2")
+	testwait.Deterministic(t, hb.beat, "transient-tick-2")
 
 	if got := atomic.LoadInt32(hb.count); got < 2 {
 		t.Errorf("transient error: total calls = %d, want >= 2", got)

@@ -52,6 +52,10 @@ type providerConnectionCollector struct {
 
 var _ ConnectionCollector = (*providerConnectionCollector)(nil)
 
+// errProviderRequired is the error message used when a nil metrics.Provider is
+// passed to any of the three NewProvider*Collector constructors.
+const errProviderRequired = "mqtt: metrics.Provider is required"
+
 // NewProviderConnectionCollector registers mqtt_reconnect_total and
 // mqtt_subscribe_failed_total on p and returns a ConnectionCollector bound to
 // cellID. cellID becomes the "cell" label.
@@ -63,7 +67,7 @@ var _ ConnectionCollector = (*providerConnectionCollector)(nil)
 func NewProviderConnectionCollector(p metrics.Provider, cellID string) (ConnectionCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: metrics.Provider is required")
+			errProviderRequired)
 	}
 	if cellID == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -231,7 +235,7 @@ var ackDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0
 func NewProviderPublisherCollector(p metrics.Provider, cellID string) (PublisherCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: metrics.Provider is required")
+			errProviderRequired)
 	}
 	if cellID == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -484,7 +488,7 @@ var (
 func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (SubscriberCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: metrics.Provider is required")
+			errProviderRequired)
 	}
 	if cellID == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,

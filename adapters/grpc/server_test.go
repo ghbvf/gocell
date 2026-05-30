@@ -35,19 +35,37 @@ func TestConfig_ApplyDefaults_ShutdownTimeout(t *testing.T) {
 	t.Parallel()
 	chain := genIntegChain(t)
 
-	// Zero ShutdownTimeout must be filled by New (applyDefaults is called internally).
-	cfg := grpcadapter.Config{
-		Addr: ":0",
-		TLS: grpcadapter.TLSConfig{
-			CertPEM: chain.serverCertPEM,
-			KeyPEM:  chain.serverKeyPEM,
-		},
+	// Zero ShutdownTimeout must be accepted: applyDefaults fills it so validate()
+	// does not error. A negative value (tested separately in V1c) must be rejected.
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		wantErr bool
+	}{
+		{"zero-filled-by-defaults", 0, false},
+		{"negative-rejected-by-validate", negativeShutdownTimeout, true},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := grpcadapter.Config{
+				Addr:            ":0",
+				ShutdownTimeout: tc.timeout,
+				TLS: grpcadapter.TLSConfig{
+					CertPEM: chain.serverCertPEM,
+					KeyPEM:  chain.serverKeyPEM,
+				},
+			}
+			srv, err := grpcadapter.New(cfg)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, srv)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, srv)
+			}
+		})
 	}
-	srv, err := grpcadapter.New(cfg)
-	require.NoError(t, err)
-	require.NotNil(t, srv)
-	// We verify indirectly via a successful New — applyDefaults fills ShutdownTimeout
-	// so validate() does not error on it; the actual value is verified by integration tests.
 }
 
 // ─── Config.validate ─────────────────────────────────────────────────────────

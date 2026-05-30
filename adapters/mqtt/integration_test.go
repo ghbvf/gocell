@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -391,18 +392,7 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			coll := newRecordingSubCollector()
-			sub, conn := newSubscriberForITest(t, "sub-disp-"+tc.name)
-			// Re-bind with collector by constructing a fresh subscriber on same conn.
-			ns, err := ParseTopicNamespace("itest")
-			if err != nil {
-				t.Fatalf("ns: %v", err)
-			}
-			sub, err = NewSubscriber(clock.Real(), conn, ns, SubscriberConfig{}, WithSubscriberCollector(coll))
-			if err != nil {
-				t.Fatalf("NewSubscriber: %v", err)
-			}
-
+			coll, sub := itestNewSubWithCollector(t, "sub-disp-"+tc.name)
 			settlement := &recordingSettlement{}
 			// Per-subtest topic prefix makes each subtest's filter disjoint, so
 			// shared-subscription fanout cannot deliver one subtest's PUBLISH to
@@ -423,9 +413,8 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 			case <-time.After(testtime.D10s):
 				t.Fatal("subscribe not ready")
 			}
-
 			topic := prefix + "/" + uuid.NewString()
-			itestPublish(t, conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
+			itestPublish(t, sub.conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
 
 			// Wait for the TERMINAL settlement, not just "failure recorded":
 			// A4 (#1142) moved releaseSettlement to AFTER routeDeadLetter +
@@ -463,6 +452,23 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 	}
 }
 
+// itestNewSubWithCollector builds a new Subscriber with a recording collector
+// for the integration disposition tests. Returns the collector and subscriber.
+func itestNewSubWithCollector(t *testing.T, role string) (*recordingSubCollector, *Subscriber) {
+	t.Helper()
+	coll := newRecordingSubCollector()
+	_, conn := newSubscriberForITest(t, role)
+	ns, err := ParseTopicNamespace("itest")
+	if err != nil {
+		t.Fatalf("ns: %v", err)
+	}
+	sub, err := NewSubscriber(clock.Real(), conn, ns, SubscriberConfig{}, WithSubscriberCollector(coll))
+	if err != nil {
+		t.Fatalf("NewSubscriber: %v", err)
+	}
+	return coll, sub
+}
+
 // TestIntegration_Subscriber_SessionRecovery verifies clean=false session
 // persistence on the GoCell consumer-group path, which ALWAYS uses a
 // $share/{group}/{filter} shared subscription (the Subscriber derives the wire
@@ -485,8 +491,6 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 // durability — that comes from the producer-side transactional outbox + QoS1 +
 // idempotent consumers. See the ADR "$share offline redelivery" amendment.
 func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
-	// Mosquitto persists per-clientId sessions. Use a dedicated container so the
-	// session lifecycle is isolated from the shared broker.
 	dedicatedURL, container, err := startDedicatedMosquittoContainer(t)
 	if err != nil {
 		t.Fatalf("start dedicated broker: %v", err)
@@ -507,7 +511,7 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 			Brokers:        []string{testutil.LoopbackIPEndpoint(dedicatedURL)},
 			ConnectTimeout: testtime.D5s,
 			KeepAlive:      testtime.D10s,
-			SessionExpiry:  testtime.D30s, // > 0 → persistent session, clean=false
+			SessionExpiry:  testtime.D30s,
 			Backoff:        BackoffConfig{BaseDelay: testtime.D100ms, MaxDelay: testtime.D2s},
 			PublishTimeout: testtime.D5s,
 		}
@@ -518,31 +522,48 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 		t.Fatalf("ns: %v", err)
 	}
 	filter := "itest/session/data"
-	group := "session-cg-" + uuid.NewString()
-	subscription := itestSubscription(filter, group)
+	subscription := itestSubscription(filter, "session-cg-"+uuid.NewString())
 
 	// Phase 1: subscribe to establish the broker-side shared subscription, then
-	// drop the connection by canceling the Open ctx (NOT Connection.Close, which
-	// runs unsubscribeAll + a clean DISCONNECT). A cancelable (non-timeout) ctx
-	// puts the manager lifecycle solely under cancel1: canceling it tears down the
-	// autopaho manager / TCP uncleanly, so the broker retains the SessionExpiry>0
-	// session + its subscription for the phase-2 resume.
+	// drop the connection uncleanly so the broker retains the persistent session.
+	itestSessionPhase1Subscribe(t, mkCfg, ns, subscription)
+
+	// Publish while offline. Recorded for observability but not asserted.
+	offlineCount := itestSessionPublishOffline(t, dedicatedURL, filter)
+
+	// Phase 2: reconnect with the SAME clientId + persistent session and assert
+	// that a message published while online is delivered (hard assertion).
+	var offlineReceived, onlineReceived atomic.Int64
+	itestSessionPhase2Subscribe(t, mkCfg, ns, subscription, &offlineReceived, &onlineReceived)
+
+	t.Logf("session-recovery observability: offline-redelivered=%d/%d online=%d",
+		offlineReceived.Load(), offlineCount, onlineReceived.Load())
+}
+
+// itestSessionPhase1Subscribe opens a persistent-session subscriber, waits for
+// Ready, then drops the connection uncleanly (ctx cancel) and waits for the
+// broker to observe the TCP drop before returning.
+func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicNamespace, subscription outbox.Subscription) {
+	t.Helper()
 	ctx1, cancel1 := context.WithCancel(context.Background())
+	// cancel1 has a dual role:
+	//   1. Functional drop (end of function): canceling ctx1 causes an unclean TCP
+	//      disconnect so the broker retains the persistent session + subscription,
+	//      which is the precondition for phase-2 session-recovery testing.
+	//   2. Cleanup guard (t.Cleanup): prevents autopaho goroutine leak if the
+	//      function returns early (e.g. t.Fatalf on error branches). cancel is
+	//      idempotent so calling it twice is safe.
+	t.Cleanup(cancel1)
 	conn1, err := Open(ctx1, clock.Real(), mkCfg())
 	if err != nil {
-		cancel1()
 		t.Fatalf("Open conn1: %v", err)
 	}
 	sub1, err := NewSubscriber(clock.Real(), conn1, ns, SubscriberConfig{})
 	if err != nil {
-		cancel1()
 		t.Fatalf("NewSubscriber 1: %v", err)
 	}
-	// sub1.Subscribe runs under ctx1 directly: canceling ctx1 (below) both drops
-	// the autopaho manager (unclean disconnect → session retained) AND unblocks
-	// this Subscribe call. No separate sub-ctx is needed — a derived cancel that
-	// is only invoked on the timeout path would leak on the happy path (govet
-	// lostcancel).
+	// sub1.Subscribe runs under ctx1: canceling ctx1 both drops the autopaho
+	// manager uncleanly (broker retains session) and unblocks Subscribe.
 	go func() {
 		_ = sub1.Subscribe(ctx1, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.Ack(), nil
@@ -551,24 +572,25 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	select {
 	case <-sub1.Ready(subscription):
 	case <-time.After(testtime.D10s):
-		cancel1()
 		t.Fatal("phase-1 subscribe not ready")
 	}
-	// Drop the connection UNCLEANLY (ctx cancel) — do NOT call subCancel1 first
-	// (that would UNSUBSCRIBE via the Subscribe-returned cancel) and do NOT call
-	// conn1.Close (that unsubscribes-all). Canceling ctx1 tears down the manager,
-	// leaving the persistent session + subscription on the broker.
+	// Functional drop: intentionally NOT calling conn1.Close() — Close() would
+	// send a DISCONNECT packet, causing the broker to delete the persistent
+	// session. Instead, we cancel ctx1 to produce an unclean TCP drop, which
+	// leaves the persistent session intact on the broker side. This is the
+	// required precondition for phase-2 to test session recovery.
 	cancel1()
 	// archtest:allow:test-sleep teardown-settle: wall-clock must elapse for the
-	// broker to observe the unclean TCP drop before the offline publish; there is
-	// no client-side signal to poll on (the manager is already gone).
+	// broker to observe the unclean TCP drop before the offline publish.
 	time.Sleep(testtime.D1s) //archtest:allow:test-sleep teardown-settle
+}
 
-	// Publish while offline. On some brokers/timings the persistent session +
-	// $share subscription offline-queue these and redeliver on resume; this is
-	// recorded for observability but not asserted (see the doc-comment + ADR).
+// itestSessionPublishOffline publishes offlineCount messages to filter while
+// the persistent-session subscriber is offline. Returns offlineCount.
+func itestSessionPublishOffline(t *testing.T, brokerURL, filter string) int {
+	t.Helper()
 	pubCfg := newTestConfig(t, "session-pub")
-	pubCfg.Brokers = []string{testutil.LoopbackIPEndpoint(dedicatedURL)}
+	pubCfg.Brokers = []string{testutil.LoopbackIPEndpoint(brokerURL)}
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), testtime.D20s)
 	pubConn, err := Open(pubCtx, clock.Real(), pubCfg)
 	if err != nil {
@@ -581,8 +603,17 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	}
 	_ = pubConn.Close(context.Background())
 	pubCancel()
+	return offlineCount
+}
 
-	// Phase 2: reconnect with the SAME clientId + persistent session.
+// itestSessionPhase2Subscribe opens a new connection with the same stableID +
+// persistent session, subscribes, publishes an online probe message, and asserts
+// that it is delivered (DETERMINISTIC hard assertion). Offline count is
+// observability-only (see TestIntegration_Subscriber_SessionRecovery doc).
+func itestSessionPhase2Subscribe(t *testing.T, mkCfg func() Config, ns TopicNamespace,
+	subscription outbox.Subscription, offlineReceived, onlineReceived *atomic.Int64,
+) {
+	t.Helper()
 	ctx2, cancel2 := context.WithTimeout(context.Background(), testtime.D30s)
 	defer cancel2()
 	conn2, err := Open(ctx2, clock.Real(), mkCfg())
@@ -594,11 +625,6 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSubscriber 2: %v", err)
 	}
-	// Separate offline-tagged deliveries (payload {"seq":<int>}) from the fresh
-	// post-resume online probe ({"seq":"online"}): the online count is the hard
-	// assertion (deterministic), the offline count is observability only.
-	var offlineReceived atomic.Int64
-	var onlineReceived atomic.Int64
 	subCtx2, subCancel2 := context.WithCancel(ctx2)
 	defer subCancel2()
 	go func() {
@@ -616,41 +642,14 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 	case <-time.After(testtime.D10s):
 		t.Fatal("phase-2 subscribe not ready")
 	}
-
-	// Publish a fresh online message AFTER resume. Delivery of a message published
-	// while the resumed shared-subscription member is connected is the
-	// DETERMINISTIC invariant this test asserts: it proves the persistent session
-	// resumed and the $share subscription was re-armed end-to-end.
-	itestPublish(t, conn2, filter, itestEnvelope(t, filter, []byte(`{"seq":"online"}`)))
-
-	// HARD assertion (deterministic, can-go-RED): the resumed persistent session
-	// MUST deliver a message published while it is online. This fails if session
-	// resume or subscription re-arm is broken.
-	deadline := time.Now().Add(testtime.D15s)
-	for time.Now().Before(deadline) {
-		if onlineReceived.Load() >= 1 {
-			break
-		}
-		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-	}
-	if onlineReceived.Load() < 1 {
-		t.Fatalf("resumed persistent session did not deliver an online message "+
+	itestPublish(t, conn2, subscription.Topic, itestEnvelope(t, subscription.Topic, []byte(`{"seq":"online"}`)))
+	// HARD assertion: the resumed persistent session MUST deliver the online message.
+	testwait.External(t, "broker-online-delivery",
+		func() bool { return onlineReceived.Load() >= 1 },
+		testtime.D15s, testtime.D20ms,
+		"resumed persistent session did not deliver an online message "+
 			"(offline=%d online=%d); session resume / subscription re-arm is broken",
-			offlineReceived.Load(), onlineReceived.Load())
-	}
-
-	// Offline-queued redelivery is recorded for observability ONLY — it is NOT a
-	// hard assertion. Whether the broker offline-queues messages for a $share
-	// member that dropped uncleanly is environment- and timing-dependent (it hinges
-	// on the broker observing the disconnect as non-clean AND retaining the share
-	// session before the offline publish): it is reliable on some mosquitto
-	// builds/timings and not others (observed redelivered locally, 0 on CI). The
-	// GoCell consumer-group path does NOT rely on broker offline queues for
-	// durability — that comes from the producer-side transactional outbox (retry
-	// until an online consumer acks) + QoS1 + idempotent consumers. See the ADR
-	// "$share offline redelivery" amendment.
-	t.Logf("session-recovery observability: offline-redelivered=%d/%d online=%d",
-		offlineReceived.Load(), offlineCount, onlineReceived.Load())
+		offlineReceived.Load(), onlineReceived.Load())
 }
 
 // isOfflineTaggedPayload reports whether an envelope payload is one of the
