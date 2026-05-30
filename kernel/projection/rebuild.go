@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // ErrRebuildInProgress is returned by Rebuild when a rebuild is already
@@ -51,9 +52,30 @@ func (c *Coordinator) Rebuild(ctx context.Context) error {
 // phase values after the initial CAS (so plain Store is correct for subsequent
 // phase transitions).
 //
-// Every error/cancel edge ends with phase=PhaseLive and openGate.
+// Every error/cancel edge ends with phase=PhaseLive and openGate. Panics from
+// business apply/onReset are recovered here (mirrors kernel/wrapper.WrapConsumer
+// containment — ref: AxonFramework TrackingEventProcessor worker-loop /
+// Watermill Recoverer): the goroutine logs and calls failRebuild (phase→Live,
+// openGate) instead of crashing the process.
 func (c *Coordinator) runRebuild(ctx context.Context) {
 	defer c.rebuildWG.Done()
+	// Panic recovery: registered after Done (LIFO so runs first). recover() stops
+	// the panic; Done then runs as the remaining deferred function. This mirrors
+	// kernel/wrapper.WrapConsumer containment (AxonFramework TrackingEventProcessor
+	// worker-loop / Watermill Recoverer): contain business panics, restore PhaseLive.
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		panicErr := redaction.RedactError(fmt.Errorf("%v", r))
+		slog.ErrorContext(ctx, "projection rebuild panic recovered",
+			"cell", c.cellID,
+			"projection", c.projectionID,
+			"panic", panicErr,
+		)
+		c.failRebuild(ctx, "panic", panicErr)
+	}()
 
 	slog.InfoContext(ctx, "projection rebuild started",
 		"cell", c.cellID,
@@ -108,13 +130,13 @@ func (c *Coordinator) runRebuild(ctx context.Context) {
 		slog.InfoContext(ctx, "projection rebuild completed",
 			"cell", c.cellID,
 			"projection", c.projectionID,
-			"duration_ms", durSecs*1000,
+			"duration_seconds", durSecs,
 		)
 	} else {
 		slog.WarnContext(ctx, "projection rebuild completed with degraded catchup",
 			"cell", c.cellID,
 			"projection", c.projectionID,
-			"duration_ms", durSecs*1000,
+			"duration_seconds", durSecs,
 		)
 	}
 	c.phase.Store(uint32(PhaseLive))
@@ -158,6 +180,9 @@ var errReplayDone = errors.New("projection.rebuild: replay reached head0")
 // replayPhase replays events from offset 0 through head0 (inclusive).
 // Each event is applied via applyOne in its own tx (exactly-once skip + pos<1
 // guard apply). Stops at head0 (catchup picks up from there).
+//
+// v1: replay is bounded only by ctx cancellation (no max-entries / max-duration).
+// Operators bound duration via the ctx timeout passed to Rebuild.
 func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 	err := c.replay.Replay(ctx, 0, func(entry outbox.Entry) error {
 		if err := ctx.Err(); err != nil {
@@ -250,16 +275,11 @@ func (c *Coordinator) failRebuild(ctx context.Context, phase string, err error) 
 }
 
 // Close cancels any in-flight rebuild and waits for it to finish.
-// It then closes the done channel. Close is idempotent (double-close is
-// guarded). ctx controls the wait timeout.
+// It then closes the done channel. Close is idempotent and safe to call
+// concurrently from multiple goroutines; only the first call closes the done
+// channel (subsequent calls are no-ops). ctx controls the wait timeout.
 func (c *Coordinator) Close(ctx context.Context) error {
-	// Guard double-close of done.
-	select {
-	case <-c.done:
-		return nil // already closed
-	default:
-	}
-	close(c.done)
+	c.closeOnce.Do(func() { close(c.done) })
 
 	if cf := c.rebuildCancel.Load(); cf != nil {
 		(*cf)()

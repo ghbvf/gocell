@@ -12,19 +12,25 @@
 // function body and (optionally) an OnReset hook. The read-model schema and the
 // Apply body itself stay business-owned (GAP-8 seal; see ADR §4).
 //
-// # Delivery status (PR-01 landed)
+// # Delivery status (PR-03 landed)
 //
-// PR-01 has delivered Coordinator + Subscribe + consume loop + checkpoint
-// write (kernel/projection/coordinator.go), MemCheckpointStore, and the
-// projectiontest conformance harness. Remaining epic items:
+// PR-01 delivered Coordinator + Subscribe + consume loop + checkpoint write
+// (kernel/projection/coordinator.go), MemCheckpointStore, and the projectiontest
+// conformance harness. PR-02 delivered the postgres CheckpointStore adapter
+// (adapters/postgres). PR-03 has delivered the rebuild state machine (Phase
+// enum, Rebuild/Close lifecycle), MemReplaySource + ReplaySource interface,
+// metrics, readyz probes (Probes() returning store-ready + lag probes), and the
+// PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01 archtest. Remaining items:
 //
-//   - PR-02: postgres CheckpointStore adapter (adapters/postgres).
-//   - PR-03: rebuild state machine (consumes Phase) + metrics + readyz.
 //   - PR-04: cellgen kind:projection derivation (the only sanctioned Subscribe
-//     callsite).
+//     callsite) + HTTP rebuild endpoint (POST /internal/v1/<cell>/projection/
+//     <name>/rebuild) + per-cell handler wiring.
+//   - HTTP endpoint: deferred to PR-04 per ADR §"Rebuild control-plane endpoint"
+//     amendment 2026-05-31 (no host cell until cellgen wiring lands; a platform-
+//     level active contract with no cell impl would trip DEAD-CONTRACT-01).
 //
-// Subscribe's frozen forward signature (implemented in PR-01; projectionID moved
-// to NewCoordinator in PR-03):
+// Subscribe's frozen forward signature (projectionID moved to NewCoordinator
+// in PR-03):
 //
 //	func (c *Coordinator) Subscribe(
 //		ctx context.Context,

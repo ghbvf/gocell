@@ -522,10 +522,11 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
 | `projection_pending_events` | Gauge | 未应用事件数 = replay 源 head − 已提交 checkpoint（积压深度，按需在 readyz/快照读取时计算） |
 | `projection_rebuild_duration_seconds` | Histogram | 一次完整 rebuild（Stop→Reset→Replay→Catchup）的墙钟耗时；仅 dashboard，无告警阈值 |
 
-`<cell>_projection_<name>_ready` readyz probe 在 `pending_events > 0` 且
+`<cell>_projection_<name>_lag` readyz probe 在 `pending_events > 0` 且
 `replay_lag_seconds > 300`（`projectionLagThresholdSeconds`）时返回 unhealthy；
 冷启动（无 pending 或尚无 apply）healthy。probe 与下方 lag 告警同源，告警先于
-probe 翻红可用作早期信号。
+probe 翻红可用作早期信号。另一个 probe `<cell>_projection_<name>_store_ready`
+在 replay.Head 或 store.LoadOffset 报错时返回 unhealthy（存储可达性，独立失败域）。
 
 ### ProjectionReplayLagHigh
 
@@ -546,9 +547,11 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
       rebuild is stuck in Replay. Cross-check gocell_projection_pending_events:
       lag high WITH pending>0 = falling behind; lag high WITH pending==0 = idle
       stream (benign, the lag is just "no new events"). The readyz probe
-      <cell>_projection_<name>_ready flips unhealthy only when BOTH hold.
-      Note: the > 300 threshold mirrors kernel/projection.projectionLagThresholdSeconds;
-      if that constant changes, update this expression to match.
+      <cell>_projection_<name>_lag flips unhealthy only when BOTH hold
+      (pending>0 AND lag>threshold). The companion store-ready probe
+      <cell>_projection_<name>_store_ready covers storage unavailability.
+      Note: the > 300 threshold mirrors kernel/projection.projectionLagThresholdSeconds
+      (probe.go); if that constant changes, update this expression to match.
       The replay_lag gauge is updated on readyz/snapshot reads (no background
       ticker), so it samples at probe cadence — use a 5m `for:` window to avoid
       false positives between probe scrapes.

@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -63,6 +64,7 @@ type Coordinator struct {
 	rebuildCancel       atomic.Pointer[context.CancelFunc]
 	rebuildWG           sync.WaitGroup
 	lastAppliedUnixNano atomic.Int64
+	closeOnce           sync.Once
 }
 
 // CoordinatorConfig bundles the Coordinator's dependencies. It mirrors the
@@ -115,6 +117,18 @@ func NewCoordinator(clk clock.Clock, cfg CoordinatorConfig) (*Coordinator, error
 	if cfg.ProjectionID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.NewCoordinator: ProjectionID required")
+	}
+	// Validate CellID and ProjectionID against the probe-name snake_case pattern so
+	// metric labels are bounded to enumerated identifiers and the probe constructors
+	// (Probes()) cannot fail at runtime. We exercise this by calling the probe-name
+	// constructor, which itself calls NewProbeName internally.
+	if _, err := healthz.ProjectionLagProbeName(cfg.CellID, cfg.ProjectionID); err != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.NewCoordinator: CellID and ProjectionID must be valid snake_case probe-name identifiers",
+			errcode.WithInternal(
+				errcode.InternalAttr("cellID", cfg.CellID),
+				errcode.InternalAttr("projectionID", cfg.ProjectionID),
+			))
 	}
 	if validation.IsNilInterface(cfg.Registrar) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

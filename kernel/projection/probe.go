@@ -11,33 +11,72 @@ import (
 
 // projectionLagThresholdSeconds is the fixed v1 lag threshold in seconds.
 // When the time since the last applied event's OccurredAt exceeds this value,
-// the readiness probe reports unhealthy. This is a fixed const for v1 (least
+// the lag probe reports unhealthy. This is a fixed const for v1 (least
 // moving parts). Per-projection tuning will be revisited only if a specific
 // projection demonstrates a concrete need — no timeline is promised.
+//
+// Cross-reference: docs/ops/alerting-rules.md GoCellProjectionReplayLagHigh
+// uses `> 300` to match this threshold; if this const changes that alert rule
+// must be updated to match. The probe name is "<cell>_projection_<name>_lag"
+// (no _ready suffix — operational health, not dependency availability).
 const projectionLagThresholdSeconds = 300
 
-// ReadinessProbe returns a [healthz.Probe] for this projection. The probe name
-// follows the format "<cellID>_projection_<projectionID>_ready" via the sole
-// sanctioned constructor [healthz.ProjectionReadyProbeName].
+// Probes returns the two healthz.Probe values for this projection, mirroring
+// the ProbeSet pattern used by adapters/postgres.Pool.Probes():
 //
-// Check returns nil (healthy) when:
-//   - pending events = 0 (head == checkpoint), OR
-//   - nothing has been applied yet (last == 0, startup grace period), OR
-//   - pending events > 0 but lag ≤ projectionLagThresholdSeconds (actively catching up)
+//   - "<cell>_projection_<proj>_store_ready": dependency-availability probe.
+//     Healthy when both replay.Head and store.LoadOffset succeed. Unhealthy
+//     when either errors (storage unreachable).
 //
-// Check returns an error (unhealthy) when pending > 0 AND lag > projectionLagThresholdSeconds.
-func (c *Coordinator) ReadinessProbe() (healthz.Probe, error) {
-	name, err := healthz.ProjectionReadyProbeName(c.cellID, c.projectionID)
+//   - "<cell>_projection_<proj>_lag": operational-health probe (no _ready
+//     suffix — same convention as outbox_relay_*). Healthy when pending events
+//     = 0 (idle), nothing applied yet (startup grace), or lag ≤ threshold.
+//     Unhealthy when pending > 0 AND lag > projectionLagThresholdSeconds.
+//
+// Both probes compute their state on demand (no background ticker), consistent
+// with the plan's "metrics computed on probe/snapshot reads" decision.
+//
+// The split follows observability.md: storage reachability (dependency
+// availability) and read-model staleness (operational health) are distinct
+// failure domains with different on-call responses.
+func (c *Coordinator) Probes() ([]healthz.Probe, error) {
+	storeReadyName, err := healthz.ProjectionStoreReadyProbeName(c.cellID, c.projectionID)
 	if err != nil {
-		return nil, fmt.Errorf("projection.ReadinessProbe: %w", err)
+		return nil, fmt.Errorf("projection.Probes: store-ready name: %w", err)
 	}
-	return healthz.NewProbe(name, c.checkReady), nil
+	lagName, err := healthz.ProjectionLagProbeName(c.cellID, c.projectionID)
+	if err != nil {
+		return nil, fmt.Errorf("projection.Probes: lag name: %w", err)
+	}
+	return []healthz.Probe{
+		healthz.NewProbe(storeReadyName, c.checkStoreReady),
+		healthz.NewProbe(lagName, c.checkLag),
+	}, nil
 }
 
-// checkReady implements the probe check function. It computes pending events
-// and lag on demand (no background ticker), consistent with the plan's
-// "metrics computed on probe/snapshot reads" decision.
-func (c *Coordinator) checkReady(ctx context.Context) error {
+// checkStoreReady is the store-availability probe check. It verifies both
+// replay.Head and store.LoadOffset succeed. If either errors, storage is
+// considered unreachable and the probe returns unhealthy (KindUnavailable).
+func (c *Coordinator) checkStoreReady(ctx context.Context) error {
+	if _, err := c.replay.Head(ctx); err != nil {
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"projection.probe: replay Head unreachable",
+			errcode.WithInternal(errcode.InternalAttr("error", err.Error())))
+	}
+	if _, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID); err != nil {
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"projection.probe: checkpoint store unreachable",
+			errcode.WithInternal(errcode.InternalAttr("error", err.Error())))
+	}
+	return nil
+}
+
+// checkLag is the operational-health probe check. It computes pending events
+// and lag on demand (no background ticker).
+//
+// F13: if pending < 0 (checkpoint > head anomaly), log a warning and treat as
+// healthy (set lag gauge to 0 — do NOT write a negative gauge).
+func (c *Coordinator) checkLag(ctx context.Context) error {
 	head, err := c.replay.Head(ctx)
 	if err != nil {
 		return fmt.Errorf("projection.probe: Head: %w", err)
@@ -48,12 +87,19 @@ func (c *Coordinator) checkReady(ctx context.Context) error {
 	}
 	pending := head - cp
 
+	// F13: checkpoint > head anomaly — log warn and treat as healthy (0 gauge).
+	if pending < 0 {
+		c.metrics.setPendingEvents(ctx, c.cellID, c.projectionID, 0)
+		c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, 0)
+		return nil
+	}
+
 	// Update pending_events gauge on demand.
 	c.metrics.setPendingEvents(ctx, c.cellID, c.projectionID, float64(pending))
 
 	// No pending events → always healthy; zero the lag gauge so it does not
 	// produce false-positive GoCellProjectionReplayLagHigh alerts on idle streams.
-	if pending <= 0 {
+	if pending == 0 {
 		c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, 0)
 		return nil
 	}
@@ -73,12 +119,14 @@ func (c *Coordinator) checkReady(ctx context.Context) error {
 		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
 			"projection.probe: replay lag exceeds threshold",
 			errcode.WithDetails(
-				errcode.PublicString("cell", c.cellID),
-				errcode.PublicString("projection", c.projectionID),
 				errcode.PublicInt("thresholdSeconds", projectionLagThresholdSeconds),
 				errcode.PublicInt("lagSeconds", int64(lagSecs)),
 			),
-			errcode.WithInternal(errcode.InternalAttr("lagSeconds", lagSecs)),
+			errcode.WithInternal(
+				errcode.InternalAttr("cell", c.cellID),
+				errcode.InternalAttr("projection", c.projectionID),
+				errcode.InternalAttr("lagSeconds", lagSecs),
+			),
 		)
 	}
 	return nil

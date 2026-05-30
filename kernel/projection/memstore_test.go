@@ -4,7 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
 )
@@ -13,6 +16,26 @@ import (
 // MemCheckpointStore, verifying that it satisfies the CheckpointStore contract.
 func TestMemCheckpointStore_Conformance(t *testing.T) {
 	projectiontest.RunCheckpointConformance(t, projection.NewMemCheckpointStore())
+}
+
+// TestMemReplaySource_Conformance enrolls MemReplaySource in the shared
+// ReplaySource conformance suite (PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01).
+// Called from the external test package to avoid the import cycle
+// projection → projectiontest → projection.
+func TestMemReplaySource_Conformance(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	seedEntries := func(n int) []outbox.Entry {
+		entries := make([]outbox.Entry, n)
+		for i := range entries {
+			e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
+			if err != nil {
+				t.Fatalf("outbox.NewEntry: %v", err)
+			}
+			entries[i] = e
+		}
+		return entries
+	}
+	projectiontest.RunReplaySourceConformance(t, projection.NewMemReplaySource(), seedEntries)
 }
 
 // TestMemCheckpointStore_ConcurrentSafety verifies that concurrent SaveOffset

@@ -305,57 +305,41 @@ projection). It is constructed via `kernel/healthz.NewProbeName(...)` — there 
 PR-03's constructor returns `(ProbeName, error)` and fails fast at construction
 when the budget is exceeded, rather than silently dropping the probe.
 
-### Rebuild control-plane endpoint (PR-03 forward contract)
+### Rebuild control-plane endpoint (forward contract)
 
-The rebuild trigger is an internal HTTP endpoint. Its `contract.yaml` + handler
-land in **PR-03 (T-03-3)**; this section freezes the forward contract so PR-03
-does not drift and `/internal/v1/` declaration requirements
-(`.claude/rules/gocell/go-standards.md` §安全检查点) are satisfied at design time:
+The rebuild trigger is a per-cell HTTP endpoint. Its `contract.yaml` + handler
+land in **PR-04** (cellgen `kind: projection` derivation, #1176); PR-03 ships
+only the kernel/runtime harness — there is **no host cell or internal listener**
+to mount it on until cellgen wiring lands. A platform-level `active` contract
+with no cell impl would trip `DEAD-CONTRACT-01`.
+
+**PR-03 freezes the programmatic trigger surface** and forward contract for PR-04:
 
 - **Endpoint**: `POST /internal/v1/<cellID>/projection/<projectionID>/rebuild`.
 - **Caller / auth**: service-token authentication + caller-cell allowlist (the
   caller's cell ID must be in the contract's `clients` allowlist). No public
   access. Same shape as other `/internal/v1/` control-plane endpoints.
 - **Network boundary**: internal-only — never mounted on a public listener.
-- **HTTP semantics**: `202 Accepted` (rebuild is async — the state machine runs
-  in the background; the response acknowledges acceptance, not completion) /
-  `409 Conflict` (a rebuild is already in progress for this projection;
-  `Phase() != PhaseLive`) / `404 Not Found` (unknown cell/projection).
-- **Response envelope**: the unified `{"data": {...}}` shape
-  (`.claude/rules/gocell/error-handling.md`); the `data` object carries the
+- **HTTP semantics**: `202 Accepted` (rebuild is async — `Coordinator.Rebuild`
+  returns immediately; the state machine runs on a background goroutine) /
+  `409 Conflict` (`ErrRebuildInProgress` — a rebuild is already running) /
+  `404 Not Found` (unknown cell/projection).
+- **Response envelope**: unified `{"data": {...}}` shape; `data` carries the
   current `{phase, replayLagSeconds, pendingEvents}` snapshot. Errors use the
   shared error envelope.
+- **PR-03 programmatic surface**: `Coordinator.Rebuild(ctx) error` (admission
+  CAS `PhaseLive→PhaseStopped`) + `Coordinator.Close(ctx)` for graceful drain.
+  The snapshot is computed by the readyz probe / metrics path delivered in PR-03.
 
-The full `contract.yaml` (request/response schema, `clients` allowlist) is
-authored in PR-03; PR-00 freezes only the auth model + network boundary + status
-semantics above.
+**PR-04 authors the HTTP wrapper**: the `POST /internal/v1/<cell>/projection/
+<name>/rebuild` contract.yaml + per-cell handler (cellgen output) calling
+`Coordinator.Rebuild`, with the **unchanged** auth model / network boundary /
+202·409·404 status semantics frozen above.
 
-> **Amendment 2026-05-31 (PR-03 #1175) — HTTP endpoint moved to PR-04.** The
-> rebuild *trigger* is a per-cell HTTP endpoint, but a GoCell contract is
-> per-cell (fixed `path` + `ownerCell` + `clients`) and PR-03 ships only the
-> kernel/runtime harness — there is **no host cell or internal listener** to
-> mount it on until cellgen `kind: projection` derivation lands (PR-04, #1176;
-> todoorder migration in PR-06). A platform-level `active` contract with no cell
-> impl would trip `DEAD-CONTRACT-01`. Therefore:
->
-> - **PR-03 freezes the programmatic trigger surface**: `Coordinator.Rebuild(ctx)
->   error` (admission CAS `PhaseLive→PhaseStopped`; returns
->   `projection.ErrRebuildInProgress` when a rebuild is already running — the
->   value the HTTP adapter will map to **409**; runs the state machine on a
->   background goroutine — the **202** semantics) + `Coordinator.Close(ctx)` for
->   graceful drain. The `{phase, replayLagSeconds, pendingEvents}` snapshot is
->   computed by the readyz probe / metrics path that **does** land in PR-03.
-> - **PR-04 authors the HTTP wrapper**: the `POST /internal/v1/<cell>/projection/
->   <name>/rebuild` contract.yaml + per-cell handler (cellgen output) calling
->   `Coordinator.Rebuild`, with the **unchanged** auth model / network boundary /
->   202·409·404 status semantics frozen above.
->
-> **Threat-matrix re-evaluation (per ai-robust.md "ADR amendment 落地必查").** No
-> cell flips: row 3 (rebuild-period read consistency) is discharged by `Phase()`
-> + readyz, **both delivered in PR-03** as planned — the HTTP *trigger* is a
-> convenience surface, not a threat-discharge mechanism (a rebuild is equally
-> triggerable via `Coordinator.Rebuild`). The forward contract above is
-> unchanged; only its *delivery PR* moves PR-03→PR-04.
+**Threat-matrix re-evaluation.** No cell flips: row 3 (rebuild-period read
+consistency) is discharged by `Phase()` + readyz, **both delivered in PR-03** as
+planned — the HTTP *trigger* is a convenience surface, not a threat-discharge
+mechanism (a rebuild is equally triggerable via `Coordinator.Rebuild`).
 
 ## 6. Threat matrix
 

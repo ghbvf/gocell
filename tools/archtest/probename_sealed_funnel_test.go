@@ -39,7 +39,12 @@
 //   - A4b: MustProbeName caller allowlist (archtest, Medium upstream)
 //   - A5: EmitterFailOpenProbeName composed-name BinaryExpr (archtest, Medium upstream)
 //   - A6: Probe interface sealed marker `isHealthzProbe()` — Go compiler gate;
-//     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls
+//     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls.
+//     Note: A6 in earlier PR-03 revisions also denoted a projection-prefix string-
+//     anchor scan (Soft per ai-robust.md "Soft 严禁立项"). That scan was removed in
+//     PR-03 round-3; the projection composed-name funnel is already Hard-closed by
+//     A2 (cast ban) + A4 (NewProbeName caller allowlist) + sole constructors
+//     (ProjectionStoreReadyProbeName / ProjectionLagProbeName).
 //   - B1: reflect.MethodByName("RegisterReadiness") blind-spot
 //   - B3: ProbeName(callExpr) cast blind-spot
 //   - B5: in-package new isHealthzProbe() implementer blind-spot
@@ -564,10 +569,10 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 	"kernel/cell/healthz.go":         {},
 	"kernel/cell/registry.go":        {},
 	"kernel/outbox/emitter.go":       {},
-	// projection.Coordinator.ReadinessProbe composes the probe name via the
-	// sanctioned healthz.ProjectionReadyProbeName constructor and passes the
-	// result to NewProbe — same funnel-internal shape as emitter.go (the name
-	// is a runtime composition of cellID+projectionID, so it cannot be a const).
+	// projection.Coordinator.Probes composes probe names via the two sanctioned
+	// constructors ProjectionStoreReadyProbeName / ProjectionLagProbeName and
+	// passes the results to NewProbe — same funnel-internal shape as emitter.go
+	// (names are runtime compositions of cellID+projectionID, not consts).
 	"kernel/projection/probe.go":                               {},
 	"runtime/bootstrap/bootstrap_phases.go":                    {},
 	"runtime/bootstrap/phases_lifecycle.go":                    {},
@@ -887,62 +892,6 @@ func scanA5EmitterFailOpenPrefixBypass(
 	return out
 }
 
-// scanA6ProjectionPrefixBypass scans file for bare BinaryExpr string
-// concatenation containing the projection readiness-probe infix "_projection_"
-// outside kernel/healthz/probename.go — the sole sanctioned site. Mirrors A5
-// (emitter prefix): the magic infix that composes "<cell>_projection_<name>_ready"
-// must be single-sourced through healthz.ProjectionReadyProbeName so a dashboard
-// generator / metric label / log key cannot hardcode a value that drifts from
-// the constructor. A2 (cast ban) + A4 (NewProbeName caller allowlist) already
-// make a *composed ProbeName* impossible outside the constructor; A6 additionally
-// keeps the prefix *literal* single-sourced (the distinct vector A5 covers for
-// the emitter prefix).
-//
-// The infix is "_projection_" (leading + trailing underscore), which does NOT
-// match metric names like "projection_event_replay_lag_seconds" (no leading
-// underscore) — only the probe-name shape "<cell>_projection_<name>_ready".
-func scanA6ProjectionPrefixBypass(
-	fset *token.FileSet,
-	file *ast.File,
-	rel string,
-	info *types.Info,
-) []Diagnostic {
-	if info == nil {
-		return nil
-	}
-	const probePrefixFile = "kernel/healthz/probename.go"
-	if strings.HasSuffix(filepath.ToSlash(rel), probePrefixFile) {
-		return nil
-	}
-
-	const projectionInfix = "_projection_"
-	var out []Diagnostic
-
-	emit := func(pos token.Position) {
-		out = append(out, Diagnostic{
-			Rel:  rel,
-			Line: pos.Line,
-			Message: fmt.Sprintf(
-				"PROBENAME-SEALED-FUNNEL-01/A6: bare string concat of projection probe infix "+
-					"%q at %s:%d — use healthz.ProjectionReadyProbeName(cellID, projectionID) instead",
-				projectionInfix, rel, pos.Line,
-			),
-		})
-	}
-
-	EachInSubtree[ast.BinaryExpr](file, func(bin *ast.BinaryExpr) {
-		if s, ok := EvaluateConstString(info, bin.X); ok && strings.Contains(s, projectionInfix) {
-			emit(fset.Position(bin.Pos()))
-		}
-		if s, ok := EvaluateConstString(info, bin.Y); ok && strings.Contains(s, projectionInfix) {
-			emit(fset.Position(bin.Pos()))
-		}
-	})
-
-	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
-	return out
-}
-
 // ─── Golden inventory collector ───────────────────────────────────────────────
 
 // collectProbeNameConsts collects all healthz.ProbeName typed const entries
@@ -1003,7 +952,7 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 // ─── Main production scan ─────────────────────────────────────────────────────
 
-// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A6)
+// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A5)
 // across the production tree.
 //
 // Sub-tests:
@@ -1023,9 +972,12 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 //     from production code outside kernel/healthz/probename.go.
 //   - A5_EmitterFailOpenPrefixBypass — the "outbox_failopen_rate_" string prefix
 //     must not appear in bare BinaryExpr concat outside probename.go.
-//   - A6_ProjectionPrefixBypass — the "_projection_" probe-name infix must not
-//     appear in bare BinaryExpr concat outside probename.go (sibling of A5 for
-//     the ProjectionReadyProbeName composed-name constructor).
+//
+// Note: A6 (projection prefix bypass scan) was removed in PR-03 round-3.
+// The projection composed-name funnel is already Hard-closed by A2 (cast ban)
+// + A4 (NewProbeName caller allowlist) + the two sole constructors
+// ProjectionStoreReadyProbeName / ProjectionLagProbeName; A6 was a bypassable
+// string-anchor scan (Soft per ai-robust.md) that added no additional closure.
 func TestProbenameSealedFunnel(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1035,7 +987,7 @@ func TestProbenameSealedFunnel(t *testing.T) {
 	root := findModuleRoot(t)
 	allPatterns := prodscan.PatternsExtended(root)
 
-	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags, a6Diags []Diagnostic
+	var a1Diags, a2Diags, a3Diags, a4Diags, a4bDiags, a5Diags []Diagnostic
 
 	_ = RunTyped(t, TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, allPatterns,
 		func(p *Pass) []Diagnostic {
@@ -1063,7 +1015,6 @@ func TestProbenameSealedFunnel(t *testing.T) {
 				a4Diags = append(a4Diags, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a4bDiags = append(a4bDiags, scanA4bMustProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 				a5Diags = append(a5Diags, scanA5EmitterFailOpenPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
-				a6Diags = append(a6Diags, scanA6ProjectionPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
 			}
 			return nil
 		})
@@ -1107,17 +1058,6 @@ func TestProbenameSealedFunnel(t *testing.T) {
 		t.Parallel()
 		Report(t, "PROBENAME-SEALED-FUNNEL-01/A5", a5Diags)
 	})
-
-	t.Run("A6_ProjectionPrefixBypass", func(t *testing.T) {
-		t.Parallel()
-		// This forward scan covers all production packages including
-		// kernel/projection/probe.go (which uses the sanctioned
-		// healthz.ProjectionReadyProbeName constructor and therefore produces
-		// zero A6 diagnostics). No separate "no false positive" test is needed:
-		// Report fails the test if any A6 diagnostic exists; zero diagnostics
-		// from the production scan is the no-false-positive green assertion.
-		Report(t, "PROBENAME-SEALED-FUNNEL-01/A6", a6Diags)
-	})
 }
 
 // ─── Reverse fixture self-tests ───────────────────────────────────────────────
@@ -1151,7 +1091,9 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 		{name: "string_cast_bypass_red", want: "B3"},
 		{name: "reflect_bypass_red", want: "B1"},
 		{name: "reflect_bypass_const_red", want: "B1"},
-		{name: "projection_prefix_bypass_red", want: "A6", contains: "projection probe infix"},
+		// projection_prefix_bypass_red (A6) removed: A6 was a bypassable
+		// string-anchor scan (Soft). The projection composed-name funnel is
+		// already Hard-closed by A2+A4+sole constructors; see TestProbenameSealedFunnel.
 		// helper_wrapper_red (B2) is a *non-bypass*: the type system already
 		// enforces healthz.ProbeName at the wrapper's signature, so a wrapper
 		// inheriting the typed signature provides no escape from the typed
@@ -1168,7 +1110,7 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 
 			subFixtureDir := filepath.Join(fixtureDir, tc.name)
 
-			var a1, a2, a3, a4, a6, b1b2, b3 []Diagnostic
+			var a1, a2, a3, a4, b1b2, b3 []Diagnostic
 
 			_ = RunTypedDir(t, subFixtureDir, TypedOpts{Tests: false}, []string{"./..."},
 				func(p *Pass) []Diagnostic {
@@ -1185,7 +1127,6 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 						a2 = append(a2, scanA2CallsiteResolves(p.Fset, f, rel, p.TypesInfo)...)
 						a3 = append(a3, scanA3AggregatorRegisterAllowlist(p.Fset, f, rel, p.TypesInfo)...)
 						a4 = append(a4, scanA4NewProbeNameCallerAllowlist(p.Fset, f, rel, p.TypesInfo)...)
-						a6 = append(a6, scanA6ProjectionPrefixBypass(p.Fset, f, rel, p.TypesInfo)...)
 
 						// B1 / B2 (via A3 + helper-wrapper scan) share the b1b2 bucket.
 						// B3 is the string-cast bypass (ProbeName(callExpr) form).
@@ -1248,9 +1189,6 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 			case "B3":
 				require.NotEmpty(t, b3, "fixture %q: expected B3 string-cast bypass to be detected by A2", tc.name)
 				bucket = b3
-			case "A6":
-				require.NotEmpty(t, a6, "fixture %q: expected A6 to fire on bare _projection_ infix concat", tc.name)
-				bucket = a6
 			}
 
 			// Branch assertion: when fixture targets a specific sub-branch

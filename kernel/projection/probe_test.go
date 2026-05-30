@@ -18,153 +18,188 @@ import (
 // Extracted to a package-level const per TEST-TIME-LITERAL-01.
 const probeTestRecentLagOffset = 10 * time.Second
 
-// TestProjectionReadyProbeName_Format asserts the probe name follows the
-// expected format "<cell>_projection_<proj>_ready".
-func TestProjectionReadyProbeName_Format(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Probe name constructor tests (F12)
+// ---------------------------------------------------------------------------
+
+// TestProjectionStoreReadyProbeName_Format asserts the store-ready probe name
+// follows "<cell>_projection_<proj>_store_ready".
+func TestProjectionStoreReadyProbeName_Format(t *testing.T) {
 	t.Parallel()
-	name, err := healthz.ProjectionReadyProbeName("mycell", "myproj")
+	name, err := healthz.ProjectionStoreReadyProbeName("mycell", "myproj")
 	if err != nil {
-		t.Fatalf("ProjectionReadyProbeName: %v", err)
+		t.Fatalf("ProjectionStoreReadyProbeName: %v", err)
 	}
-	if string(name) != "mycell_projection_myproj_ready" {
-		t.Errorf("name = %q, want %q", name, "mycell_projection_myproj_ready")
+	if string(name) != "mycell_projection_myproj_store_ready" {
+		t.Errorf("name = %q, want %q", name, "mycell_projection_myproj_store_ready")
 	}
 }
 
-// TestProjectionReadyProbeName_LengthBudget asserts names exceeding the 64-char
-// limit fail with an error (budget: fixed=18 chars, so cell+proj must be ≤ 46).
-func TestProjectionReadyProbeName_LengthBudget(t *testing.T) {
+// TestProjectionLagProbeName_Format asserts the lag probe name follows
+// "<cell>_projection_<proj>_lag".
+func TestProjectionLagProbeName_Format(t *testing.T) {
 	t.Parallel()
-	// 47-char combination of cell+proj (budget overflow).
-	longCell := strings.Repeat("a", 24) // 24 chars
-	longProj := strings.Repeat("b", 23) // 23 chars → total = 47 > 46
-	// "_projection_" (12) + "_ready" (6) = 18, so total = 47+18 = 65 > 64
-	_, err := healthz.ProjectionReadyProbeName(longCell, longProj)
+	name, err := healthz.ProjectionLagProbeName("mycell", "myproj")
+	if err != nil {
+		t.Fatalf("ProjectionLagProbeName: %v", err)
+	}
+	if string(name) != "mycell_projection_myproj_lag" {
+		t.Errorf("name = %q, want %q", name, "mycell_projection_myproj_lag")
+	}
+}
+
+// TestProjectionStoreReadyProbeName_LengthBudget asserts names exceeding 64
+// chars fail. Budget: 24 fixed chars, so cell+proj must be ≤ 40.
+func TestProjectionStoreReadyProbeName_LengthBudget(t *testing.T) {
+	t.Parallel()
+	longCell := strings.Repeat("a", 21) // 21 chars
+	longProj := strings.Repeat("b", 20) // 20 chars → total = 41 > 40
+	// "_projection_" (12) + "_store_ready" (12) = 24, so total = 41+24 = 65 > 64
+	_, err := healthz.ProjectionStoreReadyProbeName(longCell, longProj)
 	if err == nil {
 		t.Fatal("expected error for name exceeding length budget, got nil")
 	}
 }
 
-// TestProjectionReadyProbeName_MaxBudget asserts 46-char combination succeeds.
-func TestProjectionReadyProbeName_MaxBudget(t *testing.T) {
+// TestProjectionStoreReadyProbeName_MaxBudget asserts 40-char cell+proj succeeds.
+func TestProjectionStoreReadyProbeName_MaxBudget(t *testing.T) {
 	t.Parallel()
-	// 46 chars for cell+proj: exactly at budget (18 + 46 = 64).
-	cellID := strings.Repeat("a", 23)
-	projID := strings.Repeat("b", 23)
-	name, err := healthz.ProjectionReadyProbeName(cellID, projID)
+	// 40 chars for cell+proj: exactly at budget (24 + 40 = 64).
+	cellID := strings.Repeat("a", 20)
+	projID := strings.Repeat("b", 20)
+	name, err := healthz.ProjectionStoreReadyProbeName(cellID, projID)
 	if err != nil {
-		t.Fatalf("ProjectionReadyProbeName at budget: %v", err)
+		t.Fatalf("ProjectionStoreReadyProbeName at budget: %v", err)
 	}
 	if len(string(name)) != 64 {
 		t.Errorf("name len = %d, want 64", len(string(name)))
 	}
 }
 
-// TestProjectionReadyProbeName_EmptyCellID asserts empty cellID returns error.
-func TestProjectionReadyProbeName_EmptyCellID(t *testing.T) {
+// TestProjectionLagProbeName_LengthBudget asserts names exceeding 64 chars
+// fail. Budget: 16 fixed chars, so cell+proj must be ≤ 48.
+func TestProjectionLagProbeName_LengthBudget(t *testing.T) {
 	t.Parallel()
-	_, err := healthz.ProjectionReadyProbeName("", "myproj")
+	longCell := strings.Repeat("a", 25) // 25 chars
+	longProj := strings.Repeat("b", 24) // 24 chars → total = 49 > 48
+	// "_projection_" (12) + "_lag" (4) = 16, so total = 49+16 = 65 > 64
+	_, err := healthz.ProjectionLagProbeName(longCell, longProj)
+	if err == nil {
+		t.Fatal("expected error for name exceeding length budget, got nil")
+	}
+}
+
+// TestProjectionLagProbeName_MaxBudget asserts 48-char cell+proj succeeds.
+func TestProjectionLagProbeName_MaxBudget(t *testing.T) {
+	t.Parallel()
+	// 48 chars for cell+proj: exactly at budget (16 + 48 = 64).
+	cellID := strings.Repeat("a", 24)
+	projID := strings.Repeat("b", 24)
+	name, err := healthz.ProjectionLagProbeName(cellID, projID)
+	if err != nil {
+		t.Fatalf("ProjectionLagProbeName at budget: %v", err)
+	}
+	if len(string(name)) != 64 {
+		t.Errorf("name len = %d, want 64", len(string(name)))
+	}
+}
+
+// TestProjectionStoreReadyProbeName_EmptyCellID asserts empty cellID returns error.
+func TestProjectionStoreReadyProbeName_EmptyCellID(t *testing.T) {
+	t.Parallel()
+	_, err := healthz.ProjectionStoreReadyProbeName("", "myproj")
 	if err == nil {
 		t.Fatal("expected error for empty cellID, got nil")
 	}
 }
 
-// TestProjectionReadyProbeName_EmptyProjID asserts empty projID returns error.
-func TestProjectionReadyProbeName_EmptyProjID(t *testing.T) {
+// TestProjectionLagProbeName_EmptyProjID asserts empty projID returns error.
+func TestProjectionLagProbeName_EmptyProjID(t *testing.T) {
 	t.Parallel()
-	_, err := healthz.ProjectionReadyProbeName("mycell", "")
+	_, err := healthz.ProjectionLagProbeName("mycell", "")
 	if err == nil {
 		t.Fatal("expected error for empty projID, got nil")
 	}
 }
 
-// TestCoordinator_ReadinessProbe_Healthy asserts ReadinessProbe returns healthy
-// (nil) when there are no pending events (head == checkpoint).
-func TestCoordinator_ReadinessProbe_Healthy(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Coordinator.Probes — probe names and counts
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_Probes_Names asserts Probes() returns 2 probes with the
+// expected names.
+func TestCoordinator_Probes_Names(t *testing.T) {
 	t.Parallel()
-	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
-	cur := newMemCursor(src)
-	store := NewMemCheckpointStore()
+	clk := clockmock.New(time.Now())
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), newMemCursor(src), src)
 
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
-	subscribeWithDefaults(t, c, applyNoop)
-
-	probe, err := c.ReadinessProbe()
+	probes, err := c.Probes()
 	if err != nil {
-		t.Fatalf("ReadinessProbe: %v", err)
+		t.Fatalf("Probes: %v", err)
 	}
-
-	// Head=0, checkpoint=0, pending=0 → healthy.
-	if err := probe.Check(context.Background()); err != nil {
-		t.Errorf("Check: expected nil (healthy), got %v", err)
+	if len(probes) != 2 {
+		t.Fatalf("Probes() returned %d probes, want 2", len(probes))
+	}
+	wantStore := "testcell_projection_myproj_store_ready"
+	wantLag := "testcell_projection_myproj_lag"
+	if string(probes[0].Name()) != wantStore {
+		t.Errorf("probes[0].Name() = %q, want %q", probes[0].Name(), wantStore)
+	}
+	if string(probes[1].Name()) != wantLag {
+		t.Errorf("probes[1].Name() = %q, want %q", probes[1].Name(), wantLag)
 	}
 }
 
-// TestCoordinator_ReadinessProbe_ColdStartHealthy asserts ReadinessProbe returns
-// healthy (nil) on cold start (nothing applied yet, last==0).
-func TestCoordinator_ReadinessProbe_ColdStartHealthy(t *testing.T) {
+// ---------------------------------------------------------------------------
+// checkStoreReady tests
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_StoreReady_Healthy asserts store-ready probe is healthy
+// when Head and LoadOffset both succeed.
+func TestCoordinator_StoreReady_Healthy(t *testing.T) {
 	t.Parallel()
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	// Seed entries in source but don't apply any.
-	clk2 := clockmock.New(time.Now())
-	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
-	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
-
 	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
 	subscribeWithDefaults(t, c, applyNoop)
 
-	probe, err := c.ReadinessProbe()
+	probes, err := c.Probes()
 	if err != nil {
-		t.Fatalf("ReadinessProbe: %v", err)
+		t.Fatalf("Probes: %v", err)
 	}
+	storeReady := probes[0]
 
-	// head=2, checkpoint=0, pending=2, last==0 → startup grace → healthy.
-	if err := probe.Check(context.Background()); err != nil {
-		t.Errorf("Check: expected nil (startup grace), got %v", err)
+	// Head=0, LoadOffset=0 — both succeed → healthy.
+	if err := storeReady.Check(context.Background()); err != nil {
+		t.Errorf("storeReady.Check: expected nil (healthy), got %v", err)
 	}
 }
 
-// TestCoordinator_ReadinessProbe_LagUnhealthy asserts ReadinessProbe returns
-// unhealthy when lag > projectionLagThresholdSeconds.
-// Setup: head=2, checkpoint=1 (pending=1 > 0), last=farPast (lag > threshold).
-func TestCoordinator_ReadinessProbe_LagUnhealthy(t *testing.T) {
+// TestCoordinator_StoreReady_HeadError asserts store-ready probe is unhealthy
+// when Head returns an error.
+func TestCoordinator_StoreReady_HeadError(t *testing.T) {
 	t.Parallel()
-	// OccurredAt far in the past (> 300s ago).
-	farPast := time.Now().Add(-(projectionLagThresholdSeconds + 60) * time.Second)
 	clk := clockmock.New(time.Now())
-	src := NewMemReplaySource()
-	cur := newMemCursor(src)
+	errSrc := &errHeadReplaySource{headErr: errors.New("head unavailable")}
 	store := NewMemCheckpointStore()
+	cur := &fakeCursor{pos: 1}
 
-	// Append two entries so head=2.
-	clk2 := clockmock.New(time.Now())
-	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
-	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
-
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, errSrc)
 	subscribeWithDefaults(t, c, applyNoop)
 
-	// Simulate: checkpoint=1 (one event applied), head=2 → pending=1 > 0.
-	// lastApplied = far past → lag > threshold → unhealthy.
-	c.lastAppliedUnixNano.Store(farPast.UnixNano())
-	if err := store.SaveOffset(context.Background(), "testcell", "myproj", 1); err != nil {
-		t.Fatalf("SaveOffset: %v", err)
-	}
-
-	probe, err := c.ReadinessProbe()
+	probes, err := c.Probes()
 	if err != nil {
-		t.Fatalf("ReadinessProbe: %v", err)
+		t.Fatalf("Probes: %v", err)
 	}
+	storeReady := probes[0]
 
-	// pending=1 > 0, lag > threshold → unhealthy.
-	checkErr := probe.Check(context.Background())
+	checkErr := storeReady.Check(context.Background())
 	if checkErr == nil {
-		t.Fatal("Check: expected error (lag > threshold), got nil")
+		t.Fatal("storeReady.Check: expected error (Head unavailable), got nil")
 	}
 	var ec *errcode.Error
 	if !errors.As(checkErr, &ec) {
@@ -172,51 +207,159 @@ func TestCoordinator_ReadinessProbe_LagUnhealthy(t *testing.T) {
 	}
 }
 
-// TestCoordinator_ReadinessProbe_LagBelowThresholdHealthy asserts probe is healthy
-// when lag ≤ threshold.
-func TestCoordinator_ReadinessProbe_LagBelowThresholdHealthy(t *testing.T) {
+// ---------------------------------------------------------------------------
+// checkLag tests
+// ---------------------------------------------------------------------------
+
+// TestCoordinator_Lag_Idle asserts lag probe is healthy when pending = 0.
+func TestCoordinator_Lag_Idle(t *testing.T) {
 	t.Parallel()
-	// OccurredAt = 10 seconds ago (well below 300s threshold).
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur := newMemCursor(src)
+	store := NewMemCheckpointStore()
+
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	subscribeWithDefaults(t, c, applyNoop)
+
+	probes, err := c.Probes()
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	lagProbe := probes[1]
+
+	// Head=0, checkpoint=0, pending=0 → idle → healthy.
+	if err := lagProbe.Check(context.Background()); err != nil {
+		t.Errorf("lagProbe.Check: expected nil (idle), got %v", err)
+	}
+}
+
+// TestCoordinator_Lag_ColdStartHealthy asserts lag probe is healthy on cold
+// start (nothing applied yet, last==0).
+func TestCoordinator_Lag_ColdStartHealthy(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur := newMemCursor(src)
+	store := NewMemCheckpointStore()
+
+	clk2 := clockmock.New(time.Now())
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	subscribeWithDefaults(t, c, applyNoop)
+
+	probes, err := c.Probes()
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	lagProbe := probes[1]
+
+	// head=2, checkpoint=0, pending=2, last==0 → startup grace → healthy.
+	if err := lagProbe.Check(context.Background()); err != nil {
+		t.Errorf("lagProbe.Check: expected nil (startup grace), got %v", err)
+	}
+}
+
+// TestCoordinator_Lag_NegativePending_Warn asserts lag probe is healthy when
+// checkpoint > head (anomaly) and does NOT write a negative gauge (F13).
+func TestCoordinator_Lag_NegativePending_Warn(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur := newMemCursor(src)
+	store := NewMemCheckpointStore()
+
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	subscribeWithDefaults(t, c, applyNoop)
+
+	// Set checkpoint > head (anomaly: head=0, checkpoint=5).
+	if err := store.SaveOffset(context.Background(), "testcell", "myproj", 5); err != nil {
+		t.Fatalf("SaveOffset: %v", err)
+	}
+
+	probes, err := c.Probes()
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	lagProbe := probes[1]
+
+	// pending < 0 → should be healthy (F13: no negative gauge, just warn+healthy).
+	if err := lagProbe.Check(context.Background()); err != nil {
+		t.Errorf("lagProbe.Check: expected nil (negative-pending anomaly → healthy), got %v", err)
+	}
+}
+
+// TestCoordinator_Lag_Unhealthy asserts lag probe is unhealthy when
+// lag > projectionLagThresholdSeconds.
+func TestCoordinator_Lag_Unhealthy(t *testing.T) {
+	t.Parallel()
+	farPast := time.Now().Add(-(projectionLagThresholdSeconds + 60) * time.Second)
+	clk := clockmock.New(time.Now())
+	src := NewMemReplaySource()
+	cur := newMemCursor(src)
+	store := NewMemCheckpointStore()
+
+	clk2 := clockmock.New(time.Now())
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+
+	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
+	subscribeWithDefaults(t, c, applyNoop)
+
+	// pending=1, last=farPast → lag > threshold → unhealthy.
+	c.lastAppliedUnixNano.Store(farPast.UnixNano())
+	if err := store.SaveOffset(context.Background(), "testcell", "myproj", 1); err != nil {
+		t.Fatalf("SaveOffset: %v", err)
+	}
+
+	probes, err := c.Probes()
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	lagProbe := probes[1]
+
+	checkErr := lagProbe.Check(context.Background())
+	if checkErr == nil {
+		t.Fatal("lagProbe.Check: expected error (lag > threshold), got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(checkErr, &ec) {
+		t.Errorf("error is not *errcode.Error: %T %v", checkErr, checkErr)
+	}
+}
+
+// TestCoordinator_Lag_BelowThreshold asserts lag probe is healthy when
+// lag ≤ threshold (F14: cell/projection in Internal, not Details).
+func TestCoordinator_Lag_BelowThreshold(t *testing.T) {
+	t.Parallel()
 	recentPast := time.Now().Add(-probeTestRecentLagOffset)
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	// Apply entry with recent OccurredAt.
+	clk2 := clockmock.New(time.Now())
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+
 	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
 	subscribeWithDefaults(t, c, applyNoop)
+
 	c.lastAppliedUnixNano.Store(recentPast.UnixNano())
 	if err := store.SaveOffset(context.Background(), "testcell", "myproj", 1); err != nil {
 		t.Fatalf("SaveOffset: %v", err)
 	}
 
-	probe, err := c.ReadinessProbe()
+	probes, err := c.Probes()
 	if err != nil {
-		t.Fatalf("ReadinessProbe: %v", err)
+		t.Fatalf("Probes: %v", err)
 	}
+	lagProbe := probes[1]
 
 	// lag ≈ 10s < 300s → healthy.
-	if err := probe.Check(context.Background()); err != nil {
-		t.Errorf("Check: expected nil (lag below threshold), got %v", err)
-	}
-}
-
-// TestCoordinator_ReadinessProbe_ProbeName asserts the probe name follows the
-// expected format "<cell>_projection_<proj>_ready".
-func TestCoordinator_ReadinessProbe_ProbeName(t *testing.T) {
-	t.Parallel()
-	src := NewMemReplaySource()
-	clk := clockmock.New(time.Now())
-	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), newMemCursor(src), src)
-
-	probe, err := c.ReadinessProbe()
-	if err != nil {
-		t.Fatalf("ReadinessProbe: %v", err)
-	}
-
-	wantName := "testcell_projection_myproj_ready"
-	if string(probe.Name()) != wantName {
-		t.Errorf("probe.Name() = %q, want %q", probe.Name(), wantName)
+	if err := lagProbe.Check(context.Background()); err != nil {
+		t.Errorf("lagProbe.Check: expected nil (lag below threshold), got %v", err)
 	}
 }

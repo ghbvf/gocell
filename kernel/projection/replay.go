@@ -27,6 +27,14 @@ import (
 // ambient transaction — it is the caller's responsibility to manage tx
 // boundaries around fn.
 //
+// # Replay duration bound (v1)
+//
+// In v1, Replay is bounded only by ctx cancellation: there is no max-entries
+// or max-duration parameter. Operators bound replay duration by setting a
+// timeout on the rebuild context (the ctx passed to Rebuild, which is
+// forwarded as the runRebuild ctx). Per-batch limiting is deferred to a future
+// version when large-history projections require it.
+//
 // PR-03 ships this interface and the MemReplaySource fake. A production
 // journal-backed implementation (reading from the outbox event store or a
 // separate event log) lands in PR-04 (#1176) alongside the cellgen wiring.
