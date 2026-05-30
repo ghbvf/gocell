@@ -237,7 +237,7 @@ type Server struct {
 
 type ServerConfig struct {
     Addr           string
-    TLS            *tls.Config       // nil → plaintext (dev only; bootstrap rejects in non-dev)
+    TLS            *tls.Config       // nil → plaintext, gated by explicit AllowInsecure opt-in (fail-closed: zero-value rejected), not restricted to loopback — mesh-sidecar plaintext is a valid production posture
     MaxRecvMsgSize int               // default 4 MiB; matches grpc-go default
     KeepaliveParams keepalive.ServerParameters
 }
