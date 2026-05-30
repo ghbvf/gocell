@@ -449,10 +449,13 @@ func (e *Executor) executeInner(
 				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
 			}
 		}()
-		runHeartbeat(hbCtx, e.clk, e.heartbeater,
-			inst.ID, leaseID, inst.DefinitionID,
-			e.heartbeatInterval, e.leaseDuration,
-			e.logger, onStale, onHBFailure)
+		runHeartbeat(hbCtx, e.clk, e.heartbeater, HeartbeatConfig{
+			InstanceID:    inst.ID,
+			LeaseID:       leaseID,
+			DefinitionID:  inst.DefinitionID,
+			Interval:      e.heartbeatInterval,
+			LeaseDuration: e.leaseDuration,
+		}, e.logger, onStale, onHBFailure)
 	}()
 	stopAndJoin := func() { stopHB(); hbWG.Wait() }
 
@@ -561,10 +564,13 @@ func (e *Executor) RunWithHeartbeat(
 				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails
 			}
 		}()
-		runHeartbeat(hbCtx, e.clk, e.heartbeater,
-			inst.ID, leaseID, inst.DefinitionID,
-			e.heartbeatInterval, e.leaseDuration,
-			e.logger, onStale, onHBFailure)
+		runHeartbeat(hbCtx, e.clk, e.heartbeater, HeartbeatConfig{
+			InstanceID:    inst.ID,
+			LeaseID:       leaseID,
+			DefinitionID:  inst.DefinitionID,
+			Interval:      e.heartbeatInterval,
+			LeaseDuration: e.leaseDuration,
+		}, e.logger, onStale, onHBFailure)
 	}()
 	defer func() {
 		stopHB()
