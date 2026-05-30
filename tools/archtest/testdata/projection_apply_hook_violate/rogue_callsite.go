@@ -28,5 +28,5 @@ func rogueSubscribe(coord *projection.Coordinator) {
 	}
 	// VIOLATION: Coordinator.Subscribe called from a non-allowlisted file.
 	// PROJECTION-APPLY-HOOK-FUNNEL-01 must fire here.
-	_ = coord.Subscribe(context.Background(), spec, "proj-id", apply)
+	_ = coord.Subscribe(context.Background(), spec, apply)
 }

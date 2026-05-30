@@ -6,6 +6,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+// OnReset is the business hook invoked during a projection rebuild Reset phase.
+// It allows the projection owner to clear its read-model state (e.g. TRUNCATE a
+// view table) before the harness resets the checkpoint offset to 0 and begins
+// replay. The transaction is ambient — OnReset obtains it via
+// persistence.TxFromContext(ctx), exactly like Apply. Both OnReset and the
+// SaveOffset(0) call share the same transaction; if OnReset returns an error,
+// the whole transaction rolls back and the read-model is left untouched.
+//
+// Passing nil is valid (projection has no read-model table to clear — offset
+// reset alone suffices). OnReset is set via WithOnReset option on Subscribe.
+//
+// ref: AxonFramework @ResetHandler — called during TrackingEventProcessor reset
+// to let the projection clear application state before replay.
+type OnReset func(ctx context.Context) error
+
 // Apply is the business event→state projection hook: given a consumed event,
 // mutate the read-model. The transaction is ambient — Apply obtains it via
 // persistence.TxFromContext(ctx) exactly like outbox.Writer.Write, because the
@@ -59,10 +74,24 @@ type CheckpointStore interface {
 // Declared here so the Subscribe API surface is fixed by the ADR rather than
 // drifting when the implementation lands.
 //
-// In v1 no option constructors exist yet — passing no opts (an empty or nil
-// slice) is valid and is the expected call form for the initial release.
+// Available option constructors:
+//   - [WithOnReset] — registers an OnReset hook invoked during the rebuild Reset phase.
+//
+// Passing no opts (an empty or nil slice) is valid.
 type Option func(*subscribeOptions)
 
 // subscribeOptions holds the resolved Subscribe configuration. It is the target
-// of Option closures; fields are introduced with the Coordinator in PR-01.
-type subscribeOptions struct{}
+// of Option closures.
+type subscribeOptions struct {
+	onReset OnReset
+}
+
+// WithOnReset configures the OnReset hook for the projection. When a rebuild is
+// triggered, the hook is called inside the Reset transaction so the read-model
+// can be cleared atomically with the checkpoint offset reset to 0. Passing nil
+// is valid (no-op; offset is still reset to 0).
+func WithOnReset(fn OnReset) Option {
+	return func(o *subscribeOptions) {
+		o.onReset = fn
+	}
+}

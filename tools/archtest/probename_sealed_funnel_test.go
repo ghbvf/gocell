@@ -39,7 +39,12 @@
 //   - A4b: MustProbeName caller allowlist (archtest, Medium upstream)
 //   - A5: EmitterFailOpenProbeName composed-name BinaryExpr (archtest, Medium upstream)
 //   - A6: Probe interface sealed marker `isHealthzProbe()` — Go compiler gate;
-//     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls
+//     no archtest rule needed; cross-checked by B5 blind-spot for in-package impls.
+//     Note: A6 in earlier PR-03 revisions also denoted a projection-prefix string-
+//     anchor scan (Soft per ai-robust.md "Soft 严禁立项"). That scan was removed in
+//     PR-03 round-3; the projection composed-name funnel is already Hard-closed by
+//     A2 (cast ban) + A4 (NewProbeName caller allowlist) + sole constructors
+//     (ProjectionStoreReadyProbeName / ProjectionLagProbeName).
 //   - B1: reflect.MethodByName("RegisterReadiness") blind-spot
 //   - B3: ProbeName(callExpr) cast blind-spot
 //   - B5: in-package new isHealthzProbe() implementer blind-spot
@@ -560,10 +565,15 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 	// adapterutil.HealthToProbe wraps its ProbeName parameter through to
 	// healthz.NewProbe — the parameter originates as a sanctioned const at
 	// the caller's adapter declaration site (e.g. redis.ProbeReady).
-	"adapters/adapterutil/health.go":                           {},
-	"kernel/cell/healthz.go":                                   {},
-	"kernel/cell/registry.go":                                  {},
-	"kernel/outbox/emitter.go":                                 {},
+	"adapters/adapterutil/health.go": {},
+	"kernel/cell/healthz.go":         {},
+	"kernel/cell/registry.go":        {},
+	"kernel/outbox/emitter.go":       {},
+	// projection.Coordinator.Probes composes probe names via the two sanctioned
+	// constructors ProjectionStoreReadyProbeName / ProjectionLagProbeName and
+	// passes the results to NewProbe — same funnel-internal shape as emitter.go
+	// (names are runtime compositions of cellID+projectionID, not consts).
+	"kernel/projection/probe.go":                               {},
 	"runtime/bootstrap/bootstrap_phases.go":                    {},
 	"runtime/bootstrap/phases_lifecycle.go":                    {},
 	"runtime/observability/healthz/healthztest/conformance.go": {},
@@ -942,7 +952,7 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 
 // ─── Main production scan ─────────────────────────────────────────────────────
 
-// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A6)
+// TestProbenameSealedFunnel enforces PROBENAME-SEALED-FUNNEL-01 (A1–A5)
 // across the production tree.
 //
 // Sub-tests:
@@ -962,6 +972,12 @@ func collectProbeNameConsts(t *testing.T, root string) []string {
 //     from production code outside kernel/healthz/probename.go.
 //   - A5_EmitterFailOpenPrefixBypass — the "outbox_failopen_rate_" string prefix
 //     must not appear in bare BinaryExpr concat outside probename.go.
+//
+// Note: A6 (projection prefix bypass scan) was removed in PR-03 round-3.
+// The projection composed-name funnel is already Hard-closed by A2 (cast ban)
+// + A4 (NewProbeName caller allowlist) + the two sole constructors
+// ProjectionStoreReadyProbeName / ProjectionLagProbeName; A6 was a bypassable
+// string-anchor scan (Soft per ai-robust.md) that added no additional closure.
 func TestProbenameSealedFunnel(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -1075,6 +1091,9 @@ func TestProbenameSealedFunnel_ReverseFixtures(t *testing.T) {
 		{name: "string_cast_bypass_red", want: "B3"},
 		{name: "reflect_bypass_red", want: "B1"},
 		{name: "reflect_bypass_const_red", want: "B1"},
+		// projection_prefix_bypass_red (A6) removed: A6 was a bypassable
+		// string-anchor scan (Soft). The projection composed-name funnel is
+		// already Hard-closed by A2+A4+sole constructors; see TestProbenameSealedFunnel.
 		// helper_wrapper_red (B2) is a *non-bypass*: the type system already
 		// enforces healthz.ProbeName at the wrapper's signature, so a wrapper
 		// inheriting the typed signature provides no escape from the typed

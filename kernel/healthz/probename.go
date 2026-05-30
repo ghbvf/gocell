@@ -154,3 +154,61 @@ func EmitterFailOpenProbeName(cellID string) (ProbeName, error) {
 	}
 	return NewProbeName(emitterFailOpenProbeNamePrefix + cellID)
 }
+
+// projectionProbeNameInfix forms the fixed middle segment shared by all
+// projection probe names: "<cellID>_projection_<projectionID>_…".
+// Length = len("_projection_") = 12.
+const projectionProbeNameInfix = "_projection_"
+
+// projectionStoreReadySuffix and projectionLagSuffix are the terminal segments
+// of the two projection probe names, per observability.md conventions:
+//   - "…_store_ready": dependency-availability probe (_ready suffix required)
+//   - "…_lag": operational-health probe (no _ready suffix — same convention as
+//     outbox_relay_poll / outbox_relay_reclaim / outbox_relay_cleanup)
+const (
+	projectionStoreReadySuffix = "_store_ready"
+	projectionLagSuffix        = "_lag"
+)
+
+// ProjectionStoreReadyProbeName composes the typed probe name for the
+// projection store-readiness probe:
+// "<cellID>_projection_<projectionID>_store_ready". This is a dependency-
+// availability probe (storage reachable); the "_ready" suffix is required per
+// observability.md.
+//
+// Budget: fixed infix "_projection_" (12) + suffix "_store_ready" (12) = 24
+// chars. So len(cellID)+len(projectionID) must be ≤ 40 (64 − 24).
+// NewProbeName fail-fast on overflow.
+//
+// This is one of the TWO sole-sanctioned composed-name constructors for
+// projection probes. The composed-name closure is: A2 cast-ban + A4
+// NewProbeName caller-allowlist (kernel/healthz/probename.go) + sole
+// constructors (here and ProjectionLagProbeName) — Hard up+downstream.
+// No A5-style prefix scan is needed (A2+A4 already prevent any bypass).
+func ProjectionStoreReadyProbeName(cellID, projectionID string) (ProbeName, error) {
+	if cellID == "" || projectionID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: projection probe cellID and projectionID must not be empty")
+	}
+	return NewProbeName(cellID + projectionProbeNameInfix + projectionID + projectionStoreReadySuffix)
+}
+
+// ProjectionLagProbeName composes the typed probe name for the projection
+// replay-lag probe: "<cellID>_projection_<projectionID>_lag". This is an
+// operational-health probe (read-model staleness); per observability.md it
+// does NOT carry the "_ready" suffix — same convention as
+// outbox_relay_poll / outbox_relay_reclaim.
+//
+// Budget: fixed infix "_projection_" (12) + suffix "_lag" (4) = 16 chars.
+// So len(cellID)+len(projectionID) must be ≤ 48 (64 − 16).
+// NewProbeName fail-fast on overflow.
+//
+// This is one of the TWO sole-sanctioned composed-name constructors for
+// projection probes. See ProjectionStoreReadyProbeName for the closure note.
+func ProjectionLagProbeName(cellID, projectionID string) (ProbeName, error) {
+	if cellID == "" || projectionID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: projection probe cellID and projectionID must not be empty")
+	}
+	return NewProbeName(cellID + projectionProbeNameInfix + projectionID + projectionLagSuffix)
+}

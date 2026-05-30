@@ -145,6 +145,66 @@ func TestEmitterFailOpenProbeName_InvalidCellID(t *testing.T) {
 	}
 }
 
+func TestProjectionStoreReadyProbeName(t *testing.T) {
+	t.Parallel()
+
+	got, err := ProjectionStoreReadyProbeName("ordercell", "statussummary")
+	if err != nil {
+		t.Fatalf("ProjectionStoreReadyProbeName unexpected error: %v", err)
+	}
+	if want := ProbeName("ordercell_projection_statussummary_store_ready"); got != want {
+		t.Errorf("ProjectionStoreReadyProbeName = %q, want %q", got, want)
+	}
+
+	// Over budget: fixed segments are 24 chars (cap 64 → cell+proj ≤ 40).
+	if _, err := ProjectionStoreReadyProbeName(strings.Repeat("a", 21), strings.Repeat("b", 20)); err == nil {
+		t.Error("ProjectionStoreReadyProbeName(41 chars cell+proj) expected length-budget error, got nil")
+	}
+	for _, tc := range []struct{ name, cell, proj string }{
+		{"empty-cell", "", "p"},
+		{"empty-proj", "c", ""},
+		{"hyphen-cell", "Bad-Cell", "p"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ProjectionStoreReadyProbeName(tc.cell, tc.proj); err == nil {
+				t.Errorf("ProjectionStoreReadyProbeName(%q,%q) expected error, got nil", tc.cell, tc.proj)
+			}
+		})
+	}
+}
+
+func TestProjectionLagProbeName(t *testing.T) {
+	t.Parallel()
+
+	got, err := ProjectionLagProbeName("ordercell", "statussummary")
+	if err != nil {
+		t.Fatalf("ProjectionLagProbeName unexpected error: %v", err)
+	}
+	if want := ProbeName("ordercell_projection_statussummary_lag"); got != want {
+		t.Errorf("ProjectionLagProbeName = %q, want %q", got, want)
+	}
+
+	// Over budget: fixed segments are 16 chars (cap 64 → cell+proj ≤ 48).
+	if _, err := ProjectionLagProbeName(strings.Repeat("a", 25), strings.Repeat("b", 24)); err == nil {
+		t.Error("ProjectionLagProbeName(49 chars cell+proj) expected length-budget error, got nil")
+	}
+	for _, tc := range []struct{ name, cell, proj string }{
+		{"empty-cell", "", "p"},
+		{"empty-proj", "c", ""},
+		{"hyphen-proj", "c", "Bad-Proj"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ProjectionLagProbeName(tc.cell, tc.proj); err == nil {
+				t.Errorf("ProjectionLagProbeName(%q,%q) expected error, got nil", tc.cell, tc.proj)
+			}
+		})
+	}
+}
+
 func TestMustProbeName_Panic_RecoversWithRightReason(t *testing.T) {
 	t.Parallel()
 

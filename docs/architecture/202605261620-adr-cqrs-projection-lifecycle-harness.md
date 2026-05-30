@@ -305,30 +305,41 @@ projection). It is constructed via `kernel/healthz.NewProbeName(...)` — there 
 PR-03's constructor returns `(ProbeName, error)` and fails fast at construction
 when the budget is exceeded, rather than silently dropping the probe.
 
-### Rebuild control-plane endpoint (PR-03 forward contract)
+### Rebuild control-plane endpoint (forward contract)
 
-The rebuild trigger is an internal HTTP endpoint. Its `contract.yaml` + handler
-land in **PR-03 (T-03-3)**; this section freezes the forward contract so PR-03
-does not drift and `/internal/v1/` declaration requirements
-(`.claude/rules/gocell/go-standards.md` §安全检查点) are satisfied at design time:
+The rebuild trigger is a per-cell HTTP endpoint. Its `contract.yaml` + handler
+land in **PR-04** (cellgen `kind: projection` derivation, #1176); PR-03 ships
+only the kernel/runtime harness — there is **no host cell or internal listener**
+to mount it on until cellgen wiring lands. A platform-level `active` contract
+with no cell impl would trip `DEAD-CONTRACT-01`.
+
+**PR-03 freezes the programmatic trigger surface** and forward contract for PR-04:
 
 - **Endpoint**: `POST /internal/v1/<cellID>/projection/<projectionID>/rebuild`.
 - **Caller / auth**: service-token authentication + caller-cell allowlist (the
   caller's cell ID must be in the contract's `clients` allowlist). No public
   access. Same shape as other `/internal/v1/` control-plane endpoints.
 - **Network boundary**: internal-only — never mounted on a public listener.
-- **HTTP semantics**: `202 Accepted` (rebuild is async — the state machine runs
-  in the background; the response acknowledges acceptance, not completion) /
-  `409 Conflict` (a rebuild is already in progress for this projection;
-  `Phase() != PhaseLive`) / `404 Not Found` (unknown cell/projection).
-- **Response envelope**: the unified `{"data": {...}}` shape
-  (`.claude/rules/gocell/error-handling.md`); the `data` object carries the
+- **HTTP semantics**: `202 Accepted` (rebuild is async — `Coordinator.Rebuild`
+  returns immediately; the state machine runs on a background goroutine) /
+  `409 Conflict` (`ErrRebuildInProgress` — a rebuild is already running) /
+  `404 Not Found` (unknown cell/projection).
+- **Response envelope**: unified `{"data": {...}}` shape; `data` carries the
   current `{phase, replayLagSeconds, pendingEvents}` snapshot. Errors use the
   shared error envelope.
+- **PR-03 programmatic surface**: `Coordinator.Rebuild(ctx) error` (admission
+  CAS `PhaseLive→PhaseStopped`) + `Coordinator.Close(ctx)` for graceful drain.
+  The snapshot is computed by the readyz probe / metrics path delivered in PR-03.
 
-The full `contract.yaml` (request/response schema, `clients` allowlist) is
-authored in PR-03; PR-00 freezes only the auth model + network boundary + status
-semantics above.
+**PR-04 authors the HTTP wrapper**: the `POST /internal/v1/<cell>/projection/
+<name>/rebuild` contract.yaml + per-cell handler (cellgen output) calling
+`Coordinator.Rebuild`, with the **unchanged** auth model / network boundary /
+202·409·404 status semantics frozen above.
+
+**Threat-matrix re-evaluation.** No cell flips: row 3 (rebuild-period read
+consistency) is discharged by `Phase()` + readyz, **both delivered in PR-03** as
+planned — the HTTP *trigger* is a convenience surface, not a threat-discharge
+mechanism (a rebuild is equally triggerable via `Coordinator.Rebuild`).
 
 ## 6. Threat matrix
 
@@ -341,7 +352,7 @@ verified by the listed PR).
 |---|---|---|---|
 | 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in PR-04 (#1176, where cellgen wiring first needs a concrete Cursor); PR-06 real-PG integration |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
-| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract |
+| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. See §5 Amendment 2026-05-31: the HTTP trigger moved to PR-04 but the Phase()/readyz discharge mechanism lands in PR-03 as planned. |
 | 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring in PR-04 — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04 (#1176)** |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
