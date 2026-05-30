@@ -597,8 +597,8 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 	buildCellLevelProject := func(cellLevel, role string) *metadata.ProjectMeta {
 		return &metadata.ProjectMeta{
 			Cells: map[string]*metadata.CellMeta{
-				"orchestratorcell": {
-					ID:               "orchestratorcell",
+				metadatatest.NewCellID("orchestratorcell"): {
+					ID:               metadatatest.NewCellID("orchestratorcell"),
 					ConsistencyLevel: cellLevel,
 					File:             "cells/orchestratorcell/cell.yaml",
 				},
@@ -606,7 +606,7 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 			Slices: map[string]*metadata.SliceMeta{
 				"orchestratorcell/saga-orchestrate": {
 					ID:            "saga-orchestrate",
-					BelongsToCell: "orchestratorcell",
+					BelongsToCell: metadatatest.NewCellID("orchestratorcell"),
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "saga.order.v1", Role: role},
 					},
@@ -697,7 +697,7 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 			Slices: map[string]*metadata.SliceMeta{
 				"unknowncell/saga-orchestrate": {
 					ID:            "saga-orchestrate",
-					BelongsToCell: "unknowncell",
+					BelongsToCell: metadatatest.NewCellID("unknowncell"),
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "saga.order.v1", Role: "orchestrate"},
 					},
@@ -722,15 +722,15 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 		t.Parallel()
 		project := &metadata.ProjectMeta{
 			Cells: map[string]*metadata.CellMeta{
-				"orchestratorcell": {
-					ID: "orchestratorcell", ConsistencyLevel: "L2",
+				metadatatest.NewCellID("orchestratorcell"): {
+					ID: metadatatest.NewCellID("orchestratorcell"), ConsistencyLevel: "L2",
 					File: "cells/orchestratorcell/cell.yaml",
 				},
 			},
 			Slices: map[string]*metadata.SliceMeta{
 				"orchestratorcell/bad-orchestrate": {
 					ID:            "bad-orchestrate",
-					BelongsToCell: "orchestratorcell",
+					BelongsToCell: metadatatest.NewCellID("orchestratorcell"),
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.order.v1", Role: "orchestrate"},
 					},

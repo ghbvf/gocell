@@ -4003,16 +4003,15 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 			continue
 		}
 		rel := p.Rel(file)
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Recv != nil || fd.Body == nil {
-				continue
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			if fd.Recv != nil || fd.Body == nil {
+				return
 			}
 			if !strings.HasPrefix(fd.Name.Name, "New") {
-				continue
+				return
 			}
 			if fd.Type.Params == nil {
-				continue
+				return
 			}
 			// Collect interface parameters and their types.Object.
 			type ifaceParam struct {
@@ -4067,29 +4066,26 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 				}
 			}
 			if len(ifaces) == 0 {
-				continue
+				return
 			}
 			// For each interface param, check if a guard call referencing it exists
 			// in the body.
 			for _, ip := range ifaces {
-				guarded := false
-				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
-					if guarded || !sagaIsGuardCall(p, call) {
-						return
+				_, guarded := FindFirstInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) bool {
+					if !sagaIsGuardCall(p, call) {
+						return false
 					}
 					// Check first argument is the parameter object. ast.Unparen
 					// strips redundant parens so IsNilInterface((dep)) is still
 					// recognized as a guard (closes the parenthesized-arg bypass).
 					if len(call.Args) == 0 {
-						return
+						return false
 					}
 					firstArg, ok2 := ast.Unparen(call.Args[0]).(*ast.Ident)
 					if !ok2 {
-						return
+						return false
 					}
-					if p.TypesInfo.ObjectOf(firstArg) == ip.obj {
-						guarded = true
-					}
+					return p.TypesInfo.ObjectOf(firstArg) == ip.obj
 				})
 				if !guarded {
 					out = append(out, sagaDiag(p, fd.Name, rel,
@@ -4099,7 +4095,7 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 							"add validation.IsNilInterface("+ip.name+") or clock.MustHaveClock("+ip.name+", ...)"))
 				}
 			}
-		}
+		})
 	}
 	return out
 }
@@ -4234,14 +4230,13 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 				continue
 			}
 			rel := p.Rel(file)
-			for _, decl := range file.Decls {
-				fd, ok := decl.(*ast.FuncDecl)
-				if !ok || fd.Body == nil || fd.Recv != nil || !strings.HasPrefix(fd.Name.Name, "New") {
-					continue
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Body == nil || fd.Recv != nil || !strings.HasPrefix(fd.Name.Name, "New") {
+					return
 				}
 				paramObjs := sagaConstructorIfaceParamObjs(p, fd)
 				if len(paramObjs) == 0 {
-					continue
+					return
 				}
 				EachInSubtree[ast.AssignStmt](fd.Body, func(as *ast.AssignStmt) {
 					for _, rhs := range as.Rhs {
@@ -4257,7 +4252,7 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 						}
 					}
 				})
-			}
+			})
 		}
 		return out
 	})

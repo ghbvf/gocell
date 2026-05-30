@@ -507,33 +507,29 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		return wrapErr
 	}
 
-	// registerCounter registers one CounterVec, tracks it for rollback, and on
-	// failure returns the rollback-wrapped error so the caller just propagates it.
-	registerCounter := func(opts metrics.CounterOpts, wrapCtx string) (metrics.CounterVec, error) {
-		cv, cErr := p.CounterVec(opts)
-		if cErr != nil {
-			return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, wrapCtx, cErr))
-		}
-		registered = append(registered, cv)
-		return cv, nil
+	consumeTotal, cErr := p.CounterVec(subConsumeTotalOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register consume total counter", cErr))
 	}
+	registered = append(registered, consumeTotal)
 
-	consumeTotal, err := registerCounter(subConsumeTotalOpts, "mqtt: register consume total counter")
-	if err != nil {
-		return nil, err
+	consumeFailed, cErr := p.CounterVec(subConsumeFailedOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register consume failed counter", cErr))
 	}
-	consumeFailed, err := registerCounter(subConsumeFailedOpts, "mqtt: register consume failed counter")
-	if err != nil {
-		return nil, err
+	registered = append(registered, consumeFailed)
+
+	dlxTotal, cErr := p.CounterVec(subDlxTotalOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register dlx counter", cErr))
 	}
-	dlxTotal, err := registerCounter(subDlxTotalOpts, "mqtt: register dlx counter")
-	if err != nil {
-		return nil, err
+	registered = append(registered, dlxTotal)
+
+	dlxFailed, cErr := p.CounterVec(subDlxFailedOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register dlx failed counter", cErr))
 	}
-	dlxFailed, err := registerCounter(subDlxFailedOpts, "mqtt: register dlx failed counter")
-	if err != nil {
-		return nil, err
-	}
+	registered = append(registered, dlxFailed)
 
 	consumeDur, err := p.HistogramVec(subConsumeDurOpts)
 	if err != nil {
