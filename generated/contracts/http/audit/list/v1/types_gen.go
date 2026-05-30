@@ -20,8 +20,9 @@ type Request struct {
 	Cursor    string `json:"cursor,omitempty"`
 	EventType string `json:"eventType,omitempty"`
 	// format: date-time
-	From  string `json:"from,omitempty"`
-	Limit int64  `json:"limit,omitempty"`
+	From      string `json:"from,omitempty"`
+	Limit     int64  `json:"limit,omitempty"`
+	SubjectID string `json:"subjectId,omitempty"`
 	// format: date-time
 	To string `json:"to,omitempty"`
 }

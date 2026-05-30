@@ -136,6 +136,27 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 	}
 
 	principal := entry.Principal()
+
+	// INV-SINGLE-TENANT-ONLY regression tripwire (#1289, epic #1296).
+	//
+	// This is an OPERATIONAL tripwire, NOT a tenant-isolation security boundary.
+	// develop is single-tenant: no producer writes principal.TenantID (the auth
+	// middleware never calls ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+	// locks the only writer to consumer-side RestoreToContext), so this branch is
+	// dead today. A non-empty TenantID reaching audit persistence means
+	// multi-tenancy (#1296) landed without wiring tenant-scoped audit filtering —
+	// a security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
+	// audit record: compliance evidence is never discarded. When #1296 lands, this
+	// tripwire is removed and replaced by tenant-scoped query filtering. It guards
+	// the persistence-reach path; CTXKEYS-PRINCIPAL-WRITE-CALLER-01 orthogonally
+	// guards the ctx-write path.
+	if principal.TenantID != "" {
+		s.logger.Error(logPrefix+": INV-SINGLE-TENANT-ONLY violated — non-empty principal.TenantID "+
+			"with no tenant-scoped audit query enforcement (epic #1296)",
+			slog.String("event_id", entry.ID()),
+			slog.String("event_type", entry.EventType()))
+	}
+
 	e := &ledger.Entry{
 		ID:            auditEntryIDPrefix + uuid.NewString(),
 		EventID:       entry.ID(),

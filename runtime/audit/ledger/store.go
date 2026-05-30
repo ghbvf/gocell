@@ -32,6 +32,14 @@ type AuditFilters struct {
 	// ActorID filters by exact actor identifier. Empty means no filter.
 	ActorID string
 
+	// SubjectID filters by exact subject identifier — the principal the audited
+	// action targeted. Empty means no filter. Unlike ActorID (who performed the
+	// action), SubjectID lets an admin investigate impersonation where actor !=
+	// subject (#1290). For non-admin callers it composes with the actor-self
+	// scoping the auditquery policy enforces, so it only ever narrows within the
+	// caller's own actions.
+	SubjectID string
+
 	// From filters entries with Timestamp >= From. Zero means no lower bound.
 	From time.Time
 

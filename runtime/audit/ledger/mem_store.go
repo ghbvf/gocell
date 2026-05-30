@@ -326,6 +326,9 @@ func matchesFilters(e *Entry, f AuditFilters) bool {
 	if f.ActorID != "" && e.ActorID != f.ActorID {
 		return false
 	}
+	if f.SubjectID != "" && e.SubjectID != f.SubjectID {
+		return false
+	}
 	if !f.From.IsZero() && e.Timestamp.Before(f.From) {
 		return false
 	}

@@ -219,6 +219,7 @@ func TestHttpAuditListV1_QueryParamsMetadata(t *testing.T) {
 		"eventType": "string",
 		"from":      "string",
 		"limit":     "integer",
+		"subjectId": "string",
 		"to":        "string",
 	}
 	if len(c.HTTP.QueryParams) != len(want) {

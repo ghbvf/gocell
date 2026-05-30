@@ -558,16 +558,16 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
 		Data []struct {
-			ID        string `json:"id"`
+			EventID   string `json:"eventId"`
 			ActorID   string `json:"actorId"`
 			SubjectID string `json:"subjectId"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// Only ns-1: actor=usr-1 AND subject=victim. ns-2 excluded by subjectId,
-	// ns-3 excluded by actor-self scoping.
+	// Only the ns-1 row (eventId evt-n1): actor=usr-1 AND subject=victim. ns-2 is
+	// excluded by the subjectId filter, ns-3 by actor-self scoping.
 	require.Len(t, resp.Data, 1)
-	assert.Equal(t, "ns-1", resp.Data[0].ID)
+	assert.Equal(t, "evt-n1", resp.Data[0].EventID)
 	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
 	assert.Equal(t, "victim", resp.Data[0].SubjectID)
 }
