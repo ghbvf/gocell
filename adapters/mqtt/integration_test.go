@@ -544,14 +544,20 @@ func TestIntegration_Subscriber_SessionRecovery(t *testing.T) {
 func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicNamespace, subscription outbox.Subscription) {
 	t.Helper()
 	ctx1, cancel1 := context.WithCancel(context.Background())
+	// cancel1 has a dual role:
+	//   1. Functional drop (end of function): canceling ctx1 causes an unclean TCP
+	//      disconnect so the broker retains the persistent session + subscription,
+	//      which is the precondition for phase-2 session-recovery testing.
+	//   2. Cleanup guard (t.Cleanup): prevents autopaho goroutine leak if the
+	//      function returns early (e.g. t.Fatalf on error branches). cancel is
+	//      idempotent so calling it twice is safe.
+	t.Cleanup(cancel1)
 	conn1, err := Open(ctx1, clock.Real(), mkCfg())
 	if err != nil {
-		cancel1()
 		t.Fatalf("Open conn1: %v", err)
 	}
 	sub1, err := NewSubscriber(clock.Real(), conn1, ns, SubscriberConfig{})
 	if err != nil {
-		cancel1()
 		t.Fatalf("NewSubscriber 1: %v", err)
 	}
 	// sub1.Subscribe runs under ctx1: canceling ctx1 both drops the autopaho
@@ -564,9 +570,13 @@ func itestSessionPhase1Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 	select {
 	case <-sub1.Ready(subscription):
 	case <-time.After(testtime.D10s):
-		cancel1()
 		t.Fatal("phase-1 subscribe not ready")
 	}
+	// Functional drop: intentionally NOT calling conn1.Close() — Close() would
+	// send a DISCONNECT packet, causing the broker to delete the persistent
+	// session. Instead, we cancel ctx1 to produce an unclean TCP drop, which
+	// leaves the persistent session intact on the broker side. This is the
+	// required precondition for phase-2 to test session recovery.
 	cancel1()
 	// archtest:allow:test-sleep teardown-settle: wall-clock must elapse for the
 	// broker to observe the unclean TCP drop before the offline publish.
@@ -632,18 +642,12 @@ func itestSessionPhase2Subscribe(t *testing.T, mkCfg func() Config, ns TopicName
 	}
 	itestPublish(t, conn2, subscription.Topic, itestEnvelope(t, subscription.Topic, []byte(`{"seq":"online"}`)))
 	// HARD assertion: the resumed persistent session MUST deliver the online message.
-	deadline := time.Now().Add(testtime.D15s)
-	for time.Now().Before(deadline) {
-		if onlineReceived.Load() >= 1 {
-			break
-		}
-		time.Sleep(testtime.D20ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-	}
-	if onlineReceived.Load() < 1 {
-		t.Fatalf("resumed persistent session did not deliver an online message "+
+	testwait.External(t, "broker-online-delivery",
+		func() bool { return onlineReceived.Load() >= 1 },
+		testtime.D15s, testtime.D20ms,
+		"resumed persistent session did not deliver an online message "+
 			"(offline=%d online=%d); session resume / subscription re-arm is broken",
-			offlineReceived.Load(), onlineReceived.Load())
-	}
+		offlineReceived.Load(), onlineReceived.Load())
 }
 
 // isOfflineTaggedPayload reports whether an envelope payload is one of the

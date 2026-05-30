@@ -46,6 +46,16 @@ import (
 // the signal effectively instantly, so this is never hit in a green run
 // even under the race detector. Sized comfortably below `go test -timeout`
 // so a deadlocked signal fails readably here instead of as a whole-suite kill.
+//
+// The default `go test -timeout` is 10 minutes; 30 s is far below that, so a
+// deadlocked signal produces a readable per-test Fatalf with the label (e.g.
+// "session-created") before the whole-suite kill fires — the whole-suite kill
+// carries no per-test location info, making CI diagnosis much harder.
+//
+// If this safety-net fires in a green-path run (signal that should arrive
+// instantly takes 30 s), the root cause is the system under test — the signal
+// channel is broken or the producer is hung. Do not raise this constant;
+// investigate the signal producer instead.
 const signalSafetyNet = 30 * time.Second
 
 // TB is the testing surface required by External and Deterministic. It
@@ -132,7 +142,12 @@ func External(t TB, reason string, condition func() bool,
 //
 // Hard via Go type system: signal's <-chan T signature lets callers receive
 // any payload type but forbids "polling via Deterministic" — the API name
-// and signature together pin the channel-blocking semantics.
+// and signature together pin the channel-blocking semantics. The absence of
+// a caller-facing timeout parameter is additionally locked by archtest
+// TEST-DETERMINISTIC-NO-TIMEOUT-PARAM-01 (Hard downstream form-lock; Medium
+// upstream — "no new timeout param" is a Go-language ceiling, same shape as
+// #851/#893/#1282: the axis "who may declare a given function's parameters"
+// is not expressible in the Go type system).
 //
 // For CI grep-ability, pass a short label string as the first msgAndArg:
 //

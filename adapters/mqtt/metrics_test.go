@@ -516,6 +516,7 @@ func TestProviderSubscriberCollector_RecordConsumeFailure(t *testing.T) {
 		consumeReasonReject,
 		consumeReasonRequeue,
 		consumeReasonCommitFailed,
+		consumeReasonAckFailed,
 		consumeReasonUnknownDisposition,
 	}
 	for _, reason := range allReasons {

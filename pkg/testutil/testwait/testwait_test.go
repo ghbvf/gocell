@@ -195,6 +195,15 @@ type fooPayload struct{ ID int }
 // TestDeterministic_ClosedChannelReturnsImmediately documents Go channel
 // semantics: receiving from a closed channel returns the zero value immediately,
 // not a timeout. Deterministic must not call t.Fatalf in this case.
+//
+// Semantic distinction: a closed channel and an expired safety-net both return
+// the zero value of T, but they are opposite outcomes. Closed channel is a
+// well-formed immediate return — the producer has signaled completion by
+// closing. Safety-net expiry is a hung-test failure — the producer never sent
+// and Deterministic calls t.Fatalf. The assertion `ft.failed == false` is the
+// load-bearing guard that distinguishes these two zero-value paths: it proves
+// Deterministic treated the closed channel as a successful receive, not as a
+// hung-test.
 func TestDeterministic_ClosedChannelReturnsImmediately(t *testing.T) {
 	t.Parallel()
 	sig := make(chan int)
