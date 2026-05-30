@@ -369,14 +369,14 @@ func TestForwardRebuildTarget_UpSectionOnly(t *testing.T) {
 			wantOK:     false,
 		},
 		{
-			// Fail-open regression: a literal "-- +goose Down" substring in Up-section
+			// Fail-open regression: two non-marker "+goose Down" prose forms (line-prefix and word-boundary) in Up-section
 			// prose must NOT truncate the scan. Only a line-anchored "^-- +goose Down$"
 			// acts as the section boundary. The annotation appears after the prose
 			// comment and must still be detected.
-			name: "literal +goose Down in Up-section prose does not truncate scan",
+			name: "line-prefixed +goose Down in Up-section prose does not truncate scan",
 			sqlContent: "-- +goose Up\n" +
-				"-- This runbook references the +goose Down section for rollback steps.\n" +
-				"-- see the +goose Down section for the DROP statement\n" +
+				"-- +goose Down is mentioned here in prose, not as a real section marker\n" +
+				"-- +goose Downstream is a word in prose, not the section marker\n" +
 				"-- +gocell forward-rebuild target=real_target\n" +
 				"SELECT 1;\n" +
 				"-- +goose Down\n" +
