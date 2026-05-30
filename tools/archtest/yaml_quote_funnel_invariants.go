@@ -35,7 +35,8 @@ package archtest
 // 过滤跳过 pkg/yamlsafe 内部即认为是合规上游；任何包外类型化 Scalar 字段
 // 都需经过 Quote 才能赋值（构造点被下游 archtest 守住）。041 plan §3 明确
 // 本 PR 内三件套闭环（typed funnel + archtest 下游 Hard +
-// 反向自检）。
+// 反向自检）。上游 Medium → Hard 终态（seal Scalar 构造使包外不可表达
+// 裸转换）的升级路径追踪于 gh issue #1304。
 //
 // Blind spot inventory (covered by reverse self-test):
 //   - bare ident form `Scalar(x)` inside pkg/yamlsafe itself (allowed,
@@ -55,6 +56,12 @@ package archtest
 //   - reverse self-test fixture: scanner applied to pkg/yamlsafe production
 //     AST (path filter bypassed) MUST report at least one bare Scalar(raw) site
 //     present in Quote() — proves types.Info resolution actually fires
+//   - known gap: if pkg/yamlsafe.Quote() is ever reimplemented WITHOUT a bare
+//     Scalar(raw) conversion, TestYAMLQuoteFunnel_DetectsViolation flips RED→
+//     GREEN (it no longer has a live conversion to detect). That is a property
+//     of yamlsafe's own implementation, outside this archtest's control domain;
+//     the fixture-based DetectsAliasBypass / DetectsLiteralBypass tests keep
+//     proving types.Info resolution independently of Quote()'s body.
 //
 // ref: pkg/yamlsafe/yamlsafe.go — Quote single funnel definition
 // ref: tools/archtest/prom_cell_label_funnel_test.go — companion Hard pattern
@@ -64,7 +71,6 @@ package archtest
 //	packages.Load).
 
 import (
-	"fmt"
 	"go/ast"
 	"go/types"
 	"strings"
@@ -92,6 +98,12 @@ const (
 // production code and returns its diagnostics. GoCell's TestYAMLQuoteFunnel
 // calls it directly (single source, no parallel rule body). cfg.BuildTags
 // is wired into the TypedOpts.Tags for the production scan.
+//
+// Deliberately NOT registered in [StandardCellRules]: the rule only constrains
+// conversions of the gocell-internal pkg/yamlsafe.Scalar type, so it is vacuous
+// for an external Cell repo that never imports yamlsafe. It stays importable
+// (non-test file, single source) for the dogfood Test, but external_repo wiring
+// is out of scope — see external.go [StandardCellRules] godoc + M3 issue #1302.
 func CheckYAMLQuoteFunnel(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
@@ -121,9 +133,10 @@ func CheckYAMLQuoteFunnel(t *testing.T, cfg ConfigForExternalCell) []Diagnostic 
 // declared static type is already yamlsafe.Scalar (allowing identity /
 // helper-returns without forcing redundant Quote wrapping).
 func scanYAMLQuoteFunnel(p *Pass, file *ast.File, rel string) []Diagnostic {
-	if p.TypesInfo == nil {
-		return nil
-	}
+	// p.TypesInfo is guaranteed non-nil: runRulePasses skips any Pass whose
+	// buildTypedPass returned nil (pkg.TypesInfo == nil), so every Pass that
+	// reaches a typed rule like this one carries a populated TypesInfo. The
+	// callee-resolution helpers below still nil-guard defensively in isolation.
 	var diags []Diagnostic
 	scanner.EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
 		if !isYAMLScalarConversion(p.TypesInfo, call.Fun) {
@@ -145,10 +158,8 @@ func scanYAMLQuoteFunnel(p *Pass, file *ast.File, rel string) []Diagnostic {
 		diags = append(diags, Diagnostic{
 			Rel:  rel,
 			Line: pos.Line,
-			Message: fmt.Sprintf(
-				"yamlsafe.Scalar(...) argument must be yamlsafe.Quote(...) " +
-					"or a value of declared yamlsafe.Scalar type",
-			),
+			Message: "yamlsafe.Scalar(...) argument must be yamlsafe.Quote(...) " +
+				"or a value of declared yamlsafe.Scalar type",
 		})
 	})
 	return diags

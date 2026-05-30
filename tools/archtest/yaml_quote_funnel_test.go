@@ -100,11 +100,16 @@ func TestYAMLQuoteFunnel_DetectsAliasBypass(t *testing.T) {
 		})
 
 	require.True(t, found, "yamlquotefixture package must be loaded (check -tags=archtest_fixture)")
-	require.NotEmpty(t, diags,
-		"scanner must detect AliasOfScalar(\"evil-alias-raw\") via types.Unalias; "+
-			"empty result means alias bypass is silently allowed (regression)")
-	require.GreaterOrEqual(t, len(diags), 1,
-		"at least 1 violation expected (BypassViaAlias); CompliantQuoted must not fire. got: %v", diags)
+	// The fixture has exactly 3 bypass sites (BypassViaAlias / BypassViaLiteral /
+	// BypassViaConstConcat) and 2 compliant controls (CompliantQuoted /
+	// CompliantTypedScalar) that must NOT fire. Asserting == 3 (not >= 1) makes
+	// this test red on BOTH directions: if types.Unalias resolution regresses,
+	// BypassViaAlias drops out (count → 2); if a compliant control starts firing,
+	// count → 4. diags[0] is the alias site (AST top-down: it is first in
+	// fixture.go), so the message assertion anchors alias detection specifically.
+	require.Equal(t, 3, len(diags),
+		"expected exactly the 3 bypass sites; alias-detection regression or a "+
+			"compliant control firing would shift the count. got: %v", diags)
 	require.Contains(t, diags[0].Message, "yamlsafe.Scalar(...)")
 }
 
@@ -142,9 +147,12 @@ func TestYAMLQuoteFunnel_DetectsLiteralBypass(t *testing.T) {
 		})
 
 	require.True(t, found, "yamlquotefixture package must be loaded (check -tags=archtest_fixture)")
-	// Expect violations from: BypassViaAlias, BypassViaLiteral, BypassViaConstConcat.
-	// CompliantQuoted and CompliantTypedScalar must NOT fire.
-	require.GreaterOrEqual(t, len(diags), 3,
-		"scanner must detect alias + literal + concat bypass sites; got %d: %v",
-		len(diags), diags)
+	// Expect violations from exactly: BypassViaAlias, BypassViaLiteral,
+	// BypassViaConstConcat. CompliantQuoted and CompliantTypedScalar must NOT
+	// fire. == 3 (not >= 3) closes the over-detection gap: if allowedScalarConversionArg
+	// regresses to flag a compliant control, the count climbs to 4 and this test
+	// goes red instead of silently passing.
+	require.Equal(t, 3, len(diags),
+		"scanner must detect exactly the alias + literal + concat bypass sites "+
+			"(compliant controls must not fire); got %d: %v", len(diags), diags)
 }
