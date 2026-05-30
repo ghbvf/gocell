@@ -48,12 +48,13 @@ func isAuditWireContract(contractID string) bool {
 }
 
 // rejectSensitiveAuditWireFields returns an error if an audit-domain wire-out
-// schema (HTTP response or event payload) declares a property whose name
-// matches pkg/redaction.IsSensitiveKey, at any nesting depth. wireRole labels
-// the schema ("response" / "payload") for the error message. Non-audit
-// contracts and the inbound request path are exempt — callers MUST NOT invoke
-// this for Request schemas (inbound password/token fields are legitimate); the
-// archtest enforces that the only call sites are the Response and Payload paths.
+// schema (HTTP response, event payload, or event headers) declares a property
+// whose name matches pkg/redaction.IsSensitiveKey, at any nesting depth.
+// wireRole labels the schema ("response" / "payload" / "headers") for the error
+// message. Non-audit contracts and the inbound request path are exempt —
+// callers MUST NOT invoke this for Request schemas (inbound password/token
+// fields are legitimate); the archtest enforces that the only call sites are
+// the Response, Payload, and Headers wire-out paths.
 func rejectSensitiveAuditWireFields(contractID, wireRole string, s *Schema) error {
 	if !isAuditWireContract(contractID) {
 		return nil

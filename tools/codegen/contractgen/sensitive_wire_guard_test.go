@@ -17,12 +17,19 @@
 // whose name matches pkg/redaction.IsSensitiveKey, at any nesting depth. The
 // offending DTO can never be produced → leaking the field is unexpressible.
 //
-// AI-robust grading (Hard 范本目录: codegen funnel + golden):
-//   - Downstream Hard: generation rejects the schema; gated to the audit
-//     wire-out paths (Response in buildHTTPDTOs + Payload in buildEventSpec),
-//     never the Request path (inbound password is legitimate).
-//   - Upstream Hard: `gocell verify generated` byte-stable golden drift catches
-//     a hand-edited types_gen.go; `gocell generate` re-derivation re-rejects.
+// AI-robust grading (Hard 范本目录: codegen funnel + golden — single source of
+// truth is the funnel godoc in sensitive_wire_guard.go + the archtest
+// audit_wire_sensitive_funnel_test.go; this block must not drift from them):
+//   - Upstream Hard: a sensitive field cannot reach a generated audit DTO. By
+//     schema → generation rejects it here; by hand-edited types_gen.go →
+//     `gocell verify generated` byte-stable golden drift fails CI.
+//   - Downstream Medium (ceiling): the funnel must be CALLED on every audit
+//     wire-out path (Response + Payload + Headers). That "must-call" cannot be
+//     expressed in Go's type system (schemaToDTOs is shared with the exempt
+//     Request path), so it is locked by archtest
+//     AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (call-site allowlist + role coverage).
+//     archtest-Medium is the Go ceiling for codegen must-call; gh #1299 tracks
+//     this ceiling (same won't-do shape as #851/#893).
 //   - Scope: audit domain only (规则不超前于代码现状 — auditcore is today's only
 //     Principal-aggregating consumer). When a new such cell appears, extend
 //     isAuditWireContract in the same PR.
@@ -30,8 +37,8 @@
 // This file holds the BEHAVIORAL coverage: it drives the funnel through the
 // real generation entry points (buildHTTPDTOs / buildEventSpec) so the
 // rejection/exemption behavior is pinned. The call-site allowlist (funnel is
-// wired into exactly the Response + Payload paths, never Request) and the
-// domain scope-completeness lock live in the archtest
+// wired into exactly the Response + Payload + Headers wire-out paths, never
+// Request) and the domain scope-completeness lock live in the archtest
 // tools/archtest/audit_wire_sensitive_funnel_test.go — those are the
 // AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 enforcement points discovered by
 // ARCHTEST-VERIFY-COVERAGE-01; this file is an ordinary contractgen unit test.
@@ -258,6 +265,67 @@ func TestAuditWireSensitiveFieldFunnel_Payload(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("unexpected error for %s payload: %v", tc.contractID, err)
+			}
+		})
+	}
+}
+
+// TestAuditWireSensitiveFieldFunnel_Headers asserts the funnel also fires on
+// audit event *headers* schemas — event.audit.appended.v1 ships a real headers
+// schema, so a sensitive key added there must be rejected the same as in the
+// payload. The payload below is always clean; only the headers vary.
+//
+// INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
+func TestAuditWireSensitiveFieldFunnel_Headers(t *testing.T) {
+	cases := []struct {
+		name        string
+		contractID  string
+		headersBody string
+		wantErr     bool
+	}{
+		{
+			name:        "audit_headers_sessionId_rejected",
+			contractID:  "event.audit.appended.v1",
+			headersBody: flatObject(`"eventId":{"type":"string"},"sessionId":{"type":"string"}`),
+			wantErr:     true,
+		},
+		{
+			name:        "audit_headers_correlationId_ok",
+			contractID:  "event.audit.appended.v1",
+			headersBody: flatObject(`"eventId":{"type":"string"},"correlationId":{"type":"string"}`),
+			wantErr:     false,
+		},
+		{
+			name:        "non_audit_headers_sessionId_ok",
+			contractID:  "event.session.created.v1",
+			headersBody: flatObject(`"eventId":{"type":"string"},"sessionId":{"type":"string"}`),
+			wantErr:     false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			contractDir := "contracts/synth/v1"
+			writeSensitiveGuardSchema(t, tmp, contractDir, "payload.schema.json",
+				flatObject(`"eventId":{"type":"string"}`))
+			writeSensitiveGuardSchema(t, tmp, contractDir, "headers.schema.json", tc.headersBody)
+
+			contract := &metadata.ContractMeta{
+				ID:   tc.contractID,
+				Kind: "event",
+				SchemaRefs: metadata.SchemaRefsMeta{
+					Payload: "payload.schema.json",
+					Headers: "headers.schema.json",
+				},
+			}
+			err := buildEventSpec(&ContractGenSpec{}, tmp, contract, contractDir)
+
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected funnel to reject %s headers, got nil error", tc.contractID)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for %s headers: %v", tc.contractID, err)
 			}
 		})
 	}

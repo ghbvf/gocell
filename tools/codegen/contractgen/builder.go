@@ -587,6 +587,19 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 		if err != nil {
 			return fmt.Errorf("contractgen build: %q headers schema: %w", contract.ID, err)
 		}
+		// Wire-out funnel: event headers are an outbound wire surface too, so
+		// audit-domain headers must not project Principal credentials either
+		// (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01). event.audit.appended.v1 ships
+		// a real headers schema — leaving it unguarded would let a sensitive key
+		// added there bypass the payload-only check.
+		// Wire-out funnel: event headers are an outbound wire surface too, so
+		// audit-domain headers must not project Principal credentials either
+		// (AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01). event.audit.appended.v1 ships
+		// a real headers schema — leaving it unguarded would let a sensitive key
+		// added there bypass the payload-only check.
+		if err := rejectSensitiveAuditWireFields(contract.ID, "headers", headersSchema); err != nil {
+			return fmt.Errorf("contractgen build: %w", err)
+		}
 		headersDTOs, err := schemaToDTOs("Headers", headersSchema)
 		if err != nil {
 			return fmt.Errorf("contractgen build: %q headers DTOs: %w", contract.ID, err)

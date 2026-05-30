@@ -25,11 +25,13 @@
 //
 // Two sub-checks:
 //
-//   - A1 (call-site allowlist + coverage): in production contractgen files,
-//     every call to rejectSensitiveAuditWireFields is inside buildHTTPDTOs (the
-//     Response path) or buildEventSpec (the Payload path), and BOTH contain one
-//     — so the funnel cannot be silently removed from a wire-out path, and is
-//     never wired into the exempt Request path.
+//   - A1 (call-site allowlist + role coverage): in production contractgen
+//     files, every call to rejectSensitiveAuditWireFields is inside buildHTTPDTOs
+//     (the Response path) or buildEventSpec (the Payload + Headers paths), never
+//     the exempt Request path. Coverage is keyed on the funnel's 2nd arg
+//     (wireRole): {response, payload, headers} must each be guarded by a call, so
+//     the funnel cannot be silently dropped from any single wire-out surface —
+//     including Headers, which sits in the same host function as Payload.
 //   - A2 (scope completeness): every contract owned by auditcore has an id
 //     covered by the funnel's prefix gate (http.audit.* / event.audit.*), so a
 //     future auditcore-owned contract with a divergent id cannot escape the
@@ -43,16 +45,23 @@
 //     A method or selector of the same name on another value (x.rejectSensitiveAuditWireFields)
 //     would NOT be a bare Ident and is therefore out of scope; TestAuditWireFunnel_NoSelectorShadow
 //     asserts no such selector exists in production contractgen, closing that blind spot.
+//   - A1's role coverage reads the wireRole literal (2nd arg). A non-literal
+//     role (e.g. a variable) would make coverage unverifiable, so A1 flags any
+//     funnel call whose 2nd arg is not a string literal as a violation rather
+//     than silently skipping it — the funnel's 3 production call sites all pass
+//     literals ("response" / "payload" / "headers").
 //   - A1 scope excludes _test.go (DirsScope default) and generated/ — the
 //     behavioral test and the fallback unit test call the funnel directly and
 //     must not be mistaken for production call sites.
 //   - A1 locks where the funnel IS called, not "every wire-out schemaToDTOs is
-//     funnel-guarded". Other schemaToDTOs callers (buildSagaSpec's saga output,
-//     headers) are NOT funnel-guarded today — but they cannot carry an audit
-//     wire surface unnoticed: a kind:saga (or any new-kind) contract owned by
+//     funnel-guarded". The remaining unguarded schemaToDTOs caller is
+//     buildSagaSpec's saga step output — but it cannot carry an audit wire
+//     surface unnoticed: a kind:saga (or any new-kind) contract owned by
 //     auditcore would have an id that misses the http.audit./event.audit. prefix
 //     gate, so A2 fails until isAuditWireContract is extended (at which point the
 //     funnel must be wired into that path too). The gap is real but A2-gated.
+//     (Event Headers used to live here too; it is now funnel-guarded and pinned
+//     by A1's "headers" required role.)
 //   - A2 keys on ownerCell == "auditcore"; a Principal-aggregating cell under a
 //     different owner name is out of A2's scope. That is acceptable today
 //     (auditcore is the sole such cell — 规则不超前于代码现状); the funnel godoc
@@ -64,7 +73,9 @@ package archtest
 
 import (
 	"go/ast"
+	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -77,14 +88,27 @@ const auditFunnelCallee = "rejectSensitiveAuditWireFields"
 
 // auditFunnelAllowedCallers is the closed set of contractgen functions allowed
 // to invoke the funnel — the two wire-out (non-Request) DTO build paths.
+// buildEventSpec hosts both the Payload and the Headers calls.
 var auditFunnelAllowedCallers = map[string]bool{
 	"buildHTTPDTOs":  true, // HTTP Response schema path
-	"buildEventSpec": true, // event Payload schema path
+	"buildEventSpec": true, // event Payload + Headers schema paths
 }
 
-// TestAuditWireFunnel_CallSiteAllowlistAndCoverage is A1: the funnel's call
-// sites in production contractgen are exactly {buildHTTPDTOs, buildEventSpec},
-// and both are present.
+// auditFunnelRequiredRoles is the closed set of wire-out roles (the funnel's
+// 2nd arg) that MUST each be guarded by a call. Coverage is keyed on the role
+// literal, not the host function, because Payload and Headers both live in
+// buildEventSpec — a host-name-only check could not tell that one of them lost
+// its funnel call.
+var auditFunnelRequiredRoles = map[string]bool{
+	"response": true,
+	"payload":  true,
+	"headers":  true,
+}
+
+// TestAuditWireFunnel_CallSiteAllowlistAndCoverage is A1: every funnel call in
+// production contractgen sits inside {buildHTTPDTOs, buildEventSpec} (never the
+// Request path), and every required wire-out role {response, payload, headers}
+// is covered by such a call.
 //
 // INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (A1 call-site lock).
 func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
@@ -92,7 +116,7 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(root, []string{"tools/codegen/contractgen"})
 
-	covered := map[string]bool{}
+	coveredRoles := map[string]bool{}
 	diags := Run(t, scope, func(p *Pass) []Diagnostic {
 		var d []Diagnostic
 		for _, file := range p.Files {
@@ -106,17 +130,27 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 					if !ok || id.Name != auditFunnelCallee {
 						return
 					}
-					if auditFunnelAllowedCallers[fn.Name.Name] {
-						covered[fn.Name.Name] = true
+					if !auditFunnelAllowedCallers[fn.Name.Name] {
+						d = append(d, Diagnostic{
+							Rel:  rel,
+							Line: p.Fset.Position(c.Pos()).Line,
+							Message: auditFunnelCallee + " called inside " + fn.Name.Name +
+								" — only the wire-out paths {buildHTTPDTOs, buildEventSpec} may call it " +
+								"(Request path must stay exempt)",
+						})
 						return
 					}
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: p.Fset.Position(c.Pos()).Line,
-						Message: auditFunnelCallee + " called inside " + fn.Name.Name +
-							" — only the wire-out paths {buildHTTPDTOs, buildEventSpec} may call it " +
-							"(Request path must stay exempt)",
-					})
+					role, ok := auditFunnelRoleArg(c)
+					if !ok {
+						d = append(d, Diagnostic{
+							Rel:  rel,
+							Line: p.Fset.Position(c.Pos()).Line,
+							Message: auditFunnelCallee + " 2nd arg (wireRole) must be a string literal so " +
+								"role coverage is statically checkable",
+						})
+						return
+					}
+					coveredRoles[role] = true
 				})
 			})
 		}
@@ -124,12 +158,30 @@ func TestAuditWireFunnel_CallSiteAllowlistAndCoverage(t *testing.T) {
 	})
 	Report(t, "AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01", diags)
 
-	for caller := range auditFunnelAllowedCallers {
-		if !covered[caller] {
-			t.Errorf("AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01: %s does not call %s — "+
-				"a wire-out path is no longer funneled (coverage gap)", caller, auditFunnelCallee)
+	for role := range auditFunnelRequiredRoles {
+		if !coveredRoles[role] {
+			t.Errorf("AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01: no call to %s guards the %q wire-out role — "+
+				"that audit wire surface is no longer funneled (coverage gap)", auditFunnelCallee, role)
 		}
 	}
+}
+
+// auditFunnelRoleArg returns the funnel's 2nd argument (wireRole) when it is a
+// string literal. A non-literal role would make A1's role coverage unverifiable,
+// so the caller treats !ok as a violation.
+func auditFunnelRoleArg(c *ast.CallExpr) (string, bool) {
+	if len(c.Args) < 2 {
+		return "", false
+	}
+	lit, ok := c.Args[1].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return s, true
 }
 
 // TestAuditWireFunnel_NoSelectorShadow is the A1 blind-spot reverse check: no
