@@ -69,6 +69,10 @@ const (
 	// created_at (store/seal time) so the round-trip proves the two timestamps are
 	// carried as independent columns. Extracted to a const per TEST-TIME-LITERAL-01.
 	occurredAtBranchSkew = 90 * time.Minute
+	// occurredAtSubMicro is a sub-microsecond component added to the seeded
+	// occurred_at so the round-trip proves PG timestamptz truncates to microseconds
+	// (the tail must be dropped). Extracted to a const per TEST-TIME-LITERAL-01.
+	occurredAtSubMicro = 789 * time.Nanosecond
 )
 
 // installWarnCapture redirects the package-level slog default (which
@@ -237,7 +241,7 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 		// not merely that an already-truncated value survives. created_at is kept
 		// at microsecond precision and skewed so the two columns stay distinct.
 		base := time.Now().UTC().Truncate(time.Microsecond)
-		occurredAtNanos := base.Add(789 * time.Nanosecond)
+		occurredAtNanos := base.Add(occurredAtSubMicro)
 		wantOccurredAt := base // PG must drop the sub-µs tail
 		createdAt := base.Add(occurredAtBranchSkew)
 
