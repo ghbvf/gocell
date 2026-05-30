@@ -26,7 +26,7 @@
 --
 --   Rollback (Down):
 --     1. Stop traffic.
---     2. Run `goose down` with GUC gocell.allow_destructive_down=true.
+--     2. Run `goose down` (destructive-down permit enforced in Go; see issue #1248).
 --     3. Re-deploy the S4a binary (its schema_guard predates the
 --        forbiddenColumns entry and accepts the re-added column).
 --     4. Re-enable traffic.
@@ -51,13 +51,5 @@
 ALTER TABLE sessions DROP COLUMN authz_epoch_at_issue;
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 ALTER TABLE sessions ADD COLUMN authz_epoch_at_issue BIGINT NOT NULL DEFAULT 0;

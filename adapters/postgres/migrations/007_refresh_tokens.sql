@@ -37,20 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires
 
 -- +goose Down
 -- WARNING: Irreversible in production — DROP TABLE destroys all active refresh sessions.
--- Running this migration down forces logout for ALL users (tokens are non-recoverable
--- once the table is dropped). Coordinate with user communication / maintenance window
--- before executing in any environment that has real traffic.
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
--- without the GUC will RAISE EXCEPTION here.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_session;

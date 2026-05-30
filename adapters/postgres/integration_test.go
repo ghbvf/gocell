@@ -262,41 +262,6 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 }
 
-func TestMigration012Down_SQLGuardRejectsDirectProviderBypass(t *testing.T) {
-	pool := emptyPool(t)
-
-	ctx := context.Background()
-	mfs := migrationsUpToFS(t, 12)
-
-	migrator, err := NewMigrator(pool, mfs, "schema_migrations_012_down_guard")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 012")
-
-	_, err = migrator.provider.Down(ctx)
-	require.Error(t, err, "direct goose down must be rejected by migration 012 SQL guard")
-	assert.Contains(t, err.Error(), "destructive down blocked")
-
-	var selectorExists bool
-	err = pool.DB().QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'refresh_tokens' AND column_name = 'selector'
-)`).Scan(&selectorExists)
-	require.NoError(t, err)
-	assert.True(t, selectorExists, "failed direct down must leave 012 refresh token schema intact")
-
-	require.NoError(t, migrator.Down(ctx, mustAllowDestructiveDown(t, "integration test rollback through SQL guard")),
-		"Migrator.Down with typed permit must set the SQL guard on goose's execution connection")
-
-	var tokenExists bool
-	err = pool.DB().QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'refresh_tokens' AND column_name = 'token'
-)`).Scan(&tokenExists)
-	require.NoError(t, err)
-	assert.True(t, tokenExists, "permitted down must recreate the pre-012 token column")
-}
 
 // ---------------------------------------------------------------------------
 // T22: TestIntegration_OutboxWriter
@@ -804,68 +769,163 @@ func TestMigrator_Down_AtVersionZero_Idempotent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// S3F: TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected
+// S3F: TestMigrator_Down_WithPermit_Succeeds
 // ---------------------------------------------------------------------------
 
-// TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected verifies that
-// calling Down directly on a goose Provider (bypassing Migrator.Down) is
-// rejected by the SQL fail-closed guard in destructive migration Down sections.
-// The guard raises EXCEPTION P0001 unless gocell.allow_destructive_down = 'true'.
-func TestMigrator_Down_RequiresGUC_DirectGooseProviderRejected(t *testing.T) {
+// TestMigrator_Down_WithPermit_Succeeds verifies that Migrator.Down with a
+// valid DestructiveDownPermit succeeds. Migration 012 has no SQL-level GUC
+// guard in its Down section — the Go-layer DestructiveDownPermit is the sole
+// gate, confirming the typed permit is the enforced channel.
+func TestMigrator_Down_WithPermit_Succeeds(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
 
-	// Apply only up to migration 019 (includes the destructive users/sessions/roles tables).
-	mfs := migrationsUpToFS(t, 19)
-	migrator, err := NewMigrator(pool, mfs, "schema_migrations_guc_guard")
+	// Apply migrations up to 012 so there is a migration to roll back.
+	// Migration 012 Down has no GUC SQL guard — permit is the only gate.
+	mfs := migrationsUpToFS(t, 12)
+	migrator, err := NewMigrator(pool, mfs, "schema_migrations_permit_down")
 	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 019")
+	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 012")
 
-	// Direct provider.Down bypasses the destructiveDownSessionLocker — the GUC
-	// is NOT set, so the SQL DO $$ guard in migration 019's Down must RAISE EXCEPTION.
-	_, downErr := migrator.provider.Down(ctx)
-	require.Error(t, downErr, "direct goose provider Down must be rejected by migration SQL guard")
-	assert.Contains(t, downErr.Error(), "destructive down blocked",
-		"error must mention the GUC guard sentinel")
-}
-
-// ---------------------------------------------------------------------------
-// S3F: TestMigrator_Down_WithPermit_SetsGUC
-// ---------------------------------------------------------------------------
-
-// TestMigrator_Down_WithPermit_SetsGUC verifies that Migrator.Down with a
-// valid DestructiveDownPermit sets gocell.allow_destructive_down on the goose
-// session, allowing the migration SQL guard to pass. If this test fails with a
-// GUC-blocked error, the destructiveDownSessionLocker is not wiring the GUC
-// correctly.
-func TestMigrator_Down_WithPermit_SetsGUC(t *testing.T) {
-	pool := emptyPool(t)
-	ctx := context.Background()
-
-	// Apply migrations up to 019 so there is a destructive migration to roll back.
-	mfs := migrationsUpToFS(t, 19)
-	migrator, err := NewMigrator(pool, mfs, "schema_migrations_permit_guc")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "Up() must apply through migration 019")
-
-	permit := mustAllowDestructiveDown(t, "S3F permit GUC integration test")
+	permit := mustAllowDestructiveDown(t, "S3F permit integration test")
 	require.NoError(t, migrator.Down(ctx, permit),
-		"Migrator.Down with typed permit must succeed: locker sets GUC on the goose connection")
+		"Migrator.Down with typed permit must succeed: Go-layer permit is the sole gate")
+
+	// Verify migration 012 was rolled back: refresh_tokens should have the
+	// pre-012 token column (which 012 Down recreates).
+	var tokenExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'token'
+)`).Scan(&tokenExists)
+	require.NoError(t, err)
+	assert.True(t, tokenExists, "permitted Down must recreate the pre-012 token column")
 }
 
 // ---------------------------------------------------------------------------
-// S3F: TestMigrator_GUCName_AllowDestructiveDown
+// ForwardRebuild integration tests
 // ---------------------------------------------------------------------------
 
-// TestMigrator_GUCName_AllowDestructiveDown asserts that the GUC constant used
-// by the destructiveDownSessionLocker matches the sentinel expected by migration
-// SQL guards. This is a compile-time (constant value) regression test — any
-// rename that makes the Go constant diverge from the SQL literal will break
-// the permit flow rather than the direct-bypass flow.
-func TestMigrator_GUCName_AllowDestructiveDown(t *testing.T) {
-	const wantGUC = "gocell.allow_destructive_down"
-	assert.Equal(t, wantGUC, allowDestructiveDownGUC,
-		"allowDestructiveDownGUC must match the GUC literal used in migration SQL guards")
+func mustAllowForwardRebuild(t testing.TB, migrationNumber int64, reason string) ForwardRebuildPermit {
+	t.Helper()
+	permit, err := AllowForwardRebuild(migrationNumber, reason)
+	require.NoError(t, err)
+	return permit
+}
+
+// TestMigrator_ForwardRebuild_EmptyTable_Up verifies that Up() applies all
+// migrations including any annotated forward-rebuild migrations when the target
+// tables are empty or missing — no permit required.
+func TestMigrator_ForwardRebuild_EmptyTable_Up(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fwd_empty")
+	require.NoError(t, err)
+
+	// Fresh DB: all rebuild targets are empty/missing — Up() must succeed without permits.
+	require.NoError(t, migrator.Up(ctx), "Up() must succeed on a fresh DB (no rows to protect)")
+
+	// Verify migration 012's refresh_tokens (forward-rebuild target) was created.
+	var exists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'refresh_tokens')").
+		Scan(&exists)
+	require.NoError(t, err)
+	assert.True(t, exists, "refresh_tokens table must exist after Up()")
+}
+
+// TestMigrator_ForwardRebuild_PopulatedTable_UpFailClosed verifies that Up()
+// refuses with an error when a pending forward-rebuild migration's target table
+// already holds rows — fail-closed without an explicit permit.
+func TestMigrator_ForwardRebuild_PopulatedTable_UpFailClosed(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 011 (refresh_tokens exists and can be populated).
+	mfs011 := migrationsUpToFS(t, 11)
+	prep, err := NewMigrator(pool, mfs011, "schema_migrations_fwd_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
+
+	// Insert a row into refresh_tokens so migration 012's forward-rebuild is dangerous.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO refresh_tokens (id, token, session_id, subject_id, created_at, last_used, expires_at)
+		VALUES (1, 'tok-abc', 'sess-1', 'subj-1', now(), now(), now() + interval '1 hour')
+	`)
+	require.NoError(t, execErr, "must be able to insert a row into pre-012 refresh_tokens")
+
+	// Now create a migrator with the full FS so migration 012 is pending.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fwd_prep")
+	require.NoError(t, err)
+
+	upErr := migrator.Up(ctx)
+	require.Error(t, upErr, "Up() must refuse when a forward-rebuild target has rows and no permit")
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	// Verify details contain migration number.
+	assert.Contains(t, upErr.Error(), "12", "error should reference migration 12")
+}
+
+// TestMigrator_ForwardRebuild_PopulatedTable_WithPermit verifies that
+// ForwardRebuild with the correct permit succeeds when the target table has rows.
+func TestMigrator_ForwardRebuild_PopulatedTable_WithPermit(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Apply migrations up through 011.
+	mfs011 := migrationsUpToFS(t, 11)
+	prep, err := NewMigrator(pool, mfs011, "schema_migrations_permit_prep")
+	require.NoError(t, err)
+	require.NoError(t, prep.Up(ctx), "Up() through 011 must succeed")
+
+	// Insert a row into pre-012 refresh_tokens.
+	_, execErr := pool.DB().Exec(ctx, `
+		INSERT INTO refresh_tokens (id, token, session_id, subject_id, created_at, last_used, expires_at)
+		VALUES (1, 'tok-xyz', 'sess-2', 'subj-2', now(), now(), now() + interval '1 hour')
+	`)
+	require.NoError(t, execErr)
+
+	// ForwardRebuild with permit for migration 12 must succeed.
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_permit_prep")
+	require.NoError(t, err)
+
+	permit := mustAllowForwardRebuild(t, 12, "integration test: approved refresh_tokens v2 rebuild")
+	require.NoError(t, migrator.ForwardRebuild(ctx, permit),
+		"ForwardRebuild with explicit permit must succeed")
+
+	// Verify 012's new selector column exists (v2 schema).
+	var selectorExists bool
+	err = pool.DB().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'refresh_tokens' AND column_name = 'selector'
+)`).Scan(&selectorExists)
+	require.NoError(t, err)
+	assert.True(t, selectorExists, "ForwardRebuild must apply migration 012 creating the selector column")
+}
+
+// TestMigrator_ForwardRebuild_MisconfiguredPermit verifies that ForwardRebuild
+// returns an error when a permit references a migration that is not a pending
+// forward-rebuild.
+func TestMigrator_ForwardRebuild_MisconfiguredPermit(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// Fresh DB — no migrations applied yet, so version 999 cannot be a pending
+	// forward-rebuild (it does not exist in the FS at all).
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_misconfig")
+	require.NoError(t, err)
+
+	permit := mustAllowForwardRebuild(t, 999, "misconfig test")
+	rebuildErr := migrator.ForwardRebuild(ctx, permit)
+	require.Error(t, rebuildErr, "ForwardRebuild with permit for non-existent migration must fail")
+	var ec *errcode.Error
+	require.True(t, errors.As(rebuildErr, &ec), "error must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
+	assert.Contains(t, rebuildErr.Error(), "999", "error should reference the misconfigured migration number")
 }
 
 // Target: adapters/postgres coverage >= 80%

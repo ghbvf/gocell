@@ -57,34 +57,8 @@
 -- ref: tools/archtest/audit_hash_input_frozen_test.go AUDIT-HASH-INPUT-FROZEN-01
 
 -- +goose Up
--- Forward-rebuild permit (decoupled from the destructive-down GUC). 043 is a
--- forward DROP+CREATE rebuild, NOT a Migrator.Down rollback, so it must not
--- share gocell.allow_destructive_down (which guards Down 020/021/etc). The
--- dedicated gocell.allow_audit_rebuild GUC makes the semantic boundary explicit
--- at the runbook + audit-log layer.
---
--- Up guard uses pg_class (not information_schema.tables) so the existence
--- check works regardless of whether the migration role has SELECT on
--- information_schema. Behavior matrix:
---   - table missing             → DROP+CREATE runs unconditionally (fresh deploy)
---   - table present, 0 rows     → DROP+CREATE runs unconditionally (idempotent dev re-run)
---   - table present, ≥1 row     → require GUC gocell.allow_audit_rebuild=true
---
--- Hardness ceiling: the GUC string is the strongest signal goose migration SQL
--- can read; a typed MigratorPermit funnel (Hard) would require moving forward-
--- rebuild orchestration out of the SQL file into Go-side Migrator.ForwardRebuild
--- API. Tracked as a backlog framework upgrade — see ADR-1042 §Decision 4 and
--- the follow-up issue cross-referenced there.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_audit_rebuild', true) IS DISTINCT FROM 'true'
-       AND EXISTS (SELECT 1 FROM pg_class WHERE relname = 'audit_entries' AND relkind = 'r')
-       AND EXISTS (SELECT 1 FROM audit_entries) THEN
-        RAISE EXCEPTION 'audit_entries v2 rebuild blocked: existing rows present and GUC gocell.allow_audit_rebuild not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Forward-rebuild gate is enforced in Go (Migrator.ForwardRebuild + ForwardRebuildPermit); see issue #1248.
+-- +gocell forward-rebuild target=audit_entries
 
 DROP INDEX IF EXISTS uq_audit_namespace_event_id;
 DROP INDEX IF EXISTS idx_audit_namespace_event_type;
@@ -126,34 +100,7 @@ CREATE UNIQUE INDEX uq_audit_namespace_event_id     ON audit_entries (namespace,
 -- all audit data. Production rollback MUST back up the table first
 -- (e.g., `pg_dump -t audit_entries`).
 --
--- What `goose up` after this Down actually does (verified against the goose
--- state machine, not assumed): schema_migrations still has 020/021 marked as
--- applied, so `goose up` does NOT re-run 020/021. The only unapplied entry is
--- 043 itself — so `goose up` re-runs 043 Up and re-creates the v2 table empty
--- (chain restarts from seq_no=1). The result is a fresh v2 schema, not a
--- pre-043 v1 schema; that semantic matches the forward-only canonical-rewrite
--- intent (CLAUDE.md「Review 和重构时不考虑向后兼容」).
---
--- If the operator genuinely wants the pre-043 v1 schema back, the correct
--- recipe is `goose down-to 019` (rewind past 020/021 + 043) followed by
--- `goose up` (replays 020 + 021 + 043 — i.e. back to v2 again because 043 is
--- the latest declared schema). v1 is never reachable while 043 lives in the
--- migrations directory.
---
--- Fail-closed: requires the standard destructive-down permit
--- gocell.allow_destructive_down (shared with 020/021/etc). This matches the
--- Migrator framework's typed permit channel (Migrator.Down(ctx, permit)). The
--- Up forward-rebuild permit (gocell.allow_audit_rebuild) is intentionally
--- separate so audit-rebuild approval is decoupled from destructive-rollback
--- approval — see migration header for the rationale.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP INDEX IF EXISTS uq_audit_namespace_event_id;
 DROP INDEX IF EXISTS idx_audit_namespace_event_type;

@@ -95,7 +95,7 @@ DROP INDEX CONCURRENTLY <index_name>;
 向后兼容（项目宪法："不向后兼容时不留软回退"），所以这类 migration 没有滚动部署窗口：
 
 - 必须在文件顶部注释块写明 Up 部署 runbook：drain traffic → goose up → deploy 新二进制 → 恢复 traffic。
-- 必须同时写明 Down 的 GUC（`gocell.allow_destructive_down=true`）与回退顺序。
+- 必须同时写明 Down 的授权机制（destructive-down / forward-rebuild 授权由 Go 侧 typed permit 执行，issue #1248）与回退顺序。
 - lock_timeout 由 migrator session 级别自动注入（规则 4），.sql 文件无需自行设置。
 - 如果未来运行时拓扑需要无停机滚动 DDL，按"两阶段 migration"拆：(a) 先放宽约束 / 让二进制停止写该列；
   (b) 等新二进制全量部署后再 DROP 列。当前 GoCell 仅 ship 自身，无外部 schema 消费方，单 PR + 计划停机更简单。

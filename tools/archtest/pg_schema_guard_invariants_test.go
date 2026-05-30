@@ -115,7 +115,7 @@ var forwardRebuildAnnotationRE = regexp.MustCompile(
 // comments) carries exactly one -- +gocell forward-rebuild target=<table>
 // annotation in the raw Up text.
 //
-// Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01
+// Rule: MIGRATION-FORWARD-REBUILD-ANNOTATION-01.
 func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})
@@ -174,7 +174,7 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 //
 // have been replaced by the typed Go ForwardRebuildPermit / DestructiveDownPermit
 // channel. Any residual reference — whether in current_setting(), set_config(),
-// or a comment — is a stale artefact that should be removed.
+// or a comment — is a stale artifact that should be removed.
 //
 // AI-robust: Medium — substring scan on SQL text, caught at test time.
 //
@@ -192,7 +192,7 @@ func TestArchtest_MigrationForwardRebuildAnnotation(t *testing.T) {
 // contains "gocell.allow_" (case-insensitive), confirming the four legacy GUC
 // variables have been fully removed and replaced by the typed permit channel.
 //
-// Rule: MIGRATION-NO-GUC-RESIDUE-01
+// Rule: MIGRATION-NO-GUC-RESIDUE-01.
 func TestArchtest_MigrationNoGUCResidue(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := scanner.DirsScope(root, []string{"adapters/postgres/migrations"})

@@ -28,15 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_devices_status ON devices (status);
 -- WARNING: Irreversible — DROP TABLE destroys every device row including any
 -- pending command FK targets (commands.device_id REFERENCES devices(id) with
 -- ON DELETE RESTRICT, so the DROP will cascade-fail if commands rows exist).
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP INDEX IF EXISTS idx_devices_status;
 DROP TABLE IF EXISTS devices;

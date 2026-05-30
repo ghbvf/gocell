@@ -66,15 +66,7 @@ ALTER TABLE refresh_tokens DROP CONSTRAINT IF EXISTS refresh_tokens_authz_epoch_
 ALTER TABLE refresh_tokens ADD CONSTRAINT refresh_tokens_authz_epoch_at_issue_positive CHECK (authz_epoch_at_issue > 0);
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_authz_epoch_positive;
 ALTER TABLE users ALTER COLUMN authz_epoch SET DEFAULT 0;
 ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_authz_epoch_at_issue_positive;

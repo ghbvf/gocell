@@ -73,7 +73,7 @@ var migratorProviderCallAllowlist = map[string]bool{
 // adapters/postgres/migrator.go appears only in methods whose names are in
 // migratorProviderCallAllowlist.
 //
-// Rule: MIGRATOR-PROVIDER-UP-CALLSITE-01
+// Rule: MIGRATOR-PROVIDER-UP-CALLSITE-01.
 func TestArchtest_MigratorProviderUpCallsite(t *testing.T) {
 	root := findModuleRoot(t)
 	migratorPath := filepath.Join(root, "adapters", "postgres", "migrator.go")
