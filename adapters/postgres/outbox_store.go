@@ -365,13 +365,13 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	}
 
 	if obs, ok := decodeOversizeGuardedJSONB[kout.ObservabilityMetadata](
-		observabilityJSON, maxObservabilityJSONBytes, "observability", scan.ID, scan.EventType,
+		observabilityJSON, maxObservabilityJSONBytes, observabilityDecodeWarnings, scan.ID, scan.EventType,
 	); ok {
 		scan.Observability = obs
 	}
 
 	if principal, ok := decodeOversizeGuardedJSONB[kout.PrincipalMetadata](
-		principalJSON, maxPrincipalJSONBytes, "principal", scan.ID, scan.EventType,
+		principalJSON, maxPrincipalJSONBytes, principalDecodeWarnings, scan.ID, scan.EventType,
 	); ok {
 		scan.Principal = principal
 	}
@@ -387,29 +387,51 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	}, nil
 }
 
+// jsonbDecodeWarnings holds the three drop-reason Warn messages for one
+// size-capped JSONB column. The messages are kept as const literals (declared
+// per-column below) rather than runtime-concatenated from a field name, so the
+// exact text stays greppable in source and stable for log-based alerting.
+type jsonbDecodeWarnings struct {
+	oversize       string // raw exceeds the column's byte cap
+	unmarshalError string // json.Unmarshal failed
+	validateError  string // decoded value failed Validate()
+}
+
+var (
+	observabilityDecodeWarnings = jsonbDecodeWarnings{
+		oversize:       "outbox store: observability JSON exceeds max size, dropping",
+		unmarshalError: "outbox store: failed to unmarshal observability — dropping",
+		validateError:  "outbox store: observability fails validation — dropping",
+	}
+	principalDecodeWarnings = jsonbDecodeWarnings{
+		oversize:       "outbox store: principal JSON exceeds max size, dropping",
+		unmarshalError: "outbox store: failed to unmarshal principal — dropping",
+		validateError:  "outbox store: principal fails validation — dropping",
+	}
+)
+
 // decodeOversizeGuardedJSONB decodes a size-capped, Validate-guarded JSONB
 // column into T. It returns (zero, false) — leaving the caller's destination
 // field at its zero value — when raw is empty, exceeds maxBytes, fails to
-// unmarshal, or fails T.Validate(); each rejection is logged at Warn with the
-// entry/event identifiers. The staged decode into a local variable (PR #582
-// round-3 review F4) prevents a partial decode from leaking into the caller's
-// field: json.Unmarshal is documented to leave partial values in the dst when
-// it errors mid-decode (e.g. SafeID.UnmarshalJSON rejects field N while fields
-// 1..N-1 already succeeded). field names the column ("observability" /
-// "principal") for the Warn messages. Mirrors etcd clientv3 / K8s
-// runtime.Decode staged-decode pattern. Shared by the observability and
-// principal read-side guards, which are structurally identical (issue #1229
-// review F5: symmetric size caps prevent unbounded allocation from corrupted
-// or maliciously-crafted rows).
+// unmarshal, or fails T.Validate(); each rejection is logged at Warn (using the
+// caller-supplied per-column messages) with the entry/event identifiers. The
+// staged decode into a local variable (PR #582 round-3 review F4) prevents a
+// partial decode from leaking into the caller's field: json.Unmarshal is
+// documented to leave partial values in the dst when it errors mid-decode (e.g.
+// SafeID.UnmarshalJSON rejects field N while fields 1..N-1 already succeeded).
+// Mirrors etcd clientv3 / K8s runtime.Decode staged-decode pattern. Shared by
+// the observability and principal read-side guards, which are structurally
+// identical (issue #1229 review F5: symmetric size caps prevent unbounded
+// allocation from corrupted or maliciously-crafted rows).
 func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
-	raw []byte, maxBytes int, field, entryID, eventType string,
+	raw []byte, maxBytes int, warn jsonbDecodeWarnings, entryID, eventType string,
 ) (T, bool) {
 	var zero T
 	if len(raw) == 0 {
 		return zero, false
 	}
 	if len(raw) > maxBytes {
-		slog.Warn("outbox store: "+field+" JSON exceeds max size, dropping",
+		slog.Warn(warn.oversize,
 			slog.String("entry_id", entryID),
 			slog.String("event_type", eventType),
 			slog.Int("size", len(raw)),
@@ -418,14 +440,14 @@ func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
 	}
 	var decoded T
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		slog.Warn("outbox store: failed to unmarshal "+field+" — dropping",
+		slog.Warn(warn.unmarshalError,
 			slog.String("entry_id", entryID),
 			slog.String("event_type", eventType),
 			slog.Any("error", err))
 		return zero, false
 	}
 	if err := decoded.Validate(); err != nil {
-		slog.Warn("outbox store: "+field+" fails validation — dropping",
+		slog.Warn(warn.validateError,
 			slog.String("entry_id", entryID),
 			slog.String("event_type", eventType),
 			slog.Any("error", err))
