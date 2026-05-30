@@ -509,25 +509,29 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 
 	consumeTotal, cErr := p.CounterVec(subConsumeTotalOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register consume total counter", cErr))
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume total counter", cErr))
 	}
 	registered = append(registered, consumeTotal)
 
 	consumeFailed, cErr := p.CounterVec(subConsumeFailedOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register consume failed counter", cErr))
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume failed counter", cErr))
 	}
 	registered = append(registered, consumeFailed)
 
 	dlxTotal, cErr := p.CounterVec(subDlxTotalOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register dlx counter", cErr))
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx counter", cErr))
 	}
 	registered = append(registered, dlxTotal)
 
 	dlxFailed, cErr := p.CounterVec(subDlxFailedOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "mqtt: register dlx failed counter", cErr))
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx failed counter", cErr))
 	}
 	registered = append(registered, dlxFailed)
 
