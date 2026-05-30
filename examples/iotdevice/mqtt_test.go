@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -72,7 +73,7 @@ func TestMQTTTopicPublisher_MapsTopicAndDelegates(t *testing.T) {
 	if want := "iotdevice/event/device-registered/v1"; fake.gotTopic != want {
 		t.Fatalf("inner topic = %q, want %q", fake.gotTopic, want)
 	}
-	if string(fake.gotPayload) != string(payload) {
+	if !bytes.Equal(fake.gotPayload, payload) {
 		t.Fatalf("payload mutated: got %q want %q", fake.gotPayload, payload)
 	}
 	if err := pub.Close(context.Background()); err != nil {
