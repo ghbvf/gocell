@@ -31,6 +31,10 @@
 // values (accumulated by the cell registry during Init) into
 // [kernel/cell.RouteGroup] values that bootstrap mounts onto the HTTP server.
 //
+// # Deferred capabilities
+//
+// Metrics and healthz probes are deferred to PR-6 (KERNEL-WEBHOOK-01).
+//
 // # References
 //
 // ref: svix/svix-webhooks go/webhook.go@main — HMAC-SHA256 header parsing and

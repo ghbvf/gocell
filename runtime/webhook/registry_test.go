@@ -21,6 +21,7 @@ func validReceiverRequest(t *testing.T) cell.WebhookReceiverRequest {
 }
 
 func TestBuildRouteGroups_HappyPath(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
@@ -29,7 +30,7 @@ func TestBuildRouteGroups_HappyPath(t *testing.T) {
 		validReceiverRequest(t),
 	}
 
-	groups, err := rtwh.BuildRouteGroups(reqs, store, claimer, clk)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -58,6 +59,7 @@ func TestBuildRouteGroups_HappyPath(t *testing.T) {
 }
 
 func TestBuildRouteGroups_MultipleRequests(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
@@ -75,7 +77,7 @@ func TestBuildRouteGroups_MultipleRequests(t *testing.T) {
 		},
 	}
 
-	groups, err := rtwh.BuildRouteGroups(reqs, store, claimer, clk)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -85,11 +87,12 @@ func TestBuildRouteGroups_MultipleRequests(t *testing.T) {
 }
 
 func TestBuildRouteGroups_EmptyReqs(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	groups, err := rtwh.BuildRouteGroups(nil, store, claimer, clk)
+	groups, err := rtwh.BuildRouteGroups(clk, nil, store, claimer)
 	if err != nil {
 		t.Fatalf("BuildRouteGroups(nil): %v", err)
 	}
@@ -99,26 +102,29 @@ func TestBuildRouteGroups_EmptyReqs(t *testing.T) {
 }
 
 func TestBuildRouteGroups_NilStore(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	_, err := rtwh.BuildRouteGroups(nil, nil, claimer, clk)
+	_, err := rtwh.BuildRouteGroups(clk, nil, nil, claimer)
 	if err == nil {
 		t.Fatal("expected error for nil store")
 	}
 }
 
 func TestBuildRouteGroups_NilClaimer(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 
-	_, err := rtwh.BuildRouteGroups(nil, store, nil, clk)
+	_, err := rtwh.BuildRouteGroups(clk, nil, store, nil)
 	if err == nil {
 		t.Fatal("expected error for nil claimer")
 	}
 }
 
 func TestBuildRouteGroups_InvalidSpec(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
@@ -131,18 +137,19 @@ func TestBuildRouteGroups_InvalidSpec(t *testing.T) {
 		},
 	}
 
-	_, err := rtwh.BuildRouteGroups(reqs, store, claimer, clk)
+	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
 	if err == nil {
 		t.Fatal("expected error for invalid spec")
 	}
 }
 
 func TestBuildRouteGroups_Register_IsMountCall(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	groups, err := rtwh.BuildRouteGroups([]cell.WebhookReceiverRequest{validReceiverRequest(t)}, store, claimer, clk)
+	groups, err := rtwh.BuildRouteGroups(clk, []cell.WebhookReceiverRequest{validReceiverRequest(t)}, store, claimer)
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}

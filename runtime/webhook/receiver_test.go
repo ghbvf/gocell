@@ -28,6 +28,10 @@ const (
 	testSecret       = "12345678901234567890abcd" // 24 bytes
 	testMaxBodyBytes = 1 << 20                    // 1 MiB
 	testTolerance    = 300                        // seconds
+
+	// testReplaySkew is the clock offset used to place a delivery outside the
+	// tolerance window in timestamp-expiry tests (must exceed testTolerance seconds).
+	testReplaySkew = 10 * time.Minute
 )
 
 // fixedNow is a stable reference time used across tests.
@@ -157,9 +161,29 @@ func (nopReceipt) Commit(_ context.Context) error                  { return nil 
 func (nopReceipt) Release(_ context.Context) error                 { return nil }
 func (nopReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
+// countingReceipt records how many times Release was called, used by the
+// handler-panic test to assert the lease is released before re-panic.
+type countingReceipt struct {
+	released int
+}
+
+func (r *countingReceipt) Commit(_ context.Context) error                  { return nil }
+func (r *countingReceipt) Release(_ context.Context) error                 { r.released++; return nil }
+func (r *countingReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
+
+// countingClaimer always returns ClaimAcquired with a shared countingReceipt.
+type countingClaimer struct {
+	rcpt *countingReceipt
+}
+
+func (c *countingClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
+	return idempotency.ClaimAcquired, c.rcpt, nil
+}
+
 // ---- NewReceiver construction tests ----
 
 func TestNewReceiver_NilDeps(t *testing.T) {
+	t.Parallel()
 	clk := clockmock.New(fixedNow)
 	store := testStore(t)
 	verifier, _ := kwh.NewHMACVerifier(clk)
@@ -196,6 +220,7 @@ func TestNewReceiver_NilDeps(t *testing.T) {
 // ---- ServeHTTP table-driven tests ----
 
 func TestReceiver_ServeHTTP(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"event":"test"}`)
 	deliveryID := "msg-001"
 
@@ -302,7 +327,9 @@ func TestReceiver_ServeHTTP(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			recv := buildReceiver(t, receiverOpts{
 				claimer: tt.claimer,
 				handler: tt.handler,
@@ -317,6 +344,7 @@ func TestReceiver_ServeHTTP(t *testing.T) {
 }
 
 func TestReceiver_SuccessResponseShape(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"event":"test"}`)
 	recv := buildReceiver(t, receiverOpts{})
 	w := httptest.NewRecorder()
@@ -337,6 +365,7 @@ func TestReceiver_SuccessResponseShape(t *testing.T) {
 }
 
 func TestReceiver_ErrorResponseEnvelope(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{}`)
 	recv := buildReceiver(t, receiverOpts{})
 	w := httptest.NewRecorder()
@@ -357,6 +386,7 @@ func TestReceiver_ErrorResponseEnvelope(t *testing.T) {
 }
 
 func TestReceiver_UnknownSource_Returns401(t *testing.T) {
+	t.Parallel()
 	// Build a receiver pointing at a source that isn't in the store.
 	clk := clockmock.New(fixedNow)
 	emptyStore := kwh.NewSourceRegistry()
@@ -376,6 +406,7 @@ func TestReceiver_UnknownSource_Returns401(t *testing.T) {
 }
 
 func TestReceiver_TimestampExpired_Returns401(t *testing.T) {
+	t.Parallel()
 	// The signer uses fixedNow but the verifier's clock is 10 minutes ahead
 	// (outside the 300s tolerance window).
 	body := []byte(`{"event":"test"}`)
@@ -392,8 +423,8 @@ func TestReceiver_TimestampExpired_Returns401(t *testing.T) {
 	req.Header.Set("X-Timestamp", headers.Timestamp)
 	req.Header.Set("X-Signature", headers.Signature)
 
-	// Verifier clock is 10 minutes ahead → outside ±300s window.
-	laterClk := clockmock.New(fixedNow.Add(10 * time.Minute))
+	// Verifier clock is testReplaySkew ahead → outside ±300s window.
+	laterClk := clockmock.New(fixedNow.Add(testReplaySkew))
 	store := testStore(t)
 	verifier, _ := kwh.NewHMACVerifier(laterClk, kwh.WithTolerance(testTolerance*time.Second))
 	claimer := idempotency.NewInMemClaimer(laterClk)
@@ -411,6 +442,7 @@ func TestReceiver_TimestampExpired_Returns401(t *testing.T) {
 }
 
 func TestReceiver_BodyExceedsLimitViaMaxBytesReader(t *testing.T) {
+	t.Parallel()
 	// Build a receiver with a tiny body limit.
 	spec := testSpec()
 	spec.MaxBodyBytes = 10 // 10 bytes limit
@@ -449,6 +481,7 @@ func TestReceiver_BodyExceedsLimitViaMaxBytesReader(t *testing.T) {
 }
 
 func TestReceiver_HandlerReceivesDelivery(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"event":"check-delivery"}`)
 	deliveryID := "msg-delivery-check"
 
@@ -471,5 +504,57 @@ func TestReceiver_HandlerReceivesDelivery(t *testing.T) {
 	}
 	if string(gotDelivery.SourceID) != testSourceID {
 		t.Errorf("sourceID = %q, want %q", gotDelivery.SourceID, testSourceID)
+	}
+}
+
+// TestReceiver_HandlerPanic_ReleasesLeaseAndRepanics verifies that when the
+// business handler panics, the Receiver:
+//  1. Calls Release on the idempotency receipt (so the TTL does not permanently
+//     block re-delivery).
+//  2. Re-panics with the original value so the HTTP recovery middleware can
+//     convert the panic to a 500 response.
+//
+// This test uses a shared countingReceipt; the handler and release assertions
+// require a specific execution order, so the sub-cases are NOT run in parallel.
+func TestReceiver_HandlerPanic_ReleasesLeaseAndRepanics(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"event":"panic-test"}`)
+	rcpt := &countingReceipt{}
+	claimer := &countingClaimer{rcpt: rcpt}
+
+	panicValue := "test-handler-panic"
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		panic(panicValue)
+	}
+
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(testTolerance*time.Second))
+	if err != nil {
+		t.Fatalf("NewHMACVerifier: %v", err)
+	}
+
+	recv, err := rtwh.NewReceiver(clk, testSpec(), verifier, store, claimer, handler)
+	if err != nil {
+		t.Fatalf("NewReceiver: %v", err)
+	}
+
+	// Capture the re-panic from dispatch so we can assert it propagated.
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		w := httptest.NewRecorder()
+		recv.ServeHTTP(w, signedRequest(t, body, "msg-panic-001"))
+	}()
+
+	// The lease must have been released before the panic propagated.
+	if rcpt.released != 1 {
+		t.Errorf("Release called %d times, want 1", rcpt.released)
+	}
+
+	// The panic must have re-propagated (recovered is non-nil).
+	if recovered == nil {
+		t.Error("expected panic to re-propagate, but recover() returned nil")
 	}
 }

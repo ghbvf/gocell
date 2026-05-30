@@ -10,19 +10,19 @@ in one of two directions:
 | `inbound` | receiver（接收外部回调，HMAC + timestamp + Claimer 三重保护） | `webhook-receive` | 外部 source 推送给我们 |
 | `outbound` | dispatcher（签名后推送，SSRF 防御 + 退避重试） | `webhook-dispatch` | 我们推送给外部 target |
 
-> **Scope note (PR-2)**: 本目录与 cellgen 派生**只覆盖契约识别 + 代码生成层**。运行时
-> （`reg.RegisterWebhookReceiver/Dispatch` 方法本体、HTTP 接收 middleware、dispatcher
-> outbox consumer、SSRF guard、healthz/metrics）在后续 PR 落地（receiver = PR-3，
-> SSRF = PR-4，dispatcher = PR-5）。kernel 纯计算内核（Signer/Verifier/Source）已在
-> PR-1（#1251）落地于 `kernel/webhook/`。
+> **Scope note (PR-2 → PR-3 landed)**: 本目录与 cellgen 派生覆盖**契约识别 + 代码生成层**。
+> PR-3（#1158）已落地 receiver 运行时（`runtime/webhook`：`Receiver`、`BuildRouteGroups`、
+> `bootstrap` phase5 drain），`reg.RegisterWebhookReceiver` 方法本体及 HTTP 接收 pipeline
+> 均已实现。kernel 纯计算内核（Signer/Verifier/Source）已在 PR-1（#1251）落地于 `kernel/webhook/`。
 >
-> **PR-2 → PR-3/5/6 排序约束（forward reference）**：cellgen 的 `cell.tmpl` 已无条件
-> emit `reg.RegisterWebhookReceiver/Dispatch` 调用，但这两个 `cell.Registrar` 方法本体
-> 在 PR-3/PR-5 才落地。PR-2 之所以 `go build ./...` 绿，是因为**当前没有任何真实 webhook
-> cell**——这些调用只存在于 cellgen 的 golden 文本夹具（`*.go.golden`，不参与编译）。
-> 因此 **PR-3（receiver）/ PR-5（dispatcher）必须先把对应 Registrar 方法 + bootstrap drain
-> 落地，才能生成第一个真实 webhook cell（PR-6 demo）**；否则 `gocell generate cell` 会产出
-> 引用不存在方法的 `cell_gen.go`（编译失败）。这是有意的 seam 排序，不是缺陷。
+> 仍待后续 PR 落地：SSRF guard（PR-4）、dispatcher outbox consumer（PR-5）、
+> healthz/metrics 探针（PR-6，KERNEL-WEBHOOK-01）。
+>
+> **PR-3 之后的排序约束**：`gocell generate cell` 现可为声明 `contractUsages[role=webhook-receive]`
+> 的 slice 派生 `reg.RegisterWebhookReceiver` 调用（方法本体已存在）。第一个真实 webhook cell
+> demo 在 PR-6 落地。dispatcher 路径（PR-5）落地前，`contractUsages[role=webhook-dispatch]`
+> 的 cellgen 派生仍引用未实现的 `reg.RegisterWebhookDispatch`，会导致编译失败——这是有意的
+> seam 排序，不是缺陷。
 >
 > **codegen 零产物语义**：webhook 契约即便 `codegen: true`，contractgen 也**有意产出零
 > per-contract 产物**（注册经 cellgen 字面量，不经 contractgen；见 `generator.go` webhook 分支
@@ -153,8 +153,8 @@ func (c *PaymentCoreCell) Init(ctx context.Context, reg cell.Registrar) error {
 
 `webhook.ReceiverSpec` / `DispatchSpec` 是 `kernel/webhook` 的纯数据结构；`CellID` 作为字面量
 由 cellgen 从 cell.yaml 注入（observability owner 溯源 cell 元数据，与 `reg.Subscribe` 的位置
-cellID 同源约束）。`reg.RegisterWebhookReceiver/Dispatch` 这两个 `cell.Registrar` 方法本体在
-PR-3/PR-5 落地。
+cellID 同源约束）。`reg.RegisterWebhookReceiver` 方法本体已在 PR-3（#1158）落地；
+`reg.RegisterWebhookDispatch` 在 PR-5 落地。
 
 ## 静态守卫（archtest）
 

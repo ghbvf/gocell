@@ -40,7 +40,7 @@ func buildIntegrationServer(t *testing.T, handler kwh.WebhookReceiveHandler) (*h
 		},
 	}
 
-	groups, err := rtwh.BuildRouteGroups(reqs, store, claimer, clk)
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
 	if err != nil {
 		t.Fatalf("BuildRouteGroups: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestIntegration_IdempotentReplay(t *testing.T) {
 	}
 
 	// Second request with the same delivery ID — handler must NOT be called again;
-	// response is 200 (idempotent acknowledged).
+	// response is 200 (idempotent acknowledged) with the same {"status":"accepted"} body.
 	resp2 := sendSignedRequest(t, srv, signer, body, deliveryID)
 	if resp2.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp2.Body)
@@ -186,6 +186,14 @@ func TestIntegration_IdempotentReplay(t *testing.T) {
 	}
 	if handlerCalled != 1 {
 		t.Errorf("second request: handler called %d times total, want 1 (idempotent)", handlerCalled)
+	}
+	// Verify idempotent replay response body shape.
+	var result2 map[string]string
+	if err := json.NewDecoder(resp2.Body).Decode(&result2); err != nil {
+		t.Fatalf("decode idempotent replay response: %v", err)
+	}
+	if result2["status"] != "accepted" {
+		t.Errorf("idempotent replay response.status = %q, want accepted", result2["status"])
 	}
 }
 
@@ -293,5 +301,158 @@ func TestIntegration_StatusCodeCoverage(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, tt.wantStatus, raw)
 			}
 		})
+	}
+}
+
+// TestIntegration_BodyTooLarge_Returns413 verifies that a request whose body
+// exceeds MaxBodyBytes is rejected with 413 before HMAC verification.
+func TestIntegration_BodyTooLarge_Returns413(t *testing.T) {
+	// Build a spec with a tiny body limit.
+	spec := testSpec()
+	spec.MaxBodyBytes = 10 // 10 bytes
+
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	if err != nil {
+		t.Fatalf("BuildRouteGroups: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	for _, g := range groups {
+		stub := &serveMuxAdapter{mux: mux, prefix: g.Prefix}
+		if err := g.Register(stub); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Body is larger than the 10-byte limit.
+	bigBody := bytes.Repeat([]byte("x"), 100)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(bigBody))
+	req.ContentLength = int64(len(bigBody)) // above spec.MaxBodyBytes
+	req.Header.Set("X-Delivery-Id", "int-413-001")
+	req.Header.Set("X-Timestamp", "1234567890")
+	req.Header.Set("X-Signature", "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 413; body: %s", resp.StatusCode, raw)
+	}
+}
+
+// TestIntegration_TimestampExpired_Returns401 verifies that a delivery signed
+// at fixedNow but received with a clock testReplaySkew in the future is
+// rejected 401 (replay defence — outside ±300s tolerance window).
+func TestIntegration_TimestampExpired_Returns401(t *testing.T) {
+	src := testSource(t)
+	signer, err := kwh.NewHMACSigner(src)
+	if err != nil {
+		t.Fatalf("NewHMACSigner: %v", err)
+	}
+
+	body := []byte(`{"event":"ts-expired"}`)
+	did, _ := kwh.NewDeliveryID("int-ts-expired-001")
+	headers, _ := signer.Sign(body, fixedNow, did) // signed at fixedNow
+
+	// Server clock is testReplaySkew ahead → outside ±testTolerance window.
+	laterClk := clockmock.New(fixedNow.Add(testReplaySkew))
+	store := testStore(t)
+	claimer := idempotency.NewInMemClaimer(laterClk)
+
+	spec := testSpec()
+	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
+	groups, err := rtwh.BuildRouteGroups(laterClk, reqs, store, claimer)
+	if err != nil {
+		t.Fatalf("BuildRouteGroups: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	for _, g := range groups {
+		stub := &serveMuxAdapter{mux: mux, prefix: g.Prefix}
+		if err := g.Register(stub); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
+	req.Header.Set("X-Timestamp", headers.Timestamp)
+	req.Header.Set("X-Signature", headers.Signature)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 401; body: %s", resp.StatusCode, raw)
+	}
+}
+
+// TestIntegration_ConcurrentDelivery_Returns409 verifies that a ClaimBusy
+// state (another goroutine already holds the lease) returns 409.
+func TestIntegration_ConcurrentDelivery_Returns409(t *testing.T) {
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+
+	// fakeClaimer always returns ClaimBusy to simulate a concurrent delivery.
+	fakeCl := &fakeClaimer{results: []claimResult{{state: idempotency.ClaimBusy}}}
+
+	src := testSource(t)
+	signer, err := kwh.NewHMACSigner(src)
+	if err != nil {
+		t.Fatalf("NewHMACSigner: %v", err)
+	}
+
+	spec := testSpec()
+	reqs := []cell.WebhookReceiverRequest{{Spec: spec, Handler: func(_ context.Context, _ kwh.Delivery) error { return nil }}}
+	groups, err := rtwh.BuildRouteGroups(clk, reqs, store, fakeCl)
+	if err != nil {
+		t.Fatalf("BuildRouteGroups: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	for _, g := range groups {
+		stub := &serveMuxAdapter{mux: mux, prefix: g.Prefix}
+		if err := g.Register(stub); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	body := []byte(`{"event":"busy"}`)
+	did, _ := kwh.NewDeliveryID("int-busy-001")
+	headers, _ := signer.Sign(body, fixedNow, did)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+testPathPattern, bytes.NewReader(body))
+	req.Header.Set("X-Delivery-Id", string(headers.DeliveryID))
+	req.Header.Set("X-Timestamp", headers.Timestamp)
+	req.Header.Set("X-Signature", headers.Signature)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusConflict {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, raw)
 	}
 }

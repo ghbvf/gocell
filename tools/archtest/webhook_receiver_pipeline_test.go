@@ -61,6 +61,10 @@
 // existing invokeHandler is the only caller today (locked by A2 on the
 // SelectorExpr form). A3 does not exercise this form because the fixture would
 // need to also detect the AssignStmt + CallExpr combo, which is a separate rule.
+// No reverse self-test added for B2 because the local-variable-capture form is
+// not expressible as an AST-level SelectorExpr with types.Info.Selections — the
+// same Go-language ceiling that makes package-internal upstream Hard-ization
+// impossible for this pattern (same precedent as gh #1282 won't-do and #851).
 //
 // B3 — alias type re-shape: if verified or claimed were re-exported under an
 // alias in another package inside runtime/webhook (impossible today because the
@@ -342,10 +346,13 @@ func TestWebhookReceiverPipeline_ReverseFixture(t *testing.T) {
 		})
 
 	// A1: both verified{} (forgeBadVerified) and claimed{} (forgeBadClaimed)
-	// construction outside the allowed functions must fire.
-	assert.GreaterOrEqual(t, len(a1), 2,
-		"A1 reverse fixture: expected ≥2 diagnostics (verified{} outside verify + claimed{} outside claim)")
-	// A2: r.handler called in callHandlerDirectly (outside invokeHandler) must fire.
-	assert.GreaterOrEqual(t, len(a2), 1,
-		"A2 reverse fixture: expected ≥1 diagnostic (r.handler called outside invokeHandler)")
+	// construction outside the allowed functions must fire — exactly 2 diagnostics
+	// matching the two known violation sites in the fixture.
+	assert.Equal(t, 2, len(a1),
+		"A1 reverse fixture: expected exactly 2 diagnostics (verified{} outside verify + claimed{} outside claim)")
+	// A2: r.handler called in callHandlerDirectly (outside invokeHandler) must fire —
+	// exactly 1 diagnostic matching the one known violation site in the fixture.
+	// Also asserts that the legitimate invokeHandler callsite does NOT produce a diagnostic.
+	assert.Equal(t, 1, len(a2),
+		"A2 reverse fixture: expected exactly 1 diagnostic (r.handler called outside invokeHandler)")
 }

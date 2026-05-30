@@ -359,5 +359,27 @@ func TestWithWebhookClaimer_NilIgnored(t *testing.T) {
 	assert.Nil(t, b.webhookClaimer, "typed-nil claimer must be ignored")
 }
 
+// TestWithWebhookSourceStore_BareNilIgnored verifies that a bare untyped nil
+// passed directly to WithWebhookSourceStore is silently ignored (cumulative
+// option semantics — does not clear a previously set store).
+func TestWithWebhookSourceStore_BareNilIgnored(t *testing.T) {
+	b := New(clockmock.New(whFixedNow))
+	// Pass bare nil (not a typed interface variable).
+	opt := WithWebhookSourceStore(nil)
+	opt(b)
+	assert.Nil(t, b.webhookSourceStore, "bare-nil source store must be ignored")
+}
+
+// TestWithWebhookClaimer_BareNilIgnored verifies that a bare untyped nil
+// passed directly to WithWebhookClaimer is silently ignored.
+func TestWithWebhookClaimer_BareNilIgnored(t *testing.T) {
+	clk := clockmock.New(whFixedNow)
+	b := New(clk)
+	// Pass bare nil (not a typed interface variable).
+	opt := WithWebhookClaimer(nil)
+	opt(b)
+	assert.Nil(t, b.webhookClaimer, "bare-nil claimer must be ignored")
+}
+
 // Compile-time check: webhookTestCell implements cell.Cell.
 var _ cell.Cell = (*webhookTestCell)(nil)

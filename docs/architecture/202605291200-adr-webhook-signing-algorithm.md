@@ -115,7 +115,7 @@ multi-secret sources are a follow-up.
 | Timestamp outside tolerance window (replay) | 401 | `ErrWebhookTimestampExpired` |
 | Body exceeds configured limit | 413 | `ErrWebhookBodyTooLarge` |
 | Idempotent duplicate (ClaimDone — already processed) | 200 | — (silent success, safe for sender retry) |
-| Concurrent in-flight (ClaimBusy — another goroutine holds lease) | 409 | `ErrWebhookConflict` |
+| Concurrent in-flight (ClaimBusy — another goroutine holds lease) | 409 | `ErrWebhookDuplicateDelivery` |
 | Handler transient error (KindUnavailable / infra fault) | 503 | framework-mapped |
 | Handler permanent error | 500 | framework-mapped |
 
@@ -156,10 +156,9 @@ upstream for external callers).
 | Downstream (callsite) | `WEBHOOK-RECEIVER-PIPELINE-01` A2 locks `invokeHandler` callsites to require a `claimed` argument; A3 locks `claim` callsites to require a `verified` argument | **Hard** |
 
 The package-internal Medium upstream axis follows the same permanent Go-language
-ceiling as `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` (#1282 won't-do). Tracking
-issue for explicit Hard-ization: **gh #1321** (sealed unexported interface +
-private constructor, following #851/#1282 precedent). The funnel godoc names
-this issue.
+ceiling as `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` (#1282 won't-do). Package-internal
+upstream Hard-ization is constrained by the Go-language ceiling, the same
+won't-do precedent as #1282/#851; no independent tracking issue exists.
 
 ### 4. Built-in two-phase idempotency (Claimer)
 
@@ -167,8 +166,8 @@ The receiver runtime embeds `kernel/idempotency.Claimer` with key
 `webhook:{sourceID}:{deliveryID}` and 24h TTL. The pipeline is:
 
 ```
-Claim (get lease) → verify signature → invokeHandler → Commit
-                                    ↘ Release (on panic / transient error)
+readBody → verify signature → Claim (get lease) → invokeHandler → Commit
+                                                ↘ Release (on panic / transient error)
 ```
 
 **Rationale vs. Stripe/Svix/GitHub OSS approach:** OSS webhook libraries
@@ -240,4 +239,4 @@ are added and immediately closed by PR-3 controls.
 - Stripe webhook signatures: https://github.com/stripe/stripe-go/blob/master/webhook/client.go
 - ADR `202605051730-adr-errcode-message-pii-safety.md` (Message/Details/Internal redaction)
 - ADR `202604242030-adr-kernel-wrapper-contract-observability.md` §8 (span/error redaction)
-- ai-robust.md §Funnel 双向锁评级; gh #1243 (upstream Hard-ization A3), #851 (precedent), #1321 (pipeline token Hard-ization), #1282 (Go-language ceiling precedent)
+- ai-robust.md §Funnel 双向锁评级; gh #1243 (upstream Hard-ization A3), #851 (precedent), #1282 (Go-language ceiling precedent — pipeline token package-internal upstream Medium is the permanent ceiling, same won't-do shape)

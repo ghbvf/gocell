@@ -31,6 +31,11 @@ import (
 
 const (
 	conformanceMinSecretLen = 24
+
+	// conformanceOutOfWindowSkew is the timestamp offset used to put a
+	// delivery outside the default ±5min tolerance window in the bidirectional
+	// timestamp-window test cases.
+	conformanceOutOfWindowSkew = 10 * time.Minute
 )
 
 // VerifierFactory creates a [webhook.Verifier] whose internal clock is pinned
@@ -160,8 +165,8 @@ func runTamperTimestampExpired(
 	t.Helper()
 	t.Run("tamper_timestamp_expired", func(t *testing.T) {
 		t.Parallel()
-		// Clock is 10 minutes past signing time; default tolerance is 5 min.
-		v := verifierAt(t, base.Add(10*time.Minute))
+		// Clock is conformanceOutOfWindowSkew past signing time; default tolerance is 5 min.
+		v := verifierAt(t, base.Add(conformanceOutOfWindowSkew))
 		err := v.Verify(payload, headers, src)
 		requireErrCode(t, err, errcode.ErrWebhookTimestampExpired, errcode.KindUnauthenticated)
 	})
@@ -215,7 +220,7 @@ func runTimestampOutsideWindow(
 	t.Run("timestamp_outside_window", func(t *testing.T) {
 		t.Parallel()
 		// Bidirectional: past the window in the negative direction.
-		v := verifierAt(t, base.Add(-10*time.Minute))
+		v := verifierAt(t, base.Add(-conformanceOutOfWindowSkew))
 		err := v.Verify(payload, headers, src)
 		requireErrCode(t, err, errcode.ErrWebhookTimestampExpired, errcode.KindUnauthenticated)
 	})

@@ -80,7 +80,7 @@ func (v *hmacVerifier) Verify(rawBody []byte, headers Headers, source Source) er
 		// is not a source-ID enumeration oracle (WEBHOOK-HMAC-FUNNEL-01 F8/F9).
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
 			"webhook: no presented signature matches the computed digest",
-			errcode.WithInternal(errcode.InternalAttr("sourceId", string(source.id))))
+			errcode.WithInternal(errcode.InternalAttr("source_id", string(source.id))))
 	}
 	return nil
 }
@@ -99,12 +99,15 @@ func (v *hmacVerifier) validateTimestamp(timestamp string) error {
 		skew = -skew
 	}
 	if skew > v.tolerance {
+		// skewSeconds is server-side only: exposing the exact skew in wire
+		// details would let an attacker calibrate replay timing. toleranceSeconds
+		// is safe to expose (it is the configured window, not a runtime secret).
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookTimestampExpired,
 			"webhook: signature timestamp is outside the tolerance window",
 			errcode.WithDetails(
-				errcode.PublicInt("skewSeconds", int64(skew/time.Second)),
 				errcode.PublicInt("toleranceSeconds", int64(v.tolerance/time.Second)),
-			))
+			),
+			errcode.WithInternal(errcode.InternalAttr("skewSeconds", int64(skew/time.Second))))
 	}
 	return nil
 }

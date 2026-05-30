@@ -21,13 +21,14 @@ import (
 // verifier and [Receiver] for each request happens eagerly so configuration
 // errors are reported at startup rather than at request time.
 //
+// clk is the mandatory positional clock (CLOCK-POSITIONAL-INJECTION-01); it
+// is the first parameter per the GoCell clock-injection convention.
 // store and claimer are shared across all receivers; they must not be nil.
-// clk is the mandatory positional clock (CLOCK-POSITIONAL-INJECTION-01).
 func BuildRouteGroups(
+	clk clock.Clock,
 	reqs []cell.WebhookReceiverRequest,
 	store kwh.SourceStore,
 	claimer idempotency.Claimer,
-	clk clock.Clock,
 ) ([]cell.RouteGroup, error) {
 	clock.MustHaveClock(clk, "webhook.BuildRouteGroups")
 	if validation.IsNilInterface(store) {
@@ -41,7 +42,7 @@ func BuildRouteGroups(
 
 	groups := make([]cell.RouteGroup, 0, len(reqs))
 	for _, req := range reqs {
-		rg, err := buildRouteGroup(req, store, claimer, clk)
+		rg, err := buildRouteGroup(clk, req, store, claimer)
 		if err != nil {
 			return nil, fmt.Errorf("webhook BuildRouteGroups: contract %q: %w",
 				req.Spec.ContractID, err)
@@ -52,11 +53,17 @@ func BuildRouteGroups(
 }
 
 // buildRouteGroup builds a single RouteGroup from one WebhookReceiverRequest.
+//
+// clk is the first parameter per CLOCK-POSITIONAL-INJECTION-01.
+// Prefix carries the full PathPattern for cell ownership attribution in the
+// HTTP metrics cell label. Register mounts at "/" so that the bootstrap adapter
+// composes joinPrefix(Prefix, "/") = Prefix — avoiding a double-prefix when
+// the adapter walks RouteGroup.Prefix + the Mount argument.
 func buildRouteGroup(
+	clk clock.Clock,
 	req cell.WebhookReceiverRequest,
 	store kwh.SourceStore,
 	claimer idempotency.Claimer,
-	clk clock.Clock,
 ) (cell.RouteGroup, error) {
 	tolerance := time.Duration(req.Spec.ToleranceSeconds) * time.Second
 	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(tolerance))
