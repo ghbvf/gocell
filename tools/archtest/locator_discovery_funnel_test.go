@@ -39,13 +39,18 @@
 //      AI-robust grading: upstream Medium (archtest caller allowlist) +
 //      downstream Hard (form uniqueness via const-eval arg scanning).
 //      Funnel EXITING upstream is Medium (archtest caller-allowlist + blind-spot
-//      self-check); upstream Hard 升级路径 (Locator sealed envelope /
-//      typed pathx package / accept Medium 上限) is tracked by gh issue #1235.
+//      self-check) and is a PERMANENT ceiling, same as A1/A2: the banned token
+//      is a string literal ("cells"/"cmd") and filepath.Join is a stdlib public
+//      func — neither can be made unexpressible by Go's type system. Locator
+//      sealed envelope / typed pathx were evaluated and rejected (sealing the
+//      derived path does not stop a literal "cells" being typed → illusory
+//      Hard); gh issue #1235 closed won't-do (2026-05-30).
 //
 // AI-robust grading: Medium upstream + Hard downstream is a final form per
-// ai-robust §"Funnel 双向锁评级". No follow-up issue is opened for A1/A2; the
+// ai-robust §"Funnel 双向锁评级". No follow-up issue is opened for A1/A2/A5; the
 // upstream ceiling is a Go-language limit, not a deferred TODO. See ADR
-// 202605281200. A5 upstream Hard tracking: gh issue #1235.
+// 202605281200 §"EXITING 上游为何不升 Hard". Same structural-unreachability
+// precedent as #851 / #893.
 
 package archtest
 
@@ -798,19 +803,25 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 // AI-robust grading:
 //   - Upstream: Medium (archtest caller allowlist; Go type system cannot
 //     prevent package-internal code from calling filepath.Join freely).
-//     Upstream Hard upgrade path tracked by gh issue #1235.
+//     This is a PERMANENT Go-language ceiling — the banned token is a string
+//     literal that Go cannot make unexpressible (same as A1/A2; precedent
+//     #851 / #893). gh issue #1235 closed won't-do (2026-05-30); no upgrade
+//     issue remains open. See package godoc + ADR 202605281200.
 //   - Downstream: Hard (form-uniqueness: EvaluateConstString resolves every
 //     filepath.Join argument; any arg that evaluates to a banned token fails).
 //
 // Blind spots enforced by TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots.
 //
-// Two files are permanently allowlisted via locatorA5AllowedFiles:
+// Three files are permanently allowlisted via locatorA5AllowedFiles (full
+// rationale on the variable decl):
 //   - cmd/gocell/app/scaffold.go: write path (layout generator); does not
 //     consume discovery paths, produces them.
 //   - kernel/metadata/assembly_derive.go: "cmd" is the conventional output
 //     directory name for the cmd/<id>/main.go entrypoint, guarded by
 //     isConventionalAssemblyPath so Manifest-mode assemblies use
 //     path.Dir(asm.File)/main.go instead.
+//   - kernel/assembly/generator.go: write path; "assemblies"/"cmd" are the
+//     conventional scaffold output directory names, not discovery tokens.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 	diags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
 		func(p *Pass) []Diagnostic {

@@ -384,12 +384,22 @@ interface + private constructor，在 Go 语言下对于"谁可以调用 `fs.Wal
 | 方向 | 形态 | 评级 |
 |------|------|------|
 | 下游 Hard | A5 form-uniqueness：EvaluateConstString 解析 `filepath.Join` 每个 arg，命中 banned token ("cells", "cmd") 即 CI 红；consumer scope = kernel/governance + cmd/gocell + kernel/metadata（funnel 文件外） | **Hard** |
-| 上游 Medium | archtest caller-allowlist：Go 类型系统无法阻止包内代码任意调用 `filepath.Join`；A5 盲区负向自检补充 | **Medium（过渡形态）** |
+| 上游 Medium | archtest caller-allowlist：Go 类型系统无法阻止包内代码任意调用 `filepath.Join`；A5 盲区负向自检补充 | **Medium（Go 结构性上限）** |
 
-**EXITING 上游升级路径**：Locator sealed envelope（unexported result 类型 + 私有构造函数）/
-typed pathx 包 / 接受 Medium 上限（同 ENTERING）三条路径，
-由 **gh issue #1235** 跟踪显式 Hard 化任务。根据 ai-robust.md §"Funnel 双向锁评级"，
-Medium 上游 + Hard 下游是合法过渡形态；issue #1235 是该条款要求的必开跟踪 issue。
+**EXITING 上游为何不升 Hard（决策 2026-05-30，原 gh issue #1235 → won't-do）**：A5 ban 的语义目标是
+`filepath.Join(_, "cells"/"cmd", …)` 中的**字面量** layout token。评估过两条 Hard 化候选——
+**(A)** Locator sealed envelope（把 `MetadataSource.Path` / `CellMeta.File` 等 seal 成 unexported +
+envelope method）与 **(B)** typed pathx 包（`RelPath` newtype 收口派生）——**均不能**让该字面量在
+type system 层不可表达：字符串常量 `"cells"` 与标准库 public `filepath.Join` 在 Go 下永远可敲，
+seal 派生输出只让"正确派生"更便捷（"no need to reconstruct"），无法表达"**不能** reconstruct"。
+下游字面量 ban 仍只能靠 A5 archtest 兜，A/B 不增量提升上游可表达性。这与 ENTERING 轴
+（`fs.WalkDir` 标准库 public func）完全同构，亦与 `SPAN-SETATTR-HOLDER-SEAL-01` (#851) /
+`HEALTHZ-HOLDER-SEAL-01` (#893) 同范式的 Go 结构性不可达情形。A 方案另需改写 ~166 处 path 派生点
+（93 `.File` read + 73 derive）/ 5 个 metadata 类型 + printers raw-path 透传 + 破坏 M-series
+外部仓库公开 API（`CellMeta.File` 等是已暴露字段），换取 illusory Hard，工作量/收益严重失衡。
+故 ai-robust.md §"Funnel 双向锁评级""存在低成本 Hard 化路径"前提**不成立**，按同 §"ENTERING 上游
+为何不开升级 issue"同款判定，**不开/不留升级 issue**，Medium 是该形态的永久上限；gh issue #1235
+关闭为 won't-do。本 amendment 不改 A5 archtest 行为，下游 Hard 不变，无任何 §安全模型覆盖格降级。
 
 **path 单一真值源**：A5 funnel 的语义边界是 `MetadataSource.Path`（`Locator.Discover()` 输出）——
 governance / CLI 代码必须从 `MetadataSource.Path` / `CellMeta.File` / `SliceMeta.File` 等
@@ -522,5 +532,5 @@ Medium（上游 + 下游残留）+ Hard 下游现实向量为合法过渡形态�
   `cmd/vendor/golang.org/x/mod/modfile/work.go`
 - 关联 ADR（Hard funnel 双向锁参考范式）:
   `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8
-- 关联 ADR（Medium 上游 + Hard 下游过渡形态论证范式）:
+- 关联 ADR（Medium 上游 + Hard 下游论证范式；A5 EXITING 轴已据此判定为永久上限 won't-do，见 §"EXITING 上游为何不升 Hard"）:
   `docs/architecture/202605271100-adr-probename-sealed-funnel.md` §AI-robust 评级
