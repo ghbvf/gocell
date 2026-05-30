@@ -23,6 +23,10 @@ import (
 
 const bootstrapAuditEntryOffset = 2 * time.Hour
 
+// seedThirdEntryOffset spaces the third seeded entry in subjectId-filter tests
+// (TEST-TIME-LITERAL-01: durations live in package-level consts, not literals).
+const seedThirdEntryOffset = 2 * time.Hour
+
 // newHandlerMux registers auditquery routes under the canonical API prefix,
 // mirroring production wiring so all auth.Mount guards are exercised.
 func newHandlerMux(svc *Service) http.Handler {
@@ -510,7 +514,7 @@ func TestHandleQuery_SubjectFilter(t *testing.T) {
 		},
 		{
 			ID: "se-3", EventID: "evt-s3", EventType: "event.test.v1",
-			ActorID: "actor-3", SubjectID: "alice", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+			ActorID: "actor-3", SubjectID: "alice", Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
 		},
 	}
 	for _, e := range seed {
@@ -565,7 +569,7 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 		// usr-1 (actor-self scoping; cross-user safety).
 		{
 			ID: "ns-3", EventID: "evt-n3", EventType: "event.test.v1",
-			ActorID: "usr-2", SubjectID: "victim", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+			ActorID: "usr-2", SubjectID: "victim", Timestamp: base.Add(seedThirdEntryOffset), Payload: []byte("{}"),
 		},
 	}
 	for _, e := range seed {
