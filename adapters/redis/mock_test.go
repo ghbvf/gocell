@@ -265,6 +265,80 @@ func newClaimerMock() *claimerMockCmdable {
 	}
 }
 
+// evalRelease handles the release Lua script: 1 key (leaseKey), 1 arg (token).
+func (m *claimerMockCmdable) evalRelease(cmd *goredis.Cmd, keys []string, args []any) {
+	leaseKey := keys[0]
+	token := toString(args[0])
+	if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+		delete(m.store, leaseKey)
+		cmd.SetVal(int64(1))
+	} else {
+		cmd.SetVal(int64(0))
+	}
+}
+
+// evalExtend handles the extend Lua script: 1 key (leaseKey), 2 args (token, ttlMs).
+func (m *claimerMockCmdable) evalExtend(cmd *goredis.Cmd, keys []string, args []any) {
+	leaseKey := keys[0]
+	token := toString(args[0])
+	ttlMs := toInt64(args[1])
+	if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+		entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
+		m.store[leaseKey] = entry
+		cmd.SetVal(int64(1))
+	} else {
+		cmd.SetVal(int64(0))
+	}
+}
+
+// evalClaim handles the claim Lua script: 2 keys (doneKey, leaseKey), args (token, leaseMs).
+// keys[0] ends in ":done" (cluster hashtag layout).
+func (m *claimerMockCmdable) evalClaim(cmd *goredis.Cmd, keys []string, args []any) {
+	doneKey, leaseKey := keys[0], keys[1]
+	token := toString(args[0])
+	leaseMs := toInt64(args[1])
+
+	if entry, ok := m.store[doneKey]; ok {
+		// Treat expired done key as absent (same as Get with expiry check).
+		if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
+			cmd.SetVal(int64(0)) // ClaimDone
+			return
+		}
+		delete(m.store, doneKey) // expired
+	}
+	if entry, ok := m.store[leaseKey]; ok {
+		if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
+			cmd.SetVal(int64(2)) // ClaimBusy
+			return
+		}
+		delete(m.store, leaseKey) // expired
+	}
+	m.store[leaseKey] = mockEntry{
+		value:  token,
+		expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
+	}
+	cmd.SetVal(int64(1)) // ClaimAcquired
+}
+
+// evalCommit handles the commit Lua script: 2 keys (leaseKey, doneKey), args (token, doneMs).
+// keys[0] ends in ":lease" (cluster hashtag layout).
+func (m *claimerMockCmdable) evalCommit(cmd *goredis.Cmd, keys []string, args []any) {
+	leaseKey, doneKey := keys[0], keys[1]
+	token := toString(args[0])
+	doneMs := toInt64(args[1])
+
+	if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+		delete(m.store, leaseKey)
+		m.store[doneKey] = mockEntry{
+			value:  "1",
+			expiry: time.Now().Add(time.Duration(doneMs) * time.Millisecond),
+		}
+		cmd.SetVal(int64(1))
+	} else {
+		cmd.SetVal(int64(0))
+	}
+}
+
 // Eval overrides the base mock to simulate the claimer Lua scripts.
 // Distinguishes claim vs commit by key order:
 //   - Claim:   keys=[{k}:done, {k}:lease]  (keys[0] ends in ":done")
@@ -286,78 +360,18 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	switch {
 	// Release script: 1 key (leaseKey), 1 arg (token)
 	case len(keys) == 1 && len(args) == 1:
-		leaseKey := keys[0]
-		token := toString(args[0])
-		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
-			delete(m.store, leaseKey)
-			cmd.SetVal(int64(1))
-		} else {
-			cmd.SetVal(int64(0))
-		}
-		return cmd
-
+		m.evalRelease(cmd, keys, args)
 	// Extend script: 1 key (leaseKey), 2 args (token, ttlMs)
 	case len(keys) == 1 && len(args) == 2:
-		leaseKey := keys[0]
-		token := toString(args[0])
-		ttlMs := toInt64(args[1])
-		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
-			entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
-			m.store[leaseKey] = entry
-			cmd.SetVal(int64(1))
-		} else {
-			cmd.SetVal(int64(0))
-		}
-		return cmd
-
+		m.evalExtend(cmd, keys, args)
 	// Claim script: 2 keys, keys[0] ends in ":done" (cluster hashtag layout).
 	case len(keys) == 2 && len(args) >= 2 && strings.HasSuffix(keys[0], ":done"):
-		doneKey, leaseKey := keys[0], keys[1]
-		token := toString(args[0])
-		leaseMs := toInt64(args[1])
-
-		if entry, ok := m.store[doneKey]; ok {
-			// Treat expired done key as absent (same as Get with expiry check).
-			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
-				cmd.SetVal(int64(0)) // ClaimDone
-				return cmd
-			}
-			delete(m.store, doneKey) // expired
-		}
-		if entry, ok := m.store[leaseKey]; ok {
-			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
-				cmd.SetVal(int64(2)) // ClaimBusy
-				return cmd
-			}
-			delete(m.store, leaseKey) // expired
-		}
-		m.store[leaseKey] = mockEntry{
-			value:  token,
-			expiry: time.Now().Add(time.Duration(leaseMs) * time.Millisecond),
-		}
-		cmd.SetVal(int64(1)) // ClaimAcquired
-		return cmd
-
+		m.evalClaim(cmd, keys, args)
 	// Commit script: 2 keys, keys[0] ends in ":lease" (cluster hashtag layout).
 	case len(keys) == 2 && len(args) == 2 && strings.HasSuffix(keys[0], ":lease"):
-		leaseKey, doneKey := keys[0], keys[1]
-		token := toString(args[0])
-		doneMs := toInt64(args[1])
-
-		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
-			delete(m.store, leaseKey)
-			m.store[doneKey] = mockEntry{
-				value:  "1",
-				expiry: time.Now().Add(time.Duration(doneMs) * time.Millisecond),
-			}
-			cmd.SetVal(int64(1))
-		} else {
-			cmd.SetVal(int64(0))
-		}
-		return cmd
-
+		m.evalCommit(cmd, keys, args)
 	default:
 		cmd.SetVal(int64(0))
-		return cmd
 	}
+	return cmd
 }

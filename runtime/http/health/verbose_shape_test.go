@@ -383,38 +383,65 @@ func findLogfmtLine(t *testing.T, out, msg string) string {
 // Known limits (sufficient for the single-line readyz record under test): one
 // line only (caller pre-selects the line); no \n inside values; first
 // occurrence wins on duplicate keys.
+// parseLogfmtKey advances i past leading spaces and reads the next key token
+// (up to '=' or ' '). Returns (key, newI, ok=false) when no '=' follows.
+func parseLogfmtKey(line string, i int) (key string, next int, ok bool) {
+	for i < len(line) && line[i] == ' ' {
+		i++
+	}
+	if i >= len(line) {
+		return "", i, false
+	}
+	start := i
+	for i < len(line) && line[i] != '=' && line[i] != ' ' {
+		i++
+	}
+	if i >= len(line) || line[i] != '=' {
+		return "", i, false // token without '=' — skip
+	}
+	return line[start:i], i + 1, true // +1 to consume '='
+}
+
+// parseLogfmtQuotedVal reads a double-quoted value starting after the opening '"'.
+// Returns the unescaped value and the index after the closing '"'.
+func parseLogfmtQuotedVal(line string, i int) (string, int) {
+	var sb strings.Builder
+	for i < len(line) && line[i] != '"' {
+		if line[i] == '\\' && i+1 < len(line) {
+			i++
+		}
+		sb.WriteByte(line[i])
+		i++
+	}
+	if i < len(line) {
+		i++ // consume closing '"'
+	}
+	return sb.String(), i
+}
+
+// parseLogfmtLine is a minimal logfmt parser for the single-line records that
+// slog.NewTextHandler emitted, so assertions run against decoded values rather
+// than raw substrings.
+//
+// Known limits (sufficient for the single-line readyz record under test): one
+// line only (caller pre-selects the line); no \n inside values; first
+// occurrence wins on duplicate keys.
 func parseLogfmtLine(line string) map[string]string {
 	m := make(map[string]string)
 	i := 0
 	for i < len(line) {
-		for i < len(line) && line[i] == ' ' {
-			i++
-		}
-		if i >= len(line) {
-			break
-		}
-		start := i
-		for i < len(line) && line[i] != '=' && line[i] != ' ' {
-			i++
-		}
-		if i >= len(line) || line[i] != '=' {
-			continue // token without '=' — skip
-		}
-		key := line[start:i]
-		i++ // consume '='
-		var val string
-		if i < len(line) && line[i] == '"' {
-			i++
-			var sb strings.Builder
-			for i < len(line) && line[i] != '"' {
-				if line[i] == '\\' && i+1 < len(line) {
-					i++
-				}
-				sb.WriteByte(line[i])
+		key, next, ok := parseLogfmtKey(line, i)
+		if !ok {
+			// advance past the skipped token to avoid infinite loop
+			for i < len(line) && line[i] != ' ' {
 				i++
 			}
-			i++ // consume closing quote
-			val = sb.String()
+			continue
+		}
+		i = next
+		var val string
+		if i < len(line) && line[i] == '"' {
+			val, i = parseLogfmtQuotedVal(line, i+1)
 		} else {
 			vs := i
 			for i < len(line) && line[i] != ' ' {
