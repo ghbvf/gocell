@@ -55,6 +55,33 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 	}
 }
 
+// promStackToLocals creates a minimal *cmdLocals from a promStack for tests
+// that still call buildAssembly / runtimeBaseOptions / defaultRuntimeOptions
+// directly without going through the full runCorebundle path.
+func promStackToLocals(ps promStack) *cmdLocals {
+	l := &cmdLocals{
+		registry:       ps.registry,
+		hookObserver:   ps.hookObserver,
+		metricProvider: ps.metricProvider,
+	}
+	l.initVaultMetricsFactory()
+	return l
+}
+
+// sharedToLocals creates a minimal *cmdLocals from a SharedDeps for tests
+// that use buildTestSharedDeps and need to call functions that take *cmdLocals.
+func sharedToLocals(shared *SharedDeps) *cmdLocals {
+	l := &cmdLocals{
+		registry:        shared.PromStack.registry,
+		hookObserver:    shared.PromStack.hookObserver,
+		metricProvider:  shared.PromStack.metricProvider,
+		internalGuard:   shared.InternalGuard,
+		consumerClaimerKind: shared.ConsumerClaimerKind,
+	}
+	l.initVaultMetricsFactory()
+	return l
+}
+
 // ---------------------------------------------------------------------------
 // buildInternalAuthChain coverage
 // ---------------------------------------------------------------------------
@@ -87,7 +114,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 
-	_, err = buildAssembly(ps, "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
+	_, err = buildAssembly(promStackToLocals(ps), "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
@@ -150,10 +177,11 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
-	base, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	testLocals := sharedToLocals(shared)
+	base, err := defaultRuntimeOptions(shared, testLocals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
 	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
-	withRedis, err := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	withRedis, err := defaultRuntimeOptions(shared, testLocals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.NoError(t, err)
 
 	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
@@ -446,7 +474,8 @@ func buildBootstrapFromShared(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
+	testLocals := sharedToLocals(shared)
+	asm, err := buildAssembly(testLocals, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +488,7 @@ func buildBootstrapFromShared(
 	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, testLocals, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	// Primary listener carries the JWT policy resolved from the assembly. F3
 	// round-3: this is the single source of truth for JWT auth — there is no
@@ -855,7 +884,7 @@ func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
 	require.NoError(t, err)
 
 	// Pass nil assembly — NewAuthJWTFromAssembly rejects nil via IsNilInterface.
-	_, err = defaultRuntimeOptions(shared, nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	_, err = defaultRuntimeOptions(shared, sharedToLocals(shared), nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "primary listener auth",
 		"error must identify which listener auth failed for operator diagnosis")

@@ -84,7 +84,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	consumerBase, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
-	opts := runtimeBaseOptions(shared, asm, consumerBase, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	opts := runtimeBaseOptions(shared, sharedToLocals(shared), asm, consumerBase, http.NewServeMux(), adapterInfoForSharedDeps(shared))
 	// Wire the minimum required listeners so phase0–phase5 do not fail before
 	// phase6. PrimaryListener uses the pre-built verifier from shared.JWTDeps
 	// (no authProvider cell needed in the assembly).

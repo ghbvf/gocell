@@ -14,7 +14,7 @@ import (
 // buildAssembly constructs the runtime Assembly and registers the generated
 // cell list. Extracted to keep runCorebundle cognitive complexity <= 15.
 func buildAssembly(
-	ps promStack,
+	locals *cmdLocals,
 	assemblyID string,
 	mode outbox.DurabilityMode,
 	clk clock.Clock,
@@ -23,8 +23,8 @@ func buildAssembly(
 	asm := assembly.New(clk, assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
-		HookObserver:    ps.hookObserver,
-		MetricsProvider: ps.metricProvider,
+		HookObserver:    locals.hookObserver,
+		MetricsProvider: locals.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
 	})
 	for _, c := range cells {

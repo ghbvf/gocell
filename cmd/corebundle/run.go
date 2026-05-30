@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/lifecycle"
 )
 
@@ -45,45 +46,35 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	if err != nil {
 		return err
 	}
+	// Build cmd-private locals from the populated SharedDeps.
+	locals := buildCmdLocals(shared)
 
 	// Provision assembly-level shared infrastructure (postgres pool / redis
 	// client → cap.*Provider) once, before any module consumes it. Mirrors
 	// fx.New() resolve-before-start ordering.
-	if err := provisionCapabilities(ctx, shared); err != nil {
+	if err := provisionCapabilities(ctx, shared, locals); err != nil {
 		return err
 	}
 	// Close the pool if startup aborts before bootstrap.Run takes ownership of
-	// the ManagedResource (BuildApp / buildAssembly / option wiring failures).
-	// Once bootstrap.Run is reached the pool is managed by bootstrap's LIFO
-	// teardown. Mirrors BuildApp's provisional-rollback for pre-Run resources.
+	// the ManagedResource (composition.Builder.Build / buildAssembly / option wiring
+	// failures). Once bootstrap.Run is reached the pool is managed by bootstrap's
+	// LIFO teardown.
 	handedToBootstrap := false
 	defer func() {
-		if !handedToBootstrap && shared.poolMR != nil {
-			_ = shared.poolMR.Close(ctx)
+		if !handedToBootstrap && locals.poolMR != nil {
+			_ = locals.poolMR.Close(ctx)
 		}
 	}()
 
-	modules, err := corebundleModules(assemblyID, assemblyCellIDs)
+	// Build the composition.SharedDeps view (public, interface-only fields) from
+	// the cmd-private SharedDeps.
+	compShared := toCompositionSharedDeps(shared)
+	compShared.AssemblyID = assemblyID
+
+	mods, err := corebundleModules(assemblyID, assemblyCellIDs, locals)
 	if err != nil {
 		return err
 	}
-	cells, cellOpts, err := BuildApp(ctx, shared, modules...)
-	if err != nil {
-		return err
-	}
-	logAssemblyMaturity(cells)
-
-	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
-	if err != nil {
-		return fmt.Errorf("build assembly: %w", err)
-	}
-
-	consumerBase, err := buildConsumerBase(shared)
-	if err != nil {
-		return err
-	}
-
-	metricsHandler := shared.metricsHandler
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
 	slog.Info("corebundle: startup configuration",
@@ -97,18 +88,39 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 
 	logSinglePodNonceStoreAcknowledgement(shared)
 
-	opts, err := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
-	if err != nil {
-		return fmt.Errorf("default runtime options: %w", err)
+	// runtimeOptsFunc stays in cmd: auth construction is AUTH-PLAN-04-allowlisted
+	// to cmd/.
+	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
+		logAssemblyMaturity(cells)
+
+		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
+		if buildErr != nil {
+			return nil, fmt.Errorf("build assembly: %w", buildErr)
+		}
+
+		consumerBase, cbErr := buildConsumerBase(shared)
+		if cbErr != nil {
+			return nil, cbErr
+		}
+
+		opts, rtErr := defaultRuntimeOptions(shared, locals, asm, consumerBase, locals.metricsHandler, adapterInfo)
+		if rtErr != nil {
+			return nil, fmt.Errorf("default runtime options: %w", rtErr)
+		}
+		return opts, nil
 	}
-	opts = append(opts, cellOpts...)
+
+	app, err := composition.New().With(mods...).Build(ctx, compShared, runtimeOptsFunc)
+	if err != nil {
+		return err
+	}
 
 	handedToBootstrap = true
-	return bootstrap.New(shared.Clock, opts...).Run(ctx)
+	return app.Run(ctx)
 }
 
-func corebundleModules(assemblyID string, cellIDs []string) ([]CellModule, error) {
-	mods := generatedCellModules()
+func corebundleModules(assemblyID string, cellIDs []string, locals *cmdLocals) ([]composition.CellModule, error) {
+	mods := generatedCellModules(locals)
 	if err := assertModuleIDsMatch(assemblyID, cellIDs, mods); err != nil {
 		return nil, err
 	}
@@ -163,7 +175,7 @@ func logAssemblyMaturity(cells []cell.Cell) {
 // assertModuleIDsMatch fails-fast when assembly.yaml.cells (cellIDs) drifts from
 // the generated module list. The two should be 1:1 in declaration order; any
 // mismatch indicates a missing `gocell generate assembly` run.
-func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule) error {
+func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []composition.CellModule) error {
 	hint := fmt.Sprintf("run `gocell generate assembly --id=%s`", assemblyID)
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(

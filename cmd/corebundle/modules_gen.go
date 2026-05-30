@@ -2,13 +2,32 @@
 // Source: assemblies/corebundle/assembly.yaml
 package main
 
-import "github.com/ghbvf/gocell/runtime/capability"
+import (
+	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/composition"
+	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
+	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
+	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
+)
 
-func generatedCellModules() []CellModule {
-	return []CellModule{
-		ConfigCoreModule{},
-		AuditCoreModule{},
-		AccessCoreModule{},
+func generatedCellModules(locals *cmdLocals) []composition.CellModule {
+	// configcore needs the prometheus registry for stale-cipher counter and
+	// vault-transit metrics. We pass the registry and a vault metrics factory
+	// via platform/configcore's WithPrometheusRegistry / WithVaultMetrics options.
+	// The vault metrics factory is a sync.Once-guarded closure over locals.registry.
+	// When locals is nil (test-only path: corebundleModules in ID-match tests),
+	// the registry/metrics options are skipped — those tests only verify IDs, not wiring.
+	var configOpts []platformconfigcore.ModuleOption
+	if locals != nil {
+		configOpts = []platformconfigcore.ModuleOption{
+			platformconfigcore.WithPrometheusRegistry(locals.registry),
+			platformconfigcore.WithVaultMetrics(locals.vaultTransitMetrics),
+		}
+	}
+	return []composition.CellModule{
+		platformconfigcore.Module(configOpts...),
+		platformauditcore.Module(),
+		platformaccesscore.Module(),
 	}
 }
 

@@ -53,7 +53,7 @@ func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
 	asm := project.Assemblies["corebundle"]
 	require.NotNil(t, asm)
 
-	modules, err := corebundleModules(asm.ID, asm.Cells)
+	modules, err := corebundleModules(asm.ID, asm.Cells, nil)
 	require.NoError(t, err)
 	require.Len(t, modules, len(asm.Cells))
 
@@ -70,14 +70,14 @@ func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
 // to run `gocell generate assembly --id=corebundle` after editing assembly.yaml.
 func TestCorebundleModulesRejectDrift(t *testing.T) {
 	// Length mismatch: 2 IDs vs 3 generated modules.
-	modules, err := corebundleModules("corebundle", []string{"configcore", "ghostcore"})
+	modules, err := corebundleModules("corebundle", []string{"configcore", "ghostcore"}, nil)
 	require.Error(t, err)
 	assert.Nil(t, modules)
 	assert.Contains(t, err.Error(), "length mismatch")
 	assert.Contains(t, err.Error(), "gocell generate assembly")
 
 	// ID drift: correct count but wrong IDs.
-	modules, err = corebundleModules("corebundle", []string{"configcore", "ghostcore", "auditcore"})
+	modules, err = corebundleModules("corebundle", []string{"configcore", "ghostcore", "auditcore"}, nil)
 	require.Error(t, err)
 	assert.Nil(t, modules)
 	assert.Contains(t, err.Error(), "drift")

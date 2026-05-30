@@ -37,10 +37,10 @@ func pgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
 // primitives themselves.
 //
-// Called from runCorebundle after LoadSharedDepsFromEnv and before BuildApp so
-// the providers are present (or fail-fast) before any module.Provide runs —
+// Called from runCorebundle after LoadSharedDepsFromEnv and before composition.Builder.Build
+// so the providers are present (or fail-fast) before any module.Provide runs —
 // mirroring fx.New()'s resolve-before-start ordering (ref: uber-go/fx app.go).
-func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
+func provisionCapabilities(ctx context.Context, shared *SharedDeps, locals *cmdLocals) error {
 	// INVARIANT: generatedCapabilities() exists because the corebundle assembly's
 	// cells declare a non-empty `requires` union (auditcore/configcore require
 	// postgres). The codegen template emits generatedCapabilities() iff that union
@@ -50,7 +50,7 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 	for _, c := range generatedCapabilities() {
 		switch c {
 		case capability.Postgres:
-			if err := provisionPostgres(ctx, shared); err != nil {
+			if err := provisionPostgres(ctx, shared, locals); err != nil {
 				return err
 			}
 		case capability.Redis:
@@ -74,13 +74,13 @@ func provisionCapabilities(ctx context.Context, shared *SharedDeps) error {
 // provisionPostgres opens the assembly's single postgres pool (postgres
 // StorageBackend only), runs the schema/shape/index fail-fast checks, and wraps
 // the pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle into the
-// sealed capability.PGProvider. The pool is recorded as shared.poolMR so bundle_options
+// sealed capability.PGProvider. The pool is recorded as locals.poolMR so bundle_options
 // registers it as the first ManagedResource (LIFO: closed last, after every PG
 // consumer — relay, cell workers, tx).
 //
 // In memory mode the pool is not opened and shared.PG stays nil; cell modules
 // fall through to their in-memory storage path.
-func provisionPostgres(ctx context.Context, shared *SharedDeps) error {
+func provisionPostgres(ctx context.Context, shared *SharedDeps, locals *cmdLocals) error {
 	if shared.Topology.StorageBackend != "postgres" {
 		return nil
 	}
@@ -106,7 +106,7 @@ func provisionPostgres(ctx context.Context, shared *SharedDeps) error {
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
 	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
-	shared.poolMR = pool
+	locals.poolMR = pool
 	return nil
 }
 

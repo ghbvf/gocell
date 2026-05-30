@@ -40,6 +40,11 @@ var internalLayerByDir = map[string]string{
 	"tools":     LayerTools,
 	"tests":     LayerTests,
 	"generated": LayerGenerated,
+	// platform/ is a composition-root layer (sibling to cmd/ and examples/):
+	// it wires platform Cell modules by importing cells/ + adapters/ + runtime/
+	// and is the new home for corebundle's AccessCoreModule / AuditCoreModule /
+	// ConfigCoreModule (#1085).
+	"platform": LayerCmd,
 }
 
 // LayerOf classifies importPath relative to module. module must be the

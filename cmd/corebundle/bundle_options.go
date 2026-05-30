@@ -17,6 +17,7 @@ import (
 
 func runtimeBaseOptions(
 	shared *SharedDeps,
+	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
@@ -51,14 +52,14 @@ func runtimeBaseOptions(
 		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
-		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
+		bootstrap.WithMetricsProvider(locals.metricProvider),
 	}
 	// Register the assembly's shared infrastructure as the FIRST ManagedResources
 	// so bootstrap's LIFO teardown closes them LAST — after every consumer
 	// registered later via cell opts (relay, EventRouter goroutines, ConsumerBase
 	// workers, cell tx). Provisioned in provisionCapabilities (cap_wiring.go).
-	if shared.poolMR != nil {
-		opts = append(opts, bootstrap.WithManagedResource(shared.poolMR))
+	if locals.poolMR != nil {
+		opts = append(opts, bootstrap.WithManagedResource(locals.poolMR))
 	}
 	if shared.Redis != nil {
 		if mr, ok := shared.Redis.Client().(kernellifecycle.ManagedResource); ok {
@@ -97,6 +98,7 @@ func newBootstrapFromOptions(clk clock.Clock, opts []bootstrap.Option) *bootstra
 // HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
 func defaultRuntimeOptions(
 	shared *SharedDeps,
+	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
@@ -117,7 +119,7 @@ func defaultRuntimeOptions(
 	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
-	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
 	if shared.PrimaryHTTPAddr != "" {
 		primaryAuth, err := auth.NewAuthJWTFromAssembly(asm)
 		if err != nil {
@@ -128,7 +130,7 @@ func defaultRuntimeOptions(
 			[]auth.ListenerAuth{primaryAuth},
 		))
 	}
-	internalChain, err := buildInternalAuthChain(shared.InternalGuard)
+	internalChain, err := buildInternalAuthChain(locals.internalGuard)
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}

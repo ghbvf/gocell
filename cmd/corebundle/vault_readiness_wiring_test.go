@@ -103,7 +103,8 @@ func buildBootstrapWithFakeKeyProvider(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
+	testLocals := sharedToLocals(shared)
+	asm, err := buildAssembly(testLocals, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func buildBootstrapWithFakeKeyProvider(
 	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, testLocals, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
