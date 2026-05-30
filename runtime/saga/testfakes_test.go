@@ -1,14 +1,18 @@
 package saga
 
-// testfakes_test.go provides additional fake helpers for the integration test
-// suite in integration_test.go. All types are in package saga (white-box).
+// testfakes_test.go provides the thread-safe fakes used across the whole saga
+// test suite — both the single-goroutine driveOne tests in coordinator_test.go
+// and the concurrent / staged-commit atomicity tests in integration_test.go.
+// All types are in package saga (white-box).
 //
-// NOTE: coordinator_test.go (same package) already declares:
-//   - fakeEmitter  (no mu / no Snapshot — single goroutine only)
-//   - fakeTxRunner (with err field for error injection)
-//   - noopStep, newFakeClock, newMemJournal, newRegistry, mustCoordinator
+// safeFakeEmitter and safeFakeTxRunner are the sole emitter/TxRunner fakes:
+// the mutex is inert when no goroutine races and the stagedTxState is inert
+// when no stagedJournal is installed (a plain MemJournal Appends directly), so
+// they double as the simple fakes for the non-concurrent tests without a
+// second "plain" fake set to drift against.
 //
-// This file declares supplementary helpers used by the integration tests.
+// NOTE: coordinator_test.go (same package) declares the shared test scaffolding
+// noopStep, newFakeClock, newMemJournal, newRegistry, mustCoordinator.
 
 import (
 	"context"
@@ -28,10 +32,9 @@ import (
 // safeFakeEmitter — thread-safe emitter with Snapshot (for concurrent tests)
 // ---------------------------------------------------------------------------
 
-// safeFakeEmitter captures outbox entries in a thread-safe slice. It is
-// separate from the single-goroutine fakeEmitter already declared in
-// coordinator_test.go and is used wherever the Coordinator goroutine and the
-// test goroutine race on the entries slice.
+// safeFakeEmitter captures outbox entries in a thread-safe slice, used wherever
+// the Coordinator goroutine and the test goroutine race on the entries slice
+// (and, harmlessly, in the single-goroutine tests too).
 type safeFakeEmitter struct {
 	mu      sync.Mutex
 	entries []koutbox.Entry
