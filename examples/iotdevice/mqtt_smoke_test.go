@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"testing"
-	"time"
 
 	mqttserver "github.com/mochi-mqtt/server/v2"
 	mqttallow "github.com/mochi-mqtt/server/v2/hooks/auth"
@@ -206,11 +205,11 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 				return outbox.Ack(), noopSettlement{}
 			})
 	}()
-	select {
-	case <-sub.Ready(subscription):
-	case <-time.After(testtime.D10s):
-		t.Fatal("subscriber not ready before deadline")
-	}
+	// Deterministic channel waits — no caller-supplied wall-clock budget (issue
+	// #1320): sub.Ready() closes when SUBACK confirms, received carries the
+	// delivered entry. testwait.Deterministic blocks on the signal with only an
+	// internal hung-test safety net.
+	testwait.Deterministic(t, sub.Ready(subscription), "smoke-mqtt-subscriber-ready")
 
 	// Drive the real register flow.
 	const deviceName = "smoke-sensor"
@@ -219,29 +218,25 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 	}
 
 	// Verify the MQTT side received the envelope with the matching payload.
-	select {
-	case entry := <-received:
-		if got := entry.EventType(); got != deviceregister.TopicDeviceRegistered {
-			t.Fatalf("entry EventType = %q, want %q", got, deviceregister.TopicDeviceRegistered)
-		}
-		var ev struct {
-			ID     string `json:"id"`
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal(entry.Payload(), &ev); err != nil {
-			t.Fatalf("unmarshal payload %q: %v", entry.Payload(), err)
-		}
-		if ev.Name != deviceName {
-			t.Fatalf("payload name = %q, want %q", ev.Name, deviceName)
-		}
-		if ev.Status != "online" {
-			t.Fatalf("payload status = %q, want %q", ev.Status, "online")
-		}
-		if ev.ID == "" {
-			t.Fatal("payload id is empty")
-		}
-	case <-time.After(testtime.D10s):
-		t.Fatal("did not receive device-registered event on MQTT broker before deadline")
+	entry := testwait.Deterministic(t, received, "smoke-mqtt-device-registered")
+	if got := entry.EventType(); got != deviceregister.TopicDeviceRegistered {
+		t.Fatalf("entry EventType = %q, want %q", got, deviceregister.TopicDeviceRegistered)
+	}
+	var ev struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(entry.Payload(), &ev); err != nil {
+		t.Fatalf("unmarshal payload %q: %v", entry.Payload(), err)
+	}
+	if ev.Name != deviceName {
+		t.Fatalf("payload name = %q, want %q", ev.Name, deviceName)
+	}
+	if ev.Status != "online" {
+		t.Fatalf("payload status = %q, want %q", ev.Status, "online")
+	}
+	if ev.ID == "" {
+		t.Fatal("payload id is empty")
 	}
 }
