@@ -45,6 +45,9 @@ func namespaceLegalSet(s string) bool {
 //     Protocol.ComputeHash output (proven by Run's Protocol_HashParity /
 //     PrincipalFields_RoundTrip on both backends), this transitively guarantees
 //     cross-store HMAC parity across the whole namespace set.
+//
+// Lives in package storetest (white-box) rather than runtime/audit/ledger so it
+// can reuse the independent HMAC mirror (referenceComputeHash) and TestHMACKey.
 func FuzzNamespaceID(f *testing.F) {
 	// Legal seeds.
 	for _, s := range []string{"auditcore", "bootstrap", "_runtime", "a", strings.Repeat("a", namespaceMaxLen)} {
@@ -75,8 +78,9 @@ func FuzzNamespaceID(f *testing.F) {
 		}
 
 		// HMAC namespace domain separation: ComputeHash must match the
-		// independent reference for this namespace.
-		key := TestHMACKey()
+		// independent reference for this namespace. NewProtocol zeroes the key
+		// slice it receives, so the reference computation gets its own fresh
+		// TestHMACKey() copy (same deterministic bytes).
 		p, perr := ledger.NewProtocol(
 			ns, TestHMACKey(),
 			ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
@@ -87,7 +91,7 @@ func FuzzNamespaceID(f *testing.F) {
 		}
 		e := NewEntryFixture(t, "ns-fuzz", "", "", epochAnchor)
 		got := p.ComputeHash("", e)
-		want := referenceComputeHash(key, ns, "", e)
+		want := referenceComputeHash(TestHMACKey(), ns, "", e)
 		if got != want {
 			t.Errorf("namespace %q HMAC parity broken:\n  ComputeHash=%s\n  reference  =%s", s, got, want)
 		}

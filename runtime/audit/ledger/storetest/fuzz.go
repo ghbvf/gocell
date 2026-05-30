@@ -32,6 +32,9 @@ const fuzzTimePrecision = time.Microsecond
 //
 // store and protocol are constructed once by the caller and reused across all
 // fuzz iterations — PG cannot afford a fresh migrated database per iteration.
+// The chain therefore grows unbounded over a long run (every accepted Append
+// adds an entry); bound it with -fuzztime rather than expecting per-iteration
+// reset.
 // The same exported helper is wired into both the MemStore fuzz
 // (suite_test.go) and the PG fuzz (adapters/postgres, integration tag) with a
 // shared seed corpus, so mem-vs-PG round-trip + HMAC parity is exercised in
@@ -103,13 +106,15 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 		t.Fatalf("Append: %v", err)
 	}
 
-	tail, err := store.Tail(ctx)
+	// Append writes the assigned SeqNo back onto src (both MemStore and the PG
+	// store do this), so the read-back targets the exact sequence number this
+	// call produced — no reliance on Tail pointing at our entry, hence no
+	// assumption about iteration ordering. AssertEntryRoundTrip skips the
+	// store-assigned fields (SeqNo/ID/PrevHash/Hash), so populating src here is
+	// harmless to the field comparison.
+	got, err := store.GetBySeq(ctx, src.SeqNo)
 	if err != nil {
-		t.Fatalf("Tail: %v", err)
-	}
-	got, err := store.GetBySeq(ctx, tail.SeqNo)
-	if err != nil {
-		t.Fatalf("GetBySeq(%d): %v", tail.SeqNo, err)
+		t.Fatalf("GetBySeq(%d): %v", src.SeqNo, err)
 	}
 
 	AssertEntryRoundTrip(t, src, got)
