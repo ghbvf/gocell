@@ -3,8 +3,6 @@ package archtest
 // taggroup_loop_no_runtyped_invariants.go — importable TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
 // rule logic.
 //
-// INVARIANT: TAGGROUP-LOOP-FORBIDS-RUNTYPED-01
-//
 // TAGGROUP-LOOP-FORBIDS-RUNTYPED-01 — backstory and form-uniqueness
 //
 // Backstory: panic_invariants_test.go::TestPanicRegistered once wrote the
@@ -143,7 +141,7 @@ const (
 // green (empty scan set) and provide no value to external consumers.
 func CheckTagGroupLoopForbidsRunTyped(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	return RunTyped(t, TypedOpts{Tests: true},
+	return RunTyped(t, TypedOpts{Tests: true, Tags: cfg.BuildTags},
 		[]string{taggroupLoopPatternProd},
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {

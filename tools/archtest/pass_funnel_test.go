@@ -573,7 +573,7 @@ func diagsFixtureTagBypass(tgt passFunnelTarget) []scanner.Diagnostic {
 	// Var-indirection closure (#944): collect same-file objects bound to a
 	// slice literal carrying a fixture-tag-resolving element, so a loader arg
 	// that is a plain *ast.Ident (the var name) is still caught. Mirrors
-	// collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_test.go.
+	// collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_invariants.go.
 	boundObjs := collectFixtureTagBoundObjects(info, tgt.file)
 	// Position-based dedup: a single arg expression may contain nested Exprs
 	// that all resolve to the same const value (e.g. BinaryExpr "X"+"Y" plus
@@ -690,7 +690,7 @@ func exprCarriesFixtureTag(info *types.Info, expr ast.Expr) bool {
 //
 // Scope is file-level (the realistic copy template declares the binding in the
 // same file as the loader call) and single-binding only (LHS/RHS length 1),
-// mirroring collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_test.go.
+// mirroring collectKnownTagsBoundObjects in taggroup_loop_no_runtyped_invariants.go.
 // Only `var` declarations and `:=` / `=` assignments are collected — `const`
 // ValueSpecs are deliberately skipped because a const ident is already reported
 // via the const path in the Ident walker (it never reaches the bound-object
