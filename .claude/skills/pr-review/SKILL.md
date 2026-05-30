@@ -35,7 +35,7 @@ gh pr view <N> --json additions,deletions --jq '.additions + .deletions'
 
 ```bash
 BRANCH=$(gh pr view <N> --json headRefName --jq .headRefName)
-WORKTREE=$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '/^worktree /{w=$2} $0=="branch "b{print w; exit}')
+git worktree list   # 从输出中找 [<BRANCH>] 所在行，其首列路径即该分支 worktree，记为 WORKTREE；无匹配行 → 情况 B
 ```
 
 **情况 A：找到既有 worktree** → 直接用 `$WORKTREE`，不动其状态。

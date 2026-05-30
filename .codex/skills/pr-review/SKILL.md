@@ -8,4 +8,4 @@ disable-model-invocation: true
 
 See .claude/skills/pr-review/SKILL.md
 
-完成后对根因进行开源对标，给出修复方向
+**完成后对根因进行开源对标，给出修复方向**
