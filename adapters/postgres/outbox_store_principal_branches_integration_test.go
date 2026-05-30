@@ -213,11 +213,17 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 			assert.Equal(t, id, line["entry_id"], "warn must carry entry_id correlation field")
 			assert.Equal(t, "user.login", line["event_type"], "warn must carry event_type correlation field")
 			// Lock the diagnostic payload each branch carries (review O1/A2): the
-			// size-cap branch logs size+max integers; the unmarshal/validate
-			// branches log the underlying error for operator triage.
+			// size-cap branch logs size+max integers, and size MUST exceed max —
+			// that inequality is the very condition that fired the branch, so
+			// asserting it (not just key presence) proves the oversize guard ran
+			// for the right reason. JSON numbers decode as float64. The
+			// unmarshal/validate branches instead log the underlying error.
 			if tc.oversize {
-				assert.NotNil(t, line["size"], "oversize drop must log the offending size")
-				assert.NotNil(t, line["max"], "oversize drop must log the cap")
+				size, sizeOK := line["size"].(float64)
+				maxv, maxOK := line["max"].(float64)
+				require.True(t, sizeOK, "oversize drop must log a numeric size; got %v", line["size"])
+				require.True(t, maxOK, "oversize drop must log a numeric max; got %v", line["max"])
+				assert.Greater(t, size, maxv, "logged size must exceed the cap that triggered the oversize drop")
 			} else {
 				assert.NotEmpty(t, line["error"], "unmarshal/validate drop must log the underlying error")
 			}
