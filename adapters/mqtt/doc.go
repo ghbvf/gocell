@@ -9,13 +9,16 @@
 // (ClientID, TopicNamespace), Config, metrics skeleton, pkg/redaction wiring,
 // and the archtest funnels that lock the sealed-struct shapes.
 //
-// PR-2 (this PR): Publisher (outbox.Publisher), QoS-1 PUBACK error classification
+// PR-2 (merged): Publisher (outbox.Publisher), QoS-1 PUBACK error classification
 // (classifyPubackReason), publisher metrics (mqtt_publish_failed_total closed-set
 // reason labels), and the MQTT-PUBLISH-CALLSITE-FUNNEL-01 callsite archtest that
 // locks all cm.Publish calls inside (*Connection).Publish.
 //
-// PR-3: Subscriber (outbox.Subscriber) + ConsumerBase integration.
-// PR-4: DLT routing ($dead/<topic>), outbox conformance suite.
+// PR-3 (merged): Subscriber (outbox.Subscriber) + ConsumerBase integration,
+// SUBSCRIBE/ACK callsite funnels.
+// PR-4 (this PR): DLT routing ($dead/<topic> via TopicNamespace.MintDeadLetter),
+// mqtt_dlx_total metric, Option C Requeue semantics (ADR-050 §6), outbox
+// conformance suite, mTLS nightly.
 // PR-5: examples/iotdevice MQTT demo path.
 //
 // Parent epic: gh issue #1138.
@@ -62,8 +65,12 @@
 //   - ClientID upstream Hard (package-external): Go compile error.
 //   - ClientID upstream Medium (package-internal): archtest A2 AST scan.
 //   - TopicNamespace: same grading as ClientID.
-//   - Downstream callsite funnel: MQTT-PUBLISH-CALLSITE-FUNNEL-01 landed in PR-2
-//     (tools/archtest/mqtt_callsite_funnel_test.go A1–A4). gh issue #1225 closed.
+//   - Downstream callsite funnels: MQTT-PUBLISH-CALLSITE-FUNNEL-01 (PR-2; gh #1225
+//     closed), MQTT-SUBSCRIBE-CALLSITE-FUNNEL-01 + MQTT-ACK-CALLSITE-FUNNEL-01
+//     (PR-3). PR-4 extended the PUBLISH funnel's A2 construction allowlist to
+//     {Mint, MintDeadLetter} for the $dead sink. The authoritative sub-rule
+//     inventory + Hard/Medium grading lives in the package godoc of
+//     tools/archtest/mqtt_callsite_funnel_test.go (single source, not duplicated here).
 //
 // # Reference
 //

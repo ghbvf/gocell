@@ -56,14 +56,16 @@ const (
 	logKeyClientID = "client_id"
 	logKeyTopic    = "topic"
 	logKeyEventID  = "event_id"
+	// logKeyDLXTopic is the $dead/<topic> sink target logged on dead-letter routing.
+	logKeyDLXTopic = "dlx_topic"
 )
 
 // SubscriberConfig configures how a Subscriber consumes messages.
 //
 // There is no DLXExchange: MQTT has no broker-native dead-letter exchange. Poison
-// / permanent-reject routing to an app-level $dead/<topic> topic is deferred to
-// PR-4; until then poison and Reject messages are acked-as-consumed (logged) so
-// they cannot block intake forever.
+// (unmarshal-failure) and permanent-reject messages are routed to an app-level
+// "$dead/<topic>" sink (see deadletter.go routeDeadLetter) before being
+// acked-as-consumed, so they cannot block intake forever yet remain auditable.
 type SubscriberConfig struct {
 	// QoS is the MQTT QoS requested in the SUBSCRIBE packet. 0 → defaults to 1.
 	// Only QoS 0 and 1 are supported; QoS 2 is NOT supported by the manual-ack
@@ -122,11 +124,10 @@ func (sc *SubscriberConfig) setDefaults() {
 //
 // Consumer: cg-{ConsumerGroup}-{topic}
 // Idempotency: Claimer (two-phase Claim/Commit/Release) via ConsumerBase, TTL 24h
-// Disposition: Ack on success / Requeue (left unacked, broker redelivers) on
-//
-//	transient / Reject (acked-as-poison) on permanent
-//
-// DLX: app-level $dead/<topic>, PR-4 (no broker-native DLX in MQTT)
+// Disposition: Ack on success / Requeue → left unacked, broker redelivers on
+// reconnect (Option C, ADR-050 §6) on transient / Reject → routed to
+// $dead/<topic> then acked-as-poison on permanent.
+// DLX: app-level $dead/<topic> (no broker-native DLX in MQTT); see deadletter.go.
 //
 // ref: adapters/rabbitmq/subscriber.go dispatchDisposition / StopIntake.
 type Subscriber struct {
@@ -397,9 +398,9 @@ func (s *Subscriber) logIntakeStoppedDrop(pb *paho.Publish) {
 // processDelivery decodes the wire envelope and dispatches to the handler.
 //
 // On unmarshal failure (POISON): the bytes are permanently undecodable, so the
-// message is acked-as-consumed (it cannot block intake forever) and the failure
-// is recorded. The handler is NOT invoked. PR-4 will route to $dead/<topic>
-// before this ack.
+// raw payload is routed to $dead/<pb.Topic> (the broker-delivered topic is known
+// even though the envelope is not) and the message is acked-as-consumed (it
+// cannot block intake forever). The handler is NOT invoked.
 func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, handler outbox.SubscriberHandler) {
 	entry, err := outbox.UnmarshalEnvelope(pb.Topic, pb.Payload)
 	if err != nil {
@@ -407,11 +408,15 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 		// so operators can grep it; the handler is never invoked for poison.
 		poisonErr := errcode.Wrap(errcode.KindInvalid, ErrAdapterMQTTUnmarshalEnvelope,
 			"mqtt: unmarshal envelope failed", err)
-		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unmarshal envelope failed, acking poison message (PR-4 will route to $dead)",
+		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unmarshal envelope failed, routing raw payload to $dead then acking poison",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(pb.Topic)),
 			slog.Any("error", poisonErr))
 		s.collector.RecordConsumeFailure(ctx, consumeReasonUnmarshal)
+		// Capture the undecodable bytes in $dead/<pb.Topic> before the ack. The
+		// envelope is unparseable, so use the broker-delivered topic and the raw
+		// payload. routeDeadLetter is fail-closed (logs + skips on any error).
+		s.routeDeadLetter(ctx, pb.Topic, pb.Payload, consumeReasonUnmarshal)
 		// ackPoison logs its own ack failure. The unmarshal path has no Settlement
 		// or SettlementObservers to notify (the handler was never invoked); if the
 		// poison ack itself fails, record a distinct ack-failed metric (the broker
@@ -437,23 +442,42 @@ func (s *Subscriber) dispatchDisposition(
 	case outbox.DispositionAck:
 		s.dispatchAck(ctx, pb, res, settlement, entry, start)
 	case outbox.DispositionReject:
-		// Permanent failure: ack-as-poison (PR-4 adds $dead publish first).
-		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, acking poison (PR-4 will route to $dead)",
+		// Permanent failure: route the envelope to $dead/<topic> for ops audit,
+		// then ack-as-poison to stop redelivery. routeDeadLetter is fail-closed
+		// (logs + skips on any error) so the ack always proceeds.
+		//
+		// Order is a correctness invariant: route → ackPoison (broker disposition)
+		// → releaseSettlement. The claim is released only AFTER the PUBACK finalizes
+		// the broker disposition, so a connection drop mid-settle cannot redeliver
+		// the message to another instance that then re-claims a freed claim (mirrors
+		// rabbitmq's Nack-before-release). routeDeadLetter's broker round-trip would
+		// otherwise widen that window.
+		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, routing to $dead then acking poison",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
-		s.releaseSettlement(ctx, settlement, entry, "reject")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonReject)
-		if ackErr := s.ackPoison(ctx, pb, "reject"); ackErr != nil {
+		s.routeDeadLetter(ctx, entry.Topic(), pb.Payload, consumeReasonReject)
+		ackErr := s.ackPoison(ctx, pb, "reject")
+		s.releaseSettlement(ctx, settlement, entry, "reject")
+		if ackErr != nil {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultAckFailed, ackErr)
 		} else {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 		}
 	case outbox.DispositionRequeue:
-		// Transient failure: leave unacked so the broker redelivers; Release the
-		// claim so redelivery can re-enter the Claim cycle cleanly.
-		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: handler requeued entry, leaving unacked for broker redelivery",
+		// Option C (ADR-050 §6): MQTT is a transport, not a work queue. Leave the
+		// message unacked so the broker redelivers on session resume / reconnect;
+		// Release the claim so redelivery re-enters the Claim cycle cleanly.
+		//
+		// ConsumerBase is the sole retry layer — it retries transient handler
+		// failures in-process and converts exhaustion to Reject BEFORE the adapter,
+		// so a Requeue reaching here is a degraded-state signal (graceful shutdown /
+		// idempotency backend down / claim contention), where reconnect-redelivery
+		// is the correct behavior. There is deliberately no app-level re-dispatch
+		// loop and no $dead routing on Requeue (those would be Option A).
+		slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: handler requeued entry, leaving unacked for reconnect redelivery (degraded-state signal)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
@@ -463,6 +487,7 @@ func (s *Subscriber) dispatchDisposition(
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	default:
 		// Zero / invalid Disposition: treat as Requeue (leave unacked) + Release.
+		// Same Option C reconnect-redelivery semantics as Requeue; no $dead routing.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: unknown disposition, leaving unacked (treated as requeue)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),

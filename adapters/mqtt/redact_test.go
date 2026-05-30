@@ -51,18 +51,6 @@ func TestRedactConnectURL_Unparseable(t *testing.T) {
 	}
 }
 
-func TestRedactPayloadForLog(t *testing.T) {
-	payload := []byte(`{"password":"hunter2","user":"alice"}`)
-	out := redactPayloadForLog(payload)
-	if strings.Contains(string(out), "hunter2") {
-		t.Errorf("redactPayloadForLog: password value not redacted, got: %s", out)
-	}
-	// user should still be visible
-	if !strings.Contains(string(out), "alice") {
-		t.Errorf("redactPayloadForLog: user field should not be redacted, got: %s", out)
-	}
-}
-
 func TestRedactErr(t *testing.T) {
 	err := errors.New("connect failed: token=abc123 host=broker")
 	out := redactErr(err)
@@ -78,5 +66,21 @@ func TestRedactErr(t *testing.T) {
 func TestRedactErr_Nil(t *testing.T) {
 	if out := redactErr(nil); out != nil {
 		t.Errorf("redactErr(nil) = %v, want nil", out)
+	}
+}
+
+func TestSafeErrForLog(t *testing.T) {
+	if got := safeErrForLog(nil); got != "" {
+		t.Errorf("safeErrForLog(nil) = %q, want empty", got)
+	}
+	// An errcode embedding an untrusted topic with a control char (newline) must
+	// have the control char stripped (CWE-117 log-injection), while non-control
+	// text is preserved.
+	out := safeErrForLog(errors.New("[ERR_X] topic=ns/foo\nINJECTED"))
+	if strings.ContainsAny(out, "\n\r") {
+		t.Errorf("safeErrForLog left a control char: %q", out)
+	}
+	if !strings.Contains(out, "INJECTED") {
+		t.Errorf("safeErrForLog dropped non-control text: %q", out)
 	}
 }

@@ -85,7 +85,7 @@ func startSubscribe(t *testing.T, sub *Subscriber, subscription outbox.Subscript
 	go func() { _ = sub.Subscribe(ctx, subscription, handler) }()
 	select {
 	case <-sub.Ready(subscription):
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		cancel()
 		t.Fatal("subscribe did not become ready")
 	}
@@ -227,6 +227,7 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 		wantReason  ConsumeFailureReason
 		wantCommit  int
 		wantRelease int
+		wantDLX     int // expected $dead routing count (Option C: only Reject routes)
 	}{
 		{
 			name:        "ack",
@@ -240,18 +241,21 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 			result:      func() outbox.HandleResult { return outbox.Requeue(errors.New("transient")) },
 			wantReason:  consumeReasonRequeue,
 			wantRelease: 1,
+			wantDLX:     0, // Option C: Requeue leaves unacked for reconnect, no $dead
 		},
 		{
 			name:        "reject",
 			result:      func() outbox.HandleResult { return outbox.Reject(errors.New("permanent")) },
 			wantReason:  consumeReasonReject,
 			wantRelease: 1,
+			wantDLX:     1, // Reject routes the envelope to $dead before ack-as-poison
 		},
 		{
 			name:        "zero-value-disposition",
 			result:      func() outbox.HandleResult { return outbox.HandleResult{} },
 			wantReason:  consumeReasonUnknownDisposition,
 			wantRelease: 1,
+			wantDLX:     0, // unknown disposition degrades to Requeue (leave unacked), no $dead
 		},
 	}
 	for _, tc := range tests {
@@ -284,17 +288,38 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 
 			testwait.External(t, "handler-called", called.Load, testtime.D5s, testtime.D10ms)
 
-			// Allow dispatch to finish (commit/release/ack).
+			// Wait for the TERMINAL settlement: A4 (#1142) releases the claim only
+			// AFTER routeDeadLetter + ackPoison, so "failure recorded" no longer
+			// implies "released". Poll until success (ack) or release
+			// (requeue/reject) reaches the expected count, so the release assertion
+			// below is not racing the (now-last) releaseSettlement step.
 			testwait.External(t, "dispatch-settled", func() bool {
 				success, failure, _ := coll.snapshot()
-				return success+failure >= 1
+				_, release := settlement.counts()
+				return success >= tc.wantSuccess && release >= tc.wantRelease && (tc.wantReason == "" || failure >= 1)
 			}, testtime.D5s, testtime.D10ms)
+
+			// The $dead routing (RecordDeadLetter) runs AFTER RecordConsumeFailure
+			// and includes a broker round-trip, so wait for it explicitly when
+			// expected to avoid racing the assertion.
+			if tc.wantDLX > 0 {
+				testwait.External(t, "dead-letter-routed", func() bool {
+					total, _ := coll.dlxSnapshot()
+					return total >= tc.wantDLX
+				}, testtime.D5s, testtime.D10ms)
+			}
 
 			success, failure, lastReason := coll.snapshot()
 			commit, release := settlement.counts()
+			dlxTotal, dlxByReason := coll.dlxSnapshot()
 			assert.Equal(t, tc.wantSuccess, success, "consume success count")
 			assert.Equal(t, tc.wantCommit, commit, "settlement commit count")
 			assert.Equal(t, tc.wantRelease, release, "settlement release count")
+			assert.Equal(t, tc.wantDLX, dlxTotal, "$dead routing count")
+			if tc.wantDLX > 0 {
+				assert.Equal(t, tc.wantDLX, dlxByReason[tc.wantReason],
+					"$dead recorded under the disposition reason %s", tc.wantReason)
+			}
 			if tc.wantReason != "" {
 				assert.GreaterOrEqual(t, failure, 1)
 				assert.Equal(t, tc.wantReason, lastReason)
@@ -331,9 +356,19 @@ func TestSubscriber_UnmarshalFail_PoisonAcked(t *testing.T) {
 		return failure >= 1
 	}, testtime.D5s, testtime.D10ms)
 
+	// The undecodable payload is routed to $dead/<pb.Topic> (raw bytes) before
+	// the poison ack — wait for the dead-letter record.
+	testwait.External(t, "poison-dead-letter-routed", func() bool {
+		total, _ := coll.dlxSnapshot()
+		return total >= 1
+	}, testtime.D5s, testtime.D10ms)
+
 	_, failure, lastReason := coll.snapshot()
+	dlxTotal, dlxByReason := coll.dlxSnapshot()
 	assert.Equal(t, 1, failure)
 	assert.Equal(t, consumeReasonUnmarshal, lastReason)
+	assert.Equal(t, 1, dlxTotal, "poison message routed to $dead")
+	assert.Equal(t, 1, dlxByReason[consumeReasonUnmarshal], "$dead recorded under the unmarshal reason")
 	assert.False(t, handlerCalled.Load(), "handler must not be called for poison message")
 }
 
@@ -759,39 +794,86 @@ func TestSubscriber_NotifySettlement_FiresObservers(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
-		disp       outbox.Disposition
+		result     func(obs outbox.SettlementObserver) outbox.HandleResult
+		wantDisp   outbox.Disposition
 		wantResult outbox.SettlementResult
 	}{
-		{name: "ack", disp: outbox.DispositionAck, wantResult: outbox.SettlementResultSuccess},
-		{name: "reject", disp: outbox.DispositionReject, wantResult: outbox.SettlementResultSuccess},
-		{name: "requeue", disp: outbox.DispositionRequeue, wantResult: outbox.SettlementResultSuccess},
+		{
+			name: "ack",
+			result: func(o outbox.SettlementObserver) outbox.HandleResult {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionAck,
+					SettlementObservers: []outbox.SettlementObserver{o},
+				}
+			},
+			wantDisp:   outbox.DispositionAck,
+			wantResult: outbox.SettlementResultSuccess,
+		},
+		{
+			name: "reject",
+			result: func(o outbox.SettlementObserver) outbox.HandleResult {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionReject,
+					Err:                 errors.New("permanent"),
+					SettlementObservers: []outbox.SettlementObserver{o},
+				}
+			},
+			wantDisp:   outbox.DispositionReject,
+			wantResult: outbox.SettlementResultSuccess,
+		},
+		{
+			name: "requeue",
+			result: func(o outbox.SettlementObserver) outbox.HandleResult {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionRequeue,
+					Err:                 errors.New("transient"),
+					SettlementObservers: []outbox.SettlementObserver{o},
+				}
+			},
+			wantDisp:   outbox.DispositionRequeue,
+			wantResult: outbox.SettlementResultSuccess,
+		},
 	}
+	// Broker-backed: the Reject path now publishes to $dead (routeDeadLetter), so
+	// the observer must fire through the REAL dispatch path (a synthetic fake-conn
+	// would nil-panic on the dead-letter publish). Drive a real delivery whose
+	// handler returns the disposition + observer in its HandleResult.
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			coll := newRecordingSubCollector()
-			// fakeAckConn(nil): conn.ack (Ack path) and ackPoison (Reject path)
-			// both succeed, so the success branches are exercised.
-			sub := newDispatchAckSubscriber(t, nil, coll)
+			addr, stop := startInternalBroker(t)
+			defer stop()
+			sub, conn := newTestSubscriber(t, addr, nil)
 
-			// dispatchDisposition is synchronous and invokes the observer inline,
-			// so a plain counter is race-free here.
-			var count int
+			var count atomic.Int32
+			var mu sync.Mutex
 			var gotObs outbox.SettlementObservation
 			obs := outbox.SettlementObserverFunc(func(_ context.Context, o outbox.SettlementObservation) {
-				count++
+				count.Add(1)
+				mu.Lock()
 				gotObs = o
+				mu.Unlock()
 			})
-			res := outbox.HandleResult{
-				Disposition:         tc.disp,
-				SettlementObservers: []outbox.SettlementObserver{obs},
-			}
-			pb, entry := dispatchAckEntry(t, "test/notify/"+tc.name)
-			sub.dispatchDisposition(context.Background(), pb, res, &recordingSettlement{}, entry, time.Now())
 
-			require.Equal(t, 1, count, "SettlementObserver must fire exactly once")
-			assert.Equal(t, tc.disp, gotObs.Disposition, "observation Disposition")
+			prefix := "test/notify/" + tc.name
+			subscription := newSubscription(prefix+"/+", "notify-"+tc.name+"-"+uuid.NewString())
+			cancel := startSubscribe(t, sub, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return tc.result(obs), &recordingSettlement{}
+			})
+			defer cancel()
+
+			topic := prefix + "/" + uuid.NewString()
+			publishTo(t, conn, topic, newSubEnvelope(t, topic, []byte(`{"k":"v"}`)))
+
+			testwait.External(t, "settlement-observer-fired", func() bool {
+				return count.Load() >= 1
+			}, testtime.D5s, testtime.D10ms)
+
+			require.Equal(t, int32(1), count.Load(), "SettlementObserver must fire exactly once")
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, tc.wantDisp, gotObs.Disposition, "observation Disposition")
 			assert.Equal(t, tc.wantResult, gotObs.Result, "observation SettlementResult")
 		})
 	}

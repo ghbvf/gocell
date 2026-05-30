@@ -23,8 +23,9 @@
 // "sealed construction" composite:
 //
 //   - publishableTopic / subscribableFilter: package-unexported structs. Their
-//     ONLY constructors are TopicNamespace.Mint / TopicNamespace.MintFilter,
-//     which internally call PublishOK / SubscribeOK. So any code holding one is
+//     ONLY constructors are TopicNamespace.Mint / TopicNamespace.MintDeadLetter
+//     (publishableTopic) and TopicNamespace.MintFilter (subscribableFilter), each
+//     of which internally calls PublishOK / SubscribeOK. So any code holding one is
 //     guaranteed (at compile time, package-external) that the topic/filter was
 //     validated against the namespace.
 //   - (*Connection).Publish / (*Connection).Subscribe: the ONLY methods in
@@ -51,7 +52,7 @@
 //     ResolveEnclosingFunc, so a FuncLit body (e.g. the Subscribe cancel-closure)
 //     is attributed to its containing FuncDecl.
 //   - Upstream cross-package Hard: publishableTopic / subscribableFilter
-//     unexported + Mint / MintFilter sole constructor + (*Connection).Publish /
+//     unexported + Mint / MintDeadLetter / MintFilter sole constructors + (*Connection).Publish /
 //     (*Connection).Subscribe parameter type — package-external code cannot
 //     construct the sealed token, so cannot call the Connection method, so cannot
 //     reach cm.Publish / cm.Subscribe. For ACK: (*Connection).ack is unexported,
@@ -60,8 +61,8 @@
 //     gate, no archtest needed for the cross-package side.
 //   - Upstream package-internal Medium (A2/A2b/A3 + S3 archtest backstops):
 //     publishableTopic{} / subscribableFilter{} composite-literal construction
-//     inside adapters/mqtt is restricted to the Mint / MintFilter body + zero-value
-//     error return; the token field-shape is reflect/go-types-frozen. Permanent
+//     inside adapters/mqtt is restricted to the Mint / MintDeadLetter / MintFilter
+//     body + zero-value error return; the token field-shape is reflect/go-types-frozen. Permanent
 //     Go-language ceiling (same as SPAN-SETATTR-REDACT-01 /
 //     PROBENAME-SEALED-FUNNEL-01 package-internal side). Tracked for potential
 //     Hard upgrade — gh #1247 per ai-robust.md §Funnel 双向锁评级 ("必须同步开 gh
@@ -73,7 +74,9 @@
 //   - A1 downstream callsite (Hard): typed CallExpr scan; `(*autopaho.ConnectionManager).Publish`
 //     callees in adapters/mqtt production files ⊆ {(*Connection).Publish body}.
 //   - A2 Mint construction allowlist (Medium): `publishableTopic{...}` composite
-//     literal in adapters/mqtt production files ⊆ {TopicNamespace.Mint body}.
+//     literal in adapters/mqtt production files ⊆ {TopicNamespace.Mint body,
+//     TopicNamespace.MintDeadLetter body} (PR-4 added MintDeadLetter for the
+//     $dead/<topic> DLT sink).
 //   - A2b field-assignment blind-spot (Medium): no assignment to a
 //     publishableTopic `topic` field (`t.topic = …`) outside the Mint body.
 //   - A3 publishableTopic field freeze (Medium): reflect lock asserting
@@ -451,16 +454,18 @@ func f(c client, pb any) { _ = c.Ack(pb) }
 
 // TestMQTTPublishCallsiteFunnel_A2_PublishableTopicConstructionAllowlist enforces
 // that non-zero publishableTopic composite literals in adapters/mqtt production
-// files are only inside TopicNamespace.Mint.
+// files are only inside the two sanctioned constructors TopicNamespace.Mint and
+// TopicNamespace.MintDeadLetter (PR-4 $dead/<topic> DLT sink). Both mint through
+// PublishOK; no other callsite may construct the sealed token.
 func TestMQTTPublishCallsiteFunnel_A2_PublishableTopicConstructionAllowlist(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
-	diags := scanMQTTTokenConstruction(t, "publishableTopic", []string{"Mint"},
+	diags := scanMQTTTokenConstruction(t, "publishableTopic", []string{"Mint", "MintDeadLetter"},
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2")
 	assert.Empty(t, diags,
-		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: publishableTopic composite literals outside Mint body detected")
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: publishableTopic composite literals outside Mint/MintDeadLetter body detected")
 }
 
 func TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous(t *testing.T) {
@@ -472,6 +477,23 @@ func TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous(t *testing.T) {
 	assert.GreaterOrEqual(t, inside, 1,
 		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: scanner found 0 publishableTopic literals inside Mint — "+
 			"the go/types resolution path may be silently broken")
+}
+
+// TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous_MintDeadLetter asserts the
+// second sanctioned constructor actually mints through the sealed publishableTopic
+// type (≥1 composite literal inside MintDeadLetter). This is the blind-spot
+// reverse-check for the A2 allowlist extension: it fails if MintDeadLetter is
+// renamed, deleted, or stops constructing the sealed token (e.g. bypasses it),
+// guarding against a stale allowlist entry that silently permits nothing.
+func TestMQTTPublishCallsiteFunnel_A2_ScannerNonVacuous_MintDeadLetter(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	inside := countMQTTTokenLiteralsInsideFunc(t, "publishableTopic", "MintDeadLetter")
+	assert.GreaterOrEqual(t, inside, 1,
+		"MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2: scanner found 0 publishableTopic literals inside MintDeadLetter — "+
+			"MintDeadLetter must mint through the sealed publishableTopic type; the allowlist entry is stale or the resolution path is broken")
 }
 
 // TestMQTTSubscribeCallsiteFunnel_S3_SubscribableFilterConstructionAllowlist

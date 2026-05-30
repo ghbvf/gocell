@@ -28,6 +28,7 @@ func KnownNonDefaultTags() [][]string {
 		{"e2e", "pg"},
 		{"examples_smoke"},
 		{"integration", "otelcollector"},
+		{"integration", "mqtt_tls"},
 		{"integration_cluster"},
 		// archtest_fixture is deliberately ABSENT (#944): the fixture build tag
 		// is NOT a generic production tag and must never enter this union, or a
