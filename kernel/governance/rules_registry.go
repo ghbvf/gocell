@@ -136,6 +136,7 @@ var allRules = []Rule{
 	{Code: codeSAGACONTRACTCOMPENSATIONORDER01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTCOMPENSATIONORDER01},
 	{Code: codeSAGACONTRACTCONSISTENCYL301, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTCONSISTENCYL301},
 	{Code: codeSAGACONTRACTRETRYTIMEOUT01, Phase: PhaseBase, Detect: (*Validator).validateSAGACONTRACTRETRYTIMEOUT01},
+	{Code: codeSAGACELLLEVELL3DECLARE01, Phase: PhaseBase, Detect: (*Validator).validateSAGACELLLEVELL3DECLARE01},
 
 	// -------------------------------------------------------------------------
 	// PhaseStrict — run only with `gocell validate --strict`

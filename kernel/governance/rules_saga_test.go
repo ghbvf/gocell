@@ -590,6 +590,149 @@ func TestSagaContractBlockPresent01(t *testing.T) {
 	}
 }
 
+// ---- SAGA-CELL-LEVEL-L3-DECLARE-01 ------------------------------------------
+
+// TestSagaCellLevelL3Declare01 tests the SAGA-CELL-LEVEL-L3-DECLARE-01 rule:
+// a slice with contractUsage role=orchestrate must belong to a cell whose
+// consistencyLevel is exactly L3.
+//
+// The rule is intentionally ONE-WAY (orchestrate ⟹ cell.L3); L3 cells that
+// have no orchestrate CU are fine (CQRS projections, compliance-tracking cells
+// exist as L3 long before saga). A two-way implication would turn those builds
+// red. AI-robust evaluation: Medium — gocell validate is the real CI gate and
+// covers in-memory ProjectMeta fixtures; schema enum is documentation only.
+func TestSagaCellLevelL3Declare01(t *testing.T) {
+	t.Parallel()
+
+	// buildCellLevelProject builds a minimal project with one cell (given level)
+	// and one slice with one contractUsage of the given role pointing at a
+	// placeholder contract id (no actual Contract entry needed — REF rules cover
+	// missing contracts, and this rule only checks belongsToCell's consistencyLevel).
+	buildCellLevelProject := func(cellLevel, role string) *metadata.ProjectMeta {
+		return &metadata.ProjectMeta{
+			Cells: map[string]*metadata.CellMeta{
+				"orchestratorcell": {
+					ID:               "orchestratorcell",
+					ConsistencyLevel: cellLevel,
+					File:             "cells/orchestratorcell/cell.yaml",
+				},
+			},
+			Slices: map[string]*metadata.SliceMeta{
+				"orchestratorcell/saga-orchestrate": {
+					ID:            "saga-orchestrate",
+					BelongsToCell: "orchestratorcell",
+					ContractUsages: []metadata.ContractUsage{
+						{Contract: "saga.order.v1", Role: role},
+					},
+					File: "cells/orchestratorcell/slices/saga-orchestrate/slice.yaml",
+				},
+			},
+			Contracts:  map[string]*metadata.ContractMeta{},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		cellLevel    string
+		role         string
+		wantErrCount int
+	}{
+		{
+			name:         "orchestrate on L3 cell → no error (valid)",
+			cellLevel:    "L3",
+			role:         "orchestrate",
+			wantErrCount: 0,
+		},
+		{
+			name:         "orchestrate on L2 cell → error",
+			cellLevel:    "L2",
+			role:         "orchestrate",
+			wantErrCount: 1,
+		},
+		{
+			name:         "orchestrate on L1 cell → error",
+			cellLevel:    "L1",
+			role:         "orchestrate",
+			wantErrCount: 1,
+		},
+		{
+			name:         "orchestrate on L0 cell → error",
+			cellLevel:    "L0",
+			role:         "orchestrate",
+			wantErrCount: 1,
+		},
+		{
+			name:         "orchestrate on L4 cell → error",
+			cellLevel:    "L4",
+			role:         "orchestrate",
+			wantErrCount: 1,
+		},
+		{
+			name:         "orchestrate on empty level cell → error",
+			cellLevel:    "",
+			role:         "orchestrate",
+			wantErrCount: 1,
+		},
+		{
+			name:         "subscribe role on L2 cell → no error (rule only fires on orchestrate)",
+			cellLevel:    "L2",
+			role:         "subscribe",
+			wantErrCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			project := buildCellLevelProject(tc.cellLevel, tc.role)
+			v := NewValidator(project, "", clock.Real())
+			got := filterByCode(v.validateSAGACELLLEVELL3DECLARE01(), codeSAGACELLLEVELL3DECLARE01)
+			if len(got) != tc.wantErrCount {
+				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
+			}
+			if tc.wantErrCount > 0 {
+				r := got[0]
+				if r.Severity != SeverityError {
+					t.Errorf("expected SeverityError, got %s", r.Severity)
+				}
+				if r.Fix == "" {
+					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+				}
+			}
+		})
+	}
+
+	// belongsToCell not in Cells map → no error (REF already covers missing
+	// cell declarations; SAGA-CELL-LEVEL-L3-DECLARE-01 must not double-report).
+	t.Run("orchestrate with unknown cell → no error (REF scope)", func(t *testing.T) {
+		t.Parallel()
+		project := &metadata.ProjectMeta{
+			Cells: map[string]*metadata.CellMeta{},
+			Slices: map[string]*metadata.SliceMeta{
+				"unknowncell/saga-orchestrate": {
+					ID:            "saga-orchestrate",
+					BelongsToCell: "unknowncell",
+					ContractUsages: []metadata.ContractUsage{
+						{Contract: "saga.order.v1", Role: "orchestrate"},
+					},
+					File: "cells/unknowncell/slices/saga-orchestrate/slice.yaml",
+				},
+			},
+			Contracts:  map[string]*metadata.ContractMeta{},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+		v := NewValidator(project, "", clock.Real())
+		got := filterByCode(v.validateSAGACELLLEVELL3DECLARE01(), codeSAGACELLLEVELL3DECLARE01)
+		if len(got) != 0 {
+			t.Fatalf("unknown cell must not trigger rule (REF scope), got %d: %v", len(got), got)
+		}
+	})
+}
+
 // ---- SAGA-CONTRACT-RETRY-TIMEOUT-01 -----------------------------------------
 
 func TestSagaContractRetryTimeout01(t *testing.T) {

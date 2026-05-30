@@ -131,6 +131,7 @@ func goldenRuleIDs() []string {
 		"SAGA-CONTRACT-COMPENSATION-ORDER-01",
 		"SAGA-CONTRACT-CONSISTENCY-L3-01",
 		"SAGA-CONTRACT-RETRY-TIMEOUT-01",
+		"SAGA-CELL-LEVEL-L3-DECLARE-01",
 
 		// REF — reference integrity (rules_ref.go for REF-01..11, 13..17;
 		// REF-12 was relocated to rules_fmt.go in PR-FUNNEL-03 because it is

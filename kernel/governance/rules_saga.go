@@ -8,13 +8,17 @@ package governance
 //   - INVARIANT: SAGA-CONTRACT-COMPENSATION-ORDER-01
 //   - INVARIANT: SAGA-CONTRACT-CONSISTENCY-L3-01
 //   - INVARIANT: SAGA-CONTRACT-RETRY-TIMEOUT-01
+//   - INVARIANT: SAGA-CELL-LEVEL-L3-DECLARE-01
 //
-// This file implements eight PhaseBase governance rules validating the format
-// of kind=saga contracts. Together they cover the machine-checkable invariants
-// of SagaMeta: presence of the saga block, non-empty steps list, per-step name
-// validity and uniqueness, per-step output schema reference,
+// This file implements nine PhaseBase governance rules. The first eight
+// validate the format of kind=saga contracts and cover the machine-checkable
+// invariants of SagaMeta: presence of the saga block, non-empty steps list,
+// per-step name validity and uniqueness, per-step output schema reference,
 // compensation-order enum, required consistencyLevel=L3, and numeric validity
-// of retry policies and timeout durations.
+// of retry policies and timeout durations. The ninth,
+// SAGA-CELL-LEVEL-L3-DECLARE-01, is a cell-level topology rule (not contract
+// format): a slice with contractUsage role=orchestrate must belong to a cell
+// declared consistencyLevel=L3.
 //
 // AI-robust evaluation (honest grading — same class as PROJECTION-CONSISTENCY-01):
 //
@@ -400,6 +404,61 @@ func (v *Validator) checkSagaRetryMeta(file, contractID, field string, rm *metad
 				"ensure maxAttempts >= 0, intervals >= 0, and maxInterval >= baseInterval when both are set",
 			))
 		}
+	}
+	return results
+}
+
+// validateSAGACELLLEVELL3DECLARE01 enforces SAGA-CELL-LEVEL-L3-DECLARE-01:
+// a slice with contractUsage role=orchestrate must belong to a cell whose
+// consistencyLevel is exactly L3 (WorkflowEventual).
+//
+// The implication is ONE-WAY: orchestrate ⟹ cell.consistencyLevel==L3.
+// The inverse is intentionally NOT enforced — L3 cells predate saga orchestration
+// (CQRS projections, compliance-tracking cells are L3 without orchestrating any
+// saga), so a bidirectional check would cause spurious failures.
+//
+// If the slice's belongsToCell does not appear in v.project.Cells, this rule
+// silently skips that entry. REF-01 (referential integrity) is the correct owner
+// of "unknown cell" findings; double-reporting here would confuse operators.
+//
+// AI-robust evaluation (Medium): gocell validate runs in CI and covers in-memory
+// ProjectMeta fixtures (same class as SAGA-CONTRACT-CONSISTENCY-L3-01 and
+// PROJECTION-CONSISTENCY-01). The schema enum is documentation only.
+func (v *Validator) validateSAGACELLLEVELL3DECLARE01() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		results = append(results, v.checkSliceOrchestrateLevel(s)...)
+	}
+	return results
+}
+
+// checkSliceOrchestrateLevel checks all contractUsages of a single slice for
+// the orchestrate-⟹-L3 invariant. Extracted to keep
+// validateSAGACELLLEVELL3DECLARE01 within cognitive complexity ≤ 15.
+func (v *Validator) checkSliceOrchestrateLevel(s *metadata.SliceMeta) []ValidationResult {
+	cell, ok := v.project.Cells[s.BelongsToCell]
+	if !ok {
+		return nil // REF covers missing cell declarations; don't double-report
+	}
+	var results []ValidationResult
+	for i, cu := range s.ContractUsages {
+		if cellvocab.ContractRole(cu.Role) != cellvocab.RoleOrchestrate {
+			continue
+		}
+		if cell.ConsistencyLevel == "L3" {
+			continue
+		}
+		results = append(results, v.newError(
+			codeSAGACELLLEVELL3DECLARE01, IssueInvalid,
+			sliceFile(s),
+			fmt.Sprintf(fieldContractUsagesRoleFmt, i),
+			fmt.Sprintf(
+				"slice %q (cell %q) has role=orchestrate but cell.consistencyLevel=%q; "+
+					"a saga orchestrator cell must be L3 (WorkflowEventual)",
+				s.ID, s.BelongsToCell, cell.ConsistencyLevel,
+			),
+			"set cell.consistencyLevel to L3 in the cell's cell.yaml",
+		))
 	}
 	return results
 }
