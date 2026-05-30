@@ -74,8 +74,10 @@ type CheckpointStore interface {
 // Declared here so the Subscribe API surface is fixed by the ADR rather than
 // drifting when the implementation lands.
 //
-// In v1 no option constructors exist yet — passing no opts (an empty or nil
-// slice) is valid and is the expected call form for the initial release.
+// Available option constructors:
+//   - [WithOnReset] — registers an OnReset hook invoked during the rebuild Reset phase.
+//
+// Passing no opts (an empty or nil slice) is valid.
 type Option func(*subscribeOptions)
 
 // subscribeOptions holds the resolved Subscribe configuration. It is the target

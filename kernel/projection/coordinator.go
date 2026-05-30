@@ -60,7 +60,7 @@ type Coordinator struct {
 	spec       contractspec.ContractSpec
 	onReset    OnReset
 
-	rebuildCancel       context.CancelFunc
+	rebuildCancel       atomic.Pointer[context.CancelFunc]
 	rebuildWG           sync.WaitGroup
 	lastAppliedUnixNano atomic.Int64
 }
@@ -219,13 +219,12 @@ func (c *Coordinator) buildHandler(apply Apply) outbox.EntryHandler {
 		case <-*gp:
 			// gate is open — proceed
 		case <-ctx.Done():
-			return outbox.Requeue(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"projection.handler: context canceled while waiting for gate"))
+			return outbox.Requeue(fmt.Errorf("projection.handler: context canceled waiting for gate: %w", ctx.Err()))
 		}
 
 		ctx, span := c.tracer.Start(ctx, "projection.apply",
 			wrapper.Attr{Key: "gocell.projection.cell", Value: c.cellID},
-			wrapper.Attr{Key: "gocell.projection.id", Value: c.projectionID},
+			wrapper.Attr{Key: "gocell.projection.projection", Value: c.projectionID},
 		)
 		defer span.End()
 
@@ -306,14 +305,17 @@ func (c *Coordinator) shutGate() {
 }
 
 // openGate sets the gate to OPEN: closes the current channel idempotently
-// so parked handlers unblock. Only the rebuild goroutine calls this.
+// so parked handlers unblock. Only the single rebuild goroutine ever calls
+// this (single-writer invariant), so select-default is a safe idempotent guard:
+// if the channel is already closed (first case fires), we skip; otherwise we
+// close it. This avoids double-close panics without recover.
 func (c *Coordinator) openGate() {
 	gp := c.liveGate.Load()
-	// Close idempotently via select-default; double-close panics, so guard with recover.
-	func() {
-		defer func() { recover() }() //nolint:errcheck // intentional idempotent close
+	select {
+	case <-*gp: // already closed (OPEN) — idempotent no-op
+	default:
 		close(*gp)
-	}()
+	}
 }
 
 // classify maps an error to the appropriate HandleResult disposition.

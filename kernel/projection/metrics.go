@@ -22,10 +22,12 @@ const (
 	labelProjection = "projection"
 )
 
-// projectionRebuildDurationBuckets covers sub-millisecond to multi-minute
+// projectionRebuildDurationBuckets covers sub-millisecond to multi-hour
 // rebuild durations. Smaller projections complete in ms; large historical
-// replays may take minutes.
-var projectionRebuildDurationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 120, 300}
+// replays may take many minutes. Buckets extend to 1800s (30min) so that the
+// ADR §Q4 "Stage-1 rebuild p95 ≥ 30min" trigger can be measured rather than
+// collapsing into +Inf.
+var projectionRebuildDurationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 900, 1800}
 
 // Metrics holds the optional pre-bound instruments the Coordinator records to.
 // A nil *Metrics (or nil individual fields) disables that instrument. Build via

@@ -133,7 +133,18 @@ func (m *MemReplaySource) Head(_ context.Context) (int64, error) {
 // method so that Coordinator.applyOne receives the same 1-based position that
 // Replay delivers entries with. The coupling ensures position agreement between
 // the replay source and the cursor.
+//
+// Note: Position (public) is the stable cross-package alias used by projectiontest
+// conformance helpers and test cursors; both are identical.
 func (m *MemReplaySource) positionOf(e outbox.Entry) int64 {
+	return m.Position(e)
+}
+
+// Position returns the 1-based insertion index of entry in the source by its
+// entry ID (UUID), or 0 if not found. Used by the projectiontest conformance
+// helper and test cursors which need a stable cross-package API. Entry.ID() is
+// unique per entry so this lookup is collision-free even for same-nanosecond entries.
+func (m *MemReplaySource) Position(e outbox.Entry) int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i, stored := range m.entries {
@@ -142,12 +153,6 @@ func (m *MemReplaySource) positionOf(e outbox.Entry) int64 {
 		}
 	}
 	return 0
-}
-
-// Position is the public version of positionOf, used by the projectiontest
-// conformance helper and test cursors which need a stable cross-package API.
-func (m *MemReplaySource) Position(e outbox.Entry) int64 {
-	return m.positionOf(e)
 }
 
 // compile-time interface check.

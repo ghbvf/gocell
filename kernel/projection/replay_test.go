@@ -1,3 +1,4 @@
+// L3 conformance: projection rebuild + event replay test (go-standards.md §L3)
 package projection
 
 import (

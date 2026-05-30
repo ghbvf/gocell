@@ -1110,6 +1110,12 @@ func TestProbenameSealedFunnel(t *testing.T) {
 
 	t.Run("A6_ProjectionPrefixBypass", func(t *testing.T) {
 		t.Parallel()
+		// This forward scan covers all production packages including
+		// kernel/projection/probe.go (which uses the sanctioned
+		// healthz.ProjectionReadyProbeName constructor and therefore produces
+		// zero A6 diagnostics). No separate "no false positive" test is needed:
+		// Report fails the test if any A6 diagnostic exists; zero diagnostics
+		// from the production scan is the no-false-positive green assertion.
 		Report(t, "PROBENAME-SEALED-FUNNEL-01/A6", a6Diags)
 	})
 }

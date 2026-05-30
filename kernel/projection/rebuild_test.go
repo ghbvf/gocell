@@ -1,8 +1,10 @@
+// L3 conformance: projection rebuild + event replay test (go-standards.md §L3)
 package projection
 
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +16,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
+
+// rebuildTestHandlerTimeout is the deadline for a buildHandler call to return
+// once the gate is open. 2s is ample for an in-process no-op apply.
+const rebuildTestHandlerTimeout = 2 * time.Second
+
+// rebuildTestGatePollDelay is the window we poll to assert a handler has NOT
+// returned while the gate is shut (gate-park assertion).
+const rebuildTestGatePollDelay = 50 * time.Millisecond
 
 // ---------------------------------------------------------------------------
 // helpers for rebuild tests
@@ -162,6 +172,13 @@ func TestRebuild_OnResetCalledInTx(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // TestRebuild_OnResetErrorRollback — OnReset error must not zero the offset
+//
+// fakeTxRunner is an in-memory runner that executes the function in the same
+// goroutine without a real database transaction. The test asserts that the
+// MemCheckpointStore offset is NOT zeroed after an OnReset error, which covers
+// the Coordinator logic (failing to call SaveOffset(0) when onReset returns an
+// error). True PG transaction atomicity (Apply + SaveOffset in one real tx) is
+// exercised separately in PR-02 integration tests, not here.
 // ---------------------------------------------------------------------------
 
 func TestRebuild_OnResetErrorRollback(t *testing.T) {
@@ -474,6 +491,297 @@ func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestRebuild_CaptureHeadError — captureHead error routes to failRebuild → PhaseLive
+// (finding #17)
+// ---------------------------------------------------------------------------
+
+// errHeadReplaySource is a ReplaySource whose Head always returns an error.
+type errHeadReplaySource struct {
+	headErr error
+}
+
+func (e *errHeadReplaySource) Head(_ context.Context) (int64, error) { return 0, e.headErr }
+func (e *errHeadReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+	return nil
+}
+
+func TestRebuild_CaptureHeadError(t *testing.T) {
+	t.Parallel()
+	headErr := errors.New("head unavailable")
+	src := &errHeadReplaySource{headErr: headErr}
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+	cur := &fakeCursor{pos: 1}
+
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, src, wrapper.NoopTracer{}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	// failRebuild must restore PhaseLive and open the gate.
+	waitForPhase(t, c, PhaseLive)
+	if c.Phase() != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive after captureHead error", c.Phase())
+	}
+	// Gate must be open: buildHandler should not hang.
+	result := make(chan outbox.HandleResult, 1)
+	entry := mustNewEntryForTest(t)
+	h := c.buildHandler(applyNoop)
+	go func() { result <- h(context.Background(), entry) }()
+	select {
+	case r := <-result:
+		// Any disposition is fine; gate being open means we didn't hang.
+		_ = r
+	case <-time.After(rebuildTestHandlerTimeout):
+		t.Fatal("buildHandler hung after captureHead error (gate not opened)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_GateParkAndResume — gate parks handler during rebuild and unblocks on Live
+// (finding #18)
+// ---------------------------------------------------------------------------
+
+func TestRebuild_GateParkAndResume(t *testing.T) {
+	t.Parallel()
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+	// fakeCursor with pos=1 lets applyOne run on any entry.
+	cur := &fakeCursor{pos: 1}
+
+	// Use a blocking replay source to keep rebuild in Replay phase (gate SHUT).
+	blockSrc := &blockingReplaySource{unblock: make(chan struct{})}
+
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, blockSrc, wrapper.NoopTracer{}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	entry := mustNewEntryForTest(t)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	// Wait until PhaseReplay — at that point shutGate has been called and Replay is blocking.
+	waitForPhase(t, c, PhaseReplay)
+
+	// (b) drive buildHandler with an entry — assert it blocks (gate is SHUT).
+	handlerDone := make(chan outbox.HandleResult, 1)
+	h := c.buildHandler(applyNoop)
+	entryCtx, entryCancel := context.WithCancel(context.Background())
+	defer entryCancel()
+	go func() {
+		handlerDone <- h(entryCtx, entry)
+	}()
+
+	// Verify handler has NOT returned yet (gate is shut).
+	select {
+	case <-handlerDone:
+		t.Fatal("buildHandler returned while rebuild is in-flight (gate should be shut)")
+	case <-time.After(rebuildTestGatePollDelay):
+		// expected: handler is parked
+	}
+
+	// (c) unblock rebuild → runs to completion → gate opens → PhaseLive.
+	close(blockSrc.unblock)
+	waitForPhase(t, c, PhaseLive)
+
+	// (d) handler must complete (gate is open). Disposition can be Ack or Requeue
+	// depending on whether the applied entry's cursor position matches the checkpoint;
+	// the key invariant is that buildHandler is NOT stuck (gate was opened).
+	select {
+	case <-handlerDone:
+		// gate opened — handler returned; any disposition is acceptable
+	case <-time.After(rebuildTestHandlerTimeout):
+		t.Fatal("buildHandler hung after gate opened")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_OnResetError_GateReopened — gate is open after OnReset error
+// (finding #19)
+// ---------------------------------------------------------------------------
+
+func TestRebuild_OnResetError_GateReopened(t *testing.T) {
+	t.Parallel()
+	src, cur := makeReplayWithEntries(t, 2)
+	store := newSeededStore("testcell", "p1", 2)
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+
+	c := newCoordinatorFull(t, clk, "p1", reg, txr, store, cur, src)
+
+	errReset := errors.New("reset failed")
+	subscribeWithDefaults(t, c, applyNoop, WithOnReset(func(_ context.Context) error {
+		return errReset
+	}))
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitForPhase(t, c, PhaseLive)
+
+	// Gate must be open — buildHandler must NOT hang.
+	result := make(chan outbox.HandleResult, 1)
+	entry := mustNewEntryForTest(t)
+	h := c.buildHandler(applyNoop)
+	go func() { result <- h(context.Background(), entry) }()
+	select {
+	case <-result:
+		// any disposition fine; what matters is no hang
+	case <-time.After(rebuildTestHandlerTimeout):
+		t.Fatal("buildHandler hung after OnReset error (gate not reopened)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_CatchupPaths — non-fatal isCaughtUp error + ctx-cancel paths
+// (finding #20)
+// ---------------------------------------------------------------------------
+
+// catchupErrReplaySource is a ReplaySource that returns an error from Head
+// on the n-th call, used to trigger the catchup non-fatal degraded path.
+type catchupErrReplaySource struct {
+	mu       sync.Mutex
+	headCall int
+	failAt   int // Head returns error on calls >= failAt
+	headErr  error
+}
+
+func (s *catchupErrReplaySource) Head(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.headCall++
+	if s.failAt > 0 && s.headCall >= s.failAt {
+		return 0, s.headErr
+	}
+	return 0, nil
+}
+
+func (s *catchupErrReplaySource) Replay(_ context.Context, _ int64, _ func(outbox.Entry) error) error {
+	return nil
+}
+
+// TestRebuild_CatchupIsCaughtUpError asserts that a Head/LoadOffset error during
+// catchup is non-fatal: phase returns to Live without blocking.
+func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
+	t.Parallel()
+	// Arrange: on Head call 1 (captureHead) return 0; on call 2+ (catchup) return error.
+	catchupSrc := &catchupErrReplaySource{failAt: 2, headErr: errors.New("head transient error")}
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+	cur := &fakeCursor{pos: 1}
+
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, catchupSrc, wrapper.NoopTracer{}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	// Non-fatal path must resolve to PhaseLive.
+	waitForPhase(t, c, PhaseLive)
+	if c.Phase() != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive after catchup isCaughtUp error", c.Phase())
+	}
+}
+
+// TestRebuild_CatchupCtxCancel asserts that a ctx cancel during catchup routes
+// through failRebuild → PhaseLive and leaves the gate open.
+func TestRebuild_CatchupCtxCancel(t *testing.T) {
+	t.Parallel()
+	// Use empty replay source so captureHead/reset/replay succeed instantly.
+	emptySrc := NewMemReplaySource()
+	store := NewMemCheckpointStore()
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+	cur := &fakeCursor{pos: 1}
+
+	// Seed 1 event so head=1 and checkpoint=0, making catchup spin.
+	clk2 := clockmock.New(time.Now())
+	emptySrc.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, emptySrc, wrapper.NoopTracer{}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+
+	// Cancel via Close — triggers rebuildCancel → ctx cancel in catchup.
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if c.Phase() != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive after catchup ctx cancel", c.Phase())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_RebuildThenClose_NoRace — concurrent Rebuild + Close under -race
+// (finding #1 race verification)
+// ---------------------------------------------------------------------------
+
+func TestRebuild_RebuildThenClose_NoRace(t *testing.T) {
+	t.Parallel()
+	blockSrc := &blockingReplaySource{unblock: make(chan struct{})}
+	store := NewMemCheckpointStore()
+	reg := &fakeRegistrar{}
+	clk := clockmock.New(time.Now())
+	cur := &fakeCursor{pos: 1}
+
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, &fakeTxRunner{}, store, cur, blockSrc, wrapper.NoopTracer{}, nil)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	subscribeWithDefaults(t, c, applyNoop)
+
+	if err := c.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	waitUntilPhaseNot(t, c, PhaseLive)
+
+	// Close concurrently while rebuild is in-flight — must not data-race.
+	// unblock before Close so the goroutine finishes quickly.
+	close(blockSrc.unblock)
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if c.Phase() != PhaseLive {
+		t.Errorf("Phase = %v, want PhaseLive after Close", c.Phase())
+	}
+}
+
+// mustNewEntryForTest creates a minimal outbox.Entry for handler tests.
+func mustNewEntryForTest(t *testing.T) outbox.Entry {
+	t.Helper()
+	clk := clockmock.New(time.Now())
+	e, err := outbox.NewEntry(clk, context.Background(), "topic.v1", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("outbox.NewEntry: %v", err)
+	}
+	return e
+}
+
+// ---------------------------------------------------------------------------
 // blockingReplaySource — ReplaySource that blocks until unblock is closed
 // ---------------------------------------------------------------------------
 
@@ -502,10 +810,7 @@ func (b *blockingReplaySource) Head(context.Context) (int64, error) {
 // state machine runs on a background goroutine with no started-observable sync
 // hook (it transitions phases internally), so this is a sanctioned external
 // poll via testwait.External (TEST-SLEEP-DISCIPLINE-01) rather than a raw sleep
-// loop. clk is the FakeClock; the wait observes real-clock goroutine progress,
-// not simulated time.
-//
-//nolint:unparam // want=PhaseLive in current callers; param kept for future tests
+// loop. The wait observes real-clock goroutine progress, not simulated time.
 func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 	t.Helper()
 	testwait.External(t, "projection-rebuild-phase-transition",
@@ -516,6 +821,8 @@ func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 
 // waitUntilPhaseNot blocks until c.Phase() != notWant or the timeout fires.
 // Same background-goroutine rationale as waitForPhase.
+//
+//nolint:unparam // notWant=PhaseLive in current callers; param kept for future tests
 func waitUntilPhaseNot(t *testing.T, c *Coordinator, notWant Phase) {
 	t.Helper()
 	testwait.External(t, "projection-rebuild-phase-transition",

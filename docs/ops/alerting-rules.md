@@ -547,6 +547,11 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
       lag high WITH pending>0 = falling behind; lag high WITH pending==0 = idle
       stream (benign, the lag is just "no new events"). The readyz probe
       <cell>_projection_<name>_ready flips unhealthy only when BOTH hold.
+      Note: the > 300 threshold mirrors kernel/projection.projectionLagThresholdSeconds;
+      if that constant changes, update this expression to match.
+      The replay_lag gauge is updated on readyz/snapshot reads (no background
+      ticker), so it samples at probe cadence — use a 5m `for:` window to avoid
+      false positives between probe scrapes.
 ```
 
 ### ProjectionPendingEventsHigh
@@ -572,8 +577,9 @@ rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
 ### Rebuild duration（仅 dashboard）
 
 `gocell_projection_rebuild_duration_seconds` 无告警阈值（rebuild 是手动/计划触发的
-运维动作）。用于容量规划——若 winmdm Stage 1 全量 rebuild p95 ≥ 30min，触发 ADR
-§Q4 记录的 v1.1 snapshot-store epic。p95 PromQL：
+运维动作）。用于容量规划——若 Stage-1 全量 rebuild p95 ≥ 30min，触发 ADR
+§Q4 记录的 v1.1 snapshot-store epic。Histogram buckets 覆盖至 1800s (30min)，
+确保 p95 ≥ 30min 的触发条件可测量而不塌缩入 +Inf。p95 PromQL：
 `histogram_quantile(0.95, sum(rate(gocell_projection_rebuild_duration_seconds_bucket[1h])) by (le, cell, projection))`
 
 ---

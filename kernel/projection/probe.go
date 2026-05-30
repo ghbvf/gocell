@@ -9,10 +9,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// projectionLagThresholdSeconds is the v1 constant lag threshold in seconds.
+// projectionLagThresholdSeconds is the fixed v1 lag threshold in seconds.
 // When the time since the last applied event's OccurredAt exceeds this value,
-// the readiness probe reports unhealthy. Configurable per projection in a
-// future release; const for v1 (least moving parts).
+// the readiness probe reports unhealthy. This is a fixed const for v1 (least
+// moving parts). Per-projection tuning will be revisited only if a specific
+// projection demonstrates a concrete need — no timeline is promised.
 const projectionLagThresholdSeconds = 300
 
 // ReadinessProbe returns a [healthz.Probe] for this projection. The probe name
@@ -21,9 +22,10 @@ const projectionLagThresholdSeconds = 300
 //
 // Check returns nil (healthy) when:
 //   - pending events = 0 (head == checkpoint), OR
-//   - nothing has been applied yet (last == 0, startup grace period)
+//   - nothing has been applied yet (last == 0, startup grace period), OR
+//   - pending events > 0 but lag ≤ projectionLagThresholdSeconds (actively catching up)
 //
-// Check returns an error (unhealthy) when lag > projectionLagThresholdSeconds.
+// Check returns an error (unhealthy) when pending > 0 AND lag > projectionLagThresholdSeconds.
 func (c *Coordinator) ReadinessProbe() (healthz.Probe, error) {
 	name, err := healthz.ProjectionReadyProbeName(c.cellID, c.projectionID)
 	if err != nil {
@@ -49,8 +51,10 @@ func (c *Coordinator) checkReady(ctx context.Context) error {
 	// Update pending_events gauge on demand.
 	c.metrics.setPendingEvents(ctx, c.cellID, c.projectionID, float64(pending))
 
-	// No pending events → always healthy.
+	// No pending events → always healthy; zero the lag gauge so it does not
+	// produce false-positive GoCellProjectionReplayLagHigh alerts on idle streams.
 	if pending <= 0 {
+		c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, 0)
 		return nil
 	}
 
@@ -66,13 +70,15 @@ func (c *Coordinator) checkReady(ctx context.Context) error {
 	c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, lagSecs)
 
 	if lagSecs > projectionLagThresholdSeconds {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
 			"projection.probe: replay lag exceeds threshold",
 			errcode.WithDetails(
 				errcode.PublicString("cell", c.cellID),
 				errcode.PublicString("projection", c.projectionID),
 				errcode.PublicInt("thresholdSeconds", projectionLagThresholdSeconds),
+				errcode.PublicInt("lagSeconds", int64(lagSecs)),
 			),
+			errcode.WithInternal(errcode.InternalAttr("lagSeconds", lagSecs)),
 		)
 	}
 	return nil

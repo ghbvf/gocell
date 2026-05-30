@@ -70,6 +70,7 @@ type seededStore struct {
 	loadErr   error
 }
 
+//nolint:unparam // cellID always "testcell" in current callers; param kept for generality
 func newSeededStore(cellID, projectionID string, offset int64) *seededStore {
 	s := &seededStore{offsets: make(map[string]int64)}
 	if cellID != "" {

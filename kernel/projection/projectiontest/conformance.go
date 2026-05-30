@@ -260,13 +260,17 @@ func checkReplayHeadN(t *testing.T, src projection.ReplaySource, ap replayAppend
 
 func checkReplayAscending(t *testing.T, src projection.ReplaySource, ap replayAppenderPositioner, seedEntries func(n int) []outbox.Entry) {
 	t.Helper()
+	// Record head before this sub-test's appends so fromOffset is relative to
+	// this sub-test's 4 entries only — callers must pass a fresh src (or accept
+	// that earlier sub-tests' entries are also replayed, which satisfies the
+	// ascending invariant too since positions are global-monotonic).
+	headBefore, _ := src.Head(context.Background())
 	entries := seedEntries(4)
 	for _, e := range entries {
 		ap.Append(e)
 	}
-	head, _ := src.Head(context.Background())
 	var received []int64
-	_ = src.Replay(context.Background(), head-4, func(e outbox.Entry) error {
+	_ = src.Replay(context.Background(), headBefore, func(e outbox.Entry) error {
 		received = append(received, ap.Position(e))
 		return nil
 	})

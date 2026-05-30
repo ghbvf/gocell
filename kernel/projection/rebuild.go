@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -39,8 +40,8 @@ func (c *Coordinator) Rebuild(ctx context.Context) error {
 		return ErrRebuildInProgress
 	}
 
-	rctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in c.rebuildCancel and called in Close()
-	c.rebuildCancel = cancel
+	rctx, cancel := context.WithCancel(context.Background())
+	c.rebuildCancel.Store(&cancel)
 	c.rebuildWG.Add(1)
 	go c.runRebuild(rctx)
 	return nil
@@ -54,6 +55,10 @@ func (c *Coordinator) Rebuild(ctx context.Context) error {
 func (c *Coordinator) runRebuild(ctx context.Context) {
 	defer c.rebuildWG.Done()
 
+	slog.InfoContext(ctx, "projection rebuild started",
+		"cell", c.cellID,
+		"projection", c.projectionID,
+	)
 	start := c.clk.Now()
 
 	// Phase: Stopped — shut gate so live handler parks.
@@ -61,21 +66,21 @@ func (c *Coordinator) runRebuild(ctx context.Context) {
 
 	head0, err := c.captureHead(ctx)
 	if err != nil {
-		c.failRebuild()
+		c.failRebuild(ctx, "captureHead", err)
 		return
 	}
 
 	// Phase: Reset — OnReset + SaveOffset(0) in one tx.
 	c.phase.Store(uint32(PhaseReset))
 	if err := c.resetPhase(ctx); err != nil {
-		c.failRebuild()
+		c.failRebuild(ctx, "resetPhase", err)
 		return
 	}
 
 	// Phase: Replay — replay from 0 through head0.
 	c.phase.Store(uint32(PhaseReplay))
 	if err := c.replayPhase(ctx, head0); err != nil {
-		c.failRebuild()
+		c.failRebuild(ctx, "replayPhase", err)
 		return
 	}
 
@@ -86,13 +91,19 @@ func (c *Coordinator) runRebuild(ctx context.Context) {
 	// Catchup: wait until checkpoint ≥ current Head (or ctx cancel).
 	if err := c.catchupPhase(ctx); err != nil {
 		// ctx cancel during catchup: gate is already open, live handler continues.
-		c.phase.Store(uint32(PhaseLive))
+		// Route through failRebuild for consistent logging; openGate is idempotent.
+		c.failRebuild(ctx, "catchupPhase", err)
 		return
 	}
 
 	// Success.
 	durSecs := c.clk.Since(start).Seconds()
 	c.metrics.observeRebuildDuration(ctx, c.cellID, c.projectionID, durSecs)
+	slog.InfoContext(ctx, "projection rebuild completed",
+		"cell", c.cellID,
+		"projection", c.projectionID,
+		"duration_ms", durSecs*1000,
+	)
 	c.phase.Store(uint32(PhaseLive))
 }
 
@@ -170,7 +181,14 @@ func (c *Coordinator) catchupPhase(ctx context.Context) error {
 		caught, err := c.isCaughtUp(ctx)
 		if err != nil {
 			// Non-fatal: store/Head error in catchup; live handler continues.
-			return nil //nolint:nilerr // intentional: catchup error is non-fatal; live path resumes
+			// Do not observe rebuild_duration on this degraded path — recording
+			// a success duration when catchup was skipped due to error misleads dashboards.
+			slog.WarnContext(ctx, "projection rebuild catchup check degraded",
+				"cell", c.cellID,
+				"projection", c.projectionID,
+				"error", err,
+			)
+			return nil // intentional: catchup isCaughtUp error is non-fatal; live path resumes
 		}
 		if caught {
 			break
@@ -201,7 +219,16 @@ func (c *Coordinator) isCaughtUp(ctx context.Context) (bool, error) {
 const catchupPollInterval = 5 * time.Millisecond
 
 // failRebuild restores PhaseLive and opens the gate on any rebuild error.
-func (c *Coordinator) failRebuild() {
+// It logs a structured slog error with the phase name and error for ops diagnostics.
+// openGate is idempotent, so calling failRebuild after the gate is already open
+// (e.g. from catchupPhase) is safe.
+func (c *Coordinator) failRebuild(ctx context.Context, phase string, err error) {
+	slog.ErrorContext(ctx, "projection rebuild failed",
+		"cell", c.cellID,
+		"projection", c.projectionID,
+		"phase", phase,
+		"error", err,
+	)
 	c.openGate()
 	c.phase.Store(uint32(PhaseLive))
 }
@@ -218,8 +245,8 @@ func (c *Coordinator) Close(ctx context.Context) error {
 	}
 	close(c.done)
 
-	if c.rebuildCancel != nil {
-		c.rebuildCancel()
+	if cf := c.rebuildCancel.Load(); cf != nil {
+		(*cf)()
 	}
 
 	// Wait for rebuild goroutine to finish, or until ctx is done.

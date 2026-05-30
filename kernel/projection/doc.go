@@ -23,12 +23,12 @@
 //   - PR-04: cellgen kind:projection derivation (the only sanctioned Subscribe
 //     callsite).
 //
-// Subscribe's frozen forward signature (implemented in PR-01):
+// Subscribe's frozen forward signature (implemented in PR-01; projectionID moved
+// to NewCoordinator in PR-03):
 //
 //	func (c *Coordinator) Subscribe(
 //		ctx context.Context,
 //		spec contractspec.ContractSpec,
-//		projectionID string,
 //		apply Apply,
 //		opts ...Option,
 //	) error
