@@ -51,6 +51,12 @@ func (s *Service) Query(
 	if filters.ActorID != "" {
 		attrs = append(attrs, "actorId", filters.ActorID)
 	}
+	if filters.SubjectID != "" {
+		// subjectId participates in the cursor scope fingerprint exactly like
+		// actorId/eventType: it changes which rows are paged, so a cursor minted
+		// for one subjectId must not silently resume against another (#1290).
+		attrs = append(attrs, "subjectId", filters.SubjectID)
+	}
 	// From/To are time-range filter predicates, not cursor-scope identifiers.
 	// Including zero-value time.Time in the scope would embed "0001-01-01T00:00:00Z"
 	// and break cursor reuse when callers omit From/To (F-07). Non-zero values

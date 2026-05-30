@@ -85,6 +85,7 @@ func TestHttpAuditListV1_QueryParamConstraints(t *testing.T) {
 	c.MustRejectQueryParam(t, "limit", "501")                         // violates maximum: 500
 	c.MustRejectQueryParam(t, "cursor", string(make([]byte, 4097)))   // violates maxLength: 4096
 	c.MustRejectQueryParam(t, "actorId", string(make([]byte, 257)))   // violates maxLength: 256
+	c.MustRejectQueryParam(t, "subjectId", string(make([]byte, 257))) // violates maxLength: 256
 	c.MustRejectQueryParam(t, "eventType", string(make([]byte, 257))) // violates maxLength: 256
 	c.MustRejectQueryParam(t, "from", "not-a-date-time")              // violates format: date-time
 	c.MustRejectQueryParam(t, "to", "2026-01-01T00:00:00Z-garbage")   // violates format: date-time

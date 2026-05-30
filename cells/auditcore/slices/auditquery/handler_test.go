@@ -448,6 +448,16 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			wantCount:  -1,
 		},
 		{
+			// subjectId must not let a non-admin smuggle a cross-user actorId
+			// past the policy: actorId=usr-2 still trips the 403 (#1290 authz).
+			name:       "non-admin subjectId with cross-user actorId returns 403",
+			query:      "?subjectId=victim&actorId=usr-2",
+			subject:    "usr-1",
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+			wantCount:  -1,
+		},
+		{
 			name:       "other actorId with admin allowed",
 			query:      "?actorId=usr-2",
 			subject:    "admin-user",

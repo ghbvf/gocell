@@ -147,6 +147,21 @@ func TestService_Query(t *testing.T) {
 			filters: ledger.AuditFilters{ActorID: "usr-1"},
 			wantLen: 1,
 		},
+		{
+			name: "filter by subject (#1290)",
+			seed: func(r *ledger.MemStore) {
+				_ = r.Append(context.Background(), &ledger.Entry{
+					ID: "s-1", EventID: "evt-s-1", EventType: "event.user.created.v1",
+					ActorID: "actor-1", SubjectID: "alice", Timestamp: now, Payload: []byte("{}"),
+				})
+				_ = r.Append(context.Background(), &ledger.Entry{
+					ID: "s-2", EventID: "evt-s-2", EventType: "event.user.created.v1",
+					ActorID: "actor-2", SubjectID: "bob", Timestamp: now.Add(time.Second), Payload: []byte("{}"),
+				})
+			},
+			filters: ledger.AuditFilters{SubjectID: "alice"},
+			wantLen: 1,
+		},
 	}
 
 	for _, tt := range tests {

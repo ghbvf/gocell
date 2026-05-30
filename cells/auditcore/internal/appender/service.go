@@ -112,7 +112,8 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: invalid JSON payload",
-				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
+				errcode.WithDetails(errcode.PublicString("slice", s.spec.name))),
+		))
 	}
 
 	// actor_id is the audited action's actor as declared by the producer in the
@@ -132,30 +133,12 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		return outbox.Reject(outbox.NewPermanentError(
 			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"auditappender: event payload missing required actor identity",
-				errcode.WithDetails(errcode.PublicString("slice", s.spec.name)))))
+				errcode.WithDetails(errcode.PublicString("slice", s.spec.name))),
+		))
 	}
 
 	principal := entry.Principal()
-
-	// INV-SINGLE-TENANT-ONLY regression tripwire (#1289, epic #1296).
-	//
-	// This is an OPERATIONAL tripwire, NOT a tenant-isolation security boundary.
-	// develop is single-tenant: no producer writes principal.TenantID (the auth
-	// middleware never calls ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01
-	// locks the only writer to consumer-side RestoreToContext), so this branch is
-	// dead today. A non-empty TenantID reaching audit persistence means
-	// multi-tenancy (#1296) landed without wiring tenant-scoped audit filtering —
-	// a security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
-	// audit record: compliance evidence is never discarded. When #1296 lands, this
-	// tripwire is removed and replaced by tenant-scoped query filtering. It guards
-	// the persistence-reach path; CTXKEYS-PRINCIPAL-WRITE-CALLER-01 orthogonally
-	// guards the ctx-write path.
-	if principal.TenantID != "" {
-		s.logger.Error(logPrefix+": INV-SINGLE-TENANT-ONLY violated — non-empty principal.TenantID "+
-			"with no tenant-scoped audit query enforcement (epic #1296)",
-			slog.String("event_id", entry.ID()),
-			slog.String("event_type", entry.EventType()))
-	}
+	s.tripSingleTenantInvariant(logPrefix, entry, principal)
 
 	e := &ledger.Entry{
 		ID:            auditEntryIDPrefix + uuid.NewString(),
@@ -219,6 +202,38 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 		slog.String("event_type", entry.EventType()),
 		slog.String("actor_id", e.ActorID))
 	return outbox.Ack()
+}
+
+// tripSingleTenantInvariant is the INV-SINGLE-TENANT-ONLY regression tripwire
+// (#1289, epic #1296).
+//
+// This is an OPERATIONAL tripwire, NOT a tenant-isolation security boundary.
+// develop is single-tenant: no producer writes principal.TenantID (the auth
+// middleware never calls ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01
+// locks the only writer to consumer-side RestoreToContext), so this branch is
+// dead today. A non-empty TenantID reaching audit persistence means
+// multi-tenancy (#1296) landed without wiring tenant-scoped audit filtering —
+// a security-relevant gap. Trip loudly (Error, alertable) but DO NOT drop the
+// audit record: compliance evidence is never discarded (the caller continues to
+// Append). When #1296 lands, this tripwire is removed and replaced by
+// tenant-scoped query filtering. It guards the persistence-reach path;
+// CTXKEYS-PRINCIPAL-WRITE-CALLER-01 orthogonally guards the ctx-write path.
+//
+// Firing cadence: logs once PER event with a non-empty tenant. That is
+// intentional — until #1296 lands the branch is dead (no producer), so any
+// firing is a real regression worth a per-event alert; the temporary nature of
+// the stopgap does not warrant sampling/rate-limiting machinery. tenant_id is an
+// opaque, non-credential identifier (observability.md), so logging its value
+// server-side is safe and aids #1296 debugging.
+func (s *Service) tripSingleTenantInvariant(logPrefix string, entry outbox.Entry, principal outbox.PrincipalMetadata) {
+	if principal.TenantID == "" {
+		return
+	}
+	s.logger.Error(logPrefix+": INV-SINGLE-TENANT-ONLY violated — non-empty principal.TenantID "+
+		"with no tenant-scoped audit query enforcement (epic #1296)",
+		slog.String("event_id", entry.ID()),
+		slog.String("event_type", entry.EventType()),
+		slog.String("tenant_id", string(principal.TenantID)))
 }
 
 // tsForLedger picks the audit entry Timestamp (ledger persistence / HMAC time)
