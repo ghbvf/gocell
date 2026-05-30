@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metautil"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
@@ -30,6 +31,16 @@ const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 // scan-side size guard must be applied uniformly to both (issue #1229 review
 // F5 — principal previously decoded without a cap, unlike observability).
 const maxPrincipalJSONBytes = 4 * kout.MaxPrincipalTotalSize
+
+// maxMetadataJSONBytes bounds the JSONB payload size accepted from the business
+// metadata column at scan time. Producers cap total metadata at
+// metautil.MaxMetadataTotalSize; the 4× headroom mirrors the observability /
+// principal formula (JSON-encoding overhead — key names, quotes, separators —
+// plus slack). Metadata is an untyped business KV map with no Validate(), so
+// it cannot share decodeOversizeGuardedJSONB, but the same unbounded-allocation
+// defense against a corrupted or maliciously-crafted row applies, so the cap is
+// enforced inline below.
+const maxMetadataJSONBytes = 4 * metautil.MaxMetadataTotalSize
 
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
@@ -355,83 +366,37 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		return outbox.ClaimedEntry{}, err
 	}
 
-	if len(metadataJSON) > 0 {
+	if len(metadataJSON) > maxMetadataJSONBytes {
+		// Defensive: reject oversized metadata payloads to prevent unbounded
+		// allocation from a corrupted or maliciously-crafted row — same threat
+		// the observability/principal caps defend against. Metadata is untyped
+		// business KV (no Validate()), so this stays inline rather than routing
+		// through decodeOversizeGuardedJSONB.
+		slog.Warn("outbox store: metadata JSON exceeds max size — dropping",
+			slog.String("entry_id", scan.ID),
+			slog.String("event_type", scan.EventType),
+			slog.Int("size", len(metadataJSON)),
+			slog.Int("max", maxMetadataJSONBytes))
+	} else if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &scan.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",
 				slog.String("entry_id", scan.ID),
 				slog.String("event_type", scan.EventType),
+				slog.Int("size", len(metadataJSON)),
 				slog.Any("error", err))
 		}
 	}
 
-	if len(observabilityJSON) > maxObservabilityJSONBytes {
-		// Defensive: reject oversized observability payloads to prevent
-		// unbounded allocation from a corrupted row. Field-level limits
-		// in ObservabilityMetadata.Validate cover the producer side; this
-		// guard covers tampered/legacy data on the read side.
-		slog.Warn("outbox store: observability JSON exceeds max size, dropping",
-			slog.String("entry_id", scan.ID),
-			slog.String("event_type", scan.EventType),
-			slog.Int("size", len(observabilityJSON)),
-			slog.Int("max", maxObservabilityJSONBytes))
-	} else if len(observabilityJSON) > 0 {
-		// Decode-validate-assign atomic (PR #582 round-3 review F4):
-		// `json.Unmarshal` is documented to leave partial values in the dst
-		// when it errors mid-decode (e.g., SafeID.UnmarshalJSON rejects field
-		// N while fields 1..N-1 already succeeded). Without a local-var
-		// staging variable, an unsafe row would leak partially-valid
-		// observability into scan.Observability. Mirrors etcd clientv3 /
-		// K8s runtime.Decode pattern.
-		var obs kout.ObservabilityMetadata
-		if err := json.Unmarshal(observabilityJSON, &obs); err != nil {
-			slog.Warn("outbox store: failed to unmarshal observability — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", err))
-			// scan.Observability stays zero-value
-		} else if validateErr := obs.Validate(); validateErr != nil {
-			// Persisted row violates field-size invariants (older row written
-			// before the invariant existed, or schema drift). Drop entirely —
-			// downstream restore must not see partially valid IDs.
-			slog.Warn("outbox store: observability fails validation — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", validateErr))
-			// scan.Observability stays zero-value
-		} else {
-			scan.Observability = obs
-		}
+	if obs, ok := decodeOversizeGuardedJSONB[kout.ObservabilityMetadata](
+		observabilityJSON, maxObservabilityJSONBytes, observabilityDecodeWarnings, scan.ID, scan.EventType,
+	); ok {
+		scan.Observability = obs
 	}
 
-	if len(principalJSON) > maxPrincipalJSONBytes {
-		// Defensive: reject oversized principal payloads to prevent unbounded
-		// allocation from a corrupted or maliciously-crafted row — symmetric
-		// with the observability guard above (issue #1229 review F5).
-		slog.Warn("outbox store: principal JSON exceeds max size, dropping",
-			slog.String("entry_id", scan.ID),
-			slog.String("event_type", scan.EventType),
-			slog.Int("size", len(principalJSON)),
-			slog.Int("max", maxPrincipalJSONBytes))
-	} else if len(principalJSON) > 0 {
-		// Same staged-unmarshal pattern as observability (PR #582 F4): unmarshal
-		// into a local variable first so a partial decode does not leak into
-		// scan.Principal.
-		var principal kout.PrincipalMetadata
-		if err := json.Unmarshal(principalJSON, &principal); err != nil {
-			slog.Warn("outbox store: failed to unmarshal principal — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", err))
-			// scan.Principal stays zero-value
-		} else if validateErr := principal.Validate(); validateErr != nil {
-			slog.Warn("outbox store: principal fails validation — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", validateErr))
-			// scan.Principal stays zero-value
-		} else {
-			scan.Principal = principal
-		}
+	if principal, ok := decodeOversizeGuardedJSONB[kout.PrincipalMetadata](
+		principalJSON, maxPrincipalJSONBytes, principalDecodeWarnings, scan.ID, scan.EventType,
+	); ok {
+		scan.Principal = principal
 	}
 
 	entry, err := scan.ToEntry()
@@ -443,6 +408,82 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		Attempts: attempts,
 		LeaseID:  leaseID.String(),
 	}, nil
+}
+
+// jsonbDecodeWarnings holds the three drop-reason Warn messages for one
+// size-capped JSONB column. The messages are kept as const literals (declared
+// per-column below) rather than runtime-concatenated from a field name, so the
+// exact text stays greppable in source and stable for log-based alerting.
+type jsonbDecodeWarnings struct {
+	oversize       string // raw exceeds the column's byte cap
+	unmarshalError string // json.Unmarshal failed
+	validateError  string // decoded value failed Validate()
+}
+
+var (
+	observabilityDecodeWarnings = jsonbDecodeWarnings{
+		oversize:       "outbox store: observability JSON exceeds max size — dropping",
+		unmarshalError: "outbox store: failed to unmarshal observability — dropping",
+		validateError:  "outbox store: observability fails validation — dropping",
+	}
+	principalDecodeWarnings = jsonbDecodeWarnings{
+		oversize:       "outbox store: principal JSON exceeds max size — dropping",
+		unmarshalError: "outbox store: failed to unmarshal principal — dropping",
+		validateError:  "outbox store: principal fails validation — dropping",
+	}
+)
+
+// decodeOversizeGuardedJSONB decodes a size-capped, Validate-guarded JSONB
+// column into T. It returns (zero, false) — leaving the caller's destination
+// field at its zero value — when raw is empty, exceeds maxBytes, fails to
+// unmarshal, or fails T.Validate(); each rejection is logged at Warn (using the
+// caller-supplied per-column messages) with the entry/event identifiers. The
+// staged decode into a local variable (PR #582 round-3 review F4) prevents a
+// partial decode from leaking into the caller's field: json.Unmarshal is
+// documented to leave partial values in the dst when it errors mid-decode (e.g.
+// SafeID.UnmarshalJSON rejects field N while fields 1..N-1 already succeeded).
+// Mirrors etcd clientv3 / K8s runtime.Decode staged-decode pattern. Shared by
+// the observability and principal read-side guards, which are structurally
+// identical (issue #1229 review F5: symmetric size caps prevent unbounded
+// allocation from corrupted or maliciously-crafted rows).
+//
+// The metadata column is deliberately NOT routed through this helper: it is an
+// untyped business KV map with no Validate() method, so it cannot satisfy the
+// type constraint. Its size cap (maxMetadataJSONBytes) and simpler unmarshal
+// stay inline above.
+func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
+	raw []byte, maxBytes int, warn jsonbDecodeWarnings, entryID, eventType string,
+) (T, bool) {
+	var zero T
+	if len(raw) == 0 {
+		return zero, false
+	}
+	if len(raw) > maxBytes {
+		slog.Warn(warn.oversize,
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
+			slog.Int("max", maxBytes))
+		return zero, false
+	}
+	var decoded T
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		slog.Warn(warn.unmarshalError,
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
+			slog.Any("error", err))
+		return zero, false
+	}
+	if err := decoded.Validate(); err != nil {
+		slog.Warn(warn.validateError,
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
+			slog.Any("error", err))
+		return zero, false
+	}
+	return decoded, true
 }
 
 // CountPending returns the number of rows in pending status. The count may be

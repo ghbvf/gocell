@@ -179,7 +179,7 @@ readyz 各字段归属：
 - 消费侧还原由 `SubscriberWithMiddleware.SubscribeEntry`（`kernel/outbox/outbox.go`）的 outermost built-in step 完成（`entry.observability` + `entry.principal` → ctxkeys），先于业务 middleware；`kernel/wrapper.WrapSubscriber` 只写 delivery span attrs，不负责 ctx 还原。
 - `OccurredAt`（producer 域事件时间）mandatory（`Validate` 拒零值），`NewEntry` stamp，`WithOccurredAt` 注入 domain 时间；与 `CreatedAt`（store/seal 时间）语义分层，两者作为独立 wire 字段端到端携带（`outbox_fullchain_test.go` 锁 round-trip 独立性）。auditquery 出口对二者用 `time.RFC3339Nano`（亚秒精度是 HMAC chain `*UnixNano` 的一部分，不可截断）。
 - wire schema：Principal `omitempty`（additive），OccurredAt required；`PrincipalMetadata` 4 字段 `idutil.SafeID`，由 `SAFEID-WIREMESSAGE-USAGE-01` + `PRINCIPAL-SEALED-FIELD-FROZEN-01` 冻结。
-- 读侧 size cap：PG scan 对 observability 与 principal JSONB 列对称施加 `maxObservabilityJSONBytes` / `maxPrincipalJSONBytes` 上限（drop+warn），防 corrupted row 无界分配。
+- 读侧 size cap：PG scan 对 observability / principal / metadata 三个 JSONB 列对称施加 `maxObservabilityJSONBytes` / `maxPrincipalJSONBytes` / `maxMetadataJSONBytes` 上限（drop+warn），防 corrupted 或 maliciously-crafted row 无界分配——三列面对同一 DoS 向量。identity 两列经 `decodeOversizeGuardedJSONB[T]` 泛型 funnel（带 `Validate()`）；metadata 是无 `Validate()` 的 business KV map，cap 内联但语义对齐。各 cap = `4 ×` 对应 producer-side total（`kout.Max{Observability,Principal}TotalSize` / `metautil.MaxMetadataTotalSize`），4× 为 JSON 编码 overhead headroom。
 
 audit `actor_id` 例外：源自事件 payload 的 domain actor（`appender.extractActor`），非 `entry.Principal().ActorID`——actor 是被审计动作的执行者（login 期 `session.created` 无 auth principal 时仍可用），Principal 族是正交的 request-context。详见 ADR §Amendment 2026-05-29 "actor 来源决议"。
 

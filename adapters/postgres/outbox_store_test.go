@@ -451,6 +451,37 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	assert.True(t, entries[0].Observability().IsZero())
 }
 
+func TestPGOutboxStore_ClaimPending_MetadataOversize(t *testing.T) {
+	e := makeRelayEntry("e-meta-big", "order.created", 0)
+	// metadata JSONB larger than maxMetadataJSONBytes is dropped (drop+warn),
+	// defending against unbounded allocation from a corrupted/malicious row —
+	// symmetric with the observability/principal read-side caps. The row still
+	// scans successfully; only Metadata is left nil.
+	oversize := make([]byte, maxMetadataJSONBytes+1)
+	for i := range oversize {
+		oversize[i] = 'a'
+	}
+	row := mockRowData{
+		values: []any{
+			e.ID(), e.AggregateID(), e.AggregateType(), e.EventType(),
+			e.Topic(), e.Payload(),
+			oversize, // metadata exceeds the cap → dropped
+			e.CreatedAt(), e.Attempts,
+			[]byte(nil),    // NULL observability
+			uuid.New(),     // lease_id
+			[]byte(`{}`),   // principal
+			e.OccurredAt(), // occurred_at
+		},
+	}
+	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
+	store := NewOutboxStore(db, clock.Real())
+
+	entries, err := store.ClaimPending(context.Background(), 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Nil(t, entries[0].Metadata(), "oversized metadata must be dropped, not decoded")
+}
+
 func TestPGOutboxStore_ClaimPending_BeginError(t *testing.T) {
 	db := &mockDBTX{beginErr: errors.New("connection refused")}
 	store := NewOutboxStore(db, clock.Real())
