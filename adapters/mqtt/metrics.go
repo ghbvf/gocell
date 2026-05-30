@@ -56,6 +56,11 @@ var _ ConnectionCollector = (*providerConnectionCollector)(nil)
 // passed to any of the three NewProvider*Collector constructors.
 const errProviderRequired = "mqtt: metrics.Provider is required"
 
+// helpCellLabel is the common suffix appended to metric Help strings to document
+// that the "cell" label is bound at construction time (registration-time
+// enumerated, not derived from request context).
+const helpCellLabel = "Label: cell = construction-time cell identifier."
+
 // NewProviderConnectionCollector registers mqtt_reconnect_total and
 // mqtt_subscribe_failed_total on p and returns a ConnectionCollector bound to
 // cellID. cellID becomes the "cell" label.
@@ -97,7 +102,7 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 		Name: "mqtt_subscribe_failed_total",
 		Help: "Total number of receive-path SUBSCRIBE failures (initial SUBACK rejection or reconnect re-arm), " +
 			"classified by reason. reason ∈ {suback_reject, transport} — closed set; alerting rules can rely on " +
-			"the literals. Label: cell = construction-time cell identifier.",
+			"the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
@@ -270,7 +275,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		Help: "Total number of MQTT publish attempts that failed, classified by reason. " +
 			"reason ∈ {payload_too_large, closed, puback_timeout, context_canceled, publish_error, " +
 			"topic_outside_namespace, rate_limited, not_authorized, payload_format_invalid, rejected} — " +
-			"closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+			"closed set; alerting rules can rely on the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
@@ -282,8 +287,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	ackDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name: "mqtt_publish_ack_duration_seconds",
 		Help: "End-to-end MQTT publish ack round-trip duration in seconds, from Publish() call to broker PUBACK. " +
-			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
-			"Label: cell = construction-time cell identifier.",
+			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " + helpCellLabel,
 		LabelNames: []string{"cell"},
 		Buckets:    ackDurationBuckets,
 	})

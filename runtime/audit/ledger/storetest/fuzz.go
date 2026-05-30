@@ -176,7 +176,7 @@ func seedEntryRoundTripCorpus(f *testing.F) {
 	tsNano := epochAnchor.UnixNano()
 	occNano := epochAnchor.Add(principalOccurredAtSkew).UnixNano()
 
-	add := func(eventID string, payload string) {
+	add := func(eventID, payload string) {
 		f.Add(
 			eventID, "audit.test", "actor-1", "subject-1", "session-1", "tenant-1", "corr-1",
 			occNano, tsNano, []byte(payload),
