@@ -101,6 +101,12 @@
 | P2 | **P1** |
 | P1 | 维持（架构 refactor 顶到 P1，不再上调）|
 
+> **触发型例外（架构信号升级封顶 P2）**：`flag-cond` 触发型条目，若其守护的 invariant **已被 Medium archtest / governance 守住**（CI 绿，Hard 升级仅关闭理论 AI 逃逸面、无线上正确性/安全缺口），架构信号升级**封顶 P2，不升 P1**——P1 留给尚未被守住的真实缺口。trigger fire 后随实施 PR 再评。
+>
+> 根因：架构命中升级（type=arch-opt + 描述含 "Hard 升级"/funnel + 触 `tools/archtest/` typed funnel + AI-robust "Medium 上游升 Hard"）会四信号全中把 P2 顶到 P1，但下方"反向降级"的触发型口子原只覆盖 `feat/bug`，`arch-opt` 触发型掉进缝里——吃到升级、豁免于降级。本例外补上该缝。
+>
+> 反例（2026-05-27 批量回落 P2）：`SERVICEOWNED-HANDLER-OWNER-CHECK-01` (#719) / `PASS-PRODUCTION-UPSTREAM-HARD-01` (#722) / `ARCHTEST-FUNNEL-CALLSITE-LEVEL-01` (#732) / `PG-REPO-AMBIENT-TX-01` (#738) 等"Medium→Hard 升级（触发型）"被自动升 P1，污染 daily 主线 wave（P0+P1 默认队列）。
+
 ### 反向降级规则（避免重评放水）
 
 | 信号 | 降级 |
@@ -116,6 +122,7 @@
 |---|---|---|
 | ✅ 命中 | P3 | P2 |
 | ✅ 命中 | P2 | P1 |
+| ✅ 命中（`flag-cond` 触发型 + invariant 已被 Medium 守住）| P2 / P3 | **P2 封顶**（见"触发型例外"）|
 | ✅ 命中 | P1 | P1（维持）|
 | ❌ 未命中 + 降级信号 | P2 | P3 |
 | ❌ 未命中 | 任意 | 维持 |
