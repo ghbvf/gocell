@@ -7,7 +7,6 @@
 # terminal pure ban. Migration tracked by #1302; Hard-ization by #1304.
 # blank lines and # comments are ignored.
 tools/archtest/adapter_returns_declared_types_test.go
-tools/archtest/aftercommit_pure_transient_test.go
 tools/archtest/archtest_test.go
 tools/archtest/audit_hash_input_frozen_test.go
 tools/archtest/auth_authtest_boundary_test.go
