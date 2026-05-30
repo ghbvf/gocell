@@ -262,7 +262,6 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 }
 
-
 // ---------------------------------------------------------------------------
 // T22: TestIntegration_OutboxWriter
 // ---------------------------------------------------------------------------
@@ -927,7 +926,11 @@ func TestMigrator_ForwardRebuild_MisconfiguredPermit(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(rebuildErr, &ec), "error must wrap *errcode.Error")
 	assert.Equal(t, ErrAdapterPGMigrate, ec.Code)
-	assert.Contains(t, rebuildErr.Error(), "999", "error should reference the misconfigured migration number")
+	// Public details (not the Error() string) carry the migration number — errcode
+	// renders only "[CODE] message" in Error(), details live in wire/slog.
+	migDetail, ok := ec.FindAttr("migration")
+	require.True(t, ok, "error must have a public detail keyed 'migration'")
+	assert.Equal(t, int64(999), migDetail.Value(), "migration detail value must be 999")
 }
 
 // ---------------------------------------------------------------------------
