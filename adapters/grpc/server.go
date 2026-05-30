@@ -255,8 +255,8 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 //   - otherwise              →  server-side TLS via NewServerTLSConfig
 //
 // The nil-credentials return for AllowInsecure is intentional: grpc.NewServer
-// without grpc.Creds listens in plaintext. This is a dev-only mode guarded by
-// Config.validate() (V5 fail-closed).
+// without grpc.Creds listens in plaintext. This is an explicit-opt-in mode (dev
+// or mesh-sidecar) guarded by Config.validate() (V5 fail-closed).
 func buildCredentials(t TLSConfig) (credentials.TransportCredentials, error) {
 	if t.AllowInsecure {
 		// Plaintext: no transport credentials. Declare as typed nil so callers

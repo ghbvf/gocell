@@ -463,6 +463,121 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 		"probe must be unhealthy after concurrent Stop+Close")
 }
 
+// TestIntegration_ServeContextCancel_GracefulDrain verifies the serve() ctx.Done
+// branch performs a real GRACEFUL drain — not a hard stop — when the context
+// passed to ServeListenerForTest is canceled (simulating a WorkerGroup / bootstrap
+// external cancel: sibling worker crash, SIGTERM, etc.).
+//
+// To prove gracefulness (rather than merely that the branch returns
+// context.Canceled), the test holds a unary RPC in-flight across the cancel and
+// asserts serve() does NOT return until that RPC is released, then that the RPC
+// completes with its real response instead of being killed mid-flight. This also
+// pins the WithoutCancel budget detachment: serve drains within its self-owned
+// cfg.ShutdownTimeout (context.WithoutCancel(ctx)), so a regression that reused the
+// already-canceled parent ctx as the drain budget — collapsing the graceful drain
+// into an immediate hard Stop() — would return before release and fail this test.
+//
+// It mirrors the runtime/websocket Hub external-cancel shutdown pattern documented
+// in server.go, and complements TestIntegration_GracefulDrain (which drives the
+// same gracefulStop through Close()'s own ctx).
+func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
+	t.Parallel()
+
+	cfg := grpcadapter.Config{
+		Addr:            "127.0.0.1:0",
+		ShutdownTimeout: integServeTimeout,
+		TLS:             grpcadapter.TLSConfig{AllowInsecure: true},
+	}
+	srv, err := grpcadapter.New(cfg)
+	require.NoError(t, err)
+
+	// A blocking unary RPC lets the test hold a request in-flight across the cancel
+	// so it can prove the drain WAITS for it (graceful) rather than hard-killing it.
+	rpcStarted := make(chan struct{})
+	release := make(chan struct{})
+	desc := blockingServiceDesc(rpcStarted, release)
+	srv.ServiceRegistrar().RegisterService(&desc, new(any))
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := lis.Addr().String()
+
+	// cancelableCtx simulates the WorkerGroup / bootstrap parent ctx being
+	// canceled externally (sibling worker crash, SIGTERM, etc.).
+	cancelableCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- srv.ServeListenerForTest(cancelableCtx, lis)
+	}()
+
+	waitForServing(t, srv)
+
+	// Fire the blocking RPC and wait until the handler is actually executing, so
+	// it is genuinely in-flight when the external cancel triggers the drain. The
+	// RPC uses its own context.Background(): canceling the serve ctx must not
+	// cancel the in-flight RPC, only trigger the graceful drain around it.
+	cc := dialInsecure(t, addr)
+	defer func() { _ = cc.Close() }()
+	rpcErr := make(chan error, 1)
+	rpcResp := make(chan *grpc_health_v1.HealthCheckResponse, 1)
+	go func() {
+		resp := new(grpc_health_v1.HealthCheckResponse)
+		if err := cc.Invoke(context.Background(), blockerMethod,
+			&grpc_health_v1.HealthCheckRequest{}, resp); err != nil {
+			rpcErr <- err
+			return
+		}
+		rpcResp <- resp
+	}()
+	testwait.Deterministic(t, rpcStarted, integServeTimeout, "blocking-rpc-started")
+
+	// Core trigger: cancel the serve ctx while the RPC is in-flight. This drives
+	// serve()'s ctx.Done branch, which must begin a graceful drain bounded by the
+	// self-owned ShutdownTimeout (NOT the already-canceled parent ctx).
+	cancel()
+
+	// Readiness must flip to unhealthy as soon as the drain begins, even though
+	// the in-flight RPC has not completed yet.
+	probes := srv.Probes()
+	require.Len(t, probes, 1)
+	testwait.External(t, "grpc-ready-unhealthy-during-ctxcancel-drain", func() bool {
+		return probes[0].Check(context.Background()) != nil
+	}, integDialTimeout, integProbePollTick)
+
+	// serve() must NOT have returned yet: the graceful drain is waiting for the
+	// in-flight RPC. A hard stop — or reusing the canceled parent ctx as the drain
+	// budget — would return here before release; that is the regression guarded.
+	select {
+	case err := <-serveDone:
+		t.Fatalf("serve returned before the in-flight RPC was released "+
+			"(drain did not wait — hard stop or canceled-ctx budget): %v", err)
+	default:
+	}
+
+	// Release the RPC; the drain now completes and serve returns.
+	close(release)
+
+	serveErr := testwait.Deterministic(t, serveDone, integServeTimeout, "serve-returns-after-drain")
+	assert.ErrorIs(t, serveErr, context.Canceled,
+		"serve must return context.Canceled after the ctx-cancel drain completes")
+
+	// The in-flight RPC must have drained cleanly (served its real response), not
+	// been hard-killed mid-flight.
+	select {
+	case err := <-rpcErr:
+		t.Fatalf("in-flight RPC failed instead of draining cleanly: %v", err)
+	case resp := <-rpcResp:
+		assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.GetStatus(),
+			"in-flight RPC must complete with its real response after graceful drain")
+	}
+
+	// After serve returns, serving must be false.
+	assert.Error(t, probes[0].Check(context.Background()),
+		"probe must be unhealthy after serve returns from ctx-cancel drain")
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // waitForServing polls srv.Probes()[0].Check until it returns nil or times out.

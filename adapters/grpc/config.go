@@ -18,15 +18,17 @@ const (
 // ErrAdapterGRPCConfigInvalid (V5 fail-closed — neither plaintext nor TLS).
 //
 // Three modes are supported:
-//   - Plaintext (dev-only): set AllowInsecure = true; leave all PEM fields nil.
+//   - Plaintext (dev or mesh-sidecar): set AllowInsecure = true; leave all PEM
+//     fields nil. The bind address is not restricted to loopback (see
+//     AllowInsecure field doc); the explicit opt-in is the only fail-closed gate.
 //   - Server-side TLS: set CertPEM + KeyPEM; leave ClientCAPEM nil.
 //   - Mutual TLS (mTLS): set CertPEM + KeyPEM + ClientCAPEM.
 //
 // AllowInsecure and any PEM material are mutually exclusive (V2 validation).
 // Omitting both AllowInsecure and PEM fields is rejected fail-closed (V5).
 type TLSConfig struct {
-	// AllowInsecure enables plaintext (no TLS). Explicit dev-only opt-in.
-	// Must not be combined with CertPEM, KeyPEM, or ClientCAPEM.
+	// AllowInsecure enables plaintext (no TLS). Explicit opt-in (dev or
+	// mesh-sidecar). Must not be combined with CertPEM, KeyPEM, or ClientCAPEM.
 	//
 	// The listen address is deliberately NOT restricted to loopback when
 	// AllowInsecure is set. Binding plaintext on a non-loopback address (e.g.
@@ -110,7 +112,7 @@ func (c *Config) validate() error {
 		// V5: fail-closed — neither plaintext nor TLS configured — caller error.
 		if !hasCert && !hasKey && !hasCA {
 			return errcode.New(errcode.KindInvalid, ErrAdapterGRPCConfigInvalid,
-				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev-only) "+
+				"grpc: no TLS configuration; set AllowInsecure=true for plaintext (dev or mesh-sidecar) "+
 					"or supply CertPEM+KeyPEM for TLS")
 		}
 

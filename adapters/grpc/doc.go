@@ -15,8 +15,11 @@
 //     (tlsutil.NewServerMTLSConfig + tlsutil.NewClientCAPool).
 //   - Server-side TLS (single direction): supply CertPEM + KeyPEM only.
 //     Clients authenticate the server; the server does not verify clients.
-//   - Plaintext (dev-only): set Config.TLS.AllowInsecure = true. Omitting
-//     both AllowInsecure and PEM material is rejected fail-closed.
+//   - Plaintext (dev or mesh-sidecar): set Config.TLS.AllowInsecure = true.
+//     The bind address is not restricted to loopback — a service-mesh sidecar
+//     terminating mTLS at the pod boundary and forwarding cleartext is a valid
+//     production posture. Omitting both AllowInsecure and PEM material is
+//     rejected fail-closed (the explicit opt-in is the only gate).
 //
 // # Interceptors
 //
