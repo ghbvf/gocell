@@ -6,7 +6,6 @@ import (
 	"regexp"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
@@ -32,9 +31,8 @@ func (a Algorithm) Validate() error {
 }
 
 // SourceID is the typed identifier for a webhook source — the secret-isolation
-// key under which a [Source] is registered. Construct via [NewSourceID] /
-// [MustSourceID]; the validator mirrors kernel/healthz.ProbeName (snake/kebab
-// lowercase identifier).
+// key under which a [Source] is registered. Construct via [NewSourceID]; the
+// validator mirrors kernel/healthz.ProbeName (snake/kebab lowercase identifier).
 type SourceID string
 
 // String returns the source ID as a plain string.
@@ -66,8 +64,7 @@ func (id SourceID) Validate() error {
 	return nil
 }
 
-// NewSourceID validates s and returns a typed [SourceID]. It is the runtime
-// entry point; tests and init use [MustSourceID].
+// NewSourceID validates s and returns a typed [SourceID].
 func NewSourceID(s string) (SourceID, error) {
 	id := SourceID(s)
 	if err := id.Validate(); err != nil {
@@ -76,21 +73,9 @@ func NewSourceID(s string) (SourceID, error) {
 	return id, nil
 }
 
-// MustSourceID is the panic variant of [NewSourceID] for test fixtures and
-// package init where an invalid ID is a programmer error.
-func MustSourceID(s string) SourceID {
-	id, err := NewSourceID(s)
-	if err != nil {
-		panic(panicregister.Approved("webhook-source-id-invalid",
-			errcode.Assertion("webhook.MustSourceID(%q): %v", s, err)))
-	}
-	return id
-}
-
 // DeliveryID is the typed per-delivery identifier. It doubles as the
 // idempotency key on the receiver side and is part of the signed content, so
-// it must not contain whitespace. Construct via [NewDeliveryID] /
-// [MustDeliveryID].
+// it must not contain whitespace. Construct via [NewDeliveryID].
 type DeliveryID string
 
 // String returns the delivery ID as a plain string.
@@ -135,16 +120,6 @@ func NewDeliveryID(s string) (DeliveryID, error) {
 		return "", err
 	}
 	return id, nil
-}
-
-// MustDeliveryID is the panic variant of [NewDeliveryID] for test fixtures.
-func MustDeliveryID(s string) DeliveryID {
-	id, err := NewDeliveryID(s)
-	if err != nil {
-		panic(panicregister.Approved("webhook-delivery-id-invalid",
-			errcode.Assertion("webhook.MustDeliveryID(%q): %v", s, err)))
-	}
-	return id
 }
 
 // minSecretLen is the floor for an HMAC secret: 24 bytes (192 bits). This sits
