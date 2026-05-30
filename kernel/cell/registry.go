@@ -155,6 +155,45 @@ type Registrar interface {
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	RegisterWebhookDispatch(spec webhook.DispatchSpec, selector webhook.WebhookDispatchSelector) error
 
+	// RegisterProjection records an L3 CQRS-projection declaration. Returns a
+	// non-nil error when req fails validation (nil Apply, empty ProjectionID /
+	// CellID, or a non-event Spec).
+	//
+	// RECORD-ONLY semantics: like Subscribe and RegisterWebhookReceiver, this
+	// method only appends a ProjectionRequest to the recorder's accumulator. It
+	// does NOT construct a projection.Coordinator, open a transaction, or start
+	// consuming. The bootstrap projection drain reads
+	// RegistrySnapshot.Projections, constructs one projection.Coordinator per
+	// request from framework-owned dependencies (checkpoint store / tx runner /
+	// cursor / replay source — wired via bootstrap options, never reachable by
+	// cell code), and calls Coordinator.Subscribe. This two-phase split (declare
+	// intent in Init, wire in bootstrap) is the same pattern as Subscribe and is
+	// what keeps the raw framework infrastructure out of the cell package: a cell
+	// could not call projection.NewCoordinator even if it wanted to, because it
+	// holds no checkpoint store / tx runner.
+	//
+	// The call is emitted by cellgen from slice.yaml
+	// contractUsages[role=subscribe] tagged with a projection id; ProjectionRequest
+	// carries identifiers known at code-generation time (CellID injected from cell
+	// metadata exactly like Subscribe's positional cellID). The Apply / OnReset
+	// function types are cell-local ([ProjectionApply] / [ProjectionResetHook])
+	// rather than kernel/projection types: kernel/projection imports kernel/cell
+	// (its Coordinator holds a cell.Registrar), so a reverse import here would be a
+	// compile-time cycle. The bootstrap drain converts these to the identical
+	// projection.Apply / projection.OnReset signatures (a legal named-type
+	// conversion). This mirrors SubscriptionRequest.Handler carrying the kernel
+	// primitive outbox.EntryHandler rather than a runtime/eventrouter type.
+	//
+	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
+	//
+	// AI-robust: callers of RegisterProjection are locked to cellgen-derived
+	// cell_gen.go + _test.go + kernel/ by archtest PROJECTION-REGISTER-FUNNEL-01
+	// (Medium upstream + Medium downstream — Go cannot type-gate callers of a
+	// public method; this is the same permanent ceiling as Subscribe /
+	// RegisterWebhookReceiver). The Hard-ification path (cellgen-only sealed-token
+	// parameter) is tracked in gh #1176 follow-up.
+	RegisterProjection(req ProjectionRequest) error
+
 	// RegisterReadiness registers a readiness probe under the typed
 	// [healthz.ProbeName]. The probe runs against the runtime
 	// healthz.Aggregator after bootstrap drains the snapshot. First-wins
@@ -359,6 +398,48 @@ type WebhookDispatchRequest struct {
 	Selector webhook.WebhookDispatchSelector
 }
 
+// ProjectionApply is the cell-local mirror of the kernel/projection.Apply
+// event→state hook signature. It is declared here (not imported from
+// kernel/projection) because kernel/projection imports kernel/cell — its
+// Coordinator holds a cell.Registrar — so importing kernel/projection back into
+// kernel/cell would be a compile-time cycle. The bootstrap projection drain
+// performs the named-type conversion to projection.Apply (identical underlying
+// signature), exactly as SubscriptionRequest.Handler carries the kernel
+// primitive outbox.EntryHandler and is converted by the event-router drain.
+type ProjectionApply func(ctx context.Context, event outbox.Entry) error
+
+// ProjectionResetHook is the cell-local mirror of kernel/projection.OnReset,
+// the optional rebuild Reset-phase hook. Same cycle-avoidance rationale as
+// ProjectionApply; a nil value is valid (no read-model table to clear).
+type ProjectionResetHook func(ctx context.Context) error
+
+// ProjectionRequest holds everything needed to register one L3 CQRS projection.
+// RegistryRecorder accumulates these via Registrar.RegisterProjection; the
+// bootstrap projection drain reads RegistrySnapshot.Projections, constructs a
+// projection.Coordinator per request from framework-owned dependencies, and
+// calls Coordinator.Subscribe. Mirrors SubscriptionRequest's exported-field
+// shape; the framework deps (checkpoint store / tx runner / cursor / replay)
+// are deliberately NOT fields here — they live in bootstrap and never reach
+// cell code.
+type ProjectionRequest struct {
+	// Spec is the event-kind contract the projection consumes (its input
+	// stream). Spec.Kind must be "event".
+	Spec contractspec.ContractSpec
+	// ProjectionID names the projection within its cell. It is half of the
+	// checkpoint key (cellID, projectionID) and the consumer group is derived
+	// as cellID + "-" + projectionID.
+	ProjectionID string
+	// CellID is the owning cell — observability owner and checkpoint-key half.
+	// Injected from cell metadata at code-generation time (same provenance as
+	// SubscriptionRequest.CellID); the bootstrap drain cross-checks it against
+	// the snapshot owner and fails fast on drift.
+	CellID string
+	// Apply is the business event→state hook. Required (non-nil).
+	Apply ProjectionApply
+	// OnReset is the optional rebuild Reset-phase hook. May be nil.
+	OnReset ProjectionResetHook
+}
+
 // SubscriptionValidator validates a Subscription at registration time.
 //
 // ref: opentelemetry-collector otelcol/config.go Validate() — declarative validation at config load time.
@@ -465,6 +546,12 @@ type RegistrySnapshot struct {
 	// Init via reg.RegisterWebhookDispatch(...). PR-2 only accumulates them; the
 	// bootstrap dispatcher runtime drains this slice in PR-5.
 	WebhookDispatchers []WebhookDispatchRequest
+
+	// Projections are the L3 CQRS projections declared during Init via
+	// reg.RegisterProjection(...). The bootstrap projection drain constructs one
+	// projection.Coordinator per request and calls Coordinator.Subscribe — same
+	// write-side-accumulate / read-side-drain split as Subscriptions.
+	Projections []ProjectionRequest
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +576,7 @@ type RegistryRecorder struct {
 	probeNames         map[healthz.ProbeName]struct{}
 	webhookReceivers   []WebhookReceiverRequest
 	webhookDispatchers []WebhookDispatchRequest
+	projections        []ProjectionRequest
 
 	finalized bool
 }
@@ -623,6 +711,40 @@ func (r *RegistryRecorder) RegisterWebhookDispatch(
 	return nil
 }
 
+// RegisterProjection validates and appends a ProjectionRequest (record-only —
+// see Registrar.RegisterProjection godoc). Validation mirrors Subscribe (the
+// projection becomes an event subscription once drained): non-nil Apply,
+// non-empty ProjectionID / CellID, and an event-kind Spec with a non-empty
+// Topic. OnReset is optional and not validated.
+func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
+	r.mustNotBeFinalized("RegisterProjection")
+
+	if req.Apply == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: Apply must not be nil")
+	}
+	if req.ProjectionID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: ProjectionID must not be empty")
+	}
+	if req.CellID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: CellID must not be empty")
+	}
+	if req.Spec.Kind != "event" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: Spec.Kind must be \"event\"; a projection consumes an event-kind input stream",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%q", req.Spec.Kind))))
+	}
+	if req.Spec.Topic == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"registry RegisterProjection: Spec.Topic must not be empty")
+	}
+
+	r.projections = append(r.projections, req)
+	return nil
+}
+
 // RegisterReadiness accumulates a probe under the typed name. First-wins
 // duplicate semantics match the runtime aggregator: a second registration
 // with the same name returns [healthz.ErrDuplicateProbe] and is not stored.
@@ -727,6 +849,9 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 	whDisp := make([]WebhookDispatchRequest, len(r.webhookDispatchers))
 	copy(whDisp, r.webhookDispatchers)
 
+	projs := make([]ProjectionRequest, len(r.projections))
+	copy(projs, r.projections)
+
 	return RegistrySnapshot{
 		RouteGroups:        rgs,
 		Subscriptions:      subs,
@@ -735,6 +860,7 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 		Probes:             probes,
 		WebhookReceivers:   whRecv,
 		WebhookDispatchers: whDisp,
+		Projections:        projs,
 	}
 }
 

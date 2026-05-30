@@ -3,9 +3,9 @@ package bootstrap
 // phases_events.go — event router startup and subscription validation (phase6).
 //
 // Covers:
-//   - phase6StartEventRouter: subscription registration + evtRouter.Run on runCtx
-//   - checkNoSubscriptionsWhenSubscriberNil: fail-fast when cells declared
-//     subscriptions but no subscriber is configured
+//   - phase6StartEventRouter: subscription + projection registration + evtRouter.Run on runCtx
+//   - checkNoEventConsumersWhenSubscriberNil: fail-fast when cells declared
+//     subscriptions or projections but no subscriber is configured
 //   - autoWireEventRouterCollector: creates EventRouterCollector when a real
 //     provider is configured and injects it into Router via WithEventRouterCollector
 //   - autoWireOutboxRejectCollector: creates OutboxRejectCollector and wires
@@ -53,11 +53,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 
 	sub := s.sub
 	if sub == nil {
-		return b.checkNoSubscriptionsWhenSubscriberNil(s)
+		// Both plain subscriptions and projections (which become event
+		// subscriptions once drained) need a Subscriber to consume.
+		return b.checkNoEventConsumersWhenSubscriberNil(s)
 	}
-	if !cellSnapshotsHaveSubscriptions(s) {
-		// No subscriptions to drain: skip router build entirely. Avoids
-		// invoking NewSubscriberWithMiddleware (which requires a non-nil
+	if !cellSnapshotsHaveSubscriptions(s) && !cellSnapshotsHaveProjections(s) {
+		// No subscriptions or projections to drain: skip router build entirely.
+		// Avoids invoking NewSubscriberWithMiddleware (which requires a non-nil
 		// ConsumerBase) when the deployment wires a Subscriber for future use
 		// but has no current handlers.
 		return nil
@@ -71,6 +73,9 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return err
 	}
 	if err := b.drainCellSubscriptions(s, evtRouter); err != nil {
+		return err
+	}
+	if err := b.drainCellProjections(runCtx, s, evtRouter); err != nil {
 		return err
 	}
 
@@ -225,10 +230,12 @@ func (b *Bootstrap) startAndRegisterEventRouter(runCtx context.Context, s *phase
 	return nil
 }
 
-// checkNoSubscriptionsWhenSubscriberNil fails fast when any cell registered
-// subscriptions (via reg.Subscribe in Init) but no subscriber is configured.
-// This prevents silently dropping all event handlers when WithSubscriber is omitted.
-func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
+// checkNoEventConsumersWhenSubscriberNil fails fast when any cell registered an
+// event consumer — a subscription (reg.Subscribe) or a projection
+// (reg.RegisterProjection, which becomes an event subscription once drained) —
+// but no subscriber is configured. This prevents silently dropping all event
+// handlers when WithSubscriber is omitted.
+func (b *Bootstrap) checkNoEventConsumersWhenSubscriberNil(s *phaseState) error {
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
@@ -237,6 +244,11 @@ func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
 		if len(snap.Subscriptions) > 0 {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
+					"add WithSubscriber to bootstrap options", id)
+		}
+		if len(snap.Projections) > 0 {
+			return fmt.Errorf(
+				"bootstrap: cell %s registered a projection but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
 		}
 	}

@@ -1,0 +1,280 @@
+package bootstrap
+
+// phases_projection.go — L3 CQRS projection drain (part of phase6).
+//
+// Covers:
+//   - buildProjectionCoordinators: the unit-testable core — constructs one
+//     projection.Coordinator per RegistrySnapshot.Projections entry from the
+//     framework-owned deps and captures each Coordinator's wrapped event
+//     subscription (no event router needed; the capture adapter stands in for
+//     one), mirroring how phase5DrainWebhookReceivers returns RouteGroups.
+//   - drainCellProjections: wires each coordinator into the running event
+//     router (AddContractHandler), registers its readiness probes, records a
+//     Close teardown, and indexes it for the PR-04 rebuild HTTP endpoint.
+//   - cellSnapshotsHaveProjections: phase6 "is there work?" predicate.
+//
+// # Why coordinator construction lives here, not in the cell
+//
+// projection.Coordinator needs raw framework infrastructure (CheckpointStore /
+// TxRunner / Cursor / ReplaySource). Cells must never reach that — they hold
+// only sealed markers (cell-raw-infra archtests). So the cell records intent via
+// reg.RegisterProjection (record-only) and bootstrap, which legally holds the
+// raw deps, constructs the Coordinator here. This is the same record-in-Init /
+// drain-in-bootstrap split as Subscribe and webhook receivers.
+//
+// # Why a capture Registrar
+//
+// Coordinator.Subscribe internally calls reg.Subscribe (it was designed to run
+// during Init against the live RegistryRecorder). By phase6 the recorder is
+// finalized, so the drain passes the Coordinator a captureRegistrar instead: its
+// Subscribe records the wrapped (spec, handler, consumerGroup, cellID, sliceID)
+// rather than appending to a finalized recorder. The drain then hands that
+// captured SubscriptionRequest to evtRouter.AddContractHandler — the same sink
+// drainCellSubscriptions uses. The Coordinator is unchanged; only its injected
+// Registrar differs (a legitimate dependency swap).
+//
+// # AI-robust
+//
+// This is the single sanctioned Coordinator.Subscribe call site (allowlisted by
+// PROJECTION-APPLY-HOOK-FUNNEL-01). reg.RegisterProjection callers are locked to
+// cellgen-derived cell_gen.go by PROJECTION-REGISTER-FUNNEL-01. Both are Medium
+// (Go cannot type-gate callers of a public method); the Hard-ification path
+// (cellgen-only sealed-token parameter) is tracked as a gh follow-up to #1176.
+// The raw-infra-stays-in-bootstrap guarantee is the Hard property (type system):
+// cells hold sealed markers, never the CheckpointStore/TxRunner constructed here.
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/eventrouter"
+)
+
+// projectionWiring bundles a constructed Coordinator with the wrapped event
+// subscription it captured during Coordinator.Subscribe.
+type projectionWiring struct {
+	coord        *projection.Coordinator
+	cellID       string
+	projectionID string
+	sub          cell.SubscriptionRequest
+}
+
+// captureRegistrar is a cell.Registrar whose only live method is Subscribe; it
+// captures what Coordinator.Subscribe forwards instead of recording into a
+// (finalized) RegistryRecorder. All other Registrar methods are inherited from
+// the embedded nil interface and MUST NOT be called — the Coordinator only ever
+// calls Subscribe. Embedding the interface (rather than spelling out nine
+// panic-stubs) is the idiomatic Go partial implementation; a future Coordinator
+// that called another Registrar method would nil-panic loudly, the desired
+// fail-fast.
+type captureRegistrar struct {
+	cell.Registrar
+	captured *cell.SubscriptionRequest
+}
+
+func (c *captureRegistrar) Subscribe(
+	spec contractspec.ContractSpec,
+	handler outbox.EntryHandler,
+	consumerGroup string,
+	cellID string,
+	opts ...cell.SubscriptionOption,
+) error {
+	req := cell.SubscriptionRequest{
+		Spec:          spec,
+		Handler:       handler,
+		ConsumerGroup: consumerGroup,
+		CellID:        cellID,
+	}
+	for _, o := range opts {
+		if o != nil {
+			o(&req)
+		}
+	}
+	c.captured = &req
+	return nil
+}
+
+// cellSnapshotsHaveProjections reports whether any cell snapshot declared at
+// least one projection. Used alongside cellSnapshotsHaveSubscriptions to decide
+// whether phase6 must build the event router.
+func cellSnapshotsHaveProjections(s *phaseState) bool {
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if len(snap.Projections) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// buildProjectionCoordinators constructs one projection.Coordinator per
+// ProjectionRequest in the cell snapshots and captures each Coordinator's
+// wrapped event subscription. It is the unit-testable core of the projection
+// drain — it touches no event router.
+//
+// CellID drift (req.CellID != snapshot owner) is a codegen defect → fail-fast
+// (same as drainCellSubscriptions). A non-empty projection set requires all four
+// framework deps; a missing one yields an errcode naming the absent option.
+func (b *Bootstrap) buildProjectionCoordinators(ctx context.Context, s *phaseState) ([]projectionWiring, error) {
+	var out []projectionWiring
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for _, req := range snap.Projections {
+			if req.CellID != id {
+				return nil, fmt.Errorf(
+					"bootstrap: cell %s projection drift: declared CellID=%q but snapshot owner=%q"+
+						" (codegen should inject cellID from cell metadata; check cellgen templates)",
+					id, req.CellID, id)
+			}
+			if err := b.checkProjectionDeps(); err != nil {
+				return nil, err
+			}
+			w, err := b.buildOneProjection(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+// checkProjectionDeps fails fast (with the missing option named) when a
+// projection has been declared but a required framework dependency was not
+// wired via the corresponding bootstrap option.
+func (b *Bootstrap) checkProjectionDeps() error {
+	switch {
+	case b.projectionStore == nil:
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: projection declared but no checkpoint store configured; "+
+				"add WithProjectionCheckpointStore to bootstrap options")
+	case b.projectionTxRunner == nil:
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: projection declared but no tx runner configured; "+
+				"add WithProjectionTxRunner to bootstrap options")
+	case b.projectionReplay == nil:
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: projection declared but no replay source configured; "+
+				"add WithProjectionReplaySource to bootstrap options")
+	case b.projectionCursor == nil:
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: projection declared but no cursor configured; "+
+				"add WithProjectionCursor to bootstrap options")
+	}
+	return nil
+}
+
+// buildOneProjection constructs the Coordinator for one ProjectionRequest and
+// drives Coordinator.Subscribe through a captureRegistrar to obtain the wrapped
+// subscription. The cell-local ProjectionApply / ProjectionResetHook are
+// converted to the identical projection.Apply / projection.OnReset signatures
+// (legal named-type conversion; the conversion lives here — runtime/bootstrap
+// may import both kernel/cell and kernel/projection — never in kernel/cell,
+// which would be an import cycle).
+func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionRequest) (projectionWiring, error) {
+	tracer := b.wrapperTracer
+	if validation.IsNilInterface(tracer) {
+		// NewCoordinator requires a non-nil Tracer; degrade to no-op spans
+		// (same fallback as NewContractTracingSubscriber when WithTracer is omitted).
+		tracer = wrapper.NoopTracer{}
+	}
+
+	capReg := &captureRegistrar{}
+	coord, err := projection.NewCoordinator(b.clock, projection.CoordinatorConfig{
+		Registrar:    capReg,
+		CellID:       req.CellID,
+		ProjectionID: req.ProjectionID,
+		TxRunner:     b.projectionTxRunner,
+		Store:        b.projectionStore,
+		Cursor:       b.projectionCursor,
+		Replay:       b.projectionReplay,
+		Tracer:       tracer,
+	})
+	if err != nil {
+		return projectionWiring{}, fmt.Errorf(
+			"bootstrap: cell %s projection %q: construct coordinator: %w", req.CellID, req.ProjectionID, err)
+	}
+
+	var opts []projection.Option
+	if req.OnReset != nil {
+		opts = append(opts, projection.WithOnReset(projection.OnReset(req.OnReset)))
+	}
+	if err := coord.Subscribe(ctx, req.Spec, projection.Apply(req.Apply), opts...); err != nil {
+		return projectionWiring{}, fmt.Errorf(
+			"bootstrap: cell %s projection %q: subscribe: %w", req.CellID, req.ProjectionID, err)
+	}
+	if capReg.captured == nil {
+		return projectionWiring{}, fmt.Errorf(
+			"bootstrap: cell %s projection %q: coordinator registered no subscription", req.CellID, req.ProjectionID)
+	}
+
+	return projectionWiring{
+		coord:        coord,
+		cellID:       req.CellID,
+		projectionID: req.ProjectionID,
+		sub:          *capReg.captured,
+	}, nil
+}
+
+// drainCellProjections constructs the projection coordinators and wires each
+// into the running event router: registers the captured wrapped handler,
+// registers the Coordinator's readiness probes, records a Close teardown, and
+// indexes the Coordinator for the rebuild HTTP endpoint (PR-04).
+//
+// Runs inside phase6 after drainCellSubscriptions and before the router starts,
+// so projection handlers are registered before consumption begins.
+func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evtRouter *eventrouter.Router) error {
+	wirings, err := b.buildProjectionCoordinators(ctx, s)
+	if err != nil {
+		return err
+	}
+	for _, w := range wirings {
+		var opts []cell.SubscriptionOption
+		if w.sub.SliceID != "" {
+			opts = append(opts, cell.WithSubscriptionSliceID(w.sub.SliceID))
+		}
+		if err := evtRouter.AddContractHandler(
+			w.sub.Spec, w.sub.Handler, w.sub.ConsumerGroup, w.sub.CellID, opts...); err != nil {
+			return fmt.Errorf("bootstrap: cell %s projection %q: handler setup failed: %w",
+				w.cellID, w.projectionID, err)
+		}
+
+		probes, err := w.coord.Probes()
+		if err != nil {
+			return fmt.Errorf("bootstrap: cell %s projection %q: build probes: %w",
+				w.cellID, w.projectionID, err)
+		}
+		for _, p := range probes {
+			// Route through the sanctioned registerHealthChecker wrapper (which
+			// performs the single allowlisted Aggregator.Register call) rather than
+			// calling b.healthAggregator.Register directly — keeps the
+			// PROBENAME-SEALED-FUNNEL-01/A3 allowlist closed to its existing sites.
+			if err := s.registerHealthChecker(p.Name(), p.Check, b.healthAggregator); err != nil {
+				return fmt.Errorf("bootstrap: cell %s projection %q: register probe %q: %w",
+					w.cellID, w.projectionID, p.Name(), err)
+			}
+		}
+
+		coord := w.coord // capture per-iteration for the teardown closure
+		s.addTeardown(func(c context.Context) error { return coord.Close(c) })
+
+		if b.projectionCoordinators == nil {
+			b.projectionCoordinators = make(map[string]*projection.Coordinator)
+		}
+		b.projectionCoordinators[w.cellID+"/"+w.projectionID] = coord
+	}
+	return nil
+}
