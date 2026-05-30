@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -432,18 +433,17 @@ func itestNewSubWithCollector(t *testing.T, role string) (*recordingSubCollector
 	return coll, sub
 }
 
-// itestWaitCollectorEvent polls coll until at least one success or failure event
-// is recorded, up to deadline duration.
+// itestWaitCollectorEvent waits until coll has recorded at least one success or
+// failure event, up to deadline. Polling is unavoidable: the event is produced
+// by the real broker's async delivery, which exposes no channel signal — hence
+// testwait.External with a const-literal reason (not a hand-rolled time.Sleep
+// loop), so TEST-POLLING-EXTERNAL-REASON-LITERAL-01 guards the polling site.
 func itestWaitCollectorEvent(t *testing.T, coll *recordingSubCollector, deadline time.Duration) {
 	t.Helper()
-	dl := time.Now().Add(deadline)
-	for time.Now().Before(dl) {
-		s, f, _ := coll.snapshot()
-		if s+f >= 1 {
-			return
-		}
-		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-	}
+	testwait.External(t, "broker-delivery-event",
+		func() bool { s, f, _ := coll.snapshot(); return s+f >= 1 },
+		deadline, testtime.D10ms,
+		"collector recorded no success/failure event")
 }
 
 // itestAssertDisposition checks success/commit/release counts and failure reason.
