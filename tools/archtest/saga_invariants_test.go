@@ -332,13 +332,13 @@ func classifyExpr(expr ast.Expr) compensateFuncAssignment {
 	return compensateFuncAssignment{}
 }
 
-// sagaFuncDeclsByName collects all top-level FuncDecls in the Pass (across
+// sagaFuncDeclsByObject collects all top-level FuncDecls in the Pass (across
 // all files) keyed by the types.Func pointer (via info.ObjectOf). This is
 // used to resolve named CompensateFunc assignments to their declaration bodies.
 func sagaFuncDeclsByObject(p *Pass) map[*types.Func]*ast.FuncDecl {
 	out := make(map[*types.Func]*ast.FuncDecl)
 	for _, f := range p.Files {
-		scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}

@@ -89,7 +89,7 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 
 	reconnect, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "mqtt_reconnect_total",
-		Help:       "Total MQTT reconnect events observed by the adapter, by cell.",
+		Help:       "Total MQTT reconnect events observed by the adapter. " + helpCellLabel,
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
@@ -447,21 +447,21 @@ var (
 	subConsumeTotalOpts = metrics.CounterOpts{
 		Name: "mqtt_consume_total",
 		Help: "Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). " +
-			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 	}
 	subConsumeFailedOpts = metrics.CounterOpts{
 		Name: "mqtt_consume_failed_total",
 		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
 			"reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; " +
-			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+			"alerting rules can rely on the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subDlxTotalOpts = metrics.CounterOpts{
 		Name: "mqtt_dlx_total",
 		Help: "Total number of messages routed to the app-level dead-letter sink $dead/<topic>. " +
 			"reason ∈ {unmarshal, reject} — closed set (poison / permanent failure). " +
-			"Label: cell = construction-time cell identifier.",
+			helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subDlxFailedOpts = metrics.CounterOpts{
@@ -469,14 +469,14 @@ var (
 		Help: "Total number of messages whose dead-letter publish to $dead/<topic> FAILED (topic " +
 			"unmintable or broker publish error); the message was acked-as-poison WITHOUT $dead capture. " +
 			"A distinct, higher-severity signal from mqtt_consume_failed_total: it means the dead-letter " +
-			"sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. Label: cell.",
+			"sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subConsumeDurOpts = metrics.HistogramOpts{
 		Name: "mqtt_consume_duration_seconds",
 		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
 			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
-			"Label: cell = construction-time cell identifier.",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 		Buckets:    consumeDurationBuckets,
 	}
