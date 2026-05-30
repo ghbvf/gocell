@@ -28,8 +28,11 @@
 //     expressed in Go's type system (schemaToDTOs is shared with the exempt
 //     Request path), so it is locked by archtest
 //     AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (call-site allowlist + role coverage).
-//     archtest-Medium is the Go ceiling for codegen must-call; gh #1299 tracks
-//     this ceiling (same won't-do shape as #851/#893).
+//     archtest-Medium is the Go ceiling for codegen must-call — a permanent
+//     won't-do ceiling (same shape as #851/#893/#982/#1282). An optional
+//     schemaToWireOutDTOs wrapper could strengthen the archtest-Medium coverage
+//     but does not change the tier; it is left as optional defense-in-depth,
+//     not separately tracked.
 //   - Scope: audit domain only (规则不超前于代码现状 — auditcore is today's only
 //     Principal-aggregating consumer). When a new such cell appears, extend
 //     isAuditWireContract in the same PR.
