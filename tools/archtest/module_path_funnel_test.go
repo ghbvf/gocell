@@ -382,3 +382,49 @@ func TestFlattenPlatformConcat(t *testing.T) {
 		})
 	}
 }
+
+// TestFirstBarePlatformLiteralLine_partition pins the partition between the two
+// detection mechanisms, so excluding bare-value consts/literals from the
+// fragment self-check (isBarePlatformValue) can NEVER hide a hardcode:
+//
+//   - A bare-value const (collected only when its RHS is a single string
+//     literal) is dropped from the fragment constMap, BUT its declaration's
+//     literal is still caught HERE → it lands in offenders/baseline. So the
+//     hardcode is always tracked at its literal site, never silently lost.
+//   - A fragment-only file (no single operand is a bare value) is NOT caught
+//     here — it is the no-fragment-split self-check's domain.
+//
+// Together the two are exhaustive over string-literal forms: every reconstruction
+// using a bare-value operand has that operand's literal caught by firstBare; every
+// reconstruction from genuine fragments is caught by the self-check. The only
+// uncovered form is the documented adversarial residual (const-of-const etc., #1304).
+func TestFirstBarePlatformLiteralLine_partition(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		src       string
+		wantFound bool
+	}{
+		{"bare-value-const-used-in-concat",
+			"package p\nconst full = \"github.com/ghbvf/gocell\"\nvar _ = full + \"/x\"\n", true},
+		{"bare-literal-child-path",
+			"package p\nvar _ = \"github.com/ghbvf/gocell/pkg/x\"\n", true},
+		{"only-fragments-no-bare", // self-check's job, not firstBare's
+			"package p\nconst a = \"github.com/\"\nconst b = \"ghbvf/gocell\"\nvar _ = a + b\n", false},
+		{"gocell-import-path-excluded",
+			"package p\nimport _ \"github.com/ghbvf/gocell/pkg/errcode\"\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, c.name+".go", c.src, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if _, found := firstBarePlatformLiteralLine(fset, f); found != c.wantFound {
+				t.Errorf("firstBarePlatformLiteralLine found=%v, want %v", found, c.wantFound)
+			}
+		})
+	}
+}
