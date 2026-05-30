@@ -201,7 +201,7 @@ var _ PublisherCollector = NoopPublisherCollector{}
 // providerPublisherCollector implements PublisherCollector via a provider-
 // neutral metrics.Provider. Wired at the composition root.
 //
-// Metrics (subsystem=mqtt):
+// Metrics (mqtt_ name prefix; metrics.CounterOpts has no Subsystem field):
 //
 //	mqtt_publish_total                 (counter,   labels: cell)
 //	mqtt_publish_failed_total          (counter,   labels: cell, reason)
@@ -407,7 +407,7 @@ var _ SubscriberCollector = NoopSubscriberCollector{}
 // providerSubscriberCollector implements SubscriberCollector via a provider-
 // neutral metrics.Provider. Wired at the composition root.
 //
-// Metrics (subsystem=mqtt):
+// Metrics (mqtt_ name prefix; metrics.CounterOpts has no Subsystem field):
 //
 //	mqtt_consume_total              (counter,   labels: cell)
 //	mqtt_consume_failed_total       (counter,   labels: cell, reason)

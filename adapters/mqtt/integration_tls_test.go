@@ -246,6 +246,7 @@ func TestIntegrationTLS_MutualTLS_PublishRoundTrip(t *testing.T) {
 			RootCAs:      caPool,
 			Certificates: []tls.Certificate{chain.clientCert},
 			ServerName:   "127.0.0.1",
+			MinVersion:   tls.VersionTLS12,
 		},
 		ConnectTimeout: testtime.D10s,
 		KeepAlive:      testtime.D10s,
@@ -332,6 +333,7 @@ func TestIntegrationTLS_UntrustedClientCert_Rejected(t *testing.T) {
 			RootCAs:      serverCAPool,
 			Certificates: []tls.Certificate{untrusted.clientCert}, // NOT trusted by broker
 			ServerName:   "127.0.0.1",
+			MinVersion:   tls.VersionTLS12,
 		},
 		ConnectTimeout: testtime.D10s,
 		KeepAlive:      testtime.D10s,
@@ -354,6 +356,65 @@ func TestIntegrationTLS_UntrustedClientCert_Rejected(t *testing.T) {
 	// The exact error shape varies by broker / paho version (CONNACK, TLS alert,
 	// connection reset). Assert only that Open fails — the broker rejected the
 	// client cert. Do not over-constrain the error code.
+	t.Logf("Open returned (expected) error: %v", openErr)
+}
+
+// TestIntegrationTLS_NoClientCert_Rejected asserts that a client presenting NO
+// client certificate is rejected by the mTLS broker (require_certificate true).
+// The client trusts the server (RootCAs = trusted CA pool) so the client-side
+// server-auth step succeeds; the broker rejects the connection during its
+// client-auth check because no certificate is presented. This is the
+// require_certificate enforcement gate — distinct from
+// TestIntegrationTLS_UntrustedClientCert_Rejected (which sends a cert signed by
+// the wrong CA).
+func TestIntegrationTLS_NoClientCert_Rejected(t *testing.T) {
+	chain := genMQTTTLSChain(t)
+	brokerURL, cleanup := startMosquittoContainerTLS(
+		t,
+		chain.serverCertPEM,
+		chain.serverKeyPEM,
+		chain.caCertPEM,
+	)
+	t.Cleanup(cleanup)
+
+	serverCAPool := x509.NewCertPool()
+	if !serverCAPool.AppendCertsFromPEM(chain.caCertPEM) {
+		t.Fatal("TestIntegrationTLS_NoClientCert_Rejected: failed to append CA cert to pool")
+	}
+
+	cid, err := ParseEphemeralClientID("itest", "tls-no-cert")
+	if err != nil {
+		t.Fatalf("ParseEphemeralClientID: %v", err)
+	}
+	// No Certificates field — client presents no cert during mTLS handshake.
+	cfg := Config{
+		ClientID: cid,
+		Brokers:  []string{brokerURL},
+		TLS: &tls.Config{
+			RootCAs:    serverCAPool,
+			ServerName: "127.0.0.1",
+			MinVersion: tls.VersionTLS12,
+		},
+		ConnectTimeout: testtime.D10s,
+		KeepAlive:      testtime.D10s,
+		Backoff: BackoffConfig{
+			BaseDelay: testtime.D100ms,
+			MaxDelay:  testtime.D2s,
+		},
+		PublishTimeout: testtime.D5s,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
+	defer cancel()
+
+	_, openErr := Open(ctx, clock.Real(), cfg)
+	if openErr == nil {
+		t.Fatal("TestIntegrationTLS_NoClientCert_Rejected: Open succeeded; " +
+			"expected broker to reject a client presenting no certificate — " +
+			"require_certificate true is NOT being enforced")
+	}
+	// The exact error shape varies (TLS alert, connection reset, CONNACK, or
+	// connect-timeout after retry budget). Assert only that Open fails.
 	t.Logf("Open returned (expected) error: %v", openErr)
 }
 

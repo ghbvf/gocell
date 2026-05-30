@@ -124,11 +124,9 @@ func (sc *SubscriberConfig) setDefaults() {
 //
 // Consumer: cg-{ConsumerGroup}-{topic}
 // Idempotency: Claimer (two-phase Claim/Commit/Release) via ConsumerBase, TTL 24h
-// Disposition: Ack on success / Requeue (left unacked, broker redelivers on
-//
-//	reconnect — Option C, ADR-050 §6) on transient / Reject (routed to
-//	$dead/<topic> then acked-as-poison) on permanent
-//
+// Disposition: Ack on success / Requeue → left unacked, broker redelivers on
+// reconnect (Option C, ADR-050 §6) on transient / Reject → routed to
+// $dead/<topic> then acked-as-poison on permanent.
 // DLX: app-level $dead/<topic> (no broker-native DLX in MQTT); see deadletter.go.
 //
 // ref: adapters/rabbitmq/subscriber.go dispatchDisposition / StopIntake.

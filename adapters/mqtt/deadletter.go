@@ -47,11 +47,13 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 	pubCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.config.SettlementTimeout)
 	defer cancel()
 	if _, pubErr := s.conn.Publish(pubCtx, dlt, payload, publishOpts{QoS: 1, Retain: false}); pubErr != nil {
+		// redactErr: broker errors may echo connection strings / credentials
+		// (key=value), consistent with connection.go / publisher.go logging.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: dead-letter publish failed; message will be acked-as-poison without DLT capture",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
-			slog.String(logKeyDLXTopic, dlt.String()),
+			slog.String(logKeyDLXTopic, safeTopicForLog(dlt.String())),
 			slog.String("reason", string(reason)),
-			slog.Any("error", pubErr))
+			slog.Any("error", redactErr(pubErr)))
 		s.collector.RecordDeadLetterFailure(ctx, reason)
 		return
 	}
@@ -60,6 +62,6 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 	slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: routed message to dead-letter sink",
 		slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 		slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
-		slog.String(logKeyDLXTopic, dlt.String()),
+		slog.String(logKeyDLXTopic, safeTopicForLog(dlt.String())),
 		slog.String("reason", string(reason)))
 }
