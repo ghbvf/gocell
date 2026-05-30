@@ -21,10 +21,10 @@ package archtest
 // anchored to [PlatformModulePath] (fixed: external repos import these packages
 // as a GoCell dependency at that path). The scan SCOPE is the running module,
 // supplied by RunTyped → findModuleRoot.
-
-// aftercommit_pure_transient_invariants.go — funnel guarding persistence
-// after-commit hooks. Hooks run after a durable commit, with the tx stripped
-// from their ctx (kernel/persistence.RunAfterCommitHooks), and must perform
+//
+// Funnel: guards persistence after-commit hooks. Hooks run after a durable
+// commit, with the tx stripped from their ctx
+// (kernel/persistence.RunAfterCommitHooks), and must perform
 // only transient side effects (saga dispatcher kick, cache invalidation, metrics
 // flush, ws broadcast) — never a persistent operation.
 //
@@ -82,6 +82,7 @@ import (
 	"go/ast"
 	"go/types"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -251,8 +252,10 @@ func implementsBannedIface(t types.Type, iface *types.Interface) bool {
 	return typesutil.ImplementsInterface(t, iface)
 }
 
-// packageFuncDecls maps unexported package-level func name → its FuncDecl across
-// all files of the Pass, for the A2 one-level helper heuristic (B4).
+// packageFuncDecls maps each package-level func name (exported or not) → its
+// FuncDecl across all files of the Pass, for the A2 one-level helper heuristic
+// (B4). Methods are excluded (Recv != nil); a same-package method helper is the
+// documented B4 deeper-chain miss.
 func packageFuncDecls(p *Pass) map[string]*ast.FuncDecl {
 	decls := map[string]*ast.FuncDecl{}
 	for _, f := range p.Files {
@@ -435,5 +438,11 @@ func CheckAfterCommitHookPureTransient(t *testing.T, cfg ConfigForExternalCell) 
 	var out []Diagnostic
 	out = append(out, a1a2Diags...)
 	out = append(out, a3Diags...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rel != out[j].Rel {
+			return out[i].Rel < out[j].Rel
+		}
+		return out[i].Line < out[j].Line
+	})
 	return out
 }

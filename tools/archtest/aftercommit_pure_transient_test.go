@@ -3,9 +3,9 @@
 // aftercommit_pure_transient_test.go — test entry points for
 // AFTERCOMMIT-HOOK-PURE-TRANSIENT-01. Rule logic, consts, and shared scan
 // helpers live in aftercommit_pure_transient_invariants.go (the non-test file,
-// so external Cell repos can compile it via StandardCellRules). This file
-// dogfoods those shared helpers against GoCell itself — single source, no
-// parallel rule body.
+// so external Cell repos can compile and call it directly — it is NOT in
+// StandardCellRules; see that file's godoc for why). This file dogfoods those
+// shared helpers against GoCell itself — single source, no parallel rule body.
 //
 // Production dogfood: one-liner via CheckAfterCommitHookPureTransient.
 // Fixture/RED tests: RunTypedFixture against testdata/ fixture dirs, reusing
