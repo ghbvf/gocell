@@ -5,6 +5,39 @@ import (
 	"testing"
 )
 
+// assertEphemeralClientIDValid checks the structural invariants of a valid
+// ParseEphemeralClientID result: prefix matches cellID, role segment follows,
+// and the trailing UUID suffix is 36 characters.
+func assertEphemeralClientIDValid(t *testing.T, cellID, role string) {
+	t.Helper()
+	cid, err := ParseEphemeralClientID(cellID, role)
+	if err != nil {
+		t.Fatalf("ParseEphemeralClientID(%q, %q) unexpected error: %v", cellID, role, err)
+	}
+	s := cid.String()
+	// Must have at least 3 parts: cellID-role-uuid (uuid contains hyphens).
+	parts := strings.Split(s, "-")
+	if len(parts) < 3 {
+		t.Fatalf("String() = %q: expected at least 3 hyphen-separated parts, got %d", s, len(parts))
+	}
+	// First segment must equal cellID (which may itself contain hyphens).
+	cellIDLen := len(cellID)
+	if s[:cellIDLen] != cellID {
+		t.Errorf("String() = %q: expected prefix %q", s, cellID)
+	}
+	// Role must appear after cellID-.
+	rest := s[cellIDLen+1:]
+	roleLen := len(role)
+	if len(rest) <= roleLen || rest[:roleLen] != role {
+		t.Errorf("String() = %q: expected role %q after cellID", s, role)
+	}
+	// Must have uuid suffix (36 chars: 32 hex + 4 hyphens).
+	uuidPart := rest[roleLen+1:]
+	if len(uuidPart) != 36 {
+		t.Errorf("String() = %q: uuid suffix %q has length %d, want 36", s, uuidPart, len(uuidPart))
+	}
+}
+
 func TestParseEphemeralClientID_Valid(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -19,32 +52,7 @@ func TestParseEphemeralClientID_Valid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cid, err := ParseEphemeralClientID(tc.cellID, tc.role)
-			if err != nil {
-				t.Fatalf("ParseEphemeralClientID(%q, %q) unexpected error: %v", tc.cellID, tc.role, err)
-			}
-			s := cid.String()
-			// Must have at least 3 parts: cellID-role-uuid (uuid contains hyphens).
-			parts := strings.Split(s, "-")
-			if len(parts) < 3 {
-				t.Fatalf("String() = %q: expected at least 3 hyphen-separated parts, got %d", s, len(parts))
-			}
-			// First segment must equal cellID (which may itself contain hyphens).
-			cellIDLen := len(tc.cellID)
-			if s[:cellIDLen] != tc.cellID {
-				t.Errorf("String() = %q: expected prefix %q", s, tc.cellID)
-			}
-			// Role must appear after cellID-.
-			rest := s[cellIDLen+1:]
-			roleLen := len(tc.role)
-			if len(rest) <= roleLen || rest[:roleLen] != tc.role {
-				t.Errorf("String() = %q: expected role %q after cellID", s, tc.role)
-			}
-			// Must have uuid suffix (36 chars: 32 hex + 4 hyphens).
-			uuidPart := rest[roleLen+1:]
-			if len(uuidPart) != 36 {
-				t.Errorf("String() = %q: uuid suffix %q has length %d, want 36", s, uuidPart, len(uuidPart))
-			}
+			assertEphemeralClientIDValid(t, tc.cellID, tc.role)
 		})
 	}
 }

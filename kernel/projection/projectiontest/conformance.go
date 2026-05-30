@@ -27,6 +27,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
+const (
+	testIsoCellA = "cellA-iso"
+	testIsoProj1 = "p1-iso"
+)
+
 // RunCheckpointConformance runs the six canonical conformance sub-tests against
 // store. Each sub-test uses a distinct (cellID, projectionID) key to prevent
 // ordering-dependent interference on a shared store instance.
@@ -129,18 +134,18 @@ func checkMonotonicAdvance(t *testing.T, store projection.CheckpointStore) {
 func checkKeyIsolation(t *testing.T, store projection.CheckpointStore) {
 	t.Helper()
 	ctx := context.Background()
-	if err := store.SaveOffset(ctx, "cellA-iso", "p1-iso", 3); err != nil {
+	if err := store.SaveOffset(ctx, testIsoCellA, testIsoProj1, 3); err != nil {
 		t.Fatalf("SaveOffset cellA/p1: %v", err)
 	}
-	if err := store.SaveOffset(ctx, "cellB-iso", "p1-iso", 4); err != nil {
+	if err := store.SaveOffset(ctx, "cellB-iso", testIsoProj1, 4); err != nil {
 		t.Fatalf("SaveOffset cellB/p1: %v", err)
 	}
-	if err := store.SaveOffset(ctx, "cellA-iso", "p2-iso", 5); err != nil {
+	if err := store.SaveOffset(ctx, testIsoCellA, "p2-iso", 5); err != nil {
 		t.Fatalf("SaveOffset cellA/p2: %v", err)
 	}
-	checkIsolationEntry(t, store, ctx, "cellA-iso", "p1-iso", 3)
-	checkIsolationEntry(t, store, ctx, "cellB-iso", "p1-iso", 4)
-	checkIsolationEntry(t, store, ctx, "cellA-iso", "p2-iso", 5)
+	checkIsolationEntry(t, store, ctx, testIsoCellA, testIsoProj1, 3)
+	checkIsolationEntry(t, store, ctx, "cellB-iso", testIsoProj1, 4)
+	checkIsolationEntry(t, store, ctx, testIsoCellA, "p2-iso", 5)
 }
 
 func checkIsolationEntry(t *testing.T, store projection.CheckpointStore, ctx context.Context, cellID, projID string, want int64) {
