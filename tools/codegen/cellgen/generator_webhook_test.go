@@ -64,6 +64,15 @@ func TestRenderCell_GoldenWebhook(t *testing.T) {
 	if !bytes.Equal(out, golden) {
 		t.Errorf("rendered output diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
 	}
+
+	// Lightweight assertion: the receiver registration block must carry the
+	// correct CellID field value ("hooks"). This guards against regressions
+	// where the cellgen template omits or mis-derives CellID from the cell
+	// metadata, which would silently break observability labeling at runtime.
+	outStr := string(out)
+	if !bytes.Contains(out, []byte(`CellID:           "hooks"`)) {
+		t.Errorf("generated output does not contain CellID field for receiver registration; got:\n%s", outStr)
+	}
 }
 
 // buildWebhookSyntheticProject builds the in-memory ProjectMeta for the

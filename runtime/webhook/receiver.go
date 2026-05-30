@@ -19,6 +19,17 @@ import (
 )
 
 // Claim TTLs used by the receiver's idempotency Claimer.
+//
+// These are fixed package-level constants in PR-3, not yet per-contract
+// configurable. The 24h done-window matters operationally: if an external
+// provider's retry window EXCEEDS receiverDoneTTL (Stripe retries up to ~3 days,
+// Svix up to ~5 days), a duplicate that arrives after the done-record expires is
+// no longer deduplicated by the Claimer and will re-invoke the handler — the
+// guarantee degrades to timestamp-window + at-least-once for that late
+// redelivery. Handlers MUST therefore be idempotent regardless (see
+// [kwh.WebhookReceiveHandler] and the signing-algorithm ADR threat model). Making
+// these TTLs per-contract configurable (baked from contract.yaml like the other
+// ReceiverSpec fields) is tracked as a follow-up; see PR / backlog.
 const (
 	// receiverLeaseTTL is how long the in-flight processing lease is held.
 	// If the handler goroutine crashes mid-flight, the claimer reclaims after
@@ -26,9 +37,15 @@ const (
 	receiverLeaseTTL = 30 * time.Second
 
 	// receiverDoneTTL is how long a successfully-committed idempotency key
-	// is remembered. Matches the EventBus default (24 h).
+	// is remembered. Matches the EventBus default (24 h). See the package-level
+	// caveat above on provider retry windows exceeding this value.
 	receiverDoneTTL = 24 * time.Hour
 )
+
+// msgBodyTooLarge is the wire message for an over-limit request body (413).
+// Declared once because it appears in both the Content-Length pre-check and the
+// MaxBytesReader read-time branch of readBody.
+const msgBodyTooLarge = "webhook receiver: request body too large"
 
 // verified is an unforgeable token produced only by [Receiver.verify].
 // Package-external code cannot construct this type (unexported struct with no
@@ -116,6 +133,13 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// 2. Verify — produces unforgeable verified token.
 	v, err := r.verify(body, req)
 	if err != nil {
+		// Warn (not Error): a verification failure is a 4xx caused by an
+		// external caller (bad/missing signature, unknown source, expired
+		// timestamp), not a server-side correctness fault. observability.md
+		// reserves Error for failures that affect correctness; routine 4xx
+		// signature rejection is expected traffic. A sustained spike of these
+		// is a security signal handled by alerting thresholds on the rate, not
+		// by escalating each individual rejection to Error.
 		slog.WarnContext(ctx, "webhook receiver: signature verification failed",
 			slog.String("source_id", r.spec.SourceID),
 			slog.String("contract_id", r.spec.ContractID),
@@ -217,10 +241,10 @@ func (r *Receiver) readBody(w http.ResponseWriter, req *http.Request) ([]byte, e
 
 	// Quick pre-check on Content-Length before allocating.
 	if req.ContentLength > r.spec.MaxBodyBytes {
-		httputil.WriteError(ctx, w, errcode.New(errcode.KindPayloadTooLarge,
-			errcode.ErrWebhookBodyTooLarge, "webhook receiver: request body too large"))
-		return nil, errcode.New(errcode.KindPayloadTooLarge, errcode.ErrWebhookBodyTooLarge,
-			"webhook receiver: request body too large")
+		tooLarge := errcode.New(errcode.KindPayloadTooLarge,
+			errcode.ErrWebhookBodyTooLarge, msgBodyTooLarge)
+		httputil.WriteError(ctx, w, tooLarge)
+		return nil, tooLarge
 	}
 
 	req.Body = http.MaxBytesReader(w, req.Body, r.spec.MaxBodyBytes)
@@ -229,10 +253,13 @@ func (r *Receiver) readBody(w http.ResponseWriter, req *http.Request) ([]byte, e
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			httputil.WriteError(ctx, w, errcode.New(errcode.KindPayloadTooLarge,
-				errcode.ErrWebhookBodyTooLarge, "webhook receiver: request body too large"))
+				errcode.ErrWebhookBodyTooLarge, msgBodyTooLarge))
 			return nil, err
 		}
-		slog.ErrorContext(ctx, "webhook receiver: read body failed", slog.Any("error", err))
+		slog.ErrorContext(ctx, "webhook receiver: read body failed",
+			slog.String("source_id", r.spec.SourceID),
+			slog.String("contract_id", r.spec.ContractID),
+			slog.Any("error", err))
 		httputil.WriteError(ctx, w, errcode.New(errcode.KindUnavailable,
 			errcode.ErrServiceUnavailable, "webhook receiver: failed to read request body"))
 		return nil, err
@@ -265,13 +292,18 @@ func (r *Receiver) verify(body []byte, req *http.Request) (verified, error) {
 	}
 
 	// Look up the source by spec.SourceID. Return ErrWebhookInvalidSignature
-	// (not a source-enumeration error) to avoid disclosing whether the source
-	// exists (WEBHOOK-HMAC-FUNNEL-01 F8/F9).
+	// with the shared kwh.MsgSignatureVerificationFailed wire message so an
+	// unregistered source is byte-identical to a signature mismatch and cannot
+	// be used as a source-ID enumeration oracle (WEBHOOK-HMAC-FUNNEL-01 F8/F9;
+	// OWASP Generic Error Messages). The "source not registered" reason is kept
+	// in WithInternal (server-side slog only, never on the wire).
 	src, ok := r.store.Lookup(kwh.SourceID(r.spec.SourceID))
 	if !ok {
 		return verified{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
-			"webhook receiver: signature verification failed",
-			errcode.WithInternal(errcode.InternalAttr("source_id", r.spec.SourceID)))
+			kwh.MsgSignatureVerificationFailed,
+			errcode.WithInternal(
+				errcode.InternalAttr("source_id", r.spec.SourceID),
+				errcode.InternalAttr("reason", "source not registered")))
 	}
 
 	if err := r.verifier.Verify(body, headers, src); err != nil {

@@ -35,6 +35,15 @@ type Delivery struct {
 // handler a Delivery that has already been HMAC-verified and idempotency-claimed;
 // a non-nil error signals the receiver runtime to reject (NACK) the delivery.
 //
+// Handlers MUST be idempotent. The receiver's Claimer is defense-in-depth, not
+// a sole guarantee: webhook delivery is at-least-once by nature (network
+// retries, provider redelivery), and the dedupe window is bounded by the
+// Claimer's done-TTL — a duplicate arriving after that window (e.g. a provider
+// whose retry horizon exceeds the TTL) will re-invoke the handler. This matches
+// the consumer-side guidance of Stripe / Svix, which leave deduplication to the
+// application; GoCell additionally provides the Claimer as a framework-level
+// best-effort layer.
+//
 // PR-3: signature upgraded from func(ctx, []byte) error to func(ctx, Delivery)
 // error in lockstep with the cellgen template and the generated method values it
 // binds. GoCell carries no backward-compat burden (CLAUDE.md).

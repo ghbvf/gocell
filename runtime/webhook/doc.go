@@ -31,9 +31,39 @@
 // values (accumulated by the cell registry during Init) into
 // [kernel/cell.RouteGroup] values that bootstrap mounts onto the HTTP server.
 //
+// # Integrating a new receiver
+//
+// The wiring is single-sourced from slice.yaml + contract.yaml; this package is
+// never edited to add a receiver. The full authoring flow (contract.yaml
+// signature/endpoints fields, slice.yaml contractUsages[role=webhook-receive],
+// the cell.go struct field cellgen resolves the handler from, and the cellgen
+// derivation shape) lives in contracts/webhook/README.md — that is the single
+// source, not duplicated here. The runtime steps this package adds on top:
+//
+//   - composition root passes [bootstrap.WithWebhookSourceStore] (seeded with a
+//     [kernel/webhook.Source] per sender) and [bootstrap.WithWebhookClaimer].
+//   - bootstrap phase5 drains RegistrySnapshot.WebhookReceivers through
+//     [BuildRouteGroups] and mounts the resulting route groups.
+//
+// # Troubleshooting
+//
+//   - bootstrap fails with "webhook receiver declared but no SourceStore /
+//     Claimer wired": a cell registered a receiver but the composition root did
+//     not call WithWebhookSourceStore / WithWebhookClaimer (the dependency is
+//     mandatory only once a receiver exists — see options_webhook.go).
+//   - all deliveries return 401: the SourceStore has no [kernel/webhook.Source]
+//     for the receiver's sourceID, or the secret differs from the sender's. The
+//     wire 401 is intentionally identical to a signature mismatch (anti-
+//     enumeration); the real reason is in the server-side slog "reason" field.
+//   - cellgen "no cell.go struct field for slice" / "ambiguous field": see the
+//     contracts/webhook/README.md troubleshooting section (same resolution as
+//     the subscribe path).
+//
 // # Deferred capabilities
 //
 // Metrics and healthz probes are deferred to PR-6 (KERNEL-WEBHOOK-01).
+// Per-contract Claimer TTL configuration is also deferred (the 24h done-TTL is
+// a fixed constant today — see receiver.go).
 //
 // # References
 //

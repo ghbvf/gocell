@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,14 +162,18 @@ func (nopReceipt) Commit(_ context.Context) error                  { return nil 
 func (nopReceipt) Release(_ context.Context) error                 { return nil }
 func (nopReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
-// countingReceipt records how many times Release was called, used by the
-// handler-panic test to assert the lease is released before re-panic.
+// countingReceipt records Commit and Release call counts.
+// commitErr, if non-nil, is returned by Commit to test best-effort commit failure.
+// releaseErr, if non-nil, is returned by Release.
 type countingReceipt struct {
-	released int
+	committed  int
+	released   int
+	commitErr  error
+	releaseErr error
 }
 
-func (r *countingReceipt) Commit(_ context.Context) error                  { return nil }
-func (r *countingReceipt) Release(_ context.Context) error                 { r.released++; return nil }
+func (r *countingReceipt) Commit(_ context.Context) error                  { r.committed++; return r.commitErr }
+func (r *countingReceipt) Release(_ context.Context) error                 { r.released++; return r.releaseErr }
 func (r *countingReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
 // countingClaimer always returns ClaimAcquired with a shared countingReceipt.
@@ -553,8 +558,104 @@ func TestReceiver_HandlerPanic_ReleasesLeaseAndRepanics(t *testing.T) {
 		t.Errorf("Release called %d times, want 1", rcpt.released)
 	}
 
+	// Commit must NOT have been called: handler panicked before success.
+	if rcpt.committed != 0 {
+		t.Errorf("Commit called %d times, want 0 (no commit on handler panic)", rcpt.committed)
+	}
+
 	// The panic must have re-propagated (recovered is non-nil).
 	if recovered == nil {
 		t.Error("expected panic to re-propagate, but recover() returned nil")
+	}
+}
+
+// TestReceiver_CommitFailure_Still200 verifies that a Commit failure after a
+// successful handler invocation does not change the HTTP 200 response. Commit
+// is best-effort: the business operation succeeded; only the idempotency
+// record write failed, so the caller still receives 200 Accepted.
+func TestReceiver_CommitFailure_Still200(t *testing.T) {
+	// Not parallel: uses a shared mutable countingReceipt.
+	body := []byte(`{"event":"commit-fail-test"}`)
+	rcpt := &countingReceipt{commitErr: errors.New("commit boom")}
+	claimer := &countingClaimer{rcpt: rcpt}
+
+	recv := buildReceiver(t, receiverOpts{claimer: claimer})
+	w := httptest.NewRecorder()
+	recv.ServeHTTP(w, signedRequest(t, body, "msg-commit-fail-001"))
+
+	// Handler succeeded → 200 even though Commit returned an error.
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	// Commit was attempted exactly once.
+	if rcpt.committed != 1 {
+		t.Errorf("Commit called %d times, want 1", rcpt.committed)
+	}
+	// Release must NOT have been called: handler succeeded.
+	if rcpt.released != 0 {
+		t.Errorf("Release called %d times, want 0 (successful handler does not release)", rcpt.released)
+	}
+}
+
+// errReader is a minimal io.Reader that always returns a non-MaxBytesError on
+// Read, used to simulate a network/IO error during body reading.
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+// TestReceiver_ReadBodyIOError_Returns503 verifies that an IO error during body
+// reading (that is not a MaxBytesError) is mapped to HTTP 503 Service
+// Unavailable. The handler must not be invoked in this case.
+func TestReceiver_ReadBodyIOError_Returns503(t *testing.T) {
+	t.Parallel()
+
+	spec := testSpec()
+	// Ensure ContentLength is below MaxBodyBytes so the pre-check does not
+	// fire a 413 before the reader is even installed.
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(testTolerance*time.Second))
+	if err != nil {
+		t.Fatalf("NewHMACVerifier: %v", err)
+	}
+	claimer := idempotency.NewInMemClaimer(clk)
+	handlerCalled := false
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		handlerCalled = true
+		return nil
+	}
+	recv, err := rtwh.NewReceiver(clk, spec, verifier, store, claimer, handler)
+	if err != nil {
+		t.Fatalf("NewReceiver: %v", err)
+	}
+
+	ioErr := errors.New("network read error")
+	req := httptest.NewRequest(http.MethodPost, testPathPattern, nil)
+	// Replace the body with a reader that always fails; set ContentLength to a
+	// small positive value so the Content-Length pre-check passes.
+	req.Body = io.NopCloser(errReader{err: ioErr})
+	req.ContentLength = 5 // below MaxBodyBytes; pre-check passes
+
+	// Set required signature headers so the error is not caused by header parsing.
+	req.Header.Set("X-Delivery-Id", "msg-ioerr-001")
+	req.Header.Set("X-Timestamp", "1705312800")
+	req.Header.Set("X-Signature", "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+	w := httptest.NewRecorder()
+	recv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body.String())
+	}
+	if handlerCalled {
+		t.Error("handler must not be invoked when body read fails")
+	}
+	// Verify the error envelope contains the error field.
+	var envelope map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if _, ok := envelope["error"]; !ok {
+		t.Errorf("response missing 'error' key; got: %s", w.Body.String())
 	}
 }

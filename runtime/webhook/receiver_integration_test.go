@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kwh "github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	rtwh "github.com/ghbvf/gocell/runtime/webhook"
 )
 
@@ -454,5 +456,42 @@ func TestIntegration_ConcurrentDelivery_Returns409(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 409; body: %s", resp.StatusCode, raw)
+	}
+}
+
+// TestIntegration_Handler503_Returns503 verifies that a handler returning an
+// errcode.KindUnavailable error propagates to HTTP 503 through the full
+// integration stack (BuildRouteGroups → ServeMux → HTTP).
+func TestIntegration_Handler503_Returns503(t *testing.T) {
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"downstream unavailable")
+	}
+	srv, signer := buildIntegrationServer(t, handler)
+
+	body := []byte(`{"event":"handler-503"}`)
+	resp := sendSignedRequest(t, srv, signer, body, "int-handler503-001")
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 503; body: %s", resp.StatusCode, raw)
+	}
+}
+
+// TestIntegration_HandlerGenericError_Returns500 verifies that a handler
+// returning a plain (non-errcode) error propagates to HTTP 500 through the
+// full integration stack.
+func TestIntegration_HandlerGenericError_Returns500(t *testing.T) {
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		return errors.New("unexpected handler failure")
+	}
+	srv, signer := buildIntegrationServer(t, handler)
+
+	body := []byte(`{"event":"handler-500"}`)
+	resp := sendSignedRequest(t, srv, signer, body, "int-handler500-001")
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, raw)
 	}
 }

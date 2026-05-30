@@ -83,7 +83,7 @@ private construction, following the SPAN-SETATTR-HOLDER-SEAL #851 precedent):
 |--------|-----------|--------|
 | Forged payload (no secret) | HMAC over full signed content; `hmac.Equal` | ✅ |
 | Algorithm downgrade (SHA-1) | single legal `Algorithm`; `Validate` rejects others | ✅ |
-| Replay of a captured valid delivery | timestamp tolerance window (bounds replay to ±5min) + receiver Claimer two-phase dedupe (key `webhook:{sourceID}:{deliveryID}`, TTL 24h); 409 on concurrent in-flight, Release on handler panic | ✅ (PR-3 #1158 landed — see Amendment below) |
+| Replay of a captured valid delivery | timestamp tolerance window (bounds replay to ±5min) + receiver Claimer two-phase dedupe (key `webhook:{sourceID}:{deliveryID}`, TTL 24h); 409 on concurrent in-flight, Release on handler panic | ✅ under normal operation; degrades to timestamp-window + at-least-once on Commit infra fault or provider-retry-window > done-TTL — handlers must be idempotent (PR-3 #1158; see Amendment §4 Degradation modes) |
 | Timing side-channel on signature compare | `hmac.Equal` constant-time; A2 AST lock | ✅ |
 | Secret leak via logs/spans/error text | unexported secret + no getter + `Source.LogValue` mask + redaction key set + archtest B6 | ✅ |
 | Secret mutation after construction | `NewSource` defensive copy | ✅ |
@@ -222,7 +222,7 @@ All rows re-evaluated against the PR-3 implementation:
 |--------|----------------|-----------------|-----------------|
 | Forged payload (no secret) | ✅ | ✅ | No change. PR-3 only adds HTTP transport; HMAC core unchanged. |
 | Algorithm downgrade (SHA-1) | ✅ | ✅ | No change. `Algorithm.Validate` not touched. |
-| Replay of a captured valid delivery | ⚠️ partial | ✅ | **Upgraded.** PR-3 lands the Claimer (key `webhook:{sourceID}:{deliveryID}`, 24h TTL). Timestamp window was already in PR-1; Claimer adds within-window exact-duplicate dedupe. Both layers now active. |
+| Replay of a captured valid delivery | ⚠️ partial | ✅ (best-effort) | **Upgraded, with documented degradation.** PR-3 lands the Claimer (key `webhook:{sourceID}:{deliveryID}`, 24h TTL). Timestamp window was already in PR-1; Claimer adds within-window exact-duplicate dedupe. Both layers now active. **Not absolute**: Commit infra fault or a provider retry window exceeding the 24h done-TTL drops back to timestamp-window + at-least-once for that delivery — see §4 Degradation modes. Handlers are required to be idempotent ([webhook.WebhookReceiveHandler] godoc). |
 | Timing side-channel on signature compare | ✅ | ✅ | No change. `hmac.Equal` path unchanged; A2 archtest still holds. |
 | Secret leak via logs/spans/error text | ✅ | ✅ | PR-3 receiver adds `sourceId` to `errcode.WithInternal` only; wire `details` is empty for 5xx by framework strip, and the 401 path carries no details either. No new leak vector. |
 | Secret mutation after construction | ✅ | ✅ | `NewSource` defensive copy unchanged. |
