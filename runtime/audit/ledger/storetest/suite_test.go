@@ -26,3 +26,17 @@ func TestSuite_MemStore(t *testing.T) {
 
 	storetest.Run(t, factory, protocol)
 }
+
+// FuzzEntryRoundTrip runs the property-based Entry round-trip + HMAC parity
+// fuzz against the in-memory store. The store and protocol are built once and
+// reused across iterations; seed corpus + fuzz body live in
+// storetest.RunEntryRoundTripFuzz so the PG integration target shares them.
+func FuzzEntryRoundTrip(f *testing.F) {
+	protocol := storetest.NewTestProtocol(f)
+	fc := clockmock.New(storetest.EpochAnchor())
+	store, err := ledger.NewMemStore(protocol, fc)
+	if err != nil {
+		f.Fatalf("NewMemStore: %v", err)
+	}
+	storetest.RunEntryRoundTripFuzz(f, store, protocol)
+}

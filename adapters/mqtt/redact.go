@@ -70,17 +70,16 @@ func redactErr(err error) error {
 	return redaction.RedactError(err)
 }
 
-// redactPayloadForLog routes payload bytes through pkg/redaction.RedactPayload.
-// Sensitive JSON field values are replaced with "<REDACTED>"; malformed JSON
-// is entirely replaced (fail-closed).
-//
-// Reserved for the PR-4 $dead/<topic> capture path. It MUST NOT be used to log
-// payloads on the hot receive path: the receive path (processDelivery /
-// dispatchDisposition / ackPoison) deliberately omits the payload from logs, so
-// no payload bytes — redacted or not — reach the log backend during normal
-// consumption.
-//
-// ref: pkg/redaction.RedactPayload
-func redactPayloadForLog(p []byte) []byte {
-	return redaction.RedactPayload(p)
+// safeErrForLog sanitizes an error's text for slog the SAME way safeTopicForLog
+// sanitizes a topic: strip control / non-printable runes, mask key=value
+// secrets, then truncate. Use when the error may embed untrusted input — e.g. an
+// errcode whose Internal details carry a broker-delivered topic (errcode.Error()
+// renders internal details as "topic=<raw>"). redactErr alone masks secrets but
+// does NOT strip control chars, so a topic with embedded newlines would still be
+// a CWE-117 log-injection vector. nil → "".
+func safeErrForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	return safeTopicForLog(err.Error())
 }

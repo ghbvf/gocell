@@ -141,10 +141,14 @@ func EpochAnchor() time.Time { return epochAnchor }
 
 // TestHMACKey returns the deterministic 32-byte HMAC key NewTestProtocol uses.
 // Exposed so cross-implementation parity tests (RunPrincipalFieldsRoundTrip)
-// can recompute the canonical HMAC byte-for-byte via referenceComputeHash
+// can recompute the canonical HMAC byte-for-byte via ReferenceComputeHash
 // without going through Protocol.ComputeHash. The returned slice is a fresh
 // copy each call so callers may zero or mutate it (e.g. before passing into
 // WithChainHMAC, which itself wipes the input slice after a defensive copy).
+//
+// TEST ONLY. This is a fixed, public, low-entropy key (bytes 1..32) for
+// deterministic test parity — it provides no secrecy and must never be used to
+// seal a production audit chain.
 func TestHMACKey() []byte {
 	key := make([]byte, 32)
 	for i := range key {
@@ -158,7 +162,10 @@ func TestHMACKey() []byte {
 // This call routes through ledger.NewProtocol; the archtest
 // AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 allowlist must include
 // runtime/audit/ledger/storetest/ for this to compile-link cleanly.
-func NewTestProtocol(t *testing.T) *ledger.Protocol {
+//
+// Accepts testing.TB (not *testing.T) so fuzz targets can construct the
+// protocol in their setup phase, where only a *testing.F is in scope.
+func NewTestProtocol(t testing.TB) *ledger.Protocol {
 	t.Helper()
 	key := TestHMACKey()
 	ns, err := ledger.ParseNamespaceID("auditcore")
@@ -944,12 +951,21 @@ type referenceHashInput struct {
 	Payload            []byte `json:"payload"`
 }
 
-// referenceComputeHash recomputes the canonical HMAC for an Entry without
-// touching Protocol.ComputeHash. Callers supply the HMAC key, the namespace,
-// and the expected prev_hash; the function marshals the mirror struct and
-// returns the hex digest. The namespace is the first signed field, mirroring
-// the production cross-namespace HMAC domain separation (ADR-1042 §A).
-func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
+// ReferenceComputeHash recomputes the canonical HMAC for an Entry without
+// touching Protocol.ComputeHash, serving as the single independent oracle for
+// every audit-ledger hash-parity test (both the storetest suite and the
+// ledger-package white-box tests call it — there is no second copy). Callers
+// supply the HMAC key, the namespace, and the expected prev_hash; the function
+// marshals the mirror struct and returns the hex digest. The namespace is the
+// first signed field, mirroring the production cross-namespace HMAC domain
+// separation (ADR-1042 §A).
+//
+// The marshal cannot fail for referenceHashInput (only string/int64/[]byte
+// fields), but the error is surfaced via t.Fatalf rather than discarded — the
+// project forbids silently dropping errors, and a future field of an
+// unmarshalable type must fail loudly.
+func ReferenceComputeHash(t testing.TB, key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
+	t.Helper()
 	in := referenceHashInput{
 		Namespace:          string(ns),
 		PrevHash:           prevHash,
@@ -964,7 +980,10 @@ func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e 
 		TimestampUnixNano:  e.Timestamp.UnixNano(),
 		Payload:            e.Payload,
 	}
-	msgBytes, _ := json.Marshal(in)
+	msgBytes, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("ReferenceComputeHash: marshal referenceHashInput: %v", err)
+	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write(msgBytes)
 	return hex.EncodeToString(mac.Sum(nil))
@@ -1026,13 +1045,13 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 	AssertEntryRoundTrip(t, entry, got)
 
 	// HMAC parity: store-persisted Hash must equal an INDEPENDENT canonical
-	// HMAC over the loaded entry — recomputed via referenceComputeHash, which
+	// HMAC over the loaded entry — recomputed via ReferenceComputeHash, which
 	// marshals an external mirror struct (referenceHashInput) and never calls
 	// Protocol.ComputeHash. A regression that silently drops a field from
 	// ComputeHash (e.g. forgetting to wire SubjectID into auditHashInput)
 	// would still produce a self-consistent hash via protocol.ComputeHash;
 	// the independent reference catches it.
-	want := referenceComputeHash(TestHMACKey(), protocol.Namespace(), "", got)
+	want := ReferenceComputeHash(t, TestHMACKey(), protocol.Namespace(), "", got)
 	if got.Hash != want {
 		t.Errorf("Hash parity broken with populated Principal fields:\n  store=%s\n  ref  =%s",
 			got.Hash, want)

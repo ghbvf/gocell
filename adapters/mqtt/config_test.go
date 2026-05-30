@@ -187,6 +187,42 @@ func TestConfig_Validate_TLSInsecureSkipVerify_Rejected(t *testing.T) {
 	assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
 }
 
+// TestConfig_Validate_TLSMinVersion verifies the downgrade-protection floor:
+// an explicit MinVersion below TLS 1.2 is rejected; unset (0 → Go default 1.2)
+// and >= TLS 1.2 are accepted.
+func TestConfig_Validate_TLSMinVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		minVersion uint16
+		wantErr    bool
+	}{
+		{name: "tls10-rejected", minVersion: tls.VersionTLS10, wantErr: true},
+		{name: "tls11-rejected", minVersion: tls.VersionTLS11, wantErr: true},
+		{name: "unset-ok", minVersion: 0, wantErr: false},
+		{name: "tls12-ok", minVersion: tls.VersionTLS12, wantErr: false},
+		{name: "tls13-ok", minVersion: tls.VersionTLS13, wantErr: false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := validConfig(t)
+			cfg.Brokers = []string{"tls://broker.example.com:8883"}
+			cfg.TLS = &tls.Config{MinVersion: tc.minVersion} //nolint:gosec // 0 = unset → Go default TLS 1.2
+			err := cfg.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+		})
+	}
+}
+
 // TestConfig_Validate_AllValidSchemes verifies all plaintext scheme variants
 // are accepted when the host is a loopback IP literal (dev/CI testcontainer
 // exception). The same schemes with non-loopback hosts are rejected by

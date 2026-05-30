@@ -83,6 +83,28 @@ func TestAuditLedgerStore_StoretestSuite(t *testing.T) {
 	storetest.Run(t, factory, protocol)
 }
 
+// FuzzAuditLedgerStore_EntryRoundTrip runs the property-based Entry round-trip
+// + HMAC parity fuzz against a real PostgreSQL backend, sharing the seed corpus
+// and fuzz body with the MemStore target (storetest.RunEntryRoundTripFuzz). The
+// migrated pool and store are constructed once and reused across all fuzz
+// iterations — a fresh migrated database per iteration is infeasible at fuzz
+// throughput. Running the same independent reference against PG and mem proves
+// cross-store HMAC byte parity in fuzz form.
+func FuzzAuditLedgerStore_EntryRoundTrip(f *testing.F) {
+	protocol := storetest.NewTestProtocol(f)
+	fc := clockmock.New(storetest.EpochAnchor())
+
+	p := migratedPool(f)
+	f.Cleanup(func() { _ = p.Close(context.Background()) })
+	txm := NewTxManager(p)
+	store, err := NewLedgerStore(p.DB(), txm, protocol, fc)
+	if err != nil {
+		f.Fatalf("NewLedgerStore: %v", err)
+	}
+
+	storetest.RunEntryRoundTripFuzz(f, store, protocol)
+}
+
 // ---------------------------------------------------------------------------
 // TestAuditLedgerStore_RestartRecovery_AcrossPool (B2-C-14)
 // ---------------------------------------------------------------------------

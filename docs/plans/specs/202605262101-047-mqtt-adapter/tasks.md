@@ -73,11 +73,13 @@
 
 | ID | 子任务 | 文件 | LOC | 前置 | TDD |
 |----|--------|------|-----|------|-----|
-| T-4.1 | 写 `deadletter.go` — `routeReject(ctx, originalTopic string, entry outbox.Entry) error`：publish 到 `$dead/<topic>`，best-effort（失败仅 log + metric） | `adapters/mqtt/deadletter.go` `deadletter_test.go` | 280 | PR-3 merged | test-first |
-| T-4.2 | `subscriber.go` 接入 `routeReject`（替换 PR-3 内的桩） | `adapters/mqtt/subscriber.go` (改) | <30 | T-4.1 | impl |
-| T-4.3 | 写 `conformance_test.go` — 实例化 Publisher+Subscriber，Features 声明（GuaranteedOrder=false, SupportsRequeue=true, SupportsReject=true, BroadcastSubscribe=true），跑 `outboxtest.TestPubSub` 6 Batch | `adapters/mqtt/conformance_test.go` | 200 | T-4.2 | test-first |
+| T-4.1 | 写 `deadletter.go` — `routeDeadLetter(ctx, originalTopic string, payload []byte, reason ConsumeFailureReason)`：publish 到 `$dead/<topic>`，fail-closed（失败 log + `mqtt_dlx_failed_total` + ack-drop） | `adapters/mqtt/deadletter.go` `deadletter_test.go` | 280 | PR-3 merged | test-first |
+| T-4.2 | `subscriber.go` 接入 `routeDeadLetter`（替换 PR-3 内的桩） | `adapters/mqtt/subscriber.go` (改) | <30 | T-4.1 | impl |
+| T-4.3 | 写 `conformance_test.go` — 实例化 Publisher+Subscriber，Features 声明（GuaranteedOrder=false, **SupportsRequeue=false**（Option C, ADR-050 §6）, SupportsReject=true, **BroadcastSubscribe=false**（$share=competing consumers）），跑 `outboxtest.TestPubSub` 6 Batch | `adapters/mqtt/conformance_test.go` | 200 | T-4.2 | test-first |
 | T-4.4 | 写 `integration_tls_test.go` — build tag `integration,mqtt_tls`；self-signed CA + client cert；mTLS handshake 正常 + handshake 失败（cert 未信任）| `adapters/mqtt/integration_tls_test.go` `testdata/tls/*` | 280 | T-4.2 | test-first |
-| T-4.5 | CI nightly：`.github/workflows/archtest-nightly.yml` 加 mqtt_tls build tag matrix entry | `.github/workflows/archtest-nightly.yml` | 30 | T-4.4 | impl |
+| T-4.5 | CI nightly（实施偏离：见下）：新建独立 `.github/workflows/mqtt-tls-nightly.yml`（testcontainer 作业模型），**不**改 archtest-nightly | `.github/workflows/mqtt-tls-nightly.yml` | 40 | T-4.4 | impl |
+
+> **T-4.5 实施偏离（PR-4 #1142，用户确认）**：原计划在 `archtest-nightly.yml` 加 `mqtt_tls` matrix entry，实际新建独立 `mqtt-tls-nightly.yml`。理由：archtest-nightly 是静态分析 shard 模型（跑 `./tools/archtest/...`，无 Docker），而 mTLS 测试需 testcontainer（mosquitto TLS listener），语义不匹配；独立 workflow 仿 `otel-collector-nightly.yml`（已有 testcontainer nightly 先例）更正确。`{integration, mqtt_tls}` 已注册进 `KnownNonDefaultTags`（fail-closed 自检 `TestKnownNonDefaultTagsCoverage`）。
 | T-4.6 | 集成测试 DLT 端到端：subscribe + handler Reject → 独立 subscriber 在 `$dead/<topic>` 收到 | `adapters/mqtt/integration_test.go` (扩 PR-4 部分) | 180 | T-4.1, T-4.2 | test-first |
 
 **PR-4 净 diff 估算**: ~1300 行

@@ -289,6 +289,43 @@ func (n TopicNamespace) Mint(topic string) (publishableTopic, error) {
 	return publishableTopic{topic: topic}, nil
 }
 
+// deadLetterPrefix is the reserved MQTT topic prefix for app-level dead-letter
+// routing. MQTT has no broker-native dead-letter exchange (unlike AMQP's DLX),
+// so a permanently-rejected (DispositionReject) or undecodable (poison) message
+// is republished to "$dead/<originalTopic>" for ops audit before being PUBACK'd
+// to stop redelivery.
+//
+// The "$"-prefix is deliberate and load-bearing: MQTT v5 §4.7.2 excludes
+// "$"-leading topics from wildcard subscriptions ("#" / "+" at the root), so a
+// cell's normal "<ns>/#" subscription can never re-consume a $dead message —
+// the dead-letter sink cannot loop back into live delivery. The prefix is
+// intentionally OUTSIDE the TopicNamespace boundary: it is an ops sink, not a
+// cell topic.
+const deadLetterPrefix = "$dead/"
+
+// MintDeadLetter validates originalTopic against this namespace via PublishOK and
+// returns a publishableTopic for the dead-letter sink "$dead/<originalTopic>".
+//
+// It validates the ORIGINAL topic, not the "$dead/"-prefixed result, because:
+//   - the prefixed result lives outside the namespace and begins with "$", which
+//     PublishOK would (correctly) reject — so the prefixed form is unvalidatable;
+//   - on the poison path originalTopic is the untrusted broker-delivered topic,
+//     so re-validating it fail-closed rejects wildcards / empty / out-of-namespace
+//     before a publish target is constructed.
+//
+// MintDeadLetter is a SECOND sanctioned constructor of the sealed publishableTopic
+// (alongside Mint). Splitting it into its own typed function (rather than
+// overloading Mint with a "$dead/" special case) keeps the two semantics distinct
+// — "publish a cell topic" vs "route a poison message to the ops sink" — so
+// choosing the wrong one is choosing the wrong API name. The construction-allowlist
+// archtest MQTT-PUBLISH-CALLSITE-FUNNEL-01/A2 enumerates both constructors.
+func (n TopicNamespace) MintDeadLetter(originalTopic string) (publishableTopic, error) {
+	if err := n.PublishOK(originalTopic); err != nil {
+		return publishableTopic{}, err
+	}
+	return publishableTopic{topic: deadLetterPrefix + originalTopic}, nil
+}
+
 // String returns the validated topic string. Provided for slog logging and
 // for the internal Publish path to read the topic when constructing the
 // paho.Publish packet.

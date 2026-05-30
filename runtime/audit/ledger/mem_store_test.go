@@ -2,10 +2,6 @@ package ledger_test
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -18,52 +14,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
 )
-
-// referenceHashInput mirrors the unexported auditHashInput struct in
-// protocol.go. Tests use this as an external, independent reference for the
-// canonical-JSON HMAC format so that any drift between the production struct
-// (locked by archtest AUDIT-HASH-INPUT-FROZEN-01) and this reference surfaces
-// as a test failure as well as an archtest failure.
-type referenceHashInput struct {
-	Namespace          string `json:"namespace"`
-	PrevHash           string `json:"prev_hash"`
-	EventID            string `json:"event_id"`
-	EventType          string `json:"event_type"`
-	ActorID            string `json:"actor_id"`
-	SubjectID          string `json:"subject_id"`
-	TenantID           string `json:"tenant_id"`
-	SessionID          string `json:"session_id"`
-	CorrelationID      string `json:"correlation_id"`
-	OccurredAtUnixNano int64  `json:"occurred_at_unix_nano"`
-	TimestampUnixNano  int64  `json:"timestamp_unix_nano"`
-	Payload            []byte `json:"payload"`
-}
-
-// referenceComputeHash recomputes the canonical HMAC for an Entry independently
-// of Protocol.ComputeHash. The namespace is supplied explicitly because
-// production embeds Protocol.Namespace() as the first signed field
-// (cross-namespace HMAC replay attack vector — see ADR-1042 §威胁矩阵 §A).
-func referenceComputeHash(key []byte, ns ledger.NamespaceID, prevHash string, e *ledger.Entry) string {
-	in := referenceHashInput{
-		Namespace:          string(ns),
-		PrevHash:           prevHash,
-		EventID:            e.EventID,
-		EventType:          e.EventType,
-		ActorID:            e.ActorID,
-		SubjectID:          e.SubjectID,
-		TenantID:           e.TenantID,
-		SessionID:          e.SessionID,
-		CorrelationID:      e.CorrelationID,
-		OccurredAtUnixNano: e.OccurredAt.UnixNano(),
-		TimestampUnixNano:  e.Timestamp.UnixNano(),
-		Payload:            e.Payload,
-	}
-	msgBytes, _ := json.Marshal(in)
-	mac := hmac.New(sha256.New, key)
-	mac.Write(msgBytes)
-	return hex.EncodeToString(mac.Sum(nil))
-}
 
 // redeliveryAdvance is the clock advance used in at-least-once redelivery
 // simulation tests (F-CR-2 idempotency regression guard).
@@ -137,7 +89,7 @@ func TestNewMemStore_TypedNilClock_Rejected(t *testing.T) {
 // TestMemStore_Append_HashEquivalence verifies the HMAC-SHA256 computation
 // matches the 12-field canonical-JSON reference (auditHashInput struct shape +
 // json.Marshal source-order). The reference is recomputed independently via
-// referenceComputeHash (above) so any drift between production and the spec
+// storetest.ReferenceComputeHash so any drift between production and the spec
 // surfaces both here and in archtest AUDIT-HASH-INPUT-FROZEN-01.
 func TestMemStore_Append_HashEquivalence(t *testing.T) {
 	t.Parallel()
@@ -164,7 +116,7 @@ func TestMemStore_Append_HashEquivalence(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	expectedHash := referenceComputeHash(key, ledger.NamespaceID("auditcore"), "", entry)
+	expectedHash := storetest.ReferenceComputeHash(t, key, ledger.NamespaceID("auditcore"), "", entry)
 
 	tail, err := store.Tail(context.Background())
 	if err != nil {
@@ -723,7 +675,7 @@ func TestProtocol_ComputeHash_ByteForByte(t *testing.T) {
 		PrevHash:      "deadbeef",
 	}
 
-	expected := referenceComputeHash(keyCopy, ns, e.PrevHash, e)
+	expected := storetest.ReferenceComputeHash(t, keyCopy, ns, e.PrevHash, e)
 	got := p.ComputeHash(e.PrevHash, e)
 	if got != expected {
 		t.Errorf("ComputeHash mismatch:\n  got  %s\n  want %s", got, expected)

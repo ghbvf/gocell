@@ -139,8 +139,10 @@ func TestNamespaceID_Validate(t *testing.T) {
 		{"starts_dash", "-audit", true},
 		{"starts_underscore", "_audit", false},
 		{"valid_simple", "auditcore", false},
-		{"valid_with_dash", "audit-core", false},
 		{"valid_with_underscore", "audit_core", false},
+		{"contains_dash", "audit-core", true},
+		{"contains_digit", "audit1core", true},
+		{"contains_dot", "a.b", true},
 		{"contains_brace_open", "audit{core", true},
 		{"contains_brace_close", "audit}core", true},
 	}

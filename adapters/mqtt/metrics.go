@@ -205,7 +205,7 @@ var _ PublisherCollector = NoopPublisherCollector{}
 // providerPublisherCollector implements PublisherCollector via a provider-
 // neutral metrics.Provider. Wired at the composition root.
 //
-// Metrics (subsystem=mqtt):
+// Metrics (mqtt_ name prefix; metrics.CounterOpts has no Subsystem field):
 //
 //	mqtt_publish_total                 (counter,   labels: cell)
 //	mqtt_publish_failed_total          (counter,   labels: cell, reason)
@@ -327,12 +327,12 @@ type ConsumeFailureReason string
 const (
 	// consumeReasonUnmarshal means the received PUBLISH payload could not be
 	// decoded into the v1 outbox wire envelope (poison message). The message is
-	// acked-as-consumed so it cannot block intake forever; PR-4 will route to
-	// $dead/<topic> before the ack.
+	// routed to $dead/<topic> then acked-as-consumed so it cannot block intake
+	// forever (see deadletter.go routeDeadLetter).
 	consumeReasonUnmarshal ConsumeFailureReason = "unmarshal"
 	// consumeReasonReject means the handler returned DispositionReject (permanent
-	// failure). The message is acked-as-poison; PR-4 adds the $dead/<topic>
-	// publish before the ack.
+	// failure). The message is routed to $dead/<topic> then acked-as-poison (see
+	// deadletter.go routeDeadLetter).
 	consumeReasonReject ConsumeFailureReason = "reject"
 	// consumeReasonRequeue means the handler returned DispositionRequeue (transient
 	// failure). The message is left unacked so the broker redelivers on session
@@ -369,6 +369,20 @@ type SubscriberCollector interface {
 	// Implementations MUST NOT panic on any reason value; the closed set is
 	// enforced by the call site, not the collector.
 	RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason)
+	// RecordDeadLetter increments the dead-letter counter for a message routed to
+	// the app-level $dead/<topic> sink. reason ∈ {unmarshal, reject} (poison or
+	// permanent failure). Implementations MUST NOT panic on any reason value.
+	RecordDeadLetter(ctx context.Context, reason ConsumeFailureReason)
+	// RecordDeadLetterFailure increments the dead-letter-FAILURE counter when the
+	// $dead/<topic> publish itself fails (topic unmintable or broker publish
+	// error) and the message is consequently acked-as-poison WITHOUT being
+	// captured in $dead. This is a distinct, higher-severity operational signal
+	// from RecordConsumeFailure ("a message failed processing") — it means the
+	// dead-letter sink itself is unhealthy and messages are being dropped.
+	// Operators SHOULD alert on it. reason ∈ {unmarshal, reject}.
+	// ref: Kafka Connect KIP-298 deadletterqueue-produce-failures (distinct from
+	// total-record-errors).
+	RecordDeadLetterFailure(ctx context.Context, reason ConsumeFailureReason)
 }
 
 // NoopSubscriberCollector is the default collector used when no observability is
@@ -383,16 +397,26 @@ func (NoopSubscriberCollector) RecordConsumeSuccess(_ context.Context, _ time.Du
 func (NoopSubscriberCollector) RecordConsumeFailure(_ context.Context, _ ConsumeFailureReason) { /* no-op */
 }
 
+// RecordDeadLetter is a no-op.
+func (NoopSubscriberCollector) RecordDeadLetter(_ context.Context, _ ConsumeFailureReason) { /* no-op */
+}
+
+// RecordDeadLetterFailure is a no-op.
+func (NoopSubscriberCollector) RecordDeadLetterFailure(_ context.Context, _ ConsumeFailureReason) { /* no-op */
+}
+
 // Compile-time interface check.
 var _ SubscriberCollector = NoopSubscriberCollector{}
 
 // providerSubscriberCollector implements SubscriberCollector via a provider-
 // neutral metrics.Provider. Wired at the composition root.
 //
-// Metrics (subsystem=mqtt):
+// Metrics (mqtt_ name prefix; metrics.CounterOpts has no Subsystem field):
 //
 //	mqtt_consume_total              (counter,   labels: cell)
 //	mqtt_consume_failed_total       (counter,   labels: cell, reason)
+//	mqtt_dlx_total                  (counter,   labels: cell, reason)
+//	mqtt_dlx_failed_total           (counter,   labels: cell, reason)
 //	mqtt_consume_duration_seconds   (histogram, labels: cell; buckets 1ms–10s)
 //
 // ref: adapters/mqtt/metrics.go providerPublisherCollector — same inject-at-
@@ -401,6 +425,8 @@ type providerSubscriberCollector struct {
 	cellID        string
 	consumeTotal  metrics.CounterVec
 	consumeFailed metrics.CounterVec
+	dlxTotal      metrics.CounterVec
+	dlxFailed     metrics.CounterVec
 	consumeDur    metrics.HistogramVec
 }
 
@@ -410,7 +436,49 @@ var _ SubscriberCollector = (*providerSubscriberCollector)(nil)
 // 10 s, reusing the publish ack bucket choice (network-latency-oriented set).
 var consumeDurationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
-// NewProviderSubscriberCollector registers 3 metrics on p and returns a
+// Subscriber metric definitions (data; registered in registration order by
+// NewProviderSubscriberCollector). Extracted to package level to keep the
+// constructor's registration loop short.
+var (
+	subConsumeTotalOpts = metrics.CounterOpts{
+		Name: "mqtt_consume_total",
+		Help: "Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). " +
+			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+		LabelNames: []string{"cell"},
+	}
+	subConsumeFailedOpts = metrics.CounterOpts{
+		Name: "mqtt_consume_failed_total",
+		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
+			"reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; " +
+			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell", "reason"},
+	}
+	subDlxTotalOpts = metrics.CounterOpts{
+		Name: "mqtt_dlx_total",
+		Help: "Total number of messages routed to the app-level dead-letter sink $dead/<topic>. " +
+			"reason ∈ {unmarshal, reject} — closed set (poison / permanent failure). " +
+			"Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell", "reason"},
+	}
+	subDlxFailedOpts = metrics.CounterOpts{
+		Name: "mqtt_dlx_failed_total",
+		Help: "Total number of messages whose dead-letter publish to $dead/<topic> FAILED (topic " +
+			"unmintable or broker publish error); the message was acked-as-poison WITHOUT $dead capture. " +
+			"A distinct, higher-severity signal from mqtt_consume_failed_total: it means the dead-letter " +
+			"sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. Label: cell.",
+		LabelNames: []string{"cell", "reason"},
+	}
+	subConsumeDurOpts = metrics.HistogramOpts{
+		Name: "mqtt_consume_duration_seconds",
+		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
+			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
+			"Label: cell = construction-time cell identifier.",
+		LabelNames: []string{"cell"},
+		Buckets:    consumeDurationBuckets,
+	}
+)
+
+// NewProviderSubscriberCollector registers 5 metrics on p and returns a
 // SubscriberCollector bound to cellID. cellID becomes the "cell" label value.
 //
 // Returns an error when p is nil, cellID is empty, or the Provider reports a
@@ -435,39 +503,35 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		return wrapErr
 	}
 
-	consumeTotal, err := p.CounterVec(metrics.CounterOpts{
-		Name: "mqtt_consume_total",
-		Help: "Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). " +
-			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
-		LabelNames: []string{"cell"},
-	})
-	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume total counter", err))
+	// registerCounter registers one CounterVec, tracks it for rollback, and on
+	// failure returns the rollback-wrapped error so the caller just propagates it.
+	registerCounter := func(opts metrics.CounterOpts, wrapCtx string) (metrics.CounterVec, error) {
+		cv, cErr := p.CounterVec(opts)
+		if cErr != nil {
+			return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, wrapCtx, cErr))
+		}
+		registered = append(registered, cv)
+		return cv, nil
 	}
-	registered = append(registered, consumeTotal)
 
-	consumeFailed, err := p.CounterVec(metrics.CounterOpts{
-		Name: "mqtt_consume_failed_total",
-		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
-			"reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; " +
-			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
-		LabelNames: []string{"cell", "reason"},
-	})
+	consumeTotal, err := registerCounter(subConsumeTotalOpts, "mqtt: register consume total counter")
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume failed counter", err))
+		return nil, err
 	}
-	registered = append(registered, consumeFailed)
+	consumeFailed, err := registerCounter(subConsumeFailedOpts, "mqtt: register consume failed counter")
+	if err != nil {
+		return nil, err
+	}
+	dlxTotal, err := registerCounter(subDlxTotalOpts, "mqtt: register dlx counter")
+	if err != nil {
+		return nil, err
+	}
+	dlxFailed, err := registerCounter(subDlxFailedOpts, "mqtt: register dlx failed counter")
+	if err != nil {
+		return nil, err
+	}
 
-	consumeDur, err := p.HistogramVec(metrics.HistogramOpts{
-		Name: "mqtt_consume_duration_seconds",
-		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
-			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
-			"Label: cell = construction-time cell identifier.",
-		LabelNames: []string{"cell"},
-		Buckets:    consumeDurationBuckets,
-	})
+	consumeDur, err := p.HistogramVec(subConsumeDurOpts)
 	if err != nil {
 		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
 			"mqtt: register consume duration histogram", err))
@@ -479,6 +543,8 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		cellID:        cellID,
 		consumeTotal:  consumeTotal,
 		consumeFailed: consumeFailed,
+		dlxTotal:      dlxTotal,
+		dlxFailed:     dlxFailed,
 		consumeDur:    consumeDur,
 	}, nil
 }
@@ -494,4 +560,17 @@ func (c *providerSubscriberCollector) RecordConsumeSuccess(ctx context.Context, 
 // mqtt_consume_total is NOT incremented — failure is not counted as success.
 func (c *providerSubscriberCollector) RecordConsumeFailure(ctx context.Context, reason ConsumeFailureReason) {
 	c.consumeFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
+}
+
+// RecordDeadLetter increments mqtt_dlx_total{cell, reason} when a message is
+// routed to the app-level $dead/<topic> sink (poison or permanent reject).
+func (c *providerSubscriberCollector) RecordDeadLetter(ctx context.Context, reason ConsumeFailureReason) {
+	c.dlxTotal.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
+}
+
+// RecordDeadLetterFailure increments mqtt_dlx_failed_total{cell, reason} when the
+// $dead/<topic> publish fails and the message is dropped (acked-as-poison) without
+// DLT capture — the alertable "dead-letter sink unhealthy" signal.
+func (c *providerSubscriberCollector) RecordDeadLetterFailure(ctx context.Context, reason ConsumeFailureReason) {
+	c.dlxFailed.With(metrics.Labels{"cell": c.cellID, "reason": string(reason)}).Inc(ctx)
 }

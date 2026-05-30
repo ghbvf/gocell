@@ -663,7 +663,7 @@ func startBrokerWithHook(t *testing.T, h mqttserver.Hook) (addr string, stop fun
 		return true
 	}, testtime.D2s, testtime.D10ms)
 
-	return addr, func() { _ = srv.Close() }
+	return addr, func() { closeBrokerSafely(t, srv) }
 }
 
 // rejectingPubAckHook returns a broker-rejection PUBACK reason code (>= 0x80)
@@ -773,7 +773,7 @@ func startBrokerWithNoSubscribersHook(t *testing.T) (addr string, stop func()) {
 		return true
 	}, testtime.D2s, testtime.D10ms)
 
-	return addr, func() { _ = srv.Close() }
+	return addr, func() { closeBrokerSafely(t, srv) }
 }
 
 // TestPublisher_Publish_NoMatchingSubscribers_Success verifies that PUBACK 0x10

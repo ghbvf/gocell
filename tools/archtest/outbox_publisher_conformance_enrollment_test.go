@@ -73,14 +73,9 @@ var outboxPublisherEnrollmentWaivers = map[string]string{
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil": "test-double publishers " +
 		"(StubPublisher / FailingPublisher) — not a real transport; outboxtest.TestPubSub " +
 		"roundtrip is N/A for in-memory stubs.",
-	"github.com/ghbvf/gocell/adapters/mqtt": "PR-4 waiver (V11-4 series, parent gh #1138): " +
-		"adapters/mqtt.Subscriber landed in PR-3, so the pub→sub roundtrip is now possible, but the " +
-		"outboxtest.TestPubSub conformance is deferred to PR-4 alongside the $dead/<topic> DLT path it " +
-		"exercises (mosquitto-via-testcontainers integration). Remove this waiver and add " +
-		"adapters/mqtt/conformance_test.go calling outboxtest.TestPubSub in PR-4 — the stale-waiver guard " +
-		"below fails CI if the waiver is left in place after enrollment. SettlementObserver firing (F4) is " +
-		"guarded in the interim by OUTBOX-SUBSCRIBER-SETTLEMENT-NOTIFY-01 + the adapters/mqtt white-box " +
-		"TestSubscriber_NotifySettlement_FiresObservers test.",
+	// adapters/mqtt waiver removed in PR-4 (#1142): adapters/mqtt/conformance_test.go
+	// now calls outboxtest.TestPubSub (mosquitto-via-testcontainers), so the
+	// stale-waiver guard requires the entry be dropped.
 }
 
 // TestOutboxPublisherConformanceEnrollment enforces

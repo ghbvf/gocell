@@ -48,6 +48,7 @@ const (
 	msgConfigBadBrokerURL             = "mqtt: broker URL is invalid or uses an unsupported scheme"
 	msgConfigTLSRequired              = "mqtt: TLS config required for tls broker"
 	msgConfigTLSInsecureSkipVerify    = "mqtt: TLS InsecureSkipVerify is forbidden (certificate verification must not be disabled)"
+	msgConfigTLSMinVersion            = "mqtt: TLS MinVersion below TLS 1.2 is forbidden (downgrade protection)"
 	msgConfigPlaintextRemote          = "mqtt: plaintext broker scheme requires loopback host"
 	msgConfigConnectTimeout           = "mqtt: ConnectTimeout must be > 0"
 	msgConfigKeepAlive                = "mqtt: KeepAlive must be > 0"
@@ -192,6 +193,12 @@ func (c Config) validateBrokers() error {
 	// silently-insecure broker connection.
 	if c.TLS != nil && c.TLS.InsecureSkipVerify {
 		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSInsecureSkipVerify)
+	}
+	// Fail-closed downgrade protection: MinVersion==0 means "unset" → Go's tls
+	// default floor (TLS 1.2) applies, which is acceptable; reject only an
+	// explicit weaker floor (TLS 1.0 / 1.1) that a caller mis-set.
+	if c.TLS != nil && c.TLS.MinVersion != 0 && c.TLS.MinVersion < tls.VersionTLS12 {
+		return errcode.New(errcode.KindInvalid, ErrAdapterMQTTInvalidConfig, msgConfigTLSMinVersion)
 	}
 	return nil
 }
