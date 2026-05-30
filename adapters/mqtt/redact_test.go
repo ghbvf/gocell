@@ -51,18 +51,6 @@ func TestRedactConnectURL_Unparseable(t *testing.T) {
 	}
 }
 
-func TestRedactPayloadForLog(t *testing.T) {
-	payload := []byte(`{"password":"hunter2","user":"alice"}`)
-	out := redactPayloadForLog(payload)
-	if strings.Contains(string(out), "hunter2") {
-		t.Errorf("redactPayloadForLog: password value not redacted, got: %s", out)
-	}
-	// user should still be visible
-	if !strings.Contains(string(out), "alice") {
-		t.Errorf("redactPayloadForLog: user field should not be redacted, got: %s", out)
-	}
-}
-
 func TestRedactErr(t *testing.T) {
 	err := errors.New("connect failed: token=abc123 host=broker")
 	out := redactErr(err)

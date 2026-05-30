@@ -52,6 +52,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 	s.collector.RecordDeadLetter(ctx, reason)
 	slog.LogAttrs(ctx, slog.LevelWarn, "mqtt: routed message to dead-letter sink",
 		slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
+		slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
 		slog.String(logKeyDLXTopic, dlt.String()),
 		slog.String("reason", string(reason)))
 }

@@ -447,15 +447,23 @@ func (s *Subscriber) dispatchDisposition(
 		// Permanent failure: route the envelope to $dead/<topic> for ops audit,
 		// then ack-as-poison to stop redelivery. routeDeadLetter is fail-closed
 		// (logs + skips on any error) so the ack always proceeds.
+		//
+		// Order is a correctness invariant: route → ackPoison (broker disposition)
+		// → releaseSettlement. The claim is released only AFTER the PUBACK finalizes
+		// the broker disposition, so a connection drop mid-settle cannot redeliver
+		// the message to another instance that then re-claims a freed claim (mirrors
+		// rabbitmq's Nack-before-release). routeDeadLetter's broker round-trip would
+		// otherwise widen that window.
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: handler rejected entry, routing to $dead then acking poison",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, entry.Topic()),
 			slog.String(logKeyEventID, entry.ID()),
 			slog.Any("error", res.Err))
-		s.releaseSettlement(ctx, settlement, entry, "reject")
 		s.collector.RecordConsumeFailure(ctx, consumeReasonReject)
 		s.routeDeadLetter(ctx, entry.Topic(), pb.Payload, consumeReasonReject)
-		if ackErr := s.ackPoison(ctx, pb, "reject"); ackErr != nil {
+		ackErr := s.ackPoison(ctx, pb, "reject")
+		s.releaseSettlement(ctx, settlement, entry, "reject")
+		if ackErr != nil {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultAckFailed, ackErr)
 		} else {
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
