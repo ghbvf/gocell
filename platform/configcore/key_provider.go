@@ -10,8 +10,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/platform/internal/platformshared"
 )
 
 // buildKeyProvider constructs the KeyProvider from the supplied providerName
@@ -52,11 +52,13 @@ func buildKeyProvider(
 
 // buildLocalAESKeyProvider constructs the local-aes KeyProvider.
 func buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
-	if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", []byte(strings.ToLower(masterKey))); err != nil {
+	lowerMK := []byte(strings.ToLower(masterKey))
+	if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", lowerMK); err != nil {
 		return nil, err
 	}
 	if prevMasterKey != "" {
-		if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", []byte(strings.ToLower(prevMasterKey))); err != nil {
+		lowerPrev := []byte(strings.ToLower(prevMasterKey))
+		if err := platformshared.RejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", lowerPrev); err != nil {
 			return nil, err
 		}
 	}
@@ -68,8 +70,12 @@ func buildLocalAESKeyProvider(adapterMode, masterKey, prevMasterKey string) (kcr
 	return kp, nil
 }
 
+type vaultMetricsFactory func() (*adaptervault.TransitMetrics, error)
+
 // buildVaultTransitKeyProvider constructs the vault-transit KeyProvider.
-func buildVaultTransitKeyProvider(adapterMode string, clk clock.Clock, vaultMetrics func() (*adaptervault.TransitMetrics, error)) (kcrypto.KeyProvider, error) {
+func buildVaultTransitKeyProvider(
+	adapterMode string, clk clock.Clock, vaultMetrics vaultMetricsFactory,
+) (kcrypto.KeyProvider, error) {
 	metrics, err := vaultMetrics()
 	if err != nil {
 		return nil, err

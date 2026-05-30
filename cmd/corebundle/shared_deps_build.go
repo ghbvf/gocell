@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -30,9 +31,9 @@ type sharedMetricsDeps struct {
 
 // buildSharedMetricsDeps assembles framework-level always-on metric collectors
 // (config events, eventbus cache). Provider-conditional metrics (vault) live
-// in dedicated lazy methods on SharedDeps (e.g. ProvideVaultTransitMetrics)
-// so deployments that don't use the corresponding backend don't pollute their
-// scrape footprint with always-zero series.
+// in dedicated lazy methods on cmdLocals (initVaultMetricsFactory) so deployments
+// that don't use the corresponding backend don't pollute their scrape footprint
+// with always-zero series.
 //
 // Failure here is composition-root fatal (LoadSharedDepsFromEnv returns the
 // error and the process exits); no LIFO rollback needed because every
@@ -134,17 +135,17 @@ func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.C
 	}
 }
 
-func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
+func adapterInfoForSharedDeps(shared *composition.SharedDeps, locals *cmdLocals) map[string]string {
 	info := shared.Topology.AdapterInfo()
 	redisState := "not-configured"
-	if shared.redisClient != nil {
+	if locals.redisClient != nil {
 		redisState = "configured"
 	}
 	nonceStoreKind := string(kauth.NonceStoreKindNoop)
-	if shared.InternalGuard != nil && shared.InternalGuard.NonceStore() != nil {
-		nonceStoreKind = string(shared.InternalGuard.NonceStore().Kind())
+	if locals.internalGuard != nil && locals.internalGuard.NonceStore() != nil {
+		nonceStoreKind = string(locals.internalGuard.NonceStore().Kind())
 	}
-	claimerKind := string(shared.ConsumerClaimerKind)
+	claimerKind := string(locals.consumerClaimerKind)
 	if claimerKind == "" {
 		claimerKind = string(consumerClaimerKindUnknown)
 	}

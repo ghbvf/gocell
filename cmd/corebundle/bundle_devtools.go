@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 // defaultDevtoolsParseTimeout is the max time allowed for project metadata
@@ -28,7 +29,7 @@ const defaultDevtoolsParseTimeout = 30 * time.Second
 // generatedPackageGraph is the build-time generated package dep graph from
 // catalog_gen.go (produced by `go generate ./cmd/corebundle/`). When nil (e.g.
 // go generate has not been run), the packageDeps block is simply omitted.
-func devtoolsOption(shared *SharedDeps) bootstrap.Option {
+func devtoolsOption(shared *composition.SharedDeps) bootstrap.Option {
 	root := shared.ProjectRoot
 	if root == "" {
 		slog.Warn("devtools: GOCELL_PROJECT_ROOT unset; catalog endpoint disabled")

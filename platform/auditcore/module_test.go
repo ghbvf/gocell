@@ -20,6 +20,6 @@ func TestModule_CorrectID(t *testing.T) {
 	assert.Equal(t, "auditcore", m.ID(), "Module ID must be 'auditcore'")
 }
 
-func TestModule_ImplementsCellModule(t *testing.T) {
-	var _ composition.CellModule = auditcore.Module()
+func TestModule_ImplementsCellModule(*testing.T) {
+	_ = []composition.CellModule{auditcore.Module()}
 }

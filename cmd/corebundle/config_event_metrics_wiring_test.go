@@ -27,11 +27,12 @@ func newConfigEventEntry(t *testing.T, id string) outbox.Entry {
 	return entry
 }
 
-func TestSharedDepsValidateRequiresConfigEventCollector(t *testing.T) {
-	deps := buildTestSharedDeps(t)
-	deps.ConfigEventCollector = nil
+func TestCompositionSharedDepsValidateRequiresConfigEventCollector(t *testing.T) {
+	// composition.SharedDeps.Validate() checks ConfigEventCollector.
+	shared, _ := buildTestSharedDepsAndLocals(t)
+	shared.ConfigEventCollector = nil
 
-	err := deps.Validate()
+	err := shared.Validate()
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ConfigEventCollector")
@@ -76,7 +77,7 @@ func TestConfigEventOwnerValidator_RejectsConfigSubscriptionWithoutOwner(t *test
 
 func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *testing.T) {
 	collector := &recordingCoreConfigEventCollector{}
-	shared := buildTestSharedDeps(t)
+	shared, _ := buildTestSharedDepsAndLocals(t)
 	shared.ConfigEventCollector = collector
 	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(clock.Real()), outbox.ConsumerBaseConfig{
 		RetryCount:     2,
@@ -116,7 +117,7 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 
 func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *testing.T) {
 	collector := &recordingCoreConfigEventCollector{}
-	shared := buildTestSharedDeps(t)
+	shared, _ := buildTestSharedDepsAndLocals(t)
 	shared.ConfigEventCollector = collector
 	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(clock.Real()), outbox.ConsumerBaseConfig{
 		RetryCount:     2,

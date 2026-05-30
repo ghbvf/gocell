@@ -9,7 +9,15 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/http/health/healthtest"
 )
+
+// withSlogCapture redirects slog.Default for the duration of the test.
+// Delegates to healthtest.NewCapture.
+func withSlogCapture(t *testing.T) *healthtest.CaptureHandler {
+	t.Helper()
+	return healthtest.NewCapture(t)
+}
 
 // TestLogAssemblyMaturity verifies that logAssemblyMaturity emits an Info
 // record with the expected message, a total_cells attr, and per-lifecycle

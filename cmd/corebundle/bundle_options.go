@@ -12,11 +12,12 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 func runtimeBaseOptions(
-	shared *SharedDeps,
+	shared *composition.SharedDeps,
 	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
@@ -69,7 +70,7 @@ func runtimeBaseOptions(
 	return opts
 }
 
-func consumerMiddlewares(shared *SharedDeps) []outbox.SubscriptionMiddleware {
+func consumerMiddlewares(shared *composition.SharedDeps) []outbox.SubscriptionMiddleware {
 	return []outbox.SubscriptionMiddleware{
 		configEventConsumerMiddleware(shared.ConfigEventCollector),
 	}
@@ -97,7 +98,7 @@ func newBootstrapFromOptions(clk clock.Clock, opts []bootstrap.Option) *bootstra
 // BuildApp opts). This function covers only the cross-cutting concerns:
 // HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
 func defaultRuntimeOptions(
-	shared *SharedDeps,
+	shared *composition.SharedDeps,
 	locals *cmdLocals,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,

@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -39,7 +40,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/state/cas"
-	"github.com/ghbvf/gocell/platform/internal/platformshared"
 )
 
 // envSessionCacheTTL is the env knob that enables AUTH-CACHE-01.
@@ -83,60 +83,17 @@ func (m module) Provide(
 	if err != nil {
 		return nil, nil, nil, err
 	}
-
 	if creds.Username == nil {
 		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD are required "+
 				"to protect setup/admin endpoint")
 	}
 
-	// Cursor codec for accesscore.
-	accessPrimary, accessPrevious := platformshared.LoadCursorKeys("ACCESSCORE")
-	cursorCodec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
-		AdapterMode: shared.Topology.AdapterMode,
-		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
-		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
-		Primary:     accessPrimary,
-		Previous:    accessPrevious,
-		DevDefault:  "corebundle-access-cursor-key32!!",
-		Label:       "access",
-	})
+	accessOpts, sessionProto, err := buildAccessBaseOpts(shared)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
+		return nil, nil, nil, err
 	}
 
-	// CAS Protocol for ChangePassword concurrent-write guard
-	// (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
-	casProto, err := cas.NewProtocol(cas.WithVersionField(accesscell.PasswordVersionField))
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore cas protocol: %w", err)
-	}
-
-	sessionProto, err := session.NewProtocol(
-		session.WithFingerprint(session.FingerprintJTIRef{}),
-		session.WithOrdering(session.OrderingAuthzEpoch{}),
-		session.WithRevokeOnAll(),
-	)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore session protocol: %w", err)
-	}
-
-	lockoutMetrics, err := auth.NewAccountLockoutMetrics(shared.MetricsProvider)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("accesscore: register account-lockout metrics: %w", err)
-	}
-
-	accessOpts := []accesscell.Option{
-		accesscell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
-		accesscell.WithJWTIssuer(shared.JWTIssuer),
-		accesscell.WithJWTVerifier(shared.JWTVerifier),
-		accesscell.WithCursorCodec(cursorCodec),
-		accesscell.WithMetricsProvider(shared.MetricsProvider),
-		accesscell.WithConfigEventCollector(shared.ConfigEventCollector),
-		accesscell.WithLockoutMetrics(lockoutMetrics),
-		accesscell.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
-		accesscell.WithCASProtocol(casProto),
-	}
 	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
 		return nil, nil, nil, err
@@ -158,7 +115,6 @@ func (m module) Provide(
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("accesscore: build bootstrap audit observer: %w", err)
 	}
-
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  bootstrapRateLimitPerSec,
 		Burst: bootstrapRateLimitBurst,
@@ -172,6 +128,58 @@ func (m module) Provide(
 
 	c := accesscell.NewAccessCore(shared.Clock, accessOpts...)
 	return c, nil, []kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
+}
+
+// buildAccessBaseOpts builds the base accesscore options and session protocol.
+// Extracted from Provide to keep its cognitive complexity within the limit.
+func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *session.Protocol, error) {
+	accessPrimary, accessPrevious := platformshared.LoadCursorKeys("ACCESSCORE")
+	cursorCodec, err := platformshared.BuildCursorCodec(platformshared.CursorCodecConfig{
+		AdapterMode: shared.Topology.AdapterMode,
+		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     accessPrimary,
+		Previous:    accessPrevious,
+		DevDefault:  "corebundle-access-cursor-key32!!",
+		Label:       "access",
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
+	}
+
+	// CAS Protocol for ChangePassword concurrent-write guard
+	// (CAS-PROTOCOL-COMPOSITION-ROOT-01 archtest).
+	casProto, err := cas.NewProtocol(cas.WithVersionField(accesscell.PasswordVersionField))
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore cas protocol: %w", err)
+	}
+
+	sessionProto, err := session.NewProtocol(
+		session.WithFingerprint(session.FingerprintJTIRef{}),
+		session.WithOrdering(session.OrderingAuthzEpoch{}),
+		session.WithRevokeOnAll(),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore session protocol: %w", err)
+	}
+
+	lockoutMetrics, err := auth.NewAccountLockoutMetrics(shared.MetricsProvider)
+	if err != nil {
+		return nil, nil, fmt.Errorf("accesscore: register account-lockout metrics: %w", err)
+	}
+
+	opts := []accesscell.Option{
+		accesscell.WithOutboxDeps(outbox.WrapPublisherForCell(shared.EventBus), nil),
+		accesscell.WithJWTIssuer(shared.JWTIssuer),
+		accesscell.WithJWTVerifier(shared.JWTVerifier),
+		accesscell.WithCursorCodec(cursorCodec),
+		accesscell.WithMetricsProvider(shared.MetricsProvider),
+		accesscell.WithConfigEventCollector(shared.ConfigEventCollector),
+		accesscell.WithLockoutMetrics(lockoutMetrics),
+		accesscell.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
+		accesscell.WithCASProtocol(casProto),
+	}
+	return opts, sessionProto, nil
 }
 
 // accessPostgresOptions builds the postgres-specific accesscore options.

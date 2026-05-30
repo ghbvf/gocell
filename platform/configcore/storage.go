@@ -1,7 +1,6 @@
 package configcore
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -18,11 +17,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/platform/internal/platformshared"
 )
 
 // configCoreModuleConfig bundles inputs for buildConfigCoreOpts.
@@ -149,23 +148,4 @@ func buildConfigCorePGStorage(
 		return nil, fmt.Errorf("configcore PG repository wiring: %w", err)
 	}
 	return storageOpt, nil
-}
-
-// verifyPGPreconditions runs the three configcore PG fail-fast checks in
-// order. Caller owns pool lifecycle; on error caller must close the pool.
-func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
-	migrationsFS, err := adapterpg.MigrationsFS()
-	if err != nil {
-		return fmt.Errorf("configcore PG migrations fs: %w", err)
-	}
-	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS); err != nil {
-		return fmt.Errorf("configcore PG schema guard: %w", err)
-	}
-	if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
-		return fmt.Errorf("configcore PG schema shape: %w", shapeErr)
-	}
-	if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
-		return fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
-	}
-	return nil
 }

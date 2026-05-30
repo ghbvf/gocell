@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 // buildAssembly constructs the runtime Assembly and registers the generated
@@ -44,7 +45,7 @@ func durabilityModeForTopology(topo bootstrap.Topology) outbox.DurabilityMode {
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected
 // idempotency claimer built in LoadSharedDepsFromEnv.
-func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
+func buildConsumerBase(deps *composition.SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"construct ConsumerBase: SharedDeps is nil")

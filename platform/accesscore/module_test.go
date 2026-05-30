@@ -20,6 +20,6 @@ func TestModule_CorrectID(t *testing.T) {
 	assert.Equal(t, "accesscore", m.ID(), "Module ID must be 'accesscore'")
 }
 
-func TestModule_ImplementsCellModule(t *testing.T) {
-	var _ composition.CellModule = accesscore.Module()
+func TestModule_ImplementsCellModule(*testing.T) {
+	_ = []composition.CellModule{accesscore.Module()}
 }

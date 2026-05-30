@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
@@ -23,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/errutil"
@@ -34,13 +31,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // newTestInternalGuard constructs an internalGuard backed by an
-// InMemoryNonceStore so prod-topology SharedDeps.Validate paths see a
+// InMemoryNonceStore so prod-topology validation paths see a
 // replay-safe store (NonceStoreKindInMemory) rather than a Noop.
 func newTestInternalGuard(t *testing.T) *internalGuard {
 	t.Helper()
@@ -56,7 +53,7 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 }
 
 // promStackToLocals creates a minimal *cmdLocals from a promStack for tests
-// that still call buildAssembly / runtimeBaseOptions / defaultRuntimeOptions
+// that call buildAssembly / runtimeBaseOptions / defaultRuntimeOptions
 // directly without going through the full runCorebundle path.
 func promStackToLocals(ps promStack) *cmdLocals {
 	l := &cmdLocals{
@@ -68,180 +65,9 @@ func promStackToLocals(ps promStack) *cmdLocals {
 	return l
 }
 
-// sharedToLocals creates a minimal *cmdLocals from a SharedDeps for tests
-// that use buildTestSharedDeps and need to call functions that take *cmdLocals.
-func sharedToLocals(shared *SharedDeps) *cmdLocals {
-	l := &cmdLocals{
-		registry:        shared.PromStack.registry,
-		hookObserver:    shared.PromStack.hookObserver,
-		metricProvider:  shared.PromStack.metricProvider,
-		internalGuard:   shared.InternalGuard,
-		consumerClaimerKind: shared.ConsumerClaimerKind,
-	}
-	l.initVaultMetricsFactory()
-	return l
-}
-
-// ---------------------------------------------------------------------------
-// buildInternalAuthChain coverage
-// ---------------------------------------------------------------------------
-
-// TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
-// a guard produces an AuthServiceToken plan in the chain. After SEC-FAIL-CLOSED,
-// internalGuardFromEnv always returns an error rather than a nil guard when
-// GOCELL_SERVICE_SECRET is unset, so buildInternalAuthChain is only ever
-// called with a non-nil guard.
-func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
-	guard := newTestInternalGuard(t)
-	chain, err := buildInternalAuthChain(guard)
-	require.NoError(t, err)
-	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
-	_, ok := chain[0].(kauth.AuthServiceToken)
-	assert.True(t, ok, "plan must be kauth.AuthServiceToken; got %T", chain[0])
-}
-
-// ---------------------------------------------------------------------------
-// buildAssembly error branch coverage
-// ---------------------------------------------------------------------------
-
-// TestBuildAssembly_RegisterError verifies that buildAssembly propagates the
-// error returned by asm.Register when a duplicate cell ID is detected.
-func TestBuildAssembly_RegisterError(t *testing.T) {
-	ps, err := buildPromStack()
-	require.NoError(t, err)
-
-	// Two cells with the same ID causes asm.Register to fail on the second call.
-	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
-	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
-
-	_, err = buildAssembly(promStackToLocals(ps), "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
-	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
-	assert.Contains(t, err.Error(), "dup-cell",
-		"error must mention the duplicate cell ID so operators can diagnose the conflict")
-}
-
-// TestAccessCoreModule_ProvideDoesNotAdvertiseCredentialPath verifies
-// wiring does not promise a credential file path in any log output.
-func TestAccessCoreModule_ProvideDoesNotAdvertiseCredentialPath(t *testing.T) {
-	buf, restore := captureSlogInfoLines(t)
-	t.Cleanup(restore)
-
-	shared := buildTestSharedDeps(t)
-
-	_, _, _, err := AccessCoreModule{}.Provide(context.Background(), shared)
-	require.NoError(t, err)
-
-	logs := buf.String()
-	assert.NotContains(t, logs, "initial admin credential")
-	assert.NotContains(t, logs, "cred_path")
-}
-
-// ---------------------------------------------------------------------------
-// buildConsumerBase coverage
-// ---------------------------------------------------------------------------
-
-// TestBuildConsumerBase_ReturnsNonNil verifies the happy path of
-// buildConsumerBase: the returned ConsumerBase must be non-nil and usable.
-func TestBuildConsumerBase_ReturnsNonNil(t *testing.T) {
-	deps := buildTestSharedDeps(t)
-	cb, err := buildConsumerBase(deps)
-	require.NoError(t, err)
-	require.NotNil(t, cb, "buildConsumerBase must return a non-nil ConsumerBase")
-}
-
-func TestBuildConsumerBase_RealMultiPodMissingDistributedClaimerErrors(t *testing.T) {
-	deps := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
-	deps.ConsumerClaimer = nil
-	deps.ConsumerClaimerKind = consumerClaimerKindUnknown
-
-	cb, err := buildConsumerBase(deps)
-
-	require.Error(t, err)
-	assert.Nil(t, cb)
-	assert.Contains(t, err.Error(), "ConsumerClaimer")
-}
-
-func TestBuildConsumerBase_NilSharedDepsErrors(t *testing.T) {
-	cb, err := buildConsumerBase(nil)
-
-	require.Error(t, err)
-	assert.Nil(t, cb)
-	assert.Contains(t, err.Error(), "SharedDeps is nil")
-}
-
-func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-	shared.InternalHTTPAddr = "127.0.0.1:0"
-	shared.InternalGuard = newTestInternalGuard(t)
-	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo})
-	cb, err := buildConsumerBase(shared)
-	require.NoError(t, err)
-
-	testLocals := sharedToLocals(shared)
-	base, err := defaultRuntimeOptions(shared, testLocals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
-	require.NoError(t, err)
-	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
-	withRedis, err := defaultRuntimeOptions(shared, testLocals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
-	require.NoError(t, err)
-
-	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
-	// into a single WithManagedResource, so redis adds exactly 1 option (not 2).
-	assert.Len(t, withRedis, len(base)+1)
-}
-
-// ---------------------------------------------------------------------------
-// buildConfigCoreOpts: postgres pool-error path
-// ---------------------------------------------------------------------------
-
-// TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError verifies that when the
-// PGProvider returns a DB() value that is not *pgxpool.Pool, buildConfigCoreOpts
-// returns an error from pgxPoolFromProvider. Pool provisioning has moved to
-// provisionCapabilities (cap_wiring.go); buildConfigCoreOpts now consumes an
-// injected PGProvider rather than opening its own pool.
-func TestBuildConfigCoreOpts_PGMode_WrongDBType_PoolError(t *testing.T) {
-	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	// Inject a PGProvider whose DB() returns a non-*pgxpool.Pool value to
-	// trigger the pgxPoolFromProvider type-assertion failure branch.
-	result, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
-		Topology:         topo,
-		PG:               capability.NewPGProvider(nil, nil, "wrong-type"),
-		Publisher:        discardPublisher{},
-		MetricsProvider:  metrics.NopProvider{},
-		ValueTransformer: crypto.NoopTransformer{},
-	})
-
-	require.Error(t, err, "postgres mode with wrong PG DB() type must return an error")
-	assert.Contains(t, err.Error(), "pgxpool.Pool",
-		"error must mention pgxpool.Pool so operators know the provider is misconfigured")
-	assert.Nil(t, result.CellOptions, "error path must not return cell options")
-}
-
-// fakeManagedResource implements lifecycle.ManagedResource for tests.
-type fakeManagedResource struct {
-	name        string
-	closeCalled bool
-	w           kworker.Worker
-}
-
-func (f *fakeManagedResource) Probes() []healthz.Probe {
-	return []healthz.Probe{
-		healthz.NewProbe(healthz.MustProbeName("fake_resource_ready"), func(context.Context) error { return nil }),
-	}
-}
-
-func (f *fakeManagedResource) Worker() kworker.Worker { return f.w }
-
-func (f *fakeManagedResource) Close(_ context.Context) error {
-	f.closeCalled = true
-	return nil
-}
-
-var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
-
-// buildTestSharedDeps returns a minimal SharedDeps for memory topology tests.
-// Cell-specific keys (cursor codecs, HMAC key) are now module-private and are
-// read from the environment by each CellModule.Provide at wiring time.
-func buildTestSharedDeps(t *testing.T) *SharedDeps {
+// buildTestSharedDepsAndLocals returns a minimal composition.SharedDeps and
+// cmdLocals for memory topology tests.
+func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLocals) {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
@@ -267,77 +93,46 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
 	require.NoError(t, err)
 
-	return &SharedDeps{
+	guard := newTestInternalGuard(t)
+
+	shared := &composition.SharedDeps{
 		Clock:                  clock.Real(),
 		Topology:               bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:                jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:              ps,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        ps.metricProvider,
 		EventBus:               eb,
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
 		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
-		ConsumerClaimerKind:    consumerClaimerKindInMemory,
+		InternalHMACRing:       guard.ring,
 		InternalHTTPAddr:       "127.0.0.1:9090",
-		InternalGuard:          newTestInternalGuard(t),
+		HealthHTTPAddr:         "127.0.0.1:9091",
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
-		// BOOTSTRAP-AUDIT-CHAIN-WIRING-01 (plan 039 W1-2): in production wiring
-		// AuditCoreModule.Provide fills this field for AccessCoreModule.Provide
-		// to consume via audit.NewBootstrapAuthFailObserver. Tests that bypass
-		// BuildApp (e.g. AccessCoreModule{}.Provide() directly) must pre-wire
-		// a real ledger.Store here so the observer constructor sees a non-nil
-		// dependency. Integration tests that run BuildApp end-to-end overwrite
-		// this field naturally.
+		// Pre-wire BootstrapLedgerStore so tests that call Provide directly
+		// see a non-nil store.
 		BootstrapLedgerStore: buildTestBootstrapLedgerStore(t),
-		// Tests that drive the full BuildApp path inject pre-bound listeners via
-		// runtimeBaseOptions + WithListener, so SharedDeps listener addresses are
-		// not used by those helpers.
 	}
+
+	locals := &cmdLocals{
+		registry:            ps.registry,
+		hookObserver:        ps.hookObserver,
+		metricProvider:      ps.metricProvider,
+		internalGuard:       guard,
+		consumerClaimerKind: consumerClaimerKindInMemory,
+	}
+	locals.initVaultMetricsFactory()
+
+	return shared, locals
 }
 
-// buildTestBootstrapLedgerStore builds an in-memory *audit.BootstrapLedgerStore
-// suitable for non-integration unit tests (no //go:build integration tag).
-// Keep separate from cmd/corebundle/audit_test_helper_test.go which is
-// integration-tagged.
-//
-// Since issue #1121 the helper uses audit.BootstrapNamespace() so the test
-// store is on the bootstrap chain (distinct from the auditcore relay chain)
-// and the typed *audit.BootstrapLedgerStore handle matches the production
-// SharedDeps field type.
-//
-// Why not merged with runtime/audit/bootstrap_append_test.go::buildTestLedgerStore:
-// That helper uses clockmock seeded to a fixed testNow value and is designed
-// for time-exact assertions against ledger entry Timestamps. This helper is
-// intended solely for BuildApp-bypass unit tests (e.g. AccessCoreModule{}.Provide
-// called directly); it does not assert timestamps, only that wiring succeeds
-// and the store is non-nil. Integration tests that run BuildApp end-to-end
-// get this field overwritten automatically by AuditCoreModule.Provide.
-func buildTestBootstrapLedgerStore(t *testing.T) *audit.BootstrapLedgerStore {
-	t.Helper()
-	proto, err := ledger.NewProtocol(
-		audit.BootstrapNamespace(),
-		[]byte("test-bootstrap-hmac-key-32bytes!"),
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
-	require.NoError(t, err, "audit protocol")
-	mem, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
-	require.NoError(t, err, "audit mem store")
-	wrapped, err := audit.NewBootstrapLedgerStore(mem)
-	require.NoError(t, err, "wrap bootstrap ledger store")
-	return wrapped
-}
-
-// newValidatedSharedDeps returns a SharedDeps that passes Validate() for the
-// given topology. Test cases can mutate individual fields to assert that a
-// single missing field surfaces the expected error.
-//
-// Note: PoolResource, cursor codecs, HMAC key, and KeyProvider are no longer
-// part of SharedDeps; they are built inside the respective CellModule.Provide.
-// The "prod baseline" topology is tested here without those fields — the cell
-// module gates are now in each module's Provide.
-func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
+// newValidatedSharedDepsAndLocals returns composition.SharedDeps + cmdLocals
+// that pass validateCorebundleDeps for the given topology. Test cases can
+// mutate individual fields to assert that a specific missing field surfaces the
+// expected error.
+func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*composition.SharedDeps, *cmdLocals) {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
@@ -357,18 +152,20 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	eventbusCacheCollector, err := obmetrics.NewProviderEventbusCacheCollector(ps.metricProvider)
 	require.NoError(t, err)
 
-	deps := &SharedDeps{
+	guard := newTestInternalGuard(t)
+
+	shared := &composition.SharedDeps{
 		Clock:                  clock.Real(),
 		Topology:               topo,
-		JWTDeps:                jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:              ps,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        ps.metricProvider,
 		EventBus:               eventbus.New(clock.Real()),
 		ConfigEventCollector:   configEventCollector,
 		EventbusCacheCollector: eventbusCacheCollector,
 		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
-		ConsumerClaimerKind:    consumerClaimerKindInMemory,
+		InternalHMACRing:       guard.ring,
 		InternalHTTPAddr:       "127.0.0.1:9090",
-		InternalGuard:          newTestInternalGuard(t),
 		HealthHTTPAddr:         ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
@@ -376,12 +173,380 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		VerboseToken: "test-verbose",
 	}
 	if topo.RequireProductionControlPlane() {
-		deps.MetricsToken = "test-metrics"
+		shared.MetricsToken = "test-metrics"
 	}
-	if topo.StorageBackend == "postgres" {
-		t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+
+	locals := &cmdLocals{
+		registry:            ps.registry,
+		hookObserver:        ps.hookObserver,
+		metricProvider:      ps.metricProvider,
+		internalGuard:       guard,
+		consumerClaimerKind: consumerClaimerKindInMemory,
 	}
-	return deps
+	locals.initVaultMetricsFactory()
+
+	return shared, locals
+}
+
+// buildTestBootstrapLedgerStore builds an in-memory *audit.BootstrapLedgerStore
+// suitable for non-integration unit tests (no //go:build integration tag).
+func buildTestBootstrapLedgerStore(t *testing.T) *audit.BootstrapLedgerStore {
+	t.Helper()
+	proto, err := ledger.NewProtocol(
+		audit.BootstrapNamespace(),
+		[]byte("test-bootstrap-hmac-key-32bytes!"),
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	require.NoError(t, err, "audit protocol")
+	mem, err := ledger.NewMemStore(proto, clockmock.New(time.Now()))
+	require.NoError(t, err, "audit mem store")
+	wrapped, err := audit.NewBootstrapLedgerStore(mem)
+	require.NoError(t, err, "wrap bootstrap ledger store")
+	return wrapped
+}
+
+// fakeManagedResource implements lifecycle.ManagedResource for tests.
+type fakeManagedResource struct {
+	closeCalled bool
+	w           kworker.Worker
+}
+
+func (f *fakeManagedResource) Probes() []healthz.Probe {
+	return []healthz.Probe{
+		healthz.NewProbe(healthz.MustProbeName("fake_resource_ready"), func(context.Context) error { return nil }),
+	}
+}
+
+func (f *fakeManagedResource) Worker() kworker.Worker { return f.w }
+
+func (f *fakeManagedResource) Close(_ context.Context) error {
+	f.closeCalled = true
+	return nil
+}
+
+var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
+
+// ---------------------------------------------------------------------------
+// buildInternalAuthChain coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
+// a guard produces an AuthServiceToken plan in the chain.
+func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
+	guard := newTestInternalGuard(t)
+	chain, err := buildInternalAuthChain(guard)
+	require.NoError(t, err)
+	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
+	_, ok := chain[0].(kauth.AuthServiceToken)
+	assert.True(t, ok, "plan must be kauth.AuthServiceToken; got %T", chain[0])
+}
+
+// TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
+// buildInternalAuthChain returns an error when the guard's NonceStore has
+// Kind() == NonceStoreKindNoop. kauth.NewAuthServiceToken enforces replay
+// protection is not silently disabled.
+func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	guardWithNoop := &internalGuard{
+		ring:       ring,
+		nonceStore: auth.NewNoopNonceStore(),
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
+
+	_, err = buildInternalAuthChain(guardWithNoop)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "build internal auth chain",
+		"error must be wrapped with build-site context")
+}
+
+// ---------------------------------------------------------------------------
+// buildAssembly coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildAssembly_RegisterError verifies that buildAssembly propagates the
+// error returned by asm.Register when a duplicate cell ID is detected.
+func TestBuildAssembly_RegisterError(t *testing.T) {
+	ps, err := buildPromStack()
+	require.NoError(t, err)
+
+	// Two cells with the same ID causes asm.Register to fail on the second call.
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
+
+	_, err = buildAssembly(promStackToLocals(ps), "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
+	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
+	assert.Contains(t, err.Error(), "dup-cell",
+		"error must mention the duplicate cell ID so operators can diagnose the conflict")
+}
+
+// ---------------------------------------------------------------------------
+// buildConsumerBase coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildConsumerBase_ReturnsNonNil verifies the happy path of
+// buildConsumerBase: the returned ConsumerBase must be non-nil and usable.
+func TestBuildConsumerBase_ReturnsNonNil(t *testing.T) {
+	shared, _ := buildTestSharedDepsAndLocals(t)
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+	require.NotNil(t, cb, "buildConsumerBase must return a non-nil ConsumerBase")
+}
+
+func TestBuildConsumerBase_RealMultiPodMissingDistributedClaimerErrors(t *testing.T) {
+	shared, _ := newValidatedSharedDepsAndLocals(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
+	shared.ConsumerClaimer = nil
+
+	cb, err := buildConsumerBase(shared)
+
+	require.Error(t, err)
+	assert.Nil(t, cb)
+	assert.Contains(t, err.Error(), "ConsumerClaimer")
+}
+
+func TestBuildConsumerBase_NilSharedDepsErrors(t *testing.T) {
+	cb, err := buildConsumerBase(nil)
+
+	require.Error(t, err)
+	assert.Nil(t, cb)
+	assert.Contains(t, err.Error(), "SharedDeps is nil")
+}
+
+// ---------------------------------------------------------------------------
+// defaultRuntimeOptions / runtimeBaseOptions coverage
+// ---------------------------------------------------------------------------
+
+func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
+	shared, locals := buildTestSharedDepsAndLocals(t)
+	shared.InternalHTTPAddr = "127.0.0.1:0"
+	locals.internalGuard = newTestInternalGuard(t)
+	shared.InternalHMACRing = locals.internalGuard.ring
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-redis-options", DurabilityMode: outbox.DurabilityDemo})
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+
+	base, err := defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
+	require.NoError(t, err)
+	shared.Redis = capability.NewRedisProvider(new(adapterredis.Client))
+	withRedis, err := defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
+	require.NoError(t, err)
+
+	// PR-8 OIDC-MR-COMPLETENESS Group C: WithHealthChecker+WithManagedCloser collapsed
+	// into a single WithManagedResource, so redis adds exactly 1 option (not 2).
+	assert.Len(t, withRedis, len(base)+1)
+}
+
+// TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly verifies the error path
+// in defaultRuntimeOptions when a non-empty PrimaryHTTPAddr is set and asm is
+// nil. kauth.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
+// return an error containing "primary listener auth".
+func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
+	shared, locals := buildTestSharedDepsAndLocals(t)
+	shared.PrimaryHTTPAddr = ":8080" // non-empty → primary listener branch executes
+
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+
+	// Pass nil assembly — NewAuthJWTFromAssembly rejects nil via IsNilInterface.
+	_, err = defaultRuntimeOptions(shared, locals, nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "primary listener auth",
+		"error must identify which listener auth failed for operator diagnosis")
+}
+
+// ---------------------------------------------------------------------------
+// adapterInfoForSharedDeps coverage
+// ---------------------------------------------------------------------------
+
+func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
+	shared, locals := newValidatedSharedDepsAndLocals(t, bootstrap.Topology{
+		StorageBackend:            "postgres",
+		AdapterMode:               "real",
+		SinglePodReplayProtection: true,
+	})
+
+	info := adapterInfoForSharedDeps(shared, locals)
+
+	assert.Equal(t, "not-configured", info["redis"])
+	assert.Equal(t, string(kauth.NonceStoreKindInMemory), info["service_token_nonce_store"])
+	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
+
+	locals.redisClient = new(adapterredis.Client)
+	locals.consumerClaimerKind = consumerClaimerKindDistributed
+
+	info = adapterInfoForSharedDeps(shared, locals)
+
+	assert.Equal(t, "configured", info["redis"])
+	assert.Equal(t, string(consumerClaimerKindDistributed), info["outbox_consumer_claimer"])
+}
+
+// ---------------------------------------------------------------------------
+// validateCorebundleDeps / SharedDeps.Validate coverage
+// ---------------------------------------------------------------------------
+
+// TestCorebundleDepsValidate covers every invariant enforced by validateCorebundleDeps.
+// Each case takes a baseline that passes and mutates one field to verify the
+// validation surfaces that specific failure with the expected error.
+func TestCorebundleDepsValidate(t *testing.T) {
+	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
+	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
+	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
+
+	cases := []struct {
+		name         string
+		topo         bootstrap.Topology
+		mutateShared func(*composition.SharedDeps)
+		mutateLocals func(*cmdLocals)
+		wantErr      bool
+		wantSubstr   string
+	}{
+		{
+			name: "prod baseline is valid", topo: prodTopo,
+			mutateShared: func(*composition.SharedDeps) {}, mutateLocals: func(*cmdLocals) {}, wantErr: false,
+		},
+		{
+			name: "dev baseline is valid", topo: devTopo,
+			mutateShared: func(*composition.SharedDeps) {}, mutateLocals: func(*cmdLocals) {}, wantErr: false,
+		},
+		{
+			name:         "prod missing verbose token",
+			topo:         prodTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = "" },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
+		},
+		{
+			name:         "dev missing verbose token",
+			topo:         devTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = "" },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
+		},
+		{
+			name:         "dev with verbose disabled flag is valid",
+			topo:         devTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      false,
+		},
+		{
+			name:         "prod with verbose disabled flag is rejected",
+			topo:         prodTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseDisabled = true },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      true, wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
+		},
+		{
+			name:         "prod missing metrics token",
+			topo:         prodTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.MetricsToken = "" },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      true, wantSubstr: "GOCELL_METRICS_TOKEN",
+		},
+		{
+			name:         "prod missing internal guard",
+			topo:         prodTopo,
+			mutateShared: func(*composition.SharedDeps) {},
+			mutateLocals: func(l *cmdLocals) { l.internalGuard = nil },
+			wantErr:      true, wantSubstr: "GOCELL_SERVICE_SECRET",
+		},
+		{
+			name:         "real multi-pod with in-memory claimer rejected",
+			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			mutateShared: func(*composition.SharedDeps) {},
+			mutateLocals: func(l *cmdLocals) { l.consumerClaimerKind = consumerClaimerKindInMemory },
+			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED",
+		},
+		{
+			name:         "prod guard with noop nonce store rejected",
+			topo:         prodTopo,
+			mutateShared: func(*composition.SharedDeps) {},
+			mutateLocals: func(l *cmdLocals) {
+				noopRing, _ := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+				l.internalGuard = &internalGuard{
+					ring:       noopRing,
+					nonceStore: auth.NewNoopNonceStore(),
+					mw:         func(h http.Handler) http.Handler { return h },
+				}
+			},
+			wantErr: true, wantSubstr: "NoopNonceStore detected",
+		},
+		{
+			name:         "real mode + in_memory + single_pod=false → error",
+			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			mutateShared: func(*composition.SharedDeps) {},
+			mutateLocals: func(*cmdLocals) {
+				// guard already has InMemoryNonceStore from newTestInternalGuard;
+				// topology lacks SinglePodReplayProtection so Validate rejects.
+			},
+			wantErr: true, wantSubstr: "GOCELL_SINGLE_POD=1",
+		},
+		{
+			name:         "real mode + in_memory + single_pod=true → ok",
+			topo:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true},
+			mutateShared: func(*composition.SharedDeps) {},
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      false,
+		},
+		{
+			name:         "prod rejects the .env.example sample verbose token",
+			topo:         prodTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      true, wantSubstr: "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE",
+		},
+		{
+			name:         "dev permits the sample verbose token (out-of-the-box demo path)",
+			topo:         devTopo,
+			mutateShared: func(d *composition.SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder },
+			mutateLocals: func(*cmdLocals) {},
+			wantErr:      false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shared, locals := newValidatedSharedDepsAndLocals(t, tc.topo)
+			tc.mutateShared(shared)
+			tc.mutateLocals(locals)
+
+			err := validateCorebundleDeps(shared, locals)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantSubstr, "error must mention the offending field")
+			// Every joined error must be an *errcode.Error so callers can
+			// classify startup failures uniformly.
+			allowedCodes := map[errcode.Code]struct{}{
+				errcode.ErrValidationFailed:                  {},
+				errcode.ErrControlplaneServiceSecretMissing:  {},
+				errcode.ErrControlplaneNonceStoreMissing:     {},
+				errcode.ErrControlplaneVerboseTokenMissing:   {},
+				errcode.ErrControlplaneVerboseTokenSample:    {},
+				errcode.ErrControlplaneClaimerNotDistributed: {},
+			}
+			for _, sub := range errutil.FlattenJoined(err) {
+				var ec *errcode.Error
+				require.ErrorAs(t, sub, &ec, "joined error %v must be *errcode.Error", sub)
+				_, ok := allowedCodes[ec.Code]
+				assert.True(t, ok, "unexpected error code %q from validateCorebundleDeps", ec.Code)
+			}
+		})
+	}
+}
+
+// TestCorebundleDepsValidate_NilSharedDeps covers the defensive nil-shared case.
+func TestCorebundleDepsValidate_NilSharedDeps(t *testing.T) {
+	ps, err := buildPromStack()
+	require.NoError(t, err)
+	locals := promStackToLocals(ps)
+	err = validateCorebundleDeps(nil, locals)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil receiver")
 }
 
 // ---------------------------------------------------------------------------
@@ -390,9 +555,8 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 
 // TestDevtoolsOption_EmptyRoot verifies that devtoolsOption returns a no-op
 // bootstrap option (catalog endpoint disabled) when ProjectRoot is unset.
-// This exercises the first early-return branch in devtoolsOption.
 func TestDevtoolsOption_EmptyRoot(t *testing.T) {
-	shared := buildTestSharedDeps(t)
+	shared, _ := buildTestSharedDepsAndLocals(t)
 	shared.ProjectRoot = "" // unset → catalog disabled
 
 	opt := devtoolsOption(shared)
@@ -405,9 +569,8 @@ func TestDevtoolsOption_EmptyRoot(t *testing.T) {
 
 // TestDevtoolsOption_RootOutsideCwd verifies that devtoolsOption disables the
 // catalog when ProjectRoot resolves outside the current working directory.
-// This exercises the IsWithinRoot branch.
 func TestDevtoolsOption_RootOutsideCwd(t *testing.T) {
-	shared := buildTestSharedDeps(t)
+	shared, _ := buildTestSharedDepsAndLocals(t)
 	// /tmp is virtually never within the test's cwd.
 	shared.ProjectRoot = t.TempDir()
 
@@ -418,8 +581,10 @@ func TestDevtoolsOption_RootOutsideCwd(t *testing.T) {
 	require.NotNil(t, b)
 }
 
-// TestDurabilityModeForTopology_UsesStorageBackend is already in this file;
-// following tests continue below.
+// ---------------------------------------------------------------------------
+// durabilityModeForTopology coverage
+// ---------------------------------------------------------------------------
+
 func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	tests := []struct {
 		name string
@@ -448,463 +613,4 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 			assert.Equal(t, tt.want, durabilityModeForTopology(tt.topo))
 		})
 	}
-}
-
-// buildBootstrapFromShared is the test-path assembly helper, equivalent to the
-// production run() flow. It owns the PrimaryListener registration so the JWT
-// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
-// constructs internally. Tests supply the primary net.Listener and any extra
-// options (typically WithListener for InternalListener/HealthListener,
-// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
-// a fast-bcrypt option.
-func buildBootstrapFromShared(
-	t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
-) (*bootstrap.Bootstrap, error) {
-	t.Helper()
-	ctx := context.Background()
-
-	cells, cellOpts, err := BuildApp(ctx, shared,
-		ConfigCoreModule{},
-		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
-		// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
-		AuditCoreModule{},
-		AccessCoreModule{},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	testLocals := sharedToLocals(shared)
-	asm, err := buildAssembly(testLocals, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
-	if err != nil {
-		return nil, err
-	}
-
-	consumerBase, err := buildConsumerBase(shared)
-	if err != nil {
-		return nil, err
-	}
-
-	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
-
-	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := runtimeBaseOptions(shared, testLocals, asm, consumerBase, metricsHandler, adapterInfo)
-	opts = append(opts, cellOpts...)
-	// Primary listener carries the JWT policy resolved from the assembly. F3
-	// round-3: this is the single source of truth for JWT auth — there is no
-	// longer a standalone bootstrap.PolicyJWTFromAssembly Option.
-	opts = append(opts, bootstrap.WithListener(
-		cell.PrimaryListener,
-		primaryLn.Addr().String(),
-		[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
-		bootstrap.WithListenerNet(primaryLn),
-	))
-	opts = append(opts, extra...)
-	return newBootstrapFromOptions(shared.Clock, opts), nil
-}
-
-func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {
-	t.Helper()
-	chain, err := buildInternalAuthChain(newTestInternalGuard(t))
-	require.NoError(t, err)
-	return bootstrap.WithListener(
-		cell.InternalListener,
-		ln.Addr().String(),
-		chain,
-		bootstrap.WithListenerNet(ln),
-	)
-}
-
-func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
-	shared := newValidatedSharedDeps(t, bootstrap.Topology{
-		StorageBackend:            "postgres",
-		AdapterMode:               "real",
-		SinglePodReplayProtection: true,
-	})
-
-	info := adapterInfoForSharedDeps(shared)
-
-	assert.Equal(t, "not-configured", info["redis"])
-	assert.Equal(t, string(kauth.NonceStoreKindInMemory), info["service_token_nonce_store"])
-	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
-
-	shared.redisClient = new(adapterredis.Client)
-	shared.ConsumerClaimerKind = consumerClaimerKindDistributed
-
-	info = adapterInfoForSharedDeps(shared)
-
-	assert.Equal(t, "configured", info["redis"])
-	assert.Equal(t, string(consumerClaimerKindDistributed), info["outbox_consumer_claimer"])
-}
-
-// TestSharedDeps_Validate covers every invariant enforced by SharedDeps.Validate.
-// Each case takes a baseline that passes Validate and mutates one field to
-// verify Validate surfaces that specific failure with errcode.ErrValidationFailed.
-func TestSharedDeps_Validate(t *testing.T) {
-	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
-	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
-	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
-
-	cases := []struct {
-		name       string
-		topo       bootstrap.Topology
-		mutate     func(*SharedDeps)
-		wantErr    bool
-		wantSubstr string // required substring in one of the joined errors
-	}{
-		{name: "prod baseline is valid", topo: prodTopo, mutate: func(*SharedDeps) {}, wantErr: false},
-		{name: "dev baseline is valid", topo: devTopo, mutate: func(*SharedDeps) {}, wantErr: false},
-
-		{
-			name: "missing JWT issuer", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.JWTDeps.issuer = nil },
-			wantErr: true, wantSubstr: "JWTDeps.issuer",
-		},
-		{
-			name: "missing JWT verifier", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.JWTDeps.verifier = nil },
-			wantErr: true, wantSubstr: "JWTDeps.verifier",
-		},
-		{
-			name: "missing prom registry", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.PromStack.registry = nil },
-			wantErr: true, wantSubstr: "PromStack.registry",
-		},
-		{
-			name: "missing prom hook observer", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.PromStack.hookObserver = nil },
-			wantErr: true, wantSubstr: "PromStack.hookObserver",
-		},
-		{
-			name: "missing prom metric provider", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.PromStack.metricProvider = nil },
-			wantErr: true, wantSubstr: "PromStack.metricProvider",
-		},
-		{
-			name: "missing event bus", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.EventBus = nil },
-			wantErr: true, wantSubstr: "EventBus",
-		},
-
-		{
-			name: "prod missing verbose token", topo: prodTopo,
-			mutate:  func(d *SharedDeps) { d.VerboseToken = "" },
-			wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
-		},
-		{
-			name: "dev missing verbose token", topo: devTopo,
-			mutate:  func(d *SharedDeps) { d.VerboseToken = "" },
-			wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
-		},
-		{
-			name:    "dev with verbose disabled flag is valid",
-			topo:    devTopo,
-			mutate:  func(d *SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
-			wantErr: false,
-		},
-		{
-			name:       "prod with verbose disabled flag is rejected",
-			topo:       prodTopo,
-			mutate:     func(d *SharedDeps) { d.VerboseDisabled = true },
-			wantErr:    true,
-			wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
-		},
-		{
-			name: "prod missing metrics token", topo: prodTopo,
-			mutate:  func(d *SharedDeps) { d.MetricsToken = "" },
-			wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN",
-		},
-		{
-			name: "prod missing internal guard", topo: prodTopo,
-			mutate:  func(d *SharedDeps) { d.InternalGuard = nil },
-			wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET",
-		},
-		{
-			name: "real multi-pod with in-memory claimer rejected",
-			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
-			mutate: func(d *SharedDeps) {
-				d.ConsumerClaimerKind = consumerClaimerKindInMemory
-			},
-			wantErr:    true,
-			wantSubstr: "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED",
-		},
-		{
-			name: "prod guard with noop nonce store rejected",
-			topo: prodTopo,
-			mutate: func(d *SharedDeps) {
-				// Simulate a guard constructed without replay defense — the
-				// exact condition SharedDeps.Validate must reject in prod.
-				noopRing, _ := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
-				d.InternalGuard = &internalGuard{
-					ring:       noopRing,
-					nonceStore: auth.NewNoopNonceStore(),
-					mw:         func(h http.Handler) http.Handler { return h },
-				}
-			},
-			wantErr:    true,
-			wantSubstr: "NoopNonceStore detected",
-		},
-		{
-			// F1: in-memory store in real mode without GOCELL_SINGLE_POD=1 must be rejected.
-			name: "real mode + in_memory + single_pod=false → error",
-			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
-			mutate: func(d *SharedDeps) {
-				// guard already has InMemoryNonceStore from newTestInternalGuard;
-				// topology lacks SinglePodReplayProtection so Validate rejects.
-			},
-			wantErr:    true,
-			wantSubstr: "GOCELL_SINGLE_POD=1",
-		},
-		{
-			// F1: in-memory store in real mode with GOCELL_SINGLE_POD=1 is accepted.
-			name:    "real mode + in_memory + single_pod=true → ok",
-			topo:    bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true},
-			mutate:  func(*SharedDeps) {},
-			wantErr: false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			deps := newValidatedSharedDeps(t, tc.topo)
-			tc.mutate(deps)
-
-			err := deps.Validate()
-			if !tc.wantErr {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantSubstr, "error must mention the offending field")
-			// Every joined error must be an *errcode.Error so callers can
-			// classify startup failures uniformly. The specific code varies:
-			// core-field and token checks use ErrValidationFailed; the
-			// control-plane guard gate uses dedicated codes so operators
-			// can grep service-secret and nonce-store misconfigurations
-			// independently.
-			allowedCodes := map[errcode.Code]struct{}{
-				errcode.ErrValidationFailed:                  {},
-				errcode.ErrControlplaneServiceSecretMissing:  {},
-				errcode.ErrControlplaneNonceStoreMissing:     {},
-				errcode.ErrControlplaneVerboseTokenMissing:   {},
-				errcode.ErrControlplaneClaimerNotDistributed: {},
-			}
-			for _, sub := range errutil.FlattenJoined(err) {
-				var ec *errcode.Error
-				require.ErrorAs(t, sub, &ec, "joined error %v must be *errcode.Error", sub)
-				_, ok := allowedCodes[ec.Code]
-				assert.True(t, ok, "unexpected error code %q from Validate", ec.Code)
-			}
-		})
-	}
-}
-
-// TestSharedDeps_Validate_NilReceiver covers the defensive nil-receiver case.
-func TestSharedDeps_Validate_NilReceiver(t *testing.T) {
-	var deps *SharedDeps
-	err := deps.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil receiver")
-}
-
-// TestBuildApp_RejectsInvalidSharedDeps guards that BuildApp propagates
-// SharedDeps.Validate() failure before constructing any cell.
-func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
-	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-	deps := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
-	deps.VerboseToken = "" // violate prod invariant
-
-	_, _, err := BuildApp(context.Background(), deps,
-		ConfigCoreModule{},
-		// auditcore before accesscore — wires SharedDeps.BootstrapLedgerStore
-		// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
-		AuditCoreModule{},
-		AccessCoreModule{},
-	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN")
-}
-
-// TestBuildBootstrap_MemoryTopology verifies that a memory topology produces a
-// working bootstrap without a PG health checker.
-func TestBuildBootstrap_MemoryTopology(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	healthLn := newCorebundleLocalListener(t)
-
-	healthOpt := bootstrap.WithListener(
-		cell.HealthListener, healthLn.Addr().String(),
-		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
-		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		healthOpt)
-	require.NoError(t, err)
-	require.NotNil(t, app)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	healthAddr := healthLn.Addr().String()
-	waitForHealthy(t, healthAddr)
-
-	// /readyz must be healthy (no PG checker to fail).
-	resp, err := http.Get("http://" + healthAddr + "/readyz")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := resp.Body.Close(); err != nil {
-			t.Logf("close resp body: %v", err)
-		}
-	})
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	cancel()
-	select {
-	case err := <-errCh:
-		assert.NoError(t, err, "memory bootstrap must shut down cleanly")
-	case <-time.After(testtime.SelectAsyncSettle):
-		t.Fatal("bootstrap did not shut down in time")
-	}
-}
-
-// TestBuildBootstrap_PostgresTopology_FakePoolResource verifies that a postgres
-// topology with a fake ManagedResource wired via WithManagedResource option
-// attaches the PG health checker and calls Close on shutdown.
-//
-// In the new CellModule model, ConfigCoreModule.Provide would build the real
-// PoolResource from env. This test injects a fake by passing it as an extra
-// bootstrap.Option, exercising the ManagedResource lifecycle path directly.
-//
-// Note: despite the name, this test does NOT exercise the Postgres code path —
-// StorageBackend is fixed to "memory". The test name is historical. Its sole
-// purpose is verifying the WithManagedResource lifecycle hooks
-// (Probes / Worker / Close).
-func TestBuildBootstrap_PostgresTopology_FakePoolResource(t *testing.T) {
-	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-
-	shared := buildTestSharedDeps(t)
-	shared.Topology = bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
-
-	fakePG := &fakeManagedResource{name: "fake-postgres"}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	healthLn := newCorebundleLocalListener(t)
-
-	healthOpt2 := bootstrap.WithListener(
-		cell.HealthListener, healthLn.Addr().String(),
-		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
-		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		healthOpt2,
-		bootstrap.WithManagedResource(fakePG),
-	)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	healthAddr := healthLn.Addr().String()
-	waitForHealthy(t, healthAddr)
-
-	cancel()
-	select {
-	case err := <-errCh:
-		assert.NoError(t, err)
-	case <-time.After(testtime.SelectAsyncSettle):
-		t.Fatal("bootstrap did not shut down in time")
-	}
-
-	// Fake PG resource must be closed during shutdown.
-	assert.True(t, fakePG.closeCalled, "fakeManagedResource.Close() must be called during shutdown")
-}
-
-// TestBuildBootstrap_AssemblyHasAllCells verifies that BuildApp registers
-// configcore, accesscore, and auditcore. We check via health + /readyz
-// which would fail if any cell fails to init.
-func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	healthLn := newCorebundleLocalListener(t)
-
-	healthOpt3 := bootstrap.WithListener(
-		cell.HealthListener, healthLn.Addr().String(),
-		[]kauth.ListenerAuth{kauth.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
-	app, err := buildBootstrapFromShared(t, shared, ln,
-		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		healthOpt3)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-
-	healthAddr := healthLn.Addr().String()
-	waitForHealthy(t, healthAddr)
-
-	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + healthAddr + "/readyz")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := resp.Body.Close(); err != nil {
-			t.Logf("close resp body: %v", err)
-		}
-	})
-	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"all three cells (configcore, accesscore, auditcore) must be healthy")
-
-	cancel()
-	select {
-	case err := <-errCh:
-		assert.NoError(t, err)
-	case <-time.After(testtime.SelectAsyncSettle):
-		t.Fatal("full assembly bootstrap did not shut down in time")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// defaultRuntimeOptions / buildInternalAuthChain fault injection
-// ---------------------------------------------------------------------------
-
-// TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly verifies the error path
-// in defaultRuntimeOptions when a non-empty PrimaryHTTPAddr is set and asm is
-// nil. kauth.NewAuthJWTFromAssembly rejects nil interfaces, so the function must
-// return an error containing "primary listener auth".
-func TestDefaultRuntimeOptions_PrimaryAuthErrOnNilAssembly(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-	shared.PrimaryHTTPAddr = ":8080" // non-empty → primary listener branch executes
-
-	cb, err := buildConsumerBase(shared)
-	require.NoError(t, err)
-
-	// Pass nil assembly — NewAuthJWTFromAssembly rejects nil via IsNilInterface.
-	_, err = defaultRuntimeOptions(shared, sharedToLocals(shared), nil, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "primary listener auth",
-		"error must identify which listener auth failed for operator diagnosis")
-}
-
-// TestBuildInternalAuthChain_NoopNonceStoreRejected verifies that
-// buildInternalAuthChain returns an error when the guard's NonceStore has
-// Kind() == NonceStoreKindNoop. kauth.NewAuthServiceToken enforces replay
-// protection is not silently disabled.
-func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
-	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
-	require.NoError(t, err)
-	guardWithNoop := &internalGuard{
-		ring:       ring,
-		nonceStore: auth.NewNoopNonceStore(),
-		mw:         func(h http.Handler) http.Handler { return h },
-	}
-
-	_, err = buildInternalAuthChain(guardWithNoop)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "build internal auth chain",
-		"error must be wrapped with build-site context")
 }

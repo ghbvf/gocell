@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/platform/platformshared"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -60,13 +61,13 @@ func internalGuardFromEnv(adapterMode string, store kauth.NonceStore, clk clock.
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
 			"GOCELL_SERVICE_SECRET must be set in all adapter modes to protect /internal/v1/*")
 	}
-	if err := rejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {
+	if err := platformshared.RejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {
 		return nil, err
 	}
 	prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
 	var prevBytes []byte
 	if prevSecret != "" {
-		if err := rejectDemoKey(adapterMode, auth.EnvServiceSecretPrevious, []byte(prevSecret)); err != nil {
+		if err := platformshared.RejectDemoKey(adapterMode, auth.EnvServiceSecretPrevious, []byte(prevSecret)); err != nil {
 			return nil, err
 		}
 		prevBytes = []byte(prevSecret)

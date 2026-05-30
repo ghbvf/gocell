@@ -7,6 +7,7 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
@@ -45,6 +46,12 @@ type cmdLocals struct {
 
 	// metricsHandler is the Prometheus HTTP handler.
 	metricsHandler http.Handler
+
+	// redisClient holds the raw redis client constructed in LoadSharedDepsFromEnv
+	// (buildSharedReplayDeps). Used by provisionRedis to wrap into Redis capability
+	// provider. Unexported composition-root plumbing — public consumers use
+	// composition.SharedDeps.Redis.Client().
+	redisClient *adapterredis.Client
 
 	// vaultTransitMetrics is a sync.Once-guarded factory for the vault-transit
 	// metric set. Passed to platform/configcore via WithVaultMetrics so that

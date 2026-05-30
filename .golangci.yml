@@ -644,6 +644,20 @@ linters:
               desc: "cellgen must construct errors via pkg/errcode; go-multierror is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
             - pkg: github.com/cockroachdb/errors
               desc: "cellgen must construct errors via pkg/errcode; cockroachdb/errors is forbidden (CELLGEN-ERRCODE-FUNNEL-01 depguard companion)"
+        corebundle-no-cells:
+          # COMPOSITION-MODULE-API-01 (#1085): cmd/corebundle is the runtime
+          # entrypoint; all cell business wiring lives in platform/<cell> behind
+          # the public runtime/composition API. cmd/corebundle must not import
+          # cells/ directly — the platform Module() constructors do.
+          list-mode: lax
+          files:
+            - "**/cmd/corebundle/**"
+            - "!**/cmd/corebundle/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/cells
+              desc: |
+                cmd/corebundle must not import cells/ directly; cell wiring lives
+                in platform/<cell> behind runtime/composition (#1085 COMPOSITION-MODULE-API-01).
 
     forbidigo:
       forbid:

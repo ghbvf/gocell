@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/platform/platformshared"
 )
 
 const (
@@ -121,7 +123,7 @@ func TestLoadCursorKeys_PrimaryOnly(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-primary-key-value-here-32!")
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY", "")
 
-	primary, previous := LoadCursorKeys("AUDITCORE")
+	primary, previous := platformshared.LoadCursorKeys("AUDITCORE")
 	assert.Equal(t, "audit-primary-key-value-here-32!", primary)
 	assert.Equal(t, "", previous)
 }
@@ -130,7 +132,7 @@ func TestLoadCursorKeys_PreviousOnly(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "")
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY", "config-prev-key-value-here-32!!")
 
-	primary, previous := LoadCursorKeys("CONFIGCORE")
+	primary, previous := platformshared.LoadCursorKeys("CONFIGCORE")
 	assert.Equal(t, "", primary)
 	assert.Equal(t, "config-prev-key-value-here-32!!", previous)
 }
@@ -139,7 +141,7 @@ func TestLoadCursorKeys_BothSet(t *testing.T) {
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cur-key-value-here-32-b!")
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY", "access-prev-key-here-32-bytes!!")
 
-	primary, previous := LoadCursorKeys("ACCESSCORE")
+	primary, previous := platformshared.LoadCursorKeys("ACCESSCORE")
 	assert.Equal(t, "access-cur-key-value-here-32-b!", primary)
 	assert.Equal(t, "access-prev-key-here-32-bytes!!", previous)
 }
@@ -149,7 +151,7 @@ func TestLoadCursorKeys_CrossCellIsolation(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "")
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY", "")
 
-	primary, _ := LoadCursorKeys("AUDITCORE")
+	primary, _ := platformshared.LoadCursorKeys("AUDITCORE")
 	require.Equal(t, "", primary, "AUDITCORE prefix must not pick up CONFIGCORE cursor key")
 }
 
@@ -162,7 +164,7 @@ func TestLoadConfigCoreKeyProvider_AllSet(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", "prev-master-key-hex-placeholder!")
 
-	providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+	providerName, masterKey, prevMasterKey := platformshared.LoadConfigCoreKeyProvider()
 	assert.Equal(t, "local-aes", providerName)
 	assert.Equal(t, "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899", masterKey)
 	assert.Equal(t, "prev-master-key-hex-placeholder!", prevMasterKey)
@@ -173,7 +175,7 @@ func TestLoadConfigCoreKeyProvider_ProviderOnly(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", "")
 
-	providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+	providerName, masterKey, prevMasterKey := platformshared.LoadConfigCoreKeyProvider()
 	assert.Equal(t, "vault-transit", providerName)
 	assert.Equal(t, "", masterKey)
 	assert.Equal(t, "", prevMasterKey)
@@ -184,7 +186,7 @@ func TestLoadConfigCoreKeyProvider_AllEmpty(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", "")
 
-	providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+	providerName, masterKey, prevMasterKey := platformshared.LoadConfigCoreKeyProvider()
 	assert.Equal(t, "", providerName)
 	assert.Equal(t, "", masterKey)
 	assert.Equal(t, "", prevMasterKey)
@@ -197,14 +199,14 @@ func TestLoadConfigCoreKeyProvider_AllEmpty(t *testing.T) {
 func TestLoadCellHMACKey_AUDITCORE_ReturnsValue(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "audit-hmac-key-value-here-32!!!!")
 
-	key := LoadCellHMACKey("AUDITCORE")
+	key := platformshared.LoadCellHMACKey("AUDITCORE")
 	assert.Equal(t, "audit-hmac-key-value-here-32!!!!", key)
 }
 
 func TestLoadCellHMACKey_AUDITCORE_EmptyReturnsEmpty(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "")
 
-	key := LoadCellHMACKey("AUDITCORE")
+	key := platformshared.LoadCellHMACKey("AUDITCORE")
 	assert.Equal(t, "", key)
 }
 
@@ -212,8 +214,8 @@ func TestLoadCellHMACKey_CrossCellIsolation(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "audit-hmac-key-value-here-32!!!!")
 	t.Setenv("GOCELL_CONFIGCORE_HMAC_KEY", "")
 
-	auditKey := LoadCellHMACKey("AUDITCORE")
-	configKey := LoadCellHMACKey("CONFIGCORE")
+	auditKey := platformshared.LoadCellHMACKey("AUDITCORE")
+	configKey := platformshared.LoadCellHMACKey("CONFIGCORE")
 
 	assert.Equal(t, "audit-hmac-key-value-here-32!!!!", auditKey)
 	assert.Equal(t, "", configKey, "CONFIGCORE prefix must not pick up AUDITCORE HMAC key")

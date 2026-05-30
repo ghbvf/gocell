@@ -1,9 +1,10 @@
 // Package platformshared provides helpers shared across the platform/ cell
-// modules (accesscore, auditcore, configcore). It is an internal package:
-// only platform/ siblings may import it.
+// modules (accesscore, auditcore, configcore) and cmd/corebundle.
 //
-// Functions here mirror the corresponding helpers in cmd/corebundle but use
-// composition.SharedDeps instead of the cmd-private SharedDeps struct.
+// Unlike platform/internal/platformshared, this package is importable by
+// cmd/corebundle (composition root). It contains helpers that both platform/
+// cell modules and cmd/ need: demo-key rejection, cursor codec construction,
+// HMAC key loading, JWT key set loading, and the pgxpool type assertion.
 package platformshared
 
 import (
@@ -187,10 +188,10 @@ func LoadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 }
 
 // PgxPoolFromProvider is the single type-assertion site for the
-// capability.PGProvider's any-typed DB() seam. Placed here (platform/internal)
-// so all three platform cell modules reuse it without duplicating the assertion.
+// capability.PGProvider's any-typed DB() seam. Placed here so all platform
+// cell modules and cmd/ reuse it without duplicating the assertion.
 //
-// platform/internal/platformshared is a composition-root layer (like cmd/) so
+// platform/platformshared is a composition-root layer (like cmd/) so
 // importing adapters/ (pgxpool) is architecturally acceptable.
 func PgxPoolFromProvider(pg capability.PGProvider) (*pgxpool.Pool, error) {
 	pool, ok := pg.DB().(*pgxpool.Pool)

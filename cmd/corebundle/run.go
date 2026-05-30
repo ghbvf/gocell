@@ -42,17 +42,15 @@ import (
 // assembly entrypoint. The generated main.go owns the assembly ID and cell
 // order; this function owns environment loading and runtime option wiring.
 func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []string) error {
-	shared, err := LoadSharedDepsFromEnv(ctx)
+	compShared, locals, err := LoadSharedDepsFromEnv(ctx)
 	if err != nil {
 		return err
 	}
-	// Build cmd-private locals from the populated SharedDeps.
-	locals := buildCmdLocals(shared)
 
 	// Provision assembly-level shared infrastructure (postgres pool / redis
 	// client → cap.*Provider) once, before any module consumes it. Mirrors
 	// fx.New() resolve-before-start ordering.
-	if err := provisionCapabilities(ctx, shared, locals); err != nil {
+	if err := provisionCapabilities(ctx, compShared, locals); err != nil {
 		return err
 	}
 	// Close the pool if startup aborts before bootstrap.Run takes ownership of
@@ -66,9 +64,8 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		}
 	}()
 
-	// Build the composition.SharedDeps view (public, interface-only fields) from
-	// the cmd-private SharedDeps.
-	compShared := toCompositionSharedDeps(shared)
+	// Set AssemblyID on the composition.SharedDeps (used by platform modules for
+	// logging and observability).
 	compShared.AssemblyID = assemblyID
 
 	mods, err := corebundleModules(assemblyID, assemblyCellIDs, locals)
@@ -76,7 +73,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
-	adapterInfo := adapterInfoForSharedDeps(shared)
+	adapterInfo := adapterInfoForSharedDeps(compShared, locals)
 	slog.Info("corebundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
@@ -86,24 +83,24 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		slog.String("service_token_nonce_store", adapterInfo["service_token_nonce_store"]),
 		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
 
-	logSinglePodNonceStoreAcknowledgement(shared)
+	logSinglePodNonceStoreAcknowledgement(compShared, locals)
 
 	// runtimeOptsFunc stays in cmd: auth construction is AUTH-PLAN-04-allowlisted
 	// to cmd/.
 	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
 		logAssemblyMaturity(cells)
 
-		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
+		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(compShared.Topology), compShared.Clock, cells...)
 		if buildErr != nil {
 			return nil, fmt.Errorf("build assembly: %w", buildErr)
 		}
 
-		consumerBase, cbErr := buildConsumerBase(shared)
+		consumerBase, cbErr := buildConsumerBase(compShared)
 		if cbErr != nil {
 			return nil, cbErr
 		}
 
-		opts, rtErr := defaultRuntimeOptions(shared, locals, asm, consumerBase, locals.metricsHandler, adapterInfo)
+		opts, rtErr := defaultRuntimeOptions(compShared, locals, asm, consumerBase, locals.metricsHandler, adapterInfo)
 		if rtErr != nil {
 			return nil, fmt.Errorf("default runtime options: %w", rtErr)
 		}
@@ -195,11 +192,11 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []compositio
 // logSinglePodNonceStoreAcknowledgement emits a positive-path Info log when
 // the deployment is real-mode + single-pod + InMemory NonceStore, making the
 // operator's explicit single-pod replay-protection choice visible at startup.
-func logSinglePodNonceStoreAcknowledgement(shared *SharedDeps) {
-	if shared == nil || shared.InternalGuard == nil {
+func logSinglePodNonceStoreAcknowledgement(shared *composition.SharedDeps, locals *cmdLocals) {
+	if shared == nil || locals == nil || locals.internalGuard == nil {
 		return
 	}
-	ns := shared.InternalGuard.NonceStore()
+	ns := locals.internalGuard.NonceStore()
 	if ns == nil || ns.Kind() != kauth.NonceStoreKindInMemory {
 		return
 	}

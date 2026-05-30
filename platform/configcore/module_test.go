@@ -20,8 +20,8 @@ func TestModule_CorrectID(t *testing.T) {
 	assert.Equal(t, "configcore", m.ID(), "Module ID must be 'configcore'")
 }
 
-func TestModule_ImplementsCellModule(t *testing.T) {
-	var _ composition.CellModule = configcore.Module()
+func TestModule_ImplementsCellModule(*testing.T) {
+	_ = []composition.CellModule{configcore.Module()}
 }
 
 func TestModule_WithVaultMetrics_DoesNotPanic(t *testing.T) {
