@@ -158,7 +158,10 @@ func TestHMACKey() []byte {
 // This call routes through ledger.NewProtocol; the archtest
 // AUDIT-LEDGER-PROTOCOL-COMPOSITION-ROOT-01 allowlist must include
 // runtime/audit/ledger/storetest/ for this to compile-link cleanly.
-func NewTestProtocol(t *testing.T) *ledger.Protocol {
+//
+// Accepts testing.TB (not *testing.T) so fuzz targets can construct the
+// protocol in their setup phase, where only a *testing.F is in scope.
+func NewTestProtocol(t testing.TB) *ledger.Protocol {
 	t.Helper()
 	key := TestHMACKey()
 	ns, err := ledger.ParseNamespaceID("auditcore")

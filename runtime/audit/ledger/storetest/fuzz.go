@@ -1,0 +1,178 @@
+package storetest
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/audit/ledger"
+)
+
+// fuzzTimePrecision is the timestamp granularity the round-trip fuzz normalises
+// to. PostgreSQL timestamptz stores microseconds; nanosecond-granular fuzzed
+// timestamps would survive on MemStore but truncate on PG, breaking both the
+// byte-for-byte field round-trip (time.Equal) and the HMAC parity (the digest
+// signs *UnixNano). Truncating fuzz inputs to microseconds keeps the input
+// inside the precision both backends can represent identically.
+const fuzzTimePrecision = time.Microsecond
+
+// RunEntryRoundTripFuzz is the property-based complement to the example-based
+// Run suite: it generates random 12-field [ledger.Entry] values plus a binary
+// payload corpus and asserts, for every accepted Append, that
+//
+//   - every caller-supplied field round-trips byte-for-byte through
+//     Append → GetBySeq (via AssertEntryRoundTrip, reflect-driven so new Entry
+//     fields are covered automatically), and
+//   - the store-persisted Hash equals an INDEPENDENT canonical HMAC recomputed
+//     by referenceComputeHash (the external mirror, never Protocol.ComputeHash),
+//     so a silently dropped field in ComputeHash is caught.
+//
+// store and protocol are constructed once by the caller and reused across all
+// fuzz iterations — PG cannot afford a fresh migrated database per iteration.
+// The same exported helper is wired into both the MemStore fuzz
+// (suite_test.go) and the PG fuzz (adapters/postgres, integration tag) with a
+// shared seed corpus, so mem-vs-PG round-trip + HMAC parity is exercised in
+// fuzz form: both backends must satisfy the same independent reference.
+//
+// The HMAC canonical-input invariant itself is statically frozen Hard by
+// archtest AUDIT-HASH-INPUT-FROZEN-01 (sealed auditHashInput + locked hmac.New
+// callsite); this fuzz adds the runtime behavior that a static archtest cannot
+// express — µs precision handling, payload binary safety, and namespace domain
+// separation under arbitrary inputs.
+func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Protocol) {
+	if store == nil {
+		f.Fatal("storetest.RunEntryRoundTripFuzz: store must not be nil")
+	}
+	if protocol == nil {
+		f.Fatal("storetest.RunEntryRoundTripFuzz: protocol must not be nil")
+	}
+	seedEntryRoundTripCorpus(f)
+
+	f.Fuzz(func(t *testing.T,
+		eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID string,
+		occNano, tsNano int64, payload []byte,
+	) {
+		// Restrict string fields to the domain both backends can store
+		// identically: PostgreSQL text columns reject NUL (U+0000) and
+		// non-UTF-8 bytes, while a Go string (MemStore) accepts them. Inputs
+		// outside that shared domain are not a store bug — skip them so the
+		// parity assertion only fires on values both stores can represent.
+		// Arbitrary binary content is exercised through the BYTEA Payload
+		// (within valid-JSON-object framing), not the text identity fields.
+		for _, s := range []string{eventID, eventType, actorID, subjectID, sessionID, tenantID, correlationID} {
+			if !pgRepresentableString(s) {
+				return
+			}
+		}
+
+		src := &ledger.Entry{
+			EventID:       eventID,
+			EventType:     eventType,
+			ActorID:       actorID,
+			SubjectID:     subjectID,
+			SessionID:     sessionID,
+			TenantID:      tenantID,
+			CorrelationID: correlationID,
+			OccurredAt:    time.Unix(0, occNano).UTC().Truncate(fuzzTimePrecision),
+			Timestamp:     time.Unix(0, tsNano).UTC().Truncate(fuzzTimePrecision),
+			Payload:       payload,
+		}
+		assertEntryRoundTripParity(t, store, protocol, src)
+	})
+}
+
+// assertEntryRoundTripParity appends src, and on a successful (non-rejected)
+// Append asserts the persisted entry round-trips byte-for-byte and its Hash
+// matches the independent reference HMAC. ErrValidationFailed (payload is not a
+// JSON object/null) and ErrAuditLedgerAlreadyExists (duplicate EventID
+// fingerprint) are legitimate protocol rejections, not store defects, and are
+// skipped.
+func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledger.Protocol, src *ledger.Entry) {
+	t.Helper()
+	ctx := context.Background()
+
+	if err := store.Append(ctx, src); err != nil {
+		var ec *errcode.Error
+		if errors.As(err, &ec) &&
+			(ec.Code == errcode.ErrValidationFailed || ec.Code == errcode.ErrAuditLedgerAlreadyExists) {
+			return
+		}
+		t.Fatalf("Append: %v", err)
+	}
+
+	tail, err := store.Tail(ctx)
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	got, err := store.GetBySeq(ctx, tail.SeqNo)
+	if err != nil {
+		t.Fatalf("GetBySeq(%d): %v", tail.SeqNo, err)
+	}
+
+	AssertEntryRoundTrip(t, src, got)
+
+	want := referenceComputeHash(TestHMACKey(), protocol.Namespace(), got.PrevHash, got)
+	if got.Hash != want {
+		t.Errorf("HMAC parity broken under fuzz:\n  store=%s\n  ref  =%s", got.Hash, want)
+	}
+}
+
+// pgRepresentableString reports whether s can be stored verbatim in a
+// PostgreSQL text column: valid UTF-8 with no NUL byte. MemStore accepts any
+// Go string, so this is the narrower of the two backends and defines the
+// shared parity domain for the identity fields.
+func pgRepresentableString(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// seedEntryRoundTripCorpus adds the issue #1249 payload corpus and a few field
+// permutations as fuzz seeds. Timestamps derive from the suite epochAnchor +
+// principalOccurredAtSkew (no new time literals; TEST-TIME-LITERAL-01). Every
+// payload is a valid JSON object/null so the seed survives validatePayloadJSON;
+// the interesting binary content (pipe byte, Unicode boundary, escaped NUL,
+// non-alphabetical multi-key) lives inside JSON string values, which is the
+// only shape a strict-JSON-object payload can carry.
+func seedEntryRoundTripCorpus(f *testing.F) {
+	tsNano := epochAnchor.UnixNano()
+	occNano := epochAnchor.Add(principalOccurredAtSkew).UnixNano()
+
+	add := func(eventID string, payload string) {
+		f.Add(
+			eventID, "audit.test", "actor-1", "subject-1", "session-1", "tenant-1", "corr-1",
+			occNano, tsNano, []byte(payload),
+		)
+	}
+
+	add("seed-empty-object", `{}`)
+	add("seed-null", `null`)
+	add("seed-empty-bytes", ``)
+	add("seed-pipe-byte", `{"k":"a|b|c"}`)        // pipe byte (legacy HMAC delimiter)
+	add("seed-unicode", `{"k":"日本語"}`)            // multi-byte UTF-8 boundary
+	add("seed-emoji", `{"k":"😀🔒"}`)               // surrogate-range / 4-byte runes
+	add("seed-escaped-nul", `{"k":"a\u0000b"}`)   // NUL byte as JSON escape (raw 0x00 is invalid JSON)
+	add("seed-multikey", `{"b":1,"a":2,"c":"x"}`) // non-alphabetical multi-key (A-01 guard)
+	add("seed-nested", `{"x":{"y":[1,2,3]},"z":true}`)
+
+	// Field-permutation seeds: distinct values across every identity field so
+	// the fuzzer starts from a corpus that would surface a field-swap bug
+	// (e.g. SubjectID/TenantID crossed) through AssertEntryRoundTrip.
+	f.Add(
+		"seed-perm-a", "user.login", "impersonator", "end-user", "sess-42", "tenant-alpha", "corr-xyz",
+		occNano, tsNano, []byte(`{"action":"login"}`),
+	)
+	f.Add(
+		"e", "t", "a", "s", "se", "te", "c",
+		occNano, tsNano, []byte(`{}`),
+	)
+}
