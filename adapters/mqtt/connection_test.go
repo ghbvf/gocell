@@ -348,3 +348,66 @@ func (f *fakeCollector) RecordReconnect(_ context.Context) { f.count.Add(1) }
 // RecordSubscribeFailure satisfies the ConnectionCollector interface (added by
 // PR-3 review fix F7). This fake only counts reconnects, so it is a no-op here.
 func (f *fakeCollector) RecordSubscribeFailure(_ context.Context, _ mqtt.SubscribeFailureReason) {}
+
+// TestConnackError_ReasonDetailRedaction locks the CONNACK reason-name
+// public/internal channel split built by buildConnackOpts/reasonDetailOptions:
+// the numeric reasonCode is ALWAYS public (non-sensitive operator diagnostic),
+// while for auth-related reason codes (0x86 bad-credentials / 0x87 not-authorized
+// / 0x8C bad-auth-method) the human-readable reasonName is moved to the Internal
+// channel so it cannot help an attacker enumerate "credentials wrong vs authz
+// missing". Non-auth codes keep reasonName public. Mirrors paho autopaho's
+// ConnackError.ReasonCode surface (the field this redaction is built on).
+func TestConnackError_ReasonDetailRedaction(t *testing.T) {
+	tests := []struct {
+		name             string
+		reasonCode       byte
+		reasonNamePublic bool // false => auth-related, reasonName demoted to Internal
+	}{
+		{"bad username/password (auth) demotes reasonName to internal", 0x86, false},
+		{"not authorized (auth) demotes reasonName to internal", 0x87, false},
+		{"bad authentication method (auth) demotes reasonName to internal", 0x8C, false},
+		{"unspecified error (non-auth) keeps reasonName public", 0x80, true},
+		{"server busy (non-auth) keeps reasonName public", 0x89, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cause := makeConnackError(tt.reasonCode)
+			_, code := classifyConnackReason(cause)
+			e := errcode.New(errcode.KindInternal, code,
+				"mqtt: connection rejected", buildConnackOpts(cause)...)
+
+			// reasonCode is always a public detail.
+			if !connackHasPublicKey(e.PublicDetails(), "connackReasonCode") {
+				t.Errorf("connackReasonCode must always be in public details")
+			}
+			// reasonName public iff non-auth.
+			if got := connackHasPublicKey(e.PublicDetails(), "connackReasonName"); got != tt.reasonNamePublic {
+				t.Errorf("connackReasonName public = %v, want %v", got, tt.reasonNamePublic)
+			}
+			// auth-related reasonName must survive in the Internal channel (not lost).
+			if !tt.reasonNamePublic {
+				if !connackHasInternalKey(e.InternalDetails(), "connackReasonName") {
+					t.Errorf("auth-related connackReasonName must be present in internal details")
+				}
+			}
+		})
+	}
+}
+
+func connackHasPublicKey(ds []errcode.PublicDetail, key string) bool {
+	for _, d := range ds {
+		if d.Key() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func connackHasInternalKey(ds []errcode.InternalDetail, key string) bool {
+	for _, d := range ds {
+		if d.Key() == key {
+			return true
+		}
+	}
+	return false
+}
