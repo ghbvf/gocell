@@ -873,6 +873,7 @@ func stopTwoCoordinators(t *testing.T, c1, c2 *Coordinator,
 //   - The lease is expired via clock advance so coordinator-2 can re-claim.
 //     coordinator-2's driveOne sees ci.Instance.Status == StatusCompensating →
 //     recovery path → drives step1.Compensate again → StatusCompensated.
+//
 // makeStep1CompensateFn returns a Compensate function for step1 that:
 // - On first call (coordinator-1): signals compensationStarted, then blocks until ctx is done.
 // - On subsequent calls (coordinator-2 recovery): returns immediately.

@@ -105,34 +105,34 @@ func TestBuildLocatorOptions_ModeApplied(t *testing.T) {
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		requireLocatorMode(t, "conventional", "", fsys, metadata.LocatorConventional)
+		requireLocatorMode(t, "conventional", fsys, metadata.LocatorConventional)
 	})
 
 	t.Run("manifest forces manifest mode", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		requireLocatorMode(t, "manifest", "", fsys, metadata.LocatorManifest)
+		requireLocatorMode(t, "manifest", fsys, metadata.LocatorManifest)
 	})
 
 	t.Run("auto without manifest → conventional", func(t *testing.T) {
 		// No .gocell/manifest.yaml → auto-detect falls back to conventional.
-		requireLocatorMode(t, "", "", fstest.MapFS{}, metadata.LocatorConventional)
+		requireLocatorMode(t, "", fstest.MapFS{}, metadata.LocatorConventional)
 	})
 
 	t.Run("auto with manifest → manifest mode", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			".gocell/manifest.yaml": &fstest.MapFile{Data: manifestContent},
 		}
-		requireLocatorMode(t, "auto", "", fsys, metadata.LocatorManifest)
+		requireLocatorMode(t, "auto", fsys, metadata.LocatorManifest)
 	})
 }
 
-// requireLocatorMode builds locator options from layout/manifest, creates a
+// requireLocatorMode builds locator options from layout, creates a
 // NewLocatorFS with fsys, and asserts the resolved mode equals wantMode.
-func requireLocatorMode(t *testing.T, layout, manifest string, fsys fstest.MapFS, wantMode metadata.LocatorMode) {
+func requireLocatorMode(t *testing.T, layout string, fsys fstest.MapFS, wantMode metadata.LocatorMode) {
 	t.Helper()
-	opts, err := buildLocatorOptions(layout, manifest)
+	opts, err := buildLocatorOptions(layout, "")
 	if err != nil {
 		t.Fatalf("buildLocatorOptions: %v", err)
 	}
@@ -235,8 +235,8 @@ func TestFindRootFrom(t *testing.T) {
 	cases := []struct {
 		name    string
 		setup   func(t *testing.T, base string) string // returns starting dir
-		wantRel string                                  // expected root relative to base; "" means base itself
-		wantErr string                                  // non-empty → expect error containing this substring
+		wantRel string                                 // expected root relative to base; "" means base itself
+		wantErr string                                 // non-empty → expect error containing this substring
 	}{
 		{
 			name: "only go.mod → root found",

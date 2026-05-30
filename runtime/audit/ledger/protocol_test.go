@@ -347,7 +347,7 @@ func TestNewProtocol_OK(t *testing.T) {
 // left untouched — no crash, no silent data alteration.
 type chainHMACKeyCase struct {
 	name       string
-	keyLen     int  // -1 → nil key
+	keyLen     int // -1 → nil key
 	wantErr    bool
 	wantZeroed bool // post-call caller slice all-zero check
 }
