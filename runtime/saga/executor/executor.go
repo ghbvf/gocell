@@ -449,7 +449,7 @@ func (e *Executor) executeInner(
 				onStale() // cancel runCtx with errLeaseLost so the in-flight step bails
 			}
 		}()
-		runHeartbeat(hbCtx, e.clk, e.heartbeater, HeartbeatConfig{
+		runHeartbeat(hbCtx, e.clk, e.heartbeater, heartbeatConfig{
 			InstanceID:    inst.ID,
 			LeaseID:       leaseID,
 			DefinitionID:  inst.DefinitionID,
@@ -564,7 +564,7 @@ func (e *Executor) RunWithHeartbeat(
 				onStale() // cancel runCtx with errLeaseLost so the in-flight fn bails
 			}
 		}()
-		runHeartbeat(hbCtx, e.clk, e.heartbeater, HeartbeatConfig{
+		runHeartbeat(hbCtx, e.clk, e.heartbeater, heartbeatConfig{
 			InstanceID:    inst.ID,
 			LeaseID:       leaseID,
 			DefinitionID:  inst.DefinitionID,

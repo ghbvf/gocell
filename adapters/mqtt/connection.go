@@ -503,6 +503,15 @@ func buildConnackError(code errcode.Code, cause error, message string) error {
 	return errcode.New(errcode.KindInternal, code, message, opts...)
 }
 
+// errClosed returns the canonical error for operations attempted on a closed
+// connection. Centralizing the message here keeps the literal single-sourced
+// (no go:S1192 duplication) while preserving the inline BasicLit required by
+// MESSAGE-CONST-LITERAL-01.
+func errClosed() error {
+	return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
+		"mqtt: connection is closed")
+}
+
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
 // reason_name is decoded via disconnectReasonName (MQTT v5 §3.14.2.1) — the
 // DISCONNECT reason-code table, NOT the CONNACK table, which shares numeric
@@ -543,8 +552,7 @@ func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []
 	closed := c.closed
 	c.mu.RUnlock()
 	if closed {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			"mqtt: connection is closed")
+		return nil, errClosed()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
@@ -696,8 +704,7 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 	closed := c.closed
 	c.mu.RUnlock()
 	if closed {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			"mqtt: connection is closed")
+		return nil, errClosed()
 	}
 
 	// Capture the subscription ctx + handler into a dispatch closure so the
@@ -785,8 +792,7 @@ func (c *Connection) ack(pb *paho.Publish) error {
 	closed := c.closed
 	c.mu.RUnlock()
 	if closed {
-		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			"mqtt: connection is closed")
+		return errClosed()
 	}
 	c.subMu.RLock()
 	acker := c.ackClient
@@ -818,8 +824,7 @@ func (c *Connection) Health(_ context.Context) error {
 	defer c.mu.RUnlock()
 
 	if c.closed {
-		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			"mqtt: connection is closed")
+		return errClosed()
 	}
 	if c.permanentErr != nil {
 		return c.permanentErr
@@ -917,8 +922,7 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 		c.mu.RUnlock()
 
 		if closed {
-			return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-				"mqtt: connection is closed")
+			return errClosed()
 		}
 		if permErr != nil {
 			return permErr

@@ -95,7 +95,7 @@ func TestHeartbeat_TickerFiresOnAdvance(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    instID,
 			LeaseID:       leaseID,
 			DefinitionID:  "def-x",
@@ -145,7 +145,7 @@ func TestHeartbeat_NoLeakOnCancel(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    instID,
 			LeaseID:       leaseID,
 			DefinitionID:  "def-x",
@@ -179,7 +179,7 @@ func TestHeartbeat_StaleLease(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    instID,
 			LeaseID:       leaseID,
 			DefinitionID:  "def-x",
@@ -236,7 +236,7 @@ func TestHeartbeat_StaleLease_InvokesOnStale(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    instID,
 			LeaseID:       leaseID,
 			DefinitionID:  "def-x",
@@ -268,7 +268,7 @@ func TestHeartbeat_TransientError(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    instID,
 			LeaseID:       leaseID,
 			DefinitionID:  "def-x",

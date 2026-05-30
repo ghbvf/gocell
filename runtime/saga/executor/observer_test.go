@@ -374,7 +374,7 @@ func TestRunHeartbeat_ObserveHeartbeatFailure_InfraError(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, HeartbeatConfig{
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
 			InstanceID:    "inst-err",
 			LeaseID:       "lease-err",
 			DefinitionID:  "def-x",

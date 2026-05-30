@@ -37,11 +37,11 @@ type Heartbeater interface {
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 }
 
-// HeartbeatConfig holds the identity and timing parameters for runHeartbeat.
+// heartbeatConfig holds the identity and timing parameters for runHeartbeat.
 // Grouping them into a struct keeps runHeartbeat's parameter count within the
 // go:S107 limit (≤7 parameters). All fields are required; Interval and
 // LeaseDuration must be > 0.
-type HeartbeatConfig struct {
+type heartbeatConfig struct {
 	InstanceID    idutil.SafeID
 	LeaseID       idutil.SafeID
 	DefinitionID  idutil.SafeID
@@ -81,7 +81,7 @@ func runHeartbeat(
 	ctx context.Context,
 	clk clock.Clock,
 	hb Heartbeater,
-	cfg HeartbeatConfig,
+	cfg heartbeatConfig,
 	logger *slog.Logger,
 	onStale func(),
 	onHBFailure func(reason HeartbeatFailureReason),
