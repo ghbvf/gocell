@@ -240,7 +240,7 @@ func TestSagaStepNameUnique01(t *testing.T) {
 			wantField:    "saga.steps[1].name",
 		},
 		{
-			name: "three steps with two duplicates → two errors",
+			name: "three steps, one duplicate → one error",
 			steps: []metadata.SagaStepMeta{
 				{Name: "reserve", Output: "schemas/reserve.json"},
 				{Name: "charge", Output: "schemas/charge.json"},
@@ -638,6 +638,7 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 		cellLevel    string
 		role         string
 		wantErrCount int
+		wantField    string
 	}{
 		{
 			name:         "orchestrate on L3 cell → no error (valid)",
@@ -650,30 +651,35 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 			cellLevel:    "L2",
 			role:         "orchestrate",
 			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
 		},
 		{
 			name:         "orchestrate on L1 cell → error",
 			cellLevel:    "L1",
 			role:         "orchestrate",
 			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
 		},
 		{
 			name:         "orchestrate on L0 cell → error",
 			cellLevel:    "L0",
 			role:         "orchestrate",
 			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
 		},
 		{
 			name:         "orchestrate on L4 cell → error",
 			cellLevel:    "L4",
 			role:         "orchestrate",
 			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
 		},
 		{
 			name:         "orchestrate on empty level cell → error",
 			cellLevel:    "",
 			role:         "orchestrate",
 			wantErrCount: 1,
+			wantField:    "contractUsages[0].role",
 		},
 		{
 			name:         "subscribe role on L2 cell → no error (rule only fires on orchestrate)",
@@ -697,6 +703,9 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 				r := got[0]
 				if r.Severity != SeverityError {
 					t.Errorf("expected SeverityError, got %s", r.Severity)
+				}
+				if r.Field != tc.wantField {
+					t.Errorf("expected Field %q, got %q", tc.wantField, r.Field)
 				}
 				if r.Fix == "" {
 					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")

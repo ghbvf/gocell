@@ -70,7 +70,7 @@ GoCell 中有三个 L3 cell 并非 saga 编排：
 2. `clock.Clock` 参数须经 `clock.MustHaveClock(clk, ...)` 守卫（`MustHaveClock` 是 programmer-error panic 的豁免形态，clock 强制位置参，见 `.claude/rules/gocell/go-standards.md`）。
 3. enforcement = `SAGA-CONSTRUCTOR-NIL-GUARD-01` archtest（type-aware，绑定参数 types.Object 身份 + callee 解析；Medium）。**注意**：saga 构造器目前**未**接入 `gocell:"required"` tag funnel，故 `REQUIRED-DEP-NIL-GUARD-01` 不覆盖 saga；本 archtest 是 saga 侧的唯一守卫。
 
-**Hard 化路径**：接入 `gocell:"required"` struct tag funnel，由 `gocell generate required-deps` 从 tag 生成 `validateRequired()`，与 22 个平台 service 一致。该迁移会把 saga 构造器纳入 `REQUIRED-DEP-NIL-GUARD-01` 的 Hard codegen 守卫，届时本 archtest 可退役。路径可行，待独立 backlog 跟踪（触发条件 = saga coordinator/executor 进入生产 cell 使用）。
+**Hard 化路径**：接入 `gocell:"required"` struct tag funnel，由 `gocell generate required-deps` 从 tag 生成 `validateRequired()`，与 22 个平台 service 一致。该迁移会把 saga 构造器纳入 `REQUIRED-DEP-NIL-GUARD-01` 的 Hard codegen 守卫，届时本 archtest 可退役。路径可行，追踪于 **gh #1317**（触发条件 = saga coordinator/executor 进入生产 cell 使用）。
 
 ---
 

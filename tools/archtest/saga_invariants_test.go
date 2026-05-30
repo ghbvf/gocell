@@ -3918,8 +3918,16 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 //
 // Migrate runtime/saga constructors to the REQUIRED-DEP-NIL-GUARD-01 funnel
 // (gocell:"required" struct tag + generated validateRequired()). That funnel
-// carries Hard codegen enforcement. Backlog tracking: gh issue for
-// runtime/saga migration to REQUIRED-DEP-NIL-GUARD-01.
+// carries Hard codegen enforcement. Backlog tracking: gh #1317.
+//
+// # Anonymous / blank interface parameters (closed, not a blind spot)
+//
+// An unnamed interface parameter (`func New(journal.Journal)`) or a
+// blank-identifier one (`func New(_ journal.Journal)`) has no identifier to
+// reference, so it can never carry a guard call. Rather than silently skipping
+// it (the original bypass), the detector flags such a param directly: a
+// required interface dep MUST be a named, guardable parameter. The
+// red_anonymous_param fixture is the reverse self-test for both forms.
 //
 // # Blind spots
 //
@@ -4016,9 +4024,28 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 				if _, isIface := typ.Underlying().(*types.Interface); !isIface {
 					continue
 				}
+				// An unnamed interface parameter (e.g. `func New(journal.Journal)`)
+				// has no identifier to reference, so it can never be nil-guarded —
+				// flag it directly rather than silently skipping (closes the
+				// anonymous-param bypass; the param loop below requires a name).
+				if len(field.Names) == 0 {
+					out = append(out, sagaDiag(p, field.Type, rel,
+						sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
+							" has an unnamed interface parameter (type "+typ.String()+
+							") that cannot be nil-guarded; give it a name and add "+
+							"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
+					continue
+				}
 				for _, name := range field.Names {
 					obj := p.TypesInfo.Defs[name]
-					if obj == nil {
+					// A blank-identifier interface param (`_ journal.Journal`) has
+					// no object to bind a guard to — also a bypass; flag it.
+					if name.Name == "_" || obj == nil {
+						out = append(out, sagaDiag(p, name, rel,
+							sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
+								" has a blank-identifier interface parameter (type "+typ.String()+
+								") that cannot be nil-guarded; give it a name and add "+
+								"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
 						continue
 					}
 					ifaces = append(ifaces, ifaceParam{
@@ -4131,6 +4158,19 @@ func TestSagaConstructorNilGuard_NoUnguardedInterfaceParam(t *testing.T) {
 func TestSagaConstructorNilGuard_Detector_RedUnguardedParamFixture(t *testing.T) {
 	root := findModuleRoot(t)
 	relDir, pattern := sagaConstructorNilGuardFixturePattern("red_unguarded_param")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanConstructorNilGuards)
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// TestSagaConstructorNilGuard_Detector_RedAnonymousParamFixture loads the
+// red_anonymous_param fixture and asserts the detector fires for interface
+// parameters that have no usable identifier — an unnamed param (NewUnnamed) and
+// a blank-identifier param (NewBlank). This closes the anonymous-param bypass:
+// without naming, a required interface dep cannot carry a guard call. NewNamed
+// (named + guarded) is the negative control and must stay silent.
+func TestSagaConstructorNilGuard_Detector_RedAnonymousParamFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaConstructorNilGuardFixturePattern("red_anonymous_param")
 	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanConstructorNilGuards)
 	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
 }
