@@ -436,8 +436,10 @@ vs `pass.Pkg`（被分析目标）的标准分离。
 | 上游 Medium | Go 无法阻止包内写 bare 字面量；golden baseline（fail-on-new + 手动缩，ArchUnit FreezingArchRule 范式）兜底；Hard 终态 = golden 清空后纯 ban | **Medium（过渡）** |
 
 Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；Hard 化路径
-= 完成全量迁移使 golden 清空 → 纯 ban，由 follow-up issue 跟踪。符号清单 + 盲区自检活在
-`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
+= 完成全量迁移使 golden 清空 → 纯 ban，由 #1304 跟踪。符号清单 + 盲区自检活在
+`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。残留盲区 N≥3 fragment-split
+（两片段由 `no-fragment-split` 自检覆盖）不可自动检测；鉴于 M3 各 PR 均为 AI 实施，
+**「无 N≥3 字面量 fragment-split」必须作为每个 M3 迁移 PR 的人工 review checklist 条目**。
 
 ### 开源对标（`ref:` 见 commit）
 
@@ -462,7 +464,7 @@ Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向
 | manifest `modules[*].path` 指向不存在目录 | WalkDir 报 `*PathError` | `NewLocator` / `NewLocatorFS` 在构造阶段对每个 `path` 调用 `fs.Stat` fail-fast，而非推迟到 `Discover()` 调用时 |
 | go.work 中 use 的 module 不在 manifest modules 列表中 | manifest 遗漏子 module，相关 cell 不被扫描 | 本 ADR 不强制 go.work 与 manifest 对齐；M2 codegen module path 注入会在 codegen 阶段捕获不一致；long-term M11 指南补充手动校验步骤 |
 | Workspace 多模块均声明 `actors` 字段 | workspace-level singleton 重复声明 | `Locator` 解析 manifest 时 fail-fast，返回 `ErrDuplicateWorkspaceSingleton`，明确指出重复的模块路径 |
-| M3：外部仓库 import archtest 后触达 loader 原语绕过 Pass funnel | 外部代码 `packages.Load` + 手配 `*types.Info` 重建 INV-1 跨 load 配对 bug | **不削弱**：`Pass.Pkg` 仍是 `*types.Package`（非 `*packages.Package`，无 `.Syntax`）；loader 原语在 `tools/archtest/internal/`（外部不可 import）；外部仅经 `RunTyped`/`RunStandardCellRules` 安全 façade。Hard 三线防御对外部 import 与对内一致 |
+| M3：外部仓库 import archtest 后触达 loader 原语绕过 Pass funnel | 外部代码 `packages.Load` + 手配 `*types.Info` 重建 INV-1 跨 load 配对 bug | **不削弱，但边界须精确**：对外部 import 方，唯一生效的 Hard 线是**防御 #1**——`Pass.Pkg` 是 `*types.Package`（非 `*packages.Package`，无 `.Syntax`），INV-1 跨 load 配对从 `Pass` 类型上不可重建；loader 原语在 `tools/archtest/internal/`（外部不可 import）。防御 #2（depguard 禁直接 import `packages`）与 #3（meta-archtest `PASS-FUNNEL-*`）是 **gocell 内部 `_test.go` 的自约束，对外部仓库不适用**——外部消费方可在自有 test 里 `import packages`，只要不从 `Pass.Pkg` 取 `.Syntax`（类型上不可达）即无 INV-1 向量。原"Hard 三线一致"表述高估边界，已更正 |
 | M3：外部仓库的 `_test.go` 调 `RunStandardCellRules`，`findModuleRoot` 误解析到 gocell 依赖根 | 扫描目标错成 gocell 而非外部 module | `findModuleRoot` 从测试进程 cwd 向上回溯，外部 `go test` 的 cwd 在外部 module 内 → 命中外部 go.mod；gocell 依赖在 module cache（只读，非 cwd 祖先），不会被误命中 |
 | M3：迁移 PR 改规则逻辑引入行为漂移（漏报违规） | 安全规则静默失效 | 每条迁移单源 dogfood（gocell `_test.go` 与外部走同一 `Check*`）+ Test* 名不变（ARCHTEST-VERIFY-COVERAGE-01 不漂移）+ RED fixture golden 锁违规检出 |
 

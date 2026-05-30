@@ -83,6 +83,7 @@ const modulePathFunnelSanctioned = "tools/archtest/external.go"
 //
 // and review the golden diff (it should only ever shrink).
 func TestArchtestModulePathFunnel(t *testing.T) {
+	t.Parallel()
 	root := findModuleRoot(t)
 	// IncludeTests: today's rule logic lives in *_test.go; the funnel must see
 	// it. testdata/ is skipped by DirsScope's default skip set; internal/ is

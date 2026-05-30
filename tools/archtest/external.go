@@ -89,6 +89,11 @@ type ConfigForExternalCell struct {
 	// composition root for forbidden in-memory/noop wiring read this; an empty
 	// slice means "no composition-root scan for this run". GoCell's own dogfood
 	// passes {"./cmd/corebundle"}.
+	//
+	// As of PR-1, NO rule in StandardCellRules() reads this field — it is
+	// reserved for the PROD-MAIN-WIRING-NOOP-REJECT-01 rule (issue #1303), so
+	// passing it today has no effect. It is included now so the config shape is
+	// stable when that rule lands.
 	ProductionMainPkgs []string
 
 	// ExtraRules are consumer-owned custom rules appended to the standard set —
@@ -106,8 +111,12 @@ type ConfigForExternalCell struct {
 // This is the GoCell analog of the []*analysis.Analyzer slice handed to
 // multichecker.Main: a flat, registry-free list. The set grows as more rules
 // are migrated from their legacy _test.go form into importable CellRules (M3
-// PR-2..N, tracked in the umbrella ADR); the ratchet meta-archtest
+// PR-2..N, tracked at issue #1302); the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 guarantees that migration converges.
+//
+// PR-1 intentionally ships exactly ONE rule (PANIC-REGISTERED-01) as the
+// migration exemplar — do NOT treat the current set size as final. An external
+// consumer gets the rules migrated so far plus any cfg.ExtraRules they add.
 func StandardCellRules() []*CellRule {
 	return []*CellRule{
 		{ID: rulePanicRegistered01, Run: CheckPanicRegistered},
@@ -138,7 +147,15 @@ func RunStandardCellRules(t *testing.T, cfg ConfigForExternalCell) {
 	rules := StandardCellRules()
 	rules = append(rules, cfg.ExtraRules...)
 	for _, r := range rules {
+		// A nil entry or a rule with no Run is silently skipped (defensive for
+		// consumers assembling rule slices dynamically). An empty ID, however,
+		// is a misconfiguration — Report(t, "", …) would attribute diagnostics
+		// to a blank rule, hiding which gate fired — so fail fast.
 		if r == nil || r.Run == nil {
+			continue
+		}
+		if r.ID == "" {
+			t.Errorf("RunStandardCellRules: skipping a rule with an empty ID (set CellRule.ID)")
 			continue
 		}
 		Report(t, r.ID, r.Run(t, cfg))

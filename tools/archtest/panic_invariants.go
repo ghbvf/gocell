@@ -231,11 +231,22 @@ func isPanicCallExpr(call *ast.CallExpr) bool {
 
 // shouldSkipForPanicRegistered returns true for paths that must not be
 // scanned by PANIC-REGISTERED-01 (test files, generated code, testdata, etc.).
-// Mirrors fileroles.IsProductionCode exclusions for paths that RunTyped may
-// surface but the rule should not gate. All prefixes are module-relative, so
-// the skip set is correct for any module under analysis (an external repo
-// simply will not have a "tools/archtest/" tree, in which case that arm never
-// matches — harmless).
+// Preserved verbatim from the pre-migration rule so gocell behavior is
+// identical; the skip set is two kinds:
+//
+//   - UNIVERSAL (correct for any module): "_test.go", "vendor/", "generated/",
+//     "examples/", "testdata/", "node_modules/". An external repo's own files
+//     under these are non-production by the same convention.
+//   - GoCell-SPECIFIC (a gocell layout artifact): "tools/archtest/",
+//     "worktrees/", ".git/", "/auditcoretest/". An external repo simply lacks
+//     these trees, so the arm never matches — harmless, but it is gocell noise
+//     in an importable rule.
+//
+// Generalizing the skip set for external consumers (single-sourcing it through
+// tools/internal/fileroles.IsProductionCode and/or a consumer-supplied
+// SkipPaths) is part of the scan-scope generalization tracked with the rest of
+// the rule migration in #1302; it is deliberately NOT changed here to keep this
+// foundation PR's PANIC-REGISTERED-01 behavior byte-for-byte identical.
 func shouldSkipForPanicRegistered(rel string) bool {
 	switch {
 	case strings.HasSuffix(rel, "_test.go"):
@@ -246,17 +257,17 @@ func shouldSkipForPanicRegistered(rel string) bool {
 		return true
 	case strings.HasPrefix(rel, "examples/"):
 		return true
-	case strings.HasPrefix(rel, "tools/archtest/"):
+	case strings.HasPrefix(rel, "tools/archtest/"): // gocell-specific
 		return true
-	case strings.HasPrefix(rel, "worktrees/"):
+	case strings.HasPrefix(rel, "worktrees/"): // gocell-specific
 		return true
-	case strings.HasPrefix(rel, ".git/"):
+	case strings.HasPrefix(rel, ".git/"): // gocell-specific
 		return true
 	case strings.HasPrefix(rel, "node_modules/"):
 		return true
 	case strings.Contains(rel, "/testdata/") || strings.HasPrefix(rel, "testdata/"):
 		return true
-	case strings.Contains(rel, "/auditcoretest/"):
+	case strings.Contains(rel, "/auditcoretest/"): // gocell-specific
 		return true
 	}
 	return false

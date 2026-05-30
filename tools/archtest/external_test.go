@@ -1,10 +1,13 @@
 package archtest
 
-// INVARIANT: (none — exercises the importable external surface in external.go)
+// INVARIANT: ARCHTEST-EXTERNAL-SURFACE-01
 //
 // external_test.go covers the importable library entry points an external Cell
 // repository uses: [CellRule] / [StandardCellRules] / [RunStandardCellRules]
 // (the go/analysis Analyzer+multichecker analog) and the ExtraRules plugin.
+// ARCHTEST-EXTERNAL-SURFACE-01 is a unit-coverage anchor for the external
+// façade (same convention as ARCHTEST-PASS-DRIVER-UNIT-01 / GOLDEN-HELPER-UNIT-01),
+// not a production invariant gate.
 
 import "testing"
 
