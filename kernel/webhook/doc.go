@@ -1,8 +1,9 @@
 // Package webhook is the kernel-level pure-computation core for GoCell's
 // bidirectional webhook capability (KERNEL-WEBHOOK-01): inbound receiver
 // verification and outbound dispatcher signing. It depends only on the
-// standard library + pkg/errcode + pkg/redaction + pkg/panicregister +
-// kernel/clock (kernel/ layering rule — no runtime/ adapters/ cells/).
+// standard library + pkg/errcode + pkg/redaction + kernel/clock in
+// production (kernel/ layering rule — no runtime/ adapters/ cells/);
+// pkg/panicregister is a test-only dependency of webhook_helpers_test.go.
 //
 // Scope: L0 (signature compute + verify are pure functions of input bytes).
 // The HTTP receiver middleware and the outbox dispatcher consumer that wire
@@ -15,8 +16,9 @@
 //     [AlgorithmHMACSHA256]. [Algorithm.Validate] rejects everything else with
 //     [errcode.ErrWebhookAlgorithmUnsupported].
 //   - [SourceID] / [DeliveryID] — typed string newtypes with [NewSourceID] /
-//     [NewDeliveryID] validators (+ Must variants). Mirror the
-//     kernel/healthz.ProbeName funnel shape.
+//     [NewDeliveryID] validators. Mirror the kernel/healthz.ProbeName funnel
+//     shape. (Panic-on-error Must* constructors are test-only fixtures in
+//     webhook_helpers_test.go, not part of the production surface.)
 //   - [Source] — an opaque (id, secret) pair. Its secret field is unexported
 //     with no getter, and [Source.LogValue] redacts it, so a webhook secret
 //     can never reach slog/spans by accident — see the secret-leak defenses

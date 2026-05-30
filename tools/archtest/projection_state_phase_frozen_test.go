@@ -247,30 +247,26 @@ func (e phaseErr) Error() string { return string(e) }
 // phaseConstNames returns the ordered const names in the GenDecl that declares
 // PhaseLive, or nil if no such block exists.
 func phaseConstNames(f *ast.File) []string {
-	for _, d := range f.Decls {
-		gd, ok := d.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+	var result []string
+	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if result != nil || gd.Tok != token.CONST {
+			return
 		}
 		var block []string
 		hasLocator := false
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
 			for _, n := range vs.Names {
 				block = append(block, n.Name)
 				if n.Name == "PhaseLive" {
 					hasLocator = true
 				}
 			}
-		}
+		})
 		if hasLocator {
-			return block
+			result = block
 		}
-	}
-	return nil
+	})
+	return result
 }
 
 // phaseStringArms maps each `case <Ident>: return "<literal>"` arm in the
@@ -282,15 +278,18 @@ func phaseStringArms(f *ast.File) map[string]string {
 			return
 		}
 		EachInSubtree[ast.CaseClause](ctx.Func.Body, func(cc *ast.CaseClause) {
-			lit := firstReturnedStringLit(cc.Body)
+			lit := firstReturnedStringLit(cc)
 			if lit == "" {
 				return
 			}
-			for _, e := range cc.List {
-				if id, ok := e.(*ast.Ident); ok {
+			// Collect only case-label Idents (cc.List), not body Idents.
+			// CaseClause.Colon is the position of the ':' separator; List
+			// elements precede it and Body statements follow it.
+			EachInChildren[ast.Ident](cc, func(id *ast.Ident) {
+				if id.Pos() < cc.Colon {
 					arms[id.Name] = lit
 				}
-			}
+			})
 		})
 	})
 	return arms
@@ -316,31 +315,37 @@ func phaseZeroLiteralArm(f *ast.File) string {
 			return
 		}
 		EachInSubtree[ast.CaseClause](ctx.Func.Body, func(cc *ast.CaseClause) {
-			for _, e := range cc.List {
-				if bl, ok := e.(*ast.BasicLit); ok && bl.Kind == token.INT && bl.Value == "0" {
-					lit = firstReturnedStringLit(cc.Body)
+			// Find `case 0:` — a BasicLit(INT, "0") in the case-label position
+			// (before cc.Colon). EachInChildren visits depth-1 children of cc;
+			// the Pos < cc.Colon guard excludes BasicLit nodes in the body.
+			EachInChildren[ast.BasicLit](cc, func(bl *ast.BasicLit) {
+				if bl.Pos() < cc.Colon && bl.Kind == token.INT && bl.Value == "0" {
+					lit = firstReturnedStringLit(cc)
 				}
-			}
+			})
 		})
 	})
 	return lit
 }
 
-func firstReturnedStringLit(body []ast.Stmt) string {
-	for _, s := range body {
-		ret, ok := s.(*ast.ReturnStmt)
-		if !ok || len(ret.Results) != 1 {
-			continue
+// firstReturnedStringLit returns the string literal value from the first
+// `return "<literal>"` statement found as a direct child of cc (i.e. in
+// cc.Body), or "" if no such statement exists.
+func firstReturnedStringLit(cc *ast.CaseClause) string {
+	ret, found := FindFirstChild[ast.ReturnStmt](cc, func(ret *ast.ReturnStmt) bool {
+		if len(ret.Results) != 1 {
+			return false
 		}
 		lit, ok := ret.Results[0].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			continue
-		}
-		v, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			continue
-		}
-		return v
+		return ok && lit.Kind == token.STRING
+	})
+	if !found {
+		return ""
 	}
-	return ""
+	lit := ret.Results[0].(*ast.BasicLit) //nolint:forcetypeassert // guarded by predicate above
+	v, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return ""
+	}
+	return v
 }

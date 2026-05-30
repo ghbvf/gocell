@@ -347,18 +347,12 @@ func hasOutboxConformanceCall(file *ast.File, info *types.Info) bool {
 	if info == nil {
 		return false
 	}
-	found := false
-	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-		if found {
-			return
-		}
+	_, found := FindFirstInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) bool {
 		pkgPath, name, ok := ResolvePackageRef(info, call.Fun)
 		if !ok || pkgPath != outboxtestPkg {
-			return
+			return false
 		}
-		if name == "TestPubSub" || strings.HasPrefix(name, "RunBatch") {
-			found = true
-		}
+		return name == "TestPubSub" || strings.HasPrefix(name, "RunBatch")
 	})
 	return found
 }

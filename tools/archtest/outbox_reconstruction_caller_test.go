@@ -129,14 +129,10 @@ func TestOutboxReconstructionCaller01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			ast.Inspect(file, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 				symbol, matched := reconstructionFunnelSymbol(p.TypesInfo, sel)
 				if !matched {
-					return true
+					return
 				}
 				record(symbol, rel)
 				if _, allowed := reconstructionFunnelAllowlist[symbol][rel]; !allowed {
@@ -155,7 +151,6 @@ func TestOutboxReconstructionCaller01(t *testing.T) {
 							symbol, rel),
 					})
 				}
-				return true
 			})
 		}
 		return d

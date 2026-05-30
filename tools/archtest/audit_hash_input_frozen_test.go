@@ -328,19 +328,17 @@ func collectAuditHashInputFields(t *testing.T, protocolPath string) []auditHashI
 	if err != nil {
 		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: parse %s: %v", protocolPath, err)
 	}
-	var fields []auditHashInputField
-	ast.Inspect(file, func(n ast.Node) bool {
-		ts, ok := n.(*ast.TypeSpec)
-		if !ok || ts.Name == nil || ts.Name.Name != "auditHashInput" {
-			return true
-		}
-		st, ok := ts.Type.(*ast.StructType)
-		if !ok || st.Fields == nil {
-			t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput must be a struct type")
-		}
-		fields = collectStructFields(t, fset, st)
-		return false
+	ts, found := FindFirstInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) bool {
+		return ts.Name != nil && ts.Name.Name == "auditHashInput"
 	})
+	if !found {
+		t.Fatal("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput type not found in protocol.go")
+	}
+	st, ok := ts.Type.(*ast.StructType)
+	if !ok || st.Fields == nil {
+		t.Fatalf("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput must be a struct type")
+	}
+	fields := collectStructFields(t, fset, st)
 	if len(fields) == 0 {
 		t.Fatal("AUDIT-HASH-INPUT-FROZEN-01: auditHashInput type not found in protocol.go")
 	}

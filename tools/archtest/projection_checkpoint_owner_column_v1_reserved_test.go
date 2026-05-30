@@ -259,14 +259,15 @@ func d() string            { return "INSERT INTO projection_checkpoints (" + "ow
 	require.NoError(t, err)
 
 	var dynamicCalls, concatExprs int
-	ast.Inspect(file, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok && isDynamicSQLBuilderCall(call) && callArgsMentionCheckpointTable(call) {
+	EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+		if isDynamicSQLBuilderCall(call) && callArgsMentionCheckpointTable(call) {
 			dynamicCalls++
 		}
-		if be, ok := n.(*ast.BinaryExpr); ok && be.Op == token.ADD && nodeMentionsCheckpointTable(be) {
+	})
+	EachInSubtree[ast.BinaryExpr](file, func(be *ast.BinaryExpr) {
+		if be.Op == token.ADD && nodeMentionsCheckpointTable(be) {
 			concatExprs++
 		}
-		return true
 	})
 
 	assert.Equal(t, 3, dynamicCalls,

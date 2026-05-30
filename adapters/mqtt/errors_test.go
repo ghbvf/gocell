@@ -310,3 +310,65 @@ func TestPubackReasonName(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildConnackOpts_ReasonNameRedaction locks the CONNACK reason-name
+// public/internal channel split produced by buildConnackOpts (via
+// reasonDetailOptions): the numeric reasonCode is ALWAYS a public detail
+// (non-sensitive operator diagnostic), while for auth-related reason codes
+// (0x86 BadUserNameOrPassword / 0x87 NotAuthorized / 0x8C BadAuthenticationMethod)
+// the human-readable reasonName is demoted to the Internal channel so it cannot
+// help an attacker enumerate "credentials wrong vs authz missing". Non-auth
+// codes keep reasonName public. Built on autopaho.ConnackError.ReasonCode.
+func TestBuildConnackOpts_ReasonNameRedaction(t *testing.T) {
+	tests := []struct {
+		name             string
+		reasonCode       byte
+		reasonNamePublic bool // false => auth-related: reasonName demoted to Internal
+	}{
+		{"bad-user-pw-0x86-auth", 0x86, false},
+		{"not-authorized-0x87-auth", 0x87, false},
+		{"bad-auth-method-0x8C-auth", 0x8C, false},
+		{"unspecified-0x80-nonauth", 0x80, true},
+		{"server-unavailable-0x88-nonauth", 0x88, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cause := &autopaho.ConnackError{ReasonCode: tt.reasonCode}
+			e := errcode.New(errcode.KindInternal, ErrAdapterMQTTConnectPermanent,
+				"mqtt: connection rejected", buildConnackOpts(cause)...)
+
+			if !hasPublicDetailKey(e.Details, reasonDetailKeyCode) {
+				t.Errorf("reasonCode must always be a public detail")
+			}
+			if got := hasPublicDetailKey(e.Details, reasonDetailKeyName); got != tt.reasonNamePublic {
+				t.Errorf("reasonName public = %v, want %v", got, tt.reasonNamePublic)
+			}
+			if !tt.reasonNamePublic {
+				if hasPublicDetailKey(e.Details, reasonDetailKeyName) {
+					t.Errorf("auth-related reasonName must NOT be in public details")
+				}
+				if !hasInternalDetailKey(e.InternalDetails, reasonDetailKeyName) {
+					t.Errorf("auth-related reasonName must be present in internal details")
+				}
+			}
+		})
+	}
+}
+
+func hasPublicDetailKey(ds []errcode.PublicDetail, key string) bool {
+	for _, d := range ds {
+		if d.Key() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func hasInternalDetailKey(ds []errcode.InternalDetail, key string) bool {
+	for _, d := range ds {
+		if d.Key() == key {
+			return true
+		}
+	}
+	return false
+}
