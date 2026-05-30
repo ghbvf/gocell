@@ -89,6 +89,17 @@ type Service struct {
 	clock       clock.Clock
 }
 
+// NewServiceParams holds the required dependencies for NewService. Keeping the
+// required-dependency set in a struct reduces the positional-parameter count
+// and makes call sites self-documenting (S107).
+type NewServiceParams struct {
+	SessionStore session.Store
+	RoleRepo     ports.RoleRepository
+	UserRepo     ports.UserRepository
+	RefreshStore refresh.Store
+	Issuer       *auth.JWTIssuer
+}
+
 // NewService creates a session-refresh Service.
 //
 // userRepo is required (P1-3 fix): fetchPasswordResetRequired silently
@@ -101,11 +112,7 @@ type Service struct {
 // opts allows future functional extensions without breaking callers (F8).
 func NewService(
 	clk clock.Clock,
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	userRepo ports.UserRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
+	params NewServiceParams,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
@@ -114,12 +121,12 @@ func NewService(
 		logger = slog.Default()
 	}
 	s := &Service{
-		sessionStore: sessionStore,
-		roleRepo:     roleRepo,
-		userRepo:     userRepo,
-		refreshStore: refreshStore,
+		sessionStore: params.SessionStore,
+		roleRepo:     params.RoleRepo,
+		userRepo:     params.UserRepo,
+		refreshStore: params.RefreshStore,
 		clock:        clk,
-		issuer:       issuer,
+		issuer:       params.Issuer,
 		logger:       logger,
 	}
 	for _, o := range opts {

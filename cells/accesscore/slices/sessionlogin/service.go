@@ -158,16 +158,23 @@ func WithAccountLockout(svc *accountlockout.Service) Option {
 	}
 }
 
+// NewServiceParams holds the required dependencies for NewService. Keeping the
+// required-dependency set in a struct reduces the positional-parameter count
+// and makes call sites self-documenting (S107).
+type NewServiceParams struct {
+	UserRepo     ports.UserRepository
+	SessionStore session.Store
+	RoleRepo     ports.RoleRepository
+	RefreshStore refresh.Store
+	Issuer       *auth.JWTIssuer
+}
+
 // NewService creates a session-login Service. refreshStore issues the opaque
 // refresh token returned to the client; the access JWT is minted by
 // sessionmint.MintAccess.
 func NewService(
 	clk clock.Clock,
-	userRepo ports.UserRepository,
-	sessionStore session.Store,
-	roleRepo ports.RoleRepository,
-	refreshStore refresh.Store,
-	issuer *auth.JWTIssuer,
+	params NewServiceParams,
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
@@ -176,13 +183,13 @@ func NewService(
 		logger = slog.Default()
 	}
 	s := &Service{
-		userRepo:        userRepo,
-		sessionStore:    sessionStore,
-		roleRepo:        roleRepo,
-		refreshStore:    refreshStore,
+		userRepo:        params.UserRepo,
+		sessionStore:    params.SessionStore,
+		roleRepo:        params.RoleRepo,
+		refreshStore:    params.RefreshStore,
 		clock:           clk,
 		emitter:         outbox.DemoCellEmitter(),
-		issuer:          issuer,
+		issuer:          params.Issuer,
 		logger:          logger,
 		comparePassword: bcrypt.CompareHashAndPassword,
 	}

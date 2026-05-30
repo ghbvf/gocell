@@ -54,11 +54,13 @@ func setup(t testing.TB) (http.Handler, string) {
 
 	svc, err := NewService(
 		clock.Real(),
-		sessionStore,
-		mem.NewStore(clock.Real()).RoleRepository(),
-		userRepo,
-		refreshStore,
-		testIssuer,
+		NewServiceParams{
+			SessionStore: sessionStore,
+			RoleRepo:     mem.NewStore(clock.Real()).RoleRepository(),
+			UserRepo:     userRepo,
+			RefreshStore: refreshStore,
+			Issuer:       testIssuer,
+		},
 		slog.Default(),
 		WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		withTestInvalidator(userRepo, sessionStore, refreshStore),

@@ -153,7 +153,14 @@ func newE2EFixture() *e2eFixture {
 	}
 
 	loginSvc, err := sessionlogin.NewService(clock.Real(),
-		userRepo, sessionStore, roleRepo, refreshStore, e2eIssuer, slog.Default(),
+		sessionlogin.NewServiceParams{
+			UserRepo:     userRepo,
+			SessionStore: sessionStore,
+			RoleRepo:     roleRepo,
+			RefreshStore: refreshStore,
+			Issuer:       e2eIssuer,
+		},
+		slog.Default(),
 		sessionlogin.WithTxManager(persistence.WrapForCell(tx)),
 		sessionlogin.WithSessionTTL(time.Hour),
 		sessionlogin.WithAccountLockout(lockoutSvc),

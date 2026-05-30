@@ -142,7 +142,13 @@ func mustNewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
-	s, err := NewService(clock.Real(), sessionStore, roleRepo, userRepo, refreshStore, issuer, logger, opts...)
+	s, err := NewService(clock.Real(), NewServiceParams{
+		SessionStore: sessionStore,
+		RoleRepo:     roleRepo,
+		UserRepo:     userRepo,
+		RefreshStore: refreshStore,
+		Issuer:       issuer,
+	}, logger, opts...)
 	if err != nil {
 		panic("mustNewService: " + err.Error())
 	}
@@ -183,11 +189,13 @@ func mustNewServiceWithInvalidator(
 	allOpts := append([]Option{WithInvalidator(realInv)}, opts...)
 	svc, err := NewService(
 		clock.Real(),
-		deps.sessionStore,
-		deps.roleRepo,
-		deps.userRepo,
-		deps.refreshStore,
-		deps.issuer,
+		NewServiceParams{
+			SessionStore: deps.sessionStore,
+			RoleRepo:     deps.roleRepo,
+			UserRepo:     deps.userRepo,
+			RefreshStore: deps.refreshStore,
+			Issuer:       deps.issuer,
+		},
 		deps.logger,
 		allOpts...,
 	)
@@ -296,32 +304,52 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
 				var typedNil *session.MemStore
-				return NewService(clock.Real(), typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-					WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
+				return NewService(clock.Real(), NewServiceParams{
+					SessionStore: typedNil,
+					RoleRepo:     roleRepo,
+					UserRepo:     userRepo,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default(), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
 			},
 		},
 		{
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(clock.Real(), sessionStore, typedNil, userRepo, refreshStore, testIssuer, slog.Default(),
-					WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
+				return NewService(clock.Real(), NewServiceParams{
+					SessionStore: sessionStore,
+					RoleRepo:     typedNil,
+					UserRepo:     userRepo,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default(), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
 			},
 		},
 		{
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(clock.Real(), sessionStore, roleRepo, typedNil, refreshStore, testIssuer, slog.Default(),
-					WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
+				return NewService(clock.Real(), NewServiceParams{
+					SessionStore: sessionStore,
+					RoleRepo:     roleRepo,
+					UserRepo:     typedNil,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default(), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(clock.Real(), sessionStore, roleRepo, userRepo, typedNil, testIssuer, slog.Default(),
-					WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
+				return NewService(clock.Real(), NewServiceParams{
+					SessionStore: sessionStore,
+					RoleRepo:     roleRepo,
+					UserRepo:     userRepo,
+					RefreshStore: typedNil,
+					Issuer:       testIssuer,
+				}, slog.Default(), WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})))
 			},
 		},
 	}
@@ -349,7 +377,13 @@ func TestNewService_RequiresTxRunner(t *testing.T) {
 	refreshStore := newTestRefreshStore()
 
 	t.Run("missing WithTxManager option", func(t *testing.T) {
-		_, err := NewService(clock.Real(), sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+		_, err := NewService(clock.Real(), NewServiceParams{
+			SessionStore: sessionStore,
+			RoleRepo:     roleRepo,
+			UserRepo:     userRepo,
+			RefreshStore: refreshStore,
+			Issuer:       testIssuer,
+		}, slog.Default())
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -360,8 +394,13 @@ func TestNewService_RequiresTxRunner(t *testing.T) {
 		// WithTxManager silently ignores nil to keep the option idempotent —
 		// but NewService's final check still rejects the resulting unconfigured
 		// state.
-		_, err := NewService(clock.Real(), sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
-			WithTxManager(persistence.WrapForCell(nil)))
+		_, err := NewService(clock.Real(), NewServiceParams{
+			SessionStore: sessionStore,
+			RoleRepo:     roleRepo,
+			UserRepo:     userRepo,
+			RefreshStore: refreshStore,
+			Issuer:       testIssuer,
+		}, slog.Default(), WithTxManager(persistence.WrapForCell(nil)))
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)

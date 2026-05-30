@@ -268,7 +268,14 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	require.NoError(t, err)
 	refreshSvc, err := sessionrefresh.NewService(
 		clock.Real(),
-		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		sessionrefresh.NewServiceParams{
+			SessionStore: fx.Cell.sessionStore,
+			RoleRepo:     fx.Cell.roleRepo,
+			UserRepo:     fx.Cell.userRepo,
+			RefreshStore: fx.Cell.refreshStore,
+			Issuer:       fx.Cell.jwtIssuer,
+		},
+		slog.Default(),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv1),
 	)
@@ -294,7 +301,14 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	require.NoError(t, err)
 	refreshSvc, err := sessionrefresh.NewService(
 		clock.Real(),
-		fx.Cell.sessionStore, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		sessionrefresh.NewServiceParams{
+			SessionStore: fx.Cell.sessionStore,
+			RoleRepo:     fx.Cell.roleRepo,
+			UserRepo:     fx.Cell.userRepo,
+			RefreshStore: fx.Cell.refreshStore,
+			Issuer:       fx.Cell.jwtIssuer,
+		},
+		slog.Default(),
 		sessionrefresh.WithTxManager(persistence.WrapForCell(outbox.DemoTxRunner{})),
 		sessionrefresh.WithInvalidator(inv2),
 	)
