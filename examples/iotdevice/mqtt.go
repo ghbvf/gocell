@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -108,6 +109,11 @@ func buildMQTTDirectPublisher(
 		return nil, nil, false, fmt.Errorf("mqtt topic namespace %q: %w", nsStr, err)
 	}
 
+	// The clientID's cellID segment is the cell identity ("iotdevice"), NOT the
+	// configurable topic namespace: the two have different validation rules
+	// (clientID cellID forbids "/" and is ≤32 chars; a topic namespace allows
+	// "/" and is ≤128), and clientID only needs to be globally unique (the uuid
+	// suffix guarantees that). It is deliberately independent of nsStr.
 	clientID, err := mqtt.ParseEphemeralClientID(defaultMQTTTopicNS, "publisher")
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("mqtt client id: %w", err)
@@ -129,17 +135,37 @@ func buildMQTTDirectPublisher(
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("mqtt connect: %w", err)
 	}
+	// Redact any userinfo (e.g. tcp://user:pass@host) before logging broker URLs.
 	logger.Info("iotdevice: MQTT publish channel connected",
-		slog.Any("brokers", brokers), slog.String("topicNamespace", ns.String()))
+		slog.Any("brokers", redactedBrokers(brokers)), slog.String("topicNamespace", ns.String()))
 
 	pub, err := mqtt.NewPublisher(clk, conn, ns)
 	if err != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = conn.Close(closeCtx)
+		if cerr := conn.Close(closeCtx); cerr != nil {
+			logger.Warn("iotdevice: mqtt connection close after publisher-init failure",
+				slog.Any("error", cerr))
+		}
 		return nil, nil, false, fmt.Errorf("mqtt publisher: %w", err)
 	}
 	return &mqttTopicPublisher{inner: pub, ns: ns}, conn, true, nil
+}
+
+// redactedBrokers returns broker URLs with any userinfo password masked, safe
+// for structured logging. Unparseable entries fall back to a placeholder rather
+// than risk leaking embedded credentials. ref: net/url.URL.Redacted().
+func redactedBrokers(brokers []string) []string {
+	out := make([]string, 0, len(brokers))
+	for _, b := range brokers {
+		u, err := url.Parse(b)
+		if err != nil {
+			out = append(out, "<unparseable-broker-url>")
+			continue
+		}
+		out = append(out, u.Redacted())
+	}
+	return out
 }
 
 // splitBrokers parses a comma-separated broker list, trimming whitespace and

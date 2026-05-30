@@ -32,7 +32,12 @@ envelope）原样透传。
 
 **fail-fast，无 noop 回退**：通道开启后，配置/解析/连接错误会让启动失败并报错
 （不静默降级到 noop publisher）。`Open` 会阻塞直到 broker 可达——**先启动 broker
-再跑 demo**。仅"未设环境变量"是合法的关闭方式。
+再跑 demo**（broker 未就绪时 `go run` 会停在连接重试，Ctrl-C 可中断）。仅"未设环境
+变量"是合法的关闭方式。
+
+**认证**：当前 demo 仅连接**无认证** broker（示例用 `mosquitto-no-auth.conf`）。未提供
+用户名/密码环境变量；连接有认证的 broker 需扩展 `buildMQTTDirectPublisher` 注入
+`mqtt.Config.Auth`（out-of-scope for this demo）。
 
 ## 跑通命令
 

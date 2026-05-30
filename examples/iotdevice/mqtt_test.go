@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // TestMQTTEventTopic verifies the dotted-event-type → namespaced-slash-topic
@@ -82,4 +85,85 @@ func TestMQTTTopicPublisher_MapsTopicAndDelegates(t *testing.T) {
 	if !fake.closed {
 		t.Fatal("Close did not delegate to inner publisher")
 	}
+}
+
+func TestSplitBrokers(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"empty", "", []string{}},
+		{"single", "tcp://127.0.0.1:1883", []string{"tcp://127.0.0.1:1883"}},
+		{"multiple", "tcp://a:1883,tcp://b:1883", []string{"tcp://a:1883", "tcp://b:1883"}},
+		{"trims whitespace", " tcp://a:1883 , tcp://b:1883 ", []string{"tcp://a:1883", "tcp://b:1883"}},
+		{"drops empty entries", "tcp://a:1883,,  ,tcp://b:1883", []string{"tcp://a:1883", "tcp://b:1883"}},
+		{"all empty", " , , ", []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitBrokers(tt.raw)
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitBrokers(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("splitBrokers(%q)[%d] = %q, want %q", tt.raw, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRedactedBrokers(t *testing.T) {
+	// Third entry contains a control character → url.Parse fails → placeholder.
+	in := []string{"tcp://user:secret@host:1883", "tcp://127.0.0.1:1883", "tcp://\x7fbad"}
+	got := redactedBrokers(in)
+	if len(got) != 3 {
+		t.Fatalf("redactedBrokers len = %d, want 3", len(got))
+	}
+	if got[0] == in[0] {
+		t.Fatalf("password not redacted: %q", got[0])
+	}
+	for _, g := range got {
+		if bytes.Contains([]byte(g), []byte("secret")) {
+			t.Fatalf("redacted broker still contains secret: %q", g)
+		}
+	}
+	if got[2] != "<unparseable-broker-url>" {
+		t.Fatalf("unparseable broker = %q, want placeholder", got[2])
+	}
+}
+
+// TestBuildMQTTDirectPublisher_EarlyReturns covers the env-driven paths that
+// return before mqtt.Open (so no broker is needed): disabled channel, empty
+// broker list, and invalid topic namespace. The connected happy path is
+// covered end-to-end by TestMQTTSmoke_DeviceRegisterPublishesToBroker.
+func TestBuildMQTTDirectPublisher_EarlyReturns(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("disabled when broker env unset", func(t *testing.T) {
+		t.Setenv(envMQTTBrokers, "")
+		pub, conn, ok, err := buildMQTTDirectPublisher(context.Background(), clock.Real(), logger)
+		if err != nil || ok || pub != nil || conn != nil {
+			t.Fatalf("disabled channel = (%v, %v, %v, %v), want (nil, nil, false, nil)", pub, conn, ok, err)
+		}
+	})
+
+	t.Run("error when brokers env has no valid URLs", func(t *testing.T) {
+		t.Setenv(envMQTTBrokers, " , , ")
+		_, _, ok, err := buildMQTTDirectPublisher(context.Background(), clock.Real(), logger)
+		if ok || err == nil {
+			t.Fatalf("empty broker list = (ok=%v, err=%v), want (false, non-nil)", ok, err)
+		}
+	})
+
+	t.Run("error when topic namespace invalid", func(t *testing.T) {
+		t.Setenv(envMQTTBrokers, "tcp://127.0.0.1:1883")
+		t.Setenv(envMQTTTopicNS, "Bad/NS/") // trailing slash + uppercase → ParseTopicNamespace rejects
+		_, _, ok, err := buildMQTTDirectPublisher(context.Background(), clock.Real(), logger)
+		if ok || err == nil {
+			t.Fatalf("invalid namespace = (ok=%v, err=%v), want (false, non-nil)", ok, err)
+		}
+	})
 }

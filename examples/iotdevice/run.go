@@ -19,7 +19,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/auth"
 
-	"github.com/ghbvf/gocell/adapters/mqtt"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
@@ -81,11 +80,12 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	if mqttOK {
 		directPub = mqttPub
-		// mqtt_ready surfaces broker reachability on /readyz; WithManagedCloser
-		// closes the connection during framework LIFO shutdown.
+		// Connection implements lifecycle.ManagedResource: WithManagedResource
+		// registers its mqtt_ready readiness probe (with the default probe
+		// timeout) + LIFO Close in one call — the standard adapter wiring path,
+		// matching postgres/rabbitmq/redis.
 		mqttBootstrapOpts = append(mqttBootstrapOpts,
-			bootstrap.WithHealthChecker(mqtt.ProbeReady, mqttConn.Health),
-			bootstrap.WithManagedCloser(mqttConn),
+			bootstrap.WithManagedResource(mqttConn),
 		)
 	}
 

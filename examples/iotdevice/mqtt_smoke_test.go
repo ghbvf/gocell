@@ -109,6 +109,38 @@ func openSmokeConn(t *testing.T, clk clock.Clock, addr, role string) *mqtt.Conne
 	return conn
 }
 
+// TestBuildMQTTDirectPublisher_ConnectedHappyPath covers the env-driven
+// connected path of buildMQTTDirectPublisher (the function run.go calls):
+// against a live in-process broker it returns ok=true with a usable publisher
+// and connection. The early-return error paths are covered (without a broker)
+// by TestBuildMQTTDirectPublisher_EarlyReturns in mqtt_test.go.
+func TestBuildMQTTDirectPublisher_ConnectedHappyPath(t *testing.T) {
+	addr := startSmokeBroker(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	t.Setenv(envMQTTBrokers, fmt.Sprintf("tcp://%s", addr))
+
+	// autopaho binds the ConnectionManager to this ctx; scope it to the test.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	pub, conn, ok, err := buildMQTTDirectPublisher(ctx, clock.Real(), logger)
+	if err != nil {
+		t.Fatalf("buildMQTTDirectPublisher: %v", err)
+	}
+	if !ok || pub == nil || conn == nil {
+		t.Fatalf("connected path = (ok=%v, pub=%v, conn=%v), want (true, non-nil, non-nil)", ok, pub, conn)
+	}
+	t.Cleanup(func() {
+		closeCtx, cn := context.WithTimeout(context.Background(), testtime.D5s)
+		defer cn()
+		_ = pub.Close(closeCtx)
+		_ = conn.Close(closeCtx)
+	})
+	if err := conn.Health(context.Background()); err != nil {
+		t.Fatalf("connection unhealthy after connect: %v", err)
+	}
+}
+
 // TestMQTTSmoke_DeviceRegisterPublishesToBroker is the end-to-end demo smoke:
 // it drives the real device-register service through a DirectCellEmitter wired
 // to the MQTT topic-mapping publisher, then verifies an independent MQTT
@@ -152,6 +184,8 @@ func TestMQTTSmoke_DeviceRegisterPublishesToBroker(t *testing.T) {
 		t.Fatalf("NewSubscriber: %v", err)
 	}
 	subscription := outbox.Subscription{
+		// The trailing "+" single-level wildcard matches any version suffix,
+		// e.g. the "v1" produced by mqttEventTopic for event.device-registered.v1.
 		Topic:             smokeNamespace + "/event/device-registered/+",
 		ConsumerGroup:     "smoke-verifier",
 		CellID:            smokeNamespace,
