@@ -8,6 +8,7 @@
 //   - INVARIANT: SAGA-STATUS-FANOUT-COVERAGE-01
 //   - INVARIANT: SAGA-STEP-RUN-OUTSIDE-TX-01
 //   - INVARIANT: SAGA-INVARIANTS-FILE-CONSOLIDATED-01
+//   - INVARIANT: SAGA-CONSTRUCTOR-NIL-GUARD-01
 //
 // saga_invariants_test.go — consolidated saga-theme archtest invariants.
 //
@@ -140,12 +141,14 @@ import (
 // ref: .claude/rules/gocell/ai-robust.md §"typed marker funnel for unbounded ops".
 
 const (
-	sagaCompensatePureRuleID = "SAGA-STEP-COMPENSATE-PURE-01"
-	sagaPkgPath              = "github.com/ghbvf/gocell/kernel/saga"
-	sagaCompensateFuncName   = "CompensateFunc"
-	sagaCompensateFieldName  = "Compensate"
-	sagaFixturesDir          = "saga_compensate_pure_fixtures"
-	sagaMaxCompensateStmts   = 10
+	sagaCompensatePureRuleID      = "SAGA-STEP-COMPENSATE-PURE-01"
+	sagaPkgPath                   = "github.com/ghbvf/gocell/kernel/saga"
+	sagaCompensateFuncName        = "CompensateFunc"
+	sagaCompensateFieldName       = "Compensate"
+	sagaFixturesDir               = "saga_compensate_pure_fixtures"
+	sagaMaxCompensateStmts        = 10
+	sagaConstructorNilGuardRuleID = "SAGA-CONSTRUCTOR-NIL-GUARD-01"
+	sagaConstructorFixturesDir    = "saga_constructor_nilguard_fixtures"
 )
 
 // sagaBannedReceiverKeys maps "<pkgpath>.<TypeName>" → display label for
@@ -3874,6 +3877,265 @@ func TestSagaStepRunOutsideTx_Detector_RedSafeRunInRunInTxFixture(t *testing.T) 
 // directly — both are visible within the archtest package.
 
 // ============================================================================
+// SAGA-CONSTRUCTOR-NIL-GUARD-01   (type-aware, Medium)
+// ============================================================================
+
+// INVARIANT: SAGA-CONSTRUCTOR-NIL-GUARD-01
+//
+// # Rule intent
+//
+// Every top-level New* constructor within the runtime/saga and
+// runtime/saga/executor packages that receives a non-variadic parameter whose
+// underlying type is an interface must protect that parameter with either
+// pkg/validation.IsNilInterface (for interface-typed required deps) or
+// kernel/clock.MustHaveClock (for clock.Clock params). The guard must be
+// resolved via go/types object identity against the actual parameter object —
+// not by string name matching.
+//
+// # Scope
+//
+// Packages under scan:
+//   - github.com/ghbvf/gocell/runtime/saga
+//   - github.com/ghbvf/gocell/runtime/saga/executor
+//
+// # Guard set (resolved by types.Func pkg path + name)
+//
+//   - pkg: github.com/ghbvf/gocell/pkg/validation  name: IsNilInterface
+//   - pkg: github.com/ghbvf/gocell/kernel/clock     name: MustHaveClock
+//
+// # AI-robust grading: Medium
+//
+// Hard is unachievable here: a missing guard is expressible in valid Go (the
+// compiler accepts a constructor that omits the nil check). The rule requires
+// type-aware static analysis — go/types resolution of parameter identity and
+// called function identity — to detect the absence. Medium is the correct
+// honest ceiling for "absence of call" rules: the detector is type-aware
+// (uses types.Info.Defs for parameter objects and types.Info.ObjectOf for
+// callee resolution), so it cannot be fooled by renaming parameters, and
+// misidentifying an unrelated IsNilInterface call on a different variable.
+//
+// # Hard upper-bound path
+//
+// Migrate runtime/saga constructors to the REQUIRED-DEP-NIL-GUARD-01 funnel
+// (gocell:"required" struct tag + generated validateRequired()). That funnel
+// carries Hard codegen enforcement. Backlog tracking: gh issue for
+// runtime/saga migration to REQUIRED-DEP-NIL-GUARD-01.
+//
+// # Blind spots
+//
+//   - B1: Guard call inside a nested helper that is called from the constructor
+//     body but whose source is in a different file — the body scan is intra-
+//     constructor only. Reverse self-check: production constructors call
+//     IsNilInterface / MustHaveClock directly in the constructor body
+//     (confirmed by reading runtime/saga/coordinator.go and executor.go), not
+//     via a helper indirection.
+//   - B2: A guard call that uses the parameter by a different variable name
+//     after assignment (e.g., x := j; if validation.IsNilInterface(x) {}). The
+//     detector binds by types.Object identity of the *original parameter Ident*.
+//     Production code does not do this. Reverse self-check: production does not
+//     reassign constructor params before the guard call.
+
+// sagaConstructorNilGuardFixturePattern returns the (relDir, pattern) pair for
+// a constructor nil-guard fixture sub-directory.
+func sagaConstructorNilGuardFixturePattern(fix string) (dir, pattern string) {
+	return filepath.Join("tools", "archtest", "testdata", sagaConstructorFixturesDir, fix),
+		"./tools/archtest/testdata/" + sagaConstructorFixturesDir + "/" + fix
+}
+
+// sagaConstructorScopePackages is the set of production package paths scanned
+// by SAGA-CONSTRUCTOR-NIL-GUARD-01.
+var sagaConstructorScopePackages = map[string]bool{
+	"github.com/ghbvf/gocell/runtime/saga":          true,
+	"github.com/ghbvf/gocell/runtime/saga/executor": true,
+}
+
+// sagaGuardFuncKeys is the set of (pkgPath, funcName) pairs that constitute an
+// accepted nil-guard call for a constructor parameter.
+type sagaGuardKey struct{ pkg, name string }
+
+var sagaGuardFuncKeys = []sagaGuardKey{
+	{"github.com/ghbvf/gocell/pkg/validation", "IsNilInterface"},
+	{"github.com/ghbvf/gocell/kernel/clock", "MustHaveClock"},
+}
+
+// scanConstructorNilGuards scans p for top-level New* functions that accept
+// non-variadic interface parameters lacking a guard call. It is a pure function
+// (no *testing.T dependency) so it can be shared between the production scan
+// and the fixture-based reverse test.
+//
+// Detection algorithm:
+//  1. Walk p.Files for top-level FuncDecl (no Recv) whose name starts with "New"
+//     and has a non-nil Body.
+//  2. For each non-variadic parameter: resolve its type via
+//     p.TypesInfo.TypeOf(fieldType). If the Underlying() is an interface, the
+//     parameter is a required interface dep that needs a guard.
+//  3. For each such parameter, collect its types.Object via
+//     p.TypesInfo.Defs[paramIdent].
+//  4. Walk the Body for CallExpr whose callee resolves (via
+//     p.TypesInfo.ObjectOf) to a types.Func in sagaGuardFuncKeys, and whose
+//     first argument's ObjectOf equals the parameter object.
+//  5. If no matching guard call is found, emit a diagnostic.
+func scanConstructorNilGuards(p *Pass) []Diagnostic {
+	if p.TypesInfo == nil {
+		return nil
+	}
+	var out []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(filepath.ToSlash(p.Rel(file)), "_test.go") {
+			continue
+		}
+		rel := p.Rel(file)
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Body == nil {
+				continue
+			}
+			if !strings.HasPrefix(fd.Name.Name, "New") {
+				continue
+			}
+			if fd.Type.Params == nil {
+				continue
+			}
+			// Collect interface parameters and their types.Object.
+			type ifaceParam struct {
+				obj      types.Object
+				typeExpr ast.Expr
+				name     string
+				typStr   string
+			}
+			var ifaces []ifaceParam
+			for _, field := range fd.Type.Params.List {
+				if _, isEllipsis := field.Type.(*ast.Ellipsis); isEllipsis {
+					// variadic — skip
+					continue
+				}
+				typ := p.TypesInfo.TypeOf(field.Type)
+				if typ == nil {
+					continue
+				}
+				if _, isIface := typ.Underlying().(*types.Interface); !isIface {
+					continue
+				}
+				for _, name := range field.Names {
+					obj := p.TypesInfo.Defs[name]
+					if obj == nil {
+						continue
+					}
+					ifaces = append(ifaces, ifaceParam{
+						obj:      obj,
+						typeExpr: field.Type,
+						name:     name.Name,
+						typStr:   typ.String(),
+					})
+				}
+			}
+			if len(ifaces) == 0 {
+				continue
+			}
+			// For each interface param, check if a guard call referencing it exists
+			// in the body.
+			for _, ip := range ifaces {
+				guarded := false
+				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+					if guarded {
+						return
+					}
+					// Resolve callee to a types.Func.
+					var calleeFunc *types.Func
+					switch fun := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						obj := p.TypesInfo.ObjectOf(fun.Sel)
+						if f, ok2 := obj.(*types.Func); ok2 {
+							calleeFunc = f
+						}
+					case *ast.Ident:
+						obj := p.TypesInfo.ObjectOf(fun)
+						if f, ok2 := obj.(*types.Func); ok2 {
+							calleeFunc = f
+						}
+					}
+					if calleeFunc == nil {
+						return
+					}
+					// Check if this callee is in the guard set.
+					calleePkg := calleeFunc.Pkg()
+					if calleePkg == nil {
+						return
+					}
+					isGuard := false
+					for _, gk := range sagaGuardFuncKeys {
+						if calleePkg.Path() == gk.pkg && calleeFunc.Name() == gk.name {
+							isGuard = true
+							break
+						}
+					}
+					if !isGuard {
+						return
+					}
+					// Check first argument is the parameter object.
+					if len(call.Args) == 0 {
+						return
+					}
+					firstArg, ok2 := call.Args[0].(*ast.Ident)
+					if !ok2 {
+						return
+					}
+					if p.TypesInfo.ObjectOf(firstArg) == ip.obj {
+						guarded = true
+					}
+				})
+				if !guarded {
+					out = append(out, sagaDiag(p, fd.Name, rel,
+						sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
+							" has interface parameter "+ip.name+" (type "+ip.typStr+
+							") without a guard call (IsNilInterface or clock.MustHaveClock); "+
+							"add validation.IsNilInterface("+ip.name+") or clock.MustHaveClock("+ip.name+", ...)"))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// TestSagaConstructorNilGuard_NoUnguardedInterfaceParam asserts that every
+// top-level New* constructor in the runtime/saga and runtime/saga/executor
+// packages guards every non-variadic interface parameter with either
+// validation.IsNilInterface or clock.MustHaveClock. Production currently has
+// 2 constructors: NewCoordinator (runtime/saga) and NewExecutor
+// (runtime/saga/executor), both already compliant.
+//
+// AI-robust grading: Medium — see INVARIANT godoc above.
+//
+// Blind spots:
+//   - B1: guard inside a called helper (not direct in constructor body)
+//   - B2: guard called on a reassigned alias of the parameter variable
+func TestSagaConstructorNilGuard_NoUnguardedInterfaceParam(t *testing.T) {
+	t.Parallel()
+	diags := RunTypedProduction(t, TypedOpts{Tags: FlatNonDefaultTags()}, func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || !sagaConstructorScopePackages[p.Pkg.Path()] {
+			return nil
+		}
+		return scanConstructorNilGuards(p)
+	})
+	Report(t, sagaConstructorNilGuardRuleID, diags)
+}
+
+// TestSagaConstructorNilGuard_Detector_RedUnguardedParamFixture loads the
+// red_unguarded_param fixture and asserts the detector fires for the unguarded
+// interface parameter. This is the reverse self-test: if the detection logic is
+// broken, this test fails even though the production scan yields 0 diagnostics.
+//
+// Fixture layout:
+//   - unguarded constructor: NewUnguarded(dep MyInterface) — no guard → RED
+//   - guarded constructor: NewGuarded(dep MyInterface) with IsNilInterface — GREEN
+func TestSagaConstructorNilGuard_Detector_RedUnguardedParamFixture(t *testing.T) {
+	root := findModuleRoot(t)
+	relDir, pattern := sagaConstructorNilGuardFixturePattern("red_unguarded_param")
+	diags := RunTypedFixture(t, FixtureOpts{}, []string{pattern}, scanConstructorNilGuards)
+	AssertGolden(t, filepath.Join(root, relDir, "diag.golden"), diags)
+}
+
+// ============================================================================
 // SAGA-INVARIANTS-FILE-CONSOLIDATED-01   (new — consolidation guard, Refs #1213)
 // ============================================================================
 
@@ -4081,6 +4343,7 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-STATUS-FANOUT-COVERAGE-01",
 	"SAGA-STEP-RUN-OUTSIDE-TX-01",
 	"SAGA-INVARIANTS-FILE-CONSOLIDATED-01",
+	"SAGA-CONSTRUCTOR-NIL-GUARD-01",
 }
 
 // TestSagaInvariantsConsolidated_BlindSpot_KnownIDsPresent closes blind-spot B1:
