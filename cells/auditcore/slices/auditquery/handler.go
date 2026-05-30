@@ -70,9 +70,9 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	switch {
 	case actorID == "":
-		slog.Info("audit: admin querying all actors", slog.String("admin", subject))
+		slog.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
 	case actorID != subject:
-		slog.Info(
+		slog.InfoContext(ctx,
 			"audit: admin querying other user",
 			slog.String("admin", subject),
 			slog.String("target_actor", actorID),
