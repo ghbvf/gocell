@@ -63,17 +63,22 @@ func (r *recordingSettlement) counts() (commit, release int) {
 	return r.commitCalls, r.releaseCalls
 }
 
-// recordingSubCollector records consume success / failure calls.
+// recordingSubCollector records consume success / failure / dead-letter calls.
 type recordingSubCollector struct {
 	mu            sync.Mutex
 	successCount  int
 	failureCount  int
+	deadLetterCnt int
 	lastReason    ConsumeFailureReason
 	failureCounts map[ConsumeFailureReason]int
+	dlxCounts     map[ConsumeFailureReason]int
 }
 
 func newRecordingSubCollector() *recordingSubCollector {
-	return &recordingSubCollector{failureCounts: make(map[ConsumeFailureReason]int)}
+	return &recordingSubCollector{
+		failureCounts: make(map[ConsumeFailureReason]int),
+		dlxCounts:     make(map[ConsumeFailureReason]int),
+	}
 }
 
 func (c *recordingSubCollector) RecordConsumeSuccess(_ context.Context, _ time.Duration) {
@@ -90,12 +95,26 @@ func (c *recordingSubCollector) RecordConsumeFailure(_ context.Context, reason C
 	c.failureCounts[reason]++
 }
 
-// RecordDeadLetter satisfies SubscriberCollector; B1 (deadletter_test.go) replaces
-// this no-op with dead-letter recording + a reader once it asserts on $dead routing.
-func (c *recordingSubCollector) RecordDeadLetter(_ context.Context, _ ConsumeFailureReason) {}
+func (c *recordingSubCollector) RecordDeadLetter(_ context.Context, reason ConsumeFailureReason) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deadLetterCnt++
+	c.dlxCounts[reason]++
+}
 
 func (c *recordingSubCollector) snapshot() (success, failure int, last ConsumeFailureReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.successCount, c.failureCount, c.lastReason
+}
+
+// dlxSnapshot returns the total dead-letter count and a per-reason breakdown.
+func (c *recordingSubCollector) dlxSnapshot() (total int, byReason map[ConsumeFailureReason]int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := make(map[ConsumeFailureReason]int, len(c.dlxCounts))
+	for k, v := range c.dlxCounts {
+		cp[k] = v
+	}
+	return c.deadLetterCnt, cp
 }
