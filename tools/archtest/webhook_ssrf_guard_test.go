@@ -242,7 +242,8 @@ func TestWebhookSSRFGuard_ReverseFixture(t *testing.T) {
 			return nil
 		})
 
-	assert.GreaterOrEqual(t, len(a1), 2, "A1 reverse fixture: expected ≥2 net.Dial* diagnostics (net.Dial + net.DialTCP)")
+	assert.GreaterOrEqual(t, len(a1), len(ssrfBannedNetDialFuncs),
+		"A1 reverse fixture: expected one diagnostic per banned net.Dial* func (Dial/DialTCP/DialUDP/DialIP/DialUnix/DialTimeout)")
 	assert.GreaterOrEqual(t, len(a2), 1, "A2 reverse fixture: expected ≥1 raw net.Dialer.DialContext diagnostic")
 	assert.GreaterOrEqual(t, len(a3), 2, "A3 reverse fixture: expected ≥2 http global diagnostics")
 }

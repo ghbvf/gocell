@@ -33,7 +33,8 @@ blocked:
   ipv6:
     - { cidr: "::/128",          reason: "unspecified" }
     - { cidr: "::1/128",         reason: "loopback" }
-    - { cidr: "64:ff9b::/96",    reason: "rfc6052-nat64" }
+    - { cidr: "64:ff9b::/96",    reason: "rfc6052-nat64-well-known" }
+    - { cidr: "64:ff9b:1::/48",  reason: "rfc8215-nat64-local-use" }
     - { cidr: "100::/64",        reason: "discard-only" }
     - { cidr: "2001::/23",       reason: "ietf-protocol-assignments-incl-teredo" }
     - { cidr: "2001:2::/48",     reason: "benchmarking" }

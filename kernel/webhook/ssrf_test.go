@@ -110,7 +110,10 @@ func TestSafeDialer_IPLiteralCases(t *testing.T) {
 			if tc.wantBlocked {
 				assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked, got %v", err)
 			} else {
+				// Passed the vet → the only error is the canceled-ctx dial,
+				// proving rejection happened at the transport, not the guard.
 				assert.Falsef(t, isSSRFBlocked(t, err), "expected to pass vet (non-SSRF error), got SSRF block: %v", err)
+				assert.ErrorIsf(t, err, context.Canceled, "expected canceled-ctx dial error after vet, got %v", err)
 			}
 		})
 	}
@@ -168,6 +171,7 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 				assert.Truef(t, isSSRFBlocked(t, err), "expected SSRF-blocked, got %v", err)
 			} else {
 				assert.Falsef(t, isSSRFBlocked(t, err), "expected to pass vet, got SSRF block: %v", err)
+				assert.ErrorIsf(t, err, context.Canceled, "expected canceled-ctx dial error after vet, got %v", err)
 			}
 		})
 	}
@@ -176,10 +180,19 @@ func TestSafeDialer_DNSRebinding(t *testing.T) {
 func TestSafeDialer_MalformedAddress(t *testing.T) {
 	t.Parallel()
 	dial := NewSafeDialer()
-	for _, addr := range []string{"noport", "", "[::1", "host:port:extra"} {
-		t.Run(addr, func(t *testing.T) {
+	tests := []struct {
+		name string
+		addr string
+	}{
+		{name: "no_port", addr: "noport"},
+		{name: "empty", addr: ""},
+		{name: "unterminated_v6", addr: "[::1"},
+		{name: "extra_colon", addr: "host:port:extra"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := dial(context.Background(), "tcp", addr)
+			_, err := dial(context.Background(), "tcp", tc.addr)
 			require.Error(t, err)
 			assert.Truef(t, isSSRFBlocked(t, err), "malformed address must fail closed as SSRF-blocked, got %v", err)
 		})
@@ -222,15 +235,32 @@ func TestDenyRedirect(t *testing.T) {
 	t.Parallel()
 	req, err := http.NewRequest(http.MethodGet, "https://x.example.com/", nil)
 	require.NoError(t, err)
+	req2, err := http.NewRequest(http.MethodGet, "https://y.example.com/", nil)
+	require.NoError(t, err)
 
-	rerr := DenyRedirect(req, []*http.Request{req})
-	require.Error(t, rerr)
-	assert.True(t, isSSRFBlocked(t, rerr))
+	// DenyRedirect must fail closed for any via chain — single, multi, and the
+	// nil/empty first-redirect form net/http may pass.
+	for _, tc := range []struct {
+		name string
+		via  []*http.Request
+	}{
+		{name: "single", via: []*http.Request{req}},
+		{name: "multi", via: []*http.Request{req, req2}},
+		{name: "empty", via: []*http.Request{}},
+		{name: "nil", via: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rerr := DenyRedirect(req, tc.via)
+			require.Error(t, rerr)
+			assert.True(t, isSSRFBlocked(t, rerr))
 
-	var ec *errcode.Error
-	require.ErrorAs(t, rerr, &ec)
-	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
-	assert.Equal(t, http.StatusForbidden, ec.Status())
+			var ec *errcode.Error
+			require.ErrorAs(t, rerr, &ec)
+			assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+			assert.Equal(t, http.StatusForbidden, ec.Status())
+		})
+	}
 }
 
 // TestNormalizeIP locks the IPv4-mapped dewrap behavior in isolation.

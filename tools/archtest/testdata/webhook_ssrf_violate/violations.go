@@ -10,15 +10,35 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"time"
 )
 
-// ── A1 violations: net package dial-family functions ─────────────────────────
+// ── A1 violations: every net package dial-family function in the banned set ──
+// One callsite per banned func so the reverse self-test asserts each is caught
+// (a regression deleting any one entry from the banned set would fail the ≥6
+// assertion).
 func dialViaNetDial(ctx context.Context) (net.Conn, error) {
 	return net.Dial("tcp", "10.0.0.1:80") // VIOLATION A1 (net.Dial)
 }
 
 func dialViaDialTCP() (net.Conn, error) {
 	return net.DialTCP("tcp", nil, &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}) // VIOLATION A1 (net.DialTCP)
+}
+
+func dialViaDialUDP() (net.Conn, error) {
+	return net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 80}) // VIOLATION A1 (net.DialUDP)
+}
+
+func dialViaDialIP() (net.Conn, error) {
+	return net.DialIP("ip4:icmp", nil, &net.IPAddr{IP: net.ParseIP("10.0.0.1")}) // VIOLATION A1 (net.DialIP)
+}
+
+func dialViaDialUnix() (net.Conn, error) {
+	return net.DialUnix("unix", nil, &net.UnixAddr{Name: "/tmp/x.sock", Net: "unix"}) // VIOLATION A1 (net.DialUnix)
+}
+
+func dialViaDialTimeout() (net.Conn, error) {
+	return net.DialTimeout("tcp", "10.0.0.1:80", time.Second) // VIOLATION A1 (net.DialTimeout)
 }
 
 // ── A2 violation: raw net.Dialer.DialContext outside ssrf.go dial() ──────────

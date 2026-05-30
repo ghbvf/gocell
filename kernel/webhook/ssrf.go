@@ -35,7 +35,10 @@ type safeConfig struct {
 	allowLoopback bool
 	resolver      resolver
 	dialer        *net.Dialer
-	blockedNets   []*net.IPNet
+	// blockedNets is the shared, read-only package slice (ssrfBlockedNets).
+	// It must not be mutated through this field — there is no option that
+	// rewrites it, and elements are shared *net.IPNet pointers.
+	blockedNets []*net.IPNet
 }
 
 // SafeOption customizes a SafeDialContext at construction time.
@@ -78,7 +81,7 @@ func (c *safeConfig) dial(ctx context.Context, network, address string) (net.Con
 
 	// IP literal: vet directly, no DNS.
 	if ip := net.ParseIP(host); ip != nil {
-		if verr := c.vet(ip); verr != nil {
+		if verr := c.vet(host, ip); verr != nil {
 			return nil, verr
 		}
 		return c.dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
@@ -96,7 +99,7 @@ func (c *safeConfig) dial(ctx context.Context, network, address string) (net.Con
 			"webhook: dial host resolved to no addresses")
 	}
 	for _, a := range addrs {
-		if verr := c.vet(a.IP); verr != nil {
+		if verr := c.vet(host, a.IP); verr != nil {
 			return nil, verr
 		}
 	}
@@ -106,8 +109,11 @@ func (c *safeConfig) dial(ctx context.Context, network, address string) (net.Con
 
 // vet rejects ip when it falls in any blocked CIDR. The IP is normalized via
 // To4() first so IPv4-mapped IPv6 (::ffff:10.0.0.1) is checked as its embedded
-// IPv4. Loopback is exempted only when allowLoopback is set.
-func (c *safeConfig) vet(ip net.IP) error {
+// IPv4. Loopback is exempted only when allowLoopback is set. host (the dial
+// target before resolution) is recorded server-side for incident triage; the
+// reject "reason" is an Internal (server-only) attribute, never on the wire, so
+// the 403 does not advertise which targets the SSRF policy blocks.
+func (c *safeConfig) vet(host string, ip net.IP) error {
 	norm := normalizeIP(ip)
 	if c.allowLoopback && norm.IsLoopback() {
 		return nil
@@ -116,8 +122,10 @@ func (c *safeConfig) vet(ip net.IP) error {
 		if n.Contains(norm) {
 			return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
 				"webhook: dial target resolved to a blocked address",
-				errcode.WithInternal(errcode.InternalAttr("ip", norm.String())),
-				errcode.WithDetails(errcode.PublicString("reason", "ssrf_blocked")))
+				errcode.WithInternal(
+					errcode.InternalAttr("reason", "ssrf_blocked"),
+					errcode.InternalAttr("host", host),
+					errcode.InternalAttr("ip", norm.String())))
 		}
 	}
 	return nil
@@ -140,9 +148,15 @@ func normalizeIP(ip net.IP) net.IP {
 // Location; webhook delivery is one-shot, so any redirect is rejected
 // (matching Stripe / GitHub webhook delivery semantics).
 func DenyRedirect(_ *http.Request, via []*http.Request) error {
+	from := ""
+	if n := len(via); n > 0 && via[n-1] != nil && via[n-1].URL != nil {
+		from = via[n-1].URL.String()
+	}
 	return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
 		"webhook: redirects are not permitted on outbound delivery",
-		errcode.WithInternal(errcode.InternalAttr("redirect_chain_len", len(via))))
+		errcode.WithInternal(
+			errcode.InternalAttr("redirect_chain_len", len(via)),
+			errcode.InternalAttr("from_url", from)))
 }
 
 // ValidateTargetURL enforces the {http, https} scheme allowlist and rejects a
@@ -159,7 +173,10 @@ func ValidateTargetURL(rawURL string) error {
 	default:
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
 			"webhook: dispatch target scheme is not allowed",
-			errcode.WithDetails(errcode.PublicString("reason", "scheme_not_allowed")))
+			errcode.WithInternal(
+				errcode.InternalAttr("reason", "scheme_not_allowed"),
+				errcode.InternalAttr("scheme", u.Scheme),
+				errcode.InternalAttr("target_host", u.Hostname())))
 	}
 	host := u.Hostname() // strips port and IPv6 brackets
 	if ip := net.ParseIP(host); ip != nil {
@@ -168,7 +185,10 @@ func ValidateTargetURL(rawURL string) error {
 			if n.Contains(norm) {
 				return errcode.New(errcode.KindPermissionDenied, errcode.ErrWebhookSSRFBlocked,
 					"webhook: dispatch target IP literal is blocked",
-					errcode.WithInternal(errcode.InternalAttr("ip", norm.String())))
+					errcode.WithInternal(
+						errcode.InternalAttr("reason", "ssrf_blocked"),
+						errcode.InternalAttr("target_host", host),
+						errcode.InternalAttr("ip", norm.String())))
 			}
 		}
 	}
@@ -198,19 +218,20 @@ var ssrfBlockedCIDRStrings = []string{
 	"240.0.0.0/4",        // reserved
 	"255.255.255.255/32", // limited broadcast
 	// ── IPv6 ──
-	"::/128",        // unspecified
-	"::1/128",       // loopback
-	"64:ff9b::/96",  // RFC6052 NAT64 well-known prefix
-	"100::/64",      // discard-only
-	"2001::/23",     // IETF protocol assignments (incl. Teredo 2001::/32)
-	"2001:2::/48",   // benchmarking
-	"2001:db8::/32", // documentation
-	"2001:10::/28",  // deprecated ORCHID
-	"2001:20::/28",  // ORCHIDv2
-	"2002::/16",     // 6to4
-	"fc00::/7",      // RFC4193 ULA (unique local)
-	"fe80::/10",     // link-local
-	"ff00::/8",      // multicast
+	"::/128",         // unspecified
+	"::1/128",        // loopback
+	"64:ff9b::/96",   // RFC6052 NAT64 well-known prefix
+	"64:ff9b:1::/48", // RFC8215 NAT64 local-use prefix (embeds arbitrary IPv4 incl. private)
+	"100::/64",       // discard-only
+	"2001::/23",      // IETF protocol assignments (incl. Teredo 2001::/32)
+	"2001:2::/48",    // benchmarking
+	"2001:db8::/32",  // documentation
+	"2001:10::/28",   // deprecated ORCHID
+	"2001:20::/28",   // ORCHIDv2
+	"2002::/16",      // 6to4
+	"fc00::/7",       // RFC4193 ULA (unique local)
+	"fe80::/10",      // link-local
+	"ff00::/8",       // multicast
 }
 
 // ssrfBlockedNets is ssrfBlockedCIDRStrings parsed once at package init. A

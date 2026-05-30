@@ -30,13 +30,16 @@ code IS the decision, and the blocklist is security-critical.
    the connection target is the already-checked literal IP — never a re-resolved
    hostname — there is no DNS-rebinding (TOCTOU) window between check and connect.
 
-2. **Deny-by-CIDR blocklist, explicit list as source of truth.** A 29-entry IPv4
+2. **Deny-by-CIDR blocklist, explicit list as source of truth.** A 30-entry IPv4
    + IPv6 CIDR list (`ssrfBlockedCIDRStrings`) is the single source of truth,
    cross-checked against `kernel/webhook/testdata/webhook-ssrf-deny.yaml` by a
    drift-guard test. It is the IETF-reserved-range superset from
    doyensec/safeurl, covering RFC1918, loopback, link-local (incl.
-   169.254.169.254 metadata), CGNAT (RFC6598), benchmarking, TEST-NET, multicast,
-   reserved/broadcast, ULA, NAT64, 6to4, Teredo, documentation, and ORCHID
+   169.254.169.254 metadata), CGNAT (RFC6598, incl. Alibaba ECS
+   `100.100.100.200`), benchmarking, TEST-NET, multicast, reserved/broadcast,
+   ULA (incl. AWS IMDSv6 `fd00:ec2::254`), NAT64 (RFC6052 well-known
+   `64:ff9b::/96` + RFC8215 local-use `64:ff9b:1::/48`, which would otherwise
+   embed arbitrary IPv4 incl. private), 6to4, Teredo, documentation, and ORCHID
    ranges.
 
 3. **IPv4-mapped IPv6 normalization is the SOLE mapped-IPv4 defense.** `vet`
@@ -148,14 +151,41 @@ alone.
 
 ## Consequences
 
-PR-5's dispatcher consumes `NewSafeDialer` as the only outbound dialer
-(`http.Transport{DialContext: safeDial}`), sets `CheckRedirect: DenyRedirect`,
-and calls `ValidateTargetURL` before issuing a request; the A1/A2/A3 bans mean it
-cannot wire an un-vetted egress path without tripping CI. The blocklist evolves
-by editing `ssrfBlockedCIDRStrings` **and** the fixture in the same change (the
-drift guard enforces this). The upstream holder-axis Hard-ization remains a
-won't-do permanent ceiling (#1375); PR-5 adds the dispatcher-specific
-`Dispatcher.client` typed-field lock as the practical upstream tightening.
+PR-5's dispatcher consumes `NewSafeDialer` as the only outbound dialer, sets
+`CheckRedirect: DenyRedirect`, and calls `ValidateTargetURL` before issuing a
+request; the A1/A2/A3 bans mean it cannot wire an un-vetted egress path without
+tripping CI. The intended wiring:
+
+```go
+// PR-5 dispatcher (canonical wiring).
+t := &http.Transport{DialContext: webhook.NewSafeDialer()} // ONLY DialContext;
+// do NOT set DialTLSContext — http.Transport derives the TLS ServerName (SNI +
+// cert host) from the request URL host above the dialer, so dialing a vetted
+// literal IP does not break TLS. A custom DialTLSContext would bypass the vet.
+client := &http.Client{Transport: t, CheckRedirect: webhook.DenyRedirect}
+if err := webhook.ValidateTargetURL(targetURL); err != nil { /* reject before send */ }
+```
+
+The blocklist evolves by editing `ssrfBlockedCIDRStrings` **and** the fixture in
+the same change (the drift guard enforces this).
+
+**Observability.** PR-4 surfaces an SSRF rejection only via
+`errcode.ErrWebhookSSRFBlocked` + server-side `slog` Internal attributes
+(`reason` / `host` / `target_host` / `ip` / `from_url`, correlated by
+`request_id`) — there is no metric, because `kernel/webhook` is pure-computation
+and must not depend on an instrumentation adapter. PR-5's wiring layer is the
+place to increment a counter (e.g. `webhook_ssrf_blocked_total{reason}`) on
+`errors.As(err, &ec) && ec.Code == ErrWebhookSSRFBlocked` at the
+`Transport`/`CheckRedirect` error boundary.
+
+**`WithAllowLoopback` production guard.** The option is dev/CI-only and guarded
+today only by godoc (a Soft constraint). PR-5's wiring layer (corebundle /
+assembly) must not pass it; a Medium archtest banning `WithAllowLoopback`
+references in non-`_test.go` production files should land with PR-5 once there is
+a production callsite to guard (tracked alongside #1375 follow-ups). The upstream
+holder-axis Hard-ization remains a won't-do permanent ceiling (#1375); PR-5 adds
+the dispatcher-specific `Dispatcher.client` typed-field lock as the practical
+upstream tightening.
 
 ## References
 
