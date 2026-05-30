@@ -38,7 +38,9 @@ type Heartbeater interface {
 }
 
 // HeartbeatConfig holds the identity and timing parameters for runHeartbeat.
-// Grouping them into a struct reduces the positional-parameter count (S107).
+// Grouping them into a struct keeps runHeartbeat's parameter count within the
+// go:S107 limit (≤7 parameters). All fields are required; Interval and
+// LeaseDuration must be > 0.
 type HeartbeatConfig struct {
 	InstanceID    idutil.SafeID
 	LeaseID       idutil.SafeID

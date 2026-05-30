@@ -130,6 +130,8 @@ func TestBuildLocatorOptions_ModeApplied(t *testing.T) {
 
 // requireLocatorMode builds locator options from layout, creates a
 // NewLocatorFS with fsys, and asserts the resolved mode equals wantMode.
+// The manifest path is fixed to "" — call buildLocatorOptions + NewLocatorFS
+// directly if a custom manifest path needs exercising.
 func requireLocatorMode(t *testing.T, layout string, fsys fstest.MapFS, wantMode metadata.LocatorMode) {
 	t.Helper()
 	opts, err := buildLocatorOptions(layout, "")
