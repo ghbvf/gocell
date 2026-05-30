@@ -490,12 +490,18 @@ func TestHandleQuery_SubjectFilter(t *testing.T) {
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	seed := []*ledger.Entry{
-		{ID: "se-1", EventID: "evt-s1", EventType: "event.test.v1",
-			ActorID: "actor-1", SubjectID: "alice", Timestamp: base, Payload: []byte("{}")},
-		{ID: "se-2", EventID: "evt-s2", EventType: "event.test.v1",
-			ActorID: "actor-2", SubjectID: "bob", Timestamp: base.Add(time.Hour), Payload: []byte("{}")},
-		{ID: "se-3", EventID: "evt-s3", EventType: "event.test.v1",
-			ActorID: "actor-3", SubjectID: "alice", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}")},
+		{
+			ID: "se-1", EventID: "evt-s1", EventType: "event.test.v1",
+			ActorID: "actor-1", SubjectID: "alice", Timestamp: base, Payload: []byte("{}"),
+		},
+		{
+			ID: "se-2", EventID: "evt-s2", EventType: "event.test.v1",
+			ActorID: "actor-2", SubjectID: "bob", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
+		{
+			ID: "se-3", EventID: "evt-s3", EventType: "event.test.v1",
+			ActorID: "actor-3", SubjectID: "alice", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+		},
 	}
 	for _, e := range seed {
 		require.NoError(t, store.Append(context.Background(), e))
@@ -535,16 +541,22 @@ func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	seed := []*ledger.Entry{
 		// usr-1's own action targeting subject "victim".
-		{ID: "ns-1", EventID: "evt-n1", EventType: "event.test.v1",
-			ActorID: "usr-1", SubjectID: "victim", Timestamp: base, Payload: []byte("{}")},
+		{
+			ID: "ns-1", EventID: "evt-n1", EventType: "event.test.v1",
+			ActorID: "usr-1", SubjectID: "victim", Timestamp: base, Payload: []byte("{}"),
+		},
 		// usr-1's own action targeting subject "other" — must be excluded by the
 		// subjectId=victim filter (narrowing within actor-self).
-		{ID: "ns-2", EventID: "evt-n2", EventType: "event.test.v1",
-			ActorID: "usr-1", SubjectID: "other", Timestamp: base.Add(time.Hour), Payload: []byte("{}")},
+		{
+			ID: "ns-2", EventID: "evt-n2", EventType: "event.test.v1",
+			ActorID: "usr-1", SubjectID: "other", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+		},
 		// usr-2's action targeting subject "victim" — must never be visible to
 		// usr-1 (actor-self scoping; cross-user safety).
-		{ID: "ns-3", EventID: "evt-n3", EventType: "event.test.v1",
-			ActorID: "usr-2", SubjectID: "victim", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}")},
+		{
+			ID: "ns-3", EventID: "evt-n3", EventType: "event.test.v1",
+			ActorID: "usr-2", SubjectID: "victim", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}"),
+		},
 	}
 	for _, e := range seed {
 		require.NoError(t, store.Append(context.Background(), e))

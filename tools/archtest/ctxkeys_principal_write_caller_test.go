@@ -92,6 +92,14 @@ const ctxkeysPkgPath = "github.com/ghbvf/gocell/pkg/ctxkeys"
 // module-relative production files allowed to call it. WithTenantID has only the
 // consumer-restore writer because auth.Principal carries no tenant field on
 // develop (no producer source yet), so middleware.go never writes it.
+//
+// This single-writer WithTenantID entry is the ctx-write half of
+// INV-SINGLE-TENANT-ONLY (#1289): it is intentional-but-latent — the absence of a
+// producer is the single-tenant invariant, not an oversight. It pairs with the
+// persistence-reach tripwire in cells/auditcore/internal/appender (a non-empty
+// principal.TenantID reaching audit persistence logs Error). When multi-tenancy
+// (epic #1296) lands, runtime/auth/middleware.go gains a WithTenantID call and
+// must be added to this allowlist. See ADR 202605281200-1042 §Amendment 2026-05-30.
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
 		"runtime/auth/middleware.go": {}, // producer bridge (JWT + service-token)

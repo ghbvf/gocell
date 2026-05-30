@@ -378,7 +378,7 @@ Implementations:
   [x] (PR-A2) kernel/outbox.SubscriberWithMiddleware (Principal RestoreToContext)
   [x] (PR-A2) kernel/outbox/outboxtest helpers + new_surface_test.go (NewEntry/EntryScan/principal 覆盖)
   [x] (PR-A2) cells/auditcore/internal/appender (subject/tenant/session/correlation/occurred_at 真值；actor 仍源自 payload，见 §Amendment)
-  [x] (PR-A2) cells/auditcore/slices/auditquery + response.schema.json §4 (subjectId/occurredAt DTO；无 tenantId queryParam = Hard tenant 隔离；sessionId 不出 DTO)
+  [x] (PR-A2) cells/auditcore/slices/auditquery + response.schema.json §4 (subjectId/occurredAt DTO；无 tenantId queryParam = 单租户 invariant，**无 tenant 隔离 enforcement**，见 §Amendment 2026-05-30 #1289/#1296；sessionId 不出 DTO)
   [x] (PR-A2) runtime/auth/middleware.go 生产桥 (WithActorID/WithSubjectID/WithSessionID ctxkeys)
   [x] (PR-A2) kernel/wrapper.{WrapConsumer,WrapSubscriber} (Principal/OccurredAt span attrs)
   [x] (PR-A2) pkg/ctxkeys (4 new typed key pairs) + pkg/redaction (session_id sensitive key + dotted-split)
@@ -450,10 +450,13 @@ two-truth-source carryover, per ai-robust §"ADR amendment 落地必查").
    `entry.Principal()`, correlation ← `entry.Observability().CorrelationID`,
    occurred_at ← `entry.OccurredAt()`; actor ← payload.
 6. **auditquery §4** — DTO exposes `subjectId` + `occurredAt` (additive,
-   omitempty); `sessionId` is NOT exposed (sensitive-key set). Tenant isolation
-   is type-system Hard **by absence**: the contract declares no `tenantId` query
-   parameter, so no typed surface exists to request another tenant; scoping is
-   ctx-derived only.
+   omitempty); `sessionId` is NOT exposed (sensitive-key set). `tenantId` is not
+   exposed and there is **no tenant scoping at all**: develop is single-tenant, no
+   producer writes `principal.TenantID`, so the column is always empty and there
+   is nothing to scope by (INV-SINGLE-TENANT-ONLY). The original "type-system Hard
+   isolation by absence" framing here was an over-claim — "no `tenantId` query
+   parameter" is NOT "queries are isolated by tenant" — and is retracted by
+   §Amendment 2026-05-30 (#1289). Real multi-tenant isolation is epic #1296.
 
 **威胁矩阵 逐行重评（ai-robust §"ADR amendment 落地必查"）** — every row that the
 original §威胁矩阵 marked for PR-A2 is re-evaluated against the as-built seal; no
@@ -466,7 +469,7 @@ cell regressed ✅→⚠️/❌:
 | ReservedMetadataKeys 伪造（actor_id 等经 Metadata 写入） | ✅ `validateMetadata` 拒 | ✅ **强化**：除 validateMetadata 拒 **11** reserved key 外（§Amendment 2026-05-30 reconcile 12→11，occurred_at 移出），`Entry{...}` populated 字面量本身编译不可表达（type-system Hard），伪造面从「runtime Validate 拒」升级为「compile 不可表达」 |
 | OccurredAt 经 Metadata 伪造（`Metadata["occurred_at"]`） | （原列入 ReservedMetadataKeys，PR-A2 计 12 key） | N/A → 移出 reserved（§Amendment 2026-05-30）。补偿：`occurredAt` 是 sealed `Entry` 的 typed `time.Time` 字段，仅 `NewEntry`/`WithOccurredAt` 可写，`Metadata["occurred_at"]` 对真实字段 inert（无 ctxkeys round-trip，consumer 不读 metadata 还原时间）——伪造面本就不存在，移出不引入回归 |
 | Principal 注入空壳（producer 漏注入） | （原 ADR 未列） | ⚠️→缓解：生产桥（auth middleware 写 ctxkeys）是非空壳前提，已落地 ActorID/SubjectID/SessionID；无 auth ctx 的事件 Principal 空（acceptable，audit actor 源自 payload）。TenantID 无源（develop 无 tenant 概念）——已知缺口，非回归 |
-| auditquery 跨租户读 | （issue §4 目标） | ✅ type-system Hard by absence（无 tenantId queryParam，codegen 不生成字段，编译不可表达跨租户） |
+| auditquery 跨租户读 | （issue §4 目标） | ❌ **phantom rating，§Amendment 2026-05-30 (#1289) 订正**：原 ✅ 误把「无 tenantId queryParam」当 tenant 隔离。实际 develop 单租户、无 tenant producer、无 tenant-scoped WHERE，本端点**不做任何 tenant 隔离**。补偿：(a) INV-SINGLE-TENANT-ONLY appender tripwire（非空 tenant 到达持久化即 Error 告警）；(b) CTXKEYS-PRINCIPAL-WRITE-CALLER-01 锁定无 tenant producer 源；(c) 真隔离 deferred to epic #1296，落地时移除 tripwire + 加 tenant-scoped 过滤 |
 | auditquery sessionId 泄漏 | （issue §4 目标） | ✅ DTO 不含 sessionId 值（命中 redaction sensitive-key set） |
 
 ## Amendment 2026-05-29 round-2 — provenance-funnel closure (review C1/F1/F2)
@@ -628,3 +631,28 @@ assurance on the existing "principal/occurredAt 端到端携带" guarantee (prev
 - OAuth/OIDC: OpenID Connect Core 1.0 §5.1 ("sub"), RFC 8693 §4.1 ("act")
 - CloudEvents v1.0 §3 Required Attributes (Time = OccurredAt 模式)
 - HMAC canonical 参考：google/trillian `storage/leafdata.go`，RFC 8785 (JCS) struct-order determinism
+
+## Amendment 2026-05-30 — auditquery tenant reconciliation (#1289 / #1290)
+
+**裁决（#1289 = option A 单租户 invariant；#1290 = option B subjectId filter）。** PR #1272
+as-built 与本 ADR §4 spec 出现两套真理源：spec 声称 auditquery tenant 隔离是 "type-system
+Hard isolation by absence"，但 as-built 既无 tenant producer 源、`audit_entries.tenant_id`
+也从不作 WHERE 过滤——"无 tenantId queryParam" 被误等同于 "按 tenant 隔离"。这是一条 **false
+security-trust 声明**：多租户一旦落地（epic #1296）即潜在跨租户审计读（IDOR）。今日 0 exploit
+（develop 单租户、所有行 tenant 为空），但虚假 "Hard isolation" 评级是真问题。
+
+**本 PR 落地：**
+
+1. **删除 over-claim、对齐 as-built**（消除两套真理源）：
+   - handler godoc（`cells/auditcore/slices/auditquery/handler.go::toListResponseDataItem`）改写为诚实陈述（无 tenant 隔离，单租户 invariant）。
+   - 本 ADR 三处 phantom 同 PR 重写：§Implementation matrix 行（"= Hard tenant 隔离" → 单租户 invariant）、上方 §Amendment 2026-05-29 point 6（§4 spec 文本）、§威胁矩阵 round-1 `auditquery 跨租户读` 行（✅ → ❌ + 补偿）。
+2. **INV-SINGLE-TENANT-ONLY**：确立单租户不变式。enforcement 双路径正交：
+   - **ctx-write 路径** = `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`（既有 archtest，锁 `WithTenantID` 唯一 writer = consumer 侧 `RestoreToContext`，无 producer 源）。
+   - **persistence-reach 路径** = appender regression tripwire（`cells/auditcore/internal/appender/service.go::HandleEvent`）：非空 `principal.TenantID` 到达持久化即 `slog.Error` 告警，但**不 Reject**（审计合规永不丢 evidence）。
+   - **AI-robust 评级**：tripwire 是 **Medium** runtime invariant guard。**Hard 不可达**——Go 无法让 "tenant 值到达 audit 持久化" 在 type system 编译不可表达（除非 DROP `tenant_id` 列 = #1289 option C，已裁决不选，因列已端到端 plumbed for #1296）。**resolution 路径 = epic #1296**（落地时移除 tripwire + 加 tenant-scoped 过滤），非 silent carryover。
+3. **#1290 subjectId filter**：`subjectId` queryParam → `AuditFilters.SubjectID` → SQL/mem `subject_id` WHERE，补冒充审计能力（actor != subject）。非 admin 由既有 actor-self 限定兜底（subjectId 仅在自身 actor 行内 narrow），无需额外 policy gate。
+
+**威胁矩阵净变化：** `auditquery 跨租户读` ✅ → ❌（phantom 订正，补偿如上）。其余行不变。
+`auditquery sessionId 泄漏` ✅ 不变（sessionId 仍不出 DTO）。
+
+**关联：** epic #1296（multi-tenancy Principal TenantID 全链路）承接真隔离；裁决 issue #1289 / #1290。
