@@ -1,0 +1,1 @@
+tools/archtest/testdata/saga_constructor_nilguard_fixtures/red_unguarded_param/fixture.go:28: SAGA-CONSTRUCTOR-NIL-GUARD-01: constructor NewUnguarded has interface parameter dep (type redunguardedparam.MyInterface) without a guard call (IsNilInterface or clock.MustHaveClock); add validation.IsNilInterface(dep) or clock.MustHaveClock(dep, ...)
