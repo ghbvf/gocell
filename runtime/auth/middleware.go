@@ -78,7 +78,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	}
 
 	start := cfg.clock.Now()
-	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
+	ctx, p, err := AuthenticateBearer(r.Context(), verifier, token)
 	if err != nil {
 		cfg.metrics.recordTokenVerify(r.Context(), "failure", classifyTokenError(err), cfg.clock.Since(start))
 		// S43: expected 4xx (invalid/expired token, unauthorized) → Warn;
@@ -119,10 +119,10 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the subject changes
 	// their password and obtains a new token without the claim. If no matcher
 	// is wired, the gate rejects every request — fail-closed default.
-	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
+	if PasswordResetBlocked(p, isPasswordResetExempt(cfg, r.Method, r.URL.Path)) {
 		cfg.logger.Info(
 			"auth: password reset required gate blocked request",
-			slog.String("subject", claims.Subject),
+			slog.String("subject", p.Subject),
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
 		)
@@ -134,12 +134,51 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		return
 	}
 
-	// Inject the unified Principal (F7 wiring).
-	p := jwtClaimsToPrincipal(claims)
-	ctx := WithPrincipal(r.Context(), p)
-	ctx = injectPrincipalCtxKeys(ctx, p)
+	// Principal was already injected into ctx by AuthenticateBearer (WithPrincipal
+	// + principal ctxkeys). Attach the request logger and forward. The enriched
+	// ctx built before a password-reset block is discarded on that early return,
+	// so no principal leaks into a rejected request.
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// AuthenticateBearer verifies the bearer token (intent=access) and, on success,
+// returns a context enriched with the verified *Principal: both WithPrincipal
+// and the principal ctxkeys (actor/subject/session) that carry identity across
+// the async outbox boundary. It is the single transport-agnostic authentication
+// core shared by the HTTP AuthMiddleware (handleAuthRequest) and the gRPC unary
+// auth interceptor (runtime/grpc/interceptor) so neither transport duplicates
+// the verify→principal→ctx bridge.
+//
+// SECURITY: there is deliberately NO claims-input variant. A *Principal can only
+// be produced from a token that the verifier accepts — no caller (cell,
+// interceptor, …) can forge a principal by fabricating Claims. The principal
+// ctxkey writes stay physically inside this file, so the
+// CTXKEYS-PRINCIPAL-WRITE-CALLER-01 funnel is intact; exporting this function
+// does not widen the trust boundary because it gates on VerifyIntent.
+//
+// On verify failure the input ctx is returned unchanged together with the raw
+// verifier error; callers classify it (errcode.IsExpected4xx / KindUnavailable)
+// to render their transport-specific rejection.
+func AuthenticateBearer(ctx context.Context, verifier IntentTokenVerifier, token string) (context.Context, *Principal, error) {
+	claims, err := verifier.VerifyIntent(ctx, token, TokenIntentAccess)
+	if err != nil {
+		return ctx, nil, err
+	}
+	p := jwtClaimsToPrincipal(claims)
+	ctx = WithPrincipal(ctx, p)
+	ctx = injectPrincipalCtxKeys(ctx, p)
+	return ctx, p, nil
+}
+
+// PasswordResetBlocked reports whether a verified principal carrying
+// password_reset_required must be rejected on a non-exempt operation. It
+// operates on the VERIFIED *Principal (not forgeable claims); each transport
+// renders its own rejection (HTTP 403 ERR_AUTH_PASSWORD_RESET_REQUIRED vs gRPC
+// codes.PermissionDenied). A nil principal is treated as not-blocked (the caller
+// has already handled the unauthenticated case).
+func PasswordResetBlocked(p *Principal, exempt bool) bool {
+	return p != nil && p.PasswordResetRequired && !exempt
 }
 
 // injectPrincipalCtxKeys writes the authenticated principal identity into the
