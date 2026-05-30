@@ -405,14 +405,20 @@ func TestFirstBarePlatformLiteralLine_partition(t *testing.T) {
 		src       string
 		wantFound bool
 	}{
-		{"bare-value-const-used-in-concat",
-			"package p\nconst full = \"github.com/ghbvf/gocell\"\nvar _ = full + \"/x\"\n", true},
-		{"bare-literal-child-path",
-			"package p\nvar _ = \"github.com/ghbvf/gocell/pkg/x\"\n", true},
+		{
+			"bare-value-const-used-in-concat",
+			"package p\nconst full = \"github.com/ghbvf/gocell\"\nvar _ = full + \"/x\"\n", true,
+		},
+		{
+			"bare-literal-child-path",
+			"package p\nvar _ = \"github.com/ghbvf/gocell/pkg/x\"\n", true,
+		},
 		{"only-fragments-no-bare", // self-check's job, not firstBare's
 			"package p\nconst a = \"github.com/\"\nconst b = \"ghbvf/gocell\"\nvar _ = a + b\n", false},
-		{"gocell-import-path-excluded",
-			"package p\nimport _ \"github.com/ghbvf/gocell/pkg/errcode\"\n", false},
+		{
+			"gocell-import-path-excluded",
+			"package p\nimport _ \"github.com/ghbvf/gocell/pkg/errcode\"\n", false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
