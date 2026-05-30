@@ -30,6 +30,10 @@ import (
 const (
 	testIsoCellA = "cellA-iso"
 	testIsoProj1 = "p1-iso"
+
+	testBackCell     = "cell-back"
+	testBackProj     = "proj-back"
+	fmtErrLoadOffset = "LoadOffset: %v"
 )
 
 // RunCheckpointConformance runs the six canonical conformance sub-tests against
@@ -107,7 +111,7 @@ func checkSaveLoadRoundtrip(t *testing.T, store projection.CheckpointStore) {
 	}
 	got, err := store.LoadOffset(ctx, "cell-rt", "proj-rt")
 	if err != nil {
-		t.Fatalf("LoadOffset: %v", err)
+		t.Fatalf(fmtErrLoadOffset, err)
 	}
 	if got != 7 {
 		t.Errorf("LoadOffset = %d, want 7", got)
@@ -168,15 +172,15 @@ func checkIsolationEntry(t *testing.T, store projection.CheckpointStore, ctx con
 func checkBackwardWrite(t *testing.T, store projection.CheckpointStore) {
 	t.Helper()
 	ctx := context.Background()
-	if err := store.SaveOffset(ctx, "cell-back", "proj-back", 9); err != nil {
+	if err := store.SaveOffset(ctx, testBackCell, testBackProj, 9); err != nil {
 		t.Fatalf("SaveOffset(9): %v", err)
 	}
-	if err := store.SaveOffset(ctx, "cell-back", "proj-back", 3); err != nil {
+	if err := store.SaveOffset(ctx, testBackCell, testBackProj, 3); err != nil {
 		t.Fatalf("SaveOffset(3) backward write must be accepted, not rejected: %v", err)
 	}
-	got, err := store.LoadOffset(ctx, "cell-back", "proj-back")
+	got, err := store.LoadOffset(ctx, testBackCell, testBackProj)
 	if err != nil {
-		t.Fatalf("LoadOffset: %v", err)
+		t.Fatalf(fmtErrLoadOffset, err)
 	}
 	if got != 3 {
 		t.Errorf("after backward Save(3): LoadOffset = %d, want 3 (unconditional overwrite)", got)
@@ -193,7 +197,7 @@ func checkIdempotentReSave(t *testing.T, store projection.CheckpointStore) {
 	}
 	got, err := store.LoadOffset(ctx, "cell-idem", "proj-idem")
 	if err != nil {
-		t.Fatalf("LoadOffset: %v", err)
+		t.Fatalf(fmtErrLoadOffset, err)
 	}
 	if got != 5 {
 		t.Errorf("LoadOffset after two Save(5) = %d, want 5", got)

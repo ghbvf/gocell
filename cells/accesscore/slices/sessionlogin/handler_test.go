@@ -21,30 +21,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
-	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
-
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testIssuer is declared in service_test.go
 
 const loginPath = "/api/v1/access/sessions/login"
-
-func newHandlerRefreshStore() refresh.Store {
-	clk := storetest.NewFakeClock(time.Now())
-	store, err := refreshmem.New(refresh.Policy{
-		ReuseInterval:  testtime.D2s,
-		MaxAge:         time.Hour,
-		MaxIdle:        refresh.DefaultMaxIdle,
-		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
-	}, clk, nil)
-	if err != nil {
-		panic("test setup: " + err.Error())
-	}
-	return store
-}
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production. Tests dispatch via
@@ -59,7 +40,7 @@ func setup(t *testing.T) http.Handler {
 	_ = userRepo.Create(context.Background(), user)
 
 	sessionStore := testutil.RealSessionRepo(t)
-	refreshStore := newHandlerRefreshStore()
+	refreshStore := newTestRefreshStore()
 	svc, err := NewService(clock.Real(), NewServiceParams{
 		UserRepo:     userRepo,
 		SessionStore: sessionStore,
