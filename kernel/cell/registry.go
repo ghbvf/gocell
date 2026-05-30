@@ -172,17 +172,21 @@ type Registrar interface {
 	// could not call projection.NewCoordinator even if it wanted to, because it
 	// holds no checkpoint store / tx runner.
 	//
-	// The call is emitted by cellgen from slice.yaml
-	// contractUsages[role=subscribe] tagged with a projection id; ProjectionRequest
-	// carries identifiers known at code-generation time (CellID injected from cell
-	// metadata exactly like Subscribe's positional cellID). The Apply / OnReset
-	// function types are cell-local ([ProjectionApply] / [ProjectionResetHook])
-	// rather than kernel/projection types: kernel/projection imports kernel/cell
-	// (its Coordinator holds a cell.Registrar), so a reverse import here would be a
-	// compile-time cycle. The bootstrap drain converts these to the identical
-	// projection.Apply / projection.OnReset signatures (a legal named-type
-	// conversion). This mirrors SubscriptionRequest.Handler carrying the kernel
-	// primitive outbox.EntryHandler rather than a runtime/eventrouter type.
+	// The call WILL be emitted by cellgen from slice.yaml contractUsages when the
+	// kind:projection derivation lands (PR-04b, #1367); until then RegisterProjection
+	// is only called from test files (PROJECTION-REGISTER-FUNNEL-01 enforces this).
+	// The exact slice.yaml role/field that drives the derivation is decided in
+	// PR-04b, not here. ProjectionRequest carries identifiers known at
+	// code-generation time (CellID injected from cell metadata exactly like
+	// Subscribe's positional cellID). The Apply / OnReset function types are
+	// cell-local ([ProjectionApply] / [ProjectionResetHook]) rather than
+	// kernel/projection types: kernel/projection imports kernel/cell (its
+	// Coordinator's SubscribeRegistrar references cell.SubscriptionOption), so a
+	// reverse import here would be a compile-time cycle. The bootstrap drain
+	// converts these to the identical projection.Apply / projection.OnReset
+	// signatures (a legal named-type conversion). This mirrors
+	// SubscriptionRequest.Handler carrying the kernel primitive outbox.EntryHandler
+	// rather than a runtime/eventrouter type.
 	//
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
 	//
@@ -191,7 +195,10 @@ type Registrar interface {
 	// (Medium upstream + Medium downstream — Go cannot type-gate callers of a
 	// public method; this is the same permanent ceiling as Subscribe /
 	// RegisterWebhookReceiver). The Hard-ification path (cellgen-only sealed-token
-	// parameter) is tracked in gh #1176 follow-up.
+	// parameter) is tracked as a #1176 follow-up (#1372).
+	//
+	// ref: tools/archtest/projection_register_funnel_test.go (PROJECTION-REGISTER-FUNNEL-01)
+	// ref: ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §7 + §Amendment 2026-05-31
 	RegisterProjection(req ProjectionRequest) error
 
 	// RegisterReadiness registers a readiness probe under the typed
@@ -401,8 +408,9 @@ type WebhookDispatchRequest struct {
 // ProjectionApply is the cell-local mirror of the kernel/projection.Apply
 // event→state hook signature. It is declared here (not imported from
 // kernel/projection) because kernel/projection imports kernel/cell — its
-// Coordinator holds a cell.Registrar — so importing kernel/projection back into
-// kernel/cell would be a compile-time cycle. The bootstrap projection drain
+// Coordinator's SubscribeRegistrar references cell.SubscriptionOption — so
+// importing kernel/projection back into kernel/cell would be a compile-time
+// cycle. The bootstrap projection drain
 // performs the named-type conversion to projection.Apply (identical underlying
 // signature), exactly as SubscriptionRequest.Handler carries the kernel
 // primitive outbox.EntryHandler and is converted by the event-router drain.
@@ -426,8 +434,11 @@ type ProjectionRequest struct {
 	// stream). Spec.Kind must be "event".
 	Spec contractspec.ContractSpec
 	// ProjectionID names the projection within its cell. It is half of the
-	// checkpoint key (cellID, projectionID) and the consumer group is derived
-	// as cellID + "-" + projectionID.
+	// checkpoint key (cellID, projectionID); the consumer group is derived as
+	// cellID + "-" + projectionID, and the rebuild HTTP endpoint (PR-04e) keys
+	// the Coordinator by cellID + "/" + projectionID. Must be a snake_case
+	// probe-name identifier (NewCoordinator rejects "/" etc. via the probe-name
+	// validator), so neither derived key is ambiguous.
 	ProjectionID string
 	// CellID is the owning cell — observability owner and checkpoint-key half.
 	// Injected from cell metadata at code-generation time (same provenance as
@@ -734,7 +745,7 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 	if req.Spec.Kind != "event" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry RegisterProjection: Spec.Kind must be \"event\"; a projection consumes an event-kind input stream",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%q", req.Spec.Kind))))
+			errcode.WithInternal(errcode.InternalAttr("specKind", req.Spec.Kind)))
 	}
 	if req.Spec.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

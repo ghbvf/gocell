@@ -97,14 +97,14 @@ func TestRegisterProjection_SnapshotCopyIsIndependent(t *testing.T) {
 
 	snap := rec.Snapshot()
 	require.Len(t, snap.Projections, 1)
-	// Mutating the returned slice must not be observable through a second view
-	// (Snapshot returns a defensive copy, same as Subscriptions/WebhookReceivers).
+	// White-box: Snapshot returns a defensive copy, so mutating the returned
+	// slice element must NOT corrupt the recorder's internal slice (same
+	// guarantee as Subscriptions/WebhookReceivers). This test is in-package, so
+	// it can read rec.projections directly.
 	snap.Projections[0].ProjectionID = "tampered"
-	assert.Equal(t, "tampered", snap.Projections[0].ProjectionID,
-		"local mutation visible on the returned copy only")
-	// The recorder's internal slice is unchanged (verified by re-snapshotting is
-	// impossible post-finalize; instead assert the copy length is stable).
-	assert.Len(t, snap.Projections, 1)
+	require.Len(t, rec.projections, 1)
+	assert.Equal(t, "ordersummary", rec.projections[0].ProjectionID,
+		"mutating the snapshot copy must not affect the recorder's internal slice")
 }
 
 func TestRegisterProjection_AfterSnapshotPanics(t *testing.T) {

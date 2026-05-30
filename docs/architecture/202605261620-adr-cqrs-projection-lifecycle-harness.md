@@ -350,10 +350,10 @@ verified by the listed PR).
 
 | # | Threat | v1 mechanism | Discharged by |
 |---|---|---|---|
-| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in **PR-04c** (a #1176 follow-up sub-issue — see §Amendment 2026-05-31; until then projection cells run on the mem cursor/replay fakes, sufficient for the serial in-memory bus); PR-06 real-PG integration |
+| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in **PR-04c (#1368)** (a #1176 follow-up — see §Amendment 2026-05-31; until then projection cells run on the mem cursor/replay fakes, sufficient for the serial in-memory bus); PR-06 real-PG integration |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
-| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
-| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04d** (a #1176 follow-up — §Amendment 2026-05-31). PR-04a wires only the serial in-memory bus (the production wiring path it enables); a concurrent transport carrying a projection must not ship until PR-04d lands |
+| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e (#1370)** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
+| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04d (#1369)** (a #1176 follow-up — §Amendment 2026-05-31). PR-04a wires only the serial in-memory bus (the production wiring path it enables); a concurrent transport carrying a projection must not ship until PR-04d lands |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
 | 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved, **write-guarded** (reads harmless/unused); multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest (write-scoped, landed); `schema_guard.verifyDefaults` asserts the load-bearing `owner DEFAULT ''`; documented v1 limitation (Q5) |
@@ -409,16 +409,17 @@ PR-04 (#1176) as originally scoped bundled six separable concerns; the
 ≤2000-line/PR budget and a file-level conflict with epic **#1085** (CellModule →
 `runtime/composition`: its plan edits `tools/codegen/cellgen` templates + golden
 and refactors `cmd/corebundle`) made a single PR infeasible. PR-04 is therefore
-split into sequenced sub-PRs (numbers filed under #1100; see the PR-04a PR body):
+split into sequenced sub-PRs (filed under epic #1100):
 
-- **PR-04a** (this amendment): the `reg.RegisterProjection` record-only seam +
-  bootstrap projection drain + DI options + the two caller funnels. **Conflict-free**
-  — touches only `kernel/cell` + `runtime/bootstrap` + `tools/archtest`.
-- **PR-04b**: cellgen `kind:projection` derivation + metadata (conflicts #1085
-  Batch 4 → after it lands). **PR-04c**: production journal-backed `Cursor` +
-  `ReplaySource` + corebundle wiring (conflicts #1085 Batch 2). **PR-04d**:
-  serial-delivery enforcement. **PR-04e**: HTTP rebuild control-plane endpoint.
-  **PR-04f**: dev guide. **PR-04g**: funnel Hard-ization (cellgen-only sealed token).
+- **PR-04a** (this amendment, #1176): the `reg.RegisterProjection` record-only seam
+  + bootstrap projection drain + DI options + the two caller funnels.
+  **Conflict-free** — touches only `kernel/cell` + `runtime/bootstrap` + `tools/archtest`.
+- **PR-04b (#1367)**: cellgen `kind:projection` derivation + metadata (conflicts
+  #1085 Batch 4 → after it lands). **PR-04c (#1368)**: production journal-backed
+  `Cursor` + `ReplaySource` + corebundle wiring (conflicts #1085 Batch 2).
+  **PR-04d (#1369)**: serial-delivery enforcement. **PR-04e (#1370)**: HTTP rebuild
+  control-plane endpoint. **PR-04f (#1371)**: dev guide. **PR-04g (#1372)**: funnel
+  Hard-ization (cellgen-only sealed token).
 
 ### Option A — wiring seam (supersedes the §7 "cell_gen.go Subscribe callsite")
 
@@ -468,8 +469,9 @@ that lands each moves from "PR-04" to a named sub-PR:
   PR-04a's `checkNoEventConsumersWhenSubscriberNil` + the drain require a
   Subscriber; production wiring (corebundle) carries only the serial in-memory bus
   today. A concurrent transport (AMQP prefetch>1) MUST NOT carry a projection
-  subscription until PR-04d's enforcement lands — restated here, not silently
-  deferred.
+  subscription until PR-04d (#1369)'s enforcement lands — restated here, not
+  silently deferred. PR-04c (#1368, corebundle wiring) must likewise not wire a
+  concurrent subscriber to a projection before #1369 lands; #1368 reviewers enforce this.
 
 §3 Q3 (single slice → single projection) is unchanged: a slice may declare
 multiple `role=subscribe` CUs feeding one projection; PR-04b derives one

@@ -15,6 +15,7 @@ package bootstrap
 import (
 	"context"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -241,6 +242,57 @@ func TestBuildProjectionCoordinators_HappyPath_CapturesSubscription(t *testing.T
 	assert.Equal(t, projTestProjID, w.sub.SliceID, "sliceID is set to the projection id")
 	assert.Equal(t, projTestTopic, w.sub.Spec.Topic)
 	require.NotNil(t, w.sub.Handler, "wrapped handler must be captured")
+
+	// Probe naming contract (ops dashboards/alerts depend on this format).
+	probes, err := w.coord.Probes()
+	require.NoError(t, err)
+	names := make([]string, 0, len(probes))
+	for _, p := range probes {
+		names = append(names, string(p.Name()))
+	}
+	assert.Contains(t, names, projTestCellID+"_projection_"+projTestProjID+"_store_ready")
+	assert.Contains(t, names, projTestCellID+"_projection_"+projTestProjID+"_lag")
+}
+
+// TestBuildProjectionCoordinators_CapturedHandlerRunsApply proves the captured
+// SubscriptionRequest.Handler is the real projection handler (checkpoint + tx +
+// apply), not a noop: invoking it runs the business Apply. This is the core
+// side-effect the drain exists to wire — asserting only the coordinator index
+// would not catch a dropped AddContractHandler / wrong handler.
+func TestBuildProjectionCoordinators_CapturedHandlerRunsApply(t *testing.T) {
+	t.Parallel()
+	var applied atomic.Int32
+	pc := newProjectionCell()
+	pc.apply = func(context.Context, outbox.Entry) error { applied.Add(1); return nil }
+	s := buildProjectionPhaseState(t, pc)
+
+	b := newProjectionBootstrap(t)
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+
+	// fakeProjectionCursor returns position 1; cold-start checkpoint is 0, so
+	// 1 > 0 ⇒ apply is invoked exactly once.
+	_ = wirings[0].sub.Handler(context.Background(), outbox.Entry{})
+	assert.Equal(t, int32(1), applied.Load(),
+		"captured handler must route a fresh event to the business apply")
+}
+
+// TestBuildProjectionCoordinators_NewCoordinatorError covers buildOneProjection's
+// NewCoordinator failure branch: RegisterProjection accepts a non-empty
+// ProjectionID, but NewCoordinator rejects one that is not a snake_case
+// probe-name identifier.
+func TestBuildProjectionCoordinators_NewCoordinatorError(t *testing.T) {
+	t.Parallel()
+	pc := newProjectionCell()
+	pc.projectionID = "Bad-Proj" // uppercase + hyphen → invalid probe-name identifier
+	s := buildProjectionPhaseState(t, pc)
+
+	b := newProjectionBootstrap(t)
+	_, err := b.buildProjectionCoordinators(context.Background(), s)
+
+	require.Error(t, err, "invalid projectionID must fail at NewCoordinator")
+	assert.Contains(t, err.Error(), "construct coordinator")
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +300,7 @@ func TestBuildProjectionCoordinators_HappyPath_CapturesSubscription(t *testing.T
 // ---------------------------------------------------------------------------
 
 func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
+	t.Parallel()
 	bus := eventbus.New(clock.Real())
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-proj-test", DurabilityMode: outbox.DurabilityDemo})

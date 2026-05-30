@@ -75,12 +75,14 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -146,6 +148,20 @@ const projectionDrainFile = "runtime/bootstrap/phases_projection.go"
 // set: under Option A cellgen emits reg.RegisterProjection (record-only), not
 // Coordinator.Subscribe. The cell_gen.go RegisterProjection callsite is guarded
 // separately by PROJECTION-REGISTER-FUNNEL-01.
+// TestProjectionApplyHookFunnel01_DrainFileExists guards against silent drift:
+// if runtime/bootstrap/phases_projection.go is renamed/moved without updating
+// projectionDrainFile, the allowlist would stop matching the real Subscribe
+// callsite and the rule would flip to firing on legitimate code (or, if the
+// file vanished, become vacuously green). Asserting the path exists keeps the
+// Soft string anchor honest.
+func TestProjectionApplyHookFunnel01_DrainFileExists(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	_, err := os.Stat(filepath.Join(root, filepath.FromSlash(projectionDrainFile)))
+	require.NoError(t, err,
+		"projectionDrainFile %q must exist; update the const if the bootstrap drain moved", projectionDrainFile)
+}
+
 func isProjectionApplyHookAllowed(rel, _ string) bool {
 	if strings.HasSuffix(rel, "_test.go") {
 		return true

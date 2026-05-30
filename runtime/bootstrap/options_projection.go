@@ -36,10 +36,11 @@ import (
 
 // WithProjectionCheckpointStore injects the [projection.CheckpointStore] used by
 // every projection Coordinator to persist consumed offsets in the framework
-// offset table. A nil or typed-nil value is silently ignored; the final nil
-// check happens during phase6 when any cell has declared a projection.
+// offset table. Typed-nil or bare-nil inputs are not stored (cumulative builder
+// semantics); when a cell has declared a projection, the phase6 drain fails fast
+// with errcode.ErrCellInvalidConfig naming this option.
 //
-// For tests, projection.NewMemCheckpointStore is sufficient. Production
+// For tests, projection.NewMemCheckpointStore() is sufficient. Production
 // deployments inject the postgres-backed adapter via the composition root.
 func WithProjectionCheckpointStore(store projection.CheckpointStore) Option {
 	return func(b *Bootstrap) {
@@ -52,8 +53,12 @@ func WithProjectionCheckpointStore(store projection.CheckpointStore) Option {
 
 // WithProjectionTxRunner injects the [persistence.TxRunner] used by every
 // projection Coordinator to commit the Apply mutation and the checkpoint
-// SaveOffset in one transaction (exactly-once). A nil or typed-nil value is
-// silently ignored; the final nil check happens during phase6.
+// SaveOffset in one transaction (exactly-once). Typed-nil or bare-nil inputs are
+// not stored; the phase6 drain fails fast naming this option when a projection
+// is declared.
+//
+// For tests, a pass-through TxRunner whose RunInTx calls fn(ctx) directly is
+// sufficient (the mem checkpoint store ignores the ambient transaction).
 func WithProjectionTxRunner(txRunner persistence.TxRunner) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(txRunner) {
@@ -64,9 +69,11 @@ func WithProjectionTxRunner(txRunner persistence.TxRunner) Option {
 }
 
 // WithProjectionReplaySource injects the [projection.ReplaySource] used by every
-// projection Coordinator to replay the event stream during a rebuild. A nil or
-// typed-nil value is silently ignored; the final nil check happens during
-// phase6.
+// projection Coordinator to replay the event stream during a rebuild. Typed-nil
+// or bare-nil inputs are not stored; the phase6 drain fails fast naming this
+// option when a projection is declared.
+//
+// For tests, projection.NewMemReplaySource() is sufficient.
 func WithProjectionReplaySource(replay projection.ReplaySource) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(replay) {
@@ -78,8 +85,12 @@ func WithProjectionReplaySource(replay projection.ReplaySource) Option {
 
 // WithProjectionCursor injects the [projection.Cursor] used by every projection
 // Coordinator to extract a monotonic stream position from each consumed event
-// (for the exactly-once checkpoint compare). A nil or typed-nil value is
-// silently ignored; the final nil check happens during phase6.
+// (for the exactly-once checkpoint compare). Typed-nil or bare-nil inputs are
+// not stored; the phase6 drain fails fast naming this option when a projection
+// is declared.
+//
+// For tests, a one-method type returning a fixed int64 ≥ 1 is sufficient (the
+// cursor must return ≥ 1; 0 is the cold-start sentinel in the checkpoint store).
 func WithProjectionCursor(cursor projection.Cursor) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(cursor) {
