@@ -166,8 +166,8 @@
 | DLT 路由 | `adapters/mqtt/deadletter.go` + `deadletter_test.go` |
 | Conformance | `adapters/mqtt/conformance_test.go`（adapter 装入 `outboxtest.TestPubSub`） |
 | TLS / mTLS | `integration_tls_test.go`（build tag `integration,mqtt_tls`） |
-| CI nightly | `.github/workflows/archtest-nightly.yml` 加 `mqtt_tls` build tag matrix entry |
-| Polish | Subscriber Reject 走 DLT 集成完整、ConsumerBase Reject path end-to-end |
+| CI nightly | **实施为**独立 `.github/workflows/mqtt-tls-nightly.yml`（testcontainer 作业，仿 otel-collector-nightly），非 archtest-nightly matrix entry——详见 tasks.md T-4.5 偏离说明 |
+| Polish | Subscriber Reject 走 DLT 集成完整、ConsumerBase Reject path end-to-end；Requeue=Option C（ADR-050 §6） |
 
 **验收**：outbox conformance 6 Batch 全过；DLT 路由可由独立 subscriber 验证；TLS/mTLS nightly 通过。
 
