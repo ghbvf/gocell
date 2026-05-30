@@ -64,11 +64,11 @@ func TestRunStandardCellRules(t *testing.T) {
 		},
 	}
 
-	// GoCell's own production composition root; a passing standard set here is
-	// the in-repo proof that the external entry works end-to-end.
+	// A passing standard set against GoCell itself is the in-repo proof that the
+	// external entry works end-to-end; BuildTags exercises the second scan pass.
 	RunStandardCellRules(t, ConfigForExternalCell{
-		ProductionMainPkgs: []string{"./cmd/corebundle"},
-		ExtraRules:         []*CellRule{probe},
+		BuildTags:  FlatNonDefaultTags(),
+		ExtraRules: []*CellRule{probe},
 	})
 
 	if !extraInvoked {
@@ -76,16 +76,30 @@ func TestRunStandardCellRules(t *testing.T) {
 	}
 }
 
-// TestRunStandardCellRulesSkipsNilExtraRule asserts a nil entry in ExtraRules
-// (or a rule with a nil Run) is skipped rather than panicking — defensive for
-// consumers assembling rule slices dynamically. Cheap: the nil ExtraRule adds
-// nothing, but the standard set still runs, so gate behind -short.
-func TestRunStandardCellRulesSkipsNilExtraRule(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping module-wide RunStandardCellRules dogfood in -short mode")
+// TestValidateCellRule asserts a misconfigured ExtraRule (nil, nil Run, or
+// empty ID) is rejected loud — never silently skipped — so a mis-wired rule
+// slice cannot green-light a run that gated nothing. It tests the pure
+// validateCellRule helper directly (RunStandardCellRules wraps it with
+// t.Errorf), which is cheap and needs no module scan or *testing.T interception.
+func TestValidateCellRule(t *testing.T) {
+	t.Parallel()
+	nonNilRun := func(_ *testing.T, _ ConfigForExternalCell) []Diagnostic { return nil }
+	cases := []struct {
+		name    string
+		r       *CellRule
+		wantErr bool
+	}{
+		{"nil-rule", nil, true},
+		{"nil-run", &CellRule{ID: "X"}, true},
+		{"empty-id", &CellRule{ID: "", Run: nonNilRun}, true},
+		{"valid", &CellRule{ID: "X", Run: nonNilRun}, false},
 	}
-	// Must not panic.
-	RunStandardCellRules(t, ConfigForExternalCell{
-		ExtraRules: []*CellRule{nil, {ID: "TEST-NIL-RUN-01", Run: nil}},
-	})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if gotErr := validateCellRule(c.r, 0) != ""; gotErr != c.wantErr {
+				t.Errorf("validateCellRule(%s) error = %v, want %v", c.name, gotErr, c.wantErr)
+			}
+		})
+	}
 }

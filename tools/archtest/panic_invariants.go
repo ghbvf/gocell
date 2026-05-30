@@ -229,6 +229,46 @@ func isPanicCallExpr(call *ast.CallExpr) bool {
 	return ok && ident.Name == "panic"
 }
 
+// scanPanicBuiltinShadows closes the one residual blind spot of the pure-AST
+// panic detection in [isPanicCallExpr]: it matches the `panic` builtin by name,
+// so a production declaration that SHADOWS the builtin (a func/var/const/type or
+// parameter named panic) would make a later panic(...) resolve to the shadow,
+// not the builtin, defeating the scan. (The other conceivable evasion — aliasing
+// the builtin as a value, `p := panic; p(x)` — is a compile error in Go, since
+// builtins are not values, so it is structurally impossible and needs no check.)
+//
+// Any declaration site named "panic" (an ident present in types.Info.Defs) is
+// therefore a violation. info is required (collectPanicViolations passes a typed
+// Pass); a shadow resolves to a *types.Var/Func in Defs while a genuine builtin
+// call resolves via Uses, so the two are distinguishable. Today's production
+// tree has zero shadows — this is a forward guard that keeps it that way.
+func scanPanicBuiltinShadows(
+	fset *token.FileSet,
+	file *ast.File,
+	info *types.Info,
+	rel string,
+) []panicRegisteredViolation {
+	if info == nil {
+		return nil
+	}
+	var out []panicRegisteredViolation
+	EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+		if id.Name != "panic" {
+			return
+		}
+		if _, isDef := info.Defs[id]; !isDef {
+			return
+		}
+		out = append(out, panicRegisteredViolation{
+			File: rel,
+			Line: fset.Position(id.Pos()).Line,
+			Reason: "declaration shadows the built-in panic — rename it; " +
+				"shadowing defeats PANIC-REGISTERED-01 detection",
+		})
+	})
+	return out
+}
+
 // shouldSkipForPanicRegistered returns true for paths that must not be
 // scanned by PANIC-REGISTERED-01 (test files, generated code, testdata, etc.).
 // Preserved verbatim from the pre-migration rule so gocell behavior is
@@ -276,18 +316,20 @@ func shouldSkipForPanicRegistered(rel string) bool {
 // CheckPanicRegistered runs PANIC-REGISTERED-01 over the running module and
 // returns its diagnostics. It is the importable [CellRule] body wrapped by
 // [StandardCellRules]; GoCell's TestPanicRegistered calls it directly so the
-// gate has a single source. cfg is currently unused (the scan is module-wide,
-// resolved from the running module's go.mod by RunTyped) and is accepted to
-// satisfy the uniform CellRule.Run signature.
+// gate has a single source. The scan SCOPE is the running module (resolved from
+// its go.mod by RunTyped); cfg.BuildTags supplies the build tags for the second
+// pass so panics behind the consumer's //go:build directives are scanned too.
 //
-// Two RunTyped loads cover the full build-directive file set (default + the
-// FlatNonDefaultTags union), deduped by "rel:line:reason"; see the long note
-// in the prior TestPanicRegistered body / ADR 202605190000 §Alternatives for
-// why a single union load is insufficient.
-func CheckPanicRegistered(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
+// The default build config is always scanned; when cfg.BuildTags is non-empty a
+// second RunTyped load covers files behind those tags, deduped by
+// "rel:line:reason". GoCell's dogfood passes FlatNonDefaultTags(); an external
+// repo passes its own production tags. See the long note in the prior
+// TestPanicRegistered body / ADR 202605190000 §Alternatives for why a single
+// union load is insufficient.
+func CheckPanicRegistered(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 
-	seen := make(map[string]struct{}) // dedup across two loads by "rel:line:reason"
+	seen := make(map[string]struct{}) // dedup across loads by "rel:line:reason"
 	var violations []panicRegisteredViolation
 	scan := func(p *Pass) []Diagnostic {
 		violations = append(violations, collectPanicViolations(p, seen)...)
@@ -295,7 +337,9 @@ func CheckPanicRegistered(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	}
 
 	_ = RunTyped(t, TypedOpts{}, []string{"./..."}, scan)
-	_ = RunTyped(t, TypedOpts{Tags: FlatNonDefaultTags()}, []string{"./..."}, scan)
+	if len(cfg.BuildTags) > 0 {
+		_ = RunTyped(t, TypedOpts{Tags: cfg.BuildTags}, []string{"./..."}, scan)
+	}
 
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].File != violations[j].File {
@@ -325,7 +369,9 @@ func collectPanicViolations(p *Pass, seen map[string]struct{}) []panicRegistered
 		if shouldSkipForPanicRegistered(rel) {
 			continue
 		}
-		for _, v := range scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel) {
+		fileViolations := scanFileForPanicViolations(p.Fset, file, p.TypesInfo, rel)
+		fileViolations = append(fileViolations, scanPanicBuiltinShadows(p.Fset, file, p.TypesInfo, rel)...)
+		for _, v := range fileViolations {
 			key := fmt.Sprintf("%s:%d:%s", v.File, v.Line, v.Reason)
 			if _, dup := seen[key]; dup {
 				continue

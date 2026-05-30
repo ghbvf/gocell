@@ -18,7 +18,9 @@ package archtest
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"testing"
 )
@@ -95,7 +97,53 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 // NOTE: All call-site migrations complete as of PR #467; this test must pass.
 func TestPanicRegistered(t *testing.T) {
 	t.Parallel()
-	Report(t, rulePanicRegistered01, CheckPanicRegistered(t, ConfigForExternalCell{}))
+	// GoCell's production files behind //go:build directives are gated by its
+	// full non-default tag union; pass it so the second scan pass covers them.
+	Report(t, rulePanicRegistered01,
+		CheckPanicRegistered(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+}
+
+// TestScanPanicBuiltinShadows is the reverse self-check for the one declared
+// blind spot of the pure-AST panic detection (see scanPanicBuiltinShadows
+// godoc): the rule matches the `panic` builtin by name, so a declaration that
+// shadows it must be flagged. The other conceivable evasion — aliasing the
+// builtin as a value (`p := panic; p(x)`) — is a Go compile error (builtins are
+// not values), so it is structurally impossible and absent here by design. This
+// test proves the shadow closure fires (RED cases) and does not false-flag a
+// normal panic(...) call (GREEN case). The whole-module guarantee that GoCell's
+// production tree contains zero shadows is enforced by TestPanicRegistered,
+// which now also runs scanPanicBuiltinShadows over every production file.
+func TestScanPanicBuiltinShadows(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		src      string
+		wantViol bool
+	}{
+		{"normal-call", "package p\nfunc f() { panic(\"x\") }\n", false},
+		{"func-shadow", "package p\nfunc panic(any) {}\nfunc f() { panic(1) }\n", true},
+		{"var-shadow", "package p\nfunc f() {\n\tpanic := func(any) {}\n\tpanic(1)\n}\n", true},
+		{"param-shadow", "package p\nfunc f(panic func(any)) { panic(1) }\n", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, c.name+".go", c.src, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			info := &types.Info{
+				Defs: map[*ast.Ident]types.Object{},
+				Uses: map[*ast.Ident]types.Object{},
+			}
+			conf := types.Config{Error: func(error) {}} // tolerate intentional shadows
+			_, _ = conf.Check("p", fset, []*ast.File{file}, info)
+			if got := len(scanPanicBuiltinShadows(fset, file, info, c.name)) > 0; got != c.wantViol {
+				t.Errorf("scanPanicBuiltinShadows(%s) flagged=%v, want=%v", c.name, got, c.wantViol)
+			}
+		})
+	}
 }
 
 // TestPanicRegisteredScannerFixtures verifies the PANIC-REGISTERED-01 rule

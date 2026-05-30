@@ -1,6 +1,9 @@
 package archtest
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // external.go — the importable public surface that lets an external Cell
 // repository (Operator-SDK or Workspace mode, see
@@ -60,8 +63,8 @@ const PlatformModulePath = "github.com/ghbvf/gocell"
 //
 // Run takes *testing.T because the underlying drivers (Run / RunTyped /
 // RunTypedProduction) fail-loud via t.Fatalf on load errors and need the test
-// handle. A rule whose scan is module-wide may ignore cfg; rules that need the
-// consumer's own composition-root packages read cfg.ProductionMainPkgs.
+// handle. A rule whose scan is module-wide under the default build config may
+// ignore cfg; rules that must see build-tagged files read cfg.BuildTags.
 type CellRule struct {
 	// ID is the stable rule identifier (e.g. "PANIC-REGISTERED-01"). It is the
 	// ruleID passed to Report and must be unique within a rule set.
@@ -78,28 +81,32 @@ type CellRule struct {
 // underlying driver loudly. This mirrors M2's render.go contract (module path
 // is derived, never a silently-defaulted input). ref: arch-go config.Load.
 //
-// Fields are deliberately minimal (YAGNI): a metadata-locator Strategy and a
-// per-rule RuleFilter / FreezingArchRule baseline are NOT included until a rule
-// that needs them is migrated into the standard set — see the M3 follow-up
-// issues referenced in docs/architecture/202605281200-adr-cell-development-external-repo.md.
+// Fields are deliberately minimal (YAGNI): every field is read by a rule that
+// actually ships in [StandardCellRules]. A field reserved for a not-yet-migrated
+// rule (e.g. a composition-root package list for PROD-MAIN-WIRING-NOOP-REJECT-01,
+// issue #1303) is NOT added here until that rule lands — a public no-op field is
+// a premature abstraction. ref: arch-go config.Load.
 type ConfigForExternalCell struct {
-	// ProductionMainPkgs lists the consumer's production composition-root
-	// packages (the main packages that wire real adapters), as module-relative
-	// import patterns (e.g. []string{"./cmd/myapp"}). Rules that scan the
-	// composition root for forbidden in-memory/noop wiring read this; an empty
-	// slice means "no composition-root scan for this run". GoCell's own dogfood
-	// passes {"./cmd/corebundle"}.
-	//
-	// As of PR-1, NO rule in StandardCellRules() reads this field — it is
-	// reserved for the PROD-MAIN-WIRING-NOOP-REJECT-01 rule (issue #1303), so
-	// passing it today has no effect. It is included now so the config shape is
-	// stable when that rule lands.
-	ProductionMainPkgs []string
+	// BuildTags lists the consumer's production build tags (e.g.
+	// []string{"prod", "amqp"}). Rules that must see code behind build
+	// directives scan twice — once under the default build config and once with
+	// these tags — so a violation hidden behind `//go:build prod` is not missed.
+	// An empty slice means "scan the default build configuration only". GoCell's
+	// own dogfood passes FlatNonDefaultTags() (its full non-default tag union);
+	// an external repo passes whatever tags gate its production files.
+	BuildTags []string
 
 	// ExtraRules are consumer-owned custom rules appended to the standard set —
 	// the minimal plugin surface. They use the identical CellRule type (no
 	// separate registration mechanism), mirroring ArchUnit's custom
 	// DescribedPredicate/ArchCondition plugging into the same fluent API.
+	//
+	// Trust boundary: each ExtraRule's Run receives the same *testing.T as the
+	// standard rules. A rule that finds violations MUST return them as
+	// []Diagnostic (funneled through Report → t.Errorf) and MUST NOT call
+	// t.Fatal / t.FailNow itself — FailNow aborts the entire
+	// RunStandardCellRules loop via runtime.Goexit, masking every standard rule
+	// that would have run after it.
 	ExtraRules []*CellRule
 }
 
@@ -129,7 +136,7 @@ func StandardCellRules() []*CellRule {
 //
 //	func TestGoCellArchitecture(t *testing.T) {
 //	    archtest.RunStandardCellRules(t, archtest.ConfigForExternalCell{
-//	        ProductionMainPkgs: []string{"./cmd/myapp"},
+//	        BuildTags: []string{"prod"},
 //	    })
 //	}
 //
@@ -146,18 +153,31 @@ func RunStandardCellRules(t *testing.T, cfg ConfigForExternalCell) {
 	t.Helper()
 	rules := StandardCellRules()
 	rules = append(rules, cfg.ExtraRules...)
-	for _, r := range rules {
-		// A nil entry or a rule with no Run is silently skipped (defensive for
-		// consumers assembling rule slices dynamically). An empty ID, however,
-		// is a misconfiguration — Report(t, "", …) would attribute diagnostics
-		// to a blank rule, hiding which gate fired — so fail fast.
-		if r == nil || r.Run == nil {
-			continue
-		}
-		if r.ID == "" {
-			t.Errorf("RunStandardCellRules: skipping a rule with an empty ID (set CellRule.ID)")
+	for i, r := range rules {
+		if msg := validateCellRule(r, i); msg != "" {
+			t.Errorf("RunStandardCellRules: %s", msg)
 			continue
 		}
 		Report(t, r.ID, r.Run(t, cfg))
 	}
+}
+
+// validateCellRule returns a non-empty message when rules[i] is misconfigured.
+// A nil rule, a nil Run, or an empty ID is ALWAYS a consumer error (a rule
+// slice assembled wrong) — never a benign no-op — so [RunStandardCellRules]
+// reports it via t.Errorf and fails loud, rather than silently skipping and
+// green-lighting a run that gated nothing. (An empty ID would also make
+// Report(t, "", …) mis-attribute diagnostics to a blank rule, hiding which gate
+// fired.) Extracted as a pure function so the rejection table is unit-testable
+// without intercepting *testing.T.
+func validateCellRule(r *CellRule, i int) string {
+	switch {
+	case r == nil:
+		return fmt.Sprintf("rules[%d] is nil (remove it or supply a *CellRule)", i)
+	case r.Run == nil:
+		return fmt.Sprintf("rule %q has a nil Run (set CellRule.Run)", r.ID)
+	case r.ID == "":
+		return fmt.Sprintf("rules[%d] has an empty ID (set CellRule.ID)", i)
+	}
+	return ""
 }

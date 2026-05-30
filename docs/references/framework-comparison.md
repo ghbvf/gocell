@@ -165,8 +165,8 @@ primary:   golang.org/x/tools/go/analysis → analysis.go (Analyzer struct), mul
                  vs 扫描目标参数化（cfg / pass.Pkg）。
 secondary: TNG/ArchUnit            → ArchRule 值 + rule.check(importedClasses) 分离供给；
                                       ArchTests.in(StandardRules.class) 预定义集 ↔ RunStandardCellRules；
-                                      FreezingArchRule/ViolationStore（fail-on-new + 修复自动收缩）
-                                      ↔ ARCHTEST-MODULE-PATH-FUNNEL-01 迁移 ratchet golden；
+                                      FreezingArchRule/ViolationStore（fail-on-new + 禁增长 + 修复手动收缩）
+                                      ↔ ARCHTEST-MODULE-PATH-FUNNEL-01 迁移 ratchet frozen baseline；
                                       custom rule 同接口无 registry ↔ ConfigForExternalCell.ExtraRules。
            arch-go                  → config.Load(modulePath) ↔ module path 由消费方供给（gocell 从 go.mod 派生）。
 goal:      外部 Cell 仓库 go get + import 跑平台不变量（M3 #1084）；platform-vs-scan 路径拆分；

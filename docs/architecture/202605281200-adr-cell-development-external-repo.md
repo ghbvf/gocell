@@ -411,14 +411,16 @@ M3 (#1084) 解 R1：让外部 Cell 仓库 `go get github.com/ghbvf/gocell/tools/
 
 | 项 | 形态 | 落地 PR |
 |----|------|---------|
-| 可 import API（`external.go`） | `CellRule{ID,Run}` 描述符 + `ConfigForExternalCell{ProductionMainPkgs,ExtraRules}` + `StandardCellRules() []*CellRule` + `RunStandardCellRules(t,cfg)` + `PlatformModulePath` const | **PR-1** |
-| 第一批迁移 exemplar | `PANIC-REGISTERED-01` 逻辑 MOVE 到 `panic_invariants.go`（非 test），platform 路径经 `PlatformModulePath` 派生，scan scope 由 driver 供给；gocell `_test.go` dogfood 同一 `CheckPanicRegistered`（单源） | **PR-1** |
-| 迁移收敛 ratchet | `ARCHTEST-MODULE-PATH-FUNNEL-01`（`module_path_funnel_test.go`）+ golden（PR-1 基线 **76 文件** backlog） | **PR-1** |
-| 剩余 ~76 规则族迁移 | errcode / span / saga / outbox / cell / layer-05..10 / `LOCATOR-DISCOVERY-FUNNEL-01` … 逐 PR 缩 golden 至空 | **PR-2..N**（#1302） |
-| 净新 `PROD-MAIN-WIRING-NOOP-REJECT-01`（reviewer P0 #3） | 扫 `ProductionMainPkgs` composition-root noop/in-memory wiring | #1303 |
-| FreezingArchRule baseline（外部既有库增量采纳） | `BaselinePath` + CI 只读 + 修复自动收缩 | #1304 |
+| 可 import API（`external.go`） | `CellRule{ID,Run}` 描述符 + `ConfigForExternalCell{BuildTags,ExtraRules}` + `StandardCellRules() []*CellRule` + `RunStandardCellRules(t,cfg)` + `PlatformModulePath` const。每个 `ConfigForExternalCell` 字段都被一条已 ship 的规则读取（无 no-op 占位字段）；misconfigured rule（nil / nil Run / 空 ID）`t.Errorf` fail-fast 不静默跳过 | **PR-1** |
+| 第一批迁移 exemplar | `PANIC-REGISTERED-01` 逻辑 MOVE 到 `panic_invariants.go`（非 test），platform 路径经 `PlatformModulePath` 派生，scan scope 由 driver 供给；`cfg.BuildTags` 供第二趟 build-tag 扫描（外部仓库传自己的 production tags，gocell dogfood 传 `FlatNonDefaultTags()`）；builtin-`panic` shadow 检测内联进规则（关闭纯 AST `isPanicCallExpr` 唯一残留盲区）；gocell `_test.go` dogfood 同一 `CheckPanicRegistered`（单源） | **PR-1** |
+| 迁移收敛 ratchet | `ARCHTEST-MODULE-PATH-FUNNEL-01`（`module_path_funnel_test.go`）+ **frozen baseline**（`testdata/module_path_funnel.baseline`，PR-1 基线 **76 文件** backlog）。非 golden：`-update` 永不重写，monotone ceiling，新 offender ⊄ baseline 即 CI 红（无 `-update` 洗白路径） | **PR-1** |
+| ratchet PR-time gate | `TestArchtestModulePathFunnel` 入 `hack/verify-archtest-invariants.sh`（纯 AST，~0.07s），fail-on-new 在 PR 时即时生效，不再仅 nightly | **PR-1** |
+| 跨 module smoke | `external_smoke_test.go`：throwaway 临时 module `replace` 本仓 + import 真 `archtest` + 跑 `RunStandardCellRules`，断言捕获 consumer module 的 bare panic（锁住 import-as-dependency / 无 `-update` flag panic / `findModuleRoot` 解析 consumer go.mod） | **PR-1** |
+| 剩余 ~76 规则族迁移 | errcode / span / saga / outbox / cell / layer-05..10 / `LOCATOR-DISCOVERY-FUNNEL-01` … 逐 PR 缩 baseline 至空 | **PR-2..N**（#1302） |
+| 净新 `PROD-MAIN-WIRING-NOOP-REJECT-01`（reviewer P0 #3） | 扫 composition-root noop/in-memory wiring；落地时同 PR 把 `ProductionMainPkgs` 字段加回 `ConfigForExternalCell`（PR-1 删除该 no-op 占位字段，premise 到时再加） | #1303 |
+| FreezingArchRule baseline（外部既有库增量采纳） | 通用 `BaselinePath` + CI 只读 + 修复自动收缩（ratchet 已先行落地 frozen-baseline 范式，本项是其通用化） | #1304 |
 | 独立 module 抽取 `…/archtest` | go.work 多 module | #1304 |
-| ratchet 上游 Hard 化（golden 清空后纯 ban） | #1302 完成后 ARCHTEST-MODULE-PATH-FUNNEL-01 退化为 Hard | #1304 |
+| ratchet 上游 Hard 化（baseline 清空后纯 ban） | #1302 完成后 ARCHTEST-MODULE-PATH-FUNNEL-01 退化为 Hard | #1304 |
 
 ### 核心不变式：platform-vs-scan 路径拆分
 
@@ -432,14 +434,18 @@ vs `pass.Pkg`（被分析目标）的标准分离。
 
 | 方向 | 形态 | 评级 |
 |------|------|------|
-| 下游 Hard | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；sanctioned 形态 `PlatformModulePath+"/x"` 的 BasicLit 片段为 `/x`，结构上不命中——form-uniqueness，无 string-anchor / 注释豁免 | **Hard** |
-| 上游 Medium | Go 无法阻止包内写 bare 字面量；golden baseline（fail-on-new + 手动缩，ArchUnit FreezingArchRule 范式）兜底；Hard 终态 = golden 清空后纯 ban | **Medium（过渡）** |
+| 下游 Hard | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；**任意片段数 N≥2 的全字面量 `+` 拼接**经 `no-fragment-split` 自检 flatten + 前缀匹配捕获；sanctioned 形态 `PlatformModulePath+"/x"` 因含 `PlatformModulePath` Ident（非字面量）结构上不命中——form-uniqueness，无 string-anchor / 注释豁免 | **Hard** |
+| 上游 Medium | Go 无法阻止包内写 bare 字面量；frozen baseline 兜底，但**不同于 golden：`-update` 永不重写**，新 bare 字面量 ⊄ baseline 即 CI 红，无 `-update` 洗白路径，唯一容纳方式是手改 frozen baseline（review-first 可见 diff）；Hard 终态 = baseline 清空后纯 ban | **Medium（过渡）** |
 
 Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；Hard 化路径
-= 完成全量迁移使 golden 清空 → 纯 ban，由 #1304 跟踪。符号清单 + 盲区自检活在
-`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。残留盲区 N≥3 fragment-split
-（两片段由 `no-fragment-split` 自检覆盖）不可自动检测；鉴于 M3 各 PR 均为 AI 实施，
-**「无 N≥3 字面量 fragment-split」必须作为每个 M3 迁移 PR 的人工 review checklist 条目**。
+= 完成全量迁移使 baseline 清空 → 纯 ban，由 #1304 跟踪。符号清单 + 盲区自检活在
+`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
+
+> **Amendment 2026-05-30 round-2 supersede**：原文要求「无 N≥3 字面量 fragment-split
+> 作为每个 M3 迁移 PR 的人工 review checklist 条目」——**已撤销**。`no-fragment-split`
+> 自检现 flatten 任意片段数的全字面量 `+` 链，N≥3 不再是人工盲区。唯一残留盲区是
+> runtime string ops（`strings.Join` / `fmt.Sprintf` / `[]byte`）拼装路径——对 const
+> 符号路径不合理、对 const-eval 升级同样不可见、且过不了 review，不设人工 checklist。
 
 ### 开源对标（`ref:` 见 commit）
 
@@ -467,6 +473,10 @@ Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向
 | M3：外部仓库 import archtest 后触达 loader 原语绕过 Pass funnel | 外部代码 `packages.Load` + 手配 `*types.Info` 重建 INV-1 跨 load 配对 bug | **不削弱，但边界须精确**：对外部 import 方，唯一生效的 Hard 线是**防御 #1**——`Pass.Pkg` 是 `*types.Package`（非 `*packages.Package`，无 `.Syntax`），INV-1 跨 load 配对从 `Pass` 类型上不可重建；loader 原语在 `tools/archtest/internal/`（外部不可 import）。防御 #2（depguard 禁直接 import `packages`）与 #3（meta-archtest `PASS-FUNNEL-*`）是 **gocell 内部 `_test.go` 的自约束，对外部仓库不适用**——外部消费方可在自有 test 里 `import packages`，只要不从 `Pass.Pkg` 取 `.Syntax`（类型上不可达）即无 INV-1 向量。原"Hard 三线一致"表述高估边界，已更正 |
 | M3：外部仓库的 `_test.go` 调 `RunStandardCellRules`，`findModuleRoot` 误解析到 gocell 依赖根 | 扫描目标错成 gocell 而非外部 module | `findModuleRoot` 从测试进程 cwd 向上回溯，外部 `go test` 的 cwd 在外部 module 内 → 命中外部 go.mod；gocell 依赖在 module cache（只读，非 cwd 祖先），不会被误命中 |
 | M3：迁移 PR 改规则逻辑引入行为漂移（漏报违规） | 安全规则静默失效 | 每条迁移单源 dogfood（gocell `_test.go` 与外部走同一 `Check*`）+ Test* 名不变（ARCHTEST-VERIFY-COVERAGE-01 不漂移）+ RED fixture golden 锁违规检出 |
+| M3：ratchet 新 offender 经 `-update` 洗白进 golden（fail-on-new 退化为 review 纪律） | 迁移期回归静默通过，golden 悄涨 | frozen baseline 取代 golden：`-update` 永不重写 baseline，`offenders ⊄ baseline` → CI 红，无洗白路径；唯一容纳方式是手改 frozen 文件（review-first 可见 diff）。`TestArchtestModulePathFunnel` 入 PR-time gate，回归 PR 时即红不待 nightly |
+| M3：外部仓库 import `archtest` 触发包级 `-update` flag 重复注册 panic | 外部 `go test` 启动即 panic（`flag redefined: update`），根因不可推断 | `-update` flag 移入 `golden_harness_test.go`（`_test.go`）；Go 永不为依赖编译 `_test.go`（test binary 或否），外部 importer 不会注册该 flag——结构上消除，非约定 |
+| M3：外部仓库生产 panic 藏在 `//go:build` tag 后，被 PANIC-REGISTERED 漏扫 | tag-gated 的非法 panic 逃逸安全规则 | `CheckPanicRegistered` 读 `cfg.BuildTags` 跑第二趟扫描；外部仓库传自己的 production tags，gocell dogfood 传 `FlatNonDefaultTags()`。默认趟恒扫，tag 趟覆盖 build-directive 文件 |
+| M3：外部 `ExtraRule.Run` 调 `t.FailNow`/`t.Fatal` 中断 rule 循环，掩盖后续标准规则 | 一条外部规则致 FailNow → `runtime.Goexit` → 后续标准 gate 不执行，静默漏 gate | `ExtraRules` 信任边界写入 `ConfigForExternalCell` godoc：rule 必须返回 `[]Diagnostic`（经 `Report`→`t.Errorf`）不得自调 `t.Fatal/FailNow`。约定承载（外部 rule 代码不可强制），但 misconfigured rule（nil/nil Run/空 ID）已 fail-fast，非静默 |
 
 ---
 
