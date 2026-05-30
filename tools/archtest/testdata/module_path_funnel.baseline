@@ -81,4 +81,3 @@ tools/archtest/test_polling_external_reason_literal_test.go
 tools/archtest/user_repo_conformance_enrollment_test.go
 tools/archtest/webhook_hmac_funnel_test.go
 tools/archtest/wrapper_location_test.go
-tools/archtest/yaml_quote_funnel_test.go
