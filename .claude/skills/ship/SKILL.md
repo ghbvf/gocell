@@ -132,13 +132,15 @@ PR body 包含：Summary、`Refs: <ID>`、`ref: framework file`、Test plan chec
 
 **L1/L2**：1 个 `reviewer` agent（GoCell 六维度）。
 
-**L3**：按 PR diff 净增删行数确定 `reviewer` agent 数量。取数命令（求和 numstat，避开 `--stat` 末行格式随单文件/无删除变化的解析坑）：
+**L3**：按 PR diff 净增删行数确定 `reviewer` agent 数量。用 `--shortstat` 直接读增删行（避开 `--stat` 末行格式坑，也无需 awk 求和）：
 
 ```bash
-git -C worktrees/<NNN> diff --numstat origin/develop | awk '{i+=$1; d+=$2} END{print i+d}'
+git -C worktrees/<NNN> diff --shortstat origin/develop
 ```
 
-> 阶段 7 被单独调用（非 ship 完整流程、无 worktree）时，回退到仓库根执行 `git diff --numstat origin/develop | awk '{i+=$1; d+=$2} END{print i+d}'`。
+输出形如 `N files changed, X insertions(+), Y deletions(-)`；diff 行数 = X + Y（某项为 0 时该子句省略，按 0 计）。
+
+> 阶段 7 被单独调用（非 ship 完整流程、无 worktree）时，回退到仓库根执行 `git diff --shortstat origin/develop`。
 
 GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产品。分档（区间左闭右开，边界值归入更高档）：
 
