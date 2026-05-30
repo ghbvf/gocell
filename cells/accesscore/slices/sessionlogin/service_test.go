@@ -132,10 +132,14 @@ func mustNewService(
 	opts ...Option,
 ) *Service {
 	lockoutSvc := newTestLockout(userRepo, sessionStore, refreshStore)
-	// clk is the first required positional param; pass clockmock.New() (tests)
-	// or clock.Real() (production).
-	s, err := NewService(clock.Real(), userRepo, sessionStore, roleRepo, refreshStore, issuer, logger,
-		append([]Option{WithAccountLockout(lockoutSvc)}, opts...)...)
+	// clk is the first required positional param; pass clock.Real() (tests).
+	s, err := NewService(clock.Real(), NewServiceParams{
+		UserRepo:     userRepo,
+		SessionStore: sessionStore,
+		RoleRepo:     roleRepo,
+		RefreshStore: refreshStore,
+		Issuer:       issuer,
+	}, logger, append([]Option{WithAccountLockout(lockoutSvc)}, opts...)...)
 	if err != nil {
 		panic("mustNewService: " + err.Error())
 	}
@@ -180,8 +184,13 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewStore(clock.Real()).RoleRepository()
 	refreshStore := newTestRefreshStore()
-	_, err := NewService(clock.Real(), userRepo, sessionStore, roleRepo, refreshStore, testIssuer,
-		slog.Default() /* no WithTxManager */)
+	_, err := NewService(clock.Real(), NewServiceParams{
+		UserRepo:     userRepo,
+		SessionStore: sessionStore,
+		RoleRepo:     roleRepo,
+		RefreshStore: refreshStore,
+		Issuer:       testIssuer,
+	}, slog.Default() /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -203,28 +212,52 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(clock.Real(), typedNil, sessionStore, roleRepo, refreshStore, testIssuer, slog.Default())
+				return NewService(clock.Real(), NewServiceParams{
+					UserRepo:     typedNil,
+					SessionStore: sessionStore,
+					RoleRepo:     roleRepo,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default())
 			},
 		},
 		{
 			name: "typed nil sessionStore",
 			run: func() (*Service, error) {
 				var typedNil *session.MemStore
-				return NewService(clock.Real(), userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default())
+				return NewService(clock.Real(), NewServiceParams{
+					UserRepo:     userRepo,
+					SessionStore: typedNil,
+					RoleRepo:     roleRepo,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default())
 			},
 		},
 		{
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(clock.Real(), userRepo, sessionStore, typedNil, refreshStore, testIssuer, slog.Default())
+				return NewService(clock.Real(), NewServiceParams{
+					UserRepo:     userRepo,
+					SessionStore: sessionStore,
+					RoleRepo:     typedNil,
+					RefreshStore: refreshStore,
+					Issuer:       testIssuer,
+				}, slog.Default())
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(clock.Real(), userRepo, sessionStore, roleRepo, typedNil, testIssuer, slog.Default())
+				return NewService(clock.Real(), NewServiceParams{
+					UserRepo:     userRepo,
+					SessionStore: sessionStore,
+					RoleRepo:     roleRepo,
+					RefreshStore: typedNil,
+					Issuer:       testIssuer,
+				}, slog.Default())
 			},
 		},
 	}

@@ -222,19 +222,7 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 	errSave := errors.New("save failed")
 	errCursor := errors.New("cursor error")
 
-	tests := []struct {
-		name           string
-		currentOffset  int64
-		cursorPos      int64
-		cursorErr      error
-		applyErr       error
-		saveFails      bool
-		wantApplyCalls int
-		wantSaved      bool
-		wantLastSaved  int64
-		wantDisp       outbox.Disposition
-		wantLoadErr    bool
-	}{
+	tests := []applyOneCase{
 		{
 			name:           "cold-start: pos=1 applied and saved",
 			currentOffset:  0,
@@ -345,61 +333,7 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			apply := &recordingApply{err: tc.applyErr}
-			cursor := &fakeCursor{pos: tc.cursorPos, err: tc.cursorErr}
-			txr := &fakeTxRunner{}
-			reg := &fakeRegistrar{}
-
-			var store CheckpointStore
-			if tc.wantLoadErr {
-				store = &seededStore{offsets: make(map[string]int64), loadErr: errors.New("load failed")}
-			} else if tc.saveFails {
-				store = &errSaveStore{currentOffset: tc.currentOffset, saveErr: errSave}
-			} else {
-				store = newSeededStore("testcell", "p1", tc.currentOffset)
-			}
-
-			c, err := NewCoordinator("testcell", reg, txr, store, cursor, wrapper.NoopTracer{})
-			if err != nil {
-				t.Fatalf("NewCoordinator: %v", err)
-			}
-
-			h := c.buildHandler("testcell", "p1", apply.fn)
-			result := h(context.Background(), outbox.Entry{})
-
-			if apply.calls != tc.wantApplyCalls {
-				t.Errorf("apply.calls = %d, want %d", apply.calls, tc.wantApplyCalls)
-			}
-
-			if !tc.saveFails {
-				ss, ok := store.(*seededStore)
-				if ok {
-					if tc.wantSaved && ss.saveCalls == 0 {
-						t.Error("expected SaveOffset to be called, but it was not")
-					}
-					if !tc.wantSaved && ss.saveCalls != 0 {
-						t.Errorf("expected no SaveOffset calls, but got %d", ss.saveCalls)
-					}
-					if tc.wantSaved && ss.lastSaved != tc.wantLastSaved {
-						t.Errorf("lastSaved = %d, want %d", ss.lastSaved, tc.wantLastSaved)
-					}
-				}
-			} else {
-				es := store.(*errSaveStore)
-				if es.saveCalls == 0 {
-					t.Error("expected errSaveStore.SaveOffset to be called")
-				}
-				// After a save error the persisted value must not have changed.
-				got, _ := store.LoadOffset(context.Background(), "testcell", "p1")
-				if got != tc.currentOffset {
-					t.Errorf("after save error LoadOffset = %d, want original %d", got, tc.currentOffset)
-				}
-			}
-
-			if result.Disposition != tc.wantDisp {
-				t.Errorf("Disposition = %v, want %v", result.Disposition, tc.wantDisp)
-			}
+			runApplyOneCase(t, tc, errSave)
 		})
 	}
 
@@ -502,12 +436,7 @@ func TestBuildHandler_SpanStatus(t *testing.T) {
 	errTransient := errors.New("transient")
 	errPermanent := outbox.NewPermanentError(errors.New("permanent"))
 
-	tests := []struct {
-		name     string
-		applyErr error
-		wantCode wrapper.StatusCode
-		wantDesc string
-	}{
+	tests := []spanStatusCase{
 		{
 			name:     "success → StatusOK",
 			applyErr: nil,
@@ -532,32 +461,7 @@ func TestBuildHandler_SpanStatus(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			spy := &spyTracer{}
-			apply := &recordingApply{err: tc.applyErr}
-			store := newSeededStore("testcell", "p1", 0)
-			cursor := &fakeCursor{pos: 1}
-
-			c, err := NewCoordinator("testcell", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, spy)
-			if err != nil {
-				t.Fatalf("NewCoordinator: %v", err)
-			}
-
-			h := c.buildHandler("testcell", "p1", apply.fn)
-			_ = h(context.Background(), outbox.Entry{})
-
-			if spy.last == nil {
-				t.Fatal("spy tracer: no span was started")
-			}
-			if !spy.last.statusSet {
-				t.Fatal("span.SetStatus was never called")
-			}
-			if spy.last.statusCode != tc.wantCode {
-				t.Errorf("SetStatus code = %v, want %v", spy.last.statusCode, tc.wantCode)
-			}
-			if spy.last.statusDesc != tc.wantDesc {
-				t.Errorf("SetStatus desc = %q, want %q", spy.last.statusDesc, tc.wantDesc)
-			}
+			runSpanStatusCase(t, tc)
 		})
 	}
 }
@@ -694,16 +598,7 @@ func TestNewCoordinator_NilGuards(t *testing.T) {
 	// Typed-nil for store (must be rejected like bare-nil).
 	var typedNilStore *MemCheckpointStore
 
-	tests := []struct {
-		name    string
-		cellID  string
-		reg     cell.Registrar
-		txr     persistence.TxRunner
-		store   CheckpointStore
-		cursor  Cursor
-		tracer  wrapper.Tracer
-		wantErr bool
-	}{
+	tests := []nilGuardCase{
 		{
 			name:    "all valid",
 			cellID:  "testcell",
@@ -790,29 +685,7 @@ func TestNewCoordinator_NilGuards(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c, err := NewCoordinator(tc.cellID, tc.reg, tc.txr, tc.store, tc.cursor, tc.tracer)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				var e *errcode.Error
-				if !errors.As(err, &e) {
-					t.Fatalf("error is not *errcode.Error: %T %v", err, err)
-				}
-				if e.Kind != errcode.KindInvalid {
-					t.Errorf("Kind = %v, want KindInvalid", e.Kind)
-				}
-				if c != nil {
-					t.Error("expected nil coordinator on error")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if c == nil {
-					t.Fatal("expected non-nil coordinator")
-				}
-			}
+			runNilGuardCase(t, tc)
 		})
 	}
 }
@@ -826,16 +699,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 
 	errRegister := errors.New("register failed")
 
-	tests := []struct {
-		name         string
-		projectionID string
-		applyFn      Apply
-		regErr       error
-		wantErr      bool
-		wantSubCalls int
-		wantCG       string
-		wantCellID   string
-	}{
+	tests := []subscribeCase{
 		{
 			name:         "happy path",
 			projectionID: "myproj",
@@ -913,33 +777,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			reg := &fakeRegistrar{subscribeErr: tc.regErr}
-			c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
-			if err != nil {
-				t.Fatalf("NewCoordinator: %v", err)
-			}
-
-			spec := minimalSpec("projection.myproj.v1")
-			subscribeErr := c.Subscribe(context.Background(), spec, tc.projectionID, tc.applyFn)
-
-			if tc.wantErr && subscribeErr == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !tc.wantErr && subscribeErr != nil {
-				t.Fatalf("unexpected error: %v", subscribeErr)
-			}
-
-			if reg.subscribeCalls != tc.wantSubCalls {
-				t.Errorf("subscribeCalls = %d, want %d", reg.subscribeCalls, tc.wantSubCalls)
-			}
-			if !tc.wantErr && tc.wantCG != "" {
-				if reg.lastCG != tc.wantCG {
-					t.Errorf("consumerGroup = %q, want %q", reg.lastCG, tc.wantCG)
-				}
-				if reg.lastCell != tc.wantCellID {
-					t.Errorf("cellID = %q, want %q", reg.lastCell, tc.wantCellID)
-				}
-			}
+			runSubscribeCase(t, tc)
 		})
 	}
 }
@@ -1057,5 +895,217 @@ func TestPhase_AlwaysLive(t *testing.T) {
 	}
 	if got := c.Phase(); got != PhaseLive {
 		t.Errorf("Phase() = %v, want PhaseLive", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runApplyOneCase — per-case executor for TestCoordinator_ApplyOne
+// ---------------------------------------------------------------------------
+
+type applyOneCase struct {
+	name           string
+	currentOffset  int64
+	cursorPos      int64
+	cursorErr      error
+	applyErr       error
+	saveFails      bool
+	wantApplyCalls int
+	wantSaved      bool
+	wantLastSaved  int64
+	wantDisp       outbox.Disposition
+	wantLoadErr    bool
+}
+
+func runApplyOneCase(t *testing.T, tc applyOneCase, errSave error) {
+	t.Helper()
+
+	apply := &recordingApply{err: tc.applyErr}
+	cursor := &fakeCursor{pos: tc.cursorPos, err: tc.cursorErr}
+	txr := &fakeTxRunner{}
+	reg := &fakeRegistrar{}
+
+	var store CheckpointStore
+	switch {
+	case tc.wantLoadErr:
+		store = &seededStore{offsets: make(map[string]int64), loadErr: errors.New("load failed")}
+	case tc.saveFails:
+		store = &errSaveStore{currentOffset: tc.currentOffset, saveErr: errSave}
+	default:
+		store = newSeededStore("testcell", "p1", tc.currentOffset)
+	}
+
+	c, err := NewCoordinator("testcell", reg, txr, store, cursor, wrapper.NoopTracer{})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	h := c.buildHandler("testcell", "p1", apply.fn)
+	result := h(context.Background(), outbox.Entry{})
+
+	if apply.calls != tc.wantApplyCalls {
+		t.Errorf("apply.calls = %d, want %d", apply.calls, tc.wantApplyCalls)
+	}
+
+	assertApplyOneSaveState(t, tc, store)
+
+	if result.Disposition != tc.wantDisp {
+		t.Errorf("Disposition = %v, want %v", result.Disposition, tc.wantDisp)
+	}
+}
+
+func assertApplyOneSaveState(t *testing.T, tc applyOneCase, store CheckpointStore) {
+	t.Helper()
+	if tc.saveFails {
+		es := store.(*errSaveStore)
+		if es.saveCalls == 0 {
+			t.Error("expected errSaveStore.SaveOffset to be called")
+		}
+		// After a save error the persisted value must not have changed.
+		got, _ := store.LoadOffset(context.Background(), "testcell", "p1")
+		if got != tc.currentOffset {
+			t.Errorf("after save error LoadOffset = %d, want original %d", got, tc.currentOffset)
+		}
+		return
+	}
+	ss, ok := store.(*seededStore)
+	if !ok {
+		return
+	}
+	if tc.wantSaved && ss.saveCalls == 0 {
+		t.Error("expected SaveOffset to be called, but it was not")
+	}
+	if !tc.wantSaved && ss.saveCalls != 0 {
+		t.Errorf("expected no SaveOffset calls, but got %d", ss.saveCalls)
+	}
+	if tc.wantSaved && ss.lastSaved != tc.wantLastSaved {
+		t.Errorf("lastSaved = %d, want %d", ss.lastSaved, tc.wantLastSaved)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runNilGuardCase — per-case executor for TestNewCoordinator_NilGuards
+// ---------------------------------------------------------------------------
+
+type nilGuardCase struct {
+	name    string
+	cellID  string
+	reg     cell.Registrar
+	txr     persistence.TxRunner
+	store   CheckpointStore
+	cursor  Cursor
+	tracer  wrapper.Tracer
+	wantErr bool
+}
+
+func runNilGuardCase(t *testing.T, tc nilGuardCase) {
+	t.Helper()
+	c, err := NewCoordinator(tc.cellID, tc.reg, tc.txr, tc.store, tc.cursor, tc.tracer)
+	if !tc.wantErr {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if c == nil {
+			t.Fatal("expected non-nil coordinator")
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var e *errcode.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("error is not *errcode.Error: %T %v", err, err)
+	}
+	if e.Kind != errcode.KindInvalid {
+		t.Errorf("Kind = %v, want KindInvalid", e.Kind)
+	}
+	if c != nil {
+		t.Error("expected nil coordinator on error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runSubscribeCase — per-case executor for TestCoordinator_Subscribe
+// ---------------------------------------------------------------------------
+
+type subscribeCase struct {
+	name         string
+	projectionID string
+	applyFn      Apply
+	regErr       error
+	wantErr      bool
+	wantSubCalls int
+	wantCG       string
+	wantCellID   string
+}
+
+func runSubscribeCase(t *testing.T, tc subscribeCase) {
+	t.Helper()
+	reg := &fakeRegistrar{subscribeErr: tc.regErr}
+	c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	spec := minimalSpec("projection.myproj.v1")
+	subscribeErr := c.Subscribe(context.Background(), spec, tc.projectionID, tc.applyFn)
+
+	if tc.wantErr && subscribeErr == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !tc.wantErr && subscribeErr != nil {
+		t.Fatalf("unexpected error: %v", subscribeErr)
+	}
+
+	if reg.subscribeCalls != tc.wantSubCalls {
+		t.Errorf("subscribeCalls = %d, want %d", reg.subscribeCalls, tc.wantSubCalls)
+	}
+	if !tc.wantErr && tc.wantCG != "" {
+		if reg.lastCG != tc.wantCG {
+			t.Errorf("consumerGroup = %q, want %q", reg.lastCG, tc.wantCG)
+		}
+		if reg.lastCell != tc.wantCellID {
+			t.Errorf("cellID = %q, want %q", reg.lastCell, tc.wantCellID)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runSpanStatusCase — per-case executor for TestBuildHandler_SpanStatus
+// ---------------------------------------------------------------------------
+
+type spanStatusCase struct {
+	name     string
+	applyErr error
+	wantCode wrapper.StatusCode
+	wantDesc string
+}
+
+func runSpanStatusCase(t *testing.T, tc spanStatusCase) {
+	t.Helper()
+	spy := &spyTracer{}
+	apply := &recordingApply{err: tc.applyErr}
+	store := newSeededStore("testcell", "p1", 0)
+	cursor := &fakeCursor{pos: 1}
+
+	c, err := NewCoordinator("testcell", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, spy)
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	h := c.buildHandler("testcell", "p1", apply.fn)
+	_ = h(context.Background(), outbox.Entry{})
+
+	if spy.last == nil {
+		t.Fatal("spy tracer: no span was started")
+	}
+	if !spy.last.statusSet {
+		t.Fatal("span.SetStatus was never called")
+	}
+	if spy.last.statusCode != tc.wantCode {
+		t.Errorf("SetStatus code = %v, want %v", spy.last.statusCode, tc.wantCode)
+	}
+	if spy.last.statusDesc != tc.wantDesc {
+		t.Errorf("SetStatus desc = %q, want %q", spy.last.statusDesc, tc.wantDesc)
 	}
 }

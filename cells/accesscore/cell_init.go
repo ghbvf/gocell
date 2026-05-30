@@ -239,11 +239,13 @@ func (c *AccessCore) initSlices() error {
 	}
 	loginSvc, err := sessionlogin.NewService(
 		c.clk,
-		c.userRepo,
-		c.sessionStore,
-		c.roleRepo,
-		c.refreshStore,
-		c.jwtIssuer,
+		sessionlogin.NewServiceParams{
+			UserRepo:     c.userRepo,
+			SessionStore: c.sessionStore,
+			RoleRepo:     c.roleRepo,
+			RefreshStore: c.refreshStore,
+			Issuer:       c.jwtIssuer,
+		},
 		c.logger,
 		loginOpts...,
 	)
@@ -282,8 +284,14 @@ func (c *AccessCore) initSlices() error {
 	// access JWT replay attempt) returns ErrRejected.
 	refreshSvc, err := sessionrefresh.NewService(
 		c.clk,
-		c.sessionStore, c.roleRepo, c.userRepo, c.refreshStore,
-		c.jwtIssuer, c.logger,
+		sessionrefresh.NewServiceParams{
+			SessionStore: c.sessionStore,
+			RoleRepo:     c.roleRepo,
+			UserRepo:     c.userRepo,
+			RefreshStore: c.refreshStore,
+			Issuer:       c.jwtIssuer,
+		},
+		c.logger,
 		sessionrefresh.WithTxManager(c.txRunner),
 		sessionrefresh.WithInvalidator(c.invalidator),
 	)

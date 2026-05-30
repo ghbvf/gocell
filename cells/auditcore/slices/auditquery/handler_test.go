@@ -407,16 +407,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 		Payload:   []byte(`{"reason":"wrong_credentials"}`),
 	}))
 
-	tests := []struct {
-		name            string
-		query           string
-		subject         string
-		roles           []string
-		injectEmptyAuth bool // inject auth.TestContext("", nil) — authenticated but empty Subject
-		wantStatus      int
-		wantCount       int // -1 = don't check
-		wantActorIDs    []string
-	}{
+	tests := []actorBindingCase{
 		{
 			name:       "self actorId matches subject",
 			query:      "?actorId=usr-1",
@@ -482,31 +473,49 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
-			switch {
-			case tc.injectEmptyAuth:
-				req = req.WithContext(auth.TestContext("", tc.roles))
-			case tc.subject != "":
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
-			}
-			securedMux.ServeHTTP(w, req)
-
-			assert.Equal(t, tc.wantStatus, w.Code)
-			if tc.wantCount >= 0 {
-				var resp map[string]any
-				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-				data := resp["data"].([]any)
-				assert.Len(t, data, tc.wantCount)
-				if tc.wantActorIDs != nil {
-					gotActorIDs := make([]string, 0, len(data))
-					for _, raw := range data {
-						item := raw.(map[string]any)
-						gotActorIDs = append(gotActorIDs, item["actorId"].(string))
-					}
-					assert.Equal(t, tc.wantActorIDs, gotActorIDs)
-				}
-			}
+			assertActorBindingCase(t, securedMux, tc)
 		})
 	}
+}
+
+type actorBindingCase struct {
+	name            string
+	query           string
+	subject         string
+	roles           []string
+	injectEmptyAuth bool
+	wantStatus      int
+	wantCount       int
+	wantActorIDs    []string
+}
+
+func assertActorBindingCase(t *testing.T, mux *http.ServeMux, tc actorBindingCase) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
+	switch {
+	case tc.injectEmptyAuth:
+		req = req.WithContext(auth.TestContext("", tc.roles))
+	case tc.subject != "":
+		req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+	}
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, tc.wantStatus, w.Code)
+	if tc.wantCount < 0 {
+		return
+	}
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].([]any)
+	assert.Len(t, data, tc.wantCount)
+	if tc.wantActorIDs == nil {
+		return
+	}
+	gotActorIDs := make([]string, 0, len(data))
+	for _, raw := range data {
+		item := raw.(map[string]any)
+		gotActorIDs = append(gotActorIDs, item["actorId"].(string))
+	}
+	assert.Equal(t, tc.wantActorIDs, gotActorIDs)
 }

@@ -345,16 +345,57 @@ func TestNewProtocol_OK(t *testing.T) {
 // Boundary cases (nil / short key) verify the documented fail-fast behavior:
 // WithChainHMAC returns an error before clear() runs, and the caller slice is
 // left untouched — no crash, no silent data alteration.
+type chainHMACKeyCase struct {
+	name       string
+	keyLen     int // -1 → nil key
+	wantErr    bool
+	wantZeroed bool // post-call caller slice all-zero check
+}
+
+func runChainHMACKeyCase(t *testing.T, ns ledger.NamespaceID, tc chainHMACKeyCase) {
+	t.Helper()
+	var key []byte
+	if tc.keyLen >= 0 {
+		key = make([]byte, tc.keyLen)
+		for i := range key {
+			key[i] = byte(i + 1)
+		}
+	}
+	_, err := ledger.NewProtocol(
+		ns,
+		key,
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+	if tc.wantErr {
+		if err == nil {
+			t.Fatalf("NewProtocol: expected error for %s, got nil", tc.name)
+		}
+		if tc.keyLen > 0 && key[0] == 0 {
+			// Caller slice should be unchanged (no clear ran)
+			t.Errorf("caller key unexpectedly zeroed on error path for %s; clear() must only run on success", tc.name)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("NewProtocol: %v", err)
+	}
+	if !tc.wantZeroed {
+		return
+	}
+	for i, b := range key {
+		if b != 0 {
+			t.Errorf("caller key not zeroed: first non-zero byte at index %d = %#x (additional non-zero bytes suppressed)", i, b)
+			break // C.F2: surface first failure only
+		}
+	}
+}
+
 func TestWithChainHMAC_CallerSliceZeroedAfterCopy(t *testing.T) {
 	t.Parallel()
 	ns, _ := ledger.ParseNamespaceID("auditcore")
 
-	tests := []struct {
-		name       string
-		keyLen     int // -1 → nil key
-		wantErr    bool
-		wantZeroed bool // post-call caller slice all-zero check
-	}{
+	tests := []chainHMACKeyCase{
 		{"happy_32_byte", 32, false, true},
 		{"short_31_byte_rejected", 31, true, false}, // clear() never runs; caller slice untouched
 		{"nil_key_rejected", -1, true, false},       // nil-safe: clear(nil) is no-op
@@ -364,42 +405,7 @@ func TestWithChainHMAC_CallerSliceZeroedAfterCopy(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var key []byte
-			if tt.keyLen >= 0 {
-				key = make([]byte, tt.keyLen)
-				for i := range key {
-					key[i] = byte(i + 1)
-				}
-			}
-			_, err := ledger.NewProtocol(
-				ns,
-				key,
-				ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-				ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-			)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("NewProtocol: expected error for %s, got nil", tt.name)
-				}
-				if tt.keyLen > 0 {
-					// Caller slice should be unchanged (no clear ran)
-					if key[0] == 0 {
-						t.Errorf("caller key unexpectedly zeroed on error path for %s; clear() must only run on success", tt.name)
-					}
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("NewProtocol: %v", err)
-			}
-			if tt.wantZeroed {
-				for i, b := range key {
-					if b != 0 {
-						t.Errorf("caller key not zeroed: first non-zero byte at index %d = %#x (additional non-zero bytes suppressed)", i, b)
-						break // C.F2: surface first failure only
-					}
-				}
-			}
+			runChainHMACKeyCase(t, ns, tt)
 		})
 	}
 }

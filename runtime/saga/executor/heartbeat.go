@@ -37,6 +37,18 @@ type Heartbeater interface {
 	Heartbeat(ctx context.Context, instanceID, leaseID idutil.SafeID, leaseDuration time.Duration) (ok bool, err error)
 }
 
+// heartbeatConfig holds the identity and timing parameters for runHeartbeat.
+// Grouping them into a struct keeps runHeartbeat's parameter count within the
+// go:S107 limit (≤7 parameters). All fields are required; Interval and
+// LeaseDuration must be > 0.
+type heartbeatConfig struct {
+	InstanceID    idutil.SafeID
+	LeaseID       idutil.SafeID
+	DefinitionID  idutil.SafeID
+	Interval      time.Duration
+	LeaseDuration time.Duration
+}
+
 // runHeartbeat runs in its own goroutine and beats the lease at each ticker
 // interval until:
 //   - ctx is canceled (clean shutdown — caller called stopHB), or
@@ -69,12 +81,16 @@ func runHeartbeat(
 	ctx context.Context,
 	clk clock.Clock,
 	hb Heartbeater,
-	instanceID, leaseID, definitionID idutil.SafeID,
-	interval, leaseDuration time.Duration,
+	cfg heartbeatConfig,
 	logger *slog.Logger,
 	onStale func(),
 	onHBFailure func(reason HeartbeatFailureReason),
 ) {
+	instanceID := cfg.InstanceID
+	leaseID := cfg.LeaseID
+	definitionID := cfg.DefinitionID
+	interval := cfg.Interval
+	leaseDuration := cfg.LeaseDuration
 	ticker := clk.NewTicker(interval)
 	defer ticker.Stop()
 

@@ -374,8 +374,13 @@ func TestRunHeartbeat_ObserveHeartbeatFailure_InfraError(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runHeartbeat(ctx, fc, hb, "inst-err", "lease-err", "def-x",
-			testtime.D5s, testtime.D30s, noopLogger(), noStale, onHBFailure)
+		runHeartbeat(ctx, fc, hb, heartbeatConfig{
+			InstanceID:    "inst-err",
+			LeaseID:       "lease-err",
+			DefinitionID:  "def-x",
+			Interval:      testtime.D5s,
+			LeaseDuration: testtime.D30s,
+		}, noopLogger(), noStale, onHBFailure)
 	}()
 
 	// Wait for ticker registration, then drive 3 ticks.

@@ -492,26 +492,7 @@ func TestIntegration_ClaimContention(t *testing.T) {
 	})
 
 	// Stop both coordinators.
-	cancel1()
-	cancel2()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
-	defer stopCancel()
-	if err := c1.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Errorf("c1 Stop: %v", err)
-	}
-	if err := c2.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
-		t.Errorf("c2 Stop: %v", err)
-	}
-	select {
-	case <-done1:
-	case <-time.After(testtime.D3s):
-		t.Error("c1 goroutine did not exit")
-	}
-	select {
-	case <-done2:
-	case <-time.After(testtime.D3s):
-		t.Error("c2 goroutine did not exit")
-	}
+	stopTwoCoordinators(t, c1, c2, cancel1, cancel2, done1, done2)
 
 	// Total Kick count across both dispatchers == 1 (only one commit happened).
 	totalKicks := disp1.KickCount() + disp2.KickCount()
@@ -771,19 +752,7 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 		return err == nil && len(evs) == 2
 	})
 
-	evs, err := j.Load(context.Background(), inst.ID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(evs) != 2 {
-		t.Fatalf("journal event count = %d, want 2 (StepFailed + SagaFailed)", len(evs))
-	}
-	if evs[0].Kind != journal.KindStepFailed {
-		t.Errorf("evs[0].Kind = %s, want step_failed", evs[0].Kind)
-	}
-	if evs[1].Kind != journal.KindSagaFailed {
-		t.Errorf("evs[1].Kind = %s, want saga_failed", evs[1].Kind)
-	}
+	assertPanicRecoveryJournal(t, j, inst.ID)
 
 	// No outbox entries on failure path.
 	if got := em.Count(); got != 0 {
@@ -804,7 +773,35 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 		t.Errorf("KickCount = %d, want 1", got)
 	}
 
-	// Stop the coordinator cleanly.
+	stopCoordinator(t, c, cancel, done)
+
+	// Step was called exactly once (the first tick triggered it).
+	if stepCallCount != 1 {
+		t.Errorf("step call count = %d, want 1", stepCallCount)
+	}
+}
+
+// assertPanicRecoveryJournal verifies the journal contains exactly StepFailed + SagaFailed.
+func assertPanicRecoveryJournal(t *testing.T, j *journal.MemJournal, instID idutil.SafeID) {
+	t.Helper()
+	evs, err := j.Load(context.Background(), instID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("journal event count = %d, want 2 (StepFailed + SagaFailed)", len(evs))
+	}
+	if evs[0].Kind != journal.KindStepFailed {
+		t.Errorf("evs[0].Kind = %s, want step_failed", evs[0].Kind)
+	}
+	if evs[1].Kind != journal.KindSagaFailed {
+		t.Errorf("evs[1].Kind = %s, want saga_failed", evs[1].Kind)
+	}
+}
+
+// stopCoordinator cancels ctx, stops the coordinator, and waits for the goroutine to exit.
+func stopCoordinator(t *testing.T, c *Coordinator, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
 	cancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
 	defer stopCancel()
@@ -816,10 +813,32 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 	case <-time.After(testtime.D3s):
 		t.Error("coordinator goroutine did not exit")
 	}
+}
 
-	// Step was called exactly once (the first tick triggered it).
-	if stepCallCount != 1 {
-		t.Errorf("step call count = %d, want 1", stepCallCount)
+// stopTwoCoordinators stops two coordinators concurrently and waits for both goroutines.
+func stopTwoCoordinators(t *testing.T, c1, c2 *Coordinator,
+	cancel1, cancel2 context.CancelFunc, done1, done2 <-chan error,
+) {
+	t.Helper()
+	cancel1()
+	cancel2()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D3s)
+	defer stopCancel()
+	if err := c1.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("c1 Stop: %v", err)
+	}
+	if err := c2.Stop(stopCtx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("c2 Stop: %v", err)
+	}
+	select {
+	case <-done1:
+	case <-time.After(testtime.D3s):
+		t.Error("c1 goroutine did not exit")
+	}
+	select {
+	case <-done2:
+	case <-time.After(testtime.D3s):
+		t.Error("c2 goroutine did not exit")
 	}
 }
 
@@ -854,6 +873,51 @@ func TestIntegration_PanicRecovery(t *testing.T) {
 //   - The lease is expired via clock advance so coordinator-2 can re-claim.
 //     coordinator-2's driveOne sees ci.Instance.Status == StatusCompensating →
 //     recovery path → drives step1.Compensate again → StatusCompensated.
+//
+// makeStep1CompensateFn returns a Compensate function for step1 that:
+// - On first call (coordinator-1): signals compensationStarted, then blocks until ctx is done.
+// - On subsequent calls (coordinator-2 recovery): returns immediately.
+// compensationStarted is a buffered channel (cap=1); non-blocking sends fall through.
+func makeStep1CompensateFn(compensationStarted chan<- struct{}, calls *atomic.Int64) func(context.Context, *ksaga.Instance, []byte) error {
+	return func(ctx context.Context, _ *ksaga.Instance, _ []byte) error {
+		n := calls.Add(1)
+		if n == 1 {
+			select {
+			case compensationStarted <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+}
+
+// claimAndDriveOne claims exactly one pending instance from j and drives it synchronously.
+func claimAndDriveOne(t *testing.T, c *Coordinator, j *journal.MemJournal, label string) {
+	t.Helper()
+	claimed, _, err := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed) == 0 {
+		t.Fatalf("ClaimPending %s: %v / %d", label, err, len(claimed))
+	}
+	if err := c.driveOne(context.Background(), claimed[0]); err != nil {
+		t.Fatalf("driveOne %s: %v", label, err)
+	}
+}
+
+// claimOneAsync claims exactly one pending instance and starts driveOne in a goroutine.
+// Returns the error channel.
+func claimOneAsync(t *testing.T, c *Coordinator, j *journal.MemJournal, label string) <-chan error {
+	t.Helper()
+	claimed, _, err := j.ClaimPending(context.Background(), 1, testtime.D60s)
+	if err != nil || len(claimed) == 0 {
+		t.Fatalf("ClaimPending %s: %v / %d", label, err, len(claimed))
+	}
+	ch := make(chan error, 1)
+	go func() { ch <- c.driveOne(context.Background(), claimed[0]) }()
+	return ch
+}
+
 func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	const defID idutil.SafeID = "compleaselostrecovery"
 
@@ -867,42 +931,16 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	// causing the RunWithHeartbeat goroutine to cancelCause(errLeaseLost).
 	staleJ := &staleAfterFirstHBJournal{MemJournal: memJ}
 
-	// compensationStarted is signaled (buffered) by step1's Compensate when
-	// coordinator-1 first enters the compensation walk, so the test can sequence
-	// SetStale + clock.Advance precisely.
 	compensationStarted := make(chan struct{}, 1)
-	// step1CompensateCalls tracks how many times step1.Compensate was invoked
-	// so we can assert the recovery (coordinator-2) ran it exactly once.
 	var step1CompensateCalls atomic.Int64
 
 	def := &ksaga.Definition{
 		ID: defID,
 		Steps: []ksaga.Step{
 			{
-				Name: "step1",
-				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
-					return []byte(`{"s":1}`), nil
-				},
-				// Compensation for step1 (the only committed step visited in
-				// reverse walk during coordinator-1's first attempt): signal the
-				// test, then block on ctx until the lease-lost path cancels it.
-				// On coordinator-2's recovery this same function is called again;
-				// compensationStarted is already full (buffered cap=1, non-blocking
-				// send falls through) so the second call returns immediately.
-				Compensate: func(ctx context.Context, _ *ksaga.Instance, _ []byte) error {
-					n := step1CompensateCalls.Add(1)
-					if n == 1 {
-						// First call (coordinator-1): signal and block for lease-lost.
-						select {
-						case compensationStarted <- struct{}{}:
-						default:
-						}
-						<-ctx.Done()
-						return ctx.Err()
-					}
-					// Second call (coordinator-2 recovery): return immediately.
-					return nil
-				},
+				Name:       "step1",
+				Run:        func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) { return []byte(`{"s":1}`), nil },
+				Compensate: makeStep1CompensateFn(compensationStarted, &step1CompensateCalls),
 			},
 			{
 				Name: "step2",
@@ -940,25 +978,13 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 
 	// Phase 1 — c1 drives step1 (succeeds) synchronously.
 	clk.Advance(testtime.D60s + testtime.D1ms) // start fresh lease window
-	claimed1, _, err := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
-	if err != nil || len(claimed1) == 0 {
-		t.Fatalf("ClaimPending phase1: %v / %d", err, len(claimed1))
-	}
-	if err := c1.driveOne(context.Background(), claimed1[0]); err != nil {
-		t.Fatalf("driveOne phase1 (step1): %v", err)
-	}
+	claimAndDriveOne(t, c1, memJ, "phase1 (step1)")
 
 	// Phase 2 — c1 drives step2 (fails) → enters compensation → loses lease.
 	// driveOne runs in a background goroutine so the test can advance the clock
 	// mid-flight after step1.Compensate signals.
 	clk.Advance(testtime.D60s + testtime.D1ms)
-	claimed2, _, err := memJ.ClaimPending(context.Background(), 1, testtime.D60s)
-	if err != nil || len(claimed2) == 0 {
-		t.Fatalf("ClaimPending phase2: %v / %d", err, len(claimed2))
-	}
-
-	driveErrCh := make(chan error, 1)
-	go func() { driveErrCh <- c1.driveOne(context.Background(), claimed2[0]) }()
+	driveErrCh := claimOneAsync(t, c1, memJ, "phase2")
 
 	// Wait until compensation walk has started (step1.Compensate signaled).
 	select {
@@ -977,44 +1003,7 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 		testtime.D2s, testtime.D1ms)
 	clk.Advance(testtime.D5ms)
 
-	// Wait for driveOne to return.
-	select {
-	case driveErr := <-driveErrCh:
-		if driveErr != nil {
-			t.Fatalf("driveOne phase2 should return nil on lease-lost, got: %v", driveErr)
-		}
-	case <-time.After(testtime.D2s):
-		t.Fatal("driveOne phase2 did not return within 2s after lease-lost")
-	}
-
-	// Verify no terminal event written by coordinator-1.
-	evs, err := memJ.Load(context.Background(), inst.ID)
-	if err != nil {
-		t.Fatalf("Load after phase2: %v", err)
-	}
-	for _, ev := range evs {
-		if ev.Kind.IsTerminal() {
-			t.Fatalf("coordinator-1 wrote a terminal event after lease-lost: %s", ev.Kind)
-		}
-	}
-
-	// Phase 2 invariant: instance is in StatusCompensating with no terminal event.
-	// Asserting this before Phase 3 ClaimPending makes failure diagnosis friendlier:
-	// if driveOne (phase2) wrote a terminal event, Phase 3 ClaimPending would find
-	// zero instances, surfacing a confusing "claimed 0" error rather than the root cause.
-	{
-		phase2Evs, loadErr := memJ.Load(context.Background(), inst.ID)
-		if loadErr != nil {
-			t.Fatalf("Phase 2 invariant check: Load: %v", loadErr)
-		}
-		if len(phase2Evs) == 0 {
-			t.Fatal("Phase 2 invariant check: no events in journal after coordinator-1 compensation walk")
-		}
-		last2 := phase2Evs[len(phase2Evs)-1]
-		if last2.Kind.IsTerminal() {
-			t.Fatalf("Phase 2 invariant violated: last event is terminal %s before Phase 3 recovery", last2.Kind)
-		}
-	}
+	assertPhase2LeaseLost(t, memJ, inst.ID, driveErrCh)
 
 	// Phase 3 — coordinator-2 re-claims the StatusCompensating instance and
 	// drives recovery. c2 uses memJ directly so its Heartbeat always returns true.
@@ -1039,8 +1028,54 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 		t.Fatalf("driveOne phase3 (recovery): %v", err)
 	}
 
-	// Final assertions.
-	evsFinal, err := memJ.Load(context.Background(), inst.ID)
+	assertPhase3RecoveryFinal(t, memJ, inst.ID, &step1CompensateCalls)
+}
+
+// assertPhase2LeaseLost verifies that driveOne returned nil on lease-lost and
+// coordinator-1 did not write any terminal event. Also asserts the Phase 2
+// pre-condition: instance in StatusCompensating with non-terminal last event.
+func assertPhase2LeaseLost(t *testing.T, j *journal.MemJournal, instID idutil.SafeID, driveErrCh <-chan error) {
+	t.Helper()
+	select {
+	case driveErr := <-driveErrCh:
+		if driveErr != nil {
+			t.Fatalf("driveOne phase2 should return nil on lease-lost, got: %v", driveErr)
+		}
+	case <-time.After(testtime.D2s):
+		t.Fatal("driveOne phase2 did not return within 2s after lease-lost")
+	}
+
+	evs, err := j.Load(context.Background(), instID)
+	if err != nil {
+		t.Fatalf("Load after phase2: %v", err)
+	}
+	for _, ev := range evs {
+		if ev.Kind.IsTerminal() {
+			t.Fatalf("coordinator-1 wrote a terminal event after lease-lost: %s", ev.Kind)
+		}
+	}
+
+	// Phase 2 invariant: instance is in StatusCompensating with no terminal event.
+	// Asserting this before Phase 3 ClaimPending makes failure diagnosis friendlier.
+	if len(evs) == 0 {
+		t.Fatal("Phase 2 invariant check: no events in journal after coordinator-1 compensation walk")
+	}
+	if evs[len(evs)-1].Kind.IsTerminal() {
+		t.Fatalf("Phase 2 invariant violated: last event is terminal %s before Phase 3 recovery", evs[len(evs)-1].Kind)
+	}
+}
+
+// assertPhase3RecoveryFinal checks the final journal state after coordinator-2 recovery.
+// coordinator-2's recovery: collectCommittedSteps filters step1 (already has
+// KindStepCompensationFailed on the log from coordinator-1's partial attempt).
+// The remaining compensation walk is empty — step1.Compensate is NOT re-run
+// (idempotent: already attempted, not retried, #1181 F2). However,
+// priorFailureCount > 0 so compensateErrors is seeded from history (#1181 F1):
+// the recovery terminates with StatusCompensationFailed, not StatusCompensated,
+// because the prior partial failure must not be silently discarded.
+func assertPhase3RecoveryFinal(t *testing.T, j *journal.MemJournal, instID idutil.SafeID, step1CompensateCalls *atomic.Int64) {
+	t.Helper()
+	evsFinal, err := j.Load(context.Background(), instID)
 	if err != nil {
 		t.Fatalf("Load final: %v", err)
 	}
@@ -1051,13 +1086,6 @@ func TestIntegration_Compensation_LeaseLost_ResumesOnReclaim(t *testing.T) {
 	if !last.Kind.IsTerminal() {
 		t.Errorf("last event = %s, want terminal", last.Kind)
 	}
-	// coordinator-2's recovery: collectCommittedSteps filters step1 (already has
-	// KindStepCompensationFailed on the log from coordinator-1's partial attempt).
-	// The remaining compensation walk is empty — step1.Compensate is NOT re-run
-	// (idempotent: already attempted, not retried, #1181 F2). However,
-	// priorFailureCount > 0 so compensateErrors is seeded from history (#1181 F1):
-	// the recovery terminates with StatusCompensationFailed, not StatusCompensated,
-	// because the prior partial failure must not be silently discarded.
 	if last.Kind != journal.KindSagaCompensationFailed {
 		t.Errorf("last event = %s, want saga_compensation_failed (prior failure preserved across recovery)", last.Kind)
 	}

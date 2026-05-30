@@ -66,75 +66,86 @@ func TestSignalRealE2E(t *testing.T) {
 		{"graceful", 1},   // ExitRuntime: ctx-aware command unwound
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.mode, func(t *testing.T) {
-			// os.Args[0] is this test binary (self re-exec, the Go stdlib
-			// os/signal test pattern); not user input.
-			cmd := exec.Command(os.Args[0], //nolint:gosec // self re-exec of the test binary; args are literals
-				"-test.run=^TestSignalRealE2E$", "-test.count=1")
-			cmd.Env = append(os.Environ(), envSignalE2EMode+"="+tc.mode)
-			stdout, err := cmd.StdoutPipe()
-			if err != nil {
-				t.Fatalf("stdout pipe: %v", err)
-			}
-			if err := cmd.Start(); err != nil {
-				t.Fatalf("re-exec child: %v", err)
-			}
-
-			// Drain child stdout; signal `ready` when the handshake marker
-			// is seen. Reading blocks on the pipe (no sleep) and continues
-			// to EOF so cmd.Wait never deadlocks on a full pipe.
-			ready := make(chan struct{})
-			go func() {
-				sc := bufio.NewScanner(stdout)
-				seen := false
-				for sc.Scan() {
-					if !seen && sc.Text() == signalChildReady {
-						seen = true
-						close(ready)
-					}
-				}
-				if !seen {
-					// Child died before printing the marker; unblock the
-					// parent so it fails on the exit-code assertion with
-					// context rather than hanging.
-					close(ready)
-				}
-				_, _ = io.Copy(io.Discard, stdout)
-			}()
-
-			var waitErr error
-			done := make(chan struct{})
-			go func() { waitErr = cmd.Wait(); close(done) }()
-			t.Cleanup(func() {
-				if cmd.Process != nil {
-					_ = cmd.Process.Kill()
-				}
-				<-done
-			})
-
-			select {
-			case <-ready:
-			case <-time.After(testtime.EventuallyExtraLong):
-				t.Fatalf("child never reported %q (mode=%s)", signalChildReady, tc.mode)
-			}
-
-			if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
-				t.Fatalf("send SIGINT to child: %v", err)
-			}
-
-			select {
-			case <-done:
-			case <-time.After(testtime.CtxLong):
-				t.Fatalf("child did not exit within timeout of SIGINT (mode=%s)", tc.mode)
-			}
-
-			code := exitCodeOf(waitErr)
-			if code != tc.wantCode {
-				t.Fatalf("mode=%s: child exit code = %d, want %d",
-					tc.mode, code, tc.wantCode)
-			}
+			runSignalE2ECase(t, tc.mode, tc.wantCode)
 		})
 	}
+}
+
+// runSignalE2ECase forks the test binary in child mode, waits for the
+// handshake marker, sends SIGINT, and asserts the exit code.
+func runSignalE2ECase(t *testing.T, mode string, wantCode int) {
+	t.Helper()
+	// os.Args[0] is this test binary (self re-exec, the Go stdlib
+	// os/signal test pattern); not user input.
+	cmd := exec.Command(os.Args[0], //nolint:gosec // self re-exec of the test binary; args are literals
+		"-test.run=^TestSignalRealE2E$", "-test.count=1")
+	cmd.Env = append(os.Environ(), envSignalE2EMode+"="+mode)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("re-exec child: %v", err)
+	}
+
+	ready := waitForChildReady(t, stdout)
+
+	var waitErr error
+	done := make(chan struct{})
+	go func() { waitErr = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+	})
+
+	select {
+	case <-ready:
+	case <-time.After(testtime.EventuallyExtraLong):
+		t.Fatalf("child never reported %q (mode=%s)", signalChildReady, mode)
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("send SIGINT to child: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(testtime.CtxLong):
+		t.Fatalf("child did not exit within timeout of SIGINT (mode=%s)", mode)
+	}
+
+	code := exitCodeOf(waitErr)
+	if code != wantCode {
+		t.Fatalf("mode=%s: child exit code = %d, want %d", mode, code, wantCode)
+	}
+}
+
+// waitForChildReady drains stdout in a goroutine, closes the returned channel
+// when the handshake marker is seen (or when the child dies before printing it).
+func waitForChildReady(t *testing.T, stdout io.Reader) <-chan struct{} {
+	t.Helper()
+	ready := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		seen := false
+		for sc.Scan() {
+			if !seen && sc.Text() == signalChildReady {
+				seen = true
+				close(ready)
+			}
+		}
+		if !seen {
+			// Child died before printing the marker; unblock the parent so it
+			// fails on the exit-code assertion with context rather than hanging.
+			close(ready)
+		}
+		_, _ = io.Copy(io.Discard, stdout)
+	}()
+	return ready
 }
 
 // signalE2EChild runs the production signal wiring (real

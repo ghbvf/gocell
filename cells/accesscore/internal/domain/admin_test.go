@@ -75,14 +75,7 @@ func TestLastAdminGuard_CheckRemove(t *testing.T) {
 	t.Parallel()
 	sentinelInfra := errors.New("counter outage")
 
-	tests := []struct {
-		name              string
-		userIsActiveAdmin bool
-		count             int
-		countErr          error
-		wantCode          errcode.Code
-		wantErrIs         error
-	}{
+	tests := []guardCheckRemoveCase{
 		{
 			name:              "non_effective_admin_short_circuits",
 			userIsActiveAdmin: false,
@@ -118,45 +111,64 @@ func TestLastAdminGuard_CheckRemove(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			stub := &stubEffectiveAdminCounterImpl{count: tc.count, err: tc.countErr}
-			sealed, wrapErr := domain.WrapEffectiveAdminCounter(stub)
-			if wrapErr != nil {
-				t.Fatalf("WrapEffectiveAdminCounter: %v", wrapErr)
-			}
-			guard, err := domain.NewLastAdminGuard(sealed)
-			if err != nil {
-				t.Fatalf("NewLastAdminGuard: %v", err)
-			}
-
-			err = guard.CheckRemove(context.Background(), "user-123", tc.userIsActiveAdmin)
-
-			switch {
-			case tc.wantErrIs != nil:
-				if !errors.Is(err, tc.wantErrIs) {
-					t.Fatalf("expected error wrapping %v, got %v", tc.wantErrIs, err)
-				}
-			case tc.wantCode != "":
-				var coded *errcode.Error
-				if !errors.As(err, &coded) {
-					t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
-				}
-				if coded.Code != tc.wantCode {
-					t.Errorf("code: got %s, want %s", coded.Code, tc.wantCode)
-				}
-				if coded.Kind != errcode.KindPermissionDenied {
-					t.Errorf("kind: got %v, want KindPermissionDenied", coded.Kind)
-				}
-			default:
-				if err != nil {
-					t.Errorf("expected nil error, got %v", err)
-				}
-			}
-
-			// non-effective-admin path must NOT invoke the counter (avoid burning DB
-			// queries when the answer is structurally "allowed").
-			if !tc.userIsActiveAdmin && stub.called {
-				t.Error("non-effective-admin path must short-circuit before invoking counter")
-			}
+			runGuardCheckRemoveCase(t, tc)
 		})
+	}
+}
+
+type guardCheckRemoveCase struct {
+	name              string
+	userIsActiveAdmin bool
+	count             int
+	countErr          error
+	wantCode          errcode.Code
+	wantErrIs         error
+}
+
+func runGuardCheckRemoveCase(t *testing.T, tc guardCheckRemoveCase) {
+	t.Helper()
+	stub := &stubEffectiveAdminCounterImpl{count: tc.count, err: tc.countErr}
+	sealed, wrapErr := domain.WrapEffectiveAdminCounter(stub)
+	if wrapErr != nil {
+		t.Fatalf("WrapEffectiveAdminCounter: %v", wrapErr)
+	}
+	guard, err := domain.NewLastAdminGuard(sealed)
+	if err != nil {
+		t.Fatalf("NewLastAdminGuard: %v", err)
+	}
+
+	err = guard.CheckRemove(context.Background(), "user-123", tc.userIsActiveAdmin)
+
+	assertGuardRemoveError(t, err, tc)
+
+	// non-effective-admin path must NOT invoke the counter (avoid burning DB
+	// queries when the answer is structurally "allowed").
+	if !tc.userIsActiveAdmin && stub.called {
+		t.Error("non-effective-admin path must short-circuit before invoking counter")
+	}
+}
+
+func assertGuardRemoveError(t *testing.T, err error, tc guardCheckRemoveCase) {
+	t.Helper()
+	switch {
+	case tc.wantErrIs != nil:
+		if !errors.Is(err, tc.wantErrIs) {
+			t.Fatalf("expected error wrapping %v, got %v", tc.wantErrIs, err)
+		}
+	case tc.wantCode != "":
+		var coded *errcode.Error
+		if !errors.As(err, &coded) {
+			t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+		}
+		if coded.Code != tc.wantCode {
+			t.Errorf("code: got %s, want %s", coded.Code, tc.wantCode)
+		}
+		if coded.Kind != errcode.KindPermissionDenied {
+			t.Errorf("kind: got %v, want KindPermissionDenied", coded.Kind)
+		}
+	default:
+		if err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
 	}
 }

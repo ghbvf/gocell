@@ -75,6 +75,8 @@ type BaseCell struct {
 	shutdownCancel context.CancelFunc
 }
 
+const errFmtNewBaseCellParse = "cell.NewBaseCell: cell %q: %w"
+
 // NewBaseCell creates a BaseCell from declarative metadata.
 //
 // meta is the canonical source — its Type / ConsistencyLevel string fields
@@ -100,7 +102,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta.Type != "" {
 		ct, err := cellvocab.ParseCellType(meta.Type)
 		if err != nil {
-			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+			return nil, fmt.Errorf(errFmtNewBaseCellParse, meta.ID, err)
 		}
 		cellType = ct
 	}
@@ -108,7 +110,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta.ConsistencyLevel != "" {
 		lv, err := cellvocab.ParseLevel(meta.ConsistencyLevel)
 		if err != nil {
-			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+			return nil, fmt.Errorf(errFmtNewBaseCellParse, meta.ID, err)
 		}
 		level = lv
 	}
@@ -119,7 +121,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta.Lifecycle != "" {
 		parsed, err := cellvocab.ParseCellLifecycle(meta.Lifecycle)
 		if err != nil {
-			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+			return nil, fmt.Errorf(errFmtNewBaseCellParse, meta.ID, err)
 		}
 		lc = parsed
 	}

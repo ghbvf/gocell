@@ -42,6 +42,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
 )
 
+const fmtErrGetBySeq1 = "GetBySeq(1): %v"
+
 // entryStoreAssignedFields enumerates Entry fields that Append/GetBySeq write
 // or compute, NOT the caller's source-of-truth. AssertEntryRoundTrip skips
 // these because they intentionally differ between the caller's literal and
@@ -281,7 +283,7 @@ func runAppendTailRoundTrip(t *testing.T, factory Factory) {
 
 	got, err := store.GetBySeq(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("GetBySeq(1): %v", err)
+		t.Fatalf(fmtErrGetBySeq1, err)
 	}
 	if got.EventID != e.EventID {
 		t.Errorf("EventID: got %q, want %q", got.EventID, e.EventID)
@@ -615,7 +617,7 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 
 	got, err := store.GetBySeq(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("GetBySeq(1): %v", err)
+		t.Fatalf(fmtErrGetBySeq1, err)
 	}
 	// A-01: payload bytes must be preserved exactly as supplied — no JSONB normalization.
 	if !bytes.Equal(got.Payload, payload) {
@@ -980,7 +982,7 @@ func RunPrincipalFieldsRoundTrip(t *testing.T, factory Factory, protocol *ledger
 
 	got, err := store.GetBySeq(context.Background(), 1)
 	if err != nil {
-		t.Fatalf("GetBySeq(1): %v", err)
+		t.Fatalf(fmtErrGetBySeq1, err)
 	}
 
 	// AssertEntryRoundTrip walks every caller-supplied Entry field via reflect,

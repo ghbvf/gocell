@@ -615,10 +615,7 @@ modules:
 			// alt/ does not exist — second pattern matches zero files, but
 			// the emission (cells kind) as a whole matched at least one file.
 		}
-		l, err := NewLocatorFS(fsys)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
+		l := requireLocatorFS(t, fsys)
 		sources, err := l.Discover()
 		if err != nil {
 			t.Fatalf("Discover unexpected error (multi-pattern fallback must succeed): %v", err)
@@ -643,11 +640,8 @@ modules:
 			".gocell/manifest.yaml": &fstest.MapFile{Data: []byte(manifest)},
 			"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
 		}
-		l, err := NewLocatorFS(fsys)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		_, err = l.Discover()
+		l := requireLocatorFS(t, fsys)
+		_, err := l.Discover()
 		if err == nil {
 			t.Fatal("expected fail-closed error when all patterns for an emission match zero files")
 		}
@@ -669,15 +663,22 @@ modules:
 			"cells/foo/cell.yaml":   &fstest.MapFile{Data: []byte("id: foo\n")},
 			// no journeys, no assemblies, no contracts, no slices
 		}
-		l, err := NewLocatorFS(fsys)
-		if err != nil {
-			t.Fatalf("NewLocatorFS: %v", err)
-		}
-		_, err = l.Discover()
+		l := requireLocatorFS(t, fsys)
+		_, err := l.Discover()
 		if err != nil {
 			t.Errorf("expected no error for default-pattern zero-match, got: %v", err)
 		}
 	})
+}
+
+// requireLocatorFS creates a Locator from fsys and fails the test on error.
+func requireLocatorFS(t *testing.T, fsys fstest.MapFS) *Locator {
+	t.Helper()
+	l, err := NewLocatorFS(fsys)
+	if err != nil {
+		t.Fatalf("NewLocatorFS: %v", err)
+	}
+	return l
 }
 
 // TestManifestGlobFixedPrefix exercises manifestGlobFixedPrefix with the

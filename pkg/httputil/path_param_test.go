@@ -16,15 +16,7 @@ func TestParseUUIDPathParam(t *testing.T) {
 
 	const validUUID = "0e8d6e9a-3a6f-4b1f-9c1e-2a3b4c5d6e7f"
 
-	tests := []struct {
-		name       string
-		paramName  string
-		raw        string
-		wantOK     bool
-		wantStatus int
-		wantValue  string
-		wantCode   string
-	}{
+	tests := []uuidPathParamCase{
 		{
 			name:      "valid lowercase",
 			paramName: "id",
@@ -114,53 +106,69 @@ func TestParseUUIDPathParam(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			req := httptest.NewRequest(http.MethodGet, "/x", nil)
-			req.SetPathValue(tt.paramName, tt.raw)
-			rec := httptest.NewRecorder()
-
-			got, ok := httputil.ParseUUIDPathParam(rec, req, tt.paramName)
-			if ok != tt.wantOK {
-				t.Fatalf("ok = %v, want %v (rec.Code=%d body=%s)", ok, tt.wantOK, rec.Code, rec.Body.String())
-			}
-			if !ok {
-				if rec.Code != tt.wantStatus {
-					t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
-				}
-				var body struct {
-					Error struct {
-						Code    string `json:"code"`
-						Message string `json:"message"`
-						Details []struct {
-							Key   string `json:"key"`
-							Value any    `json:"value"`
-						} `json:"details"`
-					} `json:"error"`
-				}
-				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-					t.Fatalf("decode body: %v (raw=%s)", err, rec.Body.String())
-				}
-				if body.Error.Code != tt.wantCode {
-					t.Fatalf("error.code = %q, want %q", body.Error.Code, tt.wantCode)
-				}
-				// param name is in Details[key="param"], not in Message
-				if tt.paramName != "" {
-					found := false
-					for _, d := range body.Error.Details {
-						if d.Key == "param" && d.Value == tt.paramName {
-							found = true
-							break
-						}
-					}
-					if !found {
-						t.Fatalf("error.details does not contain param=%q, body=%s", tt.paramName, rec.Body.String())
-					}
-				}
-				return
-			}
-			if got != tt.wantValue {
-				t.Fatalf("value = %q, want %q", got, tt.wantValue)
-			}
+			runParseUUIDPathParamCase(t, tt)
 		})
 	}
+}
+
+type uuidPathParamCase struct {
+	name       string
+	paramName  string
+	raw        string
+	wantOK     bool
+	wantStatus int
+	wantValue  string
+	wantCode   string
+}
+
+func runParseUUIDPathParamCase(t *testing.T, tc uuidPathParamCase) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.SetPathValue(tc.paramName, tc.raw)
+	rec := httptest.NewRecorder()
+
+	got, ok := httputil.ParseUUIDPathParam(rec, req, tc.paramName)
+	if ok != tc.wantOK {
+		t.Fatalf("ok = %v, want %v (rec.Code=%d body=%s)", ok, tc.wantOK, rec.Code, rec.Body.String())
+	}
+	if ok {
+		if got != tc.wantValue {
+			t.Fatalf("value = %q, want %q", got, tc.wantValue)
+		}
+		return
+	}
+	assertUUIDPathParamError(t, rec, tc)
+}
+
+func assertUUIDPathParamError(t *testing.T, rec *httptest.ResponseRecorder, tc uuidPathParamCase) {
+	t.Helper()
+	if rec.Code != tc.wantStatus {
+		t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details []struct {
+				Key   string `json:"key"`
+				Value any    `json:"value"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (raw=%s)", err, rec.Body.String())
+	}
+	if body.Error.Code != tc.wantCode {
+		t.Fatalf("error.code = %q, want %q", body.Error.Code, tc.wantCode)
+	}
+	// param name is in Details[key="param"], not in Message
+	if tc.paramName == "" {
+		return
+	}
+	for _, d := range body.Error.Details {
+		if d.Key == "param" && d.Value == tc.paramName {
+			return
+		}
+	}
+	t.Fatalf("error.details does not contain param=%q, body=%s", tc.paramName, rec.Body.String())
 }

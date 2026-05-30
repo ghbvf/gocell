@@ -427,6 +427,56 @@ func captureLeaderCoord(t *testing.T, clk *clockmock.FakeClock, locker distlock.
 	return c
 }
 
+// makeContentionLocker builds a Locker whose next SetNX returns false (simulates
+// contention / ErrLockTimeout).
+func makeContentionLocker(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+	t.Helper()
+	fd := locktest.NewFakeDriverWithClock(clk.Now)
+	fd.SetNextSetNX(false)
+	l, err := distlock.New(fd, clk)
+	if err != nil {
+		t.Fatalf("distlock.New: %v", err)
+	}
+	return l
+}
+
+// makeNormalLocker builds a Locker backed by a default FakeDriver.
+func makeNormalLocker(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+	t.Helper()
+	l, err := distlock.New(locktest.NewFakeDriverWithClock(clk.Now), clk)
+	if err != nil {
+		t.Fatalf("distlock.New: %v", err)
+	}
+	return l
+}
+
+// makeErrLocker builds a Locker whose SetNX always returns an I/O error.
+func makeErrLocker(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
+	t.Helper()
+	l, err := distlock.New(errSetNXDriver{}, clk)
+	if err != nil {
+		t.Fatalf("distlock.New: %v", err)
+	}
+	return l
+}
+
+// assertLeaderSkipLog checks that the captured log contains the expected level,
+// the skip message, and the lease_id field.
+func assertLeaderSkipLog(t *testing.T, logs, wantLevel string) {
+	t.Helper()
+	if !strings.Contains(logs, `"level":"`+wantLevel+`"`) {
+		t.Errorf("want level %s; logs=%s", wantLevel, logs)
+	}
+	if !strings.Contains(logs, "leader-elect skip") {
+		t.Errorf("missing skip message; logs=%s", logs)
+	}
+	// lease_id (journal fencing token) correlates the skip back to the
+	// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
+	if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
+		t.Errorf("skip log missing lease_id; logs=%s", logs)
+	}
+}
+
 // TestLogLeaderSkip_Levels asserts acquireLead logs the skip at the level
 // matching its cause: contention (ErrLockTimeout) and ctx cancellation → Debug
 // (expected operational signals); backend I/O error → Warn (fault).
@@ -439,28 +489,14 @@ func TestLogLeaderSkip_Levels(t *testing.T) {
 		wantLevel string
 	}{
 		{
-			name: "contention_debug",
-			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
-				fd := locktest.NewFakeDriverWithClock(clk.Now)
-				fd.SetNextSetNX(false)
-				l, err := distlock.New(fd, clk)
-				if err != nil {
-					t.Fatalf("distlock.New: %v", err)
-				}
-				return l
-			},
+			name:      "contention_debug",
+			locker:    makeContentionLocker,
 			ctx:       context.Background,
 			wantLevel: "DEBUG",
 		},
 		{
-			name: "ctx_canceled_debug",
-			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
-				l, err := distlock.New(locktest.NewFakeDriverWithClock(clk.Now), clk)
-				if err != nil {
-					t.Fatalf("distlock.New: %v", err)
-				}
-				return l
-			},
+			name:   "ctx_canceled_debug",
+			locker: makeNormalLocker,
 			ctx: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
@@ -469,14 +505,8 @@ func TestLogLeaderSkip_Levels(t *testing.T) {
 			wantLevel: "DEBUG",
 		},
 		{
-			name: "io_error_warn",
-			locker: func(t *testing.T, clk *clockmock.FakeClock) distlock.Locker {
-				l, err := distlock.New(errSetNXDriver{}, clk)
-				if err != nil {
-					t.Fatalf("distlock.New: %v", err)
-				}
-				return l
-			},
+			name:      "io_error_warn",
+			locker:    makeErrLocker,
 			ctx:       context.Background,
 			wantLevel: "WARN",
 		},
@@ -491,18 +521,7 @@ func TestLogLeaderSkip_Levels(t *testing.T) {
 			if lead {
 				t.Fatal("expected lead=false (acquire should fail)")
 			}
-			logs := buf.String()
-			if !strings.Contains(logs, `"level":"`+tc.wantLevel+`"`) {
-				t.Errorf("want level %s; logs=%s", tc.wantLevel, logs)
-			}
-			if !strings.Contains(logs, "leader-elect skip") {
-				t.Errorf("missing skip message; logs=%s", logs)
-			}
-			// lease_id (journal fencing token) correlates the skip back to the
-			// ClaimPending cycle; claimedFixture sets LeaseID="lease-inst1".
-			if !strings.Contains(logs, `"lease_id":"lease-inst1"`) {
-				t.Errorf("skip log missing lease_id; logs=%s", logs)
-			}
+			assertLeaderSkipLog(t, buf.String(), tc.wantLevel)
 		})
 	}
 }
