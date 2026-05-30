@@ -37,7 +37,7 @@
 //	  system; package visibility only constrains implementers, not who may
 //	  declare a field of a type. This is the same permanent ceiling as
 //	  SPAN-SETATTR-HOLDER-SEAL (#851) / HEALTHZ-HOLDER-SEAL (#893). Tracked
-//	  won't-do: gh #1431. The PR-5 Dispatcher.client typed-field lock is the
+//	  won't-do: gh #1375. The PR-5 Dispatcher.client typed-field lock is the
 //	  dispatcher-specific single-sanctioned-holder Hard that complements this
 //	  package-level ban.
 //
@@ -69,7 +69,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
