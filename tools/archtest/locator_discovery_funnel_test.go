@@ -812,13 +812,16 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 //
 // Blind spots enforced by TestLOCATOR_DISCOVERY_FUNNEL_01_A5_BlindSpots.
 //
-// Two files are permanently allowlisted via locatorA5AllowedFiles:
+// Three files are permanently allowlisted via locatorA5AllowedFiles (full
+// rationale on the variable decl):
 //   - cmd/gocell/app/scaffold.go: write path (layout generator); does not
 //     consume discovery paths, produces them.
 //   - kernel/metadata/assembly_derive.go: "cmd" is the conventional output
 //     directory name for the cmd/<id>/main.go entrypoint, guarded by
 //     isConventionalAssemblyPath so Manifest-mode assemblies use
 //     path.Dir(asm.File)/main.go instead.
+//   - kernel/assembly/generator.go: write path; "assemblies"/"cmd" are the
+//     conventional scaffold output directory names, not discovery tokens.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A5_ConsumerPathFunnel(t *testing.T) {
 	diags := RunTyped(t, TypedOpts{Tests: false}, locatorConsumerScanPatterns(),
 		func(p *Pass) []Diagnostic {

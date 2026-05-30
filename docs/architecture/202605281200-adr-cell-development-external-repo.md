@@ -532,5 +532,5 @@ Medium（上游 + 下游残留）+ Hard 下游现实向量为合法过渡形态�
   `cmd/vendor/golang.org/x/mod/modfile/work.go`
 - 关联 ADR（Hard funnel 双向锁参考范式）:
   `docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md` §8
-- 关联 ADR（Medium 上游 + Hard 下游过渡形态论证范式）:
+- 关联 ADR（Medium 上游 + Hard 下游论证范式；A5 EXITING 轴已据此判定为永久上限 won't-do，见 §"EXITING 上游为何不升 Hard"）:
   `docs/architecture/202605271100-adr-probename-sealed-funnel.md` §AI-robust 评级
