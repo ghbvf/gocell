@@ -21,9 +21,14 @@ import (
 //
 // Fail-closed on every error: if the topic cannot be minted (out-of-namespace /
 // wildcard poison topic) or the $dead publish fails, routeDeadLetter logs at
-// Error and returns WITHOUT recording a dead-letter — the caller still
-// ack-as-poisons the message so a dead-letter failure can never block intake.
-// The dead-letter metric counts only messages actually captured in $dead.
+// Error, increments mqtt_dlx_failed_total (the alertable "dead-letter sink
+// unhealthy" signal), and returns WITHOUT recording a successful capture — the
+// caller still ack-as-poisons the message so a dead-letter failure can never
+// block intake. This fail-closed-and-drop mirrors Kafka Connect's
+// DeadLetterQueueReporter (KIP-298): the original is dropped, but the failure is
+// a distinct, alertable metric — NOT leave-unacked, which on MQTT would
+// reconnect-redeliver and reintroduce the head-of-line stall Option C
+// (ADR-050 §6) avoids. mqtt_dlx_total counts only messages actually captured.
 func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, payload []byte, reason ConsumeFailureReason) {
 	dlt, err := s.ns.MintDeadLetter(originalTopic)
 	if err != nil {
@@ -32,6 +37,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 			slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
 			slog.String("reason", string(reason)),
 			slog.Any("error", err))
+		s.collector.RecordDeadLetterFailure(ctx, reason)
 		return
 	}
 
@@ -46,6 +52,7 @@ func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, 
 			slog.String(logKeyDLXTopic, dlt.String()),
 			slog.String("reason", string(reason)),
 			slog.Any("error", pubErr))
+		s.collector.RecordDeadLetterFailure(ctx, reason)
 		return
 	}
 

@@ -63,21 +63,25 @@ func (r *recordingSettlement) counts() (commit, release int) {
 	return r.commitCalls, r.releaseCalls
 }
 
-// recordingSubCollector records consume success / failure / dead-letter calls.
+// recordingSubCollector records consume success / failure / dead-letter
+// (capture + failure) calls.
 type recordingSubCollector struct {
-	mu            sync.Mutex
-	successCount  int
-	failureCount  int
-	deadLetterCnt int
-	lastReason    ConsumeFailureReason
-	failureCounts map[ConsumeFailureReason]int
-	dlxCounts     map[ConsumeFailureReason]int
+	mu              sync.Mutex
+	successCount    int
+	failureCount    int
+	deadLetterCnt   int
+	deadLetterFailN int
+	lastReason      ConsumeFailureReason
+	failureCounts   map[ConsumeFailureReason]int
+	dlxCounts       map[ConsumeFailureReason]int
+	dlxFailedCounts map[ConsumeFailureReason]int
 }
 
 func newRecordingSubCollector() *recordingSubCollector {
 	return &recordingSubCollector{
-		failureCounts: make(map[ConsumeFailureReason]int),
-		dlxCounts:     make(map[ConsumeFailureReason]int),
+		failureCounts:   make(map[ConsumeFailureReason]int),
+		dlxCounts:       make(map[ConsumeFailureReason]int),
+		dlxFailedCounts: make(map[ConsumeFailureReason]int),
 	}
 }
 
@@ -102,6 +106,13 @@ func (c *recordingSubCollector) RecordDeadLetter(_ context.Context, reason Consu
 	c.dlxCounts[reason]++
 }
 
+func (c *recordingSubCollector) RecordDeadLetterFailure(_ context.Context, reason ConsumeFailureReason) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deadLetterFailN++
+	c.dlxFailedCounts[reason]++
+}
+
 func (c *recordingSubCollector) snapshot() (success, failure int, last ConsumeFailureReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,4 +128,16 @@ func (c *recordingSubCollector) dlxSnapshot() (total int, byReason map[ConsumeFa
 		cp[k] = v
 	}
 	return c.deadLetterCnt, cp
+}
+
+// dlxFailedSnapshot returns the total dead-letter-publish-failure count and a
+// per-reason breakdown.
+func (c *recordingSubCollector) dlxFailedSnapshot() (total int, byReason map[ConsumeFailureReason]int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := make(map[ConsumeFailureReason]int, len(c.dlxFailedCounts))
+	for k, v := range c.dlxFailedCounts {
+		cp[k] = v
+	}
+	return c.deadLetterFailN, cp
 }

@@ -470,15 +470,15 @@ func TestNewProviderSubscriberCollector_Registration(t *testing.T) {
 // already registered (all-or-nothing semantics) and wraps the error.
 func TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack(t *testing.T) {
 	t.Parallel()
-	// Fail on the histogram (4th registration) so all three counters
-	// (consume_total, consume_failed, dlx_total) were registered and must be
-	// unregistered.
+	// Fail on the histogram (5th registration) so all four counters
+	// (consume_total, consume_failed, dlx_total, dlx_failed) were registered and
+	// must be unregistered.
 	spy := &subRollbackProvider{failHistogram: true}
 	_, err := NewProviderSubscriberCollector(spy, "testcell")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, 3, spy.unregisterCount, "all three counters must be rolled back on histogram failure")
+	assert.Equal(t, 4, spy.unregisterCount, "all four counters must be rolled back on histogram failure")
 }
 
 // TestProviderSubscriberCollector_RecordConsumeSuccess verifies success
@@ -574,22 +574,54 @@ func TestProviderSubscriberCollector_RecordDeadLetter(t *testing.T) {
 	}
 }
 
+// TestProviderSubscriberCollector_RecordDeadLetterFailure verifies that the two
+// dead-letter reason consts increment mqtt_dlx_failed_total with the correct
+// reason label (the alertable DLT-publish-failure signal — F-2, ref KIP-298).
+func TestProviderSubscriberCollector_RecordDeadLetterFailure(t *testing.T) {
+	t.Parallel()
+	dlxReasons := []ConsumeFailureReason{consumeReasonUnmarshal, consumeReasonReject}
+	for _, reason := range dlxReasons {
+		reason := reason
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			spy := newSubSpyProvider()
+			col, err := NewProviderSubscriberCollector(spy, "testcell")
+			require.NoError(t, err)
+
+			col.RecordDeadLetterFailure(context.Background(), reason)
+
+			ops := spy.ops()
+			var found bool
+			for _, op := range ops {
+				if op.name == "mqtt_dlx_failed_total" && op.op == "Inc" {
+					assert.Equal(t, "testcell", op.labels["cell"])
+					assert.Equal(t, string(reason), op.labels["reason"])
+					found = true
+				}
+			}
+			assert.True(t, found, "mqtt_dlx_failed_total Inc not found for reason %s", reason)
+		})
+	}
+}
+
 // TestProviderSubscriberCollector_RegistersExpectedLabelNames pins the label
 // schema: consume_total {cell}, consume_failed {cell, reason}, dlx_total
-// {cell, reason}, duration {cell}.
+// {cell, reason}, dlx_failed {cell, reason}, duration {cell}.
 func TestProviderSubscriberCollector_RegistersExpectedLabelNames(t *testing.T) {
 	t.Parallel()
 	spy := newSubSpyProvider()
 	_, err := NewProviderSubscriberCollector(spy, "testcell")
 	require.NoError(t, err)
 
-	require.Len(t, spy.counterRegs, 3)
+	require.Len(t, spy.counterRegs, 4)
 	assert.Equal(t, "mqtt_consume_total", spy.counterRegs[0].Name)
 	assert.Equal(t, []string{"cell"}, spy.counterRegs[0].LabelNames)
 	assert.Equal(t, "mqtt_consume_failed_total", spy.counterRegs[1].Name)
 	assert.Equal(t, []string{"cell", "reason"}, spy.counterRegs[1].LabelNames)
 	assert.Equal(t, "mqtt_dlx_total", spy.counterRegs[2].Name)
 	assert.Equal(t, []string{"cell", "reason"}, spy.counterRegs[2].LabelNames)
+	assert.Equal(t, "mqtt_dlx_failed_total", spy.counterRegs[3].Name)
+	assert.Equal(t, []string{"cell", "reason"}, spy.counterRegs[3].LabelNames)
 	require.Len(t, spy.histogramRegs, 1)
 	assert.Equal(t, "mqtt_consume_duration_seconds", spy.histogramRegs[0].Name)
 	assert.Equal(t, []string{"cell"}, spy.histogramRegs[0].LabelNames)
@@ -603,6 +635,7 @@ func TestNoopSubscriberCollector_Methods(t *testing.T) {
 		col.RecordConsumeSuccess(context.Background(), testtime.D10ms)
 		col.RecordConsumeFailure(context.Background(), consumeReasonUnmarshal)
 		col.RecordDeadLetter(context.Background(), consumeReasonReject)
+		col.RecordDeadLetterFailure(context.Background(), consumeReasonReject)
 	})
 }
 

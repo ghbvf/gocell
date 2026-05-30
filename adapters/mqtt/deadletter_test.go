@@ -40,15 +40,19 @@ func TestRouteDeadLetter_MintFailure_SkipsPublish(t *testing.T) {
 	sub.routeDeadLetter(context.Background(), "other/x", []byte(`{"k":"v"}`), consumeReasonReject)
 
 	total, _ := coll.dlxSnapshot()
-	assert.Equal(t, 0, total, "no dead-letter recorded when the topic cannot be minted")
+	assert.Equal(t, 0, total, "no dead-letter capture recorded when the topic cannot be minted")
+	failTotal, failByReason := coll.dlxFailedSnapshot()
+	assert.Equal(t, 1, failTotal, "mint failure must record a dead-letter failure (alertable)")
+	assert.Equal(t, 1, failByReason[consumeReasonReject], "failure recorded under the reject reason")
 }
 
-// TestRouteDeadLetter_PublishFailure_NoRecord verifies that when the $dead
+// TestRouteDeadLetter_PublishFailure_RecordsFailure verifies that when the $dead
 // publish itself fails (here: a closed Connection), routeDeadLetter logs the
-// failure and returns WITHOUT recording a dead-letter — the message will be
-// acked-as-poison without DLT capture (fail-closed: never block intake on a
-// dead-letter publish failure).
-func TestRouteDeadLetter_PublishFailure_NoRecord(t *testing.T) {
+// failure, records the alertable dead-letter-failure metric, and returns WITHOUT
+// recording a successful capture — the message is acked-as-poison without DLT
+// capture (fail-closed: a dead-letter publish failure never blocks intake, but it
+// is now observable via mqtt_dlx_failed_total — F-1/F-2, ref Kafka Connect KIP-298).
+func TestRouteDeadLetter_PublishFailure_RecordsFailure(t *testing.T) {
 	t.Parallel()
 	// A closed Connection makes Publish return ErrAdapterMQTTClosed before
 	// touching the (nil) ConnectionManager.
@@ -57,7 +61,10 @@ func TestRouteDeadLetter_PublishFailure_NoRecord(t *testing.T) {
 	sub.routeDeadLetter(context.Background(), "test/foo", []byte(`{"k":"v"}`), consumeReasonReject)
 
 	total, _ := coll.dlxSnapshot()
-	assert.Equal(t, 0, total, "no dead-letter recorded when the $dead publish fails")
+	assert.Equal(t, 0, total, "no dead-letter capture recorded when the $dead publish fails")
+	failTotal, failByReason := coll.dlxFailedSnapshot()
+	assert.Equal(t, 1, failTotal, "publish failure must record a dead-letter failure (alertable)")
+	assert.Equal(t, 1, failByReason[consumeReasonReject], "failure recorded under the reject reason")
 }
 
 // TestRouteDeadLetter_Success_RecordsDLX verifies the happy path against the
