@@ -379,7 +379,7 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 			slog.Int("max", maxMetadataJSONBytes))
 	} else if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &scan.Metadata); err != nil {
-			slog.Warn("outbox store: failed to unmarshal metadata",
+			slog.Warn("outbox store: failed to unmarshal metadata — dropping",
 				slog.String("entry_id", scan.ID),
 				slog.String("event_type", scan.EventType),
 				slog.Int("size", len(metadataJSON)),
