@@ -280,162 +280,188 @@ func (durableEmitter) Durable() bool                                { return tru
 // non-durable Warn log.
 func TestResolveCellEmitter(t *testing.T) {
 	t.Parallel()
-
-	realPub := mrFakePublisher{}
-
-	captureLogger := func() (*slog.Logger, *bytes.Buffer) {
-		var buf bytes.Buffer
-		h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-		return slog.New(h), &buf
-	}
-
 	t.Run("mutual_exclusion", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID:    "testcell",
-				Mode:      outbox.DurabilityDemo,
-				Publisher: realPub,
-			},
-			PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
-		})
-		if err == nil {
-			t.Fatal("expected mutual-exclusion error, got nil")
-		}
-		var ceMutex *errcode.Error
-		if !errors.As(err, &ceMutex) {
-			t.Fatalf("expected errcode.Error, got %T: %v", err, err)
-		}
-		if !strings.Contains(ceMutex.Message+" "+ceMutex.Error(), "mutually exclusive") {
-			t.Fatalf("error message missing 'mutually exclusive': %v", err)
-		}
+		testResolveCellEmitter_MutualExclusion(t)
 	})
-
 	t.Run("preresolved_durable_mode_requires_durable", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID: "testcell",
-				Mode:   outbox.DurabilityDurable,
-			},
-			PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
-		})
-		if err == nil {
-			t.Fatal("expected durable-mode guard error, got nil")
-		}
-		var ceDurable *errcode.Error
-		if !errors.As(err, &ceDurable) {
-			t.Fatalf("expected errcode.Error, got %T: %v", err, err)
-		}
-		if !strings.Contains(ceDurable.Message+" "+ceDurable.Error(), "durable") {
-			t.Fatalf("error message missing 'durable': %v", err)
-		}
+		testResolveCellEmitter_DurableModeRequiresDurable(t)
 	})
-
 	t.Run("preresolved_durable_ok", func(t *testing.T) {
 		t.Parallel()
-		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID: "testcell",
-				Mode:   outbox.DurabilityDurable,
-			},
-			PreResolved: outbox.WrapEmitterForCell(durableEmitter{}),
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !outcome.Durable() {
-			t.Fatal("expected outcome.Durable()=true for durableEmitter")
-		}
+		testResolveCellEmitter_DurableOK(t)
 	})
-
 	t.Run("preresolved_demo_non_durable_warn_at_L2", func(t *testing.T) {
 		t.Parallel()
-		logger, buf := captureLogger()
-		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID: "testcell",
-				Mode:   outbox.DurabilityDemo,
-				Logger: logger,
-			},
-			PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
-			ConsistencyLevel: cellvocab.L2,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if outcome.Durable() {
-			t.Fatal("expected non-durable outcome")
-		}
-		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
-			t.Fatalf("expected non-durable warn log, got: %q", buf.String())
-		}
-		if !strings.Contains(buf.String(), "durability_mode=demo") {
-			t.Fatalf("expected durability_mode=demo in log, got: %q", buf.String())
-		}
+		testResolveCellEmitter_NonDurableWarnAtL2(t)
 	})
-
 	t.Run("preresolved_demo_no_warn_below_L2", func(t *testing.T) {
 		t.Parallel()
-		logger, buf := captureLogger()
-		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID: "testcell",
-				Mode:   outbox.DurabilityDemo,
-				Logger: logger,
-			},
-			PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
-			ConsistencyLevel: cellvocab.L1,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
-			t.Fatalf("expected no non-durable warn at cellvocab.L1, got: %q", buf.String())
-		}
+		testResolveCellEmitter_NoWarnBelowL2(t)
 	})
-
 	t.Run("delegates_to_resolve_emitter_on_demo", func(t *testing.T) {
 		t.Parallel()
-		logger, buf := captureLogger()
-		outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID:            "testcell",
-				Mode:              outbox.DurabilityDemo,
-				Publisher:         realPub,
-				DirectPublishMode: outbox.DirectPublishFailClosed,
-				Logger:            logger,
-				MetricsProvider:   metrics.NopProvider{},
-			},
-			ConsistencyLevel: cellvocab.L2,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if outcome == nil {
-			t.Fatal("expected non-nil Emitter")
-		}
-		if outcome.Durable() {
-			t.Fatal("expected non-durable DirectEmitter")
-		}
-		if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
-			t.Fatalf("expected non-durable warn for non-durable demo path, got: %q", buf.String())
-		}
+		testResolveCellEmitter_DelegatesOnDemo(t)
 	})
-
 	t.Run("error_from_resolve_emitter_propagates", func(t *testing.T) {
 		t.Parallel()
-		_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
-			EmitterConfig: outbox.EmitterConfig{
-				CellID: "testcell",
-				Mode:   outbox.DurabilityDemo,
-			},
-			ConsistencyLevel: cellvocab.L2,
-		})
-		if err == nil {
-			t.Fatal("expected no-sink error from ResolveEmitter")
-		}
+		testResolveCellEmitter_ErrorPropagates(t)
 	})
+}
+
+func cellEmitterCaptureLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	return slog.New(h), &buf
+}
+
+func testResolveCellEmitter_MutualExclusion(t *testing.T) {
+	t.Helper()
+	_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID:    "testcell",
+			Mode:      outbox.DurabilityDemo,
+			Publisher: mrFakePublisher{},
+		},
+		PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
+	})
+	if err == nil {
+		t.Fatal("expected mutual-exclusion error, got nil")
+	}
+	var ceMutex *errcode.Error
+	if !errors.As(err, &ceMutex) {
+		t.Fatalf("expected errcode.Error, got %T: %v", err, err)
+	}
+	if !strings.Contains(ceMutex.Message+" "+ceMutex.Error(), "mutually exclusive") {
+		t.Fatalf("error message missing 'mutually exclusive': %v", err)
+	}
+}
+
+func testResolveCellEmitter_DurableModeRequiresDurable(t *testing.T) {
+	t.Helper()
+	_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID: "testcell",
+			Mode:   outbox.DurabilityDurable,
+		},
+		PreResolved: outbox.WrapEmitterForCell(nonDurableEmitter{}),
+	})
+	if err == nil {
+		t.Fatal("expected durable-mode guard error, got nil")
+	}
+	var ceDurable *errcode.Error
+	if !errors.As(err, &ceDurable) {
+		t.Fatalf("expected errcode.Error, got %T: %v", err, err)
+	}
+	if !strings.Contains(ceDurable.Message+" "+ceDurable.Error(), "durable") {
+		t.Fatalf("error message missing 'durable': %v", err)
+	}
+}
+
+func testResolveCellEmitter_DurableOK(t *testing.T) {
+	t.Helper()
+	outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID: "testcell",
+			Mode:   outbox.DurabilityDurable,
+		},
+		PreResolved: outbox.WrapEmitterForCell(durableEmitter{}),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !outcome.Durable() {
+		t.Fatal("expected outcome.Durable()=true for durableEmitter")
+	}
+}
+
+func testResolveCellEmitter_NonDurableWarnAtL2(t *testing.T) {
+	t.Helper()
+	logger, buf := cellEmitterCaptureLogger()
+	outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID: "testcell",
+			Mode:   outbox.DurabilityDemo,
+			Logger: logger,
+		},
+		PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
+		ConsistencyLevel: cellvocab.L2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome.Durable() {
+		t.Fatal("expected non-durable outcome")
+	}
+	if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+		t.Fatalf("expected non-durable warn log, got: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "durability_mode=demo") {
+		t.Fatalf("expected durability_mode=demo in log, got: %q", buf.String())
+	}
+}
+
+func testResolveCellEmitter_NoWarnBelowL2(t *testing.T) {
+	t.Helper()
+	logger, buf := cellEmitterCaptureLogger()
+	_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID: "testcell",
+			Mode:   outbox.DurabilityDemo,
+			Logger: logger,
+		},
+		PreResolved:      outbox.WrapEmitterForCell(nonDurableEmitter{}),
+		ConsistencyLevel: cellvocab.L1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+		t.Fatalf("expected no non-durable warn at cellvocab.L1, got: %q", buf.String())
+	}
+}
+
+func testResolveCellEmitter_DelegatesOnDemo(t *testing.T) {
+	t.Helper()
+	logger, buf := cellEmitterCaptureLogger()
+	outcome, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID:            "testcell",
+			Mode:              outbox.DurabilityDemo,
+			Publisher:         mrFakePublisher{},
+			DirectPublishMode: outbox.DirectPublishFailClosed,
+			Logger:            logger,
+			MetricsProvider:   metrics.NopProvider{},
+		},
+		ConsistencyLevel: cellvocab.L2,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if outcome == nil {
+		t.Fatal("expected non-nil Emitter")
+	}
+	if outcome.Durable() {
+		t.Fatal("expected non-durable DirectEmitter")
+	}
+	if !strings.Contains(buf.String(), "transactional atomicity not guaranteed") {
+		t.Fatalf("expected non-durable warn for non-durable demo path, got: %q", buf.String())
+	}
+}
+
+func testResolveCellEmitter_ErrorPropagates(t *testing.T) {
+	t.Helper()
+	_, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+		EmitterConfig: outbox.EmitterConfig{
+			CellID: "testcell",
+			Mode:   outbox.DurabilityDemo,
+		},
+		ConsistencyLevel: cellvocab.L2,
+	})
+	if err == nil {
+		t.Fatal("expected no-sink error from ResolveEmitter")
+	}
 }
 
 // TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError asserts that
