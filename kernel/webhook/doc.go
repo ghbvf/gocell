@@ -16,8 +16,9 @@
 //     [AlgorithmHMACSHA256]. [Algorithm.Validate] rejects everything else with
 //     [errcode.ErrWebhookAlgorithmUnsupported].
 //   - [SourceID] / [DeliveryID] — typed string newtypes with [NewSourceID] /
-//     [NewDeliveryID] validators (+ Must variants). Mirror the
-//     kernel/healthz.ProbeName funnel shape.
+//     [NewDeliveryID] validators. Mirror the kernel/healthz.ProbeName funnel
+//     shape. (Panic-on-error Must* constructors are test-only fixtures in
+//     webhook_helpers_test.go, not part of the production surface.)
 //   - [Source] — an opaque (id, secret) pair. Its secret field is unexported
 //     with no getter, and [Source.LogValue] redacts it, so a webhook secret
 //     can never reach slog/spans by accident — see the secret-leak defenses
