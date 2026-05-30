@@ -48,11 +48,17 @@ import (
 // below — so it is covered without a redundant, unreachable principal case.
 
 const (
-	// principalBranchOversizeLen produces a JSONB column larger than every
-	// column's 4096-byte scan-side cap (maxMetadataJSONBytes / maxObservability
-	// JSONBytes / maxPrincipalJSONBytes are all 4 KB), so the oversize guard
-	// fires before the unmarshal/validate guards.
-	principalBranchOversizeLen = 5000
+	// identityOversizeLen produces a JSONB value larger than the identity-column
+	// scan-side caps (maxObservabilityJSONBytes / maxPrincipalJSONBytes, both
+	// 4 × ~1 KB ≈ 4 KB), so the oversize guard fires before unmarshal/validate.
+	identityOversizeLen = 5000
+	// metadataOversizeLen produces a JSONB value larger than maxMetadataJSONBytes
+	// (4 × metautil.MaxMetadataTotalSize = 4 × 65536 = 256 KB) — the metadata cap
+	// is two orders of magnitude larger than the identity caps because metadata is
+	// a business KV map, not a fixed 4-field identity struct. A value under this
+	// cap would unmarshal fine and then fail Entry.Validate's per-value length
+	// check (failing the whole claim), so the oversize injection must clear 256 KB.
+	metadataOversizeLen = 300_000
 	// invalidTraceParentJSON is a well-formed JSON object whose traceParent is not
 	// a valid W3C traceparent. It unmarshals cleanly (traceParent is a plain
 	// string with no UnmarshalJSON guard) but fails ObservabilityMetadata.Validate,
@@ -132,7 +138,7 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 	}{
 		{
 			name:     "metadata_oversize",
-			metadata: bigJSONField("k", principalBranchOversizeLen), observability: "{}", principal: "{}",
+			metadata: bigJSONField("k", metadataOversizeLen), observability: "{}", principal: "{}",
 			wantWarn: "metadata JSON exceeds max size", oversize: true,
 			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Empty(t, ce.Metadata()) },
 		},
@@ -145,7 +151,7 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 		{
 			name:          "observability_oversize",
 			metadata:      "{}",
-			observability: bigJSONField("traceId", principalBranchOversizeLen),
+			observability: bigJSONField("traceId", identityOversizeLen),
 			principal:     "{}",
 			wantWarn:      "observability JSON exceeds max size", oversize: true,
 			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Observability()) },
@@ -167,7 +173,7 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 		{
 			name:     "principal_oversize",
 			metadata: "{}", observability: "{}",
-			principal: bigJSONField("actorId", principalBranchOversizeLen),
+			principal: bigJSONField("actorId", identityOversizeLen),
 			wantWarn:  "principal JSON exceeds max size", oversize: true,
 			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Principal()) },
 		},
