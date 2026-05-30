@@ -18,10 +18,12 @@
 //     every audit wire-out generation path. That "must-call" cannot be expressed
 //     in Go's type system — schemaToDTOs is shared with the exempt Request path,
 //     so the funnel cannot be folded into it unconditionally. A1 below is the
-//     Go-language ceiling for this shape (call-site allowlist + coverage). The
-//     ceiling — and an optional archtest-Medium strengthening via a
-//     schemaToWireOutDTOs wrapper — is tracked in gh #1299 (same won't-do shape
-//     as the SPAN-SETATTR #851 / HEALTHZ-HOLDER #893 Medium ceilings).
+//     Go-language ceiling for this shape (call-site allowlist + coverage) — a
+//     permanent won't-do ceiling (same shape as the SPAN-SETATTR #851 /
+//     HEALTHZ-HOLDER #893 / SAGA-JOURNAL #982 / outbox-provenance #1282 Medium
+//     ceilings). An optional schemaToWireOutDTOs wrapper could strengthen the
+//     archtest-Medium coverage but does not change the tier; it is left as
+//     optional defense-in-depth, not separately tracked.
 //
 // Two sub-checks:
 //
