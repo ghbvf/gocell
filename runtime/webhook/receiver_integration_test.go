@@ -81,10 +81,12 @@ type serveMuxAdapter struct {
 func (s *serveMuxAdapter) Handle(pattern string, h http.Handler) {
 	s.mux.Handle(pattern, h)
 }
+
 func (s *serveMuxAdapter) Route(pattern string, fn func(cell.RouteMux)) {
 	sub := &serveMuxAdapter{mux: s.mux}
 	fn(sub)
 }
+
 func (s *serveMuxAdapter) Mount(pattern string, h http.Handler) {
 	// BuildRouteGroups calls mux.Mount("/", handler) so the Receiver is mounted
 	// under the adapter's prefix. Compose: effective = prefix + pattern.

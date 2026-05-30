@@ -188,3 +188,30 @@ func (m *recordingMux) Group(fn func(cell.RouteMux)) { fn(m) }
 func (m *recordingMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux {
 	return m
 }
+
+// TestBuildRouteGroups_NewReceiverError covers buildRouteGroup's branch where
+// NewHMACVerifier succeeds (ToleranceSeconds > 0) but NewReceiver fails because
+// the spec is otherwise invalid (empty ContractID). This exercises the
+// post-verifier NewReceiver error return that an all-zero spec does not reach
+// (an all-zero spec fails earlier at WithTolerance(0)).
+func TestBuildRouteGroups_NewReceiverError(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	spec := testSpec()
+	spec.ContractID = "" // tolerance stays valid → verifier OK → NewReceiver.Validate fails
+
+	reqs := []cell.WebhookReceiverRequest{
+		{
+			Spec:    spec,
+			Handler: func(_ context.Context, _ kwh.Delivery) error { return nil },
+		},
+	}
+
+	_, err := rtwh.BuildRouteGroups(clk, reqs, store, claimer)
+	if err == nil {
+		t.Fatal("expected error from NewReceiver inside buildRouteGroup")
+	}
+}

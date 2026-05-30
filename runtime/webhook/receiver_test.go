@@ -659,3 +659,127 @@ func TestReceiver_ReadBodyIOError_Returns503(t *testing.T) {
 		t.Errorf("response missing 'error' key; got: %s", w.Body.String())
 	}
 }
+
+// TestNewReceiver_InvalidSpec covers the spec.Validate() failure branch in
+// NewReceiver (a zero-value spec fails validation before any dependency check).
+func TestNewReceiver_InvalidSpec(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	verifier, _ := kwh.NewHMACVerifier(clk)
+	claimer := idempotency.NewInMemClaimer(clk)
+	handler := func(_ context.Context, _ kwh.Delivery) error { return nil }
+
+	_, err := rtwh.NewReceiver(clk, kwh.ReceiverSpec{}, verifier, store, claimer, handler)
+	if err == nil {
+		t.Fatal("expected error for invalid (zero-value) spec")
+	}
+}
+
+// TestReceiver_HandlerError_ReleaseError covers the branch where the handler
+// returns an error AND the subsequent Release also fails (the release-error is
+// logged, the handler error still drives the HTTP status).
+func TestReceiver_HandlerError_ReleaseError(t *testing.T) {
+	// Not parallel: uses a shared mutable countingReceipt.
+	body := []byte(`{"event":"handler-err-release-err"}`)
+	rcpt := &countingReceipt{releaseErr: errors.New("release boom")}
+	claimer := &countingClaimer{rcpt: rcpt}
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		return errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"handler transient failure")
+	}
+	recv := buildReceiver(t, receiverOpts{claimer: claimer, handler: handler})
+	w := httptest.NewRecorder()
+	recv.ServeHTTP(w, signedRequest(t, body, "msg-handler-err-rel-001"))
+
+	// KindUnavailable handler error → 503.
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body.String())
+	}
+	if rcpt.released != 1 {
+		t.Errorf("Release called %d times, want 1", rcpt.released)
+	}
+	if rcpt.committed != 0 {
+		t.Errorf("Commit called %d times, want 0 (handler failed)", rcpt.committed)
+	}
+}
+
+// TestReceiver_HandlerPanic_ReleaseError covers releaseOnPanic's branch where
+// Release itself returns an error during the panic-recovery path.
+func TestReceiver_HandlerPanic_ReleaseError(t *testing.T) {
+	// Not parallel: shared mutable countingReceipt + specific execution order.
+	body := []byte(`{"event":"panic-release-err"}`)
+	rcpt := &countingReceipt{releaseErr: errors.New("release boom")}
+	claimer := &countingClaimer{rcpt: rcpt}
+	handler := func(_ context.Context, _ kwh.Delivery) error {
+		panic("handler panic with failing release")
+	}
+	recv := buildReceiver(t, receiverOpts{claimer: claimer, handler: handler})
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		w := httptest.NewRecorder()
+		recv.ServeHTTP(w, signedRequest(t, body, "msg-panic-rel-err-001"))
+	}()
+
+	if rcpt.released != 1 {
+		t.Errorf("Release called %d times, want 1", rcpt.released)
+	}
+	if recovered == nil {
+		t.Error("expected panic to re-propagate even when Release fails")
+	}
+}
+
+// TestReceiver_MaxBytesReaderTruncation_Returns413 covers the MaxBytesReader
+// (read-time) 413 branch — distinct from the Content-Length pre-check. With an
+// unknown Content-Length (-1) the pre-check is skipped and MaxBytesReader is the
+// only enforcer.
+func TestReceiver_MaxBytesReaderTruncation_Returns413(t *testing.T) {
+	t.Parallel()
+	spec := testSpec()
+	spec.MaxBodyBytes = 10
+
+	clk := clockmock.New(fixedNow)
+	store := testStore(t)
+	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(testTolerance*time.Second))
+	if err != nil {
+		t.Fatalf("NewHMACVerifier: %v", err)
+	}
+	claimer := idempotency.NewInMemClaimer(clk)
+	handler := func(_ context.Context, _ kwh.Delivery) error { return nil }
+	recv, err := rtwh.NewReceiver(clk, spec, verifier, store, claimer, handler)
+	if err != nil {
+		t.Fatalf("NewReceiver: %v", err)
+	}
+
+	bigBody := bytes.Repeat([]byte("x"), 100)
+	req := httptest.NewRequest(http.MethodPost, testPathPattern, bytes.NewReader(bigBody))
+	req.Header.Set("X-Delivery-Id", "msg-maxbytes-001")
+	req.Header.Set("X-Timestamp", "1705312800")
+	req.Header.Set("X-Signature", "v1,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	// Unknown Content-Length → pre-check skipped; MaxBytesReader enforces the cap.
+	req.ContentLength = -1
+
+	w := httptest.NewRecorder()
+	recv.ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestReceiver_InvalidDeliveryIDFormat_Returns400 covers verify()'s
+// NewDeliveryID error branch: a non-empty but malformed delivery-id header
+// (whitespace is forbidden by the delivery-id pattern) → 400.
+func TestReceiver_InvalidDeliveryIDFormat_Returns400(t *testing.T) {
+	t.Parallel()
+	recv := buildReceiver(t, receiverOpts{})
+	req := signedRequest(t, []byte(`{"e":1}`), "valid-id")
+	// Override with a non-empty value that fails the delivery-id pattern (space).
+	req.Header.Set("X-Delivery-Id", "bad id with spaces")
+	w := httptest.NewRecorder()
+	recv.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+}
