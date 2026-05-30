@@ -378,6 +378,52 @@ metrics:
         - cell
         - outcome
       file: cmd/corebundle/bundle_configcore_storage.go
+    - name: projection_event_replay_lag_seconds
+      fqName: gocell_projection_event_replay_lag_seconds
+      namespace: gocell
+      type: gauge
+      help: 'Event replay lag in seconds (now − lastApplied.OccurredAt). Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      file: kernel/projection/metrics.go
+    - name: projection_pending_events
+      fqName: gocell_projection_pending_events
+      namespace: gocell
+      type: gauge
+      help: 'Number of events not yet reflected in the projection (Head − checkpoint). Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      file: kernel/projection/metrics.go
+    - name: projection_rebuild_duration_seconds
+      fqName: gocell_projection_rebuild_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: 'Projection rebuild wall-clock duration in seconds. Labels: cell, projection.'
+      labels:
+        - cell
+        - projection
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+        - "60"
+        - "120"
+        - "300"
+        - "600"
+        - "900"
+        - "1800"
+      file: kernel/projection/metrics.go
     - name: saga_heartbeat_failed_total
       fqName: gocell_saga_heartbeat_failed_total
       namespace: gocell
