@@ -69,10 +69,15 @@ func TestTickerTrigger_NilClockPanics(t *testing.T) {
 }
 
 // TestTickerTrigger_NonPositiveIntervalPanics asserts construction fails fast on
-// a non-positive interval (clock.MustHavePositiveInterval).
+// a non-positive interval (clock.MustHavePositiveInterval). Both boundary cases
+// of d <= 0 are checked: a negative interval and the zero value.
 func TestTickerTrigger_NonPositiveIntervalPanics(t *testing.T) {
 	fc := clockmock.New(time.Time{})
-	assert.Panics(t, func() { TickerTrigger(fc, testtime.DNeg1s) })
+	for _, interval := range []time.Duration{testtime.DNeg1s, 0} {
+		interval := interval
+		assert.Panics(t, func() { TickerTrigger(fc, interval) },
+			"non-positive interval %v must panic at construction", interval)
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -138,7 +143,8 @@ func TestChannelTrigger_SourceClosedExits(t *testing.T) {
 }
 
 // TestChannelTrigger_RespectsCtxCancel asserts the goroutine exits on ctx
-// cancellation (goleak proves no leak).
+// cancellation while idle (blocked on the source) — the outer select's ctx.Done
+// path (goleak proves no leak).
 func TestChannelTrigger_RespectsCtxCancel(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -148,6 +154,27 @@ func TestChannelTrigger_RespectsCtxCancel(t *testing.T) {
 	queue := make(chan Request)
 	ctx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, trig.Start(ctx, queue))
+	cancel()
+}
+
+// TestChannelTrigger_CancelWhileBlockedOnQueue exercises the INNER select's
+// ctx.Done path: the goroutine has a Request in hand and is blocked forwarding
+// it to an unread queue when ctx is canceled. The unbuffered source handshake
+// (in <- req completes only after the goroutine receives) guarantees the
+// goroutine is committed to the inner `queue <- req` select — which can never
+// proceed (no reader) — so cancel deterministically drives the inner exit (no
+// leak, no hang).
+func TestChannelTrigger_CancelWhileBlockedOnQueue(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	in := make(chan Request) // unbuffered: send completes after the goroutine receives
+	trig := ChannelTrigger(in)
+
+	queue := make(chan Request) // unbuffered, never read → the forward blocks
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, trig.Start(ctx, queue))
+
+	in <- Request{EntityID: "stuck"}
 	cancel()
 }
 

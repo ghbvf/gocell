@@ -377,12 +377,16 @@ func TestReconcileTriggerInterfaceFrozen01_ReverseBlindSpot(t *testing.T) {
 	type wrongReturn interface {
 		Start(context.Context, chan<- reconcile.Request)
 	}
+	type wrongReturnType interface {
+		Start(context.Context, chan<- reconcile.Request) int
+	}
 	bad := map[string]reflect.Type{
 		"extra-method":       reflect.TypeOf((*extraMethod)(nil)).Elem(),
 		"wrong-arity":        reflect.TypeOf((*wrongArity)(nil)).Elem(),
 		"bidirectional-chan": reflect.TypeOf((*bidirectionalChan)(nil)).Elem(),
 		"recv-only-chan":     reflect.TypeOf((*recvOnlyChan)(nil)).Elem(),
 		"wrong-return":       reflect.TypeOf((*wrongReturn)(nil)).Elem(),
+		"wrong-return-type":  reflect.TypeOf((*wrongReturnType)(nil)).Elem(),
 	}
 	for name, it := range bad {
 		if v := checkTriggerInterface(it); len(v) == 0 {

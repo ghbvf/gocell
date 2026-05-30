@@ -55,7 +55,10 @@
 //	                consumer waking specific entities)
 //
 // The Loop's Source field is the seam a Trigger feeds; the Builder (PR-A7) wires
-// a Trigger's output channel into it.
+// a Trigger's output channel into it. Until PR-A7 lands there is no direct
+// Trigger→Loop wiring entry point — a Trigger is exercised standalone (tests /
+// prototypes) by calling Start with a channel; the Builder's .WithTrigger(t)
+// DSL will own production wiring.
 //
 // # Reconciler implementation pattern
 //

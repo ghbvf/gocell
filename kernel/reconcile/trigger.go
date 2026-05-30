@@ -62,10 +62,12 @@ func TickerTrigger(clk clock.Clock, interval time.Duration) Trigger {
 	return &tickerTrigger{clk: clk, interval: interval}
 }
 
+// Start creates the ticker synchronously (before spawning the producer
+// goroutine), so a caller — or a test — that advances the injected clock
+// immediately after Start deterministically observes the first tick: there is no
+// race against the goroutine's first scheduling. It is non-blocking and never
+// returns a non-nil error (config is validated at construction; see Trigger).
 func (t *tickerTrigger) Start(ctx context.Context, queue chan<- Request) error {
-	// Create the ticker synchronously before returning so a caller (or test) that
-	// advances the clock right after Start deterministically observes a tick — no
-	// startup race with the goroutine's first scheduling.
 	ticker := t.clk.NewTicker(t.interval)
 	go func() {
 		defer ticker.Stop()
@@ -94,7 +96,10 @@ type channelTrigger struct {
 
 // ChannelTrigger returns a Trigger that forwards every Request from in into the
 // work queue (block-don't-drop). A nil source channel would block forever and is
-// a programmer error: it panics at construction.
+// a programmer error: it panics at construction. When in is closed, the
+// forwarding goroutine exits cleanly — the Loop keeps running but receives no
+// further Requests from this Trigger (the source is responsible for its own
+// lifecycle, mirroring Loop.pump over a closed Source).
 func ChannelTrigger(in <-chan Request) Trigger {
 	if in == nil {
 		panic(panicregister.Approved("reconcile-channel-trigger-nil-source",
