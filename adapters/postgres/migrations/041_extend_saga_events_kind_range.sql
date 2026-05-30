@@ -25,18 +25,8 @@ ALTER TABLE saga_events ADD CONSTRAINT saga_events_kind_range
 -- +goose Down
 -- +goose StatementBegin
 
--- Reverting requires that no saga_events row carry kind=10. Production
--- workflows that have written KindStepCompensationFailed rows must be
--- archived / dropped before this Down runs — otherwise the narrowed CHECK
--- rejects existing rows and the migration aborts. Fail-closed: gate behind
--- gocell.allow_destructive_down, matching the pattern in 040 + 030.
-
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'refusing destructive Down: set gocell.allow_destructive_down=true to proceed';
-    END IF;
-END $$;
+-- Reverting requires that no saga_events row carry kind=10.
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 ALTER TABLE saga_events DROP CONSTRAINT saga_events_kind_range;
 ALTER TABLE saga_events ADD CONSTRAINT saga_events_kind_range

@@ -95,12 +95,41 @@ DROP INDEX CONCURRENTLY <index_name>;
 向后兼容（项目宪法："不向后兼容时不留软回退"），所以这类 migration 没有滚动部署窗口：
 
 - 必须在文件顶部注释块写明 Up 部署 runbook：drain traffic → goose up → deploy 新二进制 → 恢复 traffic。
-- 必须同时写明 Down 的 GUC（`gocell.allow_destructive_down=true`）与回退顺序。
+- 必须同时写明 Down 的授权机制（destructive-down / forward-rebuild 授权由 Go 侧 typed permit 执行，issue #1248）与回退顺序。
 - lock_timeout 由 migrator session 级别自动注入（规则 4），.sql 文件无需自行设置。
 - 如果未来运行时拓扑需要无停机滚动 DDL，按"两阶段 migration"拆：(a) 先放宽约束 / 让二进制停止写该列；
   (b) 等新二进制全量部署后再 DROP 列。当前 GoCell 仅 ship 自身，无外部 schema 消费方，单 PR + 计划停机更简单。
 
-已有示例：`025_drop_sessions_authz_epoch_at_issue.sql`（S4b Batch 1C）。
+已有示例：`044_outbox_entries_principal.sql`（outbox principal rebuild，参见 `docs/ops/migration-044-outbox-rebuild.md`）。
+
+> **反面教材**：`025_drop_sessions_authz_epoch_at_issue.sql` 在 PR #490 ship 后才
+> 被 review 发现 P1（未列 invariant inventory，DROP COLUMN 论证不充分），由 026
+> 撤回——该文件仅作历史记录保留，**不应效仿**。详见 ADR
+> `docs/architecture/202605101400-adr-credential-session-protocol.md` §0 A1
+> RETRACTED + §A8，以及 `.claude/rules/gocell/contract-fanout.md` §DROP COLUMN 反面教材。
+
+### 如何新增 forward-rebuild migration
+
+forward-rebuild migration 在 Up 路径执行 TRUNCATE 或 DROP TABLE，需要额外的注解和开发流程配合：
+
+1. 在 `-- +goose Up` 后、首条 SQL 前（同行或紧接下一行）添加机器可读注解：
+   ```sql
+   -- +goose Up
+   -- +gocell forward-rebuild target=<table_name>
+   ```
+   注解格式由 archtest `MIGRATION-FORWARD-REBUILD-ANNOTATION-01` 校验；漏写导致 CI 红。
+
+2. **fresh DB**（表不存在或为空）：`Migrator.Up(ctx)` 的 phase0 gate 自动探测并放行，无需额外操作。
+
+3. **已填充表**（升级场景）：调用 `Migrator.ForwardRebuild(ctx, permits...)` 并传入对应的 `ForwardRebuildPermit`：
+   ```go
+   permit, err := postgres.AllowForwardRebuild(44, "outbox rebuild: add principal columns")
+   // ...
+   err = migrator.ForwardRebuild(ctx, permit)
+   ```
+   或使用 CLI：`tools/pg-migrate -rebuild "44:<reason>"`
+
+4. archtest 守卫：`MIGRATION-FORWARD-REBUILD-ANNOTATION-01`（注解存在性，Medium）；`MIGRATION-NO-GUC-RESIDUE-01`（禁止已退役 GUC 名 `gocell.allow_*_rebuild` 残留，Medium）。SQL 文件中**禁止**出现已退役的 `DO $$ RAISE EXCEPTION ... IF current_setting(...) ...` GUC 守卫块——门控职责已由 Go phase0 承担（ADR-1122）。
 
 ## 参考
 

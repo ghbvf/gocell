@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/pressly/goose/v3/lock"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // identifierRe matches valid SQL identifiers: start with letter or underscore,
@@ -55,8 +57,6 @@ type MigrationStatus struct {
 	AppliedAt time.Time
 }
 
-const allowDestructiveDownGUC = "gocell.allow_destructive_down"
-
 // migrationLockTimeout bounds how long any migration statement waits to acquire
 // a lock before failing. It is injected at session scope by
 // lockTimeoutSessionLocker (see newGooseProvider) so every migration — Up or
@@ -96,6 +96,45 @@ func (p destructiveDownPermit) Reason() string {
 	return p.reason
 }
 
+// ForwardRebuildPermit is an explicit break-glass token required to run a
+// forward-rebuild migration (DROP+CREATE / TRUNCATE) when the target table
+// already holds rows. Like DestructiveDownPermit, the unexported marker seals
+// the permit: callers outside this package cannot fabricate one.
+type ForwardRebuildPermit interface {
+	forwardRebuildPermit()
+	MigrationNumber() int64
+	Reason() string
+}
+
+type forwardRebuildPermit struct {
+	migrationNumber int64
+	reason          string
+}
+
+// AllowForwardRebuild constructs the explicit permit required by
+// Migrator.ForwardRebuild for a populated-table rebuild. migrationNumber must
+// be positive (goose Source.Version starts at 1) and reason must be non-empty.
+func AllowForwardRebuild(migrationNumber int64, reason string) (ForwardRebuildPermit, error) {
+	reason = strings.TrimSpace(reason)
+	if migrationNumber <= 0 {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres: forward-rebuild permit requires a positive migration number")
+	}
+	if reason == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres: forward-rebuild permit requires a non-empty reason")
+	}
+	return forwardRebuildPermit{migrationNumber: migrationNumber, reason: reason}, nil
+}
+
+func (forwardRebuildPermit) forwardRebuildPermit() {}
+
+// MigrationNumber returns the migration version this permit authorizes.
+func (p forwardRebuildPermit) MigrationNumber() int64 { return p.migrationNumber }
+
+// Reason returns the operator-supplied reason for the forward rebuild.
+func (p forwardRebuildPermit) Reason() string { return p.reason }
+
 // Migrator manages SQL database migrations using goose v3 and an embed.FS source.
 // It tracks applied migrations in a configurable table using goose's built-in
 // advisory locking.
@@ -124,7 +163,7 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 
 	db := stdlib.OpenDBFromPool(p.inner)
 
-	provider, err := newGooseProvider(db, migrations, tableName, nil)
+	provider, err := newGooseProvider(db, migrations, tableName)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -139,36 +178,23 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 	}, nil
 }
 
-func newGooseProvider(db *sql.DB, migrations fs.FS, tableName string, locker lock.SessionLocker) (*goose.Provider, error) {
-	var err error
-	if locker == nil {
-		// SessionLocker holds a pg_advisory_lock for the duration of Up/Down so
-		// concurrent migrators (multi-pod startup) serialize on the lock rather
-		// than racing the schema_migrations table. Default lockID is goose's
-		// constant 4097083626 (CRC of "goose"), which the codebase does not use
-		// elsewhere. Defaults give a 5min acquire budget (60 retries × 5s
-		// pg_try_advisory_lock); the ctx passed to Up/Down has priority — if it
-		// is canceled before the budget is exhausted, retry.Do returns
-		// immediately, so the caller's startup deadline always wins.
-		//
-		// ref: pressly/goose lock/postgres.go pg_try_advisory_lock + retry
-		locker, err = lock.NewPostgresSessionLocker()
-		if err != nil {
-			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
-		}
+func newGooseProvider(db *sql.DB, migrations fs.FS, tableName string) (*goose.Provider, error) {
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
 	}
 
 	// Always wrap with lock_timeout injection so every applied migration (Up or
 	// Down) runs with a bounded lock-wait by construction — see
-	// lockTimeoutSessionLocker. For Down this nests over destructiveDownSessionLocker.
-	locker = &lockTimeoutSessionLocker{inner: locker}
+	// lockTimeoutSessionLocker.
+	wrappedLocker := &lockTimeoutSessionLocker{inner: locker}
 
 	provider, err := goose.NewProvider(
 		goose.DialectPostgres,
 		db,
 		migrations,
 		goose.WithTableName(tableName),
-		goose.WithSessionLocker(locker),
+		goose.WithSessionLocker(wrappedLocker),
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create goose provider", err)
@@ -176,16 +202,45 @@ func newGooseProvider(db *sql.DB, migrations fs.FS, tableName string, locker loc
 	return provider, nil
 }
 
-// Up applies all unapplied migrations in order.
-// It performs a pre-check for INVALID indexes before advancing the schema
-// version: if any index is found with indisvalid=false, Up returns an error
-// and does not execute any migrations. Manual cleanup is required before
-// re-running.
+// Up applies all unapplied migrations. A pending forward-rebuild migration
+// whose target table already holds rows is refused fail-closed (use
+// ForwardRebuild with an explicit permit). Pre-checks invalid indexes first.
+func (m *Migrator) Up(ctx context.Context) error {
+	return m.forwardRun(ctx, nil)
+}
+
+// ForwardRebuild applies all unapplied migrations, authorizing the supplied
+// forward-rebuild permits for populated target tables.
 //
+// A permit is only needed when a forward-rebuild migration's target table
+// already holds rows — an empty or missing target is rebuilt automatically by
+// Up alone, so fresh provisioning needs no permit. Supplying more permits than
+// required is fine; a permit that is nil, duplicated, or references a migration
+// which is not a pending forward-rebuild is a misconfiguration error.
+func (m *Migrator) ForwardRebuild(ctx context.Context, permits ...ForwardRebuildPermit) error {
+	return m.forwardRun(ctx, permits)
+}
+
+func (m *Migrator) forwardRun(ctx context.Context, permits []ForwardRebuildPermit) error {
+	if err := m.checkNoInvalidIndexes(ctx); err != nil {
+		return err
+	}
+	if err := m.gatePendingRebuilds(ctx, permits); err != nil {
+		return err
+	}
+	results, err := m.provider.Up(ctx)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
+	}
+	slog.InfoContext(ctx, "postgres: migrations applied", "applied", len(results))
+	return nil
+}
+
+// checkNoInvalidIndexes returns an error if any INVALID indexes are present.
 // ref: pressly/goose migration workflow boundary — fail before advancing
 // version, not after; same principle as Atlas lint gate.
 // ref: golang-migrate Source.Read — validate preconditions before applying.
-func (m *Migrator) Up(ctx context.Context) error {
+func (m *Migrator) checkNoInvalidIndexes(ctx context.Context) error {
 	invalid, err := DetectInvalidIndexes(ctx, m.pool)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
@@ -200,10 +255,186 @@ func (m *Migrator) Up(ctx context.Context) error {
 			errcode.WithDetails(errcode.PublicInt("count", len(invalid))),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("indexes=%v", names))))
 	}
-	if _, err := m.provider.Up(ctx); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
+	return nil
+}
+
+// ForwardRebuildAnnotationPattern is the single-source regex shared by the
+// runtime permit gate (forwardRebuildTarget) and the archtest
+// MIGRATION-FORWARD-REBUILD-ANNOTATION-01
+// (tools/archtest/pg_schema_guard_invariants_test.go). Exporting it as one const
+// keeps the Go gate and the CI archtest from drifting.
+//
+// WARNING: changing this pattern is a wire-format change to the migration
+// annotation. Every existing `-- +gocell forward-rebuild target=…` line in
+// adapters/postgres/migrations/*.sql must be updated to match, or pending
+// rebuilds silently stop being gated.
+const ForwardRebuildAnnotationPattern = `(?m)^\s*--\s*\+gocell\s+forward-rebuild\s+target=([a-zA-Z_][a-zA-Z0-9_]*)\s*$`
+
+// forwardRebuildAnnotationRE matches the per-migration declaration that marks a
+// forward-rebuild and names the table whose row-count gates the permit.
+var forwardRebuildAnnotationRE = regexp.MustCompile(ForwardRebuildAnnotationPattern)
+
+// gooseDownMarkerRE line-anchors the pressly/goose Down section directive so the
+// Up-section scan in forwardRebuildTarget cannot be truncated by a literal
+// "-- +goose Down" appearing inside Up-section prose (fail-open guard).
+var gooseDownMarkerRE = regexp.MustCompile(`(?m)^\s*-- \+goose Down\s*$`)
+
+func (m *Migrator) gatePendingRebuilds(ctx context.Context, permits []ForwardRebuildPermit) error {
+	pending, err := m.collectPendingForwardRebuilds(ctx)
+	if err != nil {
+		return err
+	}
+
+	permitByNum, err := buildPermitMap(permits)
+	if err != nil {
+		return err
+	}
+
+	// Misconfiguration: every supplied permit must reference a pending forward-rebuild.
+	for num := range permitByNum {
+		if _, ok := pending[num]; !ok {
+			return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild permit references a migration that is not a pending forward-rebuild",
+				errcode.WithDetails(errcode.PublicInt("migration", num)))
+		}
+	}
+
+	// Fail-closed: every pending rebuild whose target table holds rows needs a permit.
+	for version, target := range pending {
+		if err := m.requirePermitIfDangerous(ctx, version, target, permitByNum); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// buildPermitMap indexes the supplied permits by migration number. It rejects a
+// nil interface value (typed-nil included, mirroring Down's guard) and rejects
+// two permits naming the same migration — both are caller misconfigurations
+// that would otherwise panic or silently last-write-win.
+func buildPermitMap(permits []ForwardRebuildPermit) (map[int64]ForwardRebuildPermit, error) {
+	permitByNum := make(map[int64]ForwardRebuildPermit, len(permits))
+	for _, p := range permits {
+		if p == nil || validation.IsNilInterface(p) {
+			return nil, errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild permit must not be nil")
+		}
+		num := p.MigrationNumber()
+		if _, dup := permitByNum[num]; dup {
+			return nil, errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+				"postgres: forward-rebuild misconfiguration: duplicate permit for the same migration",
+				errcode.WithDetails(errcode.PublicInt("migration", num)))
+		}
+		permitByNum[num] = p
+	}
+	return permitByNum, nil
+}
+
+// collectPendingForwardRebuilds returns the version→target map of pending
+// migrations (version > current DB version) that carry the
+// `-- +gocell forward-rebuild target=<table>` annotation.
+func (m *Migrator) collectPendingForwardRebuilds(ctx context.Context) (map[int64]string, error) {
+	current, _, err := m.provider.GetVersions(ctx)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: read migration version", err)
+	}
+	pending := map[int64]string{}
+	for _, src := range m.provider.ListSources() {
+		if src.Version <= current {
+			continue
+		}
+		target, ok, perr := m.forwardRebuildTarget(src)
+		if perr != nil {
+			return nil, perr
+		}
+		if ok {
+			pending[src.Version] = target
+		}
+	}
+	return pending, nil
+}
+
+// requirePermitIfDangerous fails closed when the rebuild target table holds rows
+// and no permit authorizes the loss. An empty/missing target is always safe.
+func (m *Migrator) requirePermitIfDangerous(
+	ctx context.Context, version int64, target string, permitByNum map[int64]ForwardRebuildPermit,
+) error {
+	dangerous, err := m.tableHasRows(ctx, target)
+	if err != nil {
+		return err
+	}
+	if !dangerous {
+		return nil // empty/missing target — safe to rebuild without a permit
+	}
+	permit, ok := permitByNum[version]
+	if ok {
+		slog.InfoContext(ctx, "postgres: forward-rebuild authorized",
+			"migration", version,
+			"target", target,
+			"reason", permit.Reason())
+		return nil
+	}
+	return errcode.New(errcode.KindInvalid, ErrAdapterPGMigrate,
+		"postgres: forward-rebuild refused: target table is non-empty and no permit was supplied",
+		errcode.WithDetails(
+			errcode.PublicInt("migration", version),
+			errcode.PublicString("target", target)),
+		errcode.WithInternal(errcode.InternalAttr("_",
+			fmt.Sprintf(
+				"authorize via: pg-migrate -dsn \"$GOCELL_PG_DSN\" -rebuild %d:<reason>  "+
+					"(or AllowForwardRebuild(%d, \"<reason>\") in Go)",
+				version, version))))
+}
+
+// forwardRebuildTarget reads the migration source and extracts the
+// `-- +gocell forward-rebuild target=<table>` annotation from the Up section
+// only. The Down section is excluded so an annotation accidentally placed there
+// does not affect the permit gate.
+func (m *Migrator) forwardRebuildTarget(src *goose.Source) (string, bool, error) {
+	data, err := fs.ReadFile(m.migrations, src.Path)
+	if err != nil {
+		return "", false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate,
+			"postgres: read migration source for rebuild gate", err)
+	}
+	// Restrict scan to the Up section: content before the goose Down marker.
+	// Line-anchored (^...$) so a literal "-- +goose Down" appearing inside
+	// Up-section prose / runbook comments does NOT truncate the scan and silently
+	// drop the annotation (fail-open → populated table rebuilt without a permit).
+	// "-- +goose Down" is a pressly/goose section directive honored only at the
+	// start of a line.
+	up := data
+	if loc := gooseDownMarkerRE.FindIndex(data); loc != nil {
+		up = data[:loc[0]]
+	}
+	mch := forwardRebuildAnnotationRE.FindSubmatch(up)
+	if mch == nil {
+		return "", false, nil
+	}
+	return string(mch[1]), true, nil
+}
+
+// tableHasRows reports whether table exists and holds at least one row. A
+// missing table reports false (a fresh DB is always safe to rebuild). The table
+// name is validated as a SQL identifier because it cannot be parameterised in
+// the FROM position.
+func (m *Migrator) tableHasRows(ctx context.Context, table string) (bool, error) {
+	if err := validateIdentifier(table); err != nil {
+		return false, err
+	}
+	var exists bool
+	if err := m.pool.DB().QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: probe rebuild target existence", err)
+	}
+	if !exists {
+		return false, nil
+	}
+	var hasRows bool
+	// #nosec G201 -- table validated by validateIdentifier above; cannot parameterise FROM.
+	q := fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s)`, table)
+	if err := m.pool.DB().QueryRow(ctx, q).Scan(&hasRows); err != nil {
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: probe rebuild target rows", err)
+	}
+	return hasRows, nil
 }
 
 // Down rolls back the last applied migration. If no migrations have been
@@ -211,80 +442,21 @@ func (m *Migrator) Up(ctx context.Context) error {
 // explicit DestructiveDownPermit because rollback files may drop production
 // data even when they only move the schema back by one version.
 func (m *Migrator) Down(ctx context.Context, permit DestructiveDownPermit) error {
-	if permit == nil || strings.TrimSpace(permit.Reason()) == "" {
+	// permit.Reason() is guaranteed non-empty by AllowDestructiveDown — the sole
+	// constructor of the sealed DestructiveDownPermit — so only the nil guard is
+	// needed; a separate empty-reason branch would be unreachable dead code.
+	if permit == nil || validation.IsNilInterface(permit) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres: destructive migration down requires explicit permit")
 	}
-	locker, err := newDestructiveDownSessionLocker()
-	if err != nil {
-		return err
-	}
-	provider, err := newGooseProvider(m.db, m.migrations, m.tableName, locker)
-	if err != nil {
-		return err
-	}
-	if _, err := provider.Down(ctx); err != nil {
+	if _, err := m.provider.Down(ctx); err != nil {
 		if errors.Is(err, goose.ErrNoCurrentVersion) || errors.Is(err, goose.ErrNoNextVersion) {
 			return nil // already at version 0, idempotent no-op
 		}
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
+	slog.InfoContext(ctx, "postgres: migration rolled back", "reason", permit.Reason())
 	return nil
-}
-
-type destructiveDownSessionLocker struct {
-	inner lock.SessionLocker
-}
-
-func newDestructiveDownSessionLocker() (lock.SessionLocker, error) {
-	inner, err := lock.NewPostgresSessionLocker()
-	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create session locker", err)
-	}
-	return &destructiveDownSessionLocker{inner: inner}, nil
-}
-
-// SessionLock acquires the underlying advisory lock and sets the GUC
-// gocell.allow_destructive_down to 'true' for the duration of the session.
-//
-// The third argument to set_config is `false` (session-scope, NOT
-// transaction-local). This is intentional: migration 004 and any migration
-// annotated with `-- +goose no transaction` execute each DDL statement in its
-// own implicit transaction. A transaction-local GUC (third arg = true) would
-// be reset at the end of each implicit transaction and would NOT be visible to
-// the next DDL statement in the same migration file. Session-scope ensures the
-// GUC survives across all DDL statements in a no-transaction migration.
-//
-// SessionUnlock resets the GUC explicitly at the end of the destructive Down
-// session so the connection is clean when returned to the pool.
-func (l *destructiveDownSessionLocker) SessionLock(ctx context.Context, conn *sql.Conn) (retErr error) {
-	if err := l.inner.SessionLock(ctx, conn); err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil {
-			retErr = errors.Join(retErr, l.inner.SessionUnlock(context.WithoutCancel(ctx), conn))
-		}
-	}()
-	// set_config third arg = false → session-scope; MUST be session-scope so the
-	// GUC survives `-- +goose no transaction` migrations (e.g. 004) where each
-	// DDL runs in its own implicit transaction.
-	if _, err := conn.ExecContext(ctx,
-		`SELECT set_config($1, 'true', false)`, allowDestructiveDownGUC); err != nil {
-		return fmt.Errorf("postgres: enable destructive down SQL guard: %w", err)
-	}
-	return nil
-}
-
-// SessionUnlock resets gocell.allow_destructive_down to empty string (session-scope,
-// matching SessionLock's set_config call) and releases the advisory lock.
-func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) error {
-	resetCtx := context.WithoutCancel(ctx)
-	// Reset with session-scope (false) to match the SessionLock set_config call.
-	_, resetErr := conn.ExecContext(resetCtx,
-		`SELECT set_config($1, '', false)`, allowDestructiveDownGUC)
-	unlockErr := l.inner.SessionUnlock(resetCtx, conn)
-	return errors.Join(resetErr, unlockErr)
 }
 
 // lockTimeoutSessionLocker wraps an inner SessionLocker and sets lock_timeout
@@ -311,12 +483,11 @@ func (l *destructiveDownSessionLocker) SessionUnlock(ctx context.Context, conn *
 // GOOSE-SESSION-LOCKER-01 (Medium, caller-scope) + review, not by the type
 // system. This is a permanent Medium ceiling, tracked for Hard-ification in
 // gh issue #1131 (alongside the SPAN #851 / HEALTHZ #893 holder-seal precedents).
-// The only operational bypass is running goose CLI / psql directly — the same
-// threat model as destructiveDownSessionLocker's GUC guard.
+// The only operational bypass is running goose CLI / psql directly.
 //
 // Session scope (set_config third arg = false) — NOT SET LOCAL — is required so
 // the timeout survives across the implicit-transaction boundaries of
-// `-- +goose no transaction` migrations, mirroring destructiveDownSessionLocker.
+// `-- +goose no transaction` migrations.
 // SessionUnlock resets via RESET so the connection is clean when returned to the
 // shared pgxpool (the migrator's *sql.DB wraps the same pool the app uses).
 type lockTimeoutSessionLocker struct {

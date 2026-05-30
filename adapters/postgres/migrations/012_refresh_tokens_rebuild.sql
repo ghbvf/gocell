@@ -30,30 +30,8 @@
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (revoke-on-use baseline)
 
 -- +goose Up
--- Pre-flight row-count guard: fresh DBs proceed automatically, but an existing
--- refresh_tokens table with rows requires an explicit operator confirmation
--- because every active refresh session will be invalidated.
---
--- To allow this destructive rebuild on a known-safe database, run goose with
--- a connection option that sets:
---   gocell.allow_destructive_refresh_tokens_rebuild=true
--- Example libpq options:
---   options='-c gocell.allow_destructive_refresh_tokens_rebuild=true'
--- +goose StatementBegin
-DO $$
-DECLARE
-    row_count bigint;
-BEGIN
-    IF to_regclass('refresh_tokens') IS NOT NULL THEN
-        SELECT count(*) INTO row_count FROM refresh_tokens;
-        IF row_count > 0
-           AND lower(coalesce(current_setting('gocell.allow_destructive_refresh_tokens_rebuild', true), '')) <> 'true' THEN
-            RAISE EXCEPTION 'migration 012 refused: refresh_tokens has % rows; set gocell.allow_destructive_refresh_tokens_rebuild=true only after an approved destructive cutover',
-                row_count;
-        END IF;
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Forward-rebuild gate is enforced in Go (Migrator.ForwardRebuild + ForwardRebuildPermit); see issue #1248.
+-- +gocell forward-rebuild target=refresh_tokens
 
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_session;
@@ -106,27 +84,8 @@ CREATE INDEX idx_refresh_tokens_parent
 
 -- +goose Down
 -- WARNING: IRREVERSIBLE DATA LOSS.
--- production. Running down recreates the pre-PR-A29 schema (legacy token/
--- obsolete_token columns) which is INCOMPATIBLE with the new binary. The old
--- binary also cannot run against the 012 schema and may not embed this Down
--- migration. To rollback safely: drain/stop app traffic, run a maintenance
--- migrator built from the PR-A29 binary and pass the typed destructive-down
--- permit at the Migrator.Down API boundary. The migrator sets
--- gocell.allow_destructive_down=true on goose's execution
--- connection; direct SQL/goose bypasses fail closed unless an operator
--- explicitly sets the same GUC. Then start the old binary after the DB schema
--- is back at 011. Never run new and old binaries against the opposite
--- refresh_tokens schema.
---
--- Recreate the pre-X11 schema shape. Token data is not recoverable.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
+-- Recreate the pre-012 schema shape. Token data is not recoverable.
 
 DROP INDEX IF EXISTS idx_refresh_tokens_parent;
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;

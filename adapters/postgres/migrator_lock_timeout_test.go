@@ -18,8 +18,8 @@ import (
 // connection for the duration of a migration session and resets it on unlock so
 // the connection is clean when returned to the shared pgxpool. Session scope
 // (not SET LOCAL) is required so the timeout survives across the implicit-tx
-// boundaries of `-- +goose no transaction` migrations, mirroring
-// destructiveDownSessionLocker.
+// boundaries of `-- +goose no transaction` migrations, mirroring the
+// session-scope lock_timeout requirement for `-- +goose no transaction` migrations.
 func TestMigrator_LockTimeoutSessionLocker_SetsAndResets(t *testing.T) {
 	pool := emptyPool(t)
 	ctx := context.Background()
@@ -105,4 +105,49 @@ END $$;
 		"probe migrations RAISE unless lock_timeout='5s' is injected by "+
 			"lockTimeoutSessionLocker via newGooseProvider — guards the wiring, "+
 			"not just the locker type")
+}
+
+// TestMigrator_LockTimeoutAppliedViaProvider_Down verifies that the Down path
+// also runs through lockTimeoutSessionLocker. newGooseProvider injects the
+// locker once at construction time and goose uses it for both Up and Down
+// sessions; this test guards that wiring for rollbacks so a future refactor
+// that accidentally splits the provider path cannot silently drop the
+// lock_timeout injection on Down.
+func TestMigrator_LockTimeoutAppliedViaProvider_Down(t *testing.T) {
+	pool := emptyPool(t)
+	ctx := context.Background()
+
+	// The Down probe RAISEs unless lock_timeout = '5s'. The Up body is a no-op
+	// CREATE TABLE so the migration is both reversible and leaves no rows that
+	// would require a ForwardRebuild permit.
+	const downProbe = `-- +goose Up
+CREATE TABLE IF NOT EXISTS _locktimeout_down_probe (id int);
+
+-- +goose Down
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF current_setting('lock_timeout') IS DISTINCT FROM '5s' THEN
+        RAISE EXCEPTION 'lock_timeout not injected (down): got %', current_setting('lock_timeout');
+    END IF;
+END $$;
+DROP TABLE IF EXISTS _locktimeout_down_probe;
+-- +goose StatementEnd
+`
+	fixtureFS := fstest.MapFS{
+		"001_locktimeout_down_probe.sql": &fstest.MapFile{Data: []byte(downProbe)},
+	}
+
+	migrator, err := NewMigrator(pool, fixtureFS, "schema_migrations_locktimeout_down_probe")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = migrator.Close() })
+
+	require.NoError(t, migrator.Up(ctx), "Up must succeed before Down can be tested")
+
+	permit, err := AllowDestructiveDown("lock_timeout Down probe test")
+	require.NoError(t, err)
+
+	require.NoError(t, migrator.Down(ctx, permit),
+		"Down probe RAISEs unless lock_timeout='5s' is injected by "+
+			"lockTimeoutSessionLocker via newGooseProvider — guards the Down wiring")
 }

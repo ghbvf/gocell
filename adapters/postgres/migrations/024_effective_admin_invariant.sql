@@ -156,15 +156,7 @@ CREATE TRIGGER effective_admin_invariant_on_users
 -- +goose Down
 -- WARNING: rolling back weakens the at-least-one-admin invariant — a locked
 -- admin would once again count as a usable holder, re-opening the S4.0 hazard.
--- Fail-closed: refuse rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP TRIGGER IF EXISTS effective_admin_invariant_on_users ON users;
 DROP TRIGGER IF EXISTS effective_admin_invariant_on_role_assignments ON role_assignments;

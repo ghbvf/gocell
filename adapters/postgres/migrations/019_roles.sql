@@ -83,17 +83,7 @@ END $$;
 
 -- +goose Down
 -- WARNING: Irreversible — dropping role_assignments destroys every grant.
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- Set by Migrator.Down's destructiveDownSessionLocker; direct goose CLI / psql bypass
--- without the GUC will RAISE EXCEPTION here.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP TRIGGER IF EXISTS last_admin_protected ON role_assignments;
 DROP FUNCTION IF EXISTS last_admin_protected_fn();

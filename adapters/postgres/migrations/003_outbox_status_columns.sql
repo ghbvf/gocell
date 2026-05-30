@@ -29,15 +29,7 @@ CREATE INDEX idx_outbox_pending ON outbox_entries (next_retry_at NULLS FIRST, cr
   WHERE status = 'pending';
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP INDEX IF EXISTS idx_outbox_pending;
 ALTER TABLE outbox_entries

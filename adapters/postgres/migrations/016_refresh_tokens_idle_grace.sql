@@ -105,17 +105,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_refresh_tokens_idle_expires
     ON refresh_tokens (idle_expires_at);
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- This migration uses NO TRANSACTION; each statement runs in its own implicit
--- transaction. The GUC is session-scope so it persists across all statements.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 DROP INDEX CONCURRENTLY IF EXISTS idx_refresh_tokens_idle_expires;
 

@@ -59,6 +59,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/otel.TracerConfig":                  "config: construction input value",
 	"adapters/postgres.Config":                    "config: construction input value",
 	"adapters/postgres.DestructiveDownPermit":     "value-object: explicit migration rollback permit",
+	"adapters/postgres.ForwardRebuildPermit":      "value-object: explicit forward-rebuild permit",
 	"adapters/postgres.InvalidIndex":              "value-object: schema validation diagnostic",
 	"adapters/postgres.LedgerStore":               "subresource-not-owner: storage facade over caller-owned pool; no independent lifecycle",
 	"adapters/postgres.MigrationDirection":        "value-object: migration enum",

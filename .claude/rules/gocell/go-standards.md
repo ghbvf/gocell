@@ -92,7 +92,11 @@ paths:
 
 ## 数据库迁移
 
-- Migration 文件只增不改（已提交的 migration 不修改）
+- Migration 文件只增不改（已提交的 migration 不修改）。例外：issue #1248
+  （forward-rebuild/destructive-down 门从 SQL GUC 搬到 Go typed permit）按 ADR
+  `docs/architecture/202605310200-1122-adr-migrator-permit-typed-channel.md` §7
+  具名豁免编辑了已提交 migration 删 GUC 守卫——理由：pre-v1.0、无生产 DB、删守卫
+  不改结果 schema shape（DDL 语义不变，仅删 SQL 侧 IF GUC 判断块）。
 - 新字段必须有默认值或允许 NULL
 - 大表索引用 `CREATE INDEX CONCURRENTLY`
 - 命名：`{序号}_{动词}_{对象}.sql`

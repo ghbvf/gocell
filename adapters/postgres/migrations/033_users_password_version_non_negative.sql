@@ -44,14 +44,6 @@ COMMENT ON CONSTRAINT users_password_version_non_negative ON users IS
     'Defense-in-depth: password_version is a monotonic counter (starts at 0, only incremented). issue #940 P2-1.';
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_password_version_non_negative;

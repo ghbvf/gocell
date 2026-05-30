@@ -13,17 +13,15 @@
 --      every non-'published' row is still un-relayed.
 --   2. Confirm all relay instances are stopped (so no row re-enters 'claiming'
 --      between the check and `goose up`).
---   3. Run `goose up`. The Up block fails closed if any non-'published' row
---      remains, unless the operator explicitly accepts the loss by setting the
---      dedicated forward-rebuild GUC gocell.allow_outbox_rebuild=true.
+--   3. Run `pg-migrate -dsn "$GOCELL_PG_DSN" -rebuild "44:<reason>"`. The Up
+--      block gate (forward-rebuild permit) is enforced in Go via
+--      Migrator.ForwardRebuild + ForwardRebuildPermit (issue #1248).
 --
--- GUC decoupling (mirror of migration 043_audit_entries_v2):
---   This is a forward (Up) destructive rebuild, NOT a rollback. It uses the
---   dedicated gocell.allow_outbox_rebuild GUC, NOT gocell.allow_destructive_down
---   (which gates Down/rollback sections). Sharing the down GUC for a forward
---   TRUNCATE would conflate "I am rolling back" with "I am rebuilding forward",
---   so the boundary is kept explicit at the runbook + audit-log layer — exactly
---   the decoupling 043 established for audit_entries.
+-- Permit decoupling (mirror of migration 043_audit_entries_v2):
+--   This is a forward (Up) destructive rebuild, NOT a rollback. The forward-rebuild
+--   permit is intentionally separate from the destructive-down permit so that
+--   rebuild approval is decoupled from rollback approval — exactly the decoupling
+--   043 established for audit_entries.
 --
 -- Rationale for TRUNCATE + ADD COLUMN rather than ADD COLUMN DEFAULT:
 --   - NOT NULL with no DEFAULT cannot apply to existing rows in PostgreSQL
@@ -38,22 +36,8 @@
 --     column value from outbox.PrincipalMetadata (zero value encodes fine).
 --
 -- +goose Up
--- Forward-rebuild permit (decoupled from the destructive-down GUC). Fail closed
--- if any UNDELIVERED row (status <> 'published') would be destroyed, unless the
--- operator sets gocell.allow_outbox_rebuild=true. Already-'published' rows are
--- delivered and safe to TRUNCATE, so they do not block the migration.
--- +goose StatementBegin
-DO $$
-DECLARE
-    undelivered bigint;
-BEGIN
-    SELECT count(*) INTO undelivered FROM outbox_entries WHERE status <> 'published';
-    IF undelivered > 0
-       AND current_setting('gocell.allow_outbox_rebuild', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'migration 044: outbox_entries has % undelivered row(s) (status <> published). Drain the relay until "SELECT count(*) FROM outbox_entries WHERE status <> ''published''" is 0, then re-run; or set GUC gocell.allow_outbox_rebuild=true to accept the loss.', undelivered;
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Forward-rebuild gate is enforced in Go (Migrator.ForwardRebuild + ForwardRebuildPermit); see issue #1248.
+-- +gocell forward-rebuild target=outbox_entries
 
 TRUNCATE outbox_entries;
 
@@ -66,15 +50,7 @@ ALTER TABLE outbox_entries
 -- permanently deleting all principal identity and occurred_at data for
 -- outbox_entries rows. Production rollback MUST back up the table first.
 --
--- Fail-closed: requires gocell.allow_destructive_down GUC (shared with 001/003/etc).
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 ALTER TABLE outbox_entries
     DROP COLUMN IF EXISTS principal,

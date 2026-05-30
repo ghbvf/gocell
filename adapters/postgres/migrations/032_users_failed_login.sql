@@ -46,15 +46,7 @@ COMMENT ON COLUMN users.locked_until IS
     'Lazy-unlock TTL for auto-locked accounts. When status=locked AND now() >= locked_until, login transparently unlocks. NULL for active accounts or manual admin lock (no TTL).';
 
 -- +goose Down
--- Fail-closed: refuse destructive rollback unless gocell.allow_destructive_down is set.
--- +goose StatementBegin
-DO $$
-BEGIN
-    IF current_setting('gocell.allow_destructive_down', true) IS DISTINCT FROM 'true' THEN
-        RAISE EXCEPTION 'destructive down blocked: GUC gocell.allow_destructive_down not set';
-    END IF;
-END $$;
--- +goose StatementEnd
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
 
 -- Drop the CHECK constraint explicitly before the columns. PG would
 -- cascade-drop it with the column, but writing it out keeps the Down path
