@@ -85,7 +85,7 @@ func startSubscribe(t *testing.T, sub *Subscriber, subscription outbox.Subscript
 	go func() { _ = sub.Subscribe(ctx, subscription, handler) }()
 	select {
 	case <-sub.Ready(subscription):
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		cancel()
 		t.Fatal("subscribe did not become ready")
 	}
