@@ -427,10 +427,18 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 			topic := prefix + "/" + uuid.NewString()
 			itestPublish(t, conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
 
+			// Wait for the TERMINAL settlement, not just "failure recorded":
+			// A4 (#1142) moved releaseSettlement to AFTER routeDeadLetter +
+			// ackPoison (release the claim only once the broker disposition is
+			// final), so RecordConsumeFailure (early) no longer implies the claim
+			// has been released. With a real broker the $dead round-trip widens
+			// that window — poll until success (ack) or release (requeue/reject)
+			// reaches the expected terminal count.
 			deadline := time.Now().Add(testtime.D10s)
 			for time.Now().Before(deadline) {
 				s, f, _ := coll.snapshot()
-				if s+f >= 1 {
+				_, rel := settlement.counts()
+				if s >= tc.wantSuccess && rel >= tc.wantRelease && (tc.wantReason == "" || f >= 1) {
 					break
 				}
 				time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency

@@ -68,3 +68,19 @@ func TestRedactErr_Nil(t *testing.T) {
 		t.Errorf("redactErr(nil) = %v, want nil", out)
 	}
 }
+
+func TestSafeErrForLog(t *testing.T) {
+	if got := safeErrForLog(nil); got != "" {
+		t.Errorf("safeErrForLog(nil) = %q, want empty", got)
+	}
+	// An errcode embedding an untrusted topic with a control char (newline) must
+	// have the control char stripped (CWE-117 log-injection), while non-control
+	// text is preserved.
+	out := safeErrForLog(errors.New("[ERR_X] topic=ns/foo\nINJECTED"))
+	if strings.ContainsAny(out, "\n\r") {
+		t.Errorf("safeErrForLog left a control char: %q", out)
+	}
+	if !strings.Contains(out, "INJECTED") {
+		t.Errorf("safeErrForLog dropped non-control text: %q", out)
+	}
+}

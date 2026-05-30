@@ -69,3 +69,17 @@ func redactConnectURL(raw string) string {
 func redactErr(err error) error {
 	return redaction.RedactError(err)
 }
+
+// safeErrForLog sanitizes an error's text for slog the SAME way safeTopicForLog
+// sanitizes a topic: strip control / non-printable runes, mask key=value
+// secrets, then truncate. Use when the error may embed untrusted input — e.g. an
+// errcode whose Internal details carry a broker-delivered topic (errcode.Error()
+// renders internal details as "topic=<raw>"). redactErr alone masks secrets but
+// does NOT strip control chars, so a topic with embedded newlines would still be
+// a CWE-117 log-injection vector. nil → "".
+func safeErrForLog(err error) string {
+	if err == nil {
+		return ""
+	}
+	return safeTopicForLog(err.Error())
+}

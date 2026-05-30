@@ -32,11 +32,14 @@ import (
 func (s *Subscriber) routeDeadLetter(ctx context.Context, originalTopic string, payload []byte, reason ConsumeFailureReason) {
 	dlt, err := s.ns.MintDeadLetter(originalTopic)
 	if err != nil {
+		// safeErrForLog: the mint error (errcode) embeds the untrusted originalTopic
+		// in its Internal detail ("topic=<raw>") — sanitize it like the topic field
+		// (redactErr would mask secrets but not strip control chars; CWE-117).
 		slog.LogAttrs(ctx, slog.LevelError, "mqtt: cannot mint $dead topic; skipping DLT publish (message acked-as-poison)",
 			slog.String(logKeyClientID, s.conn.cfg.ClientID.String()),
 			slog.String(logKeyTopic, safeTopicForLog(originalTopic)),
 			slog.String("reason", string(reason)),
-			slog.Any("error", err))
+			slog.String("error", safeErrForLog(err)))
 		s.collector.RecordDeadLetterFailure(ctx, reason)
 		return
 	}

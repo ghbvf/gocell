@@ -288,10 +288,15 @@ func TestSubscriber_DispositionMatrix(t *testing.T) {
 
 			testwait.External(t, "handler-called", called.Load, testtime.D5s, testtime.D10ms)
 
-			// Allow dispatch to finish (commit/release/ack).
+			// Wait for the TERMINAL settlement: A4 (#1142) releases the claim only
+			// AFTER routeDeadLetter + ackPoison, so "failure recorded" no longer
+			// implies "released". Poll until success (ack) or release
+			// (requeue/reject) reaches the expected count, so the release assertion
+			// below is not racing the (now-last) releaseSettlement step.
 			testwait.External(t, "dispatch-settled", func() bool {
 				success, failure, _ := coll.snapshot()
-				return success+failure >= 1
+				_, release := settlement.counts()
+				return success >= tc.wantSuccess && release >= tc.wantRelease && (tc.wantReason == "" || failure >= 1)
 			}, testtime.D5s, testtime.D10ms)
 
 			// The $dead routing (RecordDeadLetter) runs AFTER RecordConsumeFailure
