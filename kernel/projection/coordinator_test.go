@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -203,7 +205,9 @@ func minimalSpec(id string) contractspec.ContractSpec {
 
 func newCoordinator(t *testing.T, reg cell.Registrar, txr persistence.TxRunner, store CheckpointStore, cur Cursor) *Coordinator {
 	t.Helper()
-	c, err := NewCoordinator("testcell", reg, txr, store, cur, wrapper.NoopTracer{})
+	clk := clockmock.New(time.Now())
+	replay := NewMemReplaySource()
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, replay, wrapper.NoopTracer{}, nil)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -346,11 +350,12 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 		reg := &fakeRegistrar{}
 		store := &seededStore{offsets: make(map[string]int64), loadErr: errors.New("load failed")}
 
-		c, err := NewCoordinator("testcell", reg, txr, store, cursor, wrapper.NoopTracer{})
+		clk := clockmock.New(time.Now())
+		c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cursor, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
 		if err != nil {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
-		h := c.buildHandler("testcell", "p1", apply.fn)
+		h := c.buildHandler(apply.fn)
 		result := h(context.Background(), outbox.Entry{})
 
 		if apply.calls != 0 {
@@ -394,7 +399,7 @@ func TestCoordinator_ReorderDropsLowerPosition(t *testing.T) {
 	// Higher position 7 is processed first → checkpoint advances to 7.
 	applyHi := &recordingApply{}
 	cHi := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 7})
-	rHi := cHi.buildHandler("testcell", "p1", applyHi.fn)(ctx, outbox.Entry{})
+	rHi := cHi.buildHandler(applyHi.fn)(ctx, outbox.Entry{})
 	if applyHi.calls != 1 || rHi.Disposition != outbox.DispositionAck {
 		t.Fatalf("pos=7: calls=%d disp=%v, want 1 / Ack", applyHi.calls, rHi.Disposition)
 	}
@@ -403,7 +408,7 @@ func TestCoordinator_ReorderDropsLowerPosition(t *testing.T) {
 	// skipped. Apply for pos=6 never runs: this is the dropped distinct event.
 	applyLo := &recordingApply{}
 	cLo := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 6})
-	rLo := cLo.buildHandler("testcell", "p1", applyLo.fn)(ctx, outbox.Entry{})
+	rLo := cLo.buildHandler(applyLo.fn)(ctx, outbox.Entry{})
 	if applyLo.calls != 0 {
 		t.Fatalf("pos=6 after checkpoint=7: Apply called %d times — hazard expects 0 (silently dropped)", applyLo.calls)
 	}
@@ -492,7 +497,7 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 
 	// First Coordinator processes pos=6 and saves checkpoint.
 	c1 := newCoordinator(t, reg, txr, store, cursor)
-	h1 := c1.buildHandler("testcell", "p1", apply.fn)
+	h1 := c1.buildHandler(apply.fn)
 	h1(context.Background(), outbox.Entry{})
 
 	offset, _ := store.LoadOffset(context.Background(), "testcell", "p1")
@@ -504,7 +509,7 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	// pos=6 == current=6 → skip.
 	apply2 := &recordingApply{}
 	c2 := newCoordinator(t, &fakeRegistrar{}, &fakeTxRunner{}, store, &fakeCursor{pos: 6})
-	h2 := c2.buildHandler("testcell", "p1", apply2.fn)
+	h2 := c2.buildHandler(apply2.fn)
 	r2 := h2(context.Background(), outbox.Entry{})
 	if apply2.calls != 0 {
 		t.Errorf("second coordinator: apply called %d times on duplicate pos, want 0", apply2.calls)
@@ -516,7 +521,7 @@ func TestCoordinator_CrashRecovery(t *testing.T) {
 	// Second Coordinator advances to pos=7.
 	apply3 := &recordingApply{}
 	c3 := newCoordinator(t, &fakeRegistrar{}, &fakeTxRunner{}, store, &fakeCursor{pos: 7})
-	h3 := c3.buildHandler("testcell", "p1", apply3.fn)
+	h3 := c3.buildHandler(apply3.fn)
 	r3 := h3(context.Background(), outbox.Entry{})
 	if apply3.calls != 1 {
 		t.Errorf("third coordinator: apply.calls = %d, want 1", apply3.calls)
@@ -553,7 +558,7 @@ func TestCoordinator_GapSkip(t *testing.T) {
 	// Apply pos=7 (gap over 6).
 	applyFirst := &recordingApply{}
 	c1 := newCoordinator(t, reg, txr, store, &fakeCursor{pos: 7})
-	h1 := c1.buildHandler("testcell", "p1", applyFirst.fn)
+	h1 := c1.buildHandler(applyFirst.fn)
 	r1 := h1(context.Background(), outbox.Entry{})
 
 	if applyFirst.calls != 1 {
@@ -571,7 +576,7 @@ func TestCoordinator_GapSkip(t *testing.T) {
 	// passed by the monotonically-advancing cursor. Apply must NOT be called.
 	applyLate := &recordingApply{}
 	c2 := newCoordinator(t, &fakeRegistrar{}, txr, store, &fakeCursor{pos: 6})
-	h2 := c2.buildHandler("testcell", "p1", applyLate.fn)
+	h2 := c2.buildHandler(applyLate.fn)
 	r2 := h2(context.Background(), outbox.Entry{})
 
 	if applyLate.calls != 0 {
@@ -743,7 +748,8 @@ func TestCoordinator_Subscribe(t *testing.T) {
 	t.Run("non-event spec rejected by Subscribe kind guard", func(t *testing.T) {
 		t.Parallel()
 		reg := &fakeRegistrar{}
-		c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
+		clk := clockmock.New(time.Now())
+		c, err := NewCoordinator(clk, "testcell", "myproj", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
 		if err != nil {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
@@ -753,7 +759,7 @@ func TestCoordinator_Subscribe(t *testing.T) {
 			Transport: "internal",
 			// Topic intentionally absent
 		}
-		subscribeErr := c.Subscribe(context.Background(), badSpec, "myproj",
+		subscribeErr := c.Subscribe(context.Background(), badSpec,
 			func(_ context.Context, _ outbox.Entry) error { return nil },
 		)
 		if subscribeErr == nil {
@@ -882,13 +888,17 @@ func TestCheckpointKey(t *testing.T) {
 
 func TestPhase_AlwaysLive(t *testing.T) {
 	t.Parallel()
+	clk := clockmock.New(time.Now())
 	c, err := NewCoordinator(
-		"testcell",
+		clk,
+		"testcell", "p1",
 		&fakeRegistrar{},
 		&fakeTxRunner{},
 		NewMemCheckpointStore(),
 		&fakeCursor{},
+		NewMemReplaySource(),
 		wrapper.NoopTracer{},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -934,12 +944,13 @@ func runApplyOneCase(t *testing.T, tc applyOneCase, errSave error) {
 		store = newSeededStore("testcell", "p1", tc.currentOffset)
 	}
 
-	c, err := NewCoordinator("testcell", reg, txr, store, cursor, wrapper.NoopTracer{})
+	clk := clockmock.New(time.Now())
+	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cursor, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
-	h := c.buildHandler("testcell", "p1", apply.fn)
+	h := c.buildHandler(apply.fn)
 	result := h(context.Background(), outbox.Entry{})
 
 	if apply.calls != tc.wantApplyCalls {
@@ -999,7 +1010,8 @@ type nilGuardCase struct {
 
 func runNilGuardCase(t *testing.T, tc nilGuardCase) {
 	t.Helper()
-	c, err := NewCoordinator(tc.cellID, tc.reg, tc.txr, tc.store, tc.cursor, tc.tracer)
+	clk := clockmock.New(time.Now())
+	c, err := NewCoordinator(clk, tc.cellID, "p1", tc.reg, tc.txr, tc.store, tc.cursor, NewMemReplaySource(), tc.tracer, nil)
 	if !tc.wantErr {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1042,13 +1054,34 @@ type subscribeCase struct {
 func runSubscribeCase(t *testing.T, tc subscribeCase) {
 	t.Helper()
 	reg := &fakeRegistrar{subscribeErr: tc.regErr}
-	c, err := NewCoordinator("testcell", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, wrapper.NoopTracer{})
+	// projectionID is now passed to NewCoordinator; use tc.projectionID if non-empty,
+	// else "myproj" (the happy-path default). Empty-projectionID cases should
+	// now be represented as empty-projectionID in NewCoordinator, which is tested
+	// separately in TestNewCoordinator_NilGuards_PR03. Here we preserve old cases
+	// that passed projectionID to Subscribe by threading it through the constructor.
+	projID := tc.projectionID
+	if projID == "" {
+		projID = "myproj" // Subscribe empty-projectionID case no longer exists; wire valid projID
+	}
+	clk := clockmock.New(time.Now())
+	c, err := NewCoordinator(clk, "testcell", projID, reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
+	if tc.projectionID == "" {
+		// empty projectionID → NewCoordinator itself errors; Subscribe never called.
+		if err == nil {
+			t.Fatal("expected NewCoordinator to error for empty projectionID")
+		}
+		// tc.wantErr is true in this case; treat as expected.
+		if !tc.wantErr {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
 	spec := minimalSpec("projection.myproj.v1")
-	subscribeErr := c.Subscribe(context.Background(), spec, tc.projectionID, tc.applyFn)
+	subscribeErr := c.Subscribe(context.Background(), spec, tc.applyFn)
 
 	if tc.wantErr && subscribeErr == nil {
 		t.Fatal("expected error, got nil")
@@ -1088,12 +1121,13 @@ func runSpanStatusCase(t *testing.T, tc spanStatusCase) {
 	store := newSeededStore("testcell", "p1", 0)
 	cursor := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator("testcell", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, spy)
+	clk := clockmock.New(time.Now())
+	c, err := NewCoordinator(clk, "testcell", "p1", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, NewMemReplaySource(), spy, nil)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 
-	h := c.buildHandler("testcell", "p1", apply.fn)
+	h := c.buildHandler(apply.fn)
 	_ = h(context.Background(), outbox.Entry{})
 
 	if spy.last == nil {

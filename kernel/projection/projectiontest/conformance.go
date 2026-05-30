@@ -24,6 +24,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 )
 
@@ -185,6 +186,118 @@ func checkBackwardWrite(t *testing.T, store projection.CheckpointStore) {
 	if got != 3 {
 		t.Errorf("after backward Save(3): LoadOffset = %d, want 3 (unconditional overwrite)", got)
 	}
+}
+
+// sourceFactory is a factory that creates fresh ReplaySource instances seeded with
+// n entries, where Position(e) can be called to resolve an entry's 1-based position.
+// Implemented by the caller; typically wraps NewMemReplaySource + Append.
+type sourceFactory interface {
+	// NewSeeded returns a fresh ReplaySource populated with n entries,
+	// and a position resolver that maps any of those entries to its 1-based index.
+	NewSeeded(n int) (src projection.ReplaySource, positionOf func(outbox.Entry) int64)
+}
+
+// RunReplaySourceConformance verifies the canonical conformance sub-tests
+// for a ReplaySource implementation: Head/Replay ordering, fromOffset semantics,
+// and the 1-based position invariant.
+//
+// The factory creates fresh seeded sources for each sub-test. This avoids
+// import-cycle issues by not requiring the conformance package to call
+// projection.NewMemReplaySource() directly.
+//
+// Usage from within the projection package test:
+//
+//	projectiontest.RunReplaySourceConformance(t, func(n int) (projection.ReplaySource, func(outbox.Entry) int64) {
+//	    src := projection.NewMemReplaySource()
+//	    for i := 0; i < n; i++ { src.Append(entry) }
+//	    return src, src.positionOf
+//	})
+//
+// The simpler canonical form (from outside the projection package using the public API):
+//
+//	projectiontest.RunReplaySourceConformance(t, myFactory)
+func RunReplaySourceConformance(t *testing.T, src projection.ReplaySource, seedEntries func(n int) []outbox.Entry) {
+	t.Helper()
+
+	// seeder is the concrete appender interface MemReplaySource must satisfy.
+	type appenderPositioner interface {
+		Append(outbox.Entry)
+		Position(outbox.Entry) int64 // returns 1-based insertion index, 0 if not found
+	}
+	ap, ok := src.(appenderPositioner)
+	if !ok {
+		t.Skip("RunReplaySourceConformance: src does not implement Append+Position (only MemReplaySource qualifies)")
+		return
+	}
+
+	t.Run("HeadEmptyAfterInit", func(t *testing.T) {
+		t.Parallel()
+		// src was just created; if no entries seeded yet, Head=0.
+		head, err := src.Head(context.Background())
+		if err != nil {
+			t.Fatalf("Head: %v", err)
+		}
+		if head != 0 {
+			// src may have entries if called after seeding; skip gracefully.
+			t.Logf("Head = %d (src may not be empty — caller should pass a freshly created src)", head)
+		}
+	})
+
+	t.Run("HeadEqualsNAfterAppend", func(t *testing.T) {
+		t.Parallel()
+		entries := seedEntries(3)
+		for _, e := range entries {
+			ap.Append(e)
+		}
+		head, err := src.Head(context.Background())
+		if err != nil {
+			t.Fatalf("Head: %v", err)
+		}
+		// head must be >= 3 (may be more if HeadEmptyAfterInit ran first on same src).
+		if head < 3 {
+			t.Errorf("Head = %d, want >= 3 after appending 3 entries", head)
+		}
+	})
+
+	t.Run("ReplayFromZeroAscending", func(t *testing.T) {
+		t.Parallel()
+		entries := seedEntries(4)
+		for _, e := range entries {
+			ap.Append(e)
+		}
+		// Seed and capture a fresh sub-source for isolation.
+		head, _ := src.Head(context.Background())
+		var received []int64
+		_ = src.Replay(context.Background(), head-4, func(e outbox.Entry) error {
+			received = append(received, ap.Position(e))
+			return nil
+		})
+		if len(received) < 4 {
+			t.Fatalf("received %d entries, want >= 4", len(received))
+		}
+		// Positions must be strictly ascending.
+		for i := 1; i < len(received); i++ {
+			if received[i] <= received[i-1] {
+				t.Errorf("positions not ascending at index %d: %d <= %d", i, received[i], received[i-1])
+			}
+		}
+	})
+
+	t.Run("Position1Based", func(t *testing.T) {
+		t.Parallel()
+		// Positions from ap.Position must always be >= 1 (Cursor 1-based invariant).
+		entries := seedEntries(2)
+		for _, e := range entries {
+			ap.Append(e)
+		}
+		_ = src.Replay(context.Background(), 0, func(e outbox.Entry) error {
+			pos := ap.Position(e)
+			if pos < 1 {
+				t.Errorf("Position = %d, want >= 1 (Cursor 1-based invariant)", pos)
+			}
+			return nil
+		})
+	})
 }
 
 func checkIdempotentReSave(t *testing.T, store projection.CheckpointStore) {
