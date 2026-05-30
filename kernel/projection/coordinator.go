@@ -65,72 +65,99 @@ type Coordinator struct {
 	lastAppliedUnixNano atomic.Int64
 }
 
-// NewCoordinator constructs a Coordinator. clk is the first parameter per
-// CLOCK-POSITIONAL-INJECTION-01. All parameters except metrics are required.
+// CoordinatorConfig bundles the Coordinator's dependencies. It mirrors the
+// kernel many-dependency convention NewConsumerBase(claimer, ConsumerBaseConfig,
+// clk): required deps live in a config struct validated with hand-written nil
+// guards, while clk is a separate positional parameter to NewCoordinator.
 //
-// metrics is optional (nil = all instruments disabled). When non-nil, the
-// label set is validated via metrics.preflight during construction.
+// clk is deliberately NOT a field here: CLOCK-POSITIONAL-INJECTION-01 mandates a
+// positional clock parameter and forbids a Clock field on input config structs.
+//
+// Metrics is optional (nil disables all instruments). Every other field is
+// required; a nil/empty value is rejected by NewCoordinator. Grouping the deps
+// in a struct (rather than 9 positional params) removes the silent-swap hazard
+// of the two adjacent string fields CellID/ProjectionID.
+//
+// ref: open-source consensus — Watermill cqrs.EventProcessorConfig, Axon
+// TrackingEventProcessor.Builder; kernel kernel/outbox.ConsumerBaseConfig.
+type CoordinatorConfig struct {
+	Registrar    cell.Registrar
+	CellID       string
+	ProjectionID string
+	TxRunner     persistence.TxRunner
+	Store        CheckpointStore
+	Cursor       Cursor
+	Replay       ReplaySource
+	Tracer       wrapper.Tracer
+	Metrics      *Metrics // optional; nil = instruments disabled
+}
+
+// NewCoordinator constructs a per-projection Coordinator. clk is the first
+// parameter per CLOCK-POSITIONAL-INJECTION-01; all other dependencies are
+// supplied via cfg.
+//
+// When cfg.Metrics is non-nil its label set is validated via preflight during
+// construction, so a metric-label misconfiguration fails fast at startup rather
+// than panicking on the first runtime metric update.
 //
 // Required dependencies are validated with hand-written nil guards (using
 // validation.IsNilInterface) rather than gocell:"required" codegen — kernel/
 // has no codegen dependency (established kernel-layer pattern).
 //
 // ref: ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md
-func NewCoordinator(
-	clk clock.Clock,
-	cellID, projectionID string,
-	reg cell.Registrar,
-	txRunner persistence.TxRunner,
-	store CheckpointStore,
-	cursor Cursor,
-	replay ReplaySource,
-	tracer wrapper.Tracer,
-	metrics *Metrics,
-) (*Coordinator, error) {
+// ref: kernel/outbox.NewConsumerBase (required deps + config struct + positional clk)
+func NewCoordinator(clk clock.Clock, cfg CoordinatorConfig) (*Coordinator, error) {
 	clock.MustHaveClock(clk, "projection.NewCoordinator")
-	if cellID == "" {
+	if cfg.CellID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: cellID required")
+			"projection.NewCoordinator: CellID required")
 	}
-	if projectionID == "" {
+	if cfg.ProjectionID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: projectionID required")
+			"projection.NewCoordinator: ProjectionID required")
 	}
-	if validation.IsNilInterface(reg) {
+	if validation.IsNilInterface(cfg.Registrar) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: reg required")
+			"projection.NewCoordinator: Registrar required")
 	}
-	if validation.IsNilInterface(txRunner) {
+	if validation.IsNilInterface(cfg.TxRunner) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: txRunner required")
+			"projection.NewCoordinator: TxRunner required")
 	}
-	if validation.IsNilInterface(store) {
+	if validation.IsNilInterface(cfg.Store) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: store required")
+			"projection.NewCoordinator: Store required")
 	}
-	if validation.IsNilInterface(cursor) {
+	if validation.IsNilInterface(cfg.Cursor) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: cursor required")
+			"projection.NewCoordinator: Cursor required")
 	}
-	if validation.IsNilInterface(replay) {
+	if validation.IsNilInterface(cfg.Replay) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: replay required")
+			"projection.NewCoordinator: Replay required")
 	}
-	if validation.IsNilInterface(tracer) {
+	if validation.IsNilInterface(cfg.Tracer) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.NewCoordinator: tracer required")
+			"projection.NewCoordinator: Tracer required")
+	}
+	// Fail fast on metric-label misconfiguration at construction (the godoc
+	// contract) instead of panicking on the first runtime metric update.
+	if cfg.Metrics != nil {
+		if err := cfg.Metrics.preflight(cfg.CellID, cfg.ProjectionID); err != nil {
+			return nil, fmt.Errorf("projection.NewCoordinator: metrics preflight: %w", err)
+		}
 	}
 	c := &Coordinator{
 		clk:          clk,
-		cellID:       cellID,
-		projectionID: projectionID,
-		reg:          reg,
-		txRunner:     txRunner,
-		store:        store,
-		cursor:       cursor,
-		replay:       replay,
-		tracer:       tracer,
-		metrics:      metrics,
+		cellID:       cfg.CellID,
+		projectionID: cfg.ProjectionID,
+		reg:          cfg.Registrar,
+		txRunner:     cfg.TxRunner,
+		store:        cfg.Store,
+		cursor:       cfg.Cursor,
+		replay:       cfg.Replay,
+		tracer:       cfg.Tracer,
+		metrics:      cfg.Metrics,
 		done:         make(chan struct{}),
 	}
 	c.phase.Store(uint32(PhaseLive))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -45,13 +46,17 @@ func newCoordinatorFull(
 	if projectionID == "" {
 		projectionID = "p1"
 	}
-	c, err := NewCoordinator(
-		clk,
-		"testcell", projectionID,
-		reg, txr, store, cursor, replay,
-		wrapper.NoopTracer{},
-		nil, // metrics optional
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: projectionID,
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cursor,
+		Replay:       replay,
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      nil, // metrics optional
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -269,13 +274,16 @@ func TestRebuild_ConcurrentSecondRebuild(t *testing.T) {
 	blockingReplay := &blockingReplaySource{unblock: make(chan struct{})}
 	cur := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator(
-		clk,
-		"testcell", "p1",
-		reg, &fakeTxRunner{}, store, cur, blockingReplay,
-		wrapper.NoopTracer{},
-		nil,
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     &fakeTxRunner{},
+		Store:        store,
+		Cursor:       cur,
+		Replay:       blockingReplay,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -330,13 +338,16 @@ func TestClose_CancelsInFlightRebuild(t *testing.T) {
 	blockingReplay := &blockingReplaySource{unblock: make(chan struct{})}
 	cur := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator(
-		clk,
-		"testcell", "p1",
-		reg, &fakeTxRunner{}, store, cur, blockingReplay,
-		wrapper.NoopTracer{},
-		nil,
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     &fakeTxRunner{},
+		Store:        store,
+		Cursor:       cur,
+		Replay:       blockingReplay,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -368,13 +379,16 @@ func TestRebuild_ContextCancelReturnLive(t *testing.T) {
 	cur := &fakeCursor{pos: 1}
 	clk := clockmock.New(time.Now())
 
-	c, err := NewCoordinator(
-		clk,
-		"testcell", "p1",
-		&fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), cur, blockingReplay,
-		wrapper.NoopTracer{},
-		nil,
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       cur,
+		Replay:       blockingReplay,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -464,13 +478,16 @@ func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c, err := NewCoordinator(
-				tc.clk,
-				"testcell", tc.projID,
-				validReg, validTxr, validStore, validCursor, tc.replay,
-				wrapper.NoopTracer{},
-				nil,
-			)
+			c, err := NewCoordinator(tc.clk, CoordinatorConfig{
+				CellID:       "testcell",
+				ProjectionID: tc.projID,
+				Registrar:    validReg,
+				TxRunner:     validTxr,
+				Store:        validStore,
+				Cursor:       validCursor,
+				Replay:       tc.replay,
+				Tracer:       wrapper.NoopTracer{},
+			})
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -515,7 +532,16 @@ func TestRebuild_CaptureHeadError(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	cur := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, src, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cur,
+		Replay:       src,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -560,7 +586,16 @@ func TestRebuild_GateParkAndResume(t *testing.T) {
 	// Use a blocking replay source to keep rebuild in Replay phase (gate SHUT).
 	blockSrc := &blockingReplaySource{unblock: make(chan struct{})}
 
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, blockSrc, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cur,
+		Replay:       blockSrc,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -684,7 +719,16 @@ func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	cur := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, catchupSrc, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cur,
+		Replay:       catchupSrc,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -698,6 +742,121 @@ func TestRebuild_CatchupIsCaughtUpError(t *testing.T) {
 	if c.Phase() != PhaseLive {
 		t.Errorf("Phase = %v, want PhaseLive after catchup isCaughtUp error", c.Phase())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestRebuild_DegradedCatchup_NoDurationObserved — rebuild_duration NOT recorded
+// on degraded catchup path, IS recorded on clean catchup path (Task 4)
+// ---------------------------------------------------------------------------
+
+// TestRebuild_DegradedCatchup_NoDurationObserved asserts that:
+//  1. Degraded path (catchupPhase returns caughtUp=false due to Head error) → the
+//     rebuild_duration histogram receives ZERO observations.
+//  2. Clean path (catchupPhase returns caughtUp=true) → the histogram receives ≥1
+//     observation.
+//
+// This verifies the production constraint: runRebuild observes rebuild_duration
+// ONLY when caughtUp==true; degraded logs Warn and skips the Observe call.
+func TestRebuild_DegradedCatchup_NoDurationObserved(t *testing.T) {
+	t.Parallel()
+
+	// --- Degraded path: Head fails on 2nd call (during catchup) ---
+	t.Run("degraded: Head error in catchup → duration NOT observed", func(t *testing.T) {
+		t.Parallel()
+		p := newProjectionRecordingProvider()
+		m, err := RegisterMetrics(p)
+		if err != nil {
+			t.Fatalf("RegisterMetrics: %v", err)
+		}
+
+		// catchupErrReplaySource defined earlier in this file:
+		// Head returns error on calls >= failAt (2 = first captureHead succeeds, catchup fails).
+		catchupSrc := &catchupErrReplaySource{failAt: 2, headErr: errors.New("catchup head error")}
+		store := NewMemCheckpointStore()
+		txr := &fakeTxRunner{}
+		reg := &fakeRegistrar{}
+		clk := clockmock.New(time.Now())
+		cur := &fakeCursor{pos: 1}
+
+		c, err := NewCoordinator(clk, CoordinatorConfig{
+			CellID:       "testcell",
+			ProjectionID: "p1",
+			Registrar:    reg,
+			TxRunner:     txr,
+			Store:        store,
+			Cursor:       cur,
+			Replay:       catchupSrc,
+			Tracer:       wrapper.NoopTracer{},
+			Metrics:      m,
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		subscribeWithDefaults(t, c, applyNoop)
+
+		if err := c.Rebuild(context.Background()); err != nil {
+			t.Fatalf("Rebuild: %v", err)
+		}
+		waitForPhase(t, c, PhaseLive)
+
+		count := p.histogramCount(
+			metricProjectionRebuildDuration,
+			kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
+		)
+		if count != 0 {
+			t.Errorf("degraded catchup: rebuild_duration observations = %d, want 0", count)
+		}
+		// Phase must still return to Live (degraded is non-fatal).
+		if c.Phase() != PhaseLive {
+			t.Errorf("Phase = %v after degraded catchup, want PhaseLive", c.Phase())
+		}
+	})
+
+	// --- Clean path: all events replayed, caughtUp=true → duration IS observed ---
+	t.Run("clean: full catchup → duration observed ≥1", func(t *testing.T) {
+		t.Parallel()
+		p := newProjectionRecordingProvider()
+		m, err := RegisterMetrics(p)
+		if err != nil {
+			t.Fatalf("RegisterMetrics: %v", err)
+		}
+
+		const n = 3
+		src, cur := makeReplayWithEntries(t, n)
+		store := NewMemCheckpointStore()
+		txr := &fakeTxRunner{}
+		reg := &fakeRegistrar{}
+		clk := clockmock.New(time.Now())
+
+		c, err := NewCoordinator(clk, CoordinatorConfig{
+			CellID:       "testcell",
+			ProjectionID: "p1",
+			Registrar:    reg,
+			TxRunner:     txr,
+			Store:        store,
+			Cursor:       cur,
+			Replay:       src,
+			Tracer:       wrapper.NoopTracer{},
+			Metrics:      m,
+		})
+		if err != nil {
+			t.Fatalf("NewCoordinator: %v", err)
+		}
+		subscribeWithDefaults(t, c, applyNoop)
+
+		if err := c.Rebuild(context.Background()); err != nil {
+			t.Fatalf("Rebuild: %v", err)
+		}
+		waitForPhase(t, c, PhaseLive)
+
+		count := p.histogramCount(
+			metricProjectionRebuildDuration,
+			kernelmetrics.Labels{"cell": "testcell", "projection": "p1"},
+		)
+		if count < 1 {
+			t.Errorf("clean rebuild: rebuild_duration observations = %d, want ≥1", count)
+		}
+	})
 }
 
 // TestRebuild_CatchupCtxCancel asserts that a ctx cancel during catchup routes
@@ -716,7 +875,16 @@ func TestRebuild_CatchupCtxCancel(t *testing.T) {
 	clk2 := clockmock.New(time.Now())
 	emptySrc.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, emptySrc, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cur,
+		Replay:       emptySrc,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -748,7 +916,16 @@ func TestRebuild_RebuildThenClose_NoRace(t *testing.T) {
 	clk := clockmock.New(time.Now())
 	cur := &fakeCursor{pos: 1}
 
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, &fakeTxRunner{}, store, cur, blockSrc, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     &fakeTxRunner{},
+		Store:        store,
+		Cursor:       cur,
+		Replay:       blockSrc,
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

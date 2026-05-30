@@ -89,21 +89,34 @@ func (c *Coordinator) runRebuild(ctx context.Context) {
 	c.openGate()
 
 	// Catchup: wait until checkpoint ≥ current Head (or ctx cancel).
-	if err := c.catchupPhase(ctx); err != nil {
+	caughtUp, err := c.catchupPhase(ctx)
+	if err != nil {
 		// ctx cancel during catchup: gate is already open, live handler continues.
 		// Route through failRebuild for consistent logging; openGate is idempotent.
 		c.failRebuild(ctx, "catchupPhase", err)
 		return
 	}
 
-	// Success.
+	// rebuild_duration + the "completed" success signal are recorded ONLY when
+	// catchup actually reached the head. A degraded catchup (Head/LoadOffset
+	// error → caughtUp=false) returns to PhaseLive without observing the
+	// histogram, so dashboards/alerting do not mistake a degraded run for a
+	// clean completion (it was already logged at Warn in catchupPhase).
 	durSecs := c.clk.Since(start).Seconds()
-	c.metrics.observeRebuildDuration(ctx, c.cellID, c.projectionID, durSecs)
-	slog.InfoContext(ctx, "projection rebuild completed",
-		"cell", c.cellID,
-		"projection", c.projectionID,
-		"duration_ms", durSecs*1000,
-	)
+	if caughtUp {
+		c.metrics.observeRebuildDuration(ctx, c.cellID, c.projectionID, durSecs)
+		slog.InfoContext(ctx, "projection rebuild completed",
+			"cell", c.cellID,
+			"projection", c.projectionID,
+			"duration_ms", durSecs*1000,
+		)
+	} else {
+		slog.WarnContext(ctx, "projection rebuild completed with degraded catchup",
+			"cell", c.cellID,
+			"projection", c.projectionID,
+			"duration_ms", durSecs*1000,
+		)
+	}
 	c.phase.Store(uint32(PhaseLive))
 }
 
@@ -170,36 +183,39 @@ func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
 
 // catchupPhase waits until the checkpoint has caught up to the current head.
 // The gate is already open, so live event handlers are processing events.
-// This phase completes either when caught up or when ctx is canceled.
-// Head/LoadOffset errors are treated as non-fatal (live path continues after
-// catchup phase exits on error).
-func (c *Coordinator) catchupPhase(ctx context.Context) error {
+//
+// Return contract:
+//   - (true, nil)  — the checkpoint reached the head; a clean completion.
+//   - (false, nil) — DEGRADED: a non-fatal Head/LoadOffset error aborted the
+//     catchup check (already logged at Warn). The live path continues, but the
+//     caller MUST NOT record rebuild_duration / a "completed" success signal.
+//   - (false, err) — ctx canceled; the caller routes through failRebuild.
+func (c *Coordinator) catchupPhase(ctx context.Context) (caughtUp bool, err error) {
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		if cerr := ctx.Err(); cerr != nil {
+			return false, cerr
 		}
-		caught, err := c.isCaughtUp(ctx)
-		if err != nil {
+		caught, ierr := c.isCaughtUp(ctx)
+		if ierr != nil {
 			// Non-fatal: store/Head error in catchup; live handler continues.
-			// Do not observe rebuild_duration on this degraded path — recording
-			// a success duration when catchup was skipped due to error misleads dashboards.
+			// Signal DEGRADED (caughtUp=false) so the caller skips the success
+			// duration/log — recording a clean completion here misleads dashboards.
 			slog.WarnContext(ctx, "projection rebuild catchup check degraded",
 				"cell", c.cellID,
 				"projection", c.projectionID,
-				"error", err,
+				"error", ierr,
 			)
-			return nil // intentional: catchup isCaughtUp error is non-fatal; live path resumes
+			return false, nil
 		}
 		if caught {
-			break
+			return true, nil
 		}
 		// Yield briefly to let the live handler process incoming events.
 		sleepUntil := c.clk.Now().Add(catchupPollInterval)
-		if err := c.clk.Sleep(ctx, sleepUntil); err != nil {
-			return err
+		if serr := c.clk.Sleep(ctx, sleepUntil); serr != nil {
+			return false, serr
 		}
 	}
-	return nil
 }
 
 // isCaughtUp checks whether the checkpoint >= current head.

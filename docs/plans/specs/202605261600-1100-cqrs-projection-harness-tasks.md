@@ -145,14 +145,16 @@
 
 ### T-03-3 Readyz probe + control-plane endpoint
 
-- **what**：`<cell>_projection_<name>_ready` probe + `POST /internal/v1/<cell>/projection/<name>/rebuild` contract & handler
+> **Amendment (PR-03 #1175)**：HTTP control-plane endpoint（`POST /internal/v1/<cell>/projection/<name>/rebuild` contract + handler）**移至 PR-04**——PR-03 无宿主 cell / internal listener，平台级 active 契约会触发 `DEAD-CONTRACT-01`（决议见 ADR 202605261620 §Rebuild control-plane endpoint Amendment 2026-05-31）。PR-03 冻结程序化触发面 `Coordinator.Rebuild(ctx)` + `Close(ctx)`；readyz probe 留在 PR-03。下方 ② contract test 随端点移 PR-04。
+
+- **what**：`<cell>_projection_<name>_ready` probe（PR-03）+ ~~`POST /internal/v1/<cell>/projection/<name>/rebuild` contract & handler~~（移 PR-04）
 - **ship**：L3
 - **依赖**：T-03-1 + T-03-2
 - **验收**：
-  - [ ] ReadyProbeName typed const（funnel 范式同 postgres.ProbeReady）
-  - [ ] contract test：service-token auth + caller-cell allowlist
-  - [ ] readyz lag > threshold 时 unhealthy
-- **行数**：~880
+  - [x] ① ReadyProbeName typed const（funnel 范式同 postgres.ProbeReady）—— `healthz.ProjectionReadyProbeName`（PR-03 落地）
+  - [ ] ② contract test：service-token auth + caller-cell allowlist —— **随 HTTP endpoint 移 PR-04**
+  - [x] ③ readyz lag > threshold 时 unhealthy（PR-03 落地）
+- **行数**：~880（PR-03 实际仅 probe 部分；endpoint 行数计入 PR-04）
 
 ---
 

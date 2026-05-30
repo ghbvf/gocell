@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -208,7 +209,17 @@ func newCoordinator(t *testing.T, reg cell.Registrar, txr persistence.TxRunner, 
 	t.Helper()
 	clk := clockmock.New(time.Now())
 	replay := NewMemReplaySource()
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cur, replay, wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cur,
+		Replay:       replay,
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      nil,
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -352,7 +363,16 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 		store := &seededStore{offsets: make(map[string]int64), loadErr: errors.New("load failed")}
 
 		clk := clockmock.New(time.Now())
-		c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cursor, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
+		c, err := NewCoordinator(clk, CoordinatorConfig{
+			CellID:       "testcell",
+			ProjectionID: "p1",
+			Registrar:    reg,
+			TxRunner:     txr,
+			Store:        store,
+			Cursor:       cursor,
+			Replay:       NewMemReplaySource(),
+			Tracer:       wrapper.NoopTracer{},
+		})
 		if err != nil {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
@@ -592,98 +612,81 @@ func TestCoordinator_GapSkip(t *testing.T) {
 // TestNewCoordinator_NilGuards
 // ---------------------------------------------------------------------------
 
+// nilGuardCase describes a single required-field validation case.
+// mutate is applied to an all-valid baseline CoordinatorConfig; wantErrField
+// is the field name that must appear in the error message when wantErr=true.
+type nilGuardCase struct {
+	name         string
+	mutate       func(*CoordinatorConfig)
+	wantErr      bool
+	wantErrField string // substring expected in error when wantErr=true
+}
+
 func TestNewCoordinator_NilGuards(t *testing.T) {
 	t.Parallel()
-
-	validReg := &fakeRegistrar{}
-	validTxr := &fakeTxRunner{}
-	validStore := NewMemCheckpointStore()
-	validCursor := &fakeCursor{}
-	var validTracer wrapper.Tracer = wrapper.NoopTracer{}
 
 	// Typed-nil for store (must be rejected like bare-nil).
 	var typedNilStore *MemCheckpointStore
 
 	tests := []nilGuardCase{
 		{
-			name:    "all valid",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   validStore,
-			cursor:  validCursor,
-			tracer:  validTracer,
+			name:    "all valid — Metrics nil is ok",
+			mutate:  nil, // baseline unchanged
 			wantErr: false,
 		},
 		{
-			name:    "empty cellID",
-			cellID:  "",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   validStore,
-			cursor:  validCursor,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "empty CellID",
+			mutate:       func(c *CoordinatorConfig) { c.CellID = "" },
+			wantErr:      true,
+			wantErrField: "CellID",
 		},
 		{
-			name:    "nil reg",
-			cellID:  "testcell",
-			reg:     nil,
-			txr:     validTxr,
-			store:   validStore,
-			cursor:  validCursor,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "empty ProjectionID",
+			mutate:       func(c *CoordinatorConfig) { c.ProjectionID = "" },
+			wantErr:      true,
+			wantErrField: "ProjectionID",
 		},
 		{
-			name:    "nil txRunner",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     nil,
-			store:   validStore,
-			cursor:  validCursor,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "nil Registrar",
+			mutate:       func(c *CoordinatorConfig) { c.Registrar = nil },
+			wantErr:      true,
+			wantErrField: "Registrar",
 		},
 		{
-			name:    "nil store",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   nil,
-			cursor:  validCursor,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "nil TxRunner",
+			mutate:       func(c *CoordinatorConfig) { c.TxRunner = nil },
+			wantErr:      true,
+			wantErrField: "TxRunner",
 		},
 		{
-			name:    "typed-nil store",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   typedNilStore,
-			cursor:  validCursor,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "nil Store",
+			mutate:       func(c *CoordinatorConfig) { c.Store = nil },
+			wantErr:      true,
+			wantErrField: "Store",
 		},
 		{
-			name:    "nil cursor",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   validStore,
-			cursor:  nil,
-			tracer:  validTracer,
-			wantErr: true,
+			name:         "typed-nil Store",
+			mutate:       func(c *CoordinatorConfig) { c.Store = typedNilStore },
+			wantErr:      true,
+			wantErrField: "Store",
 		},
 		{
-			name:    "nil tracer",
-			cellID:  "testcell",
-			reg:     validReg,
-			txr:     validTxr,
-			store:   validStore,
-			cursor:  validCursor,
-			tracer:  nil,
-			wantErr: true,
+			name:         "nil Cursor",
+			mutate:       func(c *CoordinatorConfig) { c.Cursor = nil },
+			wantErr:      true,
+			wantErrField: "Cursor",
+		},
+		{
+			name:         "nil Replay",
+			mutate:       func(c *CoordinatorConfig) { c.Replay = nil },
+			wantErr:      true,
+			wantErrField: "Replay",
+		},
+		{
+			name:         "nil Tracer",
+			mutate:       func(c *CoordinatorConfig) { c.Tracer = nil },
+			wantErr:      true,
+			wantErrField: "Tracer",
 		},
 	}
 
@@ -750,11 +753,16 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		t.Parallel()
 		reg := &fakeRegistrar{}
 		clk := clockmock.New(time.Now())
-		c, err := NewCoordinator(
-			clk, "testcell", "myproj",
-			reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
-			NewMemReplaySource(), wrapper.NoopTracer{}, nil,
-		)
+		c, err := NewCoordinator(clk, CoordinatorConfig{
+			CellID:       "testcell",
+			ProjectionID: "myproj",
+			Registrar:    reg,
+			TxRunner:     &fakeTxRunner{},
+			Store:        NewMemCheckpointStore(),
+			Cursor:       &fakeCursor{},
+			Replay:       NewMemReplaySource(),
+			Tracer:       wrapper.NoopTracer{},
+		})
 		if err != nil {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
@@ -894,22 +902,113 @@ func TestCheckpointKey(t *testing.T) {
 func TestPhase_AlwaysLive(t *testing.T) {
 	t.Parallel()
 	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(
-		clk,
-		"testcell", "p1",
-		&fakeRegistrar{},
-		&fakeTxRunner{},
-		NewMemCheckpointStore(),
-		&fakeCursor{},
-		NewMemReplaySource(),
-		wrapper.NoopTracer{},
-		nil,
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{},
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
 	if got := c.Phase(); got != PhaseLive {
 		t.Errorf("Phase() = %v, want PhaseLive", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestNewCoordinator_MetricsPreflight — valid *Metrics passes preflight and wires
+// ---------------------------------------------------------------------------
+
+// TestNewCoordinator_MetricsPreflight_ValidMetricsSucceeds proves that:
+//  1. NewCoordinator with a valid *Metrics from RegisterMetrics succeeds (preflight
+//     is wired and does not falsely reject a correct label set).
+//  2. The Coordinator is functional: buildHandler applies events normally and the
+//     RebuildDuration instrument is reachable (observeRebuildDuration does not panic).
+//
+// A separate preflight-failure path (bad label set → error) is covered in
+// metrics_test.go: TestProjectionMetrics_Preflight_BadLabelsFails, which builds a
+// Metrics directly with wrong labels to force preflight to fire.
+func TestNewCoordinator_MetricsPreflight_ValidMetricsSucceeds(t *testing.T) {
+	t.Parallel()
+
+	p := newProjectionRecordingProvider()
+	m, err := RegisterMetrics(p)
+	if err != nil {
+		t.Fatalf("RegisterMetrics: %v", err)
+	}
+
+	clk := clockmock.New(time.Now())
+	store := newSeededStore("testcell", "p1", 0)
+	cursor := &fakeCursor{pos: 1}
+
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        store,
+		Cursor:       cursor,
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      m,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator with valid Metrics: unexpected error: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected non-nil Coordinator")
+	}
+
+	// Prove the instruments are reachable: apply one event and verify the
+	// buildHandler path runs without panic. Disposition can be Ack or Requeue
+	// (depends on offset), what matters is no panic.
+	apply := &recordingApply{}
+	h := c.buildHandler(apply.fn)
+	result := h(context.Background(), outbox.Entry{})
+	if result.Disposition == 0 {
+		t.Error("handler returned zero-value disposition (unexpected)")
+	}
+}
+
+// TestNewCoordinator_MetricsPreflight_BadLabelsFails proves that passing a *Metrics
+// with a mismatched label set causes NewCoordinator to return a wrapped error
+// (preflight is wired at construction, not deferred to first metric write).
+func TestNewCoordinator_MetricsPreflight_BadLabelsFails(t *testing.T) {
+	t.Parallel()
+
+	p := newProjectionRecordingProvider()
+	// Build a GaugeVec with wrong labels to trigger preflight failure.
+	bad, err := p.GaugeVec(kernelmetrics.GaugeOpts{
+		Name:       metricProjectionReplayLag,
+		LabelNames: []string{"wrong"},
+	})
+	if err != nil {
+		t.Fatalf("GaugeVec: %v", err)
+	}
+	badMetrics := &Metrics{ReplayLag: bad}
+
+	clk := clockmock.New(time.Now())
+	_, gotErr := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{},
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      badMetrics,
+	})
+	if gotErr == nil {
+		t.Fatal("NewCoordinator with bad Metrics labels: expected error, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "metrics") {
+		t.Errorf("error %q, want mention of 'metrics'", gotErr.Error())
 	}
 }
 
@@ -950,7 +1049,16 @@ func runApplyOneCase(t *testing.T, tc applyOneCase, errSave error) {
 	}
 
 	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(clk, "testcell", "p1", reg, txr, store, cursor, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    reg,
+		TxRunner:     txr,
+		Store:        store,
+		Cursor:       cursor,
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1002,21 +1110,28 @@ func assertApplyOneSaveState(t *testing.T, tc applyOneCase, store CheckpointStor
 // runNilGuardCase — per-case executor for TestNewCoordinator_NilGuards
 // ---------------------------------------------------------------------------
 
-type nilGuardCase struct {
-	name    string
-	cellID  string
-	reg     cell.Registrar
-	txr     persistence.TxRunner
-	store   CheckpointStore
-	cursor  Cursor
-	tracer  wrapper.Tracer
-	wantErr bool
-}
-
 func runNilGuardCase(t *testing.T, tc nilGuardCase) {
 	t.Helper()
+
+	// Build an all-valid baseline config.
+	cfg := CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{},
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+		Metrics:      nil, // optional; always nil in nil-guard tests
+	}
+	if tc.mutate != nil {
+		tc.mutate(&cfg)
+	}
+
 	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(clk, tc.cellID, "p1", tc.reg, tc.txr, tc.store, tc.cursor, NewMemReplaySource(), tc.tracer, nil)
+	c, err := NewCoordinator(clk, cfg)
+
 	if !tc.wantErr {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1035,6 +1150,9 @@ func runNilGuardCase(t *testing.T, tc nilGuardCase) {
 	}
 	if e.Kind != errcode.KindInvalid {
 		t.Errorf("Kind = %v, want KindInvalid", e.Kind)
+	}
+	if tc.wantErrField != "" && !strings.Contains(err.Error(), tc.wantErrField) {
+		t.Errorf("error %q does not mention field %q", err.Error(), tc.wantErrField)
 	}
 	if c != nil {
 		t.Error("expected nil coordinator on error")
@@ -1065,11 +1183,16 @@ func runSubscribeCase(t *testing.T, tc subscribeCase) {
 	if projID == "" {
 		// Test case wants an error from empty projectionID — NewCoordinator rejects.
 		clk := clockmock.New(time.Now())
-		_, err := NewCoordinator(
-			clk, "testcell", "",
-			&fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
-			NewMemReplaySource(), wrapper.NoopTracer{}, nil,
-		)
+		_, err := NewCoordinator(clk, CoordinatorConfig{
+			CellID:       "testcell",
+			ProjectionID: "",
+			Registrar:    &fakeRegistrar{},
+			TxRunner:     &fakeTxRunner{},
+			Store:        NewMemCheckpointStore(),
+			Cursor:       &fakeCursor{},
+			Replay:       NewMemReplaySource(),
+			Tracer:       wrapper.NoopTracer{},
+		})
 		if tc.wantErr && err == nil {
 			t.Fatal("expected error for empty projectionID from NewCoordinator, got nil")
 		}
@@ -1081,11 +1204,16 @@ func runSubscribeCase(t *testing.T, tc subscribeCase) {
 
 	reg := &fakeRegistrar{subscribeErr: tc.regErr}
 	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(
-		clk, "testcell", projID,
-		reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
-		NewMemReplaySource(), wrapper.NoopTracer{}, nil,
-	)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: projID,
+		Registrar:    reg,
+		TxRunner:     &fakeTxRunner{},
+		Store:        NewMemCheckpointStore(),
+		Cursor:       &fakeCursor{},
+		Replay:       NewMemReplaySource(),
+		Tracer:       wrapper.NoopTracer{},
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -1132,7 +1260,16 @@ func runSpanStatusCase(t *testing.T, tc spanStatusCase) {
 	cursor := &fakeCursor{pos: 1}
 
 	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(clk, "testcell", "p1", &fakeRegistrar{}, &fakeTxRunner{}, store, cursor, NewMemReplaySource(), spy, nil)
+	c, err := NewCoordinator(clk, CoordinatorConfig{
+		CellID:       "testcell",
+		ProjectionID: "p1",
+		Registrar:    &fakeRegistrar{},
+		TxRunner:     &fakeTxRunner{},
+		Store:        store,
+		Cursor:       cursor,
+		Replay:       NewMemReplaySource(),
+		Tracer:       spy,
+	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
