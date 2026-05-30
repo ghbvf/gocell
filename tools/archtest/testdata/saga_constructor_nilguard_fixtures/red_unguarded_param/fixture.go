@@ -8,7 +8,15 @@
 // Loaded only via RunTypedFixture.
 package redunguardedparam
 
-import "github.com/ghbvf/gocell/pkg/validation"
+import (
+	"errors"
+
+	"github.com/ghbvf/gocell/pkg/validation"
+)
+
+// errDepRequired models the fail-fast error a real constructor returns when a
+// required dependency is nil.
+var errDepRequired = errors.New("redunguardedparam: dep required")
 
 // MyInterface is a minimal interface for fixture purposes.
 type MyInterface interface {
@@ -23,11 +31,23 @@ func NewUnguarded(dep MyInterface) *struct{} {
 }
 
 // NewGuarded is the negative control: it calls IsNilInterface before using dep.
-// The detector must NOT fire for this constructor.
+// The detector must NOT fire for this constructor. A real constructor returns a
+// fail-fast errcode error in the guard branch; this fixture returns a sentinel
+// error to model that shape (only the guard *call* matters to the detector).
 func NewGuarded(dep MyInterface) (*struct{}, error) {
 	if validation.IsNilInterface(dep) {
-		return nil, nil
+		return nil, errDepRequired
 	}
-	_ = dep
+	return &struct{}{}, nil
+}
+
+// NewParenGuarded guards dep through a parenthesized argument
+// (IsNilInterface((dep))). The detector must still recognize this as a guard
+// (ast.Unparen) and NOT fire — the regression guard for the parenthesized-arg
+// bypass (F2/B3).
+func NewParenGuarded(dep MyInterface) (*struct{}, error) {
+	if validation.IsNilInterface((dep)) {
+		return nil, errDepRequired
+	}
 	return &struct{}{}, nil
 }

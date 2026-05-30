@@ -445,6 +445,14 @@ func (v *Validator) checkSliceOrchestrateLevel(s *metadata.SliceMeta) []Validati
 		if cellvocab.ContractRole(cu.Role) != cellvocab.RoleOrchestrate {
 			continue
 		}
+		// The L3 requirement attaches only to saga contracts. An orchestrate role
+		// on a missing or non-saga contract is owned by REF (missing contract) and
+		// TOPO-01 (role/kind legality); skip here so a single broken config is
+		// reported once at its root, not double-reported — symmetric with the
+		// unknown-cell skip above.
+		if c, found := v.project.Contracts[cu.Contract]; !found || c.Kind != string(cellvocab.ContractSaga) {
+			continue
+		}
 		if cell.ConsistencyLevel == "L3" {
 			continue
 		}
@@ -457,7 +465,7 @@ func (v *Validator) checkSliceOrchestrateLevel(s *metadata.SliceMeta) []Validati
 					"a saga orchestrator cell must be L3 (WorkflowEventual)",
 				s.ID, s.BelongsToCell, cell.ConsistencyLevel,
 			),
-			"set cell.consistencyLevel to L3 in the cell's cell.yaml",
+			fmt.Sprintf("set consistencyLevel to L3 in %s", cell.File),
 		))
 	}
 	return results

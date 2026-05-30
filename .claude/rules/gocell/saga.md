@@ -77,6 +77,6 @@ GoCell 中有三个 L3 cell 并非 saga 编排：
 ## 参考
 
 - 实施计划：`docs/plans/202605230231-046-saga-l3-workflow-implementation-plan.md` §4 PR-08（governance + archtest 落地 PR）
-- Saga 专属 ADR：`docs/architecture/202605231400-adr-saga-l3-orchestration-engine.md`（**尚未存在**，为 PR-10 deliverable；当前权威视图以实施计划和代码 godoc 为准，不引用此 ADR）
+- Saga 专属 ADR：**尚未创建**（PR-10 deliverable，计划命名 `…-adr-saga-l3-orchestration-engine.md`）；在它落地前，权威视图以上述实施计划和代码 godoc 为准——本文件刻意不给出可点击路径以免 404
 - 契约变更扇出闭环：`.claude/rules/gocell/contract-fanout.md`（`saga.Status` / `journal.EventKind` 新常量触发扇出规则）
 - AI-robust 治理章程：`.claude/rules/gocell/ai-robust.md`（评级定义、archtest 文件命名约定）

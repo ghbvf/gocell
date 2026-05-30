@@ -588,6 +588,30 @@ func TestSagaContractBlockPresent01(t *testing.T) {
 			}
 		})
 	}
+
+	// non-saga kind with nil saga block → no error (rule only fires on kind=saga).
+	t.Run("non-saga contract, nil saga block → no error (skip)", func(t *testing.T) {
+		t.Parallel()
+		project := &metadata.ProjectMeta{
+			Cells:    map[string]*metadata.CellMeta{},
+			Slices:   map[string]*metadata.SliceMeta{},
+			Journeys: map[string]*metadata.JourneyMeta{},
+			Contracts: map[string]*metadata.ContractMeta{
+				"http.order.v1": {
+					ID:   "http.order.v1",
+					Kind: "http",
+					Saga: nil,
+					File: "contracts/http/order/v1/contract.yaml",
+				},
+			},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+		v := NewValidator(project, "", clock.Real())
+		got := filterByCode(v.validateSAGACONTRACTBLOCKPRESENT01(), codeSAGACONTRACTBLOCKPRESENT01)
+		if len(got) != 0 {
+			t.Fatalf("non-saga contract must not trigger BLOCK-PRESENT, got %d: %v", len(got), got)
+		}
+	})
 }
 
 // ---- SAGA-CELL-LEVEL-L3-DECLARE-01 ------------------------------------------
@@ -605,9 +629,10 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 	t.Parallel()
 
 	// buildCellLevelProject builds a minimal project with one cell (given level)
-	// and one slice with one contractUsage of the given role pointing at a
-	// placeholder contract id (no actual Contract entry needed — REF rules cover
-	// missing contracts, and this rule only checks belongsToCell's consistencyLevel).
+	// and one slice with one contractUsage of the given role pointing at a saga
+	// contract. The rule only fires for role=orchestrate on a kind=saga contract
+	// whose cell is not L3 (missing / non-saga contracts are owned by REF/TOPO-01
+	// and skipped here).
 	buildCellLevelProject := func(cellLevel, role string) *metadata.ProjectMeta {
 		return &metadata.ProjectMeta{
 			Cells: map[string]*metadata.CellMeta{
@@ -627,7 +652,9 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 					File: "cells/orchestratorcell/slices/saga-orchestrate/slice.yaml",
 				},
 			},
-			Contracts:  map[string]*metadata.ContractMeta{},
+			Contracts: map[string]*metadata.ContractMeta{
+				"saga.order.v1": {ID: "saga.order.v1", Kind: "saga"},
+			},
 			Journeys:   map[string]*metadata.JourneyMeta{},
 			Assemblies: map[string]*metadata.AssemblyMeta{},
 		}
@@ -740,6 +767,41 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 			t.Fatalf("unknown cell must not trigger rule (REF scope), got %d: %v", len(got), got)
 		}
 	})
+
+	// orchestrate role on a non-saga contract → no error. TOPO-01 owns the
+	// role/kind legality finding; SAGA-CELL-LEVEL-L3-DECLARE-01 must not
+	// double-report on this already-broken config (symmetric with unknown-cell).
+	t.Run("orchestrate on non-saga contract → no error (TOPO scope)", func(t *testing.T) {
+		t.Parallel()
+		project := &metadata.ProjectMeta{
+			Cells: map[string]*metadata.CellMeta{
+				"orchestratorcell": {
+					ID: "orchestratorcell", ConsistencyLevel: "L2",
+					File: "cells/orchestratorcell/cell.yaml",
+				},
+			},
+			Slices: map[string]*metadata.SliceMeta{
+				"orchestratorcell/bad-orchestrate": {
+					ID:            "bad-orchestrate",
+					BelongsToCell: "orchestratorcell",
+					ContractUsages: []metadata.ContractUsage{
+						{Contract: "http.order.v1", Role: "orchestrate"},
+					},
+					File: "cells/orchestratorcell/slices/bad-orchestrate/slice.yaml",
+				},
+			},
+			Contracts: map[string]*metadata.ContractMeta{
+				"http.order.v1": {ID: "http.order.v1", Kind: "http"},
+			},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+		v := NewValidator(project, "", clock.Real())
+		got := filterByCode(v.validateSAGACELLLEVELL3DECLARE01(), codeSAGACELLLEVELL3DECLARE01)
+		if len(got) != 0 {
+			t.Fatalf("orchestrate on non-saga contract must not trigger rule (TOPO scope), got %d: %v", len(got), got)
+		}
+	})
 }
 
 // ---- SAGA-CONTRACT-RETRY-TIMEOUT-01 -----------------------------------------
@@ -796,6 +858,15 @@ func TestSagaContractRetryTimeout01(t *testing.T) {
 			saga: &metadata.SagaMeta{
 				Steps:   wellFormedSaga().Steps,
 				Retries: retryMeta(3, "30s", "1s"),
+			},
+			wantErrCount: 1,
+			wantField:    "saga.retries",
+		},
+		{
+			name: "negative maxAttempts → error (rule triggers RetryPolicy.Validate)",
+			saga: &metadata.SagaMeta{
+				Steps:   wellFormedSaga().Steps,
+				Retries: retryMeta(-1, "1s", "30s"),
 			},
 			wantErrCount: 1,
 			wantField:    "saga.retries",
