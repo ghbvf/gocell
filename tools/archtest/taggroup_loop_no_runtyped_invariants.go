@@ -138,7 +138,11 @@ const (
 // RunTyped and KnownNonDefaultTags, so its scan scope is internal to GoCell
 // (tools/archtest). It is intentionally NOT added to StandardCellRules() because
 // external Cell repos do not contain archtest code; the rule would be vacuously
-// green (empty scan set) and provide no value to external consumers.
+// green (empty scan set) and provide no value to external consumers. The symbol
+// is exported only so the rule library is uniformly addressable — an external
+// repo that calls it directly is likewise vacuously green, since the scan target
+// ./tools/archtest/... does not exist outside GoCell. cfg is consumed for
+// BuildTags only; the scan scope is fixed to GoCell's own archtest package.
 func CheckTagGroupLoopForbidsRunTyped(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return RunTyped(t, TypedOpts{Tests: true, Tags: cfg.BuildTags},
@@ -288,6 +292,10 @@ func taggroupBindIdent(info *types.Info, id *ast.Ident, dst map[types.Object]str
 // taggroupObjectOf returns the types.Object an identifier refers to, checking
 // Defs (declaration site, e.g. LHS of `:=` / `var`) then Uses (reference
 // site, e.g. range expression or LHS of plain `=`).
+//
+// Also used (same package) by pass_funnel_test.go's fixture-tag var-indirection
+// check — keep this resolver stable when renaming; a rename silently breaks that
+// caller (both files are package archtest, so the compiler still links).
 func taggroupObjectOf(info *types.Info, id *ast.Ident) types.Object {
 	if obj := info.Defs[id]; obj != nil {
 		return obj
