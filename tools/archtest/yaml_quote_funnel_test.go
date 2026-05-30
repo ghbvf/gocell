@@ -1,5 +1,7 @@
 package archtest
 
+// INVARIANT: YAML-QUOTE-FUNNEL-01
+//
 // yaml_quote_funnel_test.go — test entry points for YAML-QUOTE-FUNNEL-01.
 //
 // Rule logic, path consts, and helper funcs live in

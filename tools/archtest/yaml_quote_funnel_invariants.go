@@ -12,8 +12,6 @@ package archtest
 // so a module rename updates exactly one place and the ratchet meta-archtest
 // ARCHTEST-MODULE-PATH-FUNNEL-01 can prove no rule reintroduces a bare literal.
 
-// INVARIANT: YAML-QUOTE-FUNNEL-01
-//
 // YAML-QUOTE-FUNNEL-01: every type conversion `yamlsafe.Scalar(x)` outside
 // the pkg/yamlsafe package itself must have x = `yamlsafe.Quote(...)` (or
 // already typed as yamlsafe.Scalar) — raw string conversions bypass the
