@@ -2224,19 +2224,14 @@ type H = sagajournal.JournalCore
 	}
 
 	seen := map[string]bool{}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
-			continue
+	EachInChildren[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok != token.TYPE {
+			return
 		}
-		for _, spec := range gd.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
+		EachInChildren[ast.TypeSpec](gd, func(ts *ast.TypeSpec) {
 			exp, tracked := want[ts.Name.Name]
 			if !tracked {
-				continue
+				return
 			}
 			seen[ts.Name.Name] = true
 			aliased, matched := journalInterfaceAliasName(ts, journalNames)
@@ -2245,14 +2240,14 @@ type H = sagajournal.JournalCore
 					t.Errorf("journalInterfaceAliasName(%s) = (%q, true); want no match",
 						ts.Name.Name, aliased)
 				}
-				continue
+				return
 			}
 			if !matched || aliased != exp {
 				t.Errorf("journalInterfaceAliasName(%s) = (%q, %v); want (%q, true)",
 					ts.Name.Name, aliased, matched, exp)
 			}
-		}
-	}
+		})
+	})
 
 	// Non-vacuity: every positive case (incl. the import-aliased H) must have
 	// been exercised — otherwise the fixture or the parse silently skipped them.

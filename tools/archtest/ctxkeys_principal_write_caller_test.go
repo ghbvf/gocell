@@ -134,14 +134,10 @@ func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			ast.Inspect(file, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
 				setter, matched := principalSetterName(p.TypesInfo, sel)
 				if !matched {
-					return true
+					return
 				}
 				record(setter, rel)
 				if _, allowed := principalSetterAllowlist[setter][rel]; !allowed {
@@ -159,7 +155,6 @@ func TestCtxkeysPrincipalWriteCaller01(t *testing.T) {
 							setter, rel),
 					})
 				}
-				return true
 			})
 		}
 		return d

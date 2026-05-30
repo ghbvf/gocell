@@ -706,11 +706,17 @@ func mqttAssertFieldAssignDetectorFires(t *testing.T, field, ruleID string) {
 	f := mqttParseSnippet(t, src)
 	var fired bool
 	EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
-		for _, lhs := range assign.Lhs {
-			if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel != nil && sel.Sel.Name == field {
+		if len(assign.Lhs) == 0 {
+			return
+		}
+		lhsStart := assign.Lhs[0].Pos()
+		lhsEnd := assign.Lhs[len(assign.Lhs)-1].End()
+		EachInChildren[ast.SelectorExpr](assign, func(sel *ast.SelectorExpr) {
+			if sel.Pos() >= lhsStart && sel.Pos() < lhsEnd &&
+				sel.Sel != nil && sel.Sel.Name == field {
 				fired = true
 			}
-		}
+		})
 	})
 	assert.True(t, fired,
 		"%s: field-assignment detection did not fire on a known `t.%s = ...` snippet — "+
@@ -850,26 +856,24 @@ func scanMQTTCMMethodValue(t *testing.T, methodNames []string, ruleID string) []
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				var parentStack []ast.Node
-				ast.Inspect(f, func(n ast.Node) bool {
-					if n == nil {
-						if len(parentStack) > 0 {
-							parentStack = parentStack[:len(parentStack)-1]
-						}
-						return false
+				// Collect all SelectorExpr nodes that are the Fun of a direct
+				// CallExpr — those are the allowed "direct call" form.
+				directCallFuns := make(map[*ast.SelectorExpr]bool)
+				EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						directCallFuns[sel] = true
 					}
-					defer func() { parentStack = append(parentStack, n) }()
-					sel, ok := n.(*ast.SelectorExpr)
-					if !ok || sel.Sel == nil || !mqttInStringSet(sel.Sel.Name, methodNames) {
-						return true
+				})
+				// Report any matching SelectorExpr that is NOT a direct call.
+				EachInSubtree[ast.SelectorExpr](f, func(sel *ast.SelectorExpr) {
+					if sel.Sel == nil || !mqttInStringSet(sel.Sel.Name, methodNames) {
+						return
 					}
 					if !isCMReceiver(p.TypesInfo, sel.X) {
-						return true
+						return
 					}
-					if len(parentStack) > 0 {
-						if call, isCall := parentStack[len(parentStack)-1].(*ast.CallExpr); isCall && call.Fun == sel {
-							return true // direct call — allowed
-						}
+					if directCallFuns[sel] {
+						return // direct call — allowed
 					}
 					pos := p.Fset.Position(sel.Pos())
 					diags = append(diags, Diagnostic{
@@ -881,7 +885,6 @@ func scanMQTTCMMethodValue(t *testing.T, methodNames []string, ruleID string) []
 							ruleID, sel.Sel.Name, rel, pos.Line,
 						),
 					})
-					return true
 				})
 			}
 			return nil

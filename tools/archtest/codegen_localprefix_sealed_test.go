@@ -131,15 +131,28 @@ func findLocalPrefixWrites(fset *token.FileSet, f *ast.File, rel string) []Diagn
 		return nil
 	}
 	var out []Diagnostic
+	// Walk every AssignStmt, then for each, check whether any Lhs element is the
+	// forbidden alias.LocalPrefix pattern. EachInChildren[ast.SelectorExpr]
+	// visits depth-1 direct children of the AssignStmt (Lhs and Rhs elements);
+	// the Pos-based range check [a.Lhs[0].Pos(), a.Lhs[last].End()] distinguishes
+	// Lhs from Rhs without a for-range+type-assertion over []ast.Expr.
 	EachInSubtree[ast.AssignStmt](f, func(a *ast.AssignStmt) {
-		for _, lhs := range a.Lhs {
-			sel, isSel := lhs.(*ast.SelectorExpr)
-			if !isSel || sel.Sel == nil || sel.Sel.Name != "LocalPrefix" {
-				continue
+		if len(a.Lhs) == 0 {
+			return
+		}
+		lhsStart := a.Lhs[0].Pos()
+		lhsEnd := a.Lhs[len(a.Lhs)-1].End()
+		EachInChildren[ast.SelectorExpr](a, func(sel *ast.SelectorExpr) {
+			// Only Lhs elements fall in [lhsStart, lhsEnd).
+			if sel.Pos() < lhsStart || sel.Pos() >= lhsEnd {
+				return // Rhs expression — not an assignment target
+			}
+			if sel.Sel == nil || sel.Sel.Name != "LocalPrefix" {
+				return
 			}
 			ident, isIdent := sel.X.(*ast.Ident)
 			if !isIdent || ident.Name != alias {
-				continue
+				return
 			}
 			out = append(out, Diagnostic{
 				Rel:  rel,
@@ -148,7 +161,7 @@ func findLocalPrefixWrites(fset *token.FileSet, f *ast.File, rel string) []Diagn
 					"; the goimports local-prefix global is sealed — generated import grouping " +
 					"must derive from the modulePath arg threaded through codegen.FormatGoSource (#1083)",
 			})
-		}
+		})
 	})
 	return out
 }
