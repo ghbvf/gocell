@@ -1,5 +1,5 @@
 .PHONY: build check-build test fmt verify validate generate cover clean \
-        install-hooks \
+        install-hooks update-archtest-golden \
         up down \
         local-up local-down \
         test-integration \
@@ -44,6 +44,14 @@ test:
 # ref: kubernetes/kubernetes hack/update-gofmt.sh + hack/verify-golangci-lint.sh.
 fmt:
 	@bash -c 'source hack/lib/golangci-lint.sh && exec "$$(gocell::golangci_lint::ensure)" fmt ./...'
+
+# update-archtest-golden regenerates the diagnostic golden files of golden-based
+# archtests (errcode / clock / span / … fixtures), then leaves the diff for
+# review as a first-class artifact (see AssertGolden godoc). It does NOT touch
+# ARCHTEST-MODULE-PATH-FUNNEL-01's frozen baseline (testdata/module_path_funnel.baseline),
+# which is shrink-only and hand-maintained by design — never auto-regenerated.
+update-archtest-golden:
+	go test ./tools/archtest/... -update -count=1
 
 # verify discovers and runs every hack/verify-*.sh in deterministic order,
 # accumulating failures. Single entry point for static governance gates

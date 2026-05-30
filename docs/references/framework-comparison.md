@@ -154,6 +154,26 @@ ref PR: PR-A20（AL-02 DISTLOCK-RUNTIME-ABSTRACT-01，refactor/531）；
 ref PR: PR-DISTLOCK-LOCK-AS-RESOURCE（caller ctx 与持锁解耦，Lock 不再实现 context.Context）
 ```
 
+### tools/archtest/ — 架构不变量校验 + 外部可 import 规则库
+
+```
+primary:   golang.org/x/tools/go/analysis → analysis.go (Analyzer struct), multichecker/, analysistest/
+           取用：Pass{Fset,Files,Pkg,TypesInfo} 同构；规则 = 包级值（CellRule ↔ Analyzer，非 _test.go）；
+                 StandardCellRules() []*CellRule ↔ []*Analyzer + multichecker.Main（无 registry，slice 组合）；
+                 RunStandardCellRules(t,cfg) driver 供扫描目标 ↔ analysistest.Run(t,dir,a,patterns)；
+                 平台符号路径固定（PlatformModulePath ↔ printf 硬编 "fmt.Printf" / copylock 硬编 "sync"）
+                 vs 扫描目标参数化（cfg / pass.Pkg）。
+secondary: TNG/ArchUnit            → ArchRule 值 + rule.check(importedClasses) 分离供给；
+                                      ArchTests.in(StandardRules.class) 预定义集 ↔ RunStandardCellRules；
+                                      FreezingArchRule/ViolationStore（fail-on-new + 禁增长 + 修复手动收缩）
+                                      ↔ ARCHTEST-MODULE-PATH-FUNNEL-01 迁移 ratchet frozen baseline；
+                                      custom rule 同接口无 registry ↔ ConfigForExternalCell.ExtraRules。
+           arch-go                  → config.Load(modulePath) ↔ module path 由消费方供给（gocell 从 go.mod 派生）。
+goal:      外部 Cell 仓库 go get + import 跑平台不变量（M3 #1084）；platform-vs-scan 路径拆分；
+           158 条规则全量迁移分 PR，ratchet 强制收敛（ADR 202605281200 §M3）。
+ref PR:    M3 PR-1（refactor/archtest-external-library，#1084）
+```
+
 ## Go 标准库参考（问题修复用）
 
 | 领域 | 标准库参考 | 关注点 |
