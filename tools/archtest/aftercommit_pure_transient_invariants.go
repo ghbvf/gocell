@@ -3,18 +3,25 @@ package archtest
 // aftercommit_pure_transient_invariants.go — importable rule logic for
 // AFTERCOMMIT-HOOK-PURE-TRANSIENT-01.
 //
-// This is the non-test home of the scanner so it can be compiled by external
-// consumers (Go never compiles a dependency's _test.go). GoCell's own
-// TestAfterCommitHookPureTransient_* tests (aftercommit_pure_transient_test.go)
-// call the shared helpers here — single source, no parallel rule body.
+// This is the non-test home of the scanner so it can be compiled and imported
+// by external Cell repositories (Go never compiles a dependency's _test.go).
+// GoCell's own TestAfterCommitHookPureTransient_* tests
+// (aftercommit_pure_transient_test.go) call the shared helpers here — single
+// source, no parallel rule body.
+//
+// Note: CheckAfterCommitHookPureTransient is importable but is NOT included in
+// StandardCellRules() — rule A3's drain-caller allowlist names GoCell-internal
+// TxRunner files, so running it against an external module's production code
+// would false-positive on any TxRunner implementation outside that allowlist.
+// External repos that dogfood this rule must maintain their own allowlist via
+// a wrapper. See external.go for the design and StandardCellRules for the
+// portable curated set.
 //
 // Platform-symbol paths (persistence.RegisterAfterCommit, outbox.Writer) are
 // anchored to [PlatformModulePath] (fixed: external repos import these packages
 // as a GoCell dependency at that path). The scan SCOPE is the running module,
-// supplied by RunTyped → findModuleRoot. See external.go for the design.
+// supplied by RunTyped → findModuleRoot.
 
-// INVARIANT: AFTERCOMMIT-HOOK-PURE-TRANSIENT-01
-//
 // aftercommit_pure_transient_invariants.go — funnel guarding persistence
 // after-commit hooks. Hooks run after a durable commit, with the tx stripped
 // from their ctx (kernel/persistence.RunAfterCommitHooks), and must perform
@@ -396,12 +403,23 @@ func scanHookBodyEscapes(p *Pass, rel string, lit *ast.FuncLit) []Diagnostic {
 }
 
 // CheckAfterCommitHookPureTransient runs AFTERCOMMIT-HOOK-PURE-TRANSIENT-01
-// (A1+A2+A3+BlindSpot) over the running module's production code and returns its
+// (A1+A2+A3) over the running module's production code and returns its
 // diagnostics. cfg.BuildTags is passed to the production scan so files behind
 // //go:build directives are covered.
+//
+// This function is intentionally NOT registered in StandardCellRules(): rule
+// A3's drain-caller allowlist names GoCell-internal TxRunner files, so running
+// it against an external module's production code would false-positive on any
+// TxRunner implementation outside that allowlist. GoCell's own dogfood calls
+// this directly from TestAfterCommitHookPureTransient.
+//
+// The B2/B3 blind-spot escape scan (scanRegisterAfterCommitEscapes) is
+// intentionally absent here — it is the dedicated reverse self-check owned by
+// TestAfterCommitHookPureTransient_BlindSpots_NoEscapeInProduction, not part
+// of the forward rule enforcement.
 func CheckAfterCommitHookPureTransient(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
 	t.Helper()
-	var a1a2Diags, a3Diags, bsDiags []Diagnostic
+	var a1a2Diags, a3Diags []Diagnostic
 	_ = RunTypedProduction(t, TypedOpts{Tags: cfg.BuildTags}, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
@@ -411,13 +429,11 @@ func CheckAfterCommitHookPureTransient(t *testing.T, cfg ConfigForExternalCell) 
 		for _, file := range p.Files {
 			a1a2Diags = append(a1a2Diags, scanRegisterAfterCommitHooks(p, file, localFuncs, ifaces)...)
 			a3Diags = append(a3Diags, scanAfterCommitDrainCallers(p, file)...)
-			bsDiags = append(bsDiags, scanRegisterAfterCommitEscapes(p, file)...)
 		}
 		return nil
 	})
 	var out []Diagnostic
 	out = append(out, a1a2Diags...)
 	out = append(out, a3Diags...)
-	out = append(out, bsDiags...)
 	return out
 }
