@@ -192,7 +192,7 @@ func TestWebhookSSRFGuard(t *testing.T) {
 	var a1, a2, a3 []Diagnostic
 	_ = RunTyped(t, TypedOpts{Tests: false}, []string{webhookPkgPattern},
 		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.Pkg.Path() != "github.com/ghbvf/gocell/kernel/webhook" {
+			if p.Pkg == nil || p.Pkg.Path() != PlatformModulePath+"/kernel/webhook" {
 				return nil
 			}
 			for _, f := range p.Files {
