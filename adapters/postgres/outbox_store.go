@@ -372,7 +372,7 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		// the observability/principal caps defend against. Metadata is untyped
 		// business KV (no Validate()), so this stays inline rather than routing
 		// through decodeOversizeGuardedJSONB.
-		slog.Warn("outbox store: metadata JSON exceeds max size, dropping",
+		slog.Warn("outbox store: metadata JSON exceeds max size — dropping",
 			slog.String("entry_id", scan.ID),
 			slog.String("event_type", scan.EventType),
 			slog.Int("size", len(metadataJSON)),
@@ -422,12 +422,12 @@ type jsonbDecodeWarnings struct {
 
 var (
 	observabilityDecodeWarnings = jsonbDecodeWarnings{
-		oversize:       "outbox store: observability JSON exceeds max size, dropping",
+		oversize:       "outbox store: observability JSON exceeds max size — dropping",
 		unmarshalError: "outbox store: failed to unmarshal observability — dropping",
 		validateError:  "outbox store: observability fails validation — dropping",
 	}
 	principalDecodeWarnings = jsonbDecodeWarnings{
-		oversize:       "outbox store: principal JSON exceeds max size, dropping",
+		oversize:       "outbox store: principal JSON exceeds max size — dropping",
 		unmarshalError: "outbox store: failed to unmarshal principal — dropping",
 		validateError:  "outbox store: principal fails validation — dropping",
 	}
