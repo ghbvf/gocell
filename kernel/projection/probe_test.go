@@ -12,6 +12,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// probeTestRecentLagOffset is a site-specific deadline offset for the
+// "lag below threshold" probe test: an event applied this far in the past is
+// well under projectionLagThresholdSeconds (300s), so the probe is healthy.
+// Extracted to a package-level const per TEST-TIME-LITERAL-01.
+const probeTestRecentLagOffset = 10 * time.Second
+
 // TestProjectionReadyProbeName_Format asserts the probe name follows the
 // expected format "<cell>_projection_<proj>_ready".
 func TestProjectionReadyProbeName_Format(t *testing.T) {
@@ -171,7 +177,7 @@ func TestCoordinator_ReadinessProbe_LagUnhealthy(t *testing.T) {
 func TestCoordinator_ReadinessProbe_LagBelowThresholdHealthy(t *testing.T) {
 	t.Parallel()
 	// OccurredAt = 10 seconds ago (well below 300s threshold).
-	recentPast := time.Now().Add(-10 * time.Second)
+	recentPast := time.Now().Add(-probeTestRecentLagOffset)
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
 	cur := newMemCursor(src)

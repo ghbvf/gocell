@@ -330,6 +330,33 @@ The full `contract.yaml` (request/response schema, `clients` allowlist) is
 authored in PR-03; PR-00 freezes only the auth model + network boundary + status
 semantics above.
 
+> **Amendment 2026-05-31 (PR-03 #1175) — HTTP endpoint moved to PR-04.** The
+> rebuild *trigger* is a per-cell HTTP endpoint, but a GoCell contract is
+> per-cell (fixed `path` + `ownerCell` + `clients`) and PR-03 ships only the
+> kernel/runtime harness — there is **no host cell or internal listener** to
+> mount it on until cellgen `kind: projection` derivation lands (PR-04, #1176;
+> todoorder migration in PR-06). A platform-level `active` contract with no cell
+> impl would trip `DEAD-CONTRACT-01`. Therefore:
+>
+> - **PR-03 freezes the programmatic trigger surface**: `Coordinator.Rebuild(ctx)
+>   error` (admission CAS `PhaseLive→PhaseStopped`; returns
+>   `projection.ErrRebuildInProgress` when a rebuild is already running — the
+>   value the HTTP adapter will map to **409**; runs the state machine on a
+>   background goroutine — the **202** semantics) + `Coordinator.Close(ctx)` for
+>   graceful drain. The `{phase, replayLagSeconds, pendingEvents}` snapshot is
+>   computed by the readyz probe / metrics path that **does** land in PR-03.
+> - **PR-04 authors the HTTP wrapper**: the `POST /internal/v1/<cell>/projection/
+>   <name>/rebuild` contract.yaml + per-cell handler (cellgen output) calling
+>   `Coordinator.Rebuild`, with the **unchanged** auth model / network boundary /
+>   202·409·404 status semantics frozen above.
+>
+> **Threat-matrix re-evaluation (per ai-robust.md "ADR amendment 落地必查").** No
+> cell flips: row 3 (rebuild-period read consistency) is discharged by `Phase()`
+> + readyz, **both delivered in PR-03** as planned — the HTTP *trigger* is a
+> convenience surface, not a threat-discharge mechanism (a rebuild is equally
+> triggerable via `Coordinator.Rebuild`). The forward contract above is
+> unchanged; only its *delivery PR* moves PR-03→PR-04.
+
 ## 6. Threat matrix
 
 Each row names the threat, the v1 mechanism, and **which PR discharges it**

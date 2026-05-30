@@ -11,6 +11,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // ---------------------------------------------------------------------------
@@ -496,30 +498,28 @@ func (b *blockingReplaySource) Head(context.Context) (int64, error) {
 // waitForPhase / waitUntilPhaseNot — test sync helpers
 // ---------------------------------------------------------------------------
 
-// waitForPhase spins until c.Phase() == want or test times out.
+// waitForPhase blocks until c.Phase() == want or the timeout fires. The rebuild
+// state machine runs on a background goroutine with no started-observable sync
+// hook (it transitions phases internally), so this is a sanctioned external
+// poll via testwait.External (TEST-SLEEP-DISCIPLINE-01) rather than a raw sleep
+// loop. clk is the FakeClock; the wait observes real-clock goroutine progress,
+// not simulated time.
 //
 //nolint:unparam // want=PhaseLive in current callers; param kept for future tests
 func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Phase() == want {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for phase %v; current = %v", want, c.Phase())
+	testwait.External(t, "projection-rebuild-phase-transition",
+		func() bool { return c.Phase() == want },
+		testtime.EventuallyLong, testtime.FastPoll,
+		"phase != %v", want)
 }
 
-// waitUntilPhaseNot spins until c.Phase() != notWant or test times out.
+// waitUntilPhaseNot blocks until c.Phase() != notWant or the timeout fires.
+// Same background-goroutine rationale as waitForPhase.
 func waitUntilPhaseNot(t *testing.T, c *Coordinator, notWant Phase) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Phase() != notWant {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for phase != %v; current = %v", notWant, c.Phase())
+	testwait.External(t, "projection-rebuild-phase-transition",
+		func() bool { return c.Phase() != notWant },
+		testtime.EventuallyLong, testtime.FastPoll,
+		"phase still == %v", notWant)
 }

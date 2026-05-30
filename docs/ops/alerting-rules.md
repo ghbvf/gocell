@@ -510,6 +510,74 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
 
 ---
 
+## Projection 可观测性（CQRS rebuild harness）
+
+`kernel/projection.Coordinator`（L3 read-model 投影）注册三个 metric，全部带
+`{cell, projection}` 双 label（Prometheus provider 加 `gocell_` namespace 前缀）。
+一个 cell 可托管多个 projection，故 `projection` label 与 `cell` 同为聚合维度。
+
+| Metric (registered name) | 类型 | 含义 |
+|---|---|---|
+| `projection_event_replay_lag_seconds` | Gauge | read-model 落后多久 = `now − 最近一次 apply 的事件 OccurredAt`（域时间，非 store 时间） |
+| `projection_pending_events` | Gauge | 未应用事件数 = replay 源 head − 已提交 checkpoint（积压深度，按需在 readyz/快照读取时计算） |
+| `projection_rebuild_duration_seconds` | Histogram | 一次完整 rebuild（Stop→Reset→Replay→Catchup）的墙钟耗时；仅 dashboard，无告警阈值 |
+
+`<cell>_projection_<name>_ready` readyz probe 在 `pending_events > 0` 且
+`replay_lag_seconds > 300`（`projectionLagThresholdSeconds`）时返回 unhealthy；
+冷启动（无 pending 或尚无 apply）healthy。probe 与下方 lag 告警同源，告警先于
+probe 翻红可用作早期信号。
+
+### ProjectionReplayLagHigh
+
+read-model 持续落后表示投影 consumer 消费速率跟不上事件产生速率，或某次
+rebuild 卡在 Replay 相。下游查询读到陈旧 read-model。
+
+```yaml
+- alert: GoCellProjectionReplayLagHigh
+  expr: max(gocell_projection_event_replay_lag_seconds) by (cell, projection) > 300
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Projection replay lag high ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      Projection {{ $labels.cell }}/{{ $labels.projection }} replay lag > 300s
+      for 5m — the read-model is stale. Check consumer throughput, or whether a
+      rebuild is stuck in Replay. Cross-check gocell_projection_pending_events:
+      lag high WITH pending>0 = falling behind; lag high WITH pending==0 = idle
+      stream (benign, the lag is just "no new events"). The readyz probe
+      <cell>_projection_<name>_ready flips unhealthy only when BOTH hold.
+```
+
+### ProjectionPendingEventsHigh
+
+积压深度增长（head 远超 checkpoint）表示 apply 速率落后或 consumer 停摆。
+
+```yaml
+- alert: GoCellProjectionPendingEventsHigh
+  expr: max(gocell_projection_pending_events) by (cell, projection) > 1000
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Projection pending events high ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      Projection {{ $labels.cell }}/{{ $labels.projection }} has > 1000 un-applied
+      events for 5m. Gauge is computed on readyz/snapshot reads (no background
+      ticker), so it samples at probe cadence. A sustained climb with flat
+      checkpoint advance indicates the apply path is wedged; inspect the
+      projection.apply trace span and gocell_projection_event_replay_lag_seconds.
+```
+
+### Rebuild duration（仅 dashboard）
+
+`gocell_projection_rebuild_duration_seconds` 无告警阈值（rebuild 是手动/计划触发的
+运维动作）。用于容量规划——若 winmdm Stage 1 全量 rebuild p95 ≥ 30min，触发 ADR
+§Q4 记录的 v1.1 snapshot-store epic。p95 PromQL：
+`histogram_quantile(0.95, sum(rate(gocell_projection_rebuild_duration_seconds_bucket[1h])) by (le, cell, projection))`
+
+---
+
 ## 调试 / 仪表板查询
 
 以下 PromQL 片段可直接 paste 到 Grafana Explore 或 Dashboard panel。
