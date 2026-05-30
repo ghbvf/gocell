@@ -74,6 +74,8 @@ func filterByCode(results []ValidationResult, code RuleCode) []ValidationResult 
 // assertSagaFinding checks that got contains exactly wantErrCount results and,
 // when wantErrCount > 0, that the first result has SeverityError, Field ==
 // wantField (empty wantField skips the field check), and a non-empty Fix.
+// When wantErrCount > 1, all results are also verified to have SeverityError and
+// non-empty Fix (Field varies per-finding so only the first is field-checked).
 // Extracted to lower the cognitive complexity of each table-driven saga rule test.
 func assertSagaFinding(t *testing.T, got []ValidationResult, wantErrCount int, wantField string) {
 	t.Helper()
@@ -83,15 +85,25 @@ func assertSagaFinding(t *testing.T, got []ValidationResult, wantErrCount int, w
 	if wantErrCount == 0 {
 		return
 	}
+	// Verify the first result's field (callers only provide wantField for got[0]).
 	r := got[0]
 	if r.Severity != SeverityError {
-		t.Errorf("expected SeverityError, got %s", r.Severity)
+		t.Errorf("got[0]: expected SeverityError, got %s", r.Severity)
 	}
 	if wantField != "" && r.Field != wantField {
-		t.Errorf("expected field %q, got %q", wantField, r.Field)
+		t.Errorf("got[0]: expected field %q, got %q", wantField, r.Field)
 	}
 	if r.Fix == "" {
-		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+		t.Error("got[0]: error finding must carry non-empty Fix guidance (typed-Fix contract)")
+	}
+	// For multi-finding cases, verify every result carries Severity + Fix.
+	for i, ri := range got[1:] {
+		if ri.Severity != SeverityError {
+			t.Errorf("got[%d]: expected SeverityError, got %s", i+1, ri.Severity)
+		}
+		if ri.Fix == "" {
+			t.Errorf("got[%d]: error finding must carry non-empty Fix guidance (typed-Fix contract)", i+1)
+		}
 	}
 }
 
@@ -107,13 +119,22 @@ func assertSagaFindingPrefix(t *testing.T, got []ValidationResult, wantErrCount 
 	}
 	r := got[0]
 	if r.Severity != SeverityError {
-		t.Errorf("expected SeverityError, got %s", r.Severity)
+		t.Errorf("got[0]: expected SeverityError, got %s", r.Severity)
 	}
 	if wantField != "" && !strings.HasPrefix(r.Field, wantField) {
-		t.Errorf("expected field with prefix %q, got %q", wantField, r.Field)
+		t.Errorf("got[0]: expected field with prefix %q, got %q", wantField, r.Field)
 	}
 	if r.Fix == "" {
-		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+		t.Error("got[0]: error finding must carry non-empty Fix guidance (typed-Fix contract)")
+	}
+	// For multi-finding cases, verify every result carries Severity + Fix.
+	for i, ri := range got[1:] {
+		if ri.Severity != SeverityError {
+			t.Errorf("got[%d]: expected SeverityError, got %s", i+1, ri.Severity)
+		}
+		if ri.Fix == "" {
+			t.Errorf("got[%d]: error finding must carry non-empty Fix guidance (typed-Fix contract)", i+1)
+		}
 	}
 }
 

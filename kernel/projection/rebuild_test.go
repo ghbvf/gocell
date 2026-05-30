@@ -1157,7 +1157,7 @@ func (b *blockingReplaySource) Head(context.Context) (int64, error) {
 // loop. The wait observes real-clock goroutine progress, not simulated time.
 func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 	t.Helper()
-	testwait.External(t, "projection-rebuild-phase-transition",
+	testwait.External(t, "projection-rebuild-wait-for-phase",
 		func() bool { return c.Phase() == want },
 		testtime.EventuallyLong, testtime.FastPoll,
 		"phase != %v", want)
@@ -1169,7 +1169,7 @@ func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 //nolint:unparam // notWant=PhaseLive in current callers; param kept for future tests
 func waitUntilPhaseNot(t *testing.T, c *Coordinator, notWant Phase) {
 	t.Helper()
-	testwait.External(t, "projection-rebuild-phase-transition",
+	testwait.External(t, "projection-rebuild-wait-phase-changed",
 		func() bool { return c.Phase() != notWant },
 		testtime.EventuallyLong, testtime.FastPoll,
 		"phase still == %v", notWant)

@@ -176,11 +176,11 @@ func (p *recordingProvider) signalWhenCounterReaches(l kernelmetrics.Labels, thr
 
 	labelKey := labelsKeyR(l)
 	vec.mu.Lock()
-	vec.notify = func(labels kernelmetrics.Labels, newVal int64) {
+	vec.notifiers = append(vec.notifiers, func(labels kernelmetrics.Labels, newVal int64) {
 		if labelsKeyR(labels) == labelKey && newVal >= threshold {
 			fire()
 		}
-	}
+	})
 	// Check if threshold is already reached (race-free: vec.mu held).
 	if cur, exists := vec.obs[labelKey]; exists && cur.Load() >= threshold {
 		fire()
@@ -214,11 +214,13 @@ type recordingCounterVec struct {
 	labels []string
 	mu     sync.Mutex
 	obs    map[string]*atomic.Int64
-	// notify is an optional per-increment callback set by tests. It is called
+	// notifiers is a list of per-increment callbacks set by tests. Each is called
 	// after every Inc/Add with the label set and the new counter value.
-	// The callback is invoked outside recordingCounterVec.mu to avoid inversion
-	// with any mutex the callback itself may acquire.
-	notify func(labels kernelmetrics.Labels, newVal int64)
+	// Callbacks are invoked outside recordingCounterVec.mu to avoid inversion
+	// with any mutex the callbacks themselves may acquire.
+	// Using a slice (append) rather than a single field prevents a second
+	// signalWhenCounterReaches registration from silently overwriting the first.
+	notifiers []func(labels kernelmetrics.Labels, newVal int64)
 }
 
 func (v *recordingCounterVec) Registered() bool { return true }
@@ -262,9 +264,10 @@ type recordingCounter struct {
 func (c *recordingCounter) Inc(_ context.Context) {
 	newVal := c.n.Add(1)
 	c.vec.mu.Lock()
-	fn := c.vec.notify
+	fns := make([]func(kernelmetrics.Labels, int64), len(c.vec.notifiers))
+	copy(fns, c.vec.notifiers)
 	c.vec.mu.Unlock()
-	if fn != nil {
+	for _, fn := range fns {
 		fn(c.labels, newVal)
 	}
 }
@@ -272,9 +275,10 @@ func (c *recordingCounter) Inc(_ context.Context) {
 func (c *recordingCounter) Add(_ context.Context, d float64) {
 	newVal := c.n.Add(int64(d))
 	c.vec.mu.Lock()
-	fn := c.vec.notify
+	fns := make([]func(kernelmetrics.Labels, int64), len(c.vec.notifiers))
+	copy(fns, c.vec.notifiers)
 	c.vec.mu.Unlock()
-	if fn != nil {
+	for _, fn := range fns {
 		fn(c.labels, newVal)
 	}
 }

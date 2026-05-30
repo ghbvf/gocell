@@ -59,7 +59,7 @@ const errProviderRequired = "mqtt: metrics.Provider is required"
 // helpCellLabel is the common suffix appended to metric Help strings to document
 // that the "cell" label is bound at construction time (registration-time
 // enumerated, not derived from request context).
-const helpCellLabel = "Label: cell = construction-time cell identifier."
+const helpCellLabel = "Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx)."
 
 // NewProviderConnectionCollector registers mqtt_reconnect_total and
 // mqtt_subscribe_failed_total on p and returns a ConnectionCollector bound to
@@ -261,7 +261,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	publishTotal, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_total",
 		Help: "Total number of MQTT publish attempts that completed successfully (broker PUBACK received). " +
-			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {

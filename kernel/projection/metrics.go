@@ -23,7 +23,8 @@ const (
 )
 
 // errRegisterFmt is the format string used when a metric instrument registration
-// fails. Extracted to avoid S1192 (string literal repeated ≥3 times).
+// fails. Extracted to avoid duplicating the registration error format across the
+// three instrument registrations.
 const errRegisterFmt = "projection: register %s: %w"
 
 // projectionRebuildDurationBuckets covers sub-millisecond to multi-hour

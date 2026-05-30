@@ -30,7 +30,7 @@ func mustNewEntry(t testing.TB, eventType string, payload []byte, opts ...outbox
 // (integration) both depend on recordingSettlement + recordingSubCollector.
 //
 // Unit-only dispatchAck white-box doubles (subAckRecorder / fakeAckConn /
-// newDispatchAckSubscriber / dispatchAckEntry / ackHandler / fatalfT) live in
+// newDispatchAckSubscriber / dispatchAckEntry / ackHandler) live in
 // subscriber_dispatchack_test.go (//go:build !integration) — they have no
 // caller in the integration build and would report `unused` if compiled there.
 
