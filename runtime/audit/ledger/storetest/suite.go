@@ -560,18 +560,29 @@ func runVerifyFullRange(t *testing.T, factory Factory) {
 
 // runQueryByFilters: Query returns only entries matching the filter.
 func runQueryByFilters(t *testing.T, factory Factory) {
+	const (
+		filterEventType = "type.X" // event type asserted by the EventType filter
+		filterSubject   = "alice"  // subject asserted by the SubjectID filter (#1290)
+	)
 	store, fc, cleanup := factory(t)
 	defer cleanup()
 
 	for i := 1; i <= 6; i++ {
-		et := "type.X"
+		et := filterEventType
 		if i > 3 {
 			et = "type.Y"
+		}
+		// SubjectID is orthogonal to EventType: entries 1,2 target filterSubject,
+		// the rest target "bob" — exercising the subject_id filter (#1290).
+		subject := "bob"
+		if i <= 2 {
+			subject = filterSubject
 		}
 		e := &ledger.Entry{
 			EventID:   fmt.Sprintf("qf-%d", i),
 			EventType: et,
 			ActorID:   "actor",
+			SubjectID: subject,
 			Timestamp: fc.Now(),
 			Payload:   []byte(`{}`),
 		}
@@ -580,13 +591,34 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		}
 	}
 
-	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: "type.X"},
+	results, err := store.Query(context.Background(), ledger.AuditFilters{EventType: filterEventType},
 		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
 	if len(results) != 3 {
 		t.Errorf("Query(type.X): got %d, want 3", len(results))
+	}
+
+	// #1290: subject_id filter narrows to the two alice-subject rows.
+	bySubject, err := store.Query(context.Background(), ledger.AuditFilters{SubjectID: filterSubject},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(subjectId): %v", err)
+	}
+	if len(bySubject) != 2 {
+		t.Errorf("Query(subjectId=alice): got %d, want 2", len(bySubject))
+	}
+
+	// Combined EventType + SubjectID — both predicates AND together.
+	combined, err := store.Query(context.Background(),
+		ledger.AuditFilters{EventType: filterEventType, SubjectID: filterSubject},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(eventType+subjectId): %v", err)
+	}
+	if len(combined) != 2 {
+		t.Errorf("Query(type.X + subjectId=alice): got %d, want 2", len(combined))
 	}
 }
 

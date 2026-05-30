@@ -411,6 +411,7 @@ func (s *LedgerStore) Query(ctx context.Context, filters ledger.AuditFilters, pa
 FROM audit_entries WHERE namespace = `, ns)
 	b.AppendIf(filters.EventType != "", `AND event_type = `, filters.EventType)
 	b.AppendIf(filters.ActorID != "", `AND actor_id = `, filters.ActorID)
+	b.AppendIf(filters.SubjectID != "", `AND subject_id = `, filters.SubjectID)
 	b.AppendIf(!filters.From.IsZero(), `AND timestamp >= `, filters.From)
 	b.AppendIf(!filters.To.IsZero(), `AND timestamp <= `, filters.To)
 	if ksErr := pgquery.AppendKeyset(b, params); ksErr != nil {

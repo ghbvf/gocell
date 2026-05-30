@@ -113,6 +113,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.SubjectID = r.URL.Query().Get("subjectId")
+	if req.SubjectID != "" && len(req.SubjectID) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "subjectId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+	if len(req.SubjectID) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "subjectId"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
+
 	req.To = r.URL.Query().Get("to")
 	if req.To != "" && len(req.To) < 0 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

@@ -147,6 +147,21 @@ func TestService_Query(t *testing.T) {
 			filters: ledger.AuditFilters{ActorID: "usr-1"},
 			wantLen: 1,
 		},
+		{
+			name: "filter by subject (#1290)",
+			seed: func(r *ledger.MemStore) {
+				_ = r.Append(context.Background(), &ledger.Entry{
+					ID: "s-1", EventID: "evt-s-1", EventType: "event.user.created.v1",
+					ActorID: "actor-1", SubjectID: "alice", Timestamp: now, Payload: []byte("{}"),
+				})
+				_ = r.Append(context.Background(), &ledger.Entry{
+					ID: "s-2", EventID: "evt-s-2", EventType: "event.user.created.v1",
+					ActorID: "actor-2", SubjectID: "bob", Timestamp: now.Add(time.Second), Payload: []byte("{}"),
+				})
+			},
+			filters: ledger.AuditFilters{SubjectID: "alice"},
+			wantLen: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -243,6 +258,45 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 
 	logoutFilters := ledger.AuditFilters{EventType: "event.logout.v1"}
 	_, err = svc.Query(context.Background(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+}
+
+// TestService_Query_CursorContextMismatch_SubjectID is the subjectId sibling of
+// TestService_Query_CursorContextMismatch: it locks that subjectId participates
+// in the cursor-scope fingerprint (#1290, service.go QueryContext attrs). A
+// cursor minted under subjectId=alice must be rejected when replayed under
+// subjectId=bob (cross-context replay), exactly as eventType already is. Without
+// subjectId in the fingerprint, both queries would share a QueryContext and the
+// replay would silently succeed — this test would then fail.
+func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+			ID:        fmt.Sprintf("ae-%02d", i),
+			EventID:   fmt.Sprintf("evt-%02d", i),
+			EventType: "event.test.v1",
+			ActorID:   "actor-x",
+			SubjectID: "alice",
+			Timestamp: base.Add(time.Duration(i) * time.Hour),
+			Payload:   []byte("{}"),
+		}))
+	}
+
+	alice := ledger.AuditFilters{SubjectID: "alice"}
+	page1, err := svc.Query(context.Background(), alice, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	bob := ledger.AuditFilters{SubjectID: "bob"}
+	_, err = svc.Query(context.Background(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)

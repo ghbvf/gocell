@@ -392,6 +392,49 @@ func TestHandleEvent_PrincipalFieldMapping(t *testing.T) {
 		"ActorID must be sourced from the payload actor, not the principal subject")
 }
 
+// TestHandleEvent_SingleTenantInvariantTripwire pins #1289 (option A,
+// INV-SINGLE-TENANT-ONLY): develop has no tenant producer (the auth middleware
+// never writes ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01), so a
+// non-empty principal.TenantID reaching the appender means multi-tenancy (epic
+// #1296) landed without wiring tenant-scoped audit filtering — a security-
+// relevant gap. The appender must trip loudly (Error log) but MUST NOT drop the
+// audit record (compliance: never lose evidence). RED until the tripwire lands.
+func TestHandleEvent_SingleTenantInvariantTripwire(t *testing.T) {
+	p := newTestProtocol(t)
+	inner, err := ledger.NewMemStore(p, clock.Real())
+	require.NoError(t, err)
+	cap := &captureStore{Store: inner}
+	spec := newSpec(t, "auditappenduser", appender.ActorAcceptUserFallback)
+
+	epoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(epoch)
+	svc, buf := newServiceWithLogBuf(t, spec, cap, p, fc)
+
+	entry, err := outbox.EntryScan{
+		ID:         "evt-tenant-tripwire",
+		EventType:  "event.user.created.v1",
+		Payload:    mustJSON(t, map[string]any{"actorId": "actor-1"}),
+		CreatedAt:  epoch,
+		OccurredAt: epoch,
+		Principal:  outbox.PrincipalMetadata{TenantID: idutil.SafeID("tenant-leaked")},
+	}.ToEntry()
+	require.NoError(t, err)
+
+	result := svc.HandleEvent(context.Background(), entry)
+	// Record is NOT dropped — compliance evidence must survive the tripwire.
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"tripwire must not Reject: audit evidence is never dropped")
+	require.Len(t, cap.appended, 1, "audit record must still be appended")
+	assert.Equal(t, "tenant-leaked", cap.appended[0].TenantID)
+
+	// The invariant violation is logged at Error level for alerting.
+	logs := buf.String()
+	assert.Contains(t, logs, "INV-SINGLE-TENANT-ONLY",
+		"non-empty principal.TenantID must trip the single-tenant invariant log")
+	assert.Contains(t, logs, `"level":"ERROR"`,
+		"the tripwire must log at Error level")
+}
+
 // recordingEmitter captures every Emit call. Implements outbox.Emitter.
 type recordingEmitter struct {
 	emitted []emittedRecord
