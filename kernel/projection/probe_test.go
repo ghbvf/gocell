@@ -125,27 +125,27 @@ func TestCoordinator_ReadinessProbe_ColdStartHealthy(t *testing.T) {
 
 // TestCoordinator_ReadinessProbe_LagUnhealthy asserts ReadinessProbe returns
 // unhealthy when lag > projectionLagThresholdSeconds.
+// Setup: head=2, checkpoint=1 (pending=1 > 0), last=farPast (lag > threshold).
 func TestCoordinator_ReadinessProbe_LagUnhealthy(t *testing.T) {
 	t.Parallel()
-	// Clock starts far in the past (> threshold ago).
+	// OccurredAt far in the past (> 300s ago).
 	farPast := time.Now().Add(-(projectionLagThresholdSeconds + 60) * time.Second)
 	clk := clockmock.New(time.Now())
 	src := NewMemReplaySource()
 	cur := newMemCursor(src)
 	store := NewMemCheckpointStore()
 
-	// Append one entry with OccurredAt = far past.
-	pastClk := clockmock.New(farPast)
-	entry := mustNewTestEntry(t, pastClk, "topic.v1")
-	src.Append(entry)
+	// Append two entries so head=2.
+	clk2 := clockmock.New(time.Now())
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
+	src.Append(mustNewTestEntry(t, clk2, "topic.v1"))
 
 	c := newCoordinatorFull(t, clk, "myproj", &fakeRegistrar{}, &fakeTxRunner{}, store, cur, src)
 	subscribeWithDefaults(t, c, applyNoop)
 
-	// Simulate having applied entry 1 (checkpoint=1) by recording its OccurredAt.
-	// We do this by storing the nanotime directly.
+	// Simulate: checkpoint=1 (one event applied), head=2 → pending=1 > 0.
+	// lastApplied = far past → lag > threshold → unhealthy.
 	c.lastAppliedUnixNano.Store(farPast.UnixNano())
-	// Set checkpoint to 1 so pending = 0 but lag > threshold.
 	if err := store.SaveOffset(context.Background(), "testcell", "myproj", 1); err != nil {
 		t.Fatalf("SaveOffset: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestCoordinator_ReadinessProbe_LagUnhealthy(t *testing.T) {
 		t.Fatalf("ReadinessProbe: %v", err)
 	}
 
-	// lag > threshold → unhealthy.
+	// pending=1 > 0, lag > threshold → unhealthy.
 	checkErr := probe.Check(context.Background())
 	if checkErr == nil {
 		t.Fatal("Check: expected error (lag > threshold), got nil")

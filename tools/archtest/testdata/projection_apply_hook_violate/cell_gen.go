@@ -22,5 +22,5 @@ func generatedCellSubscribe(coord *projection.Coordinator) {
 		Kind:      "event",
 		Transport: "amqp",
 		Topic:     "test.v1",
-	}, "proj-id", apply)
+	}, apply)
 }

@@ -749,7 +749,11 @@ func TestCoordinator_Subscribe(t *testing.T) {
 		t.Parallel()
 		reg := &fakeRegistrar{}
 		clk := clockmock.New(time.Now())
-		c, err := NewCoordinator(clk, "testcell", "myproj", reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
+		c, err := NewCoordinator(
+			clk, "testcell", "myproj",
+			reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
+			NewMemReplaySource(), wrapper.NoopTracer{}, nil,
+		)
 		if err != nil {
 			t.Fatalf("NewCoordinator: %v", err)
 		}
@@ -1053,29 +1057,34 @@ type subscribeCase struct {
 
 func runSubscribeCase(t *testing.T, tc subscribeCase) {
 	t.Helper()
-	reg := &fakeRegistrar{subscribeErr: tc.regErr}
-	// projectionID is now passed to NewCoordinator; use tc.projectionID if non-empty,
-	// else "myproj" (the happy-path default). Empty-projectionID cases should
-	// now be represented as empty-projectionID in NewCoordinator, which is tested
-	// separately in TestNewCoordinator_NilGuards_PR03. Here we preserve old cases
-	// that passed projectionID to Subscribe by threading it through the constructor.
+	// In PR-03, projectionID is in NewCoordinator, not Subscribe. The "empty
+	// projectionID" case is now a NewCoordinator validation; we thread it through
+	// the constructor instead of Subscribe.
 	projID := tc.projectionID
 	if projID == "" {
-		projID = "myproj" // Subscribe empty-projectionID case no longer exists; wire valid projID
-	}
-	clk := clockmock.New(time.Now())
-	c, err := NewCoordinator(clk, "testcell", projID, reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{}, NewMemReplaySource(), wrapper.NoopTracer{}, nil)
-	if tc.projectionID == "" {
-		// empty projectionID → NewCoordinator itself errors; Subscribe never called.
-		if err == nil {
-			t.Fatal("expected NewCoordinator to error for empty projectionID")
+		// Test case wants an error from empty projectionID — NewCoordinator rejects.
+		clk := clockmock.New(time.Now())
+		_, err := NewCoordinator(
+			clk, "testcell", "",
+			&fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
+			NewMemReplaySource(), wrapper.NoopTracer{}, nil,
+		)
+		if tc.wantErr && err == nil {
+			t.Fatal("expected error for empty projectionID from NewCoordinator, got nil")
 		}
-		// tc.wantErr is true in this case; treat as expected.
-		if !tc.wantErr {
-			t.Fatalf("unexpected error: %v", err)
+		if !tc.wantErr && err != nil {
+			t.Fatalf("unexpected NewCoordinator error: %v", err)
 		}
 		return
 	}
+
+	reg := &fakeRegistrar{subscribeErr: tc.regErr}
+	clk := clockmock.New(time.Now())
+	c, err := NewCoordinator(
+		clk, "testcell", projID,
+		reg, &fakeTxRunner{}, NewMemCheckpointStore(), &fakeCursor{},
+		NewMemReplaySource(), wrapper.NoopTracer{}, nil,
+	)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

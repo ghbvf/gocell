@@ -1,0 +1,237 @@
+package projection
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// ErrRebuildInProgress is returned by Rebuild when a rebuild is already
+// running. Callers should map this to HTTP 409 Conflict.
+var ErrRebuildInProgress = errcode.New(errcode.KindConflict, errcode.ErrConflict,
+	"projection.Rebuild: rebuild already in progress; only one rebuild may run at a time")
+
+// Rebuild triggers a background full rebuild of the projection's read-model.
+// It transitions the Coordinator through the 4-phase lifecycle:
+//
+//	Stop → Reset → Replay → Catchup → Live
+//
+// Rebuild returns immediately (nil) if the CAS admission succeeds; the caller
+// should respond 202 Accepted. If a rebuild is already running, Rebuild returns
+// [ErrRebuildInProgress] (caller maps to 409 Conflict).
+//
+// Subscribe must have been called before Rebuild — the projection must have a
+// registered apply function and spec before rebuild can start.
+//
+// The rebuild goroutine is detached from the request context: it is only
+// canceled by Close (which sets rebuildCancel).
+func (c *Coordinator) Rebuild(ctx context.Context) error {
+	if !c.subscribed.Load() {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.Rebuild: Subscribe must be called before Rebuild")
+	}
+	// Admission: CAS Live→Stopped. Only one rebuild at a time.
+	if !c.phase.CompareAndSwap(uint32(PhaseLive), uint32(PhaseStopped)) {
+		return ErrRebuildInProgress
+	}
+
+	rctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in c.rebuildCancel and called in Close()
+	c.rebuildCancel = cancel
+	c.rebuildWG.Add(1)
+	go c.runRebuild(rctx)
+	return nil
+}
+
+// runRebuild executes the full rebuild lifecycle. It is the only writer of
+// phase values after the initial CAS (so plain Store is correct for subsequent
+// phase transitions).
+//
+// Every error/cancel edge ends with phase=PhaseLive and openGate.
+func (c *Coordinator) runRebuild(ctx context.Context) {
+	defer c.rebuildWG.Done()
+
+	start := c.clk.Now()
+
+	// Phase: Stopped — shut gate so live handler parks.
+	c.shutGate()
+
+	head0, err := c.captureHead(ctx)
+	if err != nil {
+		c.failRebuild()
+		return
+	}
+
+	// Phase: Reset — OnReset + SaveOffset(0) in one tx.
+	c.phase.Store(uint32(PhaseReset))
+	if err := c.resetPhase(ctx); err != nil {
+		c.failRebuild()
+		return
+	}
+
+	// Phase: Replay — replay from 0 through head0.
+	c.phase.Store(uint32(PhaseReplay))
+	if err := c.replayPhase(ctx, head0); err != nil {
+		c.failRebuild()
+		return
+	}
+
+	// Phase: Catchup — open gate, let live handler consume (head0, ∞).
+	c.phase.Store(uint32(PhaseCatchup))
+	c.openGate()
+
+	// Catchup: wait until checkpoint ≥ current Head (or ctx cancel).
+	if err := c.catchupPhase(ctx); err != nil {
+		// ctx cancel during catchup: gate is already open, live handler continues.
+		c.phase.Store(uint32(PhaseLive))
+		return
+	}
+
+	// Success.
+	durSecs := c.clk.Since(start).Seconds()
+	c.metrics.observeRebuildDuration(ctx, c.cellID, c.projectionID, durSecs)
+	c.phase.Store(uint32(PhaseLive))
+}
+
+// captureHead records head₀ for the catchup cutoff.
+func (c *Coordinator) captureHead(ctx context.Context) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	head, err := c.replay.Head(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("projection.rebuild: Head: %w", err)
+	}
+	return head, nil
+}
+
+// resetPhase runs OnReset + SaveOffset(0) in a single transaction.
+// If the transaction fails, the checkpoint is NOT zeroed (whole tx rollback).
+func (c *Coordinator) resetPhase(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if c.onReset != nil {
+			if err := c.onReset(txCtx); err != nil {
+				return fmt.Errorf("projection.rebuild[reset]: onReset: %w", err)
+			}
+		}
+		if err := c.store.SaveOffset(txCtx, c.cellID, c.projectionID, 0); err != nil {
+			return fmt.Errorf("projection.rebuild[reset]: SaveOffset(0): %w", err)
+		}
+		return nil
+	})
+}
+
+// errReplayDone is the internal sentinel returned by the Replay fn to stop
+// iteration early once head0 is reached. replayPhase filters it out.
+var errReplayDone = errors.New("projection.rebuild: replay reached head0")
+
+// replayPhase replays events from offset 0 through head0 (inclusive).
+// Each event is applied via applyOne in its own tx (exactly-once skip + pos<1
+// guard apply). Stops at head0 (catchup picks up from there).
+func (c *Coordinator) replayPhase(ctx context.Context, head0 int64) error {
+	err := c.replay.Replay(ctx, 0, func(entry outbox.Entry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+			return c.applyOne(txCtx, entry, c.apply)
+		}); err != nil {
+			return fmt.Errorf("projection.rebuild[replay]: %w", err)
+		}
+		// Stop at head0; events at positions > head0 are handled by catchup.
+		pos, _ := c.cursor.Position(entry)
+		if head0 > 0 && pos >= head0 {
+			return errReplayDone
+		}
+		return nil
+	})
+	if errors.Is(err, errReplayDone) {
+		return nil
+	}
+	return err
+}
+
+// catchupPhase waits until the checkpoint has caught up to the current head.
+// The gate is already open, so live event handlers are processing events.
+// This phase completes either when caught up or when ctx is canceled.
+// Head/LoadOffset errors are treated as non-fatal (live path continues after
+// catchup phase exits on error).
+func (c *Coordinator) catchupPhase(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		caught, err := c.isCaughtUp(ctx)
+		if err != nil {
+			// Non-fatal: store/Head error in catchup; live handler continues.
+			return nil //nolint:nilerr // intentional: catchup error is non-fatal; live path resumes
+		}
+		if caught {
+			break
+		}
+		// Yield briefly to let the live handler process incoming events.
+		sleepUntil := c.clk.Now().Add(catchupPollInterval)
+		if err := c.clk.Sleep(ctx, sleepUntil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isCaughtUp checks whether the checkpoint >= current head.
+func (c *Coordinator) isCaughtUp(ctx context.Context) (bool, error) {
+	head, err := c.replay.Head(ctx)
+	if err != nil {
+		return false, err
+	}
+	cp, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
+	if err != nil {
+		return false, err
+	}
+	return cp >= head, nil
+}
+
+// catchupPollInterval is the polling period during Catchup phase.
+const catchupPollInterval = 5 * time.Millisecond
+
+// failRebuild restores PhaseLive and opens the gate on any rebuild error.
+func (c *Coordinator) failRebuild() {
+	c.openGate()
+	c.phase.Store(uint32(PhaseLive))
+}
+
+// Close cancels any in-flight rebuild and waits for it to finish.
+// It then closes the done channel. Close is idempotent (double-close is
+// guarded). ctx controls the wait timeout.
+func (c *Coordinator) Close(ctx context.Context) error {
+	// Guard double-close of done.
+	select {
+	case <-c.done:
+		return nil // already closed
+	default:
+	}
+	close(c.done)
+
+	if c.rebuildCancel != nil {
+		c.rebuildCancel()
+	}
+
+	// Wait for rebuild goroutine to finish, or until ctx is done.
+	waited := make(chan struct{})
+	go func() {
+		c.rebuildWG.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

@@ -154,3 +154,31 @@ func EmitterFailOpenProbeName(cellID string) (ProbeName, error) {
 	}
 	return NewProbeName(emitterFailOpenProbeNamePrefix + cellID)
 }
+
+// projectionProbeNameInfix and projectionProbeNameSuffix form the fixed segments
+// of a projection readiness probe name: "<cellID>_projection_<projectionID>_ready".
+// Fixed length = len("_projection_") + len("_ready") = 12 + 6 = 18.
+// So len(cellID)+len(projectionID) must be ≤ 46 (64 − 18).
+const (
+	projectionProbeNameInfix  = "_projection_"
+	projectionProbeNameSuffix = "_ready"
+)
+
+// ProjectionReadyProbeName composes the typed probe name for a projection
+// readiness probe: "<cellID>_projection_<projectionID>_ready". Both cellID
+// and projectionID must be non-empty and the combined name must satisfy
+// [NewProbeName] validation (snake_case lowercase, ≤ 64 chars total).
+//
+// Budget: fixed infix + suffix = 18 characters; len(cellID)+len(projectionID)
+// must be ≤ 46. NewProbeName fail-fast on overflow.
+//
+// This is the SOLE sanctioned composed-name constructor for projection readiness
+// probes — bare string concatenation at callsites is rejected by archtest
+// PROBENAME-SEALED-FUNNEL-01/A5 (projection-prefix scanner added in PR-03).
+func ProjectionReadyProbeName(cellID, projectionID string) (ProbeName, error) {
+	if cellID == "" || projectionID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: projection probe cellID and projectionID must not be empty")
+	}
+	return NewProbeName(cellID + projectionProbeNameInfix + projectionID + projectionProbeNameSuffix)
+}

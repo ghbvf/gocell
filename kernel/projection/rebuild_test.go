@@ -425,17 +425,17 @@ func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 	}{
 		{
 			name: "all valid",
-			clk: clk, projID: "p1", replay: validReplay,
+			clk:  clk, projID: "p1", replay: validReplay,
 			wantErr: false,
 		},
 		{
 			name: "empty projectionID",
-			clk: clk, projID: "", replay: validReplay,
+			clk:  clk, projID: "", replay: validReplay,
 			wantErr: true,
 		},
 		{
 			name: "nil replay",
-			clk: clk, projID: "p1", replay: nil,
+			clk:  clk, projID: "p1", replay: nil,
 			wantErr: true,
 		},
 		// nil clk panics via clock.MustHaveClock — covered separately; not tested here.
@@ -445,11 +445,10 @@ func TestNewCoordinator_NilGuards_PR03(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var replayArg ReplaySource = tc.replay
 			c, err := NewCoordinator(
 				tc.clk,
 				"testcell", tc.projID,
-				validReg, validTxr, validStore, validCursor, replayArg,
+				validReg, validTxr, validStore, validCursor, tc.replay,
 				wrapper.NoopTracer{},
 				nil,
 			)
@@ -498,6 +497,8 @@ func (b *blockingReplaySource) Head(context.Context) (int64, error) {
 // ---------------------------------------------------------------------------
 
 // waitForPhase spins until c.Phase() == want or test times out.
+//
+//nolint:unparam // want=PhaseLive in current callers; param kept for future tests
 func waitForPhase(t *testing.T, c *Coordinator, want Phase) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

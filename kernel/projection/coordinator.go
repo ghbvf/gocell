@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cellvocab"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -21,43 +23,78 @@ import (
 // inside a TxRunner.RunInTx so that the Apply mutation and the checkpoint
 // advance commit atomically.
 //
-// The Coordinator is stateless except for the phase field — all durability is
-// delegated to the CheckpointStore.
+// # Per-projection model (PR-03)
 //
-// ref: JasperFx/marten async-daemon ProjectionDaemon — orchestrates Apply +
-// checkpoint inside a single transaction.
-// ref: AxonFramework TrackingEventProcessor — cursor-based position tracking.
+// Each Coordinator is per-projection (projectionID moves from Subscribe to
+// NewCoordinator). Subscribe may only be called once; a second call returns
+// an error. This is a Hard constraint enforced by a subscribed atomic.Bool CAS.
+// A cell hosting N projections creates N Coordinators.
+//
+// # Gate mechanism (PR-03)
+//
+// During a rebuild, the live event handler parks on an unbuffered channel gate
+// (liveGate). An OPEN gate is a CLOSED channel (reads pass immediately); a
+// SHUT gate is a fresh open (non-closed) channel (reads block). Only the
+// single rebuild goroutine calls shutGate/openGate.
+//
+// ref: JasperFx/marten async-daemon ProjectionDaemon.
+// ref: AxonFramework TrackingEventProcessor.
 type Coordinator struct {
-	cellID   string
-	reg      cell.Registrar
-	txRunner persistence.TxRunner
-	store    CheckpointStore
-	cursor   Cursor
-	tracer   wrapper.Tracer
+	clk          clock.Clock
+	cellID       string
+	projectionID string
+	reg          cell.Registrar
+	txRunner     persistence.TxRunner
+	store        CheckpointStore
+	cursor       Cursor
+	replay       ReplaySource
+	tracer       wrapper.Tracer
+	metrics      *Metrics // optional; nil = instruments disabled
+
 	phase    atomic.Uint32
+	done     chan struct{}
+	liveGate atomic.Pointer[chan struct{}]
+
+	subscribed atomic.Bool
+	apply      Apply
+	spec       contractspec.ContractSpec
+	onReset    OnReset
+
+	rebuildCancel       context.CancelFunc
+	rebuildWG           sync.WaitGroup
+	lastAppliedUnixNano atomic.Int64
 }
 
-// NewCoordinator constructs a Coordinator. All parameters are required; a nil
-// or typed-nil value for any interface parameter returns a validation error.
+// NewCoordinator constructs a Coordinator. clk is the first parameter per
+// CLOCK-POSITIONAL-INJECTION-01. All parameters except metrics are required.
+//
+// metrics is optional (nil = all instruments disabled). When non-nil, the
+// label set is validated via metrics.preflight during construction.
 //
 // Required dependencies are validated with hand-written nil guards (using
-// validation.IsNilInterface) rather than the gocell:"required" codegen funnel —
-// kernel/ has no codegen dependency. This is the established kernel-layer pattern
-// distinct from REQUIRED-DEP-NIL-GUARD-01 which applies to cells/ only.
+// validation.IsNilInterface) rather than gocell:"required" codegen — kernel/
+// has no codegen dependency (established kernel-layer pattern).
 //
-// cursor: the production implementation (journal/metadata-backed) lands in a
-// later PR; PR-01 provides only the interface and a test fake.
+// ref: ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md
 func NewCoordinator(
-	cellID string,
+	clk clock.Clock,
+	cellID, projectionID string,
 	reg cell.Registrar,
 	txRunner persistence.TxRunner,
 	store CheckpointStore,
 	cursor Cursor,
+	replay ReplaySource,
 	tracer wrapper.Tracer,
+	metrics *Metrics,
 ) (*Coordinator, error) {
+	clock.MustHaveClock(clk, "projection.NewCoordinator")
 	if cellID == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.NewCoordinator: cellID required")
+	}
+	if projectionID == "" {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.NewCoordinator: projectionID required")
 	}
 	if validation.IsNilInterface(reg) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -75,90 +112,74 @@ func NewCoordinator(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.NewCoordinator: cursor required")
 	}
+	if validation.IsNilInterface(replay) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection.NewCoordinator: replay required")
+	}
 	if validation.IsNilInterface(tracer) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.NewCoordinator: tracer required")
 	}
 	c := &Coordinator{
-		cellID:   cellID,
-		reg:      reg,
-		txRunner: txRunner,
-		store:    store,
-		cursor:   cursor,
-		tracer:   tracer,
+		clk:          clk,
+		cellID:       cellID,
+		projectionID: projectionID,
+		reg:          reg,
+		txRunner:     txRunner,
+		store:        store,
+		cursor:       cursor,
+		replay:       replay,
+		tracer:       tracer,
+		metrics:      metrics,
+		done:         make(chan struct{}),
 	}
 	c.phase.Store(uint32(PhaseLive))
+	c.initGateOpen()
 	return c, nil
 }
 
-// Phase returns the current lifecycle phase of the Coordinator. This is a
-// best-effort snapshot: the returned value reflects the atomic load at the
-// moment of the call and may already be stale by the time the caller acts on
-// it. See phase.go for the freshness contract.
+// Phase returns the current lifecycle phase of the Coordinator. Best-effort
+// snapshot: may be stale by the time the caller acts on it.
 func (c *Coordinator) Phase() Phase {
 	return Phase(c.phase.Load()) //nolint:gosec // uint32 holds Phase iota+1 values [1,5], no overflow
 }
 
-// Subscribe registers an event subscription for the given projectionID.
-// The Apply function is called inside a TxRunner.RunInTx for each event whose
-// position is strictly greater than the stored checkpoint (exactly-once).
+// Subscribe registers the event subscription for this Coordinator's projection.
+// Subscribe must be called exactly once; a second call returns an error (v1
+// single-input-stream Hard constraint: one Coordinator, one input stream).
 //
-// spec must be the event-kind contract spec for the input stream this projection
-// consumes: spec.Kind must be "event" and spec.Topic must be non-empty. The
-// "projection" kind is a slice-level concept (PR-04 cellgen) — it is NOT the
-// kind of the subscribed event contract.
-//
-// projectionID must be non-empty and should follow the no-dash convention
-// (caller/cellgen responsibility — no validation here beyond empty-check).
-//
-// ctx is currently unused (reserved for future span propagation); callers
-// should pass their caller context for forward compatibility.
+// spec must be an event-kind contract spec (spec.Kind must be "event").
+// apply must be non-nil. opts are applied to subscribeOptions.
 //
 // The consumerGroup is derived as cellID + "-" + projectionID and is not
-// caller-configurable — each projection has exactly one consumer GROUP (no
-// cross-cell fanout). NOTE: a single consumer group does NOT by itself guarantee
-// serial in-order delivery — the production AMQP subscriber dispatches deliveries
-// concurrently (prefetch>1). The exactly-once skip in applyOne is only sound under
-// serial in-order delivery; enforcing prefetch=1 / single-goroutine dispatch for
-// projection subscriptions lands with the cellgen wiring in PR-04 (#1176). v1
-// ships safe because cmd/* wires only the serial in-memory bus. See doc.go
-// "Ordering precondition".
+// caller-configurable (each projection has exactly one consumer group).
 //
-// In production, Subscribe should only be called from cellgen-generated wiring
-// derived from slice.yaml contractUsages (kind:projection → cell_gen.go).
-// Hand-written callsites bypass the single source of truth. Tracked in
-// gh #1100 for Hard enforcement via a sealed cellgen token in PR-04.
-//
-// apply must be non-nil. opts are applied to subscribeOptions (currently no
-// option constructors exist in v1).
+// After a successful Subscribe, apply and onReset (from opts) are captured for
+// reuse by Rebuild.
 func (c *Coordinator) Subscribe(
 	ctx context.Context,
 	spec contractspec.ContractSpec,
-	projectionID string,
 	apply Apply,
 	opts ...Option,
 ) error {
-	if projectionID == "" {
+	if !c.subscribed.CompareAndSwap(false, true) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"projection.Subscribe: projectionID required")
+			"projection.Subscribe: already subscribed; one Coordinator hosts exactly one projection (v1 single input stream)")
 	}
+
 	if apply == nil {
+		c.subscribed.Store(false) // allow retry with valid apply
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.Subscribe: apply required")
 	}
-	// Fail fast at the trust boundary: a projection consumes an event-kind input
-	// stream (the "projection" kind is a slice-level concept, not the kind of the
-	// subscribed contract). The registrar also enforces this, but self-enforcing
-	// the documented precondition here gives a projection-specific error and makes
-	// the godoc contract executable (same trust-boundary principle as the pos<1
-	// guard in applyOne). Both checks assert the identical invariant, so they
-	// cannot diverge harmfully.
 	if spec.Kind != cellvocab.ContractEvent {
+		c.subscribed.Store(false)
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.Subscribe: spec.Kind must be \"event\"; a projection consumes an event-kind input stream")
 	}
 	if err := spec.Validate(); err != nil {
-		return fmt.Errorf("projection.Subscribe[%s]: invalid spec: %w", projectionID, err)
+		c.subscribed.Store(false)
+		return fmt.Errorf("projection.Subscribe[%s]: invalid spec: %w", c.projectionID, err)
 	}
 
 	var o subscribeOptions
@@ -168,38 +189,48 @@ func (c *Coordinator) Subscribe(
 		}
 	}
 
-	_ = ctx // ctx reserved for future span propagation; callers pass their caller context
+	// Capture for Rebuild reuse.
+	c.apply = apply
+	c.spec = spec
+	c.onReset = o.onReset
 
-	cg := c.cellID + "-" + projectionID
-	h := c.buildHandler(c.cellID, projectionID, apply)
-	if err := c.reg.Subscribe(spec, h, cg, c.cellID, cell.WithSubscriptionSliceID(projectionID)); err != nil {
-		return fmt.Errorf("projection.Subscribe[%s]: %w", projectionID, err)
+	_ = ctx // reserved for future span propagation
+
+	cg := c.cellID + "-" + c.projectionID
+	h := c.buildHandler(apply)
+	if err := c.reg.Subscribe(spec, h, cg, c.cellID, cell.WithSubscriptionSliceID(c.projectionID)); err != nil {
+		return fmt.Errorf("projection.Subscribe[%s]: %w", c.projectionID, err)
 	}
 	return nil
 }
 
-// buildHandler returns the outbox.EntryHandler closure for the given projection.
-// It starts a trace span named "projection.apply" (stable ops contract — rename
-// requires dashboard sync), runs applyOne inside TxRunner.RunInTx, classifies
-// the resulting error into a HandleResult disposition, and marks the span status:
+// buildHandler returns the outbox.EntryHandler closure for this projection.
+// It parks on the liveGate during rebuild phases, then runs applyOne inside
+// TxRunner.RunInTx.
 //
-//   - Ack  → SetStatus(StatusOK, "")
-//   - Requeue → SetStatus(StatusError, "requeue")
-//   - Reject  → SetStatus(StatusError, "reject")
-//
-// Detailed error recording (RecordError + redaction) is delegated to the outer
-// WrapConsumer span so that sensitive substrings never reach the trace backend
-// without passing through pkg/redaction.RedactError. This span only marks status.
-func (c *Coordinator) buildHandler(cellID, projectionID string, apply Apply) outbox.EntryHandler {
+// Gate semantics: OPEN gate = closed channel (reads pass); SHUT gate = open
+// channel (reads block until Catchup phase opens the gate).
+func (c *Coordinator) buildHandler(apply Apply) outbox.EntryHandler {
 	return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		// Park during rebuild phases (stopped/reset/replay). OPEN gate is a closed
+		// channel so the first case fires immediately.
+		gp := c.liveGate.Load()
+		select {
+		case <-*gp:
+			// gate is open — proceed
+		case <-ctx.Done():
+			return outbox.Requeue(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"projection.handler: context canceled while waiting for gate"))
+		}
+
 		ctx, span := c.tracer.Start(ctx, "projection.apply",
-			wrapper.Attr{Key: "gocell.projection.cell", Value: cellID},
-			wrapper.Attr{Key: "gocell.projection.id", Value: projectionID},
+			wrapper.Attr{Key: "gocell.projection.cell", Value: c.cellID},
+			wrapper.Attr{Key: "gocell.projection.id", Value: c.projectionID},
 		)
 		defer span.End()
 
 		err := c.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-			return c.applyOne(txCtx, cellID, projectionID, entry, apply)
+			return c.applyOne(txCtx, entry, apply)
 		})
 		result := classify(err)
 		switch result.Disposition {
@@ -215,15 +246,10 @@ func (c *Coordinator) buildHandler(cellID, projectionID string, apply Apply) out
 }
 
 // applyOne is the inner per-event logic: load checkpoint, compare position,
-// call Apply, and advance the checkpoint. It runs inside a transaction provided
-// by the caller (buildHandler's RunInTx).
-func (c *Coordinator) applyOne(
-	ctx context.Context,
-	cellID, projectionID string,
-	entry outbox.Entry,
-	apply Apply,
-) error {
-	current, err := c.store.LoadOffset(ctx, cellID, projectionID)
+// call Apply, advance checkpoint, and update lastApplied metrics.
+// It runs inside a transaction provided by the caller (buildHandler's RunInTx).
+func (c *Coordinator) applyOne(ctx context.Context, entry outbox.Entry, apply Apply) error {
+	current, err := c.store.LoadOffset(ctx, c.cellID, c.projectionID)
 	if err != nil {
 		return fmt.Errorf("projection.applyOne[load]: %w", err)
 	}
@@ -233,28 +259,13 @@ func (c *Coordinator) applyOne(
 		return fmt.Errorf("projection.applyOne[cursor]: %w", err)
 	}
 
-	// Enforce the Cursor 1-based invariant (cursor.go #2) at the trust boundary:
-	// position 0 is reserved for cold start, so a real event MUST have pos >= 1.
-	// A non-conformant Cursor returning < 1 would otherwise be silently Ack-skipped
-	// by the pos<=current guard below (0<=0 at cold start = a dropped event with no
-	// error). Route the malformed event to the DLX as a permanent error instead of
-	// dropping it silently — the worst failure mode is a silent skip.
+	// Enforce the Cursor 1-based invariant (cursor.go #2) at the trust boundary.
 	if pos < 1 {
 		return outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"projection.applyOne: cursor returned a non-positive position; Cursor must honor the 1-based invariant"))
 	}
 
 	// Exactly-once: skip events already reflected in the checkpoint.
-	//
-	// CORRECTNESS PRECONDITION: this cumulative-watermark skip is only sound under
-	// strictly serial, in-order delivery of the projection's stream. Under
-	// concurrent delivery (e.g. the production AMQP subscriber dispatches one
-	// goroutine per delivery with prefetch>1) or broker redelivery-reorder, a
-	// higher position can advance the checkpoint before a lower position is
-	// applied, and the lower event's distinct Apply is then silently skipped
-	// (projection gap). v1 wires only the serial in-memory bus; serial-delivery
-	// enforcement for the production transport lands with the cellgen projection
-	// wiring in PR-04 (#1176). See doc.go "Ordering precondition" + ADR §6 row 4.
 	if pos <= current {
 		return nil
 	}
@@ -263,16 +274,49 @@ func (c *Coordinator) applyOne(
 		return fmt.Errorf("projection.applyOne[apply]: %w", err)
 	}
 
-	if err := c.store.SaveOffset(ctx, cellID, projectionID, pos); err != nil {
+	if err := c.store.SaveOffset(ctx, c.cellID, c.projectionID, pos); err != nil {
 		return fmt.Errorf("projection.applyOne[save]: %w", err)
 	}
+
+	// Record last applied domain time (used by readyz lag computation).
+	c.lastAppliedUnixNano.Store(entry.OccurredAt().UnixNano())
+	lagSecs := c.clk.Since(entry.OccurredAt()).Seconds()
+	c.metrics.setReplayLag(ctx, c.cellID, c.projectionID, lagSecs)
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Gate helpers
+// ---------------------------------------------------------------------------
+
+// initGateOpen initializes the liveGate to an OPEN state: a pre-closed channel.
+// Called once in NewCoordinator.
+func (c *Coordinator) initGateOpen() {
+	ch := make(chan struct{})
+	close(ch) // closed = OPEN = passes immediately
+	c.liveGate.Store(&ch)
+}
+
+// shutGate sets the gate to SHUT: replaces with a fresh open (non-closed)
+// channel. Live handlers that load after this call will park.
+// Only the rebuild goroutine calls this.
+func (c *Coordinator) shutGate() {
+	ch := make(chan struct{})
+	c.liveGate.Store(&ch)
+}
+
+// openGate sets the gate to OPEN: closes the current channel idempotently
+// so parked handlers unblock. Only the rebuild goroutine calls this.
+func (c *Coordinator) openGate() {
+	gp := c.liveGate.Load()
+	// Close idempotently via select-default; double-close panics, so guard with recover.
+	func() {
+		defer func() { recover() }() //nolint:errcheck // intentional idempotent close
+		close(*gp)
+	}()
+}
+
 // classify maps an error to the appropriate HandleResult disposition.
-//   - nil      → Ack (success)
-//   - permanent error (PermanentError anywhere in the chain) → Reject
-//   - any other error → Requeue (transient)
 func classify(err error) outbox.HandleResult {
 	if err == nil {
 		return outbox.Ack()
