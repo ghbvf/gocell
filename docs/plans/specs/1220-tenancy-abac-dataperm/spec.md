@@ -9,14 +9,18 @@
 
 三者**不是一个机制**，业界主流分四层处理；GoCell 规避独立 PDP 进程（OPA/SpiceDB/OpenFGA），全部内嵌：
 
+> **层标号用 D1–D4**（Data-perm 架构分层），与 GoCell 一致性等级 **L0–L4 物理无关**——`authorizationdecide` 的 consistencyLevel 实际是 **L0**，不要把 D2 误读为 L2。
+
 | 层 | 关注点 | GoCell 落点 | 默认 fail 行为 |
 |----|--------|------------|---------------|
-| L1 租户边界 | 隔离域物理边界（强制不变式） | `runtime/auth` middleware → `ctxkeys.TenantID` | fail-closed（无 tenant 拒绝请求） |
-| L2 ABAC 决策 | 「principal 能否对 resource 执行 action」 | `cells/accesscore/slices/authorizationdecide`（内嵌 policy 引擎） | fail-closed（deny on error/missing attr） |
-| L3 行级 enforcement | 数据行可见范围 | repo `tenant.TenantID` 强制 typed param（粗）+ policy 派生 `RowScope`（细，user/device） + PG RLS 兜底 | fail-closed（无谓词→0 行） |
-| L4 列级 masking | 字段可见性 | `ResourceProjection` sealed type ← policy `FieldMask` obligation | fail-closed（无 opt-out，敏感列默认 mask） |
+| D1 租户边界 | 隔离域物理边界（强制不变式） | `runtime/auth` middleware → `ctxkeys.TenantID` | fail-closed（无 tenant 拒绝请求） |
+| D2 ABAC 决策 | 「principal 能否对 resource 执行 action」 | `cells/accesscore/slices/authorizationdecide`（内嵌 policy 引擎，consistencyLevel L0） | fail-closed（deny on error/missing attr） |
+| D3 行级 enforcement | 数据行可见范围 | repo `tenant.TenantID` 强制 typed param（粗）+ policy 派生 `RowScope`（细，user/device） + PG RLS 兜底 | fail-closed（无谓词→0 行） |
+| D4 列级 masking | 字段可见性 | `pkg/projection.ResourceProjection` sealed type ← policy `FieldMask` obligation | fail-closed（无 opt-out，敏感列默认 mask） |
 
-**核心安全不变式**：租户隔离 ≠ ABAC policy 的一条规则。租户谓词是 repo 接口的**强制 typed 位置参**（type-system Hard），ABAC 决策是叠加在其上的**收窄层**。policy 漏洞绝不能放大成跨租户越权。
+**核心安全不变式**：租户隔离 ≠ ABAC policy 的一条规则。租户谓词是 repo 接口的**强制 typed 位置参**，ABAC 决策是叠加在其上的**收窄层**。policy 漏洞绝不能放大成跨租户越权。
+
+> **Hard 评级精确边界**：「repo 方法**漏传** `tenant.TenantID`」= 编译器 type-system Hard（签名缺参不可编译）；「传**空值** `TenantID("")`」= 合法 Go 表达式，**不是** type-system Hard，由构造器/`Validate()` 运行时 fail-fast + archtest（禁跳过 Validate）守，评级 **Medium**。两者合起来才是完整 fail-closed。
 
 ---
 
@@ -44,7 +48,7 @@
 
 **Why this priority**：用户/设备级行隔离是 MDM（设备只能拉自己的命令/证书）与零信任（最小可见面）的直接需求。与 US1 同属 P1，因为单 tenant 内的越权同样是数据泄漏。
 
-**Independent Test**：tenant 内非 admin 用户 U1 查列表，只返回 U1 拥有的行；设备 D1 的 service-token 查命令队列，只返回 `device_id=D1` 的行；admin 查返回租户全量。
+**Independent Test**：tenant 内非 admin 用户 U1 查列表，只返回 U1 拥有的行；设备 D1 的 service-token 查命令队列，只返回 `device_id=D1` 的行；admin 查返回租户全量。device 主体在本 epic 内用 `principalKind=device` 的 **test principal stub** 构造（不依赖 #1051 真实 device-token），保证 US2 独立可测。
 
 **Acceptance Scenarios**：
 1. **Given** 非 admin 用户 U1，**When** 查 audit/order 列表，**Then** 仅返回 `owner_id=U1` 的行（`RowScope=self`）。
@@ -91,6 +95,8 @@
 
 **Why this priority**：P2，依赖 US3 obligations。
 
+> **MVP 无裂变**：MVP（US1/US2）阶段读端点尚无 masking。引入 `ResourceProjection` 时，**无 `FieldMask` obligation 的端点用 identity projection**（可见字段集不变），使 MVP→P2 不产生 response type 破坏式裂变（见 tasks.md T11.2/T12.3）。
+
 **Independent Test**：同一资源，admin 看到全列、非 admin 看到 masked 列、设备看到设备列子集；handler 代码无法返回含敏感列的 full view 类型（编译期阻止）。
 
 **Acceptance Scenarios**：
@@ -126,18 +132,18 @@
 
 ### Functional Requirements
 
-**租户边界（L1）**
-- **FR-001**: 系统 MUST 从 JWT tenant claim 与 service-token 路径解析 tenant，经 `injectPrincipalCtxKeys` 写入 `ctxkeys.TenantID`（消除现状「no source on develop」）。
-- **FR-002**: 系统 MUST 提供 `tenant.TenantID` sealed newtype（空值在构造/守卫处 fail-fast），对齐 `idutil.SafeID` 范式。
-- **FR-003**: 需租户隔离的 repo 接口方法 MUST 接收 `tenant.TenantID` 强制 typed 位置参；缺失为编译错误。
+**租户边界（D1）**
+- **FR-001**: 系统 MUST 从 JWT tenant claim 与 service-token 路径解析 tenant，经 `injectPrincipalCtxKeys` 写入 `ctxkeys.TenantID`（消除现状「no source on develop」）；该 setter 写入方须同 commit 加入 `CTXKEYS-PRINCIPAL-WRITE-CALLER-01` allowlist。
+- **FR-002**: 系统 MUST 提供 `tenant.TenantID` sealed newtype，**空值由构造器/`Validate()` 运行时 fail-fast**（非 type-system Hard——空值是合法 Go 表达式），对齐 `idutil.SafeID` 范式。
+- **FR-003**: 需租户隔离的 repo 接口方法 MUST 接收 `tenant.TenantID` 强制 typed 位置参；**漏传为编译错误**（type-system Hard）。
 - **FR-004**: 系统 MUST 提供 PG 层 `FORCE ROW LEVEL SECURITY` 兜底，TxRunner 在 `RunInTx` 起始注入 `SET LOCAL app.tenant_id`；空 tenant fail-closed。
 
-**行级（L3，user/device 粒度）**
+**行级（D3，user/device 粒度）**
 - **FR-005**: 系统 MUST 提供 `RowScope` typed obligation，取值至少 `{self, device, tenant, all}`；list/get repo 方法接收 `RowScope` 强制 typed 位置参。
 - **FR-006**: 非特权 user 主体 MUST 被收窄为 `RowScope=self`（`owner_id=subject`）；device 主体（`principalKind=device`）收窄为 `RowScope=device`（`device_id=subject`）；admin 为 `RowScope=tenant`。
 - **FR-007**: 平台 super-admin 的 `RowScope=all`（跨租户）MUST 是显式独立决策路径并强制审计。
 
-**ABAC 决策（L2）**
+**ABAC 决策（D2，consistencyLevel L0）**
 - **FR-008**: 系统 MUST 提供 policy 持久化模型（Policy / Rule / Condition）与存储接口（mem + PG），policy 可演化不需停机。
 - **FR-009**: 决策引擎 MUST 接受 subject（user/device）、resource、environment 三类属性；environment 时间属性经注入的 `clock.Clock`（禁 `time.Now()`）。
 - **FR-010**: 决策语义 MUST 为 default-deny + forbid-wins，输出 `Decision{Allow|Deny}` + obligations（`RowScope` / `FieldMask`）。
@@ -149,8 +155,8 @@
 - **FR-014**: composition root MUST 把 `accesscore.Authorizer()`/policy 决策接线到业务路由（消除 authorizationdecide 死代码）。
 - **FR-015**: 业务端点授权 MUST 迁移到 permission/policy-based；移除 role-name 字面量直比（关闭 #914）。
 
-**列级（L4）**
-- **FR-016**: 系统 MUST 提供 `ResourceProjection` sealed type；读端点 response 类型仅含 projection，handler 无法返回含敏感列的 full view（编译期阻止）。
+**列级（D4）**
+- **FR-016**: 系统 MUST 提供 `pkg/projection.ResourceProjection` sealed type（全字段 unexported + 唯一构造器 `NewProjection(mask, data)`，包外不可字面量伪造 full view）；读端点 response 类型仅含 projection，handler 无法返回含敏感列的 full view（编译期阻止）。无 obligation 时 projection = identity（避免 MVP→P2 裂变）。
 - **FR-017**: 列 masking MUST 由 policy `FieldMask` obligation 驱动，per user/device；无 caller opt-out（对齐 redaction fail-closed），复用 `pkg/redaction`。
 
 **治理（贯穿）**
@@ -165,20 +171,20 @@
 - **Policy / Rule / Condition**：ABAC 策略持久化模型；Condition 引用 subject/resource/env 属性。
 - **Decision**：`{effect: Allow|Deny, obligations: {rowScope, fieldMask}}`。
 - **FieldMask**：列级 obligation，列名集合 → mask；驱动 ResourceProjection。
-- **ResourceProjection**：sealed type，按 mask 后的可下发视图；full view 不可作 HTTP response。
+- **ResourceProjection**（`pkg/projection`）：sealed type（全字段 unexported + 唯一构造器 `NewProjection(FieldMask, data)`），按 mask 后的可下发视图；full view 不可作 HTTP response，无 obligation 时为 identity。
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
 - **SC-001**: 跨租户读/写尝试 100% 返回空或拒绝（应用层 + RLS 双层），0 泄漏。
-- **SC-002**: 任一 repo 方法漏传 `tenant.TenantID` 或 `RowScope` 时编译失败——通过新增反向自检 fixture 验证「不可表达」。
+- **SC-002**: 任一 repo 方法**漏传** `tenant.TenantID` 或 `RowScope` 时**编译失败**（type-system Hard）；传**空 TenantID** 由 `Validate()` 运行时拒绝（Medium）。反向自检 fixture（`testdata/.../violates/` 收 string 的假 repo）验证 archtest 能识别绕过。
 - **SC-003**: 非 admin user 列表只见 own 行、device 只见 own-device 行、admin 见 tenant 全量——三类主体 e2e 通过。
 - **SC-004**: policy store 不可用 / 属性缺失时决策为 deny——fail-closed 路径有测试覆盖。
 - **SC-005**: 业务 handler 中 role-name 字面量授权分支数降至 0（#914 关闭）。
 - **SC-006**: 敏感列对无权主体 100% masked；handler 返回 full view 编译失败。
 - **SC-007**: `make verify`（含 archtest）全绿；每条新 invariant 有反向自检 + AI-robust 评级登记于其 archtest godoc。
-- **SC-008**: 单次 ABAC 决策（内嵌，无外部 PDP）p95 < 1ms（无网络往返）。
+- **SC-008**: 单次 ABAC 决策（内嵌，无外部 PDP）p95 < 1ms（无网络往返）——由 `BenchmarkEvaluator_*` 在固定基准数据集（如 100 policy × 10 subject 属性，CI `-benchtime=5s`）守卫；非阻塞 gate，作指导性目标 + 回归哨兵。
 
 ## Assumptions
 
