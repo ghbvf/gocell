@@ -47,6 +47,7 @@
 //   - Calls through an interface variable aliasing provider are not tracked.
 //   - Method calls on a copy of provider (not via selector on the struct field)
 //     are not tracked.
+//
 // These blind spots are documented, not enforced; the corpus has no such cases.
 
 package archtest
@@ -62,6 +63,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	postgres "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 // migratorProviderCallAllowlist is the set of method names in which
@@ -77,6 +79,13 @@ var migratorProviderCallAllowlist = map[string]bool{
 // migratorProviderCallAllowlist.
 //
 // Rule: MIGRATOR-PROVIDER-UP-CALLSITE-01.
+//
+// Owner-method resolution: scanner.EachInChildren[ast.FuncDecl] iterates the
+// file's direct top-level declarations and yields each *ast.FuncDecl. Within
+// each FuncDecl.Body we then call scanner.EachInSubtree[ast.CallExpr] to find
+// all provider.Up/Down call expressions. This approach is scope-native: the
+// method name is known from the enclosing FuncDecl, so no pos-range lookup is
+// needed and there is no off-by-one risk.
 func TestArchtest_MigratorProviderUpCallsite(t *testing.T) {
 	root := findModuleRoot(t)
 	migratorPath := filepath.Join(root, "adapters", "postgres", "migrator.go")
@@ -88,68 +97,39 @@ func TestArchtest_MigratorProviderUpCallsite(t *testing.T) {
 		t.Fatalf("MIGRATOR-PROVIDER-UP-CALLSITE-01: cannot parse %s: %v", migratorPath, err)
 	}
 
-	// Collect all top-level FuncDecls (methods) for position-based lookup.
-	type methodRange struct {
-		name  string
-		start token.Pos
-		end   token.Pos
-	}
-	var methods []methodRange
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
-		}
-		methods = append(methods, methodRange{
-			name:  fd.Name.Name,
-			start: fd.Body.Lbrace,
-			end:   fd.Body.Rbrace,
-		})
-	}
-
-	// ownerMethod returns the name of the FuncDecl whose body contains pos,
-	// or "" if pos is not inside any method body.
-	ownerMethod := func(pos token.Pos) string {
-		for _, m := range methods {
-			if pos >= m.start && pos <= m.end {
-				return m.name
-			}
-		}
-		return ""
-	}
-
-	// Walk the AST looking for <expr>.provider.Up(...) and
-	// <expr>.provider.Down(...) call expressions.
-	// Pattern: CallExpr{ Fun: SelectorExpr{ X: SelectorExpr{ Sel: "provider" }, Sel: "Up"|"Down" } }
+	// Walk top-level FuncDecls via EachInChildren (depth-1 from the file node)
+	// and within each method body use EachInSubtree to find provider.Up/Down
+	// call expressions. The method name is directly available from fd.Name.Name.
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		if fd.Body == nil {
+			return
 		}
-		outer, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		// outer.Sel must be "Up" or "Down"
-		if outer.Sel.Name != "Up" && outer.Sel.Name != "Down" {
-			return true
-		}
-		// outer.X must itself be a SelectorExpr with Sel == "provider"
-		inner, ok := outer.X.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if inner.Sel.Name != "provider" {
-			return true
-		}
-		// Found a candidate: <recv>.provider.Up/Down(...)
-		owner := ownerMethod(call.Pos())
-		if !migratorProviderCallAllowlist[owner] {
-			pos := fset.Position(call.Pos())
-			violations = append(violations, formatProviderCallViolation(pos.Line, outer.Sel.Name, owner))
-		}
-		return true
+		methodName := fd.Name.Name
+		// Pattern: CallExpr{ Fun: SelectorExpr{ X: SelectorExpr{ Sel: "provider" }, Sel: "Up"|"Down" } }
+		scanner.EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+			outer, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			// outer.Sel must be "Up" or "Down"
+			if outer.Sel.Name != "Up" && outer.Sel.Name != "Down" {
+				return
+			}
+			// outer.X must itself be a SelectorExpr with Sel == "provider"
+			inner, ok := outer.X.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			if inner.Sel.Name != "provider" {
+				return
+			}
+			// Found a candidate: <recv>.provider.Up/Down(...)
+			if !migratorProviderCallAllowlist[methodName] {
+				pos := fset.Position(call.Pos())
+				violations = append(violations, formatProviderCallViolation(pos.Line, outer.Sel.Name, methodName))
+			}
+		})
 	})
 
 	for _, v := range violations {
@@ -213,32 +193,43 @@ func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoFuncValueAssignment(t *
 
 	// Detect any AssignStmt where the RHS contains <recv>.provider.Up or
 	// <recv>.provider.Down as a function value (SelectorExpr, not a CallExpr).
+	// Use EachInSubtree[ast.AssignStmt] to find all assignment statements, then
+	// EachInSubtree[ast.SelectorExpr] within each Rhs expression to find
+	// provider.Up/Down used as function values.
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
+	scanner.EachInSubtree[ast.AssignStmt](f, func(assign *ast.AssignStmt) {
 		for _, rhs := range assign.Rhs {
-			outer, ok := rhs.(*ast.SelectorExpr)
-			if !ok {
-				continue
-			}
-			if outer.Sel.Name != "Up" && outer.Sel.Name != "Down" {
-				continue
-			}
-			inner, ok := outer.X.(*ast.SelectorExpr)
-			if !ok {
-				continue
-			}
-			if inner.Sel.Name == "provider" {
-				pos := fset.Position(outer.Pos())
-				violations = append(violations, fmt.Sprintf(
-					"line %d: provider.%s used as function value (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
-					pos.Line, outer.Sel.Name))
-			}
+			scanner.EachInSubtree[ast.SelectorExpr](rhs, func(outer *ast.SelectorExpr) {
+				if outer.Sel.Name != "Up" && outer.Sel.Name != "Down" {
+					return
+				}
+				inner, ok := outer.X.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				if inner.Sel.Name != "provider" {
+					return
+				}
+				// Check that this SelectorExpr is not immediately the Fun of a CallExpr.
+				// We want function-value references, not calls. Because EachInSubtree is
+				// pre-order, we detect call-context by checking whether the parent is a
+				// CallExpr. We do this by searching for a CallExpr wrapping this node
+				// via position: if no CallExpr in the assignment RHS has this selector
+				// as its Fun, then it is a function-value reference.
+				isCall := false
+				scanner.EachInSubtree[ast.CallExpr](rhs, func(call *ast.CallExpr) {
+					if call.Fun == outer {
+						isCall = true
+					}
+				})
+				if !isCall {
+					pos := fset.Position(outer.Pos())
+					violations = append(violations, fmt.Sprintf(
+						"line %d: provider.%s used as function value (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
+						pos.Line, outer.Sel.Name))
+				}
+			})
 		}
-		return true
 	})
 
 	assert.Empty(t, violations,
@@ -264,43 +255,41 @@ func TestArchtest_MigratorProviderUpCallsite_BlindSpot_NoProviderCopy(t *testing
 	}
 
 	// Detect local variable declarations of type *goose.Provider (or goose.Provider).
+	// Use EachInSubtree[ast.ValueSpec] to walk all value specs across the file.
 	var violations []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		valSpec, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
-		}
+	scanner.EachInSubtree[ast.ValueSpec](f, func(valSpec *ast.ValueSpec) {
 		if valSpec.Type == nil {
-			return true
+			return
 		}
 		// Check for *goose.Provider or goose.Provider type annotation.
-		checkType := func(expr ast.Expr) bool {
-			starExpr, isStar := expr.(*ast.StarExpr)
-			if isStar {
-				expr = starExpr.X
-			}
-			sel, ok := expr.(*ast.SelectorExpr)
-			if !ok {
-				return false
-			}
-			pkgIdent, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return false
-			}
-			return pkgIdent.Name == "goose" && sel.Sel.Name == "Provider"
-		}
-		if checkType(valSpec.Type) {
+		if checkGooseProviderType(valSpec.Type) {
 			pos := fset.Position(valSpec.Pos())
 			violations = append(violations, fmt.Sprintf(
 				"line %d: local goose.Provider var declared (MIGRATOR-PROVIDER-UP-CALLSITE-01 blind spot)",
 				pos.Line))
 		}
-		return true
 	})
 
 	assert.Empty(t, violations,
 		"MIGRATOR-PROVIDER-UP-CALLSITE-01 blind-spot: local goose.Provider variables must not exist; "+
 			"if added, MIGRATOR-PROVIDER-UP-CALLSITE-01 would not detect Up/Down calls on them.")
+}
+
+// checkGooseProviderType reports whether expr is a type annotation for
+// *goose.Provider or goose.Provider.
+func checkGooseProviderType(expr ast.Expr) bool {
+	if starExpr, isStar := expr.(*ast.StarExpr); isStar {
+		expr = starExpr.X
+	}
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkgIdent, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return pkgIdent.Name == "goose" && sel.Sel.Name == "Provider"
 }
 
 // migratorForwardRebuildAnnotationPatternSingleSource verifies that the archtest
