@@ -377,7 +377,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 		}
 		rpcResp <- resp
 	}()
-	testwait.Deterministic(t, rpcStarted, integServeTimeout, "blocking-rpc-started")
+	testwait.Deterministic(t, rpcStarted, "blocking-rpc-started")
 
 	// Begin graceful stop in the background; it must block until the in-flight
 	// RPC is released.
@@ -405,7 +405,7 @@ func TestIntegration_GracefulDrain(t *testing.T) {
 
 	// Release the RPC; both it and Close should now complete cleanly.
 	close(release)
-	closeErr := testwait.Deterministic(t, closeReturned, integServeTimeout, "close-returns-after-drain")
+	closeErr := testwait.Deterministic(t, closeReturned, "close-returns-after-drain")
 	assert.NoError(t, closeErr, "Close should succeed within shutdown budget")
 	select {
 	case err := <-rpcErr:
@@ -450,8 +450,8 @@ func TestIntegration_WorkerStopAndCloseConcurrent(t *testing.T) {
 	go func() { stopDone <- srv.Worker().Stop(teardownCtx) }()
 	go func() { closeDone <- srv.Close(teardownCtx) }()
 
-	stopErr := testwait.Deterministic(t, stopDone, integServeTimeout, "worker-stop")
-	closeErr := testwait.Deterministic(t, closeDone, integServeTimeout, "close")
+	stopErr := testwait.Deterministic(t, stopDone, "worker-stop")
+	closeErr := testwait.Deterministic(t, closeDone, "close")
 
 	// Both callers must not return a non-nil error in the happy path.
 	// The second caller always returns nil (stopOnce semantic).
@@ -533,7 +533,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 		}
 		rpcResp <- resp
 	}()
-	testwait.Deterministic(t, rpcStarted, integServeTimeout, "blocking-rpc-started")
+	testwait.Deterministic(t, rpcStarted, "blocking-rpc-started")
 
 	// Core trigger: cancel the serve ctx while the RPC is in-flight. This drives
 	// serve()'s ctx.Done branch, which must begin a graceful drain bounded by the
@@ -561,7 +561,7 @@ func TestIntegration_ServeContextCancel_GracefulDrain(t *testing.T) {
 	// Release the RPC; the drain now completes and serve returns.
 	close(release)
 
-	serveErr := testwait.Deterministic(t, serveDone, integServeTimeout, "serve-returns-after-drain")
+	serveErr := testwait.Deterministic(t, serveDone, "serve-returns-after-drain")
 	assert.ErrorIs(t, serveErr, context.Canceled,
 		"serve must return context.Canceled after the ctx-cancel drain completes")
 

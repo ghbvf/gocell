@@ -13,7 +13,7 @@ import (
 // programmer error that can slip through.
 func TestNewForListener_NilClockPanics(t *testing.T) {
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("expected panic when typed-nil clock is passed")
 		}
 	}()

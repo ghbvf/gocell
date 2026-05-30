@@ -13,10 +13,13 @@
 //     Together they form a Hard funnel per ai-robust.md §"Funnel 双向锁评级"
 //     and Hard 范本 "typed marker funnel for unbounded ops" (sibling of
 //     panicregister.Approved).
-//   - Deterministic: blocks on a channel signal with timeout — no polling,
-//     no race window. The default choice; use External only as carve-out.
-//     Hard via Go type system: <-chan T signature makes "polling via
-//     Deterministic" unrepresentable.
+//   - Deterministic: blocks on a channel signal — no polling, no race window.
+//     The default choice; use External only as carve-out. Hard via Go type
+//     system: <-chan T signature makes "polling via Deterministic"
+//     unrepresentable. The internal safety-net timeout is [signalSafetyNet];
+//     callers do NOT pass a timeout — the signal arrival IS the
+//     synchronization point, so any caller-supplied timeout would be a latency
+//     budget, not a hung-test guard.
 //
 // Polling is the leading source of race-CI flakes in GoCell tests; see
 // docs/plans/202605181600-042-archtest.md §1.1 (TEST-POLLING-DETERMINISM).
@@ -37,6 +40,13 @@ import (
 	"fmt"
 	"time"
 )
+
+// signalSafetyNet bounds Deterministic's wait on a guaranteed signal.
+// It is a hung-test guard, NOT a latency budget — a correct run receives
+// the signal effectively instantly, so this is never hit in a green run
+// even under the race detector. Sized comfortably below `go test -timeout`
+// so a deadlocked signal fails readably here instead of as a whole-suite kill.
+const signalSafetyNet = 30 * time.Second
 
 // TB is the testing surface required by External and Deterministic. It
 // matches the subset of testing.TB the helpers actually use, so test code
@@ -105,9 +115,15 @@ func External(t TB, reason string, condition func() bool,
 	}
 }
 
-// Deterministic blocks on signal until it receives a value or timeout fires.
-// On success returns the received value; on timeout calls t.Fatalf and
-// returns the zero value of T.
+// Deterministic blocks on signal until it receives a value or the internal
+// safety-net timeout fires. On success returns the received value; on safety-net
+// expiry calls t.Fatalf and returns the zero value of T.
+//
+// The timeout is NOT caller-configurable. Deterministic is designed for signals
+// that are guaranteed to arrive in a correct run; the internal [signalSafetyNet]
+// is a hung-test guard only. A caller-supplied timeout would be a latency budget
+// (the root cause of race-CI flakes in observer_test.go, issue #1320). If you
+// genuinely need a poll with a configurable timeout, use External instead.
 //
 // This is the polling-free wait: the channel signal IS the synchronization
 // point. No closure capture, no race window with concurrent producers — Go's
@@ -120,23 +136,21 @@ func External(t TB, reason string, condition func() bool,
 //
 // For CI grep-ability, pass a short label string as the first msgAndArg:
 //
-//	testwait.Deterministic(t, sig, testtime.EventuallyShort, "session-created")
+//	testwait.Deterministic(t, sig, "session-created")
 //
 // The label appears verbatim in the t.Fatalf output, making the timeout
 // site findable via `grep "session-created" ci.log`.
-func Deterministic[T any](t TB, signal <-chan T, timeout time.Duration,
-	msgAndArgs ...any,
-) T {
+func Deterministic[T any](t TB, signal <-chan T, msgAndArgs ...any) T {
 	t.Helper()
 	var zero T
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(signalSafetyNet)
 	defer timer.Stop()
 	select {
 	case v := <-signal:
 		return v
 	case <-timer.C:
-		t.Fatalf("testwait.Deterministic: timeout after %v waiting on signal: %s",
-			timeout, formatMsgAndArgs(msgAndArgs))
+		t.Fatalf("testwait.Deterministic: safety-net expired after %v waiting on signal: %s",
+			signalSafetyNet, formatMsgAndArgs(msgAndArgs))
 		return zero
 	}
 }

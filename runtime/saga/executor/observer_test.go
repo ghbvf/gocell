@@ -223,7 +223,7 @@ func TestExecute_ObserveOutcome_Failed(t *testing.T) {
 		waitForOnePendingTimer(t, fc)
 		fc.Advance(policy.Backoff(i, jExpected))
 	}
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "fail-result")
+	result := testwait.Deterministic(t, resultCh, "fail-result")
 
 	if result.Outcome != OutcomeFailed {
 		t.Fatalf("outcome = %v, want OutcomeFailed", result.Outcome)
@@ -265,9 +265,9 @@ func TestExecute_ObserveOutcome_Canceled(t *testing.T) {
 	go func() {
 		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-cancel", step, ksaga.RetryPolicy{}, nil)
 	}()
-	testwait.Deterministic(t, stepStarted, testtime.EventuallyShort, "step-started")
+	testwait.Deterministic(t, stepStarted, "step-started")
 	cancel()
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "canceled-result")
+	result := testwait.Deterministic(t, resultCh, "canceled-result")
 
 	if result.Outcome != OutcomeCanceled {
 		t.Fatalf("outcome = %v, want OutcomeCanceled", result.Outcome)
@@ -324,13 +324,13 @@ func TestExecute_ObserveHeartbeatFailure_StaleLease(t *testing.T) {
 	go func() {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-stale-x", step, ksaga.RetryPolicy{}, nil)
 	}()
-	testwait.Deterministic(t, stepEntered, testtime.EventuallyShort, "step-entered")
+	testwait.Deterministic(t, stepEntered, "step-entered")
 	// First tick fires Heartbeat → ok=false → onStale cancels runCtx → step ctx done → Outcome=LeaseLost.
 	testwait.External(t, "fakeclock-ticker-registration",
 		func() bool { return fc.PendingTickers() >= 1 },
 		testtime.EventuallyShort, testtime.FastPoll, "no ticker")
 	fc.Advance(testtime.D5s)
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "lease-lost-result")
+	result := testwait.Deterministic(t, resultCh, "lease-lost-result")
 
 	if result.Outcome != OutcomeLeaseLost {
 		t.Fatalf("outcome = %v, want OutcomeLeaseLost", result.Outcome)
@@ -389,7 +389,7 @@ func TestRunHeartbeat_ObserveHeartbeatFailure_InfraError(t *testing.T) {
 		testtime.EventuallyShort, testtime.FastPoll, "no ticker")
 	for i := 0; i < 3; i++ {
 		fc.Advance(testtime.D5s)
-		testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "tick")
+		testwait.Deterministic(t, hb.beat, "tick")
 	}
 	cancel()
 	wg.Wait()
@@ -479,12 +479,12 @@ func TestRunWithHeartbeat_StaleLease_ReturnsLeaseLost(t *testing.T) {
 	go func() {
 		errCh <- exec.RunWithHeartbeat(context.Background(), newTestInstance(), "lease-rw3", fn)
 	}()
-	testwait.Deterministic(t, fnEntered, testtime.EventuallyShort, "fn-entered")
+	testwait.Deterministic(t, fnEntered, "fn-entered")
 	testwait.External(t, "fakeclock-ticker-registration",
 		func() bool { return fc.PendingTickers() >= 1 },
 		testtime.EventuallyShort, testtime.FastPoll, "no ticker")
 	fc.Advance(testtime.D5s)
-	got := testwait.Deterministic(t, errCh, testtime.EventuallyShort, "lease-lost-result")
+	got := testwait.Deterministic(t, errCh, "lease-lost-result")
 
 	if !IsLeaseLost(got) {
 		t.Errorf("got %v, want IsLeaseLost", got)
@@ -557,13 +557,13 @@ func TestRunWithHeartbeat_BlockingObserver_DoesNotStall(t *testing.T) {
 
 	// Wait for the observer call to enter so we know the bounded timer was
 	// created before we advance the clock past its deadline.
-	testwait.Deterministic(t, obs.hbEntered, testtime.EventuallyShort, "observer-call-entered")
+	testwait.Deterministic(t, obs.hbEntered, "observer-call-entered")
 
 	// Advance past the bounded deadline; the timer fires, callObserverBounded
 	// logs Warn and returns, and the preflight branch returns errLeaseLost.
 	fc.Advance(testtime.D50ms)
 
-	got := testwait.Deterministic(t, errCh, testtime.EventuallyShort,
+	got := testwait.Deterministic(t, errCh,
 		"RunWithHeartbeat must return despite blocked observer")
 	if !IsLeaseLost(got) {
 		t.Errorf("got %v, want IsLeaseLost (preflight stale)", got)
@@ -634,9 +634,9 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 
 	// Wait for the observer call to enter so the bounded timer exists, then
 	// advance past its deadline to fire the timeout branch.
-	testwait.Deterministic(t, obs.hbEntered, testtime.EventuallyShort, "observer-call-entered")
+	testwait.Deterministic(t, obs.hbEntered, "observer-call-entered")
 	fc.Advance(testtime.D50ms)
-	_ = testwait.Deterministic(t, errCh, testtime.EventuallyShort, "RunWithHeartbeat must return")
+	_ = testwait.Deterministic(t, errCh, "RunWithHeartbeat must return")
 
 	entry := sloghelper.FindLogEntry(buf.String(), "observer call exceeded deadline")
 	if entry == nil {

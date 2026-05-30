@@ -416,7 +416,7 @@ func (s *Subscriber) processDelivery(ctx context.Context, pb *paho.Publish, hand
 		// or SettlementObservers to notify (the handler was never invoked); if the
 		// poison ack itself fails, record a distinct ack-failed metric (the broker
 		// will redeliver the un-decodable message and it will be re-acked).
-		if ackErr := s.ackPoison(ctx, pb, "unmarshal"); ackErr != nil {
+		if s.ackPoison(ctx, pb, "unmarshal") != nil {
 			s.collector.RecordConsumeFailure(ctx, consumeReasonAckFailed)
 		}
 		return

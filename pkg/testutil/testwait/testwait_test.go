@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
@@ -162,24 +161,21 @@ func TestDeterministic_ReceivesValueFromSignal(t *testing.T) {
 	t.Parallel()
 	sig := make(chan int, 1)
 	sig <- 42
-	got := testwait.Deterministic(t, sig, testtime.EventuallyShort, "expected 42")
+	got := testwait.Deterministic(t, sig, "expected 42")
 	require.Equal(t, 42, got)
 }
 
-func TestDeterministic_TimesOutWhenSilent(t *testing.T) {
-	t.Parallel()
-	ft := &fakeT{T: t}
-	sig := make(chan int) // never sent on
-	got := testwait.Deterministic(ft, sig, testtime.D20ms, "silent signal")
-	assert.True(t, ft.failed.Load(), "expected t.Fatalf on silent signal")
-	assert.Equal(t, 0, got, "timeout must return zero value of T")
-}
+// TestDeterministic_TimesOutWhenSilent is intentionally absent: the safety-net
+// timeout is [signalSafetyNet] (30s) — an internal hung-test guard that is
+// never triggered in a correct run. Verifying it in a unit test would require
+// waiting 30 seconds, which is not practical. The safety-net fires readably
+// before `go test -timeout` kills the whole suite.
 
 func TestDeterministic_GenericOverStructSignal(t *testing.T) {
 	t.Parallel()
 	sig := make(chan struct{}, 1)
 	sig <- struct{}{}
-	got := testwait.Deterministic(t, sig, testtime.EventuallyShort, "struct signal")
+	got := testwait.Deterministic(t, sig, "struct signal")
 	require.Equal(t, struct{}{}, got)
 }
 
@@ -193,7 +189,7 @@ func TestDeterministic_ClosedChannelReturnsImmediately(t *testing.T) {
 	sig := make(chan int)
 	close(sig)
 	ft := &fakeT{T: t}
-	got := testwait.Deterministic(ft, sig, testtime.EventuallyShort, "closed-channel")
+	got := testwait.Deterministic(ft, sig, "closed-channel")
 	require.False(t, ft.failed.Load(),
 		"Deterministic must not call t.Fatalf when channel is already closed")
 	require.Equal(t, 0, got, "receive from closed chan int must return zero value")
@@ -204,6 +200,6 @@ func TestDeterministic_GenericOverTypedSignal(t *testing.T) {
 	sig := make(chan *fooPayload, 1)
 	want := &fooPayload{ID: 7}
 	sig <- want
-	got := testwait.Deterministic(t, sig, testtime.EventuallyShort, "typed signal")
+	got := testwait.Deterministic(t, sig, "typed signal")
 	require.Same(t, want, got, "Deterministic must return the exact value received")
 }

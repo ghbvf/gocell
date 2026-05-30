@@ -22,7 +22,7 @@ func TestApprove_MintsApproval(t *testing.T) {
 		pgrepoapproved.IntegrationTestDeleteUser,
 	}
 	for _, reason := range cases {
-		if got := pgrepoapproved.Approve(reason); got == nil {
+		if pgrepoapproved.Approve(reason) == nil {
 			t.Fatalf("Approve(%q) returned nil Approval", reason)
 		}
 	}

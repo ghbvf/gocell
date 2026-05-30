@@ -100,7 +100,7 @@ func TestNewExecutor_NilClock(t *testing.T) {
 	t.Parallel()
 	hb := &alwaysOKHeartbeater{}
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic for nil clock")
 		}
 	}()
@@ -243,7 +243,7 @@ func TestExecute_RetryBackoffDeterministic(t *testing.T) {
 		fc.Advance(delay)
 	}
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "retry-backoff-result")
+	result := testwait.Deterministic(t, resultCh, "retry-backoff-result")
 	if result.Outcome != OutcomeSucceeded {
 		t.Errorf("Outcome = %v, want OutcomeSucceeded", result.Outcome)
 	}
@@ -398,7 +398,7 @@ func TestExecute_StepTimeout_Expired(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-3", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
+	testwait.Deterministic(t, started, "step-started")
 
 	// Negative assertion: advancing the fake clock short of the step deadline
 	// must NOT expire the step (the timeout is clock-driven, not wall-clock).
@@ -413,7 +413,7 @@ func TestExecute_StepTimeout_Expired(t *testing.T) {
 	// Now cross the deadline: the clock-driven AfterFunc fires and expires the step.
 	fc.Advance(testtime.D2ms)
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "step-timeout-result")
+	result := testwait.Deterministic(t, resultCh, "step-timeout-result")
 	if result.Outcome != OutcomeExpired {
 		t.Errorf("Outcome = %v, want OutcomeExpired", result.Outcome)
 	}
@@ -454,10 +454,10 @@ func TestExecute_ParentCancel_Canceled(t *testing.T) {
 		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-4", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
+	testwait.Deterministic(t, started, "step-started")
 	cancel()
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "parent-cancel-result")
+	result := testwait.Deterministic(t, resultCh, "parent-cancel-result")
 	if result.Outcome != OutcomeCanceled {
 		t.Errorf("Outcome = %v, want OutcomeCanceled", result.Outcome)
 	}
@@ -495,7 +495,7 @@ func TestExecute_ParentDeadline_Expired(t *testing.T) {
 		resultCh <- exec.Execute(ctx, newTestInstance(), "lease-deadline", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "parent-deadline-result")
+	result := testwait.Deterministic(t, resultCh, "parent-deadline-result")
 	if result.Outcome != OutcomeExpired {
 		t.Errorf("Outcome = %v, want OutcomeExpired (saga-level deadline, not Canceled)", result.Outcome)
 	}
@@ -532,7 +532,7 @@ func TestExecute_BackoffParentCancel_Canceled(t *testing.T) {
 	waitForOnePendingTimer(t, fc)
 	cancel()
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "backoff-cancel-result")
+	result := testwait.Deterministic(t, resultCh, "backoff-cancel-result")
 	if result.Outcome != OutcomeCanceled {
 		t.Errorf("Outcome = %v, want OutcomeCanceled", result.Outcome)
 	}
@@ -572,13 +572,13 @@ func TestExecute_LeaseLost_CancelsStepAndReturnsLeaseLost(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), "lease-lost", step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	testwait.Deterministic(t, started, testtime.EventuallyShort, "step-started")
+	testwait.Deterministic(t, started, "step-started")
 	// Heartbeat goroutine registers its ticker; advancing one interval fires the
 	// (stale) heartbeat → ok=false → the executor must cancel the running step.
 	waitForOneTicker(t, fc)
 	fc.Advance(testtime.D5s)
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "lease-lost-result")
+	result := testwait.Deterministic(t, resultCh, "lease-lost-result")
 	if result.Outcome != OutcomeLeaseLost {
 		t.Errorf("Outcome = %v, want OutcomeLeaseLost", result.Outcome)
 	}
@@ -630,11 +630,11 @@ func TestExecute_LeaseRenewsDuringBackoff(t *testing.T) {
 	// Advance one heartbeat interval (5s) — far short of the ~48-60s backoff, so
 	// only the heartbeat ticker fires, not the backoff timer.
 	fc.Advance(testtime.D5s)
-	testwait.Deterministic(t, hb.beat, testtime.EventuallyShort, "heartbeat-during-backoff")
+	testwait.Deterministic(t, hb.beat, "heartbeat-during-backoff")
 
 	// Tear down: cancel parent so the backoff Sleep returns and Execute exits.
 	cancel()
-	testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "renew-teardown-result")
+	testwait.Deterministic(t, resultCh, "renew-teardown-result")
 }
 
 // --- Execute: Run panic → convert to error, then retry ---
@@ -670,7 +670,7 @@ func TestExecute_RunPanic_ConvertedToError(t *testing.T) {
 	waitForOnePendingTimer(t, fc)
 	fc.Advance(defaultBaseInterval + testtime.D1ms)
 
-	result := testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "panic-recover-result")
+	result := testwait.Deterministic(t, resultCh, "panic-recover-result")
 	if result.Outcome != OutcomeSucceeded {
 		t.Errorf("Outcome = %v, want OutcomeSucceeded (panic recovered, second attempt succeeded)", result.Outcome)
 	}
@@ -708,7 +708,7 @@ func TestExecute_LeaseIDPassedToHeartbeater(t *testing.T) {
 		resultCh <- exec.Execute(context.Background(), newTestInstance(), leaseID, step, ksaga.RetryPolicy{}, nil)
 	}()
 
-	testwait.Deterministic(t, resultCh, testtime.EventuallyShort, "lease-id-result")
+	testwait.Deterministic(t, resultCh, "lease-id-result")
 	// The step completes quickly so there may be 0 heartbeats — that's fine.
 	// What we ensure is: no panic occurred and leaseID type was forwarded correctly.
 	// More thorough testing is done in TestHeartbeat_*.

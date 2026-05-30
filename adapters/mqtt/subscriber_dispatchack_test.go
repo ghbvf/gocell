@@ -45,7 +45,7 @@ func fakeAckConn(ackErr error) *Connection {
 // Connection (see fakeAckConn) with the given collector, for white-box
 // dispatchAck branch tests. The namespace is the canonical "test" namespace so
 // NewSubscriber's non-zero-namespace guard passes; no broker SUBSCRIBE happens.
-func newDispatchAckSubscriber(t testingT, ackErr error, collector SubscriberCollector) *Subscriber {
+func newDispatchAckSubscriber(t fatalfT, ackErr error, collector SubscriberCollector) *Subscriber {
 	ns, err := ParseTopicNamespace("test")
 	if err != nil {
 		t.Fatalf("ParseTopicNamespace: %v", err)
@@ -58,8 +58,8 @@ func newDispatchAckSubscriber(t testingT, ackErr error, collector SubscriberColl
 	return sub
 }
 
-// testingT is the minimal testing surface newDispatchAckSubscriber needs.
-type testingT interface {
+// fatalfT is the minimal testing surface newDispatchAckSubscriber needs.
+type fatalfT interface {
 	Fatalf(format string, args ...any)
 }
 

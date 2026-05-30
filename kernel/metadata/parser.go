@@ -693,17 +693,20 @@ func indexWebhookSlice(sl *SliceMeta, contracts map[string]*ContractMeta, idx *w
 		if !ok || c.Kind != "webhook" {
 			continue
 		}
-		if cu.Role == string(cellvocab.RoleWebhookReceive) {
-			if err := validateWebhookReceive(cu, sl, c, idx); err != nil {
-				return err
-			}
-		} else {
-			if err := validateWebhookDispatch(cu, sl, c, idx); err != nil {
-				return err
-			}
+		if err := applyWebhookCU(cu, sl, c, idx); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// applyWebhookCU dispatches a single webhook ContractUsage to the appropriate
+// validator based on role (webhook-receive or webhook-dispatch).
+func applyWebhookCU(cu ContractUsage, sl *SliceMeta, c *ContractMeta, idx *webhookCellIndex) error {
+	if cu.Role == string(cellvocab.RoleWebhookReceive) {
+		return validateWebhookReceive(cu, sl, c, idx)
+	}
+	return validateWebhookDispatch(cu, sl, c, idx)
 }
 
 // dedupSorted returns a new sorted slice with duplicate strings removed.

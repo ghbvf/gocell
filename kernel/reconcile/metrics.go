@@ -59,6 +59,10 @@ type Metrics struct {
 	Leader kernelmetrics.GaugeVec
 }
 
+// errRegisterMetricFmt is the format string for metric registration errors.
+// The two %s verbs are the metric name and the underlying error.
+const errRegisterMetricFmt = "reconcile: register %s: %w"
+
 // RegisterMetrics registers the four reconcile instruments on p with canonical
 // names, labels, and buckets, returning them bundled. It is the single source
 // for reconcile metric identity; consumers call it at the composition root and
@@ -70,7 +74,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 		LabelNames: []string{labelReconciler, labelResult},
 	})
 	if err != nil {
-		return Metrics{}, fmt.Errorf("reconcile: register %s: %w", metricReconcileTotal, err)
+		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricReconcileTotal, err)
 	}
 	duration, err := p.HistogramVec(kernelmetrics.HistogramOpts{
 		Name:       metricReconcileDuration,
@@ -79,7 +83,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 		Buckets:    reconcileDurationBuckets,
 	})
 	if err != nil {
-		return Metrics{}, fmt.Errorf("reconcile: register %s: %w", metricReconcileDuration, err)
+		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricReconcileDuration, err)
 	}
 	inFlight, err := p.GaugeVec(kernelmetrics.GaugeOpts{
 		Name:       metricReconcileInFlight,
@@ -87,7 +91,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 		LabelNames: []string{labelReconciler},
 	})
 	if err != nil {
-		return Metrics{}, fmt.Errorf("reconcile: register %s: %w", metricReconcileInFlight, err)
+		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricReconcileInFlight, err)
 	}
 	leader, err := p.GaugeVec(kernelmetrics.GaugeOpts{
 		Name:       metricReconcileLeader,
@@ -95,7 +99,7 @@ func RegisterMetrics(p kernelmetrics.Provider) (Metrics, error) {
 		LabelNames: []string{labelReconciler},
 	})
 	if err != nil {
-		return Metrics{}, fmt.Errorf("reconcile: register %s: %w", metricReconcileLeader, err)
+		return Metrics{}, fmt.Errorf(errRegisterMetricFmt, metricReconcileLeader, err)
 	}
 	return Metrics{Total: total, Duration: duration, InFlight: inFlight, Leader: leader}, nil
 }

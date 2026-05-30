@@ -336,22 +336,30 @@ func TestBuildConnackOpts_ReasonNameRedaction(t *testing.T) {
 			cause := &autopaho.ConnackError{ReasonCode: tt.reasonCode}
 			e := errcode.New(errcode.KindInternal, ErrAdapterMQTTConnectPermanent,
 				"mqtt: connection rejected", buildConnackOpts(cause)...)
-
-			if !hasPublicDetailKey(e.Details, reasonDetailKeyCode) {
-				t.Errorf("reasonCode must always be a public detail")
-			}
-			if got := hasPublicDetailKey(e.Details, reasonDetailKeyName); got != tt.reasonNamePublic {
-				t.Errorf("reasonName public = %v, want %v", got, tt.reasonNamePublic)
-			}
-			if !tt.reasonNamePublic {
-				if hasPublicDetailKey(e.Details, reasonDetailKeyName) {
-					t.Errorf("auth-related reasonName must NOT be in public details")
-				}
-				if !hasInternalDetailKey(e.InternalDetails, reasonDetailKeyName) {
-					t.Errorf("auth-related reasonName must be present in internal details")
-				}
-			}
+			assertConnackOptsRedaction(t, e, tt.reasonNamePublic)
 		})
+	}
+}
+
+// assertConnackOptsRedaction checks the public/internal channel split for a
+// buildConnackOpts-produced errcode.Error. Extracted to reduce cognitive
+// complexity of TestBuildConnackOpts_ReasonNameRedaction.
+func assertConnackOptsRedaction(t *testing.T, e *errcode.Error, reasonNamePublic bool) {
+	t.Helper()
+	if !hasPublicDetailKey(e.Details, reasonDetailKeyCode) {
+		t.Errorf("reasonCode must always be a public detail")
+	}
+	if got := hasPublicDetailKey(e.Details, reasonDetailKeyName); got != reasonNamePublic {
+		t.Errorf("reasonName public = %v, want %v", got, reasonNamePublic)
+	}
+	if reasonNamePublic {
+		return
+	}
+	if hasPublicDetailKey(e.Details, reasonDetailKeyName) {
+		t.Errorf("auth-related reasonName must NOT be in public details")
+	}
+	if !hasInternalDetailKey(e.InternalDetails, reasonDetailKeyName) {
+		t.Errorf("auth-related reasonName must be present in internal details")
 	}
 }
 
