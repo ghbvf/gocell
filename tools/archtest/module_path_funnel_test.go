@@ -33,14 +33,26 @@ package archtest
 //
 // # AI-robust rating (funnel double-lock)
 //
-//   - Downstream Hard: a bare "github.com/ghbvf/gocell[/…]" STRING literal is
-//     detected by AST form (BasicLit prefix match), and an all-string-literal
-//     `+` chain that reconstructs the path (any fragment count) is caught by the
-//     no-fragment-split self-check. The SANCTIONED escape — PlatformModulePath +
-//     "/pkg/x" — is by construction invisible (its fragment is "/pkg/x", and the
-//     chain includes the PlatformModulePath Ident so it is not all-literal), so
-//     the migrated form is never a false positive and the bare form is always
-//     caught. Form-uniqueness, no string-anchor / comment-allowlist.
+//   - Downstream Hard (realistic vectors): a bare "github.com/ghbvf/gocell[/…]"
+//     STRING literal is detected by AST BasicLit prefix match; a `+` chain that
+//     reconstructs the path from FRAGMENTS — string literals AND same-package
+//     string-literal consts (flattenPlatformConcat + constMap) — is caught by the
+//     no-fragment-split self-check, any fragment count. The SANCTIONED escape
+//     PlatformModulePath+"/pkg/x" is invisible because PlatformModulePath is
+//     declared in the excluded external.go, so it is unresolvable and the chain is
+//     dropped. Form-uniqueness, no string-anchor / comment-allowlist.
+//   - Downstream residual (NOT Hard — adversarial, honestly stated): a path
+//     reconstructed via a const-of-const (`const x = y` where y is itself a
+//     const), a cross-package const selector, or runtime string ops
+//     (strings.Join / fmt.Sprintf / []byte) is NOT resolved by the AST-only
+//     flatten and escapes the self-check. The honest claim is therefore Hard for
+//     the realistic forms (bare literal / literal-fragment / same-package
+//     const-fragment), NOT an absolute downstream Hard. Closing the residual needs
+//     typed const-eval (types.Info constant folding) with a PlatformModulePath-
+//     operand exception — blocked today because the rules live in _test.go (needs
+//     test-variant typed loading) and a naive EvaluateConstString would false-flag
+//     the sanctioned PlatformModulePath+"/x" form. Tracked by #1304. These forms
+//     are deliberate obfuscation that would not survive review.
 //   - Upstream Medium: Go cannot prevent a package-internal author from writing
 //     a bare string literal. The frozen baseline is the backstop, but — unlike a
 //     golden — it is NEVER rewritten by -update: a new bare literal fails CI
@@ -51,22 +63,23 @@ package archtest
 //
 // # Blind spots (declared) + reverse self-checks
 //
-//	(a) Fragment-split literal: "github.com/ghbvf/" + "gocell/pkg/x". The reverse
-//	    self-check below (TestArchtestModulePathFunnel/no-fragment-split) catches
-//	    this by flattening ANY all-string-literal `+` chain (N≥2 fragments) and
-//	    prefix-checking the join; the sanctioned PlatformModulePath+"/x" form
-//	    stays invisible because PlatformModulePath is an Ident, not a literal, so
-//	    the chain is not all-literal (an EvaluateConstString upgrade would instead
-//	    false-flag that sanctioned form). Residual blind spot: a path assembled by
-//	    runtime string ops (strings.Join / fmt.Sprintf / []byte) — implausible for
-//	    a const symbol path, equally invisible to const-eval, and would not
-//	    survive review.
+//	(a) Fragment-split reconstruction: "github.com/ghbvf/" + "gocell/pkg/x", or
+//	    const fragments a+b+c. The reverse self-check below
+//	    (TestArchtestModulePathFunnel/no-fragment-split) catches this by flattening
+//	    a `+` chain whose operands are string literals or same-package
+//	    string-literal consts (flattenPlatformConcat), any fragment count, and
+//	    prefix-checking the join; the sanctioned PlatformModulePath+"/x" stays
+//	    invisible (PlatformModulePath's external.go declaration is excluded from
+//	    constMap → unresolvable). RESIDUAL (adversarial, NOT covered): const-of-
+//	    const, cross-package const, or runtime string ops — see the downstream
+//	    residual rating above; typed-const-eval closure tracked by #1304.
 //	(b) Build-tagged files (//go:build x): Run is AST-only and parses every
 //	    file regardless of build tags, so tagged rule files ARE scanned — not a
 //	    blind spot here (unlike type-loading rules).
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -136,14 +149,26 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 		}
 	}
 
-	// Reverse self-check for declared blind spot (a): an all-string-literal `+`
-	// chain that reconstructs the platform path would evade the per-literal scan.
-	// Flatten ANY such chain (any fragment count) and prefix-check the join; the
-	// sanctioned PlatformModulePath+"/x" form stays invisible because the chain
-	// includes the PlatformModulePath Ident (not all-literal).
+	// Reverse self-check for declared blind spot (a): a `+` chain that
+	// reconstructs the platform path from FRAGMENTS would evade the per-literal
+	// scan. flattenPlatformConcat resolves each operand as a string literal OR a
+	// same-package string-literal const (constMap), so it catches both
+	//   "github.com/" + "ghbvf/" + "gocell"            (literal fragments)
+	//   const a,b,c = …; _ = a + b + c                 (literal-const fragments)
+	// The sanctioned PlatformModulePath+"/x" form stays invisible because
+	// PlatformModulePath is declared in external.go, which is excluded from
+	// constMap (inFunnelScope), so it is unresolvable → the chain is dropped.
+	// Residual (adversarial) blind spot: a const defined via another const/ident,
+	// a cross-package const, or runtime string ops — see godoc.
 	t.Run("no-fragment-split", func(t *testing.T) {
 		var splits []string
 		_ = Run(t, scope, func(p *Pass) []Diagnostic {
+			constMap := make(map[string]string)
+			for _, f := range p.Files {
+				if inFunnelScope(p.Rel(f)) {
+					collectStringLiteralConsts(f, constMap)
+				}
+			}
 			for _, f := range p.Files {
 				rel := p.Rel(f)
 				if !inFunnelScope(rel) {
@@ -153,7 +178,7 @@ func TestArchtestModulePathFunnel(t *testing.T) {
 					if be.Op != token.ADD {
 						return
 					}
-					if joined, allLits := concatStringLiterals(be); allLits &&
+					if joined, ok := flattenPlatformConcat(be, constMap); ok &&
 						strings.HasPrefix(joined, PlatformModulePath) {
 						splits = append(splits, rel)
 					}
@@ -219,7 +244,7 @@ func firstBarePlatformLiteralLine(fset *token.FileSet, f *ast.File) (int, bool) 
 		if err != nil {
 			return false
 		}
-		return val == PlatformModulePath || strings.HasPrefix(val, PlatformModulePath+"/")
+		return isBarePlatformValue(val)
 	})
 	if !found {
 		return 0, false
@@ -227,21 +252,71 @@ func firstBarePlatformLiteralLine(fset *token.FileSet, f *ast.File) (int, bool) 
 	return fset.Position(lit.Pos()).Line, true
 }
 
-// concatStringLiterals flattens a `+` expression tree, returning the
-// concatenated value and true ONLY when every leaf operand is a string literal
-// (no identifiers, calls, etc.). A chain that includes the PlatformModulePath
-// const Ident therefore returns false — the sanctioned derivation is invisible,
-// while a pure-literal reconstruction of any fragment count is caught.
-func concatStringLiterals(expr ast.Expr) (string, bool) {
+// isBarePlatformValue reports whether v is the platform module path itself or a
+// child path of it — i.e. a value that directly hardcodes the platform path
+// (the bare-literal violation [firstBarePlatformLiteralLine] catches). Genuine
+// FRAGMENTS (e.g. "github.com/ghbvf/", which is a prefix of, not prefixed by,
+// the path) are NOT bare values and are the fragment-split self-check's domain.
+func isBarePlatformValue(v string) bool {
+	return v == PlatformModulePath || strings.HasPrefix(v, PlatformModulePath+"/")
+}
+
+// collectStringLiteralConsts records every `const NAME = "literal"` (string
+// BasicLit RHS) declared in f into dst (NAME -> unquoted value), including
+// function-local consts. Only string-LITERAL consts are collected; a const
+// whose RHS is another ident/expr is deliberately left unresolvable, so
+// flattenPlatformConcat cannot follow const-of-const chains (documented
+// adversarial residual). Walks via the scanner funnel (SCANNER-FRAMEWORK-USAGE).
+func collectStringLiteralConsts(f *ast.File, dst map[string]string) {
+	EachInSubtree[ast.GenDecl](f, func(gd *ast.GenDecl) {
+		if gd.Tok != token.CONST {
+			return
+		}
+		EachInChildren[ast.ValueSpec](gd, func(vs *ast.ValueSpec) {
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				// Only genuine FRAGMENTS seed the map: a const whose value is itself
+				// a bare platform value is a direct violation handled by
+				// firstBarePlatformLiteralLine; resolving it here would re-flag its
+				// every concatenation as a (redundant) split.
+				if v, ok := stringLitVal(vs.Values[i]); ok && !isBarePlatformValue(v) {
+					dst[name.Name] = v
+				}
+			}
+		})
+	})
+}
+
+// flattenPlatformConcat resolves a `+` expression tree to its constant string
+// value, returning the value and true when EVERY leaf operand is either a string
+// literal or a same-package string-literal const found in constMap. Any other
+// operand (a const-of-const ident, a cross-package selector, the sanctioned
+// PlatformModulePath ident — whose external.go declaration is excluded from
+// constMap — a call, etc.) makes the whole chain unresolvable → ("", false), so
+// the sanctioned derivation stays invisible while literal AND literal-const
+// fragment splits are caught. The unresolvable cases are the documented
+// adversarial residual blind spot (typed-const-eval upgrade tracked by #1304).
+func flattenPlatformConcat(expr ast.Expr, constMap map[string]string) (string, bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
-		return stringLitVal(e)
+		// A literal operand that is itself a bare platform value is a direct
+		// violation (firstBarePlatformLiteralLine's job), NOT a fragment — drop
+		// the chain so the self-check does not redundantly re-report it.
+		if v, ok := stringLitVal(e); ok && !isBarePlatformValue(v) {
+			return v, true
+		}
+		return "", false
+	case *ast.Ident:
+		v, ok := constMap[e.Name]
+		return v, ok
 	case *ast.BinaryExpr:
 		if e.Op != token.ADD {
 			return "", false
 		}
-		l, lok := concatStringLiterals(e.X)
-		r, rok := concatStringLiterals(e.Y)
+		l, lok := flattenPlatformConcat(e.X, constMap)
+		r, rok := flattenPlatformConcat(e.Y, constMap)
 		if !lok || !rok {
 			return "", false
 		}
@@ -261,4 +336,49 @@ func stringLitVal(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// TestFlattenPlatformConcat is the RED/GREEN unit check for the const-fragment
+// closure: a `+` chain reconstructing the platform path from string-literal
+// consts (the const-ident evasion) is resolved and flagged, while the sanctioned
+// PlatformModulePath-derived form (PlatformModulePath absent from constMap) stays
+// unresolvable and invisible. Documents the residual: a const-of-const ident
+// (not in constMap) leaves the chain unresolvable (adversarial, #1304).
+func TestFlattenPlatformConcat(t *testing.T) {
+	t.Parallel()
+	constMap := map[string]string{
+		"a":      "github.com/",
+		"b":      "ghbvf/",
+		"c":      "gocell",
+		"tail":   "ghbvf/gocell",
+		"viaRef": "", // simulates a const-of-const: present but unresolved value
+	}
+	cases := []struct {
+		name        string
+		expr        string
+		wantFlagged bool
+	}{
+		{"all-literal", `"github.com/" + "ghbvf/" + "gocell"`, true},
+		{"all-const", `a + b + c`, true},
+		{"mixed-literal-const", `"github.com/" + tail`, true},
+		{"sanctioned-derivation", `PlatformModulePath + "/pkg/x"`, false}, // not in constMap
+		{"unrelated", `"foo" + "bar"`, false},
+		{"const-of-const-residual", `viaRef + "ghbvf/gocell"`, false},                // viaRef value empty → no path
+		{"direct-bare-literal-in-concat", `"github.com/ghbvf/gocell" + "/x"`, false}, // direct violation, firstBare's job
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			expr, err := parser.ParseExpr(c.expr)
+			if err != nil {
+				t.Fatalf("parse %q: %v", c.expr, err)
+			}
+			joined, ok := flattenPlatformConcat(expr, constMap)
+			flagged := ok && strings.HasPrefix(joined, PlatformModulePath)
+			if flagged != c.wantFlagged {
+				t.Errorf("flattenPlatformConcat(%q) joined=%q ok=%v flagged=%v, want %v",
+					c.expr, joined, ok, flagged, c.wantFlagged)
+			}
+		})
+	}
 }

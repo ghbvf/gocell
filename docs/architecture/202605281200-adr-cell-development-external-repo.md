@@ -434,18 +434,20 @@ vs `pass.Pkg`（被分析目标）的标准分离。
 
 | 方向 | 形态 | 评级 |
 |------|------|------|
-| 下游 Hard | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；**任意片段数 N≥2 的全字面量 `+` 拼接**经 `no-fragment-split` 自检 flatten + 前缀匹配捕获；sanctioned 形态 `PlatformModulePath+"/x"` 因含 `PlatformModulePath` Ident（非字面量）结构上不命中——form-uniqueness，无 string-anchor / 注释豁免 | **Hard** |
+| 下游 Hard（现实向量） | bare `"github.com/ghbvf/gocell[/…]"` STRING 字面量经 AST BasicLit 前缀匹配检出；`+` 拼接经 `no-fragment-split` 自检 flatten 捕获——operand 可为字面量**或同包字面量 const**（`flattenPlatformConcat`+`constMap`），任意片段数；sanctioned 形态 `PlatformModulePath+"/x"` 因 `PlatformModulePath` 声明在被排除的 external.go、`constMap` 解析不到而不可命中 | **Hard** |
+| 下游残留（**非 Hard**，adversarial，如实声明） | const-of-const（`const x = y`，y 本身是 const）/ 跨包 const selector / runtime string ops（`strings.Join`/`fmt.Sprintf`/`[]byte`）拼装的路径，AST-only flatten 解析不到 → 逃逸自检。故下游**对现实向量（bare/字面量片段/同包 const 片段）是 Hard，但非绝对 Hard**。封堵需 typed const-eval（`types.Info` 常量折叠）+ `PlatformModulePath`-operand 例外——当前受阻：规则活在 `_test.go`（需 test-variant typed load）且裸 `EvaluateConstString` 会误伤 sanctioned 形态。由 #1304 跟踪 | **Medium（过渡）** |
 | 上游 Medium | Go 无法阻止包内写 bare 字面量；frozen baseline 兜底，但**不同于 golden：`-update` 永不重写**，新 bare 字面量 ⊄ baseline 即 CI 红，无 `-update` 洗白路径，唯一容纳方式是手改 frozen baseline（review-first 可见 diff）；Hard 终态 = baseline 清空后纯 ban | **Medium（过渡）** |
 
-Medium 上游 + Hard 下游为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；Hard 化路径
-= 完成全量迁移使 baseline 清空 → 纯 ban，由 #1304 跟踪。符号清单 + 盲区自检活在
-`module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
+Medium（上游 + 下游残留）+ Hard 下游现实向量为合法过渡形态（ai-robust.md §"Funnel 双向锁评级"）；
+两条 Hard 化路径——baseline 清空（上游）+ typed const-eval（下游残留）——均由 #1304 跟踪。
+符号清单 + 盲区自检活在 `module_path_funnel_test.go` 的 godoc，不在本 ADR 复制。
 
-> **Amendment 2026-05-30 round-2 supersede**：原文要求「无 N≥3 字面量 fragment-split
+> **Amendment 2026-05-30 round-3**：原文（round-2）要求「无 N≥3 字面量 fragment-split
 > 作为每个 M3 迁移 PR 的人工 review checklist 条目」——**已撤销**。`no-fragment-split`
-> 自检现 flatten 任意片段数的全字面量 `+` 链，N≥3 不再是人工盲区。唯一残留盲区是
-> runtime string ops（`strings.Join` / `fmt.Sprintf` / `[]byte`）拼装路径——对 const
-> 符号路径不合理、对 const-eval 升级同样不可见、且过不了 review，不设人工 checklist。
+> 自检现 flatten 任意片段数的 `+` 链，operand 含同包字面量 const，N≥3 与 const-Ident 片段
+> 拼接（如 `const a,b,c = …; a+b+c`）均机器捕获，不再是人工盲区。**唯一残留是 adversarial
+> 形态**（const-of-const / 跨包 const / runtime string ops），见上「下游残留」行，由 #1304
+> typed-const-eval 升级跟踪——不设人工 checklist（这些是过不了 review 的刻意混淆）。
 
 ### 开源对标（`ref:` 见 commit）
 
