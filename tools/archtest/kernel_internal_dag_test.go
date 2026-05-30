@@ -74,9 +74,12 @@ const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
 //
 // KERNEL-WEBHOOK-01 PR-2 (#1265) registers `webhook`: the kernel/webhook pure
 // HMAC signer/verifier kernel (PR-1 #1251) imports only clock (replay-window
-// timing). webhook→clock is the sole kernel→kernel edge; clock is a leaf so no
-// cycle. (kernel/projection from the W10 projection PRs is still unregistered —
-// tracked separately, intentionally not added here.)
+// timing); clock is a leaf so no cycle. cell→webhook is the registration edge.
+// kernel/projection and kernel/reconcile (W10 / #661) are registered as
+// consumer-layer kernels: they depend on cell/outbox/wrapper/observability etc.
+// but nothing imports them back, so no cycle is introduced. governance→saga
+// (rules_saga.go validates saga contract shape) is likewise acyclic (saga does
+// not import governance).
 var allowedKernelEdges = map[string][]string{
 	"assembly":      {"cell", "clock", "metadata", "observability", "outbox", "registry"},
 	"auth":          {"cell"},

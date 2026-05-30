@@ -1,8 +1,9 @@
 // Package webhook is the kernel-level pure-computation core for GoCell's
 // bidirectional webhook capability (KERNEL-WEBHOOK-01): inbound receiver
 // verification and outbound dispatcher signing. It depends only on the
-// standard library + pkg/errcode + pkg/redaction + pkg/panicregister +
-// kernel/clock (kernel/ layering rule — no runtime/ adapters/ cells/).
+// standard library + pkg/errcode + pkg/redaction + kernel/clock in
+// production (kernel/ layering rule — no runtime/ adapters/ cells/);
+// pkg/panicregister is a test-only dependency of webhook_helpers_test.go.
 //
 // Scope: L0 (signature compute + verify are pure functions of input bytes).
 // The HTTP receiver middleware and the outbox dispatcher consumer that wire
