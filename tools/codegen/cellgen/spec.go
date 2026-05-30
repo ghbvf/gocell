@@ -129,6 +129,26 @@ type WebhookReceiverGenSpec struct {
 	SourceID string
 	// HandlerExpr is the dotted handler reference, e.g. "c.stripeSvc.HandleStripeEvent".
 	HandlerExpr string
+
+	// Runtime configuration baked from contract.yaml at code-generation time.
+	// PathPattern is the HTTP path the receiver runtime mounts
+	// (contract.yaml endpoints.inbound.pathPattern).
+	PathPattern string
+	// DeliveryIDHeader is the HTTP header name carrying the per-delivery
+	// identifier (contract.yaml signature.deliveryIDHeader).
+	DeliveryIDHeader string
+	// TimestampHeader is the HTTP header name carrying the unix-seconds
+	// timestamp (contract.yaml signature.timestampHeader).
+	TimestampHeader string
+	// SignatureHeader is the HTTP header name carrying the HMAC signature tokens
+	// (contract.yaml signature.signatureHeader).
+	SignatureHeader string
+	// ToleranceSeconds is the bidirectional timestamp window in seconds
+	// (contract.yaml signature.toleranceSeconds). Must be > 0.
+	ToleranceSeconds int64
+	// MaxBodyBytes is the maximum accepted request body size in bytes
+	// (contract.yaml payload.maxBodyBytes). Must be > 0.
+	MaxBodyBytes int64
 }
 
 // WebhookDispatchGenSpec describes one reg.RegisterWebhookDispatch() call.

@@ -727,11 +727,13 @@ const (
 	// allowed replay window (default ±5min). Constructed with
 	// KindUnauthenticated → HTTP 401.
 	ErrWebhookTimestampExpired Code = "ERR_WEBHOOK_TIMESTAMP_EXPIRED"
-	// ErrWebhookDuplicateDelivery signals a delivery ID was already processed
-	// (idempotent replay). Receiver maps idempotent replay to HTTP 200; this
-	// sentinel classifies the replay for logging. The wire status (200
-	// idempotent vs 409) is decided in PR-3 (receiver runtime). First
-	// constructed in PR-3 (receiver runtime).
+	// ErrWebhookDuplicateDelivery signals a delivery whose idempotency claim did
+	// not acquire a fresh lease. The PR-3 receiver constructs it on the
+	// ClaimBusy branch — another worker currently holds the lease for the same
+	// (sourceID, deliveryID) — and maps it to HTTP 409 (KindConflict) so the
+	// sender retries. The already-completed replay (ClaimDone) is a success and
+	// returns 200 without this sentinel. First constructed in PR-3 (receiver
+	// runtime).
 	ErrWebhookDuplicateDelivery Code = "ERR_WEBHOOK_DUPLICATE_DELIVERY"
 	// ErrWebhookInvalidHeader signals a required signature header is missing or
 	// malformed (bad scheme, unparseable timestamp). Constructed with

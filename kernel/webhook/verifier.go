@@ -15,6 +15,27 @@ import (
 // delivery is accepted (replay defense). ±5min matches Stripe / Svix defaults.
 const defaultTolerance = 5 * time.Minute
 
+// MsgSignatureVerificationFailed is the single, generic wire message returned by
+// every inbound-webhook authentication failure that resolves to HTTP 401 with
+// [errcode.ErrWebhookInvalidSignature]: an unregistered/unknown source (receiver
+// SourceStore miss) and a non-matching HMAC signature (this verifier) MUST be
+// byte-identical on the wire so the receive path is not a source-ID enumeration
+// oracle (OWASP Authentication Cheat Sheet §Generic Error Messages;
+// WEBHOOK-HMAC-FUNNEL-01 F8/F9). The differentiating reason lives in each
+// caller's WithInternal attribute (server-side slog only, never on the wire).
+//
+// This is a shared-const convention (Soft): both 401 emit points reference it,
+// but a future third path could still construct a different literal. The narrow
+// exploitability (source IDs are route-bound, not attacker-supplied) makes an
+// archtest disproportionate; the const + this godoc + the errcode.go contract
+// note are the single source of the required wire text.
+//
+// ref: stripe/stripe-go webhook/client.go@master / svix/svix-webhooks
+// go/webhook.go@main — neither performs a source lookup (secret is caller-
+// supplied), so this oracle surface is GoCell-specific; OWASP provides the
+// governing principle.
+const MsgSignatureVerificationFailed = "webhook: signature verification failed"
+
 // Verifier checks the signature [Headers] of an inbound webhook against a
 // [Source]'s secret. The interface is sealed (unexported sealed() marker): the
 // sole implementation is the HMAC-SHA256 verifier from [NewHMACVerifier]
@@ -79,8 +100,10 @@ func (v *hmacVerifier) Verify(rawBody []byte, headers Headers, source Source) er
 		// 401 must be uniform with the unknown-source case so the receive path
 		// is not a source-ID enumeration oracle (WEBHOOK-HMAC-FUNNEL-01 F8/F9).
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookInvalidSignature,
-			"webhook: no presented signature matches the computed digest",
-			errcode.WithInternal(errcode.InternalAttr("sourceId", string(source.id))))
+			MsgSignatureVerificationFailed,
+			errcode.WithInternal(
+				errcode.InternalAttr("source_id", string(source.id)),
+				errcode.InternalAttr("reason", "signature mismatch")))
 	}
 	return nil
 }
@@ -99,12 +122,15 @@ func (v *hmacVerifier) validateTimestamp(timestamp string) error {
 		skew = -skew
 	}
 	if skew > v.tolerance {
+		// skewSeconds is server-side only: exposing the exact skew in wire
+		// details would let an attacker calibrate replay timing. toleranceSeconds
+		// is safe to expose (it is the configured window, not a runtime secret).
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrWebhookTimestampExpired,
 			"webhook: signature timestamp is outside the tolerance window",
 			errcode.WithDetails(
-				errcode.PublicInt("skewSeconds", int64(skew/time.Second)),
 				errcode.PublicInt("toleranceSeconds", int64(v.tolerance/time.Second)),
-			))
+			),
+			errcode.WithInternal(errcode.InternalAttr("skewSeconds", int64(skew/time.Second))))
 	}
 	return nil
 }

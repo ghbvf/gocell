@@ -403,8 +403,10 @@ func resolveWebhookField(
 //
 // The cell struct field is resolved via fieldIndex.resolveSliceField.
 // HandlerExpr is rendered as `c.<fieldName>.<cu.Handler>`.
-//
-//nolint:dupl // symmetric to buildWebhookDispatchSpecFromCU; different role, fields, and return types
+// Runtime configuration fields (PathPattern, headers, ToleranceSeconds,
+// MaxBodyBytes) are baked from contract.yaml at code-generation time via
+// extractReceiverRuntimeConfig so the generated spec is single-source
+// and zero-IO at runtime.
 func buildWebhookReceiverSpecFromCU(
 	p *metadata.ProjectMeta,
 	cellID, sliceID string,
@@ -436,11 +438,100 @@ func buildWebhookReceiverSpecFromCU(
 	if err != nil {
 		return WebhookReceiverGenSpec{}, err
 	}
+	rc, err := extractReceiverRuntimeConfig(p, cellID, sliceID, cu.Contract)
+	if err != nil {
+		return WebhookReceiverGenSpec{}, err
+	}
 	return WebhookReceiverGenSpec{
-		ContractID:  cu.Contract,
-		SliceID:     sliceID,
-		SourceID:    cu.SourceID,
-		HandlerExpr: "c." + fieldName + "." + cu.Handler,
+		ContractID:       cu.Contract,
+		SliceID:          sliceID,
+		SourceID:         cu.SourceID,
+		HandlerExpr:      "c." + fieldName + "." + cu.Handler,
+		PathPattern:      rc.PathPattern,
+		DeliveryIDHeader: rc.DeliveryIDHeader,
+		TimestampHeader:  rc.TimestampHeader,
+		SignatureHeader:  rc.SignatureHeader,
+		ToleranceSeconds: rc.ToleranceSeconds,
+		MaxBodyBytes:     rc.MaxBodyBytes,
+	}, nil
+}
+
+// receiverRuntimeConfig holds the contract.yaml-derived runtime fields baked
+// into a WebhookReceiverGenSpec. Extracted into a named struct so that
+// extractReceiverRuntimeConfig stays below cognitive-complexity 15 and its
+// return type is self-documenting.
+type receiverRuntimeConfig struct {
+	PathPattern      string
+	DeliveryIDHeader string
+	TimestampHeader  string
+	SignatureHeader  string
+	ToleranceSeconds int64
+	MaxBodyBytes     int64
+}
+
+// extractReceiverRuntimeConfig reads contract.yaml's signature / endpoints.inbound
+// / payload sections for an inbound webhook contract and returns the runtime
+// configuration that cellgen bakes into webhook.ReceiverSpec literals.
+//
+// Fails fast (FMT-37 defense-in-depth) when the contract is missing required
+// sections or sub-fields, so a misconfigured contract.yaml produces a codegen
+// error rather than a zero-valued or silently broken spec.
+func extractReceiverRuntimeConfig(
+	p *metadata.ProjectMeta,
+	cellID, sliceID, contractID string,
+) (receiverRuntimeConfig, error) {
+	contract := p.Contracts[contractID] // already validated non-nil by resolveWebhookField
+	details := []errcode.Option{
+		errcode.WithDetails(
+			errcode.PublicString("contractID", contractID),
+			errcode.PublicString("cellID", cellID),
+			errcode.PublicString("sliceID", sliceID),
+		),
+	}
+	if contract.Signature == nil {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract is missing signature section — required for ReceiverSpec",
+			details...)
+	}
+	if contract.Endpoints.Inbound == nil {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract is missing endpoints.inbound section — required for ReceiverSpec",
+			details...)
+	}
+	if contract.Payload == nil {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract is missing payload section — required for ReceiverSpec",
+			details...)
+	}
+	sig := contract.Signature
+	inbound := contract.Endpoints.Inbound
+	if sig.DeliveryIDHeader == "" || sig.TimestampHeader == "" || sig.SignatureHeader == "" {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract signature is missing required header fields",
+			details...)
+	}
+	if inbound.PathPattern == "" {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract endpoints.inbound.pathPattern is empty",
+			details...)
+	}
+	if sig.ToleranceSeconds <= 0 {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract signature.toleranceSeconds must be positive",
+			details...)
+	}
+	if contract.Payload.MaxBodyBytes <= 0 {
+		return receiverRuntimeConfig{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build: inbound webhook contract payload.maxBodyBytes must be positive",
+			details...)
+	}
+	return receiverRuntimeConfig{
+		PathPattern:      inbound.PathPattern,
+		DeliveryIDHeader: sig.DeliveryIDHeader,
+		TimestampHeader:  sig.TimestampHeader,
+		SignatureHeader:  sig.SignatureHeader,
+		ToleranceSeconds: int64(sig.ToleranceSeconds), // metadata is int; spec is int64
+		MaxBodyBytes:     contract.Payload.MaxBodyBytes,
 	}, nil
 }
 
@@ -460,8 +551,6 @@ func buildWebhookDispatchesFromSlices(
 //
 // The cell struct field is resolved via fieldIndex.resolveSliceField.
 // SelectorExpr is rendered as `c.<fieldName>.<cu.TargetSelector>`.
-//
-//nolint:dupl // symmetric to buildWebhookReceiverSpecFromCU; different role, fields, and return types
 func buildWebhookDispatchSpecFromCU(
 	p *metadata.ProjectMeta,
 	cellID, sliceID string,

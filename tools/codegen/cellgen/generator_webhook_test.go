@@ -64,6 +64,15 @@ func TestRenderCell_GoldenWebhook(t *testing.T) {
 	if !bytes.Equal(out, golden) {
 		t.Errorf("rendered output diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
 	}
+
+	// Lightweight assertion: the receiver registration block must carry the
+	// correct CellID field value ("hooks"). This guards against regressions
+	// where the cellgen template omits or mis-derives CellID from the cell
+	// metadata, which would silently break observability labeling at runtime.
+	outStr := string(out)
+	if !bytes.Contains(out, []byte(`CellID:           "hooks"`)) {
+		t.Errorf("generated output does not contain CellID field for receiver registration; got:\n%s", outStr)
+	}
 }
 
 // buildWebhookSyntheticProject builds the in-memory ProjectMeta for the
@@ -105,8 +114,25 @@ func buildWebhookSyntheticProject() *metadata.ProjectMeta {
 		},
 	}
 	stripeContract := &metadata.ContractMeta{
-		ID:   "webhook.stripe.payment-events.v1",
-		Kind: "webhook",
+		ID:        "webhook.stripe.payment-events.v1",
+		Kind:      "webhook",
+		Direction: "inbound",
+		Signature: &metadata.WebhookSignatureMeta{
+			Algorithm:        "hmac-sha256",
+			DeliveryIDHeader: "svix-id",
+			TimestampHeader:  "svix-timestamp",
+			SignatureHeader:  "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{
+				PathPattern: "/api/webhooks/stripe/payment-events",
+				SourceID:    "stripe",
+			},
+		},
+		Payload: &metadata.WebhookPayloadMeta{
+			MaxBodyBytes: 1048576,
+		},
 	}
 	shopifyContract := &metadata.ContractMeta{
 		ID:   "webhook.shopify.orders.v1",

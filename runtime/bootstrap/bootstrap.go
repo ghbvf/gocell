@@ -25,10 +25,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	kwh "github.com/ghbvf/gocell/kernel/webhook"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -142,6 +144,13 @@ type Bootstrap struct {
 	// eventRouterCollector is cached so multiple Router instances (if a future
 	// multi-listener model arrives) share the same collector.
 	eventRouterCollector *metricsmiddleware.EventRouterCollector
+
+	// --- webhook: inbound-webhook receiver dependencies ---
+	// Both are injected via WithWebhookSourceStore / WithWebhookClaimer.
+	// nil means "not configured"; phase5 fail-fasts when any cell registers a
+	// webhook receiver but these fields remain nil.
+	webhookSourceStore kwh.SourceStore
+	webhookClaimer     idempotency.Claimer
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
