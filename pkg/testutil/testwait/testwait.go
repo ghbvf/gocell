@@ -142,15 +142,27 @@ func External(t TB, reason string, condition func() bool,
 // site findable via `grep "session-created" ci.log`.
 func Deterministic[T any](t TB, signal <-chan T, msgAndArgs ...any) T {
 	t.Helper()
+	return deterministicWithin(t, signal, signalSafetyNet, msgAndArgs...)
+}
+
+// deterministicWithin is the implementation behind Deterministic. budget is an
+// INTERNAL hung-test guard, never a caller-facing knob — Deterministic always
+// passes signalSafetyNet. It is split out so the white-box self-test
+// (export_test.go) can exercise the safety-net-expiry branch with a short
+// budget instead of waiting the full signalSafetyNet. Business test code in
+// other packages cannot reach it: the export_test.go forwarder is visible only
+// inside testwait's own test binary, so the timeout-free public funnel holds.
+func deterministicWithin[T any](t TB, signal <-chan T, budget time.Duration, msgAndArgs ...any) T {
+	t.Helper()
 	var zero T
-	timer := time.NewTimer(signalSafetyNet)
+	timer := time.NewTimer(budget)
 	defer timer.Stop()
 	select {
 	case v := <-signal:
 		return v
 	case <-timer.C:
 		t.Fatalf("testwait.Deterministic: safety-net expired after %v waiting on signal: %s",
-			signalSafetyNet, formatMsgAndArgs(msgAndArgs))
+			budget, formatMsgAndArgs(msgAndArgs))
 		return zero
 	}
 }

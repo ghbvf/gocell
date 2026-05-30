@@ -165,11 +165,22 @@ func TestDeterministic_ReceivesValueFromSignal(t *testing.T) {
 	require.Equal(t, 42, got)
 }
 
-// TestDeterministic_TimesOutWhenSilent is intentionally absent: the safety-net
-// timeout is [signalSafetyNet] (30s) — an internal hung-test guard that is
-// never triggered in a correct run. Verifying it in a unit test would require
-// waiting 30 seconds, which is not practical. The safety-net fires readably
-// before `go test -timeout` kills the whole suite.
+// TestDeterministic_SafetyNetExpiresWhenSilent exercises the hung-test
+// safety-net branch via the white-box forwarder with a short budget, so the
+// expiry path is covered without waiting the production signalSafetyNet (30s).
+// A genuinely hung signal must call t.Fatalf with the label, not block forever.
+func TestDeterministic_SafetyNetExpiresWhenSilent(t *testing.T) {
+	t.Parallel()
+	sig := make(chan int) // never sent on
+	ft := &fakeT{T: t}
+	got := testwait.DeterministicWithinForTest(ft, sig, testtime.D5ms, "silent-signal")
+	require.True(t, ft.failed.Load(),
+		"safety-net expiry must call t.Fatalf when the signal never arrives")
+	rendered := fmt.Sprintf(ft.lastMsg, ft.lastArgs...)
+	require.Contains(t, rendered, "silent-signal",
+		"safety-net Fatalf must echo the label for CI grep-ability; got %q", rendered)
+	require.Equal(t, 0, got, "safety-net expiry must return the zero value of T")
+}
 
 func TestDeterministic_GenericOverStructSignal(t *testing.T) {
 	t.Parallel()

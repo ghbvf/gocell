@@ -306,7 +306,9 @@ func checkSliceCoverage(args []string) error {
 
 // collectSliceCoverageResults gathers validation results and counts for either a
 // single cell (when filterCellID is non-empty) or all cells in the project.
-func collectSliceCoverageResults(root string, project *metadata.ProjectMeta, filterCellID string) (results []governance.ValidationResult, cellCount, sliceCount int) {
+func collectSliceCoverageResults(
+	root string, project *metadata.ProjectMeta, filterCellID string,
+) (results []governance.ValidationResult, cellCount, sliceCount int) {
 	if filterCellID != "" {
 		cellCount = 1
 		for _, sl := range project.Slices {
