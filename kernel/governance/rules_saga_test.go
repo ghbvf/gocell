@@ -71,6 +71,52 @@ func filterByCode(results []ValidationResult, code RuleCode) []ValidationResult 
 	return out
 }
 
+// assertSagaFinding checks that got contains exactly wantErrCount results and,
+// when wantErrCount > 0, that the first result has SeverityError, Field ==
+// wantField (empty wantField skips the field check), and a non-empty Fix.
+// Extracted to lower the cognitive complexity of each table-driven saga rule test.
+func assertSagaFinding(t *testing.T, got []ValidationResult, wantErrCount int, wantField string) {
+	t.Helper()
+	if len(got) != wantErrCount {
+		t.Fatalf("expected %d result(s), got %d: %v", wantErrCount, len(got), got)
+	}
+	if wantErrCount == 0 {
+		return
+	}
+	r := got[0]
+	if r.Severity != SeverityError {
+		t.Errorf("expected SeverityError, got %s", r.Severity)
+	}
+	if wantField != "" && r.Field != wantField {
+		t.Errorf("expected field %q, got %q", wantField, r.Field)
+	}
+	if r.Fix == "" {
+		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+	}
+}
+
+// assertSagaFindingPrefix is like assertSagaFinding but uses strings.HasPrefix
+// for the field check (used by retry/timeout tests where field varies by subpath).
+func assertSagaFindingPrefix(t *testing.T, got []ValidationResult, wantErrCount int, wantField string) {
+	t.Helper()
+	if len(got) != wantErrCount {
+		t.Fatalf("expected %d result(s), got %d: %v", wantErrCount, len(got), got)
+	}
+	if wantErrCount == 0 {
+		return
+	}
+	r := got[0]
+	if r.Severity != SeverityError {
+		t.Errorf("expected SeverityError, got %s", r.Severity)
+	}
+	if wantField != "" && !strings.HasPrefix(r.Field, wantField) {
+		t.Errorf("expected field with prefix %q, got %q", wantField, r.Field)
+	}
+	if r.Fix == "" {
+		t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
+	}
+}
+
 // ---- SAGA-CONTRACT-STEPS-NONEMPTY-01 ----------------------------------------
 
 func TestSagaStepsNonempty01(t *testing.T) {
@@ -113,21 +159,7 @@ func TestSagaStepsNonempty01(t *testing.T) {
 			project := buildSagaProject("L3", tc.saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTSTEPSNONEMPTY01(), codeSAGACONTRACTSTEPSNONEMPTY01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -200,21 +232,7 @@ func TestSagaStepNameValid01(t *testing.T) {
 			project := buildSagaProject("L3", saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTSTEPNAMEVALID01(), codeSAGACONTRACTSTEPNAMEVALID01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -271,21 +289,7 @@ func TestSagaStepNameUnique01(t *testing.T) {
 			project := buildSagaProject("L3", saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTSTEPNAMEUNIQUE01(), codeSAGACONTRACTSTEPNAMEUNIQUE01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -339,21 +343,7 @@ func TestSagaStepSchemaRef01(t *testing.T) {
 			project := buildSagaProject("L3", saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTSTEPSCHEMAREF01(), codeSAGACONTRACTSTEPSCHEMAREF01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -404,21 +394,7 @@ func TestSagaCompensationOrder01(t *testing.T) {
 			project := buildSagaProject("L3", saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTCOMPENSATIONORDER01(), codeSAGACONTRACTCOMPENSATIONORDER01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -469,68 +445,46 @@ func TestSagaConsistencyL301(t *testing.T) {
 			consistencyLevel: "L3",
 			wantErrCount:     0,
 		},
-		{
-			name:             "non-saga kind → not checked (http at L2 is fine)",
-			consistencyLevel: "L2",
-			// use a non-saga contract via separate project
-		},
 	}
+
+	// non-saga contract at L2 must not trigger the saga rule (rule only fires for kind=saga).
+	t.Run("non-saga kind → not checked (http at L2 is fine)", func(t *testing.T) {
+		t.Parallel()
+		c := &metadata.ContractMeta{
+			ID:               "http.test.action.v1",
+			Kind:             "http",
+			OwnerCell:        metadatatest.CellIDTestCell,
+			ConsistencyLevel: "L2",
+			Lifecycle:        "active",
+			Endpoints: metadata.EndpointsMeta{
+				Server:  metadatatest.CellIDTestCell,
+				Clients: []string{metadatatest.CellIDEdgeBFF},
+			},
+			Dir:  "contracts/http/test/action/v1",
+			File: "contracts/http/test/action/v1/contract.yaml",
+		}
+		project := &metadata.ProjectMeta{
+			Cells:      map[string]*metadata.CellMeta{},
+			Slices:     map[string]*metadata.SliceMeta{},
+			Contracts:  map[string]*metadata.ContractMeta{c.ID: c},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+		v := NewValidator(project, "", clock.Real())
+		got := filterByCode(v.validateSAGACONTRACTCONSISTENCYL301(), codeSAGACONTRACTCONSISTENCYL301)
+		if len(got) != 0 {
+			t.Fatalf("non-saga contract must not trigger SAGA-CONTRACT-CONSISTENCY-L3-01, got %d: %v", len(got), got)
+		}
+	})
 
 	for _, tc := range tests {
 		tc := tc
-		// Skip the non-saga test case with a comment; it shares infrastructure.
-		if tc.name == "non-saga kind → not checked (http at L2 is fine)" {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				// Build an http contract with L2 — should not trigger saga rule.
-				c := &metadata.ContractMeta{
-					ID:               "http.test.action.v1",
-					Kind:             "http",
-					OwnerCell:        metadatatest.CellIDTestCell,
-					ConsistencyLevel: "L2",
-					Lifecycle:        "active",
-					Endpoints: metadata.EndpointsMeta{
-						Server:  metadatatest.CellIDTestCell,
-						Clients: []string{metadatatest.CellIDEdgeBFF},
-					},
-					Dir:  "contracts/http/test/action/v1",
-					File: "contracts/http/test/action/v1/contract.yaml",
-				}
-				project := &metadata.ProjectMeta{
-					Cells:      map[string]*metadata.CellMeta{},
-					Slices:     map[string]*metadata.SliceMeta{},
-					Contracts:  map[string]*metadata.ContractMeta{c.ID: c},
-					Journeys:   map[string]*metadata.JourneyMeta{},
-					Assemblies: map[string]*metadata.AssemblyMeta{},
-				}
-				v := NewValidator(project, "", clock.Real())
-				got := filterByCode(v.validateSAGACONTRACTCONSISTENCYL301(), codeSAGACONTRACTCONSISTENCYL301)
-				if len(got) != 0 {
-					t.Fatalf("non-saga contract must not trigger SAGA-CONTRACT-CONSISTENCY-L3-01, got %d: %v", len(got), got)
-				}
-			})
-			continue
-		}
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			project := buildSagaProject(tc.consistencyLevel, wellFormedSaga())
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTCONSISTENCYL301(), codeSAGACONTRACTCONSISTENCYL301)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
@@ -571,21 +525,7 @@ func TestSagaContractBlockPresent01(t *testing.T) {
 			project := buildSagaProject("L3", tc.saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTBLOCKPRESENT01(), codeSAGACONTRACTBLOCKPRESENT01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 
@@ -723,21 +663,7 @@ func TestSagaCellLevelL3Declare01(t *testing.T) {
 			project := buildCellLevelProject(tc.cellLevel, tc.role)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACELLLEVELL3DECLARE01(), codeSAGACELLLEVELL3DECLARE01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if r.Field != tc.wantField {
-					t.Errorf("expected Field %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFinding(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 
@@ -924,21 +850,7 @@ func TestSagaContractRetryTimeout01(t *testing.T) {
 			project := buildSagaProject("L3", tc.saga)
 			v := NewValidator(project, "", clock.Real())
 			got := filterByCode(v.validateSAGACONTRACTRETRYTIMEOUT01(), codeSAGACONTRACTRETRYTIMEOUT01)
-			if len(got) != tc.wantErrCount {
-				t.Fatalf("expected %d result(s), got %d: %v", tc.wantErrCount, len(got), got)
-			}
-			if tc.wantErrCount > 0 {
-				r := got[0]
-				if r.Severity != SeverityError {
-					t.Errorf("expected SeverityError, got %s", r.Severity)
-				}
-				if tc.wantField != "" && !strings.HasPrefix(r.Field, tc.wantField) {
-					t.Errorf("expected field with prefix %q, got %q", tc.wantField, r.Field)
-				}
-				if r.Fix == "" {
-					t.Error("error finding must carry non-empty Fix guidance (typed-Fix contract)")
-				}
-			}
+			assertSagaFindingPrefix(t, got, tc.wantErrCount, tc.wantField)
 		})
 	}
 }
