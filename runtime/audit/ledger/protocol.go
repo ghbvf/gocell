@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"unicode"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
@@ -69,13 +68,17 @@ type IdempotencyContentFingerprint struct{}
 func (IdempotencyContentFingerprint) idempotencyModeOK() {}
 
 // NamespaceID is a typed string that identifies the owner of a ledger store
-// (e.g. a cell ID). It mirrors adapters/redis.KeyNamespace validation rules:
-// lowercase only, no ':', '{', '}', length ≤ 48, first char [a-z_].
+// (e.g. a cell ID). The legal set is restricted to [a-z_] with length ≤ 48:
+// every byte must be a lowercase ASCII letter or underscore. This is stricter
+// than adapters/redis.KeyNamespace ([a-z0-9_-]) on purpose — the namespace is
+// the first signed field of the HMAC chain (cross-namespace domain separation,
+// ADR-1042 §A), so its character set is frozen narrow to avoid any ambiguity in
+// the canonical digest input.
 type NamespaceID string
 
-// Validate reports whether the NamespaceID satisfies all format constraints.
-// Rejects: empty, contains ':', '{', '}', uppercase letters, length > 48,
-// first character not in [a-z_].
+// Validate reports whether the NamespaceID satisfies all format constraints:
+// non-empty, length ≤ 48, and every byte in [a-z_]. Any digit, dash, dot,
+// uppercase letter, ':' / '{' / '}', or non-ASCII byte is rejected.
 func (ns NamespaceID) Validate() error {
 	s := string(ns)
 	if s == "" {
@@ -90,19 +93,11 @@ func (ns NamespaceID) Validate() error {
 				errcode.PublicInt("actualLength", len(s)),
 			))
 	}
-	first := rune(s[0])
-	if first != '_' && (first < 'a' || first > 'z') {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: namespace ID first character must be [a-z_]")
-	}
-	for _, r := range s {
-		if r == ':' || r == '{' || r == '}' {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '_' && (c < 'a' || c > 'z') {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: namespace ID must not contain ':', '{', or '}'")
-		}
-		if unicode.IsUpper(r) {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: namespace ID must be lowercase")
+				"audit ledger: namespace ID must contain only [a-z_]")
 		}
 	}
 	return nil
