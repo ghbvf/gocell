@@ -123,14 +123,18 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 		observability string
 		principal     string
 		wantWarn      string
+		// oversize marks the size-cap branch, which logs size/max integer attrs;
+		// the unmarshal/validate branches instead log an "error" attr. The test
+		// asserts the matching diagnostic payload per branch (review O1/A2).
+		oversize bool
 		// assert verifies the targeted field was dropped to its zero value.
 		assert func(t *testing.T, ce rout.ClaimedEntry)
 	}{
 		{
 			name:     "metadata_oversize",
 			metadata: bigJSONField("k", principalBranchOversizeLen), observability: "{}", principal: "{}",
-			wantWarn: "metadata JSON exceeds max size",
-			assert:   func(t *testing.T, ce rout.ClaimedEntry) { assert.Empty(t, ce.Metadata()) },
+			wantWarn: "metadata JSON exceeds max size", oversize: true,
+			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Empty(t, ce.Metadata()) },
 		},
 		{
 			name:     "metadata_unmarshal_failure",
@@ -143,8 +147,8 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 			metadata:      "{}",
 			observability: bigJSONField("traceId", principalBranchOversizeLen),
 			principal:     "{}",
-			wantWarn:      "observability JSON exceeds max size",
-			assert:        func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Observability()) },
+			wantWarn:      "observability JSON exceeds max size", oversize: true,
+			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Observability()) },
 		},
 		{
 			name:     "observability_unmarshal_failure",
@@ -161,21 +165,23 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 			assert:        func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Observability()) },
 		},
 		{
-			name:      "principal_oversize",
-			metadata:  "{}", observability: "{}",
+			name:     "principal_oversize",
+			metadata: "{}", observability: "{}",
 			principal: bigJSONField("actorId", principalBranchOversizeLen),
-			wantWarn:  "principal JSON exceeds max size",
-			assert:    func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Principal()) },
+			wantWarn:  "principal JSON exceeds max size", oversize: true,
+			assert: func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Principal()) },
 		},
 		{
-			name:      "principal_unmarshal_failure",
-			metadata:  "{}", observability: "{}", principal: "[]",
+			name:     "principal_unmarshal_failure",
+			metadata: "{}", observability: "{}", principal: "[]",
 			wantWarn: "failed to unmarshal principal",
 			assert:   func(t *testing.T, ce rout.ClaimedEntry) { assert.Zero(t, ce.Principal()) },
 		},
 	}
 
 	for _, tc := range cases {
+		// No t.Parallel in subtests: installWarnCapture mutates the global
+		// slog default, which would cross-contaminate parallel subcases.
 		t.Run(tc.name, func(t *testing.T) {
 			_, truncErr := pool.DB().Exec(ctx, "TRUNCATE outbox_entries")
 			require.NoError(t, truncErr, "TRUNCATE must succeed")
@@ -196,6 +202,15 @@ func TestPGOutboxStore_PrincipalReconstruct_FailSoftBranches(t *testing.T) {
 			assert.Equal(t, "WARN", line["level"], "drop must be logged at WARN")
 			assert.Equal(t, id, line["entry_id"], "warn must carry entry_id correlation field")
 			assert.Equal(t, "user.login", line["event_type"], "warn must carry event_type correlation field")
+			// Lock the diagnostic payload each branch carries (review O1/A2): the
+			// size-cap branch logs size+max integers; the unmarshal/validate
+			// branches log the underlying error for operator triage.
+			if tc.oversize {
+				assert.NotNil(t, line["size"], "oversize drop must log the offending size")
+				assert.NotNil(t, line["max"], "oversize drop must log the cap")
+			} else {
+				assert.NotEmpty(t, line["error"], "unmarshal/validate drop must log the underlying error")
+			}
 		})
 	}
 }
@@ -211,10 +226,14 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 		_, truncErr := pool.DB().Exec(ctx, "TRUNCATE outbox_entries")
 		require.NoError(t, truncErr)
 
-		// PG timestamptz has microsecond precision; truncate so the comparison is
-		// exact and the skew keeps occurred_at strictly before created_at.
-		occurredAt := time.Now().UTC().Truncate(time.Microsecond)
-		createdAt := occurredAt.Add(occurredAtBranchSkew)
+		// Seed occurred_at with a sub-microsecond (nanosecond) component so the
+		// round-trip actually proves PG timestamptz truncates to microseconds —
+		// not merely that an already-truncated value survives. created_at is kept
+		// at microsecond precision and skewed so the two columns stay distinct.
+		base := time.Now().UTC().Truncate(time.Microsecond)
+		occurredAtNanos := base.Add(789 * time.Nanosecond)
+		wantOccurredAt := base // PG must drop the sub-µs tail
+		createdAt := base.Add(occurredAtBranchSkew)
 
 		const insertSQL = `INSERT INTO outbox_entries
 			(id, aggregate_id, aggregate_type, event_type, topic, payload,
@@ -222,7 +241,7 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 			VALUES ($1, '', '', $2, $3, $4, '{}'::jsonb, '{}'::jsonb, $5, $6, 'pending', 0)`
 		_, err := pool.DB().Exec(ctx, insertSQL,
 			"occurred-roundtrip", "user.login", "user.login",
-			[]byte(`{"action":"login"}`), occurredAt, createdAt)
+			[]byte(`{"action":"login"}`), occurredAtNanos, createdAt)
 		require.NoError(t, err)
 
 		store := NewOutboxStore(pool.DB(), clock.Real())
@@ -231,9 +250,11 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 		require.Len(t, claimed, 1)
 
 		got := claimed[0]
-		assert.True(t, got.OccurredAt().Equal(occurredAt),
-			"occurred_at must round-trip at microsecond precision: got %v want %v",
-			got.OccurredAt(), occurredAt)
+		assert.True(t, got.OccurredAt().Equal(wantOccurredAt),
+			"occurred_at must round-trip truncated to microsecond precision: got %v want %v",
+			got.OccurredAt(), wantOccurredAt)
+		assert.False(t, got.OccurredAt().Equal(occurredAtNanos),
+			"the sub-microsecond component must be dropped by PG, not preserved")
 		assert.True(t, got.CreatedAt().Equal(createdAt),
 			"created_at must round-trip: got %v want %v", got.CreatedAt(), createdAt)
 		assert.False(t, got.OccurredAt().Equal(got.CreatedAt()),
