@@ -22,12 +22,16 @@
 // metrics, readyz probes (Probes() returning store-ready + lag probes), and the
 // PROJECTION-REPLAY-SOURCE-CONFORMANCE-ENROLL-01 archtest. Remaining items:
 //
-//   - PR-04: cellgen kind:projection derivation (the only sanctioned Subscribe
-//     callsite) + HTTP rebuild endpoint (POST /internal/v1/<cell>/projection/
-//     <name>/rebuild) + per-cell handler wiring.
-//   - HTTP endpoint: deferred to PR-04 per ADR §"Rebuild control-plane endpoint"
-//     amendment 2026-05-31 (no host cell until cellgen wiring lands; a platform-
-//     level active contract with no cell impl would trip DEAD-CONTRACT-01).
+//   - PR-04a (landed): the reg.RegisterProjection record-only seam + the
+//     bootstrap projection drain — the single sanctioned Coordinator.Subscribe
+//     callsite is now runtime/bootstrap/phases_projection.go (Option A, ADR
+//     §Amendment 2026-05-31). cellgen emits record-only reg.RegisterProjection,
+//     never Coordinator.Subscribe (raw infra may not reach cell code).
+//   - PR-04b: cellgen kind:projection derivation of reg.RegisterProjection.
+//   - PR-04c: production journal-backed Cursor + ReplaySource.
+//   - PR-04e: HTTP rebuild endpoint (POST /internal/v1/<cell>/projection/
+//     <name>/rebuild) — deferred until a host cell exists (a platform-level
+//     active contract with no cell impl would trip DEAD-CONTRACT-01).
 //
 // Subscribe's frozen forward signature (projectionID moved to NewCoordinator
 // in PR-03):

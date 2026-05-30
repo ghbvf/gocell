@@ -350,24 +350,25 @@ verified by the listed PR).
 
 | # | Threat | v1 mechanism | Discharged by |
 |---|---|---|---|
-| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in PR-04 (#1176, where cellgen wiring first needs a concrete Cursor); PR-06 real-PG integration |
+| 1 | **exactly-once** (apply runs once per offset) | apply + `SaveOffset` in one `CellTx` (Q1); the harness compares each event's stream position (from the `Cursor` contract defined in PR-01 — not an `outbox.Entry` field) against the stored checkpoint and skips when ≤ checkpoint | PR-01 defines the `Cursor` contract and verifies the compare/skip logic with a test fake (cold-start / out-of-order / forward-gap unit tests). The production journal-backed `Cursor` lands in **PR-04c** (a #1176 follow-up sub-issue — see §Amendment 2026-05-31; until then projection cells run on the mem cursor/replay fakes, sufficient for the serial in-memory bus); PR-06 real-PG integration |
 | 2 | **crash recovery** (no replay window after restart) | checkpoint persisted in the apply tx; restart loads checkpoint, resumes at offset+1 | PR-01 crash-recovery unit test; PR-06 real-PG integration (kill → restart) |
-| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. See §5 Amendment 2026-05-31: the HTTP trigger moved to PR-04 but the Phase()/readyz discharge mechanism lands in PR-03 as planned. |
-| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring in PR-04 — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04 (#1176)** |
+| 3 | **rebuild-period read consistency** | non-blocking by design (§5); `Phase()` lets business opt into 503; stale read is a business concern | PR-03 `Phase()` + readyz; ADR §5 contract. The HTTP trigger moved to **PR-04e** (a #1176 follow-up — §Amendment 2026-05-31); the Phase()/readyz discharge mechanism landed in PR-03 as planned (the HTTP trigger is a convenience surface, not a threat-discharge mechanism). |
+| 4 | **out-of-order / concurrent delivery** (broker redelivery-reorder OR intra-consumer-group concurrency, e.g. AMQP prefetch>1 dispatching a goroutine per delivery) | checkpoint is monotonic; a redelivered/late event whose replay-cursor position ≤ checkpoint does NOT invoke apply (exactly-once delivery to apply); ConsumerBase's Claimer idempotency layer (keyed per event-ID) sits above the Coordinator as defense-in-depth. **PRECONDITION (PR-01 amendment):** this skip is only sound under STRICTLY SERIAL, IN-ORDER delivery of the stream — a single consumer group does NOT provide it. Under concurrent delivery a higher position can commit the checkpoint before a lower position is applied, silently dropping the lower event's distinct apply (projection gap). This is distinct from row 7's multi-pod boundary (it bites within a single pod via prefetch>1). The per-event-ID Claimer does NOT serialize positions, so it gives no protection here. **Compensation:** v1 is safe because cmd/* wires only the serial in-memory bus (`runtime/eventbus`, single-goroutine consume); serial-delivery enforcement (prefetch=1 / single-goroutine dispatch for projection subscriptions) is a HARD prerequisite of the production wiring — no concurrent transport may carry a projection subscription until it lands. | PR-01 reorder-hazard characterization unit test (`TestCoordinator_ReorderDropsLowerPosition`) + `applyOne` `pos<1` guard + doc.go "Ordering precondition"; **serial-delivery enforcement deferred to PR-04d** (a #1176 follow-up — §Amendment 2026-05-31). PR-04a wires only the serial in-memory bus (the production wiring path it enables); a concurrent transport carrying a projection must not ship until PR-04d lands |
 | 5 | **fail-closed** (checkpoint store failure) | `SaveOffset` failure rolls back the whole `CellTx` (apply not committed); Coordinator requeues; never advances offset past an un-applied event | PR-01 fail-closed unit test |
 | 6 | **GAP-8 boundary** (harness must not prescribe read-model schema) | CellTx-offset design touches only the framework offset table; apply body + read-model schema stay business-owned (§4) | This PR (§4 record) + PR-02 schema review |
 | 7 | **multi-pod concurrency (v1 boundary)** | v1 single-pod (Q5); `owner` column reserved, **write-guarded** (reads harmless/unused); multi-pod safety = upper-layer leader election; **2+ replicas without leader election is unsafe in v1** | PR-02 `owner`-reserved archtest (write-scoped, landed); `schema_guard.verifyDefaults` asserts the load-bearing `owner DEFAULT ''`; documented v1 limitation (Q5) |
 
 ## 7. AI-robust ratings
 
-The epic introduces five enforcement mechanisms. Ratings follow
+The epic introduces six enforcement mechanisms. Ratings follow
 `.claude/rules/gocell/ai-robust.md`; symbol inventories live in each archtest's
 package godoc (not duplicated here).
 
 | ID | PR (stub → green) | Funnel direction / rating | Hard-template (§"Hard 范本目录") |
 |---|---|---|---|
 | **PROJECTION-STATE-PHASE-FROZEN-01** | PR-00 (green now) | n/a (membership freeze) — **Medium** (AST const-set + String-arm lock; Go enums are not reflectable as a set, so an AST/golden lock is the ceiling — same shape as `OUTBOX-STATE-TRANSITION-COMPLETENESS-01`). The orthogonal "zero value invalid" guarantee is Hard via `iota+1` + `Phase.Valid()` (type system). | enum-set golden lock |
-| **PROJECTION-APPLY-HOOK-FUNNEL-01** | PR-01 active (genuinely-green) → PR-04 cellgen callsite | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `Coordinator.Subscribe` callers to {kernel/projection self, `_test.go`, cellgen `DO NOT EDIT`}. **Correction (PR-01 amendment):** the original "下游 Hard" overstated the achievable ceiling — Go cannot type-system-gate who calls a *public* method, and `Subscribe` must stay public for cellgen, so the archtest caller-identity allowlist is the strongest achievable form (same shape and **Medium** rating as `HEALTHZ-WRITE-01` A2). True Hard downstream would require a cellgen-only sealed-token parameter, which would change the PR-00-frozen `Subscribe` signature; deferred to PR-04 (#1176). Transitional Medium → gh #1100 / #1176 tracked (named in the archtest godoc). | single sanctioned holder / caller-identity allowlist |
+| **PROJECTION-APPLY-HOOK-FUNNEL-01** | PR-01 active (genuinely-green) → **PR-04a bootstrap-drain callsite** | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `Coordinator.Subscribe` callers to {kernel/projection self, `_test.go`, **`runtime/bootstrap/phases_projection.go`**}. **Relocation (PR-04a, Option A — §Amendment 2026-05-31):** the sanctioned callsite moved from cellgen `cell_gen.go` to the single bootstrap drain file, because `Coordinator.Subscribe` must be fed framework-owned raw infrastructure that cell code may never hold (sealed-marker architecture). Go cannot type-system-gate who calls a *public* method, so the caller-identity allowlist is the strongest achievable form (Medium, same shape as `HEALTHZ-WRITE-01` A2) — now over a single hand-written kernel/runtime file (tighter than "any cell_gen.go"). True Hard downstream needs a cellgen-only sealed-token parameter changing the PR-00-frozen `Subscribe` signature; tracked as a #1176 follow-up. | single sanctioned holder / caller-identity allowlist |
+| **PROJECTION-REGISTER-FUNNEL-01** | **PR-04a active (genuinely-green, vacuous)** → PR-04b cellgen callsite | 下游 **Medium** / 上游 **Medium** — archtest caller-allowlist locks `cell.Registrar.RegisterProjection` callers to {`_test.go`, cellgen `cell_gen.go` + DO-NOT-EDIT banner}. The upstream complement of APPLY-HOOK-FUNNEL: cellgen's record-only single source is `reg.RegisterProjection` (guarded here); the `Coordinator.Subscribe` terminal that consumes it is in the bootstrap drain (guarded by APPLY-HOOK-FUNNEL). Same permanent Go-language ceiling (Medium); Hard-ization (sealed-token) is the same #1176 follow-up. The raw-infra-stays-in-bootstrap property is the **Hard** complement (type system): cells hold sealed markers, never the raw `CheckpointStore`/`TxRunner` the drain constructs. | single sanctioned holder / caller-identity allowlist |
 | **PROJECTION-CHECKPOINT-TX-BOUND-01** | PR-01 stub → PR-02 green | **Medium** (`SaveOffset` impl must obtain tx via `persistence.TxFromContext`; raw `db.Exec` / `*sql.Tx` form fails). Rides the existing `PG-REPO-AMBIENT-TX-01` Hard funnel for the PG adapter. | typed-param / ambient-tx form |
 | **PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01** | PR-02 | **Medium** (SQL-literal scan rejects `owner` in INSERT/UPDATE write paths; v1 scope — removed in the same PR that enables v1.1 claim). | input-struct field exclusion (SQL-write variant) |
 | **PROJECTION-CONSISTENCY-PARSE-TIME-01** | PR-05 | 下游 **Hard** (parser load path must call `jsonschema.Validate`; callsite identity locked) — upgrades #960 from Medium governance rule to Hard parse-time gate. | codegen/parse funnel + callsite identity |
@@ -401,3 +402,75 @@ deliberate golden update (intended).
   not exactly-once (§Q1 option C).
 - **Snapshot store in v1**: rejected — crosses GAP-8, unsupported by replay-scale
   benchmark; deferred with a documented trigger (§Q4).
+
+## Amendment 2026-05-31 (PR-04a — Option A wiring seam + PR-04 split)
+
+PR-04 (#1176) as originally scoped bundled six separable concerns; the
+≤2000-line/PR budget and a file-level conflict with epic **#1085** (CellModule →
+`runtime/composition`: its plan edits `tools/codegen/cellgen` templates + golden
+and refactors `cmd/corebundle`) made a single PR infeasible. PR-04 is therefore
+split into sequenced sub-PRs (numbers filed under #1100; see the PR-04a PR body):
+
+- **PR-04a** (this amendment): the `reg.RegisterProjection` record-only seam +
+  bootstrap projection drain + DI options + the two caller funnels. **Conflict-free**
+  — touches only `kernel/cell` + `runtime/bootstrap` + `tools/archtest`.
+- **PR-04b**: cellgen `kind:projection` derivation + metadata (conflicts #1085
+  Batch 4 → after it lands). **PR-04c**: production journal-backed `Cursor` +
+  `ReplaySource` + corebundle wiring (conflicts #1085 Batch 2). **PR-04d**:
+  serial-delivery enforcement. **PR-04e**: HTTP rebuild control-plane endpoint.
+  **PR-04f**: dev guide. **PR-04g**: funnel Hard-ization (cellgen-only sealed token).
+
+### Option A — wiring seam (supersedes the §7 "cell_gen.go Subscribe callsite")
+
+The cellgen-generated `cell_gen.go`'s `Init(ctx, reg)` holds only a
+`cell.Registrar`, yet `projection.Coordinator` needs framework-owned raw
+infrastructure (`CheckpointStore` / `TxRunner` / `Cursor` / `ReplaySource`). Cells
+must never reach raw infra (sealed-marker architecture, `CELL-RAW-INFRA-*`), so
+emitting `projection.NewCoordinator` into generated cell code is rejected.
+Instead (mirroring the subscribe / webhook record-in-Init → drain-in-bootstrap
+split):
+
+1. cellgen emits **record-only** `reg.RegisterProjection(cell.ProjectionRequest{…})`
+   into `cell_gen.go` (PR-04b). `ProjectionRequest` is self-contained in
+   `kernel/cell` (uses only `outbox.Entry` / `contractspec` + cell-local
+   `ProjectionApply` / `ProjectionResetHook` func types) — it carries **no**
+   `kernel/projection` symbol, because `kernel/projection` already imports
+   `kernel/cell` (its Coordinator holds a `cell.Registrar`) and a reverse import
+   would be a compile-time cycle. Guarded by **PROJECTION-REGISTER-FUNNEL-01**.
+2. `runtime/bootstrap` (which legally imports both kernel layers) drains
+   `RegistrySnapshot.Projections`, constructs one Coordinator per request from the
+   raw deps it holds, and calls `Coordinator.Subscribe`. The named-type conversion
+   `cell.ProjectionApply → projection.Apply` happens here. This is the single
+   sanctioned `Coordinator.Subscribe` callsite, so **PROJECTION-APPLY-HOOK-FUNNEL-01**
+   relocates its allowlist from `cell_gen.go` to `runtime/bootstrap/phases_projection.go`.
+
+Because merged `Coordinator.Subscribe` calls `reg.Subscribe` internally (designed
+for an Init-time call against the live `RegistryRecorder`), the drain passes the
+Coordinator a **capture `Registrar`** whose `Subscribe` records the wrapped
+`(spec, handler, consumerGroup, cellID, sliceID)` instead of appending to the
+finalized recorder; the drain then feeds that `SubscriptionRequest` to
+`evtRouter.AddContractHandler` — the same sink as `drainCellSubscriptions`. The
+Coordinator is unchanged; only its injected Registrar differs.
+
+### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement)
+
+No row flips to ⚠️/❌. The discharge **mechanisms** are unchanged; only the PR
+that lands each moves from "PR-04" to a named sub-PR:
+
+- **Row 1** (exactly-once / production Cursor) → PR-04c. PR-04a ships the seam on
+  the mem cursor/replay fakes, which are sound for the serial in-memory bus (the
+  only transport PR-04a's wiring path carries). No regression: cold-start /
+  out-of-order / fail-closed are already discharged by PR-01 unit tests.
+- **Row 3** (rebuild read consistency / HTTP trigger) → PR-04e. The actual
+  discharge (`Phase()` + readyz) already landed in PR-03; the HTTP trigger is a
+  convenience surface, not a threat-discharge mechanism — moving it is inert.
+- **Row 4** (serial-delivery enforcement) → PR-04d. **Compensation, load-bearing:**
+  PR-04a's `checkNoEventConsumersWhenSubscriberNil` + the drain require a
+  Subscriber; production wiring (corebundle) carries only the serial in-memory bus
+  today. A concurrent transport (AMQP prefetch>1) MUST NOT carry a projection
+  subscription until PR-04d's enforcement lands — restated here, not silently
+  deferred.
+
+§3 Q3 (single slice → single projection) is unchanged: a slice may declare
+multiple `role=subscribe` CUs feeding one projection; PR-04b derives one
+`RegisterProjection` per projection from them.
