@@ -17,7 +17,7 @@ func TestBootstrapNamespace_LiteralPassesValidate(t *testing.T) {
 	t.Parallel()
 	ns := audit.BootstrapNamespace()
 	require.NoError(t, ns.Validate(),
-		"bootstrap namespace literal must satisfy NamespaceID.Validate (lowercase / [a-z_] first char / length ≤ 48 / no ':' '{' '}')")
+		"bootstrap namespace literal must satisfy NamespaceID.Validate (non-empty / [a-z_] only / length ≤ 48)")
 }
 
 // TestBootstrapNamespace_NotEmpty is the partition invariant: the bootstrap
