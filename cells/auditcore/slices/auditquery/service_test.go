@@ -267,6 +267,45 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
 }
 
+// TestService_Query_CursorContextMismatch_SubjectID is the subjectId sibling of
+// TestService_Query_CursorContextMismatch: it locks that subjectId participates
+// in the cursor-scope fingerprint (#1290, service.go QueryContext attrs). A
+// cursor minted under subjectId=alice must be rejected when replayed under
+// subjectId=bob (cross-context replay), exactly as eventType already is. Without
+// subjectId in the fingerprint, both queries would share a QueryContext and the
+// replay would silently succeed — this test would then fail.
+func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, store := newTestService()
+	for i := range 5 {
+		require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+			ID:        fmt.Sprintf("ae-%02d", i),
+			EventID:   fmt.Sprintf("evt-%02d", i),
+			EventType: "event.test.v1",
+			ActorID:   "actor-x",
+			SubjectID: "alice",
+			Timestamp: base.Add(time.Duration(i) * time.Hour),
+			Payload:   []byte("{}"),
+		}))
+	}
+
+	alice := ledger.AuditFilters{SubjectID: "alice"}
+	page1, err := svc.Query(context.Background(), alice, query.PageParams{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	bob := ledger.AuditFilters{SubjectID: "bob"}
+	_, err = svc.Query(context.Background(), bob, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+}
+
 func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {
 	p, _ := ledger.NewProtocol(
 		ledger.NamespaceID("auditcore"),
