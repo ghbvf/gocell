@@ -478,6 +478,100 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	}
 }
 
+// TestHandleQuery_SubjectFilter pins #1290 (F23): an admin can filter audit
+// entries by subjectId to investigate impersonation (actorId != subjectId). The
+// subjectId query parameter binds to AuditFilters.SubjectID and narrows the SQL
+// WHERE to subject_id = ?. Without the binding every row is returned (RED).
+func TestHandleQuery_SubjectFilter(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*ledger.Entry{
+		{ID: "se-1", EventID: "evt-s1", EventType: "event.test.v1",
+			ActorID: "actor-1", SubjectID: "alice", Timestamp: base, Payload: []byte("{}")},
+		{ID: "se-2", EventID: "evt-s2", EventType: "event.test.v1",
+			ActorID: "actor-2", SubjectID: "bob", Timestamp: base.Add(time.Hour), Payload: []byte("{}")},
+		{ID: "se-3", EventID: "evt-s3", EventType: "event.test.v1",
+			ActorID: "actor-3", SubjectID: "alice", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}")},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	// Admin (global, no actorId) filters by subjectId=alice → only the two
+	// alice-subject rows (se-1, se-3), regardless of differing actors.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=alice", nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []struct {
+			SubjectID string `json:"subjectId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Len(t, resp.Data, 2)
+	for _, d := range resp.Data {
+		assert.Equal(t, "alice", d.SubjectID)
+	}
+}
+
+// TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf proves the subjectId
+// filter composes with — and never escapes — the actor-self scoping that the
+// auditQueryPolicy already enforces for non-admin callers. A non-admin's query
+// is always AND-ed with actor_id = self, so subjectId only narrows within the
+// caller's own actions and cannot leak another user's rows (#1290 authz design).
+func TestHandleQuery_SubjectFilter_NonAdminScopedToActorSelf(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	seed := []*ledger.Entry{
+		// usr-1's own action targeting subject "victim".
+		{ID: "ns-1", EventID: "evt-n1", EventType: "event.test.v1",
+			ActorID: "usr-1", SubjectID: "victim", Timestamp: base, Payload: []byte("{}")},
+		// usr-1's own action targeting subject "other" — must be excluded by the
+		// subjectId=victim filter (narrowing within actor-self).
+		{ID: "ns-2", EventID: "evt-n2", EventType: "event.test.v1",
+			ActorID: "usr-1", SubjectID: "other", Timestamp: base.Add(time.Hour), Payload: []byte("{}")},
+		// usr-2's action targeting subject "victim" — must never be visible to
+		// usr-1 (actor-self scoping; cross-user safety).
+		{ID: "ns-3", EventID: "evt-n3", EventType: "event.test.v1",
+			ActorID: "usr-2", SubjectID: "victim", Timestamp: base.Add(2 * time.Hour), Payload: []byte("{}")},
+	}
+	for _, e := range seed {
+		require.NoError(t, store.Append(context.Background(), e))
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?subjectId=victim", nil)
+	req = req.WithContext(auth.TestContext("usr-1", nil)) // non-admin
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []struct {
+			ID        string `json:"id"`
+			ActorID   string `json:"actorId"`
+			SubjectID string `json:"subjectId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// Only ns-1: actor=usr-1 AND subject=victim. ns-2 excluded by subjectId,
+	// ns-3 excluded by actor-self scoping.
+	require.Len(t, resp.Data, 1)
+	assert.Equal(t, "ns-1", resp.Data[0].ID)
+	assert.Equal(t, "usr-1", resp.Data[0].ActorID)
+	assert.Equal(t, "victim", resp.Data[0].SubjectID)
+}
+
 type actorBindingCase struct {
 	name            string
 	query           string

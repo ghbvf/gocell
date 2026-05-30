@@ -568,10 +568,17 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 		if i > 3 {
 			et = "type.Y"
 		}
+		// SubjectID is orthogonal to EventType: entries 1,2 target "alice",
+		// the rest target "bob" — exercising the subject_id filter (#1290).
+		subject := "bob"
+		if i <= 2 {
+			subject = "alice"
+		}
 		e := &ledger.Entry{
 			EventID:   fmt.Sprintf("qf-%d", i),
 			EventType: et,
 			ActorID:   "actor",
+			SubjectID: subject,
 			Timestamp: fc.Now(),
 			Payload:   []byte(`{}`),
 		}
@@ -587,6 +594,27 @@ func runQueryByFilters(t *testing.T, factory Factory) {
 	}
 	if len(results) != 3 {
 		t.Errorf("Query(type.X): got %d, want 3", len(results))
+	}
+
+	// #1290: subject_id filter narrows to the two alice-subject rows.
+	bySubject, err := store.Query(context.Background(), ledger.AuditFilters{SubjectID: "alice"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(subjectId): %v", err)
+	}
+	if len(bySubject) != 2 {
+		t.Errorf("Query(subjectId=alice): got %d, want 2", len(bySubject))
+	}
+
+	// Combined EventType + SubjectID — both predicates AND together.
+	combined, err := store.Query(context.Background(),
+		ledger.AuditFilters{EventType: "type.X", SubjectID: "alice"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("Query(eventType+subjectId): %v", err)
+	}
+	if len(combined) != 2 {
+		t.Errorf("Query(type.X + subjectId=alice): got %d, want 2", len(combined))
 	}
 }
 
