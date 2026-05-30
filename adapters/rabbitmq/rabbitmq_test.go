@@ -1681,14 +1681,18 @@ func TestUnmarshalDelivery(t *testing.T) {
 		// Any JSON object lacking schemaVersion:"v1" is rejected fail-closed with
 		// ErrUnknownEnvelopeVersion (no legacy fallback) — UnmarshalEnvelope keys
 		// solely off the schemaVersion field, not field-name casing. Hand-written
-		// byte literal rather than json.Marshal(entry): the sealed-construction
+		// byte literals rather than json.Marshal(entry): the sealed-construction
 		// Entry (issue #1229) has only unexported fields, so json.Marshal would
-		// emit `{}` and trip staticcheck SA9005.
-		body := []byte(`{"id":"evt-legacy-001","eventType":"test.legacy","payload":{"legacy":true}}`)
-
-		_, legacyErr := unmarshalDelivery(body)
-		require.Error(t, legacyErr, "legacy entry JSON must be rejected (no schemaVersion)")
-		assert.ErrorIs(t, legacyErr, outbox.ErrUnknownEnvelopeVersion)
+		// emit `{}` and trip staticcheck SA9005. The camelCase and PascalCase
+		// variants assert the rejection is casing-independent.
+		for _, body := range [][]byte{
+			[]byte(`{"id":"evt-legacy-001","eventType":"test.legacy","payload":{"legacy":true}}`),
+			[]byte(`{"ID":"evt-legacy-001","EventType":"test.legacy","Payload":{"legacy":true}}`),
+		} {
+			_, legacyErr := unmarshalDelivery(body)
+			require.Error(t, legacyErr, "legacy entry JSON must be rejected (no schemaVersion)")
+			assert.ErrorIs(t, legacyErr, outbox.ErrUnknownEnvelopeVersion)
+		}
 	})
 
 	t.Run("broken_json_returns_error", func(t *testing.T) {

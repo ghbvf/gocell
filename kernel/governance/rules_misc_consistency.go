@@ -1203,6 +1203,9 @@ func collectReceiverEmitTopics(
 }
 
 func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	// A NewEntry-form assignment is fully handled by the helper (it only updates
+	// entry→topic bindings, never yields findings); stop here. A non-NewEntry
+	// statement returns false and falls through to the composite-literal path.
 	if collectNewEntryAssignment(stmt, ctx, state) {
 		return nil
 	}

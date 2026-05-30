@@ -423,6 +423,12 @@ var (
 // the observability and principal read-side guards, which are structurally
 // identical (issue #1229 review F5: symmetric size caps prevent unbounded
 // allocation from corrupted or maliciously-crafted rows).
+//
+// The metadata column is deliberately NOT routed through this helper: it is an
+// untyped business KV map with no Validate() method (so it cannot satisfy the
+// type constraint) and no read-side size cap — per observability.md, the cap
+// applies only to the observability/principal identity columns, not business
+// metadata. Its simpler unmarshal stays inline above.
 func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
 	raw []byte, maxBytes int, warn jsonbDecodeWarnings, entryID, eventType string,
 ) (T, bool) {
@@ -443,6 +449,7 @@ func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
 		slog.Warn(warn.unmarshalError,
 			slog.String("entry_id", entryID),
 			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
 			slog.Any("error", err))
 		return zero, false
 	}
@@ -450,6 +457,7 @@ func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
 		slog.Warn(warn.validateError,
 			slog.String("entry_id", entryID),
 			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
 			slog.Any("error", err))
 		return zero, false
 	}
