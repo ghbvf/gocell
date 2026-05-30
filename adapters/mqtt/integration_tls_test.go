@@ -289,6 +289,74 @@ func TestIntegrationTLS_MutualTLS_PublishRoundTrip(t *testing.T) {
 	}
 }
 
+// TestIntegrationTLS_UntrustedClientCert_Rejected asserts that an mTLS broker
+// rejects a client whose certificate is signed by a CA the broker does NOT trust,
+// while the client itself trusts the server. This is the security regression gate
+// for `require_certificate true`: it proves mutual-auth enforcement is real.
+//
+// Setup: trusted chain (brokerCA) → broker server cert; separate, independent
+// chain (untrustedCA) → client cert. The broker's cafile trusts ONLY brokerCA.
+// The client's RootCAs trust the server cert (brokerCA) so the TLS client-side
+// server-auth passes; only the broker's client-auth check fails.
+func TestIntegrationTLS_UntrustedClientCert_Rejected(t *testing.T) {
+	// Trusted chain: broker server cert + CA. The broker only trusts this CA.
+	trusted := genMQTTTLSChain(t)
+	brokerURL, cleanup := startMosquittoContainerTLS(
+		t,
+		trusted.serverCertPEM,
+		trusted.serverKeyPEM,
+		trusted.caCertPEM,
+	)
+	t.Cleanup(cleanup)
+
+	// Untrusted chain: independent CA + client cert. Broker's cafile does NOT
+	// contain this CA, so the broker will reject this client cert during mTLS.
+	untrusted := genMQTTTLSChain(t)
+
+	// Client trusts the SERVER (uses trusted.caCertPEM) so TLS client-side
+	// server-auth succeeds. The failure is strictly the BROKER rejecting the
+	// CLIENT cert (mutual-auth enforcement).
+	serverCAPool := x509.NewCertPool()
+	if !serverCAPool.AppendCertsFromPEM(trusted.caCertPEM) {
+		t.Fatal("TestIntegrationTLS_UntrustedClientCert_Rejected: failed to append trusted CA cert")
+	}
+
+	cid, err := ParseEphemeralClientID("itest", "tls-untrusted-client")
+	if err != nil {
+		t.Fatalf("ParseEphemeralClientID: %v", err)
+	}
+	cfg := Config{
+		ClientID: cid,
+		Brokers:  []string{brokerURL},
+		TLS: &tls.Config{
+			RootCAs:      serverCAPool,
+			Certificates: []tls.Certificate{untrusted.clientCert}, // NOT trusted by broker
+			ServerName:   "127.0.0.1",
+		},
+		ConnectTimeout: testtime.D10s,
+		KeepAlive:      testtime.D10s,
+		Backoff: BackoffConfig{
+			BaseDelay: testtime.D100ms,
+			MaxDelay:  testtime.D2s,
+		},
+		PublishTimeout: testtime.D5s,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D30s)
+	defer cancel()
+
+	_, openErr := Open(ctx, clock.Real(), cfg)
+	if openErr == nil {
+		t.Fatal("TestIntegrationTLS_UntrustedClientCert_Rejected: Open succeeded; " +
+			"expected broker to reject the untrusted client cert during mTLS handshake — " +
+			"require_certificate is NOT being enforced")
+	}
+	// The exact error shape varies by broker / paho version (CONNACK, TLS alert,
+	// connection reset). Assert only that Open fails — the broker rejected the
+	// client cert. Do not over-constrain the error code.
+	t.Logf("Open returned (expected) error: %v", openErr)
+}
+
 // TestIntegrationTLS_InsecureSkipVerify_Rejected asserts that Config validation
 // rejects a TLS config with InsecureSkipVerify=true before any network connection
 // is attempted. This test requires no container — it is a pure validation check.

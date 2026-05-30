@@ -3,17 +3,22 @@
 package mqtt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/google/uuid"
 	dockercontainer "github.com/moby/moby/api/types/container"
 	dockernet "github.com/moby/moby/api/types/network"
@@ -797,4 +802,190 @@ func freeLoopbackTCPPort() (int, error) {
 		return 0, cerr
 	}
 	return port, nil
+}
+
+// dltCapture holds the first message received by the DLT watcher.
+type dltCapture struct {
+	mu      sync.Mutex
+	topic   string
+	payload []byte
+	gotCh   chan struct{}
+	once    sync.Once
+}
+
+func newDLTCapture() *dltCapture {
+	return &dltCapture{gotCh: make(chan struct{})}
+}
+
+func (d *dltCapture) record(topic string, payload []byte) {
+	d.once.Do(func() {
+		d.mu.Lock()
+		d.topic = topic
+		d.payload = make([]byte, len(payload))
+		copy(d.payload, payload)
+		d.mu.Unlock()
+		close(d.gotCh)
+	})
+}
+
+func (d *dltCapture) snapshot() (topic string, payload []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.topic, d.payload
+}
+
+// newRawDLTWatcher starts a raw autopaho connection subscribed to filter
+// (e.g. "$dead/itest/#") and records the first matching PUBLISH into cap.
+// It connects to brokerURL using a fresh ephemeral client ID. The returned
+// cleanup func disconnects the manager and must be called at test end.
+func newRawDLTWatcher(
+	t *testing.T, brokerURL string, filter string, cap *dltCapture,
+) (cleanup func()) {
+	t.Helper()
+	rawCID, err := ParseEphemeralClientID("itest", "dlt-watcher")
+	if err != nil {
+		t.Fatalf("newRawDLTWatcher: ParseEphemeralClientID: %v", err)
+	}
+	u, err := url.Parse(brokerURL)
+	if err != nil {
+		t.Fatalf("newRawDLTWatcher: url.Parse(%q): %v", brokerURL, err)
+	}
+
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	connectedCh := make(chan struct{}, 1)
+
+	cfg := autopaho.ClientConfig{
+		ServerUrls: []*url.URL{u},
+		KeepAlive:  10,
+		OnConnectionUp: func(_ *autopaho.ConnectionManager, _ *paho.Connack) {
+			select {
+			case connectedCh <- struct{}{}:
+			default:
+			}
+		},
+		OnConnectError: func(err error) {
+			t.Logf("newRawDLTWatcher: connect error: %v", err)
+		},
+		ClientConfig: paho.ClientConfig{
+			ClientID: rawCID.String(),
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
+				func(pr paho.PublishReceived) (bool, error) {
+					if pr.Packet != nil {
+						cap.record(pr.Packet.Topic, pr.Packet.Payload)
+					}
+					return true, nil
+				},
+			},
+		},
+	}
+
+	cm, err := autopaho.NewConnection(watchCtx, cfg)
+	if err != nil {
+		watchCancel()
+		t.Fatalf("newRawDLTWatcher: autopaho.NewConnection: %v", err)
+	}
+
+	// Wait for the watcher to connect before returning.
+	select {
+	case <-connectedCh:
+	case <-time.After(testtime.D15s):
+		watchCancel()
+		t.Fatal("newRawDLTWatcher: timed out waiting for DLT watcher to connect")
+	}
+
+	// Subscribe to the $dead filter.
+	subCtx, subCancel := context.WithTimeout(watchCtx, testtime.D10s)
+	defer subCancel()
+	_, subErr := cm.Subscribe(subCtx, &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{
+			{Topic: filter, QoS: 1},
+		},
+	})
+	if subErr != nil {
+		watchCancel()
+		t.Fatalf("newRawDLTWatcher: cm.Subscribe(%q): %v", filter, subErr)
+	}
+
+	return func() {
+		watchCancel()
+		disconnCtx, disconnCancel := context.WithTimeout(context.Background(), testtime.D5s)
+		defer disconnCancel()
+		_ = cm.Disconnect(disconnCtx)
+	}
+}
+
+// TestIntegration_Subscriber_DLTCapture proves that when a handler returns
+// outbox.Reject, the adapter publishes the rejected envelope to
+// "$dead/<originalTopic>" and that payload is readable by an independent
+// raw MQTT subscriber — not just that a metric incremented.
+//
+// The DLT watcher is a plain autopaho.ConnectionManager subscribed directly to
+// "$dead/itest/#". The GoCell Subscriber.Subscribe cannot subscribe to $dead/...
+// (SubscribeOK rejects it — outside namespace, contains $), so the watcher must
+// be a raw client. This test fails if routeDeadLetter is broken or if the
+// "$dead" prefix routing is not actually delivering to the topic.
+func TestIntegration_Subscriber_DLTCapture(t *testing.T) {
+	brokerURL := sharedBrokerURL(t)
+	rawURL := testutil.LoopbackIPEndpoint(brokerURL)
+
+	// Per-test unique topic so parallel test runs cannot cross-deliver.
+	topicSuffix := uuid.NewString()
+	originalTopic := "itest/dlt/" + topicSuffix
+	expectedDLTTopic := "$dead/" + originalTopic
+
+	// Start the DLT watcher BEFORE publishing so it is subscribed when the
+	// adapter routes to $dead/<topic>. "$dead/itest/#" is a raw MQTT wildcard —
+	// the GoCell Subscriber cannot subscribe to it (outside its namespace).
+	cap := newDLTCapture()
+	watcherCleanup := newRawDLTWatcher(t, rawURL, "$dead/itest/#", cap)
+	t.Cleanup(watcherCleanup)
+
+	// Build a GoCell connection + subscriber + publisher on the shared broker.
+	sub, conn := newSubscriberForITest(t, "dlt-capture-"+topicSuffix[:8])
+
+	// Build the envelope that will be published and later appear verbatim on $dead.
+	envelope := itestEnvelope(t, originalTopic, []byte(`{"dlt":"capture"}`))
+
+	// Subscribe the GoCell subscriber to originalTopic with a handler that
+	// always Rejects — this drives routeDeadLetter.
+	subscription := itestSubscription(originalTopic, "dlt-cg-"+topicSuffix[:8])
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	go func() {
+		_ = sub.Subscribe(subCtx, subscription,
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.Reject(errors.New("permanent-test")), nil
+			})
+	}()
+	select {
+	case <-sub.Ready(subscription):
+	case <-time.After(testtime.D10s):
+		t.Fatal("dlt capture: GoCell subscriber not ready within 10s")
+	}
+
+	// Publish the envelope. The adapter receives it, calls the handler (Reject),
+	// then routes pb.Payload (the original envelope bytes) to $dead/<originalTopic>.
+	itestPublish(t, conn, originalTopic, envelope)
+
+	// Poll until the DLT watcher receives the message or timeout.
+	deadline := time.Now().Add(testtime.D15s)
+	for time.Now().Before(deadline) {
+		select {
+		case <-cap.gotCh:
+			goto assertDLT
+		default:
+		}
+		time.Sleep(testtime.D50ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
+	}
+	t.Fatal("dlt capture: DLT watcher did not receive a message within 15s; " +
+		"routeDeadLetter may be broken or $dead/<topic> is not being published")
+
+assertDLT:
+	gotTopic, gotPayload := cap.snapshot()
+	if gotTopic != expectedDLTTopic {
+		t.Errorf("DLT topic = %q, want %q", gotTopic, expectedDLTTopic)
+	}
+	if !bytes.Equal(gotPayload, envelope) {
+		t.Errorf("DLT payload mismatch:\n  got  %q\n  want %q", gotPayload, envelope)
+	}
 }
