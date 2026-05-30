@@ -504,15 +504,21 @@ var _ = RouteGroup{Register: func(m RouteMux) error {
 // Webhook record-only API (PR-2)
 // ---------------------------------------------------------------------------
 
-func noopWebhookHandler(_ context.Context, _ []byte) error { return nil }
+func noopWebhookHandler(_ context.Context, _ webhook.Delivery) error { return nil }
 
 func noopWebhookSelector(_ context.Context, _ []byte) (string, error) { return "target", nil }
 
 func validReceiverSpec() webhook.ReceiverSpec {
 	return webhook.ReceiverSpec{
-		ContractID: "webhook.stripe.payment-events.v1",
-		SourceID:   "stripe",
-		CellID:     "hooks",
+		ContractID:       "webhook.stripe.payment-events.v1",
+		SourceID:         "stripe",
+		CellID:           "hooks",
+		PathPattern:      "/api/webhooks/stripe/payment-events",
+		DeliveryIDHeader: "X-Delivery-Id",
+		TimestampHeader:  "X-Timestamp",
+		SignatureHeader:  "X-Signature",
+		ToleranceSeconds: 300,
+		MaxBodyBytes:     1048576,
 	}
 }
 

@@ -75,9 +75,15 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 {{ end }}
 {{- range .WebhookReceivers }}
 	if err := reg.RegisterWebhookReceiver(webhook.ReceiverSpec{
-		ContractID: {{ printf "%q" .ContractID }},
-		SourceID:   {{ printf "%q" .SourceID }},
-		CellID:     {{ printf "%q" $.CellID }},
+		ContractID:       {{ printf "%q" .ContractID }},
+		SourceID:         {{ printf "%q" .SourceID }},
+		CellID:           {{ printf "%q" $.CellID }},
+		PathPattern:      {{ printf "%q" .PathPattern }},
+		DeliveryIDHeader: {{ printf "%q" .DeliveryIDHeader }},
+		TimestampHeader:  {{ printf "%q" .TimestampHeader }},
+		SignatureHeader:  {{ printf "%q" .SignatureHeader }},
+		ToleranceSeconds: {{ .ToleranceSeconds }},
+		MaxBodyBytes:     {{ .MaxBodyBytes }},
 	}, {{ .HandlerExpr }}); err != nil {
 		return fmt.Errorf({{ printf "%q" (printf "%s: webhook-receive %s: %%w" $.CellID .ContractID) }}, err)
 	}

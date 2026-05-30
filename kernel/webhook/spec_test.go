@@ -13,14 +13,27 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// TestReceiverSpecValidate_ValidAllFieldsSet verifies that ReceiverSpec.Validate()
-// returns nil when ContractID, SourceID, and CellID are all non-empty.
-func TestReceiverSpecValidate_ValidAllFieldsSet(t *testing.T) {
-	spec := webhook.ReceiverSpec{
-		ContractID: "webhook.stripe.events.v1",
-		SourceID:   "stripe",
-		CellID:     "paymentcore",
+// validReceiverSpecExt returns a fully-populated ReceiverSpec for external
+// (webhook_test package) tests. Mirrors the internal validReceiverSpec helper
+// in registry_test.go; kept in sync with any ReceiverSpec field additions.
+func validReceiverSpecExt() webhook.ReceiverSpec {
+	return webhook.ReceiverSpec{
+		ContractID:       "webhook.stripe.events.v1",
+		SourceID:         "stripe",
+		CellID:           "paymentcore",
+		PathPattern:      "/api/webhooks/stripe/events",
+		DeliveryIDHeader: "X-Delivery-Id",
+		TimestampHeader:  "X-Timestamp",
+		SignatureHeader:  "X-Signature",
+		ToleranceSeconds: 300,
+		MaxBodyBytes:     1048576,
 	}
+}
+
+// TestReceiverSpecValidate_ValidAllFieldsSet verifies that ReceiverSpec.Validate()
+// returns nil when all required fields are non-empty and in-range.
+func TestReceiverSpecValidate_ValidAllFieldsSet(t *testing.T) {
+	spec := validReceiverSpecExt()
 	require.NoError(t, spec.Validate())
 }
 
@@ -36,40 +49,61 @@ func TestDispatchSpecValidate_ValidAllFieldsSet(t *testing.T) {
 }
 
 // TestReceiverSpecValidate_MissingFields verifies that ReceiverSpec.Validate()
-// returns an error when any of the three required fields is empty.
+// returns an error when any required field is empty or out of range.
 func TestReceiverSpecValidate_MissingFields(t *testing.T) {
+	base := validReceiverSpecExt()
 	tests := []struct {
-		name string
-		spec webhook.ReceiverSpec
+		name  string
+		mutFn func(s webhook.ReceiverSpec) webhook.ReceiverSpec
 	}{
 		{
-			name: "missing ContractID",
-			spec: webhook.ReceiverSpec{
-				ContractID: "",
-				SourceID:   "stripe",
-				CellID:     "paymentcore",
-			},
+			name:  "missing ContractID",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.ContractID = ""; return s },
 		},
 		{
-			name: "missing SourceID",
-			spec: webhook.ReceiverSpec{
-				ContractID: "webhook.stripe.events.v1",
-				SourceID:   "",
-				CellID:     "paymentcore",
-			},
+			name:  "missing SourceID",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.SourceID = ""; return s },
 		},
 		{
-			name: "missing CellID",
-			spec: webhook.ReceiverSpec{
-				ContractID: "webhook.stripe.events.v1",
-				SourceID:   "stripe",
-				CellID:     "",
-			},
+			name:  "missing CellID",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.CellID = ""; return s },
+		},
+		{
+			name:  "missing PathPattern",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.PathPattern = ""; return s },
+		},
+		{
+			name:  "missing DeliveryIDHeader",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.DeliveryIDHeader = ""; return s },
+		},
+		{
+			name:  "missing TimestampHeader",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.TimestampHeader = ""; return s },
+		},
+		{
+			name:  "missing SignatureHeader",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.SignatureHeader = ""; return s },
+		},
+		{
+			name:  "zero ToleranceSeconds",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.ToleranceSeconds = 0; return s },
+		},
+		{
+			name:  "negative ToleranceSeconds",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.ToleranceSeconds = -1; return s },
+		},
+		{
+			name:  "zero MaxBodyBytes",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.MaxBodyBytes = 0; return s },
+		},
+		{
+			name:  "negative MaxBodyBytes",
+			mutFn: func(s webhook.ReceiverSpec) webhook.ReceiverSpec { s.MaxBodyBytes = -1; return s },
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.spec.Validate()
+			err := tt.mutFn(base).Validate()
 			requireWebhookConfigInvalid(t, err)
 		})
 	}

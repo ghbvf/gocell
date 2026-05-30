@@ -9,9 +9,35 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
+// stripeInboundContract returns a fully-configured inbound webhook contract for
+// stripe, usable as a fixture in receiver happy-path tests.
+func stripeInboundContract() *metadata.ContractMeta {
+	return &metadata.ContractMeta{
+		ID:        "webhook.stripe.payment-events.v1",
+		Kind:      "webhook",
+		Direction: "inbound",
+		Signature: &metadata.WebhookSignatureMeta{
+			Algorithm:        "hmac-sha256",
+			DeliveryIDHeader: "svix-id",
+			TimestampHeader:  "svix-timestamp",
+			SignatureHeader:  "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{
+				PathPattern: "/api/webhooks/stripe/payment-events",
+				SourceID:    "stripe",
+			},
+		},
+		Payload: &metadata.WebhookPayloadMeta{
+			MaxBodyBytes: 1048576,
+		},
+	}
+}
+
 // TestBuildWebhookReceiversFromSlices_HappyPath verifies that a slice with
 // role=webhook-receive produces a WebhookReceiverGenSpec with the correct
-// ContractID, SourceID, and HandlerExpr.
+// ContractID, SourceID, HandlerExpr, and baked runtime config fields.
 func TestBuildWebhookReceiversFromSlices_HappyPath(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{
@@ -34,11 +60,7 @@ func TestBuildWebhookReceiversFromSlices_HappyPath(t *testing.T) {
 			},
 		},
 	}
-	contract := &metadata.ContractMeta{
-		ID:   "webhook.stripe.payment-events.v1",
-		Kind: "webhook",
-	}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{stripeInboundContract()})
 	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
 
 	spec, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
@@ -57,6 +79,25 @@ func TestBuildWebhookReceiversFromSlices_HappyPath(t *testing.T) {
 	}
 	if recv.HandlerExpr != "c.stripeSvc.HandleStripeEvent" {
 		t.Errorf("HandlerExpr = %q, want c.stripeSvc.HandleStripeEvent", recv.HandlerExpr)
+	}
+	// Baked runtime config assertions.
+	if recv.PathPattern != "/api/webhooks/stripe/payment-events" {
+		t.Errorf("PathPattern = %q, want /api/webhooks/stripe/payment-events", recv.PathPattern)
+	}
+	if recv.DeliveryIDHeader != "svix-id" {
+		t.Errorf("DeliveryIDHeader = %q, want svix-id", recv.DeliveryIDHeader)
+	}
+	if recv.TimestampHeader != "svix-timestamp" {
+		t.Errorf("TimestampHeader = %q, want svix-timestamp", recv.TimestampHeader)
+	}
+	if recv.SignatureHeader != "svix-signature" {
+		t.Errorf("SignatureHeader = %q, want svix-signature", recv.SignatureHeader)
+	}
+	if recv.ToleranceSeconds != 300 {
+		t.Errorf("ToleranceSeconds = %d, want 300", recv.ToleranceSeconds)
+	}
+	if recv.MaxBodyBytes != 1048576 {
+		t.Errorf("MaxBodyBytes = %d, want 1048576", recv.MaxBodyBytes)
 	}
 }
 
@@ -92,8 +133,24 @@ func TestBuildWebhookReceivers_SortedBySliceIDThenContractID(t *testing.T) {
 		}},
 	}
 	contracts := []*metadata.ContractMeta{
-		{ID: "webhook.zzz.events.v1", Kind: "webhook"},
-		{ID: "webhook.aaa.events.v1", Kind: "webhook"},
+		{
+			ID: "webhook.zzz.events.v1", Kind: "webhook", Direction: "inbound",
+			Signature: &metadata.WebhookSignatureMeta{
+				DeliveryIDHeader: "x-delivery-id", TimestampHeader: "x-ts", SignatureHeader: "x-sig",
+				ToleranceSeconds: 60,
+			},
+			Endpoints: metadata.EndpointsMeta{Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/zzz", SourceID: "zzz"}},
+			Payload:   &metadata.WebhookPayloadMeta{MaxBodyBytes: 65536},
+		},
+		{
+			ID: "webhook.aaa.events.v1", Kind: "webhook", Direction: "inbound",
+			Signature: &metadata.WebhookSignatureMeta{
+				DeliveryIDHeader: "x-delivery-id", TimestampHeader: "x-ts", SignatureHeader: "x-sig",
+				ToleranceSeconds: 60,
+			},
+			Endpoints: metadata.EndpointsMeta{Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/aaa", SourceID: "aaa"}},
+			Payload:   &metadata.WebhookPayloadMeta{MaxBodyBytes: 65536},
+		},
 	}
 	p := fixtureProject(cell, []*metadata.SliceMeta{alpha, zebra}, contracts)
 	fieldIndex := idxOf(map[string]string{"alphaingest": "alphaSvc", "zebraingest": "zebraSvc"})
@@ -529,6 +586,216 @@ func TestBuildWebhookDispatches_InvalidSourceID(t *testing.T) {
 				t.Errorf("error should mention sourceID, got: %v", err)
 			}
 		})
+	}
+}
+
+// TestBuildWebhookReceivers_MissingSignature verifies that a webhook-receive CU
+// whose contract lacks a signature section is rejected at codegen time.
+func TestBuildWebhookReceivers_MissingSignature(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "stripeingest",
+		BelongsToCell: "hooks",
+		Dir:           "stripeingest",
+		File:          "cells/hooks/slices/stripeingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "webhook.stripe.payment-events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent", SourceID: "stripe"},
+		},
+	}
+	// Contract with no Signature section.
+	contract := &metadata.ContractMeta{
+		ID:   "webhook.stripe.payment-events.v1",
+		Kind: "webhook",
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+		},
+		Payload: &metadata.WebhookPayloadMeta{MaxBodyBytes: 65536},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
+
+	_, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for missing signature section, got nil")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error should mention signature, got: %v", err)
+	}
+}
+
+// TestBuildWebhookReceivers_MissingInbound verifies that a webhook-receive CU
+// whose contract lacks an endpoints.inbound section is rejected at codegen time.
+func TestBuildWebhookReceivers_MissingInbound(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "stripeingest",
+		BelongsToCell: "hooks",
+		Dir:           "stripeingest",
+		File:          "cells/hooks/slices/stripeingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "webhook.stripe.payment-events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent", SourceID: "stripe"},
+		},
+	}
+	// Contract with signature but no Inbound section.
+	contract := &metadata.ContractMeta{
+		ID:   "webhook.stripe.payment-events.v1",
+		Kind: "webhook",
+		Signature: &metadata.WebhookSignatureMeta{
+			DeliveryIDHeader: "svix-id", TimestampHeader: "svix-timestamp", SignatureHeader: "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Payload: &metadata.WebhookPayloadMeta{MaxBodyBytes: 65536},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
+
+	_, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for missing endpoints.inbound section, got nil")
+	}
+	if !strings.Contains(err.Error(), "inbound") {
+		t.Errorf("error should mention inbound, got: %v", err)
+	}
+}
+
+// TestBuildWebhookReceivers_MissingPayload verifies that a webhook-receive CU
+// whose contract lacks a payload section is rejected at codegen time.
+func TestBuildWebhookReceivers_MissingPayload(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "stripeingest",
+		BelongsToCell: "hooks",
+		Dir:           "stripeingest",
+		File:          "cells/hooks/slices/stripeingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "webhook.stripe.payment-events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent", SourceID: "stripe"},
+		},
+	}
+	// Contract with signature and inbound but no Payload section.
+	contract := &metadata.ContractMeta{
+		ID:   "webhook.stripe.payment-events.v1",
+		Kind: "webhook",
+		Signature: &metadata.WebhookSignatureMeta{
+			DeliveryIDHeader: "svix-id", TimestampHeader: "svix-timestamp", SignatureHeader: "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
+
+	_, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for missing payload section, got nil")
+	}
+	if !strings.Contains(err.Error(), "payload") {
+		t.Errorf("error should mention payload, got: %v", err)
+	}
+}
+
+// TestBuildWebhookReceivers_ZeroToleranceSeconds verifies that a contract with
+// toleranceSeconds=0 is rejected (must be positive).
+func TestBuildWebhookReceivers_ZeroToleranceSeconds(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "stripeingest",
+		BelongsToCell: "hooks",
+		Dir:           "stripeingest",
+		File:          "cells/hooks/slices/stripeingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "webhook.stripe.payment-events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent", SourceID: "stripe"},
+		},
+	}
+	contract := &metadata.ContractMeta{
+		ID:   "webhook.stripe.payment-events.v1",
+		Kind: "webhook",
+		Signature: &metadata.WebhookSignatureMeta{
+			DeliveryIDHeader: "svix-id", TimestampHeader: "svix-timestamp", SignatureHeader: "svix-signature",
+			ToleranceSeconds: 0, // invalid
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+		},
+		Payload: &metadata.WebhookPayloadMeta{MaxBodyBytes: 65536},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
+
+	_, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for zero toleranceSeconds, got nil")
+	}
+	if !strings.Contains(err.Error(), "toleranceSeconds") && !strings.Contains(err.Error(), "tolerance") {
+		t.Errorf("error should mention toleranceSeconds, got: %v", err)
+	}
+}
+
+// TestBuildWebhookReceivers_ZeroMaxBodyBytes verifies that a contract with
+// maxBodyBytes=0 is rejected (must be positive).
+func TestBuildWebhookReceivers_ZeroMaxBodyBytes(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{
+		ID:           "hooks",
+		Dir:          "hooks",
+		File:         "cells/hooks/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("HooksCell"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "stripeingest",
+		BelongsToCell: "hooks",
+		Dir:           "stripeingest",
+		File:          "cells/hooks/slices/stripeingest/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "webhook.stripe.payment-events.v1", Role: "webhook-receive", Handler: "HandleStripeEvent", SourceID: "stripe"},
+		},
+	}
+	contract := &metadata.ContractMeta{
+		ID:   "webhook.stripe.payment-events.v1",
+		Kind: "webhook",
+		Signature: &metadata.WebhookSignatureMeta{
+			DeliveryIDHeader: "svix-id", TimestampHeader: "svix-timestamp", SignatureHeader: "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{PathPattern: "/webhooks/stripe", SourceID: "stripe"},
+		},
+		Payload: &metadata.WebhookPayloadMeta{MaxBodyBytes: 0}, // invalid
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+	fieldIndex := idxOf(map[string]string{"stripeingest": "stripeSvc"})
+
+	_, err := BuildCellSpec(p, "hooks", markergen.WireBundle{}, fieldIndex)
+	if err == nil {
+		t.Fatal("expected error for zero maxBodyBytes, got nil")
+	}
+	if !strings.Contains(err.Error(), "maxBodyBytes") && !strings.Contains(err.Error(), "body") {
+		t.Errorf("error should mention maxBodyBytes, got: %v", err)
 	}
 }
 

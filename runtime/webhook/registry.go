@@ -1,0 +1,89 @@
+package webhook
+
+import (
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
+	kwh "github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
+)
+
+// BuildRouteGroups converts a slice of [cell.WebhookReceiverRequest] values
+// (accumulated by the cell registry during Init) into [cell.RouteGroup] values
+// ready for bootstrap to mount onto the HTTP server.
+//
+// Each request produces exactly one RouteGroup. Construction of the HMAC
+// verifier and [Receiver] for each request happens eagerly so configuration
+// errors are reported at startup rather than at request time.
+//
+// store and claimer are shared across all receivers; they must not be nil.
+// clk is the mandatory positional clock (CLOCK-POSITIONAL-INJECTION-01).
+func BuildRouteGroups(
+	reqs []cell.WebhookReceiverRequest,
+	store kwh.SourceStore,
+	claimer idempotency.Claimer,
+	clk clock.Clock,
+) ([]cell.RouteGroup, error) {
+	clock.MustHaveClock(clk, "webhook.BuildRouteGroups")
+	if validation.IsNilInterface(store) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook BuildRouteGroups: store must not be nil")
+	}
+	if validation.IsNilInterface(claimer) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
+			"webhook BuildRouteGroups: claimer must not be nil")
+	}
+
+	groups := make([]cell.RouteGroup, 0, len(reqs))
+	for _, req := range reqs {
+		rg, err := buildRouteGroup(req, store, claimer, clk)
+		if err != nil {
+			return nil, fmt.Errorf("webhook BuildRouteGroups: contract %q: %w",
+				req.Spec.ContractID, err)
+		}
+		groups = append(groups, rg)
+	}
+	return groups, nil
+}
+
+// buildRouteGroup builds a single RouteGroup from one WebhookReceiverRequest.
+func buildRouteGroup(
+	req cell.WebhookReceiverRequest,
+	store kwh.SourceStore,
+	claimer idempotency.Claimer,
+	clk clock.Clock,
+) (cell.RouteGroup, error) {
+	tolerance := time.Duration(req.Spec.ToleranceSeconds) * time.Second
+	verifier, err := kwh.NewHMACVerifier(clk, kwh.WithTolerance(tolerance))
+	if err != nil {
+		return cell.RouteGroup{}, fmt.Errorf("build verifier: %w", err)
+	}
+
+	recv, err := NewReceiver(clk, req.Spec, verifier, store, claimer, req.Handler)
+	if err != nil {
+		return cell.RouteGroup{}, fmt.Errorf("build receiver: %w", err)
+	}
+
+	// Capture recv for the closure (loop variable capture is safe in Go 1.22+
+	// but we capture explicitly for clarity).
+	handler := http.Handler(recv)
+	pattern := req.Spec.PathPattern
+
+	// Prefix carries the full path pattern for cell ownership attribution.
+	// Register mounts at "/" so the adapter composes
+	// joinPrefix(Prefix, "/") = Prefix — no double-prefix.
+	return cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   pattern,
+		CellID:   req.Spec.CellID,
+		Register: func(mux cell.RouteMux) error {
+			mux.Mount("/", handler)
+			return nil
+		},
+	}, nil
+}

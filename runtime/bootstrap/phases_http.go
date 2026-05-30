@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
+	runtimewebhook "github.com/ghbvf/gocell/runtime/webhook"
 )
 
 // phase5BuildRouters builds one Router per declared listener, collects
@@ -54,6 +55,11 @@ func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error
 		return err
 	}
 	groups := b.phase5CollectRouteGroups(s)
+	webhookGroups, err := b.phase5DrainWebhookReceivers(s)
+	if err != nil {
+		return err
+	}
+	groups = append(groups, webhookGroups...)
 	// defense-in-depth: phase0 already validated; re-check after phase4 resolved verifiers
 	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
@@ -402,4 +408,51 @@ func (b *Bootstrap) buildAuthRouterOptions(v kauth.IntentTokenVerifier) ([]route
 	}
 	opts = append(opts, router.WithAuthMetrics(am))
 	return opts, nil
+}
+
+// phase5DrainWebhookReceivers collects all WebhookReceiverRequest entries from
+// cell snapshots and converts them into RouteGroups via
+// [runtimewebhook.BuildRouteGroups].
+//
+// CellID drift check: each request must carry the same cell ID as the snapshot
+// key (mirroring drainCellSubscriptions). Mismatches are a codegen defect.
+//
+// Empty collection is a no-op (returns nil, nil). Non-empty collection
+// requires both webhookSourceStore and webhookClaimer to be configured; if
+// either is nil, the function returns an errcode explaining which option is missing.
+func (b *Bootstrap) phase5DrainWebhookReceivers(s *phaseState) ([]cell.RouteGroup, error) {
+	var reqs []cell.WebhookReceiverRequest
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for _, req := range snap.WebhookReceivers {
+			if req.Spec.CellID != id {
+				return nil, fmt.Errorf(
+					"bootstrap: cell %s webhook receiver drift: declared CellID=%q but snapshot owner=%q"+
+						" (codegen should inject cellID from cell metadata; check cellgen + contractgen templates)",
+					id, req.Spec.CellID, id)
+			}
+			reqs = append(reqs, req)
+		}
+	}
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if b.webhookSourceStore == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: webhook receivers declared but no source store configured; "+
+				"add WithWebhookSourceStore to bootstrap options")
+	}
+	if b.webhookClaimer == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: webhook receivers declared but no claimer configured; "+
+				"add WithWebhookClaimer to bootstrap options")
+	}
+	groups, err := runtimewebhook.BuildRouteGroups(reqs, b.webhookSourceStore, b.webhookClaimer, b.clock)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: build webhook route groups: %w", err)
+	}
+	return groups, nil
 }

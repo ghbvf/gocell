@@ -83,18 +83,156 @@ private construction, following the SPAN-SETATTR-HOLDER-SEAL #851 precedent):
 |--------|-----------|--------|
 | Forged payload (no secret) | HMAC over full signed content; `hmac.Equal` | ✅ |
 | Algorithm downgrade (SHA-1) | single legal `Algorithm`; `Validate` rejects others | ✅ |
-| Replay of a captured valid delivery | bidirectional timestamp tolerance window | ⚠️ partial (bounded to ±tolerance; full idempotency dedupe is the receiver's Claimer, PR-3/PR-6) |
+| Replay of a captured valid delivery | timestamp tolerance window (bounds replay to ±5min) + receiver Claimer two-phase dedupe (key `webhook:{sourceID}:{deliveryID}`, TTL 24h); 409 on concurrent in-flight, Release on handler panic | ✅ (PR-3 #1158 landed — see Amendment below) |
 | Timing side-channel on signature compare | `hmac.Equal` constant-time; A2 AST lock | ✅ |
 | Secret leak via logs/spans/error text | unexported secret + no getter + `Source.LogValue` mask + redaction key set + archtest B6 | ✅ |
 | Secret mutation after construction | `NewSource` defensive copy | ✅ |
 | Body-shifting between signed-content fields | MAC covers the whole string; fields never parsed back | ✅ (no forgery without the secret) |
+| Source enumeration (probing unknown sourceID) | unknown source and signature failure both return 401 (ErrWebhookInvalidSignature); sourceId only in server-side Internal, never in wire details | ✅ (PR-3 #1158 landed — see Amendment below) |
+| Oversized body DoS | `http.MaxBytesReader` enforced before verify; 413 ErrWebhookBodyTooLarge | ✅ (PR-3 #1158 landed — see Amendment below) |
 
 ## Consequences
 
-- The receiver (PR-3) and dispatcher (PR-5) consume `Verifier`/`Signer` as the
-  only signing surface; they cannot introduce a second algorithm.
-- Secret rotation is supported on the verify side (multi-token header); persistent
-  multi-secret sources are a follow-up.
+The receiver (PR-3, now landed as #1158) and dispatcher (PR-5) consume
+`Verifier`/`Signer` as the only signing surface; they cannot introduce a second
+algorithm. The receiver enforces idempotency via a built-in `kernel/idempotency.Claimer`
+(two-phase Claim/Commit/Release); cell handlers do not write their own dedupe.
+Secret rotation is supported on the verify side (multi-token header); persistent
+multi-secret sources are a follow-up.
+
+## Amendment 2026-05-31: receiver runtime (PR-3, #1158)
+
+- Date: 2026-05-31
+- Context: PR-3 #1158 — receiver runtime (`runtime/webhook`) landed
+
+### 1. HTTP status code mapping (receive path)
+
+| Condition | Status | Error sentinel |
+|-----------|--------|----------------|
+| Missing or malformed signature/timestamp/delivery-id header | 400 | `ErrWebhookInvalidHeader` |
+| Signature verification failure | 401 | `ErrWebhookInvalidSignature` |
+| Unknown sourceId (unregistered source) | 401 | `ErrWebhookInvalidSignature` (unified — see §2) |
+| Timestamp outside tolerance window (replay) | 401 | `ErrWebhookTimestampExpired` |
+| Body exceeds configured limit | 413 | `ErrWebhookBodyTooLarge` |
+| Idempotent duplicate (ClaimDone — already processed) | 200 | — (silent success, safe for sender retry) |
+| Concurrent in-flight (ClaimBusy — another goroutine holds lease) | 409 | `ErrWebhookConflict` |
+| Handler transient error (KindUnavailable / infra fault) | 503 | framework-mapped |
+| Handler permanent error | 500 | framework-mapped |
+
+### 2. Source enumeration defense
+
+Unknown sourceId and signature verification failure are **unified to 401**
+(`ErrWebhookInvalidSignature`) on the wire. The distinction is intentionally
+erased: a probe that cycles through guessed source IDs receives the same
+response as a valid source ID with an invalid signature, preventing enumeration
+of registered sources.
+
+`sourceId` is recorded only via `errcode.WithInternal` (server-side slog),
+never in wire `details`. This aligns with the existing §Decision 5 secret-leak
+defense: the `Secret-leak` threat row in the Threat model remains ✅
+(no new leak vector introduced).
+
+### 3. Capability-token pipeline (AI-robust: Hard downstream / Medium upstream)
+
+The receiver pipeline enforces `verify → claim → invokeHandler` ordering at the
+Go type system level using unexported capability tokens:
+
+- `verified` token is produced only by `verify()` (requires valid signature).
+- `claimed` token is produced only by `claim()`, which requires a `verified`
+  argument.
+- `invokeHandler()` accepts only a `claimed` argument.
+
+Skipping `verify` or `claim`, or reordering the steps, is a **compile error**
+for any code in the `runtime/webhook` package. Package-external code cannot
+construct `verified` or `claimed` at all (unexported types — type-system Hard
+upstream for external callers).
+
+**AI-robust rating:**
+
+| Direction | Form | Rating |
+|-----------|------|--------|
+| Upstream (package-external) | `verified`/`claimed` are unexported types; package-external construction is a compile error | **Hard** |
+| Upstream (package-internal) | archtest `WEBHOOK-RECEIVER-PIPELINE-01` A1 locks struct field holder set for both token types; new in-package structs holding a token are caught at CI | **Medium** |
+| Downstream (callsite) | `WEBHOOK-RECEIVER-PIPELINE-01` A2 locks `invokeHandler` callsites to require a `claimed` argument; A3 locks `claim` callsites to require a `verified` argument | **Hard** |
+
+The package-internal Medium upstream axis follows the same permanent Go-language
+ceiling as `OUTBOX-ENTRY-SEALED-CONSTRUCTION-01` (#1282 won't-do). Tracking
+issue for explicit Hard-ization: **gh #1321** (sealed unexported interface +
+private constructor, following #851/#1282 precedent). The funnel godoc names
+this issue.
+
+### 4. Built-in two-phase idempotency (Claimer)
+
+The receiver runtime embeds `kernel/idempotency.Claimer` with key
+`webhook:{sourceID}:{deliveryID}` and 24h TTL. The pipeline is:
+
+```
+Claim (get lease) → verify signature → invokeHandler → Commit
+                                    ↘ Release (on panic / transient error)
+```
+
+**Rationale vs. Stripe/Svix/GitHub OSS approach:** OSS webhook libraries
+(go-github, svix-go) leave deduplication to the application layer (e.g., Svix
+docs recommend consumer-side `webhook-id + Redis/24h`). GoCell's receiver is a
+framework component, not a library: embedding Claimer matches GoCell's own
+event-consumer pattern (`ConsumerBase`) and delivers three structural benefits:
+
+1. **409 on concurrent in-flight** — triggers sender back-off, preventing
+   duplicate processing races.
+2. **Release on handler panic** — prevents lease deadlock that would otherwise
+   permanently block re-delivery.
+3. **Cell handlers are dedupe-free** — cells do not write their own idempotency
+   logic for incoming webhooks, consistent with the event-consumer contract.
+
+**Threat model impact:** `Replay of a captured valid delivery` row updated from
+⚠️ partial to ✅ (see Threat model table above). The ±5min timestamp window
+was already present in PR-1; the Claimer adds the second layer — deliveries that
+arrive within the tolerance window but are exact repeats (same `deliveryID`) are
+caught by the Claimer's 24h dedupe window and returned 200 to the sender.
+
+### 5. Body limiting
+
+`http.MaxBytesReader` is applied to the request body **before** any read,
+capping at `ReceiverSpec.MaxBodyBytes` (default configurable per receiver via
+cellgen-baked `webhook.ReceiverSpec`). Any read beyond the limit returns 413
+`ErrWebhookBodyTooLarge`.
+
+Rationale vs. alternatives: `io.LimitReader` (used by go-github) silently
+truncates — the truncated body would produce a signature mismatch and return
+401, hiding the real cause. `http.MaxBytesReader` returns an explicit error
+that the receiver maps to 413, making the limit visible to the sender.
+
+### 6. Configuration single source (cellgen-baked ReceiverSpec)
+
+Receiver runtime configuration (`pathPattern`, `headers`, `tolerance`,
+`maxBodyBytes`) is baked into `webhook.ReceiverSpec` literals by cellgen from
+`contract.yaml` at code-generation time, analogous to how event-consumer
+`Topic` is baked from `contractUsages[role=subscribe]`. There is no runtime
+config file read or environment variable lookup for these values; they are
+compile-time constants from the cell's perspective.
+
+This means a cell cannot accidentally use a stale or environment-specific
+receiver configuration: the contract.yaml is the single source of truth,
+and a mismatch between contract and runtime requires a regenerate + rebuild.
+
+### Threat model re-evaluation (per ai-robust.md §ADR amendment 落地必查)
+
+All rows re-evaluated against the PR-3 implementation:
+
+| Threat | Pre-PR-3 status | Post-PR-3 status | Change rationale |
+|--------|----------------|-----------------|-----------------|
+| Forged payload (no secret) | ✅ | ✅ | No change. PR-3 only adds HTTP transport; HMAC core unchanged. |
+| Algorithm downgrade (SHA-1) | ✅ | ✅ | No change. `Algorithm.Validate` not touched. |
+| Replay of a captured valid delivery | ⚠️ partial | ✅ | **Upgraded.** PR-3 lands the Claimer (key `webhook:{sourceID}:{deliveryID}`, 24h TTL). Timestamp window was already in PR-1; Claimer adds within-window exact-duplicate dedupe. Both layers now active. |
+| Timing side-channel on signature compare | ✅ | ✅ | No change. `hmac.Equal` path unchanged; A2 archtest still holds. |
+| Secret leak via logs/spans/error text | ✅ | ✅ | PR-3 receiver adds `sourceId` to `errcode.WithInternal` only; wire `details` is empty for 5xx by framework strip, and the 401 path carries no details either. No new leak vector. |
+| Secret mutation after construction | ✅ | ✅ | `NewSource` defensive copy unchanged. |
+| Body-shifting between signed-content fields | ✅ | ✅ | MAC covers whole string; receiver reads body as bytes before passing to verifier, no intermediate parse. |
+| Source enumeration (new row) | n/a | ✅ | PR-3 unifies unknown-source and bad-signature to the same 401 code and message. sourceId confined to Internal. Covered by §2 above. |
+| Oversized body DoS (new row) | n/a | ✅ | PR-3 applies `http.MaxBytesReader` before any body read. Covered by §5 above. |
+
+No previously-✅ row regressed. Two new threats (source enumeration, body DoS)
+are added and immediately closed by PR-3 controls.
 
 ## References
 
@@ -102,4 +240,4 @@ private construction, following the SPAN-SETATTR-HOLDER-SEAL #851 precedent):
 - Stripe webhook signatures: https://github.com/stripe/stripe-go/blob/master/webhook/client.go
 - ADR `202605051730-adr-errcode-message-pii-safety.md` (Message/Details/Internal redaction)
 - ADR `202604242030-adr-kernel-wrapper-contract-observability.md` §8 (span/error redaction)
-- ai-robust.md §Funnel 双向锁评级; gh #1243 (upstream Hard-ization), #851 (precedent)
+- ai-robust.md §Funnel 双向锁评级; gh #1243 (upstream Hard-ization A3), #851 (precedent), #1321 (pipeline token Hard-ization), #1282 (Go-language ceiling precedent)

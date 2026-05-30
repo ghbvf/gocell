@@ -36,9 +36,15 @@ func (c *HooksCell) Init(ctx context.Context, reg cell.Registrar) error {
 	}
 
 	if err := reg.RegisterWebhookReceiver(webhook.ReceiverSpec{
-		ContractID: "webhook.stripe.payment-events.v1",
-		SourceID:   "stripe",
-		CellID:     "hooks",
+		ContractID:       "webhook.stripe.payment-events.v1",
+		SourceID:         "stripe",
+		CellID:           "hooks",
+		PathPattern:      "/api/webhooks/stripe/payment-events",
+		DeliveryIDHeader: "svix-id",
+		TimestampHeader:  "svix-timestamp",
+		SignatureHeader:  "svix-signature",
+		ToleranceSeconds: 300,
+		MaxBodyBytes:     1048576,
 	}, c.stripeSvc.HandleStripeEvent); err != nil {
 		return fmt.Errorf("hooks: webhook-receive webhook.stripe.payment-events.v1: %w", err)
 	}

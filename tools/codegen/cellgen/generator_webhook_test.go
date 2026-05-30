@@ -105,8 +105,25 @@ func buildWebhookSyntheticProject() *metadata.ProjectMeta {
 		},
 	}
 	stripeContract := &metadata.ContractMeta{
-		ID:   "webhook.stripe.payment-events.v1",
-		Kind: "webhook",
+		ID:        "webhook.stripe.payment-events.v1",
+		Kind:      "webhook",
+		Direction: "inbound",
+		Signature: &metadata.WebhookSignatureMeta{
+			Algorithm:        "hmac-sha256",
+			DeliveryIDHeader: "svix-id",
+			TimestampHeader:  "svix-timestamp",
+			SignatureHeader:  "svix-signature",
+			ToleranceSeconds: 300,
+		},
+		Endpoints: metadata.EndpointsMeta{
+			Inbound: &metadata.WebhookInboundMeta{
+				PathPattern: "/api/webhooks/stripe/payment-events",
+				SourceID:    "stripe",
+			},
+		},
+		Payload: &metadata.WebhookPayloadMeta{
+			MaxBodyBytes: 1048576,
+		},
 	}
 	shopifyContract := &metadata.ContractMeta{
 		ID:   "webhook.shopify.orders.v1",
