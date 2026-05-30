@@ -140,14 +140,27 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // B2-C-09: Payload is scrubbed of sensitive fields via pkg/redaction.RedactPayload
 // before being returned to API consumers.
 //
-// Principal exposure (issue #1229 §4): SubjectID and OccurredAt are surfaced
-// (additive, omitempty — empty/zero for rows predating PR-A2). SessionID is
-// deliberately NOT exposed (it matches pkg/redaction's sensitive-key set —
-// a live-session credential-adjacent token). TenantID is not exposed either
-// (no producer source on develop). Cross-tenant reads are structurally
-// impossible: the contract declares no tenantId query parameter, so there is
-// no typed surface through which a caller could request another tenant — tenant
-// scoping is ctx-derived only (type-system Hard isolation by absence).
+// Principal/Observability exposure (issue #1229 §4 + #1219): SubjectID,
+// CorrelationID and OccurredAt are surfaced (additive, omitempty — empty/zero
+// for rows predating PR-A2). CorrelationID is an opaque cross-cell correlation
+// id (NOT in pkg/redaction's sensitive-key set), so projecting it is safe and
+// lets consumers stitch an audited action back to its originating request.
+//
+// SessionID is deliberately NOT exposed (it matches pkg/redaction's
+// sensitive-key set — a live-session credential-adjacent token; RedactPayload
+// only scrubs the nested `payload` object, NOT top-level DTO fields, so adding
+// SessionID here would emit a raw token). The audit-domain codegen funnel
+// (contractgen, AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01) is the upstream Hard
+// backstop: it rejects any sensitive-key field in an audit wire-out schema at
+// generation time, so SessionID cannot re-enter ResponseDataItem via schema.
+//
+// TenantID is not exposed either. The structural guarantee is that
+// ResponseDataItem has no tenantId field at all (type-system absence), so it
+// cannot be projected without a schema change — which the audit-domain funnel
+// would re-review. The field is also empty in practice: no producer writes
+// principal.TenantID on develop (multi-tenancy epic #1296). Cross-tenant reads
+// are likewise impossible: the contract declares no tenantId query parameter,
+// so tenant scoping is ctx-derived only (isolation by absence).
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond
@@ -158,13 +171,14 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
 	}
 	return &auditlist.ResponseDataItem{
-		ID:         e.ID,
-		EventID:    e.EventID,
-		EventType:  e.EventType,
-		ActorID:    e.ActorID,
-		SubjectID:  e.SubjectID,
-		OccurredAt: occurredAt,
-		Timestamp:  e.Timestamp.Format(time.RFC3339Nano),
-		Payload:    json.RawMessage(redaction.RedactPayload(e.Payload)),
+		ID:            e.ID,
+		EventID:       e.EventID,
+		EventType:     e.EventType,
+		ActorID:       e.ActorID,
+		SubjectID:     e.SubjectID,
+		CorrelationID: e.CorrelationID,
+		OccurredAt:    occurredAt,
+		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
+		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
 }

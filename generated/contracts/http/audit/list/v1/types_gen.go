@@ -35,11 +35,12 @@ type Response struct {
 
 // ResponseDataItem is a generated DTO for contract http.audit.list.v1.
 type ResponseDataItem struct {
-	ID        string `json:"id"`
-	EventID   string `json:"eventId"`
-	EventType string `json:"eventType"`
-	ActorID   string `json:"actorId"`
-	SubjectID string `json:"subjectId,omitempty"`
+	ID            string `json:"id"`
+	EventID       string `json:"eventId"`
+	EventType     string `json:"eventType"`
+	ActorID       string `json:"actorId"`
+	SubjectID     string `json:"subjectId,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
 	// format: date-time
 	OccurredAt string `json:"occurredAt,omitempty"`
 	// format: date-time
