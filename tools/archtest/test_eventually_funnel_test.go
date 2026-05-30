@@ -793,10 +793,10 @@ func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
 		ruleID                = "TEST-DETERMINISTIC-NO-TIMEOUT-PARAM-01"
 	)
 	// Module-path-agnostic (ARCHTEST-MODULE-PATH-FUNNEL-01 / #1302): derive the
-	// testwait import path from PlatformModulePath via PlatformPkg instead of
-	// hard-coding "github.com/ghbvf/gocell/..." so an external Cell repo can run
-	// this rule against its own module.
-	testwaitPkgPath := PlatformPkg("pkg/testutil/testwait")
+	// testwait import path from the single sanctioned PlatformModulePath const
+	// (external.go) instead of hard-coding "github.com/ghbvf/gocell/..." so an
+	// external Cell repo can run this rule against its own module.
+	testwaitPkgPath := PlatformModulePath + "/pkg/testutil/testwait"
 
 	var (
 		sigFound         bool
