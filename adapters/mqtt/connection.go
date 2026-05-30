@@ -427,8 +427,8 @@ func (c *Connection) onConnectError(err error) {
 
 	switch class {
 	case classBootstrapFatal:
-		permErr := buildConnackError(code, err,
-			"mqtt: connection rejected (fail-fast)")
+		permErr := errcode.New(errcode.KindInternal, code,
+			"mqtt: connection rejected (fail-fast)", buildConnackOpts(err)...)
 		slog.Error("mqtt: bootstrap-fatal connect error",
 			slog.String("client_id", c.cfg.ClientID.String()),
 			slog.String("errcode", string(code)),
@@ -437,8 +437,8 @@ func (c *Connection) onConnectError(err error) {
 		c.emitFirstOutcome(bootstrapOutcome{permErr: permErr})
 
 	case classPermanentRetain:
-		permErr := buildConnackError(code, err,
-			"mqtt: connection rejected (permanent; retrying until operator fix)")
+		permErr := errcode.New(errcode.KindInternal, code,
+			"mqtt: connection rejected (permanent; retrying until operator fix)", buildConnackOpts(err)...)
 		slog.Warn("mqtt: permanent connect error; will retry until operator fixes",
 			slog.String("client_id", c.cfg.ClientID.String()),
 			slog.String("errcode", string(code)),
@@ -477,15 +477,16 @@ func isAuthRelatedConnackCode(code byte) bool {
 	return code == 0x86 || code == 0x87 || code == 0x8C
 }
 
-// buildConnackError wraps a CONNACK rejection into an errcode.Error with
-// structured diagnostics (C5 F9 — reason code/name visibility). For auth-related
-// reason codes (0x86/0x87/0x8C) the reason name is moved to the Internal channel
-// so it does not aid attacker enumeration of "credentials wrong vs authz missing";
+// buildConnackOpts returns structured detail/internal options for a CONNACK
+// rejection (C5 F9 — reason code/name visibility). For auth-related reason
+// codes (0x86/0x87/0x8C) the reason name is moved to the Internal channel so
+// it does not aid attacker enumeration of "credentials wrong vs authz missing";
 // only the numeric reasonCode is kept on wire. For all other codes, reasonName
 // stays in Public details for operator diagnostics.
-// The cause is preserved via WithCause for errors.Is/As chains; redaction
-// happens at logging boundaries (slog), not here.
-func buildConnackError(code errcode.Code, cause error, message string) error {
+// The cause is preserved via WithInternal for diagnostics; redaction happens
+// at logging boundaries (slog), not here. The message const literal is
+// provided by the caller at the errcode.New callsite (MESSAGE-CONST-LITERAL-01).
+func buildConnackOpts(cause error) []errcode.Option {
 	opts := []errcode.Option{}
 	var connackErr *autopaho.ConnackError
 	if errors.As(cause, &connackErr) {
@@ -500,7 +501,7 @@ func buildConnackError(code errcode.Code, cause error, message string) error {
 			errcode.InternalAttr("_", redactErr(cause).Error()),
 		))
 	}
-	return errcode.New(errcode.KindInternal, code, message, opts...)
+	return opts
 }
 
 // onServerDisconnect records a server-initiated DISCONNECT for diagnostics.
