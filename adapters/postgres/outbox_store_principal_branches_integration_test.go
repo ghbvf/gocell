@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
@@ -251,6 +253,9 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 		wantOccurredAt := base // PG must drop the sub-µs tail
 		createdAt := base.Add(occurredAtBranchSkew)
 
+		// observability is nullable (migration 013) and irrelevant to this case,
+		// so the INSERT omits it (column set intentionally narrower than
+		// insertCorruptOutboxRow's, which must plant all three JSONB columns).
 		const insertSQL = `INSERT INTO outbox_entries
 			(id, aggregate_id, aggregate_type, event_type, topic, payload,
 			 metadata, principal, occurred_at, created_at, status, attempts)
@@ -290,7 +295,14 @@ func TestPGOutboxStore_OccurredAt_PrecisionAndConstraint(t *testing.T) {
 		_, err := pool.DB().Exec(ctx, insertSQL,
 			"occurred-missing", "user.login", "user.login", []byte(`{"action":"login"}`))
 		require.Error(t, err, "omitting occurred_at must violate the NOT NULL constraint")
-		assert.Contains(t, strings.ToLower(err.Error()), "occurred_at",
-			"the constraint error should name the occurred_at column")
+		// Assert the structured PG error, not a substring: SQLSTATE 23502
+		// (not_null_violation) + the column name are locale-stable, unlike the
+		// rendered message text.
+		var pgErr *pgconn.PgError
+		require.ErrorAs(t, err, &pgErr, "the failure must be a structured PG error")
+		assert.Equal(t, "23502", pgErr.SQLState(),
+			"omitting a NOT NULL column must raise not_null_violation (23502)")
+		assert.Equal(t, "occurred_at", pgErr.ColumnName,
+			"the not_null_violation must name the occurred_at column")
 	})
 }
