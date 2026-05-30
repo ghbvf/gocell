@@ -392,63 +392,112 @@ func TestIntegration_Subscriber_Disposition3State(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			coll, sub := itestNewSubWithCollector(t, "sub-disp-"+tc.name)
-			settlement := &recordingSettlement{}
-			// Per-subtest topic prefix makes each subtest's filter disjoint, so
-			// shared-subscription fanout cannot deliver one subtest's PUBLISH to
-			// another (mirrors the unit DispositionMatrix fix). Consumer group is
-			// still unique per subtest as a second layer of isolation.
-			prefix := "itest/disp/" + tc.name
-			filter := prefix + "/+"
-			subscription := itestSubscription(filter, "disp-"+tc.name+"-"+uuid.NewString())
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go func() {
-				_ = sub.Subscribe(ctx, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-					return tc.result, settlement
-				})
-			}()
-			select {
-			case <-sub.Ready(subscription):
-			case <-time.After(testtime.D10s):
-				t.Fatal("subscribe not ready")
-			}
-			topic := prefix + "/" + uuid.NewString()
-			itestPublish(t, sub.conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
-
-			// Wait for the TERMINAL settlement, not just "failure recorded":
-			// A4 (#1142) moved releaseSettlement to AFTER routeDeadLetter +
-			// ackPoison (release the claim only once the broker disposition is
-			// final), so RecordConsumeFailure (early) no longer implies the claim
-			// has been released. With a real broker the $dead round-trip widens
-			// that window — poll until success (ack) or release (requeue/reject)
-			// reaches the expected terminal count.
-			deadline := time.Now().Add(testtime.D10s)
-			for time.Now().Before(deadline) {
-				s, f, _ := coll.snapshot()
-				_, rel := settlement.counts()
-				if s >= tc.wantSuccess && rel >= tc.wantRelease && (tc.wantReason == "" || f >= 1) {
-					break
-				}
-				time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
-			}
-			success, failure, reason := coll.snapshot()
-			commit, release := settlement.counts()
-			if success != tc.wantSuccess {
-				t.Errorf("success = %d, want %d", success, tc.wantSuccess)
-			}
-			if commit != tc.wantCommit {
-				t.Errorf("commit = %d, want %d", commit, tc.wantCommit)
-			}
-			if release != tc.wantRelease {
-				t.Errorf("release = %d, want %d", release, tc.wantRelease)
-			}
-			if tc.wantReason != "" {
-				if failure < 1 || reason != tc.wantReason {
-					t.Errorf("failure=%d reason=%q, want reason %q", failure, reason, tc.wantReason)
-				}
-			}
+			itestRunDispositionCase(t, tc.name, tc.result, tc.wantSuccess, tc.wantReason, tc.wantCommit, tc.wantRelease)
 		})
+	}
+}
+
+// itestRunDispositionCase runs a single disposition sub-case for
+// TestIntegration_Subscriber_Disposition3State: it builds the subscriber,
+// publishes one message, polls for the terminal settlement, and asserts all
+// expected counters.
+func itestRunDispositionCase(
+	t *testing.T,
+	name string,
+	result outbox.HandleResult,
+	wantSuccess int,
+	wantReason ConsumeFailureReason,
+	wantCommit int,
+	wantRelease int,
+) {
+	t.Helper()
+	coll, sub := itestNewSubWithCollector(t, "sub-disp-"+name)
+	settlement := &recordingSettlement{}
+	// Per-subtest topic prefix makes each subtest's filter disjoint, so
+	// shared-subscription fanout cannot deliver one subtest's PUBLISH to
+	// another (mirrors the unit DispositionMatrix fix). Consumer group is
+	// still unique per subtest as a second layer of isolation.
+	prefix := "itest/disp/" + name
+	filter := prefix + "/+"
+	subscription := itestSubscription(filter, "disp-"+name+"-"+uuid.NewString())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = sub.Subscribe(ctx, subscription, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			return result, settlement
+		})
+	}()
+	itestWaitSubscribeReady(t, sub, subscription)
+	topic := prefix + "/" + uuid.NewString()
+	itestPublish(t, sub.conn, topic, itestEnvelope(t, topic, []byte(`{"k":"v"}`)))
+	itestPollDispositionSettlement(t, coll, settlement, wantSuccess, wantReason, wantRelease)
+	itestAssertDispositionCounts(t, coll, settlement, wantSuccess, wantReason, wantCommit, wantRelease)
+}
+
+// itestWaitSubscribeReady blocks until sub reports Ready for subscription or
+// the 10-second deadline is exceeded.
+func itestWaitSubscribeReady(t *testing.T, sub *Subscriber, subscription outbox.Subscription) {
+	t.Helper()
+	select {
+	case <-sub.Ready(subscription):
+	case <-time.After(testtime.D10s):
+		t.Fatal("subscribe not ready")
+	}
+}
+
+// itestPollDispositionSettlement polls until the collector and settlement reach
+// the expected terminal counts or the 10-second deadline is exceeded.
+// A4 (#1142) moved releaseSettlement to AFTER routeDeadLetter + ackPoison
+// (release the claim only once the broker disposition is final), so
+// RecordConsumeFailure (early) no longer implies the claim has been released.
+// With a real broker the $dead round-trip widens that window.
+func itestPollDispositionSettlement(
+	t *testing.T,
+	coll *recordingSubCollector,
+	settlement *recordingSettlement,
+	wantSuccess int,
+	wantReason ConsumeFailureReason,
+	wantRelease int,
+) {
+	t.Helper()
+	deadline := time.Now().Add(testtime.D10s)
+	for time.Now().Before(deadline) {
+		s, f, _ := coll.snapshot()
+		_, rel := settlement.counts()
+		if s >= wantSuccess && rel >= wantRelease && (wantReason == "" || f >= 1) {
+			break
+		}
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep poll-loop: real broker delivery latency
+	}
+}
+
+// itestAssertDispositionCounts reads the final snapshot from coll and settlement
+// and asserts all expected counters match.
+func itestAssertDispositionCounts(
+	t *testing.T,
+	coll *recordingSubCollector,
+	settlement *recordingSettlement,
+	wantSuccess int,
+	wantReason ConsumeFailureReason,
+	wantCommit int,
+	wantRelease int,
+) {
+	t.Helper()
+	success, failure, reason := coll.snapshot()
+	commit, release := settlement.counts()
+	if success != wantSuccess {
+		t.Errorf("success = %d, want %d", success, wantSuccess)
+	}
+	if commit != wantCommit {
+		t.Errorf("commit = %d, want %d", commit, wantCommit)
+	}
+	if release != wantRelease {
+		t.Errorf("release = %d, want %d", release, wantRelease)
+	}
+	if wantReason != "" {
+		if failure < 1 || reason != wantReason {
+			t.Errorf("failure=%d reason=%q, want reason %q", failure, reason, wantReason)
+		}
 	}
 }
 

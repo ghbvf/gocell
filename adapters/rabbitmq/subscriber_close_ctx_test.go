@@ -394,7 +394,18 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	assert.NoError(t, err, "Close must return nil when handler completes before ctx deadline")
 }
 
-// TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg: context.Background() + 150ms handler → nil.
+// TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg: context.Background() → Close blocks
+// until the in-flight handler completes, then returns nil.
+//
+// Deterministic design (no wall-clock sleep or lower-bound assertion):
+//  1. Handler blocks on <-release until the test unlocks it.
+//  2. entered is closed when the handler starts, so the test knows the handler
+//     is genuinely in-flight before calling Close.
+//  3. Close is started in a goroutine; closeReturned is closed when it returns.
+//  4. Before releasing the handler the test asserts Close has NOT returned yet
+//     (non-blocking select on closeReturned), proving Close actually blocks.
+//  5. After close(release) the test uses testwait.Deterministic to wait for
+//     closeReturned — deterministic, no race window.
 func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -404,8 +415,12 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
 	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(testtime.D150ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
+		close(entered)
+		<-release
 		return outbox.Ack()
 	})
 
@@ -421,7 +436,9 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "nodeadline.topic", CellID: "test-cell"}, handler)
 	}()
 
-	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
+	// Wait until the handler is genuinely in-flight.
+	testwait.Deterministic(t, entered, "handler-entered")
+
 	cancel()
 
 	select {
@@ -430,13 +447,25 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 		t.Fatal("Subscribe did not return")
 	}
 
-	start := time.Now()
-	err := sub.Close(context.Background())
-	elapsed := time.Since(start)
+	closeReturned := make(chan struct{})
+	var closeErr error
+	go func() {
+		closeErr = sub.Close(context.Background())
+		close(closeReturned)
+	}()
 
-	assert.NoError(t, err, "Close with Background ctx must wait indefinitely and return nil")
-	assert.GreaterOrEqual(t, elapsed, testtime.SlowPoll,
-		"Close with Background ctx must have actually waited for handler; got %s", elapsed)
+	// Prove Close is blocking: it must not have returned before we release the handler.
+	select {
+	case <-closeReturned:
+		t.Fatal("Close returned before handler released")
+	default:
+	}
+
+	// Release the handler, then wait deterministically for Close to finish.
+	close(release)
+	testwait.Deterministic(t, closeReturned, "Close with Background ctx must return after handler released")
+
+	assert.NoError(t, closeErr, "Close with Background ctx must return nil")
 }
 
 // TestSubscriber_Reconnect_WaitsForInflightBeforeClose — A19 core regression test.

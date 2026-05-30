@@ -56,6 +56,11 @@ var _ ConnectionCollector = (*providerConnectionCollector)(nil)
 // passed to any of the three NewProvider*Collector constructors.
 const errProviderRequired = "mqtt: metrics.Provider is required"
 
+// helpCellLabel is the common suffix appended to metric Help strings to document
+// that the "cell" label is bound at construction time (registration-time
+// enumerated, not derived from request context).
+const helpCellLabel = "Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx)."
+
 // NewProviderConnectionCollector registers mqtt_reconnect_total and
 // mqtt_subscribe_failed_total on p and returns a ConnectionCollector bound to
 // cellID. cellID becomes the "cell" label.
@@ -84,7 +89,7 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 
 	reconnect, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "mqtt_reconnect_total",
-		Help:       "Total MQTT reconnect events observed by the adapter, by cell.",
+		Help:       "Total MQTT reconnect events observed by the adapter. " + helpCellLabel,
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
@@ -97,7 +102,7 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 		Name: "mqtt_subscribe_failed_total",
 		Help: "Total number of receive-path SUBSCRIBE failures (initial SUBACK rejection or reconnect re-arm), " +
 			"classified by reason. reason ∈ {suback_reject, transport} — closed set; alerting rules can rely on " +
-			"the literals. Label: cell = construction-time cell identifier.",
+			"the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
@@ -256,7 +261,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	publishTotal, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_total",
 		Help: "Total number of MQTT publish attempts that completed successfully (broker PUBACK received). " +
-			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
@@ -270,7 +275,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		Help: "Total number of MQTT publish attempts that failed, classified by reason. " +
 			"reason ∈ {payload_too_large, closed, puback_timeout, context_canceled, publish_error, " +
 			"topic_outside_namespace, rate_limited, not_authorized, payload_format_invalid, rejected} — " +
-			"closed set; alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+			"closed set; alerting rules can rely on the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
@@ -282,8 +287,7 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 	ackDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name: "mqtt_publish_ack_duration_seconds",
 		Help: "End-to-end MQTT publish ack round-trip duration in seconds, from Publish() call to broker PUBACK. " +
-			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
-			"Label: cell = construction-time cell identifier.",
+			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " + helpCellLabel,
 		LabelNames: []string{"cell"},
 		Buckets:    ackDurationBuckets,
 	})
@@ -443,21 +447,21 @@ var (
 	subConsumeTotalOpts = metrics.CounterOpts{
 		Name: "mqtt_consume_total",
 		Help: "Total number of MQTT messages consumed successfully (handler Ack + Settlement Commit). " +
-			"Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 	}
 	subConsumeFailedOpts = metrics.CounterOpts{
 		Name: "mqtt_consume_failed_total",
 		Help: "Total number of MQTT messages that did not result in a successful Ack, classified by reason. " +
 			"reason ∈ {unmarshal, reject, requeue, commit_failed, ack_failed, unknown_disposition} — closed set; " +
-			"alerting rules can rely on the literals. Label: cell = construction-time cell identifier.",
+			"alerting rules can rely on the literals. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subDlxTotalOpts = metrics.CounterOpts{
 		Name: "mqtt_dlx_total",
 		Help: "Total number of messages routed to the app-level dead-letter sink $dead/<topic>. " +
 			"reason ∈ {unmarshal, reject} — closed set (poison / permanent failure). " +
-			"Label: cell = construction-time cell identifier.",
+			helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subDlxFailedOpts = metrics.CounterOpts{
@@ -465,14 +469,14 @@ var (
 		Help: "Total number of messages whose dead-letter publish to $dead/<topic> FAILED (topic " +
 			"unmintable or broker publish error); the message was acked-as-poison WITHOUT $dead capture. " +
 			"A distinct, higher-severity signal from mqtt_consume_failed_total: it means the dead-letter " +
-			"sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. Label: cell.",
+			"sink itself is unhealthy. reason ∈ {unmarshal, reject} — closed set. " + helpCellLabel,
 		LabelNames: []string{"cell", "reason"},
 	}
 	subConsumeDurOpts = metrics.HistogramOpts{
 		Name: "mqtt_consume_duration_seconds",
 		Help: "End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. " +
 			"Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. " +
-			"Label: cell = construction-time cell identifier.",
+			helpCellLabel,
 		LabelNames: []string{"cell"},
 		Buckets:    consumeDurationBuckets,
 	}
@@ -503,33 +507,33 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 		return wrapErr
 	}
 
-	// registerCounter registers one CounterVec, tracks it for rollback, and on
-	// failure returns the rollback-wrapped error so the caller just propagates it.
-	registerCounter := func(opts metrics.CounterOpts, wrapCtx string) (metrics.CounterVec, error) {
-		cv, cErr := p.CounterVec(opts)
-		if cErr != nil {
-			return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, wrapCtx, cErr))
-		}
-		registered = append(registered, cv)
-		return cv, nil
+	consumeTotal, cErr := p.CounterVec(subConsumeTotalOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume total counter", cErr))
 	}
+	registered = append(registered, consumeTotal)
 
-	consumeTotal, err := registerCounter(subConsumeTotalOpts, "mqtt: register consume total counter")
-	if err != nil {
-		return nil, err
+	consumeFailed, cErr := p.CounterVec(subConsumeFailedOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume failed counter", cErr))
 	}
-	consumeFailed, err := registerCounter(subConsumeFailedOpts, "mqtt: register consume failed counter")
-	if err != nil {
-		return nil, err
+	registered = append(registered, consumeFailed)
+
+	dlxTotal, cErr := p.CounterVec(subDlxTotalOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx counter", cErr))
 	}
-	dlxTotal, err := registerCounter(subDlxTotalOpts, "mqtt: register dlx counter")
-	if err != nil {
-		return nil, err
+	registered = append(registered, dlxTotal)
+
+	dlxFailed, cErr := p.CounterVec(subDlxFailedOpts)
+	if cErr != nil {
+		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx failed counter", cErr))
 	}
-	dlxFailed, err := registerCounter(subDlxFailedOpts, "mqtt: register dlx failed counter")
-	if err != nil {
-		return nil, err
-	}
+	registered = append(registered, dlxFailed)
 
 	consumeDur, err := p.HistogramVec(subConsumeDurOpts)
 	if err != nil {

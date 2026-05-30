@@ -481,6 +481,40 @@ func TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack(t *testing
 	assert.Equal(t, 4, spy.unregisterCount, "all four counters must be rolled back on histogram failure")
 }
 
+// TestNewProviderSubscriberCollector_CounterRegistrationFailure_RollsBack covers
+// each of the four counter registration error branches: when the Nth CounterVec
+// call fails, the N-1 already-registered counters must be unregistered (rollback)
+// and the error wrapped as an errcode.Error. Pins the per-counter failure paths
+// (consume_total / consume_failed / dlx_total / dlx_failed) that the inlined
+// errcode.Wrap branches introduced.
+func TestNewProviderSubscriberCollector_CounterRegistrationFailure_RollsBack(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name             string
+		failAtCounter    int // 1-based: fail the Nth CounterVec call
+		wantUnregistered int // counters registered before the failing one
+	}{
+		{"consume_total", 1, 0},
+		{"consume_failed", 2, 1},
+		{"dlx_total", 3, 2},
+		{"dlx_failed", 4, 3},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			spy := &subRollbackProvider{failAtCounter: tc.failAtCounter}
+			_, err := NewProviderSubscriberCollector(spy, "testcell")
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, errcode.KindInternal, ec.Kind)
+			assert.Equal(t, tc.wantUnregistered, spy.unregisterCount,
+				"counters registered before the failing one must be rolled back")
+		})
+	}
+}
+
 // TestProviderSubscriberCollector_RecordConsumeSuccess verifies success
 // increments mqtt_consume_total and observes mqtt_consume_duration_seconds.
 func TestProviderSubscriberCollector_RecordConsumeSuccess(t *testing.T) {
@@ -643,16 +677,22 @@ func TestNoopSubscriberCollector_Methods(t *testing.T) {
 // Subscriber test doubles
 // ---------------------------------------------------------------------------
 
-// subRollbackProvider registers the two counters successfully then fails the
-// histogram, recording how many Unregister calls the rollback issues.
+// subRollbackProvider registers counters successfully until a configured failure
+// point, recording how many Unregister calls the rollback issues. failHistogram
+// fails the histogram (after all 4 counters); failAtCounter (1-based, 0=disabled)
+// fails the Nth CounterVec call so the per-counter error branches can be exercised.
 type subRollbackProvider struct {
 	failHistogram   bool
+	failAtCounter   int
 	counterCount    int
 	unregisterCount int
 }
 
 func (p *subRollbackProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	p.counterCount++
+	if p.failAtCounter > 0 && p.counterCount == p.failAtCounter {
+		return nil, errors.New("duplicate counter")
+	}
 	return &subSpyCounterVec{name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
