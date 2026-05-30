@@ -31,8 +31,6 @@ const (
 	phaseDisconnected
 )
 
-const errMsgConnClosed = "mqtt: connection is closed"
-
 // Compile-time interface assertions.
 var (
 	_ lifecycle.ManagedResource = (*Connection)(nil)
@@ -546,7 +544,7 @@ func (c *Connection) Publish(ctx context.Context, t publishableTopic, payload []
 	c.mu.RUnlock()
 	if closed {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			errMsgConnClosed)
+			"mqtt: connection is closed")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, errcode.Wrap(errcode.KindUnavailable, ErrAdapterMQTTPublishCanceled,
@@ -699,7 +697,7 @@ func (c *Connection) Subscribe(ctx context.Context, f subscribableFilter, qos by
 	c.mu.RUnlock()
 	if closed {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			errMsgConnClosed)
+			"mqtt: connection is closed")
 	}
 
 	// Capture the subscription ctx + handler into a dispatch closure so the
@@ -788,7 +786,7 @@ func (c *Connection) ack(pb *paho.Publish) error {
 	c.mu.RUnlock()
 	if closed {
 		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			errMsgConnClosed)
+			"mqtt: connection is closed")
 	}
 	c.subMu.RLock()
 	acker := c.ackClient
@@ -821,7 +819,7 @@ func (c *Connection) Health(_ context.Context) error {
 
 	if c.closed {
 		return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-			errMsgConnClosed)
+			"mqtt: connection is closed")
 	}
 	if c.permanentErr != nil {
 		return c.permanentErr
@@ -920,7 +918,7 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 
 		if closed {
 			return errcode.New(errcode.KindInternal, ErrAdapterMQTTClosed,
-				errMsgConnClosed)
+				"mqtt: connection is closed")
 		}
 		if permErr != nil {
 			return permErr
