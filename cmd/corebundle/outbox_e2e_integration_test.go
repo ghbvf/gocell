@@ -15,7 +15,7 @@
 // so the test passed while production was broken.
 //
 // Current form exercises the REAL production path:
-//   - Publisher passed to buildConfigCoreOpts is the in-memory eventbus `eb`
+//   - Publisher passed to buildConfigCoreCellFromShared is the in-memory eventbus `eb`
 //     (matching cmd/corebundle/main.go:492).
 //   - Subscription is registered on the same `eb` and asserts the received
 //     Entry.Payload parses as a business event (action/key/version), which
@@ -49,7 +49,6 @@ import (
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/auth/authtest"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -63,7 +62,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/keystest"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -83,6 +82,21 @@ const (
 type configEntryUpsertedBusinessPayload struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+}
+
+// buildE2EConfigCoreShared constructs a *composition.SharedDeps suitable for
+// driving the E2E configcore postgres path via buildConfigCoreCellFromShared.
+// It uses the test-default shared (from buildTestSharedDepsAndLocals) and
+// overrides Topology, PG, and EventBus.
+func buildE2EConfigCoreShared(
+	t *testing.T, eb *eventbus.InMemoryEventBus, pgProvider capability.PGProvider,
+) *composition.SharedDeps {
+	t.Helper()
+	shared, _ := buildTestSharedDepsAndLocals(t)
+	shared.Topology = bootstrap.Topology{StorageBackend: "postgres", AdapterMode: ""}
+	shared.PG = pgProvider
+	shared.EventBus = eb
+	return shared
 }
 
 // TestOutboxE2E_PGMode_WriteToSubscribe is the combined A11 + F1 regression
@@ -129,7 +143,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
 	eb := eventbus.New(clock.Real())
 
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	// Set env vars required by platform/configcore.Module().Provide() in postgres mode.
+	// AdapterMode="" (dev) so cursor codec uses the dev default; no GOCELL_CONFIGCORE_CURSOR_KEY needed.
+	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
+	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 
 	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
 	// provisionCapabilities, so we inject a capability.PGProvider directly.
@@ -143,16 +160,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		e2ePool.DB(),
 	)
 
-	modResult, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
-		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PG:               e2ePGProvider,
-		Publisher:        eb,
-		MetricsProvider:  kernelmetrics.NopProvider{},
-		ValueTransformer: crypto.NoopTransformer{},
-	})
-	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	cellAdapterOpts := modResult.CellOptions
-	relayBootstrapOpts := modResult.BootstrapOpts
+	// Build configcore cell via the new platform module path.
+	cfgShared := buildE2EConfigCoreShared(t, eb, e2ePGProvider)
+	cfgResult := buildConfigCoreCellFromShared(t, ctx, cfgShared)
+	relayBootstrapOpts := cfgResult.BootstrapOpts
 	// Relay is registered via independent bootstrap opts, not via a PoolResource.
 	require.NotEmpty(t, relayBootstrapOpts,
 		"A11 regression guard: bootstrapOpts MUST carry relay ManagedResource in PG mode")
@@ -207,18 +218,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	cursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
-	require.NoError(t, err)
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
-
-	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
-	// buildConfigCoreOpts — no separate publisher wiring needed.
-	cellAdapterOpts = append([]configcore.Option{
-		configcore.WithCursorCodec(cursorCodec),
-		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(clock.Real(), cellAdapterOpts...)
 
 	// Wire accesscore with WithBootstrapAuth. The operator calls POST /setup/admin
 	// with Basic Auth to provision the first admin (interactive mode, ADR §D5).
@@ -246,7 +247,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "e2e-test", DurabilityMode: outbox.DurabilityDemo})
-	require.NoError(t, asm.Register(configCell))
+	require.NoError(t, asm.Register(cfgResult.Cell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
 
@@ -269,7 +270,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
 	}
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
-	// buildConfigCoreOpts so its Worker/Close/Checkers lifecycle is independently
+	// buildConfigCoreCellFromShared so its Worker/Close/Checkers lifecycle is independently
 	// managed by bootstrap — not carried inside PoolResource.Worker().
 	app := newBootstrapFromOptions(asm.Clock(), append(baseOpts, relayBootstrapOpts...))
 
@@ -458,7 +459,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	// --- Step 3: Build production-shaped bundle ---
 	eb := eventbus.New(clock.Real())
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+
+	// Set env vars required by platform/configcore.Module().Provide() in postgres mode.
+	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
+	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 
 	// Open a dedicated pool for e2e wiring; pool provisioning has moved to
 	// provisionCapabilities, so we inject a capability.PGProvider directly.
@@ -472,16 +476,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		e2ePool.DB(),
 	)
 
-	modResult, err := buildConfigCoreOpts(clock.Real(), ConfigCoreModuleConfig{
-		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PG:               e2ePGProvider,
-		Publisher:        eb,
-		MetricsProvider:  kernelmetrics.NopProvider{},
-		ValueTransformer: crypto.NoopTransformer{},
-	})
-	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	cellAdapterOpts := modResult.CellOptions
-	relayBootstrapOpts := modResult.BootstrapOpts
+	// Build configcore cell via the new platform module path.
+	cfgShared := buildE2EConfigCoreShared(t, eb, e2ePGProvider)
+	cfgResult := buildConfigCoreCellFromShared(t, ctx, cfgShared)
+	relayBootstrapOpts := cfgResult.BootstrapOpts
 	require.NotEmpty(t, relayBootstrapOpts, "relay bootstrap opts must be non-empty in postgres mode")
 
 	// --- Step 4: Stub internal server —
@@ -532,16 +530,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	cursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
-	require.NoError(t, err)
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
-
-	cellAdapterOpts = append([]configcore.Option{
-		configcore.WithCursorCodec(cursorCodec),
-		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(clock.Real(), cellAdapterOpts...)
 
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
@@ -571,7 +561,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	}, auditcoreLedgerOpts(t, hmacKey)...)...)
 
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "e2e-refetch-test", DurabilityMode: outbox.DurabilityDemo})
-	require.NoError(t, asm.Register(configCell))
+	require.NoError(t, asm.Register(cfgResult.Cell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
 

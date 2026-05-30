@@ -5,8 +5,8 @@
 // outbox.WrapPublisherForCell / outbox.WrapWriterForCell /
 // outbox.WrapEmitterForCell / projection.WrapCheckpointStoreForCell are the
 // sole authorized paths for handing raw infra types into a cell's With* Option. They MUST be called only from
-// composition roots (cmd/* + examples/<demo>/main.go + examples/<demo>/app.go
-// + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
+// composition roots (cmd/* + platform/* + examples/<demo>/main.go +
+// examples/<demo>/app.go + examples/<demo>/run.go) or *_test.go, plus the kernel-internal resolution
 // funnel kernel/outbox/mode_resolver.go (ResolveCellEmitter wraps the
 // kernel-built DirectEmitter/WriterEmitter into a sealed CellEmitter — the
 // analog of demo_tx_runner.go for the emitter leg). Any other
@@ -92,6 +92,13 @@ func isWrapperCallerAllowed(rel string) bool {
 		return true
 	}
 	if strings.HasPrefix(rel, "cmd/") {
+		return true
+	}
+	// platform/<cell> is the composition-root layer that binds platform cells
+	// to adapters behind the public runtime/composition API (#1085
+	// COMPOSITION-MODULE-API-01). It is a sibling composition root to cmd/ —
+	// the cell-module wiring that used to live in cmd/corebundle/*_module.go.
+	if strings.HasPrefix(rel, "platform/") {
 		return true
 	}
 	switch rel {
@@ -182,7 +189,7 @@ func scanWrapperViolationsFromPass(p *Pass) []wrapperViolation {
 // message — drift between code and message becomes structurally
 // impossible.
 func allowlistDescription() string {
-	return "cmd/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
+	return "cmd/* | platform/* | examples/<demo>/main.go | examples/<demo>/app.go | examples/<demo>/run.go | *_test.go | " +
 		"kernel/{persistence,outbox,projection}/cell_marker.go | kernel/outbox/demo_tx_runner.go | " +
 		"kernel/outbox/mode_resolver.go | kernel/outbox/outboxtest/recorder.go | " +
 		"cells/accesscore/{mem,postgres}/bundle.go"
