@@ -364,74 +364,16 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		}
 	}
 
-	if len(observabilityJSON) > maxObservabilityJSONBytes {
-		// Defensive: reject oversized observability payloads to prevent
-		// unbounded allocation from a corrupted row. Field-level limits
-		// in ObservabilityMetadata.Validate cover the producer side; this
-		// guard covers tampered/legacy data on the read side.
-		slog.Warn("outbox store: observability JSON exceeds max size, dropping",
-			slog.String("entry_id", scan.ID),
-			slog.String("event_type", scan.EventType),
-			slog.Int("size", len(observabilityJSON)),
-			slog.Int("max", maxObservabilityJSONBytes))
-	} else if len(observabilityJSON) > 0 {
-		// Decode-validate-assign atomic (PR #582 round-3 review F4):
-		// `json.Unmarshal` is documented to leave partial values in the dst
-		// when it errors mid-decode (e.g., SafeID.UnmarshalJSON rejects field
-		// N while fields 1..N-1 already succeeded). Without a local-var
-		// staging variable, an unsafe row would leak partially-valid
-		// observability into scan.Observability. Mirrors etcd clientv3 /
-		// K8s runtime.Decode pattern.
-		var obs kout.ObservabilityMetadata
-		if err := json.Unmarshal(observabilityJSON, &obs); err != nil {
-			slog.Warn("outbox store: failed to unmarshal observability — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", err))
-			// scan.Observability stays zero-value
-		} else if validateErr := obs.Validate(); validateErr != nil {
-			// Persisted row violates field-size invariants (older row written
-			// before the invariant existed, or schema drift). Drop entirely —
-			// downstream restore must not see partially valid IDs.
-			slog.Warn("outbox store: observability fails validation — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", validateErr))
-			// scan.Observability stays zero-value
-		} else {
-			scan.Observability = obs
-		}
+	if obs, ok := decodeOversizeGuardedJSONB[kout.ObservabilityMetadata](
+		observabilityJSON, maxObservabilityJSONBytes, "observability", scan.ID, scan.EventType,
+	); ok {
+		scan.Observability = obs
 	}
 
-	if len(principalJSON) > maxPrincipalJSONBytes {
-		// Defensive: reject oversized principal payloads to prevent unbounded
-		// allocation from a corrupted or maliciously-crafted row — symmetric
-		// with the observability guard above (issue #1229 review F5).
-		slog.Warn("outbox store: principal JSON exceeds max size, dropping",
-			slog.String("entry_id", scan.ID),
-			slog.String("event_type", scan.EventType),
-			slog.Int("size", len(principalJSON)),
-			slog.Int("max", maxPrincipalJSONBytes))
-	} else if len(principalJSON) > 0 {
-		// Same staged-unmarshal pattern as observability (PR #582 F4): unmarshal
-		// into a local variable first so a partial decode does not leak into
-		// scan.Principal.
-		var principal kout.PrincipalMetadata
-		if err := json.Unmarshal(principalJSON, &principal); err != nil {
-			slog.Warn("outbox store: failed to unmarshal principal — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", err))
-			// scan.Principal stays zero-value
-		} else if validateErr := principal.Validate(); validateErr != nil {
-			slog.Warn("outbox store: principal fails validation — dropping",
-				slog.String("entry_id", scan.ID),
-				slog.String("event_type", scan.EventType),
-				slog.Any("error", validateErr))
-			// scan.Principal stays zero-value
-		} else {
-			scan.Principal = principal
-		}
+	if principal, ok := decodeOversizeGuardedJSONB[kout.PrincipalMetadata](
+		principalJSON, maxPrincipalJSONBytes, "principal", scan.ID, scan.EventType,
+	); ok {
+		scan.Principal = principal
 	}
 
 	entry, err := scan.ToEntry()
@@ -443,6 +385,53 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		Attempts: attempts,
 		LeaseID:  leaseID.String(),
 	}, nil
+}
+
+// decodeOversizeGuardedJSONB decodes a size-capped, Validate-guarded JSONB
+// column into T. It returns (zero, false) — leaving the caller's destination
+// field at its zero value — when raw is empty, exceeds maxBytes, fails to
+// unmarshal, or fails T.Validate(); each rejection is logged at Warn with the
+// entry/event identifiers. The staged decode into a local variable (PR #582
+// round-3 review F4) prevents a partial decode from leaking into the caller's
+// field: json.Unmarshal is documented to leave partial values in the dst when
+// it errors mid-decode (e.g. SafeID.UnmarshalJSON rejects field N while fields
+// 1..N-1 already succeeded). field names the column ("observability" /
+// "principal") for the Warn messages. Mirrors etcd clientv3 / K8s
+// runtime.Decode staged-decode pattern. Shared by the observability and
+// principal read-side guards, which are structurally identical (issue #1229
+// review F5: symmetric size caps prevent unbounded allocation from corrupted
+// or maliciously-crafted rows).
+func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
+	raw []byte, maxBytes int, field, entryID, eventType string,
+) (T, bool) {
+	var zero T
+	if len(raw) == 0 {
+		return zero, false
+	}
+	if len(raw) > maxBytes {
+		slog.Warn("outbox store: "+field+" JSON exceeds max size, dropping",
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Int("size", len(raw)),
+			slog.Int("max", maxBytes))
+		return zero, false
+	}
+	var decoded T
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		slog.Warn("outbox store: failed to unmarshal "+field+" — dropping",
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Any("error", err))
+		return zero, false
+	}
+	if err := decoded.Validate(); err != nil {
+		slog.Warn("outbox store: "+field+" fails validation — dropping",
+			slog.String("entry_id", entryID),
+			slog.String("event_type", eventType),
+			slog.Any("error", err))
+		return zero, false
+	}
+	return decoded, true
 }
 
 // CountPending returns the number of rows in pending status. The count may be

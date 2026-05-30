@@ -39,48 +39,16 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Minimal in-test fakes (will be reused/shared with integration tests in
-// Batch 3 — declared in coordinator_test.go for white-box access to package saga)
-// ---------------------------------------------------------------------------
-
-// fakeTxRunner is a minimal TxRunner that runs fn inline with an
-// after-commit registry installed. Required for driveOne tests.
-type fakeTxRunner struct {
-	err error // if non-nil, RunInTx returns this error (without calling fn)
-}
-
-func (f *fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	if f.err != nil {
-		return f.err
-	}
-	ctx, installed := persistence.WithAfterCommitRegistry(ctx)
-	err := fn(ctx)
-	if err != nil {
-		persistence.TruncateAfterCommitTo(ctx, 0)
-		return err
-	}
-	if installed {
-		persistence.RunAfterCommitHooks(ctx)
-	}
-	return nil
-}
-
-// fakeEmitter records Emit calls; it satisfies koutbox.Emitter.
-type fakeEmitter struct {
-	entries []koutbox.Entry
-	err     error
-}
-
-func (f *fakeEmitter) Emit(_ context.Context, e koutbox.Entry) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.entries = append(f.entries, e)
-	return nil
-}
-
-// ---------------------------------------------------------------------------
 // helpers
+//
+// The saga test suite uses a single set of thread-safe fakes —
+// safeFakeEmitter and safeFakeTxRunner (testfakes_test.go) — for both the
+// single-goroutine driveOne tests here and the concurrent / staged-commit
+// atomicity tests in integration_test.go. They are behavioral supersets of the
+// simple inline fakes they replaced: the mutex is inert when no goroutine
+// races, and the stagedTxState is inert when no stagedJournal is installed (a
+// plain MemJournal Appends directly). There is therefore no second "plain"
+// fake set to drift against.
 // ---------------------------------------------------------------------------
 
 // newFakeClock returns a deterministic FakeClock anchored at a fixed epoch.
@@ -217,8 +185,8 @@ func TestNewCoordinator_NilDeps(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	tests := []struct {
@@ -303,8 +271,8 @@ func TestNewCoordinator_NilClock(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	defer func() {
@@ -324,8 +292,8 @@ func TestNewCoordinator_HappyPath(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	c, err := NewCoordinator(j, tx, em, reg, clk)
@@ -599,7 +567,7 @@ func TestRepoReady_BeforeStart_NotRunning(t *testing.T) {
 	clk := newFakeClock()
 	memJ := newMemJournal(clk)
 	j := &stubRepoProberJournal{MemJournal: memJ}
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -622,7 +590,7 @@ func TestRepoReady_Running_DelegatesToJournal(t *testing.T) {
 		MemJournal: memJ,
 		repoErr:    errors.New("repo down"),
 	}
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -703,7 +671,7 @@ func TestCoordinator_RepoReadinessConformance(t *testing.T) {
 // RepoReady reflects the journal-delegation path rather than the lifecycle gate.
 func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *Coordinator {
 	t.Helper()
-	c, err := NewCoordinator(j, &fakeTxRunner{}, &fakeEmitter{}, newRegistry(), clk)
+	c, err := NewCoordinator(j, newSafeFakeTxRunner(), newSafeFakeEmitter(), newRegistry(), clk)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
@@ -733,8 +701,8 @@ func startRunningCoordinator(t *testing.T, j journal.Journal, clk clock.Clock) *
 func mustCoordinator(t *testing.T, clk clock.Clock) *Coordinator {
 	t.Helper()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 	c, err := NewCoordinator(j, tx, em, reg, clk)
 	if err != nil {
@@ -1006,8 +974,8 @@ type nilJournal struct{ *journal.MemJournal }
 
 func TestNewCoordinator_TypedNilJournal(t *testing.T) {
 	clk := newFakeClock()
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	// Cast a (*nilJournal)(nil) to the journal.Journal interface — typed nil.
@@ -1141,8 +1109,8 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInMemoryRegistry: %v", err)
 	}
-	em := &fakeEmitter{}
-	tx := &fakeTxRunner{}
+	em := newSafeFakeEmitter()
+	tx := newSafeFakeTxRunner()
 
 	cfg := Config{
 		PollInterval:      testtime.D10ms,
@@ -1217,8 +1185,8 @@ func TestDriveOne_StepDeadlineExceeded_MarkExpired(t *testing.T) {
 	}
 
 	// Assert no outbox entry was emitted (timeout path has no step-completed event).
-	if len(em.entries) != 0 {
-		t.Errorf("emitter entries = %d, want 0 on expired saga", len(em.entries))
+	if em.Count() != 0 {
+		t.Errorf("emitter entries = %d, want 0 on expired saga", em.Count())
 	}
 
 	// Step was called once (then returned via ctx.Done()).
@@ -1254,8 +1222,8 @@ func TestNewCoordinator_ConstructsInternalExecutor(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	c, err := NewCoordinator(j, tx, em, reg, clk)
@@ -1281,8 +1249,8 @@ func TestNewCoordinator_ConfigFlowsToExecutor(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	j := newMemJournal(clk)
-	tx := &fakeTxRunner{}
-	em := &fakeEmitter{}
+	tx := newSafeFakeTxRunner()
+	em := newSafeFakeEmitter()
 	reg := newRegistry()
 
 	// Valid Config: HeartbeatInterval * 2 < LeaseDuration.

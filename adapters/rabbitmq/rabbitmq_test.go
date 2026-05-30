@@ -1680,9 +1680,11 @@ func TestUnmarshalDelivery(t *testing.T) {
 	t.Run("legacy_entry_json", func(t *testing.T) {
 		// Legacy outbox.Entry JSON (PascalCase, missing schemaVersion) is now
 		// rejected with ErrUnknownEnvelopeVersion (fail-closed, no fallback).
-		entry := mustNewEntry(t, "test.legacy", []byte(`{"legacy":true}`), outbox.WithID("evt-legacy-001"))
-		body, err := json.Marshal(entry)
-		require.NoError(t, err)
+		// Hand-written byte literal: since the sealed-construction Entry (issue
+		// #1229) has only unexported fields, json.Marshal(entry) would emit `{}`
+		// and trip staticcheck SA9005 — and would no longer exercise the
+		// PascalCase legacy shape this case is meant to cover.
+		body := []byte(`{"ID":"evt-legacy-001","EventType":"test.legacy","Payload":{"legacy":true}}`)
 
 		_, legacyErr := unmarshalDelivery(body)
 		require.Error(t, legacyErr, "legacy entry JSON must be rejected (no schemaVersion)")

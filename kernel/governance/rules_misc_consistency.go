@@ -1203,26 +1203,10 @@ func collectReceiverEmitTopics(
 }
 
 func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
-	var results []ValidationResult
-	// Sealed-construction form (issue #1229): `entry, err := outbox.NewEntry(
-	// clk, ctx, eventType, payload, opts...)`. Multi-value assignment (Lhs has
-	// the entry var + err, Rhs has the single call). Bind the entry var to the
-	// constructor's 3rd positional arg (the eventType/topic) when it resolves to
-	// a const/literal; a dynamic eventType clears any prior binding.
-	if len(stmt.Lhs) >= 1 && len(stmt.Rhs) == 1 {
-		if call, isCall := stmt.Rhs[0].(*ast.CallExpr); isCall && isOutboxNewEntryCall(call) {
-			if lhsIdent, ok := stmt.Lhs[0].(*ast.Ident); ok {
-				if len(call.Args) >= 3 {
-					if topic, resolved := resolveTopicExpr(call.Args[2], ctx.pkgConsts, ctx.fileConsts); resolved {
-						state.entryTopics[lhsIdent.Name] = []string{topic}
-						return results
-					}
-				}
-				delete(state.entryTopics, lhsIdent.Name)
-				return results
-			}
-		}
+	if collectNewEntryAssignment(stmt, ctx, state) {
+		return nil
 	}
+	var results []ValidationResult
 	for i, lhs := range stmt.Lhs {
 		lhsIdent, ok := lhs.(*ast.Ident)
 		if !ok || i >= len(stmt.Rhs) {
@@ -1236,6 +1220,39 @@ func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *e
 		results = append(results, bindEntryTopic(lhsIdent.Name, compLit, ctx, state)...)
 	}
 	return results
+}
+
+// collectNewEntryAssignment handles the sealed-construction form (issue #1229):
+// `entry, err := outbox.NewEntry(clk, ctx, eventType, payload, opts...)`. It is
+// a multi-value assignment (Lhs has the entry var + err, Rhs has the single
+// call). It returns true when the statement is a NewEntry-form assignment (the
+// caller must stop) regardless of whether a topic was resolved: the entry var
+// is bound to the constructor's 3rd positional arg (eventType/topic) when it
+// resolves to a const/literal, and any prior binding is cleared on a dynamic
+// eventType. This form only updates entry→topic bindings in state and never
+// produces findings, so there is no ValidationResult return. It returns false
+// when the statement is not a NewEntry form and the caller should fall through
+// to the composite-literal path.
+func collectNewEntryAssignment(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) bool {
+	if len(stmt.Lhs) < 1 || len(stmt.Rhs) != 1 {
+		return false
+	}
+	call, isCall := stmt.Rhs[0].(*ast.CallExpr)
+	if !isCall || !isOutboxNewEntryCall(call) {
+		return false
+	}
+	lhsIdent, ok := stmt.Lhs[0].(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if len(call.Args) >= 3 {
+		if topic, resolved := resolveTopicExpr(call.Args[2], ctx.pkgConsts, ctx.fileConsts); resolved {
+			state.entryTopics[lhsIdent.Name] = []string{topic}
+			return true
+		}
+	}
+	delete(state.entryTopics, lhsIdent.Name)
+	return true
 }
 
 func collectEntryDecls(stmt *ast.DeclStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
