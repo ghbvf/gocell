@@ -49,8 +49,10 @@ func namespaceLegalSet(s string) bool {
 // Lives in package storetest (white-box) rather than runtime/audit/ledger so it
 // can reuse the independent HMAC mirror (referenceComputeHash) and TestHMACKey.
 func FuzzNamespaceID(f *testing.F) {
-	// Legal seeds.
-	for _, s := range []string{"auditcore", "bootstrap", "_runtime", "a", strings.Repeat("a", namespaceMaxLen)} {
+	// Legal seeds. "_test" exercises the leading-underscore case without
+	// borrowing "_runtime", which carries an unrelated framework-sentinel
+	// meaning (HTTP metrics cell / Redis namespace) and would mislead readers.
+	for _, s := range []string{"auditcore", "bootstrap", "_test", "a", strings.Repeat("a", namespaceMaxLen)} {
 		f.Add(s)
 	}
 	// Illegal seeds (each violates exactly one rule).
@@ -91,7 +93,7 @@ func FuzzNamespaceID(f *testing.F) {
 		}
 		e := NewEntryFixture(t, "ns-fuzz", "", "", epochAnchor)
 		got := p.ComputeHash("", e)
-		want := referenceComputeHash(TestHMACKey(), ns, "", e)
+		want := ReferenceComputeHash(t, TestHMACKey(), ns, "", e)
 		if got != want {
 			t.Errorf("namespace %q HMAC parity broken:\n  ComputeHash=%s\n  reference  =%s", s, got, want)
 		}

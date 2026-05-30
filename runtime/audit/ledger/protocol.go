@@ -97,7 +97,11 @@ func (ns NamespaceID) Validate() error {
 		c := s[i]
 		if c != '_' && (c < 'a' || c > 'z') {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"audit ledger: namespace ID must contain only [a-z_]")
+				"audit ledger: namespace ID must contain only [a-z_]",
+				errcode.WithDetails(
+					errcode.PublicInt("offset", i),
+					errcode.PublicInt("byte", int(c)),
+				))
 		}
 	}
 	return nil

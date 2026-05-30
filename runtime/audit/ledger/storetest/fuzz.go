@@ -27,15 +27,21 @@ const fuzzTimePrecision = time.Microsecond
 //     Append → GetBySeq (via AssertEntryRoundTrip, reflect-driven so new Entry
 //     fields are covered automatically), and
 //   - the store-persisted Hash equals an INDEPENDENT canonical HMAC recomputed
-//     by referenceComputeHash (the external mirror, never Protocol.ComputeHash),
-//     so a silently dropped field in ComputeHash is caught.
+//     by ReferenceComputeHash (the external mirror, never Protocol.ComputeHash)
+//     over an independently reconstructed prev_hash, so a silently dropped
+//     field in ComputeHash or a mis-linked chain entry is caught.
+//
+// store and protocol MUST be same-source: protocol must be the very protocol
+// the store was constructed with, and it must use TestHMACKey() as its HMAC key
+// (i.e. built via NewTestProtocol) — the parity assertion recomputes the
+// reference digest with TestHMACKey() and protocol.Namespace(), so a mismatched
+// key or namespace would surface as a spurious parity failure, not a store bug.
 //
 // store and protocol are constructed once by the caller and reused across all
 // fuzz iterations — PG cannot afford a fresh migrated database per iteration.
 // The chain therefore grows unbounded over a long run (every accepted Append
 // adds an entry); bound it with -fuzztime rather than expecting per-iteration
-// reset.
-// The same exported helper is wired into both the MemStore fuzz
+// reset. The same exported helper is wired into both the MemStore fuzz
 // (suite_test.go) and the PG fuzz (adapters/postgres, integration tag) with a
 // shared seed corpus, so mem-vs-PG round-trip + HMAC parity is exercised in
 // fuzz form: both backends must satisfy the same independent reference.
@@ -89,10 +95,13 @@ func RunEntryRoundTripFuzz(f *testing.F, store ledger.Store, protocol *ledger.Pr
 
 // assertEntryRoundTripParity appends src, and on a successful (non-rejected)
 // Append asserts the persisted entry round-trips byte-for-byte and its Hash
-// matches the independent reference HMAC. ErrValidationFailed (payload is not a
-// JSON object/null) and ErrAuditLedgerAlreadyExists (duplicate EventID
-// fingerprint) are legitimate protocol rejections, not store defects, and are
-// skipped.
+// matches the independent reference HMAC.
+//
+// Only ErrValidationFailed (payload is not a JSON object/null) and
+// ErrAuditLedgerAlreadyExists (duplicate EventID fingerprint) are legitimate
+// protocol rejections to skip. Every other error — any other errcode, or a
+// non-errcode error such as a PG infrastructure failure — is a t.Fatalf, so an
+// infra fault can never be silently mistaken for "covered".
 func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledger.Protocol, src *ledger.Entry) {
 	t.Helper()
 	ctx := context.Background()
@@ -119,7 +128,22 @@ func assertEntryRoundTripParity(t *testing.T, store ledger.Store, protocol *ledg
 
 	AssertEntryRoundTrip(t, src, got)
 
-	want := referenceComputeHash(TestHMACKey(), protocol.Namespace(), got.PrevHash, got)
+	// Reconstruct the chain link independently rather than trusting the store's
+	// own got.PrevHash: the previous entry's persisted Hash (already parity-
+	// verified in an earlier iteration) is the canonical prev_hash. Feeding the
+	// store's got.PrevHash back into the reference would let a store that links
+	// to the wrong predecessor stay self-consistent and pass. seq==1 is the
+	// chain root (prev_hash = "").
+	prevHash := ""
+	if src.SeqNo > 1 {
+		prev, perr := store.GetBySeq(ctx, src.SeqNo-1)
+		if perr != nil {
+			t.Fatalf("GetBySeq(%d) for chain link: %v", src.SeqNo-1, perr)
+		}
+		prevHash = prev.Hash
+	}
+
+	want := ReferenceComputeHash(t, TestHMACKey(), protocol.Namespace(), prevHash, got)
 	if got.Hash != want {
 		t.Errorf("HMAC parity broken under fuzz:\n  store=%s\n  ref  =%s", got.Hash, want)
 	}

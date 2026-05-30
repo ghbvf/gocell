@@ -9,7 +9,7 @@ import "github.com/ghbvf/gocell/runtime/audit/ledger"
 // separate hash chains and cannot fork a shared chain under concurrency.
 //
 // Validation happens by construction: NamespaceID format rules
-// (every byte in [a-z_] / length ≤ 48) are checked in
+// (non-empty / every byte in [a-z_] / length ≤ 48) are checked in
 // TestBootstrapNamespace_LiteralPassesValidate so any future drift in the
 // validation rules surfaces at unit-test time rather than at first request.
 //
