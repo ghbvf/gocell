@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metautil"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
@@ -30,6 +31,16 @@ const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 // scan-side size guard must be applied uniformly to both (issue #1229 review
 // F5 — principal previously decoded without a cap, unlike observability).
 const maxPrincipalJSONBytes = 4 * kout.MaxPrincipalTotalSize
+
+// maxMetadataJSONBytes bounds the JSONB payload size accepted from the business
+// metadata column at scan time. Producers cap total metadata at
+// metautil.MaxMetadataTotalSize; the 4× headroom mirrors the observability /
+// principal formula (JSON-encoding overhead — key names, quotes, separators —
+// plus slack). Metadata is an untyped business KV map with no Validate(), so
+// it cannot share decodeOversizeGuardedJSONB, but the same unbounded-allocation
+// defense against a corrupted or maliciously-crafted row applies, so the cap is
+// enforced inline below.
+const maxMetadataJSONBytes = 4 * metautil.MaxMetadataTotalSize
 
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
@@ -355,11 +366,23 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		return outbox.ClaimedEntry{}, err
 	}
 
-	if len(metadataJSON) > 0 {
+	if len(metadataJSON) > maxMetadataJSONBytes {
+		// Defensive: reject oversized metadata payloads to prevent unbounded
+		// allocation from a corrupted or maliciously-crafted row — same threat
+		// the observability/principal caps defend against. Metadata is untyped
+		// business KV (no Validate()), so this stays inline rather than routing
+		// through decodeOversizeGuardedJSONB.
+		slog.Warn("outbox store: metadata JSON exceeds max size, dropping",
+			slog.String("entry_id", scan.ID),
+			slog.String("event_type", scan.EventType),
+			slog.Int("size", len(metadataJSON)),
+			slog.Int("max", maxMetadataJSONBytes))
+	} else if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &scan.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",
 				slog.String("entry_id", scan.ID),
 				slog.String("event_type", scan.EventType),
+				slog.Int("size", len(metadataJSON)),
 				slog.Any("error", err))
 		}
 	}
@@ -425,10 +448,9 @@ var (
 // allocation from corrupted or maliciously-crafted rows).
 //
 // The metadata column is deliberately NOT routed through this helper: it is an
-// untyped business KV map with no Validate() method (so it cannot satisfy the
-// type constraint) and no read-side size cap — per observability.md, the cap
-// applies only to the observability/principal identity columns, not business
-// metadata. Its simpler unmarshal stays inline above.
+// untyped business KV map with no Validate() method, so it cannot satisfy the
+// type constraint. Its size cap (maxMetadataJSONBytes) and simpler unmarshal
+// stay inline above.
 func decodeOversizeGuardedJSONB[T interface{ Validate() error }](
 	raw []byte, maxBytes int, warn jsonbDecodeWarnings, entryID, eventType string,
 ) (T, bool) {
