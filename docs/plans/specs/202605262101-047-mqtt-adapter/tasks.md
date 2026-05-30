@@ -73,9 +73,9 @@
 
 | ID | 子任务 | 文件 | LOC | 前置 | TDD |
 |----|--------|------|-----|------|-----|
-| T-4.1 | 写 `deadletter.go` — `routeReject(ctx, originalTopic string, entry outbox.Entry) error`：publish 到 `$dead/<topic>`，best-effort（失败仅 log + metric） | `adapters/mqtt/deadletter.go` `deadletter_test.go` | 280 | PR-3 merged | test-first |
-| T-4.2 | `subscriber.go` 接入 `routeReject`（替换 PR-3 内的桩） | `adapters/mqtt/subscriber.go` (改) | <30 | T-4.1 | impl |
-| T-4.3 | 写 `conformance_test.go` — 实例化 Publisher+Subscriber，Features 声明（GuaranteedOrder=false, SupportsRequeue=true, SupportsReject=true, BroadcastSubscribe=true），跑 `outboxtest.TestPubSub` 6 Batch | `adapters/mqtt/conformance_test.go` | 200 | T-4.2 | test-first |
+| T-4.1 | 写 `deadletter.go` — `routeDeadLetter(ctx, originalTopic string, payload []byte, reason ConsumeFailureReason)`：publish 到 `$dead/<topic>`，fail-closed（失败 log + `mqtt_dlx_failed_total` + ack-drop） | `adapters/mqtt/deadletter.go` `deadletter_test.go` | 280 | PR-3 merged | test-first |
+| T-4.2 | `subscriber.go` 接入 `routeDeadLetter`（替换 PR-3 内的桩） | `adapters/mqtt/subscriber.go` (改) | <30 | T-4.1 | impl |
+| T-4.3 | 写 `conformance_test.go` — 实例化 Publisher+Subscriber，Features 声明（GuaranteedOrder=false, **SupportsRequeue=false**（Option C, ADR-050 §6）, SupportsReject=true, **BroadcastSubscribe=false**（$share=competing consumers）），跑 `outboxtest.TestPubSub` 6 Batch | `adapters/mqtt/conformance_test.go` | 200 | T-4.2 | test-first |
 | T-4.4 | 写 `integration_tls_test.go` — build tag `integration,mqtt_tls`；self-signed CA + client cert；mTLS handshake 正常 + handshake 失败（cert 未信任）| `adapters/mqtt/integration_tls_test.go` `testdata/tls/*` | 280 | T-4.2 | test-first |
 | T-4.5 | CI nightly（实施偏离：见下）：新建独立 `.github/workflows/mqtt-tls-nightly.yml`（testcontainer 作业模型），**不**改 archtest-nightly | `.github/workflows/mqtt-tls-nightly.yml` | 40 | T-4.4 | impl |
 

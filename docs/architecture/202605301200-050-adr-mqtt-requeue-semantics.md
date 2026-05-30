@@ -64,19 +64,16 @@ Cross-cutting (independent of A/B/C, already landed in PR-3): bounded concurrent
 dispatch (a slow handler no longer stalls the inbound loop) — but concurrency
 does **not** fix the in-order-ack HoL, which is about *un-acked* messages.
 
-## 4. Lean A (for discussion — superseded by §6)
+## 4. Decision
 
-Lean **A** (ack + bounded in-process retry → `$dead` on exhaustion), accepting
-the documented crash-window trade-off, because: it removes the stall, gives
-prompt retry, and the producer-side transactional outbox already provides the
-durable at-least-once boundary (the consumer is idempotent via the Claimer).
-The crash-window regression is bounded to in-flight-retrying messages and is
-strictly better than today's "stall + reconnect flood." Final decision is
-deferred to the implementing PR (likely alongside PR-4's `$dead` work, since A
-depends on the DLT path).
+The decision is **Option C** — see §6 for the accepted semantics and rationale
+(open-source consensus + ConsumerBase-is-sole-retry-layer + simplicity). §3
+records the three options weighed; §6 is the single authoritative narrative.
 
-> **注意：§6（2026-05-30 决策）推翻了上述 Lean A 倾向，最终选定 Option C。§4 的
-> 论证保留供历史参考，但 §6 是唯一权威真值源。**
+(An earlier draft of this ADR leaned toward Option A; that pre-decision
+recommendation was reversed during implementation and is intentionally **not**
+retained here, per `.claude/rules/gocell/ai-robust.md` §"ADR amendment 落地必查"
+— no contradictory prose alongside the final decision.)
 
 ## 5. References
 
