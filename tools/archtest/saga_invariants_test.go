@@ -4041,7 +4041,7 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 				if len(field.Names) == 0 {
 					out = append(out, sagaDiag(p, field.Type, rel,
 						sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
-							" has an unnamed interface parameter (type "+typ.String()+
+							" has an unnamed interface parameter (type "+sagaShortType(typ)+
 							") that cannot be nil-guarded; give it a name and add "+
 							"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
 					continue
@@ -4053,7 +4053,7 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 					if name.Name == "_" || obj == nil {
 						out = append(out, sagaDiag(p, name, rel,
 							sagaConstructorNilGuardRuleID+": constructor "+fd.Name.Name+
-								" has a blank-identifier interface parameter (type "+typ.String()+
+								" has a blank-identifier interface parameter (type "+sagaShortType(typ)+
 								") that cannot be nil-guarded; give it a name and add "+
 								"validation.IsNilInterface(<param>) (or clock.MustHaveClock)"))
 						continue
@@ -4062,7 +4062,7 @@ func scanConstructorNilGuards(p *Pass) []Diagnostic {
 						obj:      obj,
 						typeExpr: field.Type,
 						name:     name.Name,
-						typStr:   typ.String(),
+						typStr:   sagaShortType(typ),
 					})
 				}
 			}
@@ -4129,6 +4129,12 @@ func sagaIsGuardCall(p *Pass, call *ast.CallExpr) bool {
 		}
 	}
 	return false
+}
+
+// sagaShortType renders t as package.TypeName (short package name, no full
+// import path) to keep diagnostics readable in CI logs.
+func sagaShortType(t types.Type) string {
+	return types.TypeString(t, func(p *types.Package) string { return p.Name() })
 }
 
 // sagaConstructorIfaceParamObjs returns the set of named, non-variadic interface
