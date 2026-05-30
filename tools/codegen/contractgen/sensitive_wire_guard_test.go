@@ -53,11 +53,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// writeSensitiveGuardSchema writes a JSON Schema file under rootDir at the given
-// contract-relative path and returns nothing; t.Fatalf on failure.
-func writeSensitiveGuardSchema(t *testing.T, rootDir, contractDir, name, body string) {
+// synthContractDir is the fixed contract-relative dir every sensitive-guard
+// test writes its synthetic schemas under; it doubles as the contractDir passed
+// to buildHTTPDTOs / buildEventSpec.
+const synthContractDir = "contracts/synth/v1"
+
+// writeSensitiveGuardSchema writes a JSON Schema file under rootDir/synthContractDir
+// and returns nothing; t.Fatalf on failure.
+func writeSensitiveGuardSchema(t *testing.T, rootDir, name, body string) {
 	t.Helper()
-	dir := filepath.Join(rootDir, contractDir)
+	dir := filepath.Join(rootDir, synthContractDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
@@ -147,15 +152,14 @@ func TestAuditWireSensitiveFieldFunnel_Response(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			contractDir := "contracts/synth/v1"
-			writeSensitiveGuardSchema(t, tmp, contractDir, "response.schema.json", tc.respBody)
+			writeSensitiveGuardSchema(t, tmp, "response.schema.json", tc.respBody)
 
 			contract := &metadata.ContractMeta{
 				ID:         tc.contractID,
 				Kind:       "http",
 				SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
 			}
-			_, err := buildHTTPDTOs(tmp, contract, contractDir, nil, nil)
+			_, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil)
 
 			if tc.wantErr {
 				if err == nil {
@@ -202,8 +206,7 @@ func TestAuditWireSensitiveFieldFunnel_FallbackUnordered(t *testing.T) {
 // INVARIANT: AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 (behavioral funnel test).
 func TestAuditWireSensitiveFieldFunnel_RequestExempt(t *testing.T) {
 	tmp := t.TempDir()
-	contractDir := "contracts/synth/v1"
-	writeSensitiveGuardSchema(t, tmp, contractDir, "request.schema.json",
+	writeSensitiveGuardSchema(t, tmp, "request.schema.json",
 		flatObject(`"password":{"type":"string"}`))
 
 	contract := &metadata.ContractMeta{
@@ -211,7 +214,7 @@ func TestAuditWireSensitiveFieldFunnel_RequestExempt(t *testing.T) {
 		Kind:       "http",
 		SchemaRefs: metadata.SchemaRefsMeta{Request: "request.schema.json"},
 	}
-	if _, err := buildHTTPDTOs(tmp, contract, contractDir, nil, nil); err != nil {
+	if _, err := buildHTTPDTOs(tmp, contract, synthContractDir, nil, nil); err != nil {
 		t.Fatalf("request path must be exempt from the audit funnel, got: %v", err)
 	}
 }
@@ -250,15 +253,14 @@ func TestAuditWireSensitiveFieldFunnel_Payload(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			contractDir := "contracts/synth/v1"
-			writeSensitiveGuardSchema(t, tmp, contractDir, "payload.schema.json", tc.payloadBody)
+			writeSensitiveGuardSchema(t, tmp, "payload.schema.json", tc.payloadBody)
 
 			contract := &metadata.ContractMeta{
 				ID:         tc.contractID,
 				Kind:       "event",
 				SchemaRefs: metadata.SchemaRefsMeta{Payload: "payload.schema.json"},
 			}
-			err := buildEventSpec(&ContractGenSpec{}, tmp, contract, contractDir)
+			err := buildEventSpec(&ContractGenSpec{}, tmp, contract, synthContractDir)
 
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected funnel to reject %s payload, got nil error", tc.contractID)
@@ -306,10 +308,9 @@ func TestAuditWireSensitiveFieldFunnel_Headers(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			contractDir := "contracts/synth/v1"
-			writeSensitiveGuardSchema(t, tmp, contractDir, "payload.schema.json",
+			writeSensitiveGuardSchema(t, tmp, "payload.schema.json",
 				flatObject(`"eventId":{"type":"string"}`))
-			writeSensitiveGuardSchema(t, tmp, contractDir, "headers.schema.json", tc.headersBody)
+			writeSensitiveGuardSchema(t, tmp, "headers.schema.json", tc.headersBody)
 
 			contract := &metadata.ContractMeta{
 				ID:   tc.contractID,
@@ -319,7 +320,7 @@ func TestAuditWireSensitiveFieldFunnel_Headers(t *testing.T) {
 					Headers: "headers.schema.json",
 				},
 			}
-			err := buildEventSpec(&ContractGenSpec{}, tmp, contract, contractDir)
+			err := buildEventSpec(&ContractGenSpec{}, tmp, contract, synthContractDir)
 
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected funnel to reject %s headers, got nil error", tc.contractID)
