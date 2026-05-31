@@ -58,6 +58,7 @@ func setup(t testing.TB) http.Handler {
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(handlerStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setup: " + err.Error())
@@ -83,6 +84,7 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(effectiveIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
@@ -603,7 +605,7 @@ func TestHandler_ChangePassword_VersionConflict_Returns409(t *testing.T) {
 	handlerSessionStore := testutil.RealSessionRepo(t)
 	handlerRefreshStore := newHandlerIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, handlerSessionStore, handlerRefreshStore),
-		slog.Default(), WithTokenIssuer(handlerStubIssuer),
+		slog.Default(), inertRoleRepo(), WithTokenIssuer(handlerStubIssuer),
 		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -845,7 +847,7 @@ func TestChangePasswordAdapter_UserNotActive_Returns403(t *testing.T) {
 	sessionStore := testutil.RealSessionRepo(t)
 	refreshStore := newHandlerIdentityRefreshStore()
 	svc, err := NewService(clock.Real(), repo, newInvalidator(t, repo, sessionStore, refreshStore),
-		slog.Default(), WithTokenIssuer(stub),
+		slog.Default(), inertRoleRepo(), WithTokenIssuer(stub),
 		WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 

@@ -126,15 +126,6 @@ func WithPasswordHasher(h credential.Hasher) Option {
 	}
 }
 
-// WithLastAdminProtection wires the role repository used to reject operations
-// that would remove the final effective admin from the system.
-func WithLastAdminProtection(roleRepo ports.RoleRepository) Option {
-	return func(s *Service) {
-		s.lastAdminProtectionRequested = true
-		s.lastAdminRoleRepo = roleRepo
-	}
-}
-
 // WithAuthzMutator injects the authzmutate.Mutator for credential-weakening
 // domain mutations (Lock, Suspend, RequirePasswordReset, etc.). When nil the
 // service constructs one from the injected invalidator, repo, and txRunner.
@@ -148,17 +139,16 @@ func WithAuthzMutator(m *authzmutate.Mutator) Option {
 
 // Service implements identity management business logic.
 type Service struct {
-	repo                         ports.UserRepository              `gocell:"required"`
-	invalidator                  *credentialinvalidate.Invalidator `gocell:"required"`
-	authzmutator                 *authzmutate.Mutator
-	txRunner                     persistence.CellTxManager `gocell:"required" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	emitter                      outbox.CellEmitter
-	logger                       *slog.Logger
-	tokenIssuer                  TokenIssuer `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingTokenIssuer" gocellErr:"identity-manage: tokenIssuer is required; wire via WithTokenIssuer"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
-	clock                        clock.Clock
-	lastAdminProtectionRequested bool
-	lastAdminRoleRepo            ports.RoleRepository
-	lastAdminGuard               *domain.LastAdminGuard
+	repo              ports.UserRepository              `gocell:"required"`
+	invalidator       *credentialinvalidate.Invalidator `gocell:"required"`
+	authzmutator      *authzmutate.Mutator
+	txRunner          persistence.CellTxManager `gocell:"required" gocellErr:"identitymanage: TxRunner required; use WithTxManager"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	emitter           outbox.CellEmitter
+	logger            *slog.Logger
+	tokenIssuer       TokenIssuer `gocell:"required" gocellKind:"KindInternal" gocellCode:"ErrCellMissingTokenIssuer" gocellErr:"identity-manage: tokenIssuer is required; wire via WithTokenIssuer"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	clock             clock.Clock
+	lastAdminRoleRepo ports.RoleRepository
+	lastAdminGuard    *domain.LastAdminGuard
 	// hasher is the password hasher. Optional, but its default is a SAFE
 	// full-strength default — credential.NewProductionHasher() (cost 12) — not a
 	// degraded one like emitter's noop; production is correct without explicit
@@ -172,6 +162,15 @@ type Service struct {
 // credential-revocation events (Lock / Delete / ChangePassword / suspension)
 // atomically bump authz_epoch + revoke sessions + revoke refresh chains via
 // the single funnel (CREDENTIAL-INVALIDATE-FUNNEL-01).
+//
+// roleRepo is a REQUIRED positional parameter: it wires the
+// at-least-one-effective-admin guard (S4.0). A missing guard is now a compile
+// error — there is no opt-in option to forget — superseding the former
+// WithLastAdminProtection option + IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01
+// archtest (Medium → Hard). A nil roleRepo is rejected by buildLastAdminGuard,
+// matching the required-dep positional + runtime nil-guard pattern (same ceiling
+// as the clk positional param). roleRepo is retained on the Service for the
+// hasAdminRole leg (see isLastAdminProtected callers below).
 //
 // authzmutator: when not injected via WithAuthzMutator, NewService constructs
 // one from (invalidator, repo, txRunner). This is intentional composition
@@ -188,6 +187,7 @@ func NewService(
 	repo ports.UserRepository,
 	invalidator *credentialinvalidate.Invalidator,
 	logger *slog.Logger,
+	roleRepo ports.RoleRepository,
 	opts ...Option,
 ) (*Service, error) {
 	clock.MustHaveClock(clk, "identitymanage.NewService")
@@ -195,12 +195,13 @@ func NewService(
 		logger = slog.Default()
 	}
 	s := &Service{
-		repo:        repo,
-		invalidator: invalidator,
-		clock:       clk,
-		emitter:     outbox.DemoCellEmitter(),
-		logger:      logger,
-		hasher:      credential.NewProductionHasher(),
+		repo:              repo,
+		invalidator:       invalidator,
+		clock:             clk,
+		emitter:           outbox.DemoCellEmitter(),
+		logger:            logger,
+		hasher:            credential.NewProductionHasher(),
+		lastAdminRoleRepo: roleRepo,
 	}
 	for _, o := range opts {
 		o(s)
@@ -216,13 +217,13 @@ func NewService(
 		}
 		s.authzmutator = m
 	}
-	if s.lastAdminProtectionRequested {
-		guard, err := buildLastAdminGuard(s.lastAdminRoleRepo)
-		if err != nil {
-			return nil, err
-		}
-		s.lastAdminGuard = guard
+	// Build the last-admin guard unconditionally — roleRepo is required, so the
+	// guard always exists; a nil roleRepo fails fast here.
+	guard, err := buildLastAdminGuard(roleRepo)
+	if err != nil {
+		return nil, err
 	}
+	s.lastAdminGuard = guard
 	return s, nil
 }
 

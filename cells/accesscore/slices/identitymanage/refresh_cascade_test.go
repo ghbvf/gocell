@@ -49,6 +49,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -81,6 +82,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
@@ -119,6 +121,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionRepo, refreshStore), slog.Default(),
+		inertRoleRepo(),
 		WithTokenIssuer(minimalStubIssuer), WithTxManager(persistence.WrapForCell(contractTxRunner{})))
 	require.NoError(t, err)
 
