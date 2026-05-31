@@ -278,8 +278,14 @@ func Open(ctx context.Context, clk clock.Clock, cfg Config, opts ...ConnectionOp
 
 	// Block until first outcome (connected or permErr) or connectCtx elapses.
 	if waitErr := c.waitFirstConnection(connectCtx); waitErr != nil {
-		// Best-effort shutdown of the manager; ignore error.
-		_ = cm.Disconnect(context.Background())
+		// Best-effort shutdown of the manager; ignore error. Bound by
+		// cfg.ConnectTimeout so a still-unreachable broker cannot make the
+		// teardown itself hang on an unbounded ctx — which would partially
+		// reintroduce the #1388 startup stall on the very fail-fast path this
+		// deadline split exists to keep fast.
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
+		defer disconnectCancel()
+		_ = cm.Disconnect(disconnectCtx)
 		return nil, waitErr
 	}
 	return c, nil

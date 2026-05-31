@@ -176,10 +176,15 @@ func TestConnection_ConnectDeadline_FailFast(t *testing.T) {
 	clk := clock.Real()
 	id, _ := mqtt.ParseEphemeralClientID("test", "never")
 	cfg := mqtt.Config{
-		ClientID:        id,
-		Brokers:         []string{"tcp://127.0.0.1:19999"}, // dead port
-		ConnectTimeout:  testtime.D500ms,
-		ConnectDeadline: testtime.D500ms,
+		ClientID: id,
+		Brokers:  []string{"tcp://127.0.0.1:19999"}, // dead port → connection refused (instant, not a dial timeout)
+		// ConnectDeadline (300ms) is deliberately shorter than ConnectTimeout (5s):
+		// connection-refused returns instantly so autopaho keeps retrying with
+		// backoff, and the ONLY thing that ends the wait is the ConnectDeadline
+		// budget — never the per-attempt ConnectTimeout. Equal values would blur
+		// which bound fires; distinct values lock the deadline as the binding one.
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D300ms,
 		KeepAlive:       testtime.D30s,
 		Backoff: mqtt.BackoffConfig{
 			BaseDelay: testtime.D50ms,

@@ -29,7 +29,7 @@ envelope）原样透传。
 |------|------|------|
 | `GOCELL_IOTDEVICE_MQTT_BROKERS` | 逗号分隔的 broker URL（如 `tcp://127.0.0.1:1883`）。**未设 = 通道关闭**，行为与今天逐字节一致 | 未设 |
 | `GOCELL_IOTDEVICE_MQTT_TOPIC_NS` | topic namespace 前缀 | `iotdevice` |
-| `GOCELL_IOTDEVICE_MQTT_CONNECT_DEADLINE` | bootstrap 初次连接等待预算（Go duration，如 `10s`）；broker 不可达时启动在此期限内 fail-fast 退出 | `30s` |
+| `GOCELL_IOTDEVICE_MQTT_CONNECT_DEADLINE` | bootstrap 初次连接等待预算（Go duration，如 `10s`）；broker 不可达时启动在此期限内 fail-fast 退出。格式错误或 ≤0 的覆盖值导致启动失败（不静默回退默认值） | `30s` |
 
 **fail-fast，无 noop 回退**：通道开启后，配置/解析/连接错误会让启动失败并报错
 （不静默降级到 noop publisher）。`Open` 阻塞等待首次连接，但受 `ConnectDeadline`

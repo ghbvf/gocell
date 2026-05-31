@@ -96,6 +96,9 @@ func TestConfig_Validate_ConnectDeadline(t *testing.T) {
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
 			assert.Equal(t, ErrAdapterMQTTInvalidConfig, ec.Code)
+			// Assert the failure is specifically the ConnectDeadline gate, not an
+			// unrelated field (e.g. validateTimings short-circuiting elsewhere).
+			assert.Contains(t, ec.Message, "ConnectDeadline")
 		})
 	}
 }
