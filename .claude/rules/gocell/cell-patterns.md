@@ -138,6 +138,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 Wrapper 函数**仅允许**在以下位置调用（archtest `CELL-RAW-INFRA-WRAPPER-LOCATION-01` 守卫；archtest 是权威源，本列表是参考）：
 
 - `cmd/*` 任意文件（composition root）
+- `platform/*` 任意文件（platform Composition Root 层：`platform/<cell>/module.go` 将平台 cell 绑定到 adapter，#1085 COMPOSITION-MODULE-API-01）
 - `examples/<demo>/main.go` / `examples/<demo>/app.go` / `examples/<demo>/run.go`（example composition root；run.go is the hand-written half of the K#10 main+run split, see cmd/corebundle pattern）
 - `*_test.go` 任意路径（测试构造 fake）
 - `kernel/persistence/cell_marker.go` / `kernel/outbox/cell_marker.go`（marker 定义本身）

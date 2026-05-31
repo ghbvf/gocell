@@ -1,0 +1,254 @@
+// run.go is the hand-written composition root for the corebundlestarter example.
+// It demonstrates the public runtime/composition API: constructing a
+// *composition.SharedDeps in dev/memory mode and assembling the three platform
+// cells via platform/<cell>.Module() — with zero external infrastructure.
+//
+// This is the M11 dogfood target for issue #1085
+// (CellModule / SharedDeps / Builder / App public API).
+//
+// AUTH-PLAN-04: auth construction (NewAuthJWTFromAssembly, NewAuthServiceToken)
+// lives HERE in examples/ — not inside runtime/composition or platform/.
+//
+// ref: uber-go/fx fx.New — single assembly entry point used by both production
+// and tests.
+// ref: kubernetes-sigs/controller-runtime pkg/manager/manager.go — Manager
+// accumulates options and starts via Start(ctx) error.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/assembly"
+	kauth "github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
+	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
+	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
+	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/runtime/eventbus"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+)
+
+// devServiceSecret is a hard-coded demo secret for the internal listener's
+// service-token guard. Development / example use only.
+//
+// #nosec G101 -- demo fixture in examples/corebundlestarter; production is env-driven.
+const devServiceSecret = "starter-dev-secret-32-bytes-ok!!"
+
+// devJWTIssuer and devJWTAudience are the default dev JWT claims used when
+// no env vars override them.
+const (
+	devJWTIssuer   = "starter-dev"
+	devJWTAudience = "starter"
+)
+
+// devAccessTokenTTL is the JWT access-token TTL for this example.
+const devAccessTokenTTL = 15 * time.Minute
+
+// starterPrimaryAddr / InternalAddr / HealthAddr are the default listener
+// bind addresses.  Pick non-default ports to avoid conflicts with corebundle.
+const (
+	starterPrimaryAddr  = ":8088"
+	starterInternalAddr = "127.0.0.1:9088"
+	starterHealthAddr   = "127.0.0.1:9098"
+)
+
+// runStarter is the composition root: builds memory-mode SharedDeps, assembles
+// the three platform cells, and starts the bootstrap lifecycle.
+func runStarter(ctx context.Context) error {
+	shared, err := buildStarterMemSharedDeps(ctx)
+	if err != nil {
+		return fmt.Errorf("corebundlestarter: build shared deps: %w", err)
+	}
+
+	// composition.New().With(...).Build(...) is the public API under test (#1085).
+	// Module order: auditcore first (it sets shared.BootstrapLedgerStore which
+	// accesscore reads), then accesscore, then configcore — matching corebundle
+	// assembly.yaml cell order.
+	app, err := composition.New().
+		With(
+			platformauditcore.Module(),
+			platformaccesscore.Module(),
+			platformconfigcore.Module(),
+		).
+		Build(ctx, shared, starterRuntimeOptions(shared))
+	if err != nil {
+		return fmt.Errorf("corebundlestarter: Build: %w", err)
+	}
+
+	slog.Info("corebundlestarter: starting",
+		slog.String("primary", shared.PrimaryHTTPAddr),
+		slog.String("internal", shared.InternalHTTPAddr),
+		slog.String("health", shared.HealthHTTPAddr),
+	)
+	return app.Run(ctx)
+}
+
+// buildStarterMemSharedDeps constructs a fully-populated *composition.SharedDeps
+// in dev/memory mode: no postgres, no redis, ephemeral in-process JWT keys.
+func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, error) {
+	clk := clock.Real()
+
+	// Topology: dev adapter mode, in-memory storage backend.
+	topo := bootstrap.Topology{
+		AdapterMode:    "dev",
+		StorageBackend: "memory",
+	}
+
+	eb := eventbus.New(clk)
+
+	// JWT: ephemeral in-process RSA key pair (tokens invalidated on restart).
+	slog.Warn("corebundlestarter: generating ephemeral JWT keys — tokens invalid on restart")
+	jwtIssuer, jwtVerifier, err := buildStarterJWT(clk)
+	if err != nil {
+		return nil, fmt.Errorf("JWT deps: %w", err)
+	}
+
+	// MetricsProvider: kernel NopProvider — avoids prometheus import.
+	mp := kernelmetrics.NopProvider{}
+
+	// Noop collectors satisfy SharedDeps.Validate without prometheus.
+	cfgEventCollector := obmetrics.NoopConfigEventCollector{}
+	ebCacheCollector := obmetrics.NoopEventbusCacheCollector{}
+
+	// ConsumerClaimer: in-memory idempotency claimer (single-process only).
+	claimer := idempotency.NewInMemClaimer(clk)
+
+	// InternalHMACRing: dev HMAC key ring for /internal/v1/* service tokens.
+	ring, err := auth.NewHMACKeyRing([]byte(devServiceSecret), nil)
+	if err != nil {
+		return nil, fmt.Errorf("HMAC key ring: %w", err)
+	}
+
+	shared := &composition.SharedDeps{
+		Clock:                  clk,
+		Topology:               topo,
+		JWTIssuer:              jwtIssuer,
+		JWTVerifier:            jwtVerifier,
+		MetricsProvider:        mp,
+		EventBus:               eb,
+		ConfigEventCollector:   cfgEventCollector,
+		EventbusCacheCollector: ebCacheCollector,
+		ConsumerClaimer:        claimer,
+		InternalHMACRing:       ring,
+		PrimaryHTTPAddr:        starterPrimaryAddr,
+		InternalHTTPAddr:       starterInternalAddr,
+		HealthHTTPAddr:         starterHealthAddr,
+		VerboseDisabled:        true,
+		ConfigStaleCipherInc:   func() {}, // no-op in this example
+		// PG / Redis are nil → all platform modules take the in-memory path.
+	}
+
+	if err := shared.Validate(); err != nil {
+		return nil, fmt.Errorf("SharedDeps.Validate: %w", err)
+	}
+	return shared, nil
+}
+
+// buildStarterJWT creates an ephemeral JWT issuer and verifier backed by a
+// freshly generated RSA key pair.
+func buildStarterJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
+	privKey, pubKey, err := auth.GenerateRSAKeyPair()
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate RSA key pair: %w", err)
+	}
+	keySet, err := auth.NewKeySet(privKey, pubKey, clk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create key set: %w", err)
+	}
+	issuer, err := auth.NewJWTIssuer(keySet, devJWTIssuer, devAccessTokenTTL, clk,
+		auth.WithIssuerAudiencesFromSlice([]string{devJWTAudience}))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create JWT issuer: %w", err)
+	}
+	verifier, err := auth.NewJWTVerifier(keySet, clk,
+		auth.WithExpectedAudiences(devJWTAudience),
+		auth.WithExpectedIssuer(devJWTIssuer))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create JWT verifier: %w", err)
+	}
+	return issuer, verifier, nil
+}
+
+// starterRuntimeOptions returns the composition.RuntimeOptionsFunc that builds
+// the assembly and the three HTTP listeners with appropriate auth plans.
+//
+// AUTH-PLAN-04 allows examples/ to construct auth plans.
+func starterRuntimeOptions(shared *composition.SharedDeps) composition.RuntimeOptionsFunc {
+	return func(cells []cell.Cell) ([]bootstrap.Option, error) {
+		return buildStarterBootstrapOpts(shared, cells)
+	}
+}
+
+// buildStarterBootstrapOpts constructs the ordered bootstrap.Option slice.
+// Extracted from the closure to keep cognitive complexity within limit.
+func buildStarterBootstrapOpts(
+	shared *composition.SharedDeps,
+	cells []cell.Cell,
+) ([]bootstrap.Option, error) {
+	// Assembly: memory mode → DurabilityDemo.
+	asm, err := buildStarterAssembly(shared.Clock, cells)
+	if err != nil {
+		return nil, fmt.Errorf("build assembly: %w", err)
+	}
+
+	// ConsumerBase: memory idempotency claimer.
+	cb, err := outbox.NewConsumerBase(shared.ConsumerClaimer, outbox.ConsumerBaseConfig{}, shared.Clock)
+	if err != nil {
+		return nil, fmt.Errorf("consumer base: %w", err)
+	}
+
+	// Primary listener: JWT auth (phase4 discovers verifier from accesscore cell).
+	primaryAuth, err := kauth.NewAuthJWTFromAssembly(asm)
+	if err != nil {
+		return nil, fmt.Errorf("primary listener auth: %w", err)
+	}
+
+	// Internal listener: HMAC service token with in-memory nonce store.
+	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, shared.Clock)
+	if err != nil {
+		return nil, fmt.Errorf("internal nonce store: %w", err)
+	}
+	svcTokenAuth, err := kauth.NewAuthServiceToken(internalNonceStore, shared.InternalHMACRing)
+	if err != nil {
+		return nil, fmt.Errorf("internal listener auth: %w", err)
+	}
+
+	opts := []bootstrap.Option{
+		bootstrap.WithAssembly(asm),
+		bootstrap.WithPublisher(shared.EventBus),
+		bootstrap.WithSubscriber(shared.EventBus),
+		bootstrap.WithConsumerBase(cb),
+		bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
+			[]kauth.ListenerAuth{primaryAuth}),
+		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr,
+			[]kauth.ListenerAuth{svcTokenAuth}),
+		bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
+			[]kauth.ListenerAuth{kauth.AuthNone{}}),
+		bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled()),
+	}
+	return opts, nil
+}
+
+// buildStarterAssembly creates a CoreAssembly with DurabilityDemo (memory mode).
+func buildStarterAssembly(clk clock.Clock, cells []cell.Cell) (*assembly.CoreAssembly, error) {
+	asm := assembly.New(clk, assembly.Config{
+		ID:             "corebundlestarter",
+		DurabilityMode: outbox.DurabilityDemo,
+	})
+	for _, c := range cells {
+		if err := asm.Register(c); err != nil {
+			return nil, fmt.Errorf("register %s: %w", c.ID(), err)
+		}
+	}
+	return asm, nil
+}
