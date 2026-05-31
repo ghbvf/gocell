@@ -459,7 +459,7 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 // detachLock intentionally does not log. Callers (handleRemove and handleOrphan)
 // own their observability signals because the two paths have different log levels
 // and contexts: handleRemove logs a warning on I/O error; handleOrphan logs at
-// Debug. Centralising the log call here would require a caller-supplied level and
+// Debug. Centralizing the log call here would require a caller-supplied level and
 // message, adding indirection for minimal benefit.
 func (m *Manager) detachLock(
 	id lockID,
