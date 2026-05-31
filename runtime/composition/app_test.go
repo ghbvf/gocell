@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 // appRunCancelTimeout bounds how long App.Run may take to return after the
@@ -32,9 +33,15 @@ func TestApp_Run_CancelledCtx(t *testing.T) {
 
 	select {
 	case err := <-done:
-		// A canceled context causes bootstrap.Run to return context.Canceled;
-		// that is the expected path when the application shuts down.
-		_ = err // context.Canceled is acceptable
+		// App.Run must return promptly — that is the sole invariant this test
+		// enforces (blocking is the failure mode, caught by the timeout branch).
+		//
+		// With no bootstrap options, bootstrap.Run returns a config error
+		// ("no HTTP listeners declared") before the context-cancel gate is
+		// reached, so err is NOT context.Canceled in this test fixture.  Both
+		// a config error and context.Canceled are accepted; we log either for
+		// visibility but do not assert the specific error type here.
+		t.Logf("App.Run returned with err=%v (expected: config error or context.Canceled)", err)
 	case <-time.After(appRunCancelTimeout):
 		t.Fatal("App.Run did not return within 5s after context cancel")
 	}
@@ -43,7 +50,11 @@ func TestApp_Run_CancelledCtx(t *testing.T) {
 // TestApp_FieldsRetained verifies that App stores the clock and opts correctly.
 func TestApp_FieldsRetained(t *testing.T) {
 	clk := clockmock.New(time.Now())
-	app := &App{clk: clk, opts: nil}
-	require.NotNil(t, app)
+	sentinelOpt := bootstrap.WithAssembly(nil) // a non-nil option as a sentinel
+	app := &App{clk: clk, opts: []bootstrap.Option{sentinelOpt}}
+
+	// Clock must be exactly the instance that was supplied.
 	require.Equal(t, clk, app.clk)
+	// opts must be stored as-is (not dropped or copied away).
+	require.Len(t, app.opts, 1, "opts slice must be retained")
 }

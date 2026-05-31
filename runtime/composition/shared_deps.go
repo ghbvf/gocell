@@ -2,7 +2,6 @@ package composition
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -78,6 +77,10 @@ type SharedDeps struct {
 	// audit chain, wired by AuditCoreModule.Provide and consumed by
 	// AccessCoreModule.Provide via audit.NewBootstrapAuthFailObserver.
 	//
+	// Set by the auditcore module during CellModule.Provide; auditcore MUST
+	// appear before accesscore in Builder.With
+	// (MODULE-ORDER-AUDITCORE-BEFORE-ACCESSCORE-01).
+	//
 	// Not checked by Validate() — it is populated during BuildApp (after
 	// Validate has already run).  See cmd/corebundle shared_deps_validate.go
 	// for the rationale.
@@ -120,9 +123,14 @@ type SharedDeps struct {
 	VerboseDisabled bool
 
 	// HealthLocalOnly explicitly waives the loopback-only HealthHTTPAddr guard.
+	// Must be false in production; set true only in tests or single-node
+	// deployments where the health listener is deliberately bound to a
+	// non-loopback address.
 	HealthLocalOnly bool
 
 	// ProjectRoot is the directory used by the devtools catalog endpoint.
+	// Empty means devtools catalog is disabled; external callers that do not
+	// need devtools functionality should leave this field unset.
 	ProjectRoot string
 
 	// ConfigKeyProvider is the configcore value-encryption key provider.
@@ -161,7 +169,7 @@ func (d *SharedDeps) Validate() error {
 	missing := func(field string) {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"SharedDeps field must be set",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s", field)))))
+			errcode.WithDetails(errcode.PublicString("field", field))))
 	}
 
 	if d.Clock == nil {

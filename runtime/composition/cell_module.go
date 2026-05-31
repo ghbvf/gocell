@@ -40,5 +40,11 @@ type CellModule interface {
 	// the assembly cannot complete. The same resources must also appear in the
 	// returned opts via bootstrap.WithManagedResource so that bootstrap.Run
 	// manages their lifecycle on the happy path.
+	//
+	// Some modules pass cross-module state by writing to shared (e.g.
+	// SharedDeps.BootstrapLedgerStore is written by the auditcore module so
+	// that the accesscore module can read it).  When this pattern is used,
+	// [Builder.With] order matters: the writing module must be registered
+	// before the reading module.
 	Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error)
 }

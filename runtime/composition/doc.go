@@ -36,6 +36,9 @@
 // wiring must be supplied by the caller via the [RuntimeOptionsFunc] passed to
 // [Builder.Build].  The composition root (cmd/…) owns that responsibility.
 //
+// See [RuntimeOptionsFunc] and examples/corebundlestarter for a runnable
+// example of supplying listener/auth wiring.
+//
 // ref: uber-go/fx fx.App — single assembly entry point.
 // ref: kubernetes-sigs/controller-runtime pkg/manager — Manager pattern.
 package composition

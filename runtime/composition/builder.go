@@ -20,7 +20,13 @@ import (
 // never inside runtime/composition — this package is forbidden by AUTH-PLAN-04
 // from constructing auth plans (auth.NewAuthJWT / auth.NewAuthServiceToken …).
 //
+// Typical implementation: build a bootstrap.Assembly from cells, call
+// auth.NewAuthJWTFromAssembly(asm) to obtain the JWT auth plan, then return
+// bootstrap.WithAssembly(asm), bootstrap.WithListener(...) and related options.
+//
 // Returns (nil, nil) if there are no runtime-specific options to add.
+//
+// See examples/corebundlestarter/run.go for a runnable RuntimeOptionsFunc.
 type RuntimeOptionsFunc func(cells []cell.Cell) ([]bootstrap.Option, error)
 
 // Builder assembles a GoCell application from an ordered set of [CellModule]s.
@@ -53,8 +59,8 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 //  2. For each module: nil-guard, call [CellModule.Provide], accumulate cells +
 //     cellOpts + provisional ManagedResources, with LIFO Close(ctx) rollback on
 //     any failure; nil-cell guard.
-//  3. Call runtime(cells) to get runtimeOpts.  If it errors, rollback provisional
-//     resources and return.
+//  3. Call runtimeOptsFn(cells) to get runtimeOpts.  If it errors, rollback
+//     provisional resources and return.
 //  4. allOpts := runtimeOpts ++ cellOpts.
 //  5. Return &App{clk: shared.Clock, opts: allOpts}.
 //
@@ -63,6 +69,11 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 // on all accumulated resources in reverse order (LIFO) before returning the error.
 // This prevents resource leaks when the assembly cannot complete.
 //
+// Note: module order is significant when modules share fields via *SharedDeps.
+// A module that writes a shared field during Provide (e.g. auditcore writing
+// SharedDeps.BootstrapLedgerStore) must appear before any module that reads that
+// field.  Consult each SharedDeps field godoc for ordering constraints.
+//
 // ref: uber-go/fx fx.New(opts...) — single assembly entry point used by both
 // production (main) and tests (fxtest.New).
 // ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go —
@@ -70,7 +81,7 @@ func (b *Builder) With(modules ...CellModule) *Builder {
 func (b *Builder) Build(
 	ctx context.Context,
 	shared *SharedDeps,
-	runtime RuntimeOptionsFunc,
+	runtimeOptsFn RuntimeOptionsFunc,
 ) (*App, error) {
 	if shared == nil {
 		return nil, fmt.Errorf("composition.Builder.Build: shared deps must be non-nil")
@@ -114,7 +125,7 @@ func (b *Builder) Build(
 		provisional = append(provisional, mRes...)
 	}
 
-	runtimeOpts, err := runtime(cells)
+	runtimeOpts, err := runtimeOptsFn(cells)
 	if err != nil {
 		rollback()
 		return nil, fmt.Errorf("composition.Builder.Build: runtime options: %w", err)
