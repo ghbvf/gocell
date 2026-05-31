@@ -261,7 +261,7 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 			"bootstrap: cell %s projection %q: coordinator registered no subscription", req.CellID, req.ProjectionID)
 	}
 
-	// F2: honour the caller-declared SliceID when present; fall back to the
+	// F2: honor the caller-declared SliceID when present; fall back to the
 	// projectionID that Coordinator.Subscribe injected via
 	// cell.WithSubscriptionSliceID(projectionID). This keeps the 04a seam safe
 	// (no production fill path yet) while giving 04b cellgen a place to
