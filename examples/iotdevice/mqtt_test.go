@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestMQTTEventTopic verifies the dotted-event-type → namespaced-slash-topic
@@ -166,4 +168,46 @@ func TestBuildMQTTDirectPublisher_EarlyReturns(t *testing.T) {
 			t.Fatalf("invalid namespace = (ok=%v, err=%v), want (false, non-nil)", ok, err)
 		}
 	})
+}
+
+// TestMQTTConnectDeadline covers the env-driven bootstrap connect-deadline
+// resolver: unset → default constant; valid override; and the fail-fast paths
+// (malformed duration / non-positive) that must NOT silently revert to default.
+func TestMQTTConnectDeadline(t *testing.T) {
+	tests := []struct {
+		name    string
+		set     bool
+		val     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "unset uses default", set: false, want: defaultMQTTConnectDeadline},
+		{name: "valid override", set: true, val: "10s", want: testtime.D10s},
+		{name: "malformed rejected", set: true, val: "notaduration", wantErr: true},
+		{name: "zero rejected", set: true, val: "0s", wantErr: true},
+		{name: "negative rejected", set: true, val: "-5s", wantErr: true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv(envMQTTConnectDeadline, tc.val)
+			} else {
+				t.Setenv(envMQTTConnectDeadline, "")
+			}
+			got, err := mqttConnectDeadline()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("mqttConnectDeadline(%q) err = nil, want non-nil", tc.val)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("mqttConnectDeadline(%q) err = %v, want nil", tc.val, err)
+			}
+			if got != tc.want {
+				t.Fatalf("mqttConnectDeadline(%q) = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
 }

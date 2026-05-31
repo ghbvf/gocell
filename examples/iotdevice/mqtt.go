@@ -30,7 +30,37 @@ const (
 	// envMQTTTopicNS overrides the topic namespace prefix; defaults to "iotdevice".
 	envMQTTTopicNS     = "GOCELL_IOTDEVICE_MQTT_TOPIC_NS"
 	defaultMQTTTopicNS = "iotdevice"
+	// envMQTTConnectDeadline overrides the bootstrap connect deadline (a Go
+	// duration string, e.g. "10s"). Defaults to defaultMQTTConnectDeadline. This
+	// bounds how long startup waits for the first broker connection before
+	// failing fast — without it an unreachable broker would hang startup before
+	// /readyz is listening (#1388).
+	envMQTTConnectDeadline = "GOCELL_IOTDEVICE_MQTT_CONNECT_DEADLINE"
+	// defaultMQTTConnectDeadline allows ~2-3 ConnectTimeout(10s)+backoff retries
+	// before fail-fast, leaving headroom for transient network jitter without
+	// hanging startup indefinitely.
+	defaultMQTTConnectDeadline = 30 * time.Second
 )
+
+// mqttConnectDeadline resolves the bootstrap connect deadline from
+// envMQTTConnectDeadline (a Go duration string, e.g. "10s"), falling back to
+// defaultMQTTConnectDeadline when unset. A malformed or non-positive override
+// is a hard configuration error (fail-fast, no silent default) so an operator
+// typo surfaces at startup rather than silently reverting to the default.
+func mqttConnectDeadline() (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(envMQTTConnectDeadline))
+	if raw == "" {
+		return defaultMQTTConnectDeadline, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q: %w", envMQTTConnectDeadline, raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s=%q: must be > 0", envMQTTConnectDeadline, raw)
+	}
+	return d, nil
+}
 
 // mqttTopicPublisher adapts an mqtt.Publisher to iotdevice's event-type naming.
 // GoCell event types are dotted ("event.device-registered.v1"); MQTT topics are
@@ -121,12 +151,18 @@ func buildMQTTDirectPublisher(
 		return nil, nil, false, fmt.Errorf("mqtt client id: %w", err)
 	}
 
+	connectDeadline, err := mqttConnectDeadline()
+	if err != nil {
+		return nil, nil, false, err
+	}
+
 	cfg := mqtt.Config{
-		ClientID:       clientID,
-		Brokers:        brokers,
-		ConnectTimeout: 10 * time.Second,
-		KeepAlive:      30 * time.Second,
-		PublishTimeout: 5 * time.Second,
+		ClientID:        clientID,
+		Brokers:         brokers,
+		ConnectTimeout:  10 * time.Second,
+		ConnectDeadline: connectDeadline,
+		KeepAlive:       30 * time.Second,
+		PublishTimeout:  5 * time.Second,
 		Backoff: mqtt.BackoffConfig{
 			BaseDelay: 500 * time.Millisecond,
 			MaxDelay:  30 * time.Second,

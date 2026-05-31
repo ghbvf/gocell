@@ -29,11 +29,14 @@ envelope）原样透传。
 |------|------|------|
 | `GOCELL_IOTDEVICE_MQTT_BROKERS` | 逗号分隔的 broker URL（如 `tcp://127.0.0.1:1883`）。**未设 = 通道关闭**，行为与今天逐字节一致 | 未设 |
 | `GOCELL_IOTDEVICE_MQTT_TOPIC_NS` | topic namespace 前缀 | `iotdevice` |
+| `GOCELL_IOTDEVICE_MQTT_CONNECT_DEADLINE` | bootstrap 初次连接等待预算（Go duration，如 `10s`）；broker 不可达时启动在此期限内 fail-fast 退出。格式错误或 ≤0 的覆盖值导致启动失败（不静默回退默认值） | `30s` |
 
 **fail-fast，无 noop 回退**：通道开启后，配置/解析/连接错误会让启动失败并报错
-（不静默降级到 noop publisher）。`Open` 会阻塞直到 broker 可达——**先启动 broker
-再跑 demo**（broker 未就绪时 `go run` 会停在连接重试，Ctrl-C 可中断）。仅"未设环境
-变量"是合法的关闭方式。
+（不静默降级到 noop publisher）。`Open` 阻塞等待首次连接，但受 `ConnectDeadline`
+（默认 30s，可经 `GOCELL_IOTDEVICE_MQTT_CONNECT_DEADLINE` 覆盖）限定——broker 不可达
+时启动在该期限内**报错退出**，而非随 root ctx 无限挂起（#1388）。ConnectionManager 仍
+绑应用 lifecycle ctx，连接成功后不受该 deadline 影响（断线照常重连）。**建议先启动
+broker 再跑 demo**；仅"未设环境变量"是合法的关闭方式。
 
 **认证**：当前 demo 仅连接**无认证** broker（示例用 `mosquitto-no-auth.conf`）。未提供
 用户名/密码环境变量；连接有认证的 broker 需扩展 `buildMQTTDirectPublisher` 注入
@@ -69,7 +72,7 @@ body 是 outbox envelope（含 `eventId` 与 `payload`，payload 内 `name=senso
 
 - `/readyz`（HealthListener，默认 `127.0.0.1:9093`）开启 MQTT 通道时包含
   `mqtt_ready` 探针，反映 broker 可达性（broker 断开 → 探针非 nil → readyz 降级）。
-- 连接由框架 LIFO shutdown 关闭（`bootstrap.WithManagedCloser`）。
+- 连接（`mqtt_ready` 探针 + disconnect）经 `bootstrap.WithManagedResource` 注册，Publisher（drain in-flight publishes）经 `bootstrap.WithManagedCloser` 注册；二者均参与框架 LIFO shutdown。
 
 ## broker 不可用时
 
