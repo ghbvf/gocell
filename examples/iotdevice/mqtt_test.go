@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestMQTTEventTopic verifies the dotted-event-type → namespaced-slash-topic
@@ -181,7 +182,7 @@ func TestMQTTConnectDeadline(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "unset uses default", set: false, want: defaultMQTTConnectDeadline},
-		{name: "valid override", set: true, val: "10s", want: 10 * time.Second},
+		{name: "valid override", set: true, val: "10s", want: testtime.D10s},
 		{name: "malformed rejected", set: true, val: "notaduration", wantErr: true},
 		{name: "zero rejected", set: true, val: "0s", wantErr: true},
 		{name: "negative rejected", set: true, val: "-5s", wantErr: true},

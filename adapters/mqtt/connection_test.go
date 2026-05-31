@@ -231,6 +231,42 @@ func TestConnection_ConnectDeadline_Decoupled_CMSurvives(t *testing.T) {
 	assert.NoError(t, conn.Health(context.Background()))
 }
 
+// TestConnection_LifecycleCtxCanceled_ReturnsCanceled verifies that canceling
+// Open's parent lifecycle ctx during the bootstrap wait surfaces
+// ErrAdapterMQTTConnectCanceled — NOT ErrAdapterMQTTConnectTimeout. The split
+// (deadline → timeout, cancel → canceled) lets ops tell a deliberate abort from
+// a slow/unreachable broker.
+//
+// Determinism: the dead port only ever yields transient connection-refused
+// errors (never permErr, never a successful connect), and ConnectDeadline is
+// large (30s) so the deadline cannot fire within the test. Therefore the ONLY
+// way Open can return is the parent-ctx cancel propagating into connectCtx,
+// whose Err() is context.Canceled.
+func TestConnection_LifecycleCtxCanceled_ReturnsCanceled(t *testing.T) {
+	clk := clock.Real()
+	id, _ := mqtt.ParseEphemeralClientID("test", "cancel")
+	cfg := mqtt.Config{
+		ClientID:        id,
+		Brokers:         []string{"tcp://127.0.0.1:19999"}, // dead port → transient only
+		ConnectTimeout:  testtime.D5s,
+		ConnectDeadline: testtime.D30s, // large → only the cancel (not deadline) ends the wait
+		KeepAlive:       testtime.D30s,
+		Backoff: mqtt.BackoffConfig{
+			BaseDelay: testtime.D50ms,
+			MaxDelay:  testtime.D200ms,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel the parent lifecycle ctx concurrently. Open blocks on connectCtx
+	// until this propagates; with the deadline at 30s, cancel is the only exit.
+	go cancel()
+
+	_, err := mqtt.Open(ctx, clk, cfg)
+	require.Error(t, err)
+	assertErrCode(t, err, mqtt.ErrAdapterMQTTConnectCanceled)
+}
+
 // TestConnection_DenyBroker_PermanentErrViaHealth tests that a deny-all broker
 // (0x87 NotAuthorized from mochi) sets permanentErr and Open surfaces it as
 // ErrAdapterMQTTConnectPermanent — proving the bootstrap outcome channel
