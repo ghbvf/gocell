@@ -45,6 +45,21 @@ func TestRegisterProjection_HappyPath_RecordsRequest(t *testing.T) {
 	assert.Equal(t, "order-created", got.Spec.Topic)
 	require.NotNil(t, got.Apply, "Apply must survive into the snapshot")
 	assert.Nil(t, got.OnReset, "nil OnReset is valid and preserved")
+	// SliceID is optional — empty string is valid (bootstrap falls back to projectionID).
+	assert.Equal(t, "", got.SliceID, "SliceID defaults to empty when not set")
+}
+
+func TestRegisterProjection_SliceID_RoundTrip(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := validProjectionRequest()
+	req.SliceID = "myslice"
+
+	require.NoError(t, rec.RegisterProjection(req))
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.Projections, 1)
+	assert.Equal(t, "myslice", snap.Projections[0].SliceID,
+		"non-empty SliceID must survive into the snapshot")
 }
 
 func TestRegisterProjection_OnResetOptional_Preserved(t *testing.T) {
@@ -113,6 +128,22 @@ func TestRegisterProjection_AfterSnapshotPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		_ = rec.RegisterProjection(validProjectionRequest())
 	}, "registration after Snapshot must panic")
+}
+
+// TestRegisterProjection_SpecValidate_RejectsInvalidSpec verifies that a
+// ProjectionRequest whose Spec passes the Kind/Topic guards but fails
+// ContractSpec.Validate() (e.g. empty Transport) is rejected before recording.
+// This mirrors the symmetric guard added to Subscribe (F3).
+func TestRegisterProjection_SpecValidate_RejectsInvalidSpec(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	req := validProjectionRequest()
+	// Transport is required by Spec.Validate(); blank it out to trigger the error.
+	req.Spec.Transport = ""
+
+	err := rec.RegisterProjection(req)
+	require.Error(t, err, "spec with empty Transport must be rejected")
+	assert.Contains(t, err.Error(), "Transport", "error must reference the invalid field")
+	assert.Empty(t, rec.Snapshot().Projections, "rejected request must not be recorded")
 }
 
 // Compile-time anchor: ProjectionRequest.Apply has the same underlying signature

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cellvocab"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -445,6 +446,14 @@ type ProjectionRequest struct {
 	// SubscriptionRequest.CellID); the bootstrap drain cross-checks it against
 	// the snapshot owner and fails fast on drift.
 	CellID string
+	// SliceID is the slice that owns this projection — the observability owner
+	// at slice granularity, one level below CellID. Semantically mirrors
+	// SubscriptionRequest.SliceID (see that field's godoc). Typically equal to
+	// ProjectionID; injected from slice metadata at code-generation time in
+	// PR-04b. During this PR-04a record-only seam there is no production fill
+	// path, so SliceID may be empty — bootstrap falls back to ProjectionID
+	// when SliceID is the empty string.
+	SliceID string
 	// Apply is the business event→state hook. Required (non-nil).
 	Apply ProjectionApply
 	// OnReset is the optional rebuild Reset-phase hook. May be nil.
@@ -650,7 +659,7 @@ func (r *RegistryRecorder) Subscribe(
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: cellID must not be empty")
 	}
-	if spec.Kind != "event" {
+	if spec.Kind != cellvocab.ContractEvent {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Kind must be \"event\"",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%q", spec.Kind))))
@@ -658,6 +667,9 @@ func (r *RegistryRecorder) Subscribe(
 	if spec.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Topic must not be empty")
+	}
+	if err := spec.Validate(); err != nil {
+		return err
 	}
 
 	req := SubscriptionRequest{
@@ -742,7 +754,7 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry RegisterProjection: CellID must not be empty")
 	}
-	if req.Spec.Kind != "event" {
+	if req.Spec.Kind != cellvocab.ContractEvent {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry RegisterProjection: Spec.Kind must be \"event\"; a projection consumes an event-kind input stream",
 			errcode.WithInternal(errcode.InternalAttr("specKind", req.Spec.Kind)))
@@ -750,6 +762,9 @@ func (r *RegistryRecorder) RegisterProjection(req ProjectionRequest) error {
 	if req.Spec.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry RegisterProjection: Spec.Topic must not be empty")
+	}
+	if err := req.Spec.Validate(); err != nil {
+		return err
 	}
 
 	r.projections = append(r.projections, req)

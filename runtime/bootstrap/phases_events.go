@@ -302,10 +302,16 @@ func (b *Bootstrap) autoWireOutboxRejectCollector() error {
 }
 
 // checkConsumerBaseConfiguredForSubscriptions fails fast when cells registered
-// subscriptions but the ConsumerBase wired via WithConsumerBase is missing or
-// is a zero-value `&ConsumerBase{}` literal. This keeps idempotency and retry
-// lifecycle wiring explicit instead of silently consuming with a misconfigured
-// ConsumerBase.
+// subscriptions or projections but the ConsumerBase wired via WithConsumerBase
+// is missing or is a zero-value `&ConsumerBase{}` literal. This keeps
+// idempotency and retry lifecycle wiring explicit instead of silently consuming
+// with a misconfigured ConsumerBase.
+//
+// Both subscriptions (reg.Subscribe) and projections (reg.RegisterProjection,
+// which become event subscriptions once drained by buildProjectionCoordinators)
+// walk the same ConsumerBase-backed consumption path. A projection-only
+// deployment must not bypass this guard — mirroring checkNoEventConsumersWhenSubscriberNil
+// which already checks both snap.Subscriptions and snap.Projections.
 //
 // N8 (b): the IsConstructed sentinel rejects literals even when they are
 // non-nil — a `&outbox.ConsumerBase{}` would previously slip past the bare
@@ -332,6 +338,19 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
 					"call outbox.NewConsumerBase to obtain a properly initialized value",
 				id, sub.Spec.Topic, b.consumerBase)
+		}
+		for _, proj := range snap.Projections {
+			if b.consumerBase == nil {
+				return fmt.Errorf(
+					"bootstrap: cell %s registered projection topic %q but no ConsumerBase is configured; "+
+						"projections consume via the same ConsumerBase path as subscriptions — "+
+						"add WithConsumerBase to bootstrap options", id, proj.Spec.Topic)
+			}
+			return fmt.Errorf(
+				"bootstrap: cell %s registered projection topic %q but ConsumerBase (%T) was not constructed via "+
+					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
+					"call outbox.NewConsumerBase to obtain a properly initialized value",
+				id, proj.Spec.Topic, b.consumerBase)
 		}
 	}
 	return nil

@@ -50,6 +50,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/contractspec"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -212,6 +213,24 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		tracer = wrapper.NoopTracer{}
 	}
 
+	// Wire metrics when a real (non-Nop) provider is configured; leave cfg.Metrics
+	// nil when no provider is set so the Coordinator silently disables instruments.
+	// Mirrors the autoWireHTTPMetricsCollector / autoWireEventRouterCollector pattern.
+	var projMetrics *projection.Metrics
+	if p := b.metricsProvider; p != nil {
+		if _, isNop := p.(kernelmetrics.NopProvider); !isNop {
+			var regErr error
+			projMetrics, regErr = projection.RegisterMetrics(p)
+			if regErr != nil {
+				slog.Warn("bootstrap: projection metrics registration failed; running without metrics",
+					slog.String("cell", req.CellID),
+					slog.String("projection", req.ProjectionID),
+					slog.String("error", regErr.Error()))
+				projMetrics = nil // defensive: treat registration error as no-metrics
+			}
+		}
+	}
+
 	capReg := &captureRegistrar{}
 	coord, err := projection.NewCoordinator(b.clock, projection.CoordinatorConfig{
 		Registrar:    capReg,
@@ -222,6 +241,7 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 		Cursor:       b.projectionCursor,
 		Replay:       b.projectionReplay,
 		Tracer:       tracer,
+		Metrics:      projMetrics,
 	})
 	if err != nil {
 		return projectionWiring{}, fmt.Errorf(
@@ -241,11 +261,21 @@ func (b *Bootstrap) buildOneProjection(ctx context.Context, req cell.ProjectionR
 			"bootstrap: cell %s projection %q: coordinator registered no subscription", req.CellID, req.ProjectionID)
 	}
 
+	// F2: honour the caller-declared SliceID when present; fall back to the
+	// projectionID that Coordinator.Subscribe injected via
+	// cell.WithSubscriptionSliceID(projectionID). This keeps the 04a seam safe
+	// (no production fill path yet) while giving 04b cellgen a place to
+	// land the slice-metadata-derived value without touching the Coordinator.
+	sub := *capReg.captured
+	if req.SliceID != "" {
+		sub.SliceID = req.SliceID
+	}
+
 	return projectionWiring{
 		coord:        coord,
 		cellID:       req.CellID,
 		projectionID: req.ProjectionID,
-		sub:          *capReg.captured,
+		sub:          sub,
 	}, nil
 }
 

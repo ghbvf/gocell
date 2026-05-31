@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/contractspec"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/projection"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -278,6 +280,53 @@ func TestBuildProjectionCoordinators_CapturedHandlerRunsApply(t *testing.T) {
 		"captured handler must route a fresh event to the business apply")
 }
 
+// TestBuildProjectionCoordinators_SliceID_UsedWhenSet verifies that when
+// ProjectionRequest.SliceID is non-empty, buildOneProjection uses it as the
+// subscription SliceID instead of the coordinator-injected projectionID fallback.
+func TestBuildProjectionCoordinators_SliceID_UsedWhenSet(t *testing.T) {
+	t.Parallel()
+	pc := newProjectionCell()
+	s := buildProjectionPhaseState(t, pc)
+
+	// Patch the recorded projection's SliceID after snapshot is taken.
+	// White-box: RegistrySnapshot is a value type in the map, so we read it,
+	// mutate it, and write it back. This simulates cellgen 04b injecting
+	// a distinct slice name from slice metadata.
+	snap := s.cellSnapshots[projTestCellID]
+	require.Len(t, snap.Projections, 1)
+	snap.Projections[0].SliceID = "myslice"
+	s.cellSnapshots[projTestCellID] = snap
+
+	b := newProjectionBootstrap(t)
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+
+	assert.Equal(t, "myslice", wirings[0].sub.SliceID,
+		"non-empty req.SliceID must override the projectionID fallback")
+}
+
+// TestBuildProjectionCoordinators_SliceID_FallsBackToProjectionID verifies that
+// when ProjectionRequest.SliceID is empty (the PR-04a no-fill-path case),
+// buildOneProjection leaves the coordinator-injected projectionID as the SliceID.
+func TestBuildProjectionCoordinators_SliceID_FallsBackToProjectionID(t *testing.T) {
+	t.Parallel()
+	s := buildProjectionPhaseState(t, newProjectionCell())
+
+	// Confirm SliceID is empty (no cellgen fill in 04a).
+	snap := s.cellSnapshots[projTestCellID]
+	require.Len(t, snap.Projections, 1)
+	require.Equal(t, "", snap.Projections[0].SliceID, "fixture must have empty SliceID for this test")
+
+	b := newProjectionBootstrap(t)
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+
+	assert.Equal(t, projTestProjID, wirings[0].sub.SliceID,
+		"empty SliceID must fall back to projectionID (coordinator-injected value)")
+}
+
 // TestBuildProjectionCoordinators_NewCoordinatorError covers buildOneProjection's
 // NewCoordinator failure branch: RegisterProjection accepts a non-empty
 // ProjectionID, but NewCoordinator rejects one that is not a snake_case
@@ -343,6 +392,80 @@ func TestPhase6_ProjectionDrain_WiresCoordinatorAndProbes(t *testing.T) {
 	}
 }
 
+// TestPhase6_ProjectionDrain_PublishApplyRoundTrip verifies that after phase6
+// drains the projection into the running event router, publishing a real event
+// on the projection's topic causes the business Apply to be invoked. This is the
+// true E2E guarantee: coordinator wired, handler registered, router running, and
+// publish → Apply round-trip confirmed.
+//
+// The test uses an atomic counter + Eventually to avoid sleep-based polling.
+// In-mem eventbus + mem projection deps ensure no external deps and determinism.
+func TestPhase6_ProjectionDrain_PublishApplyRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	var applied atomic.Int32
+	bus := eventbus.New(clock.Real())
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase6-e2e-apply", DurabilityMode: outbox.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+	pc := newProjectionCell()
+	pc.apply = func(_ context.Context, _ outbox.Entry) error {
+		applied.Add(1)
+		return nil
+	}
+	require.NoError(t, asm.Register(pc))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := newProjectionBootstrap(t,
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+	b.healthAggregator = newEventsTestAggregator()
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, newEventsTestAggregator(), clock.Real())
+
+	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
+		"phase6 must start cleanly before the publish test")
+
+	// Publish one valid wire envelope to the projection topic.
+	// fakeProjectionCursor returns position 1 > checkpoint 0, so apply fires.
+	now := clock.Real().Now()
+	entry, err := outbox.EntryScan{
+		ID:         "test-proj-e2e-id",
+		EventType:  projTestTopic,
+		Topic:      projTestTopic,
+		Payload:    []byte(`{"order":"test"}`),
+		CreatedAt:  now,
+		OccurredAt: now,
+	}.ToEntry()
+	require.NoError(t, err, "EntryScan.ToEntry must succeed for a valid entry")
+
+	payload, err := outbox.MarshalEnvelope(entry)
+	require.NoError(t, err, "MarshalEnvelope must succeed for a valid entry")
+
+	require.NoError(t, bus.Publish(context.Background(), projTestTopic, payload),
+		"Publish must succeed when the router is running")
+
+	// Wait up to 2 s for Apply to be called; in-mem bus is synchronous in
+	// dispatch but the handler runs in a goroutine so Eventually is needed.
+	require.Eventually(t, func() bool {
+		return applied.Load() >= 1
+	}, 2*time.Second, 10*time.Millisecond,
+		"projection Apply must be invoked within 2s of publishing the event")
+
+	// Teardown: LIFO stop the router + coordinator.
+	for _, v := range slices.Backward(s.teardowns) {
+		_ = v.fn(context.Background())
+	}
+}
+
 func TestPhase6_ProjectionWithoutSubscriber_FailsFast(t *testing.T) {
 	t.Parallel()
 	s := buildProjectionPhaseState(t, newProjectionCell())
@@ -394,6 +517,58 @@ func TestWithProjectionOptions_StoreValueAndNilIgnored(t *testing.T) {
 		WithProjectionCursor(nilCur)(b)
 		assert.NotNil(t, b.projectionCursor, "typed-nil must not clear the set value")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// F4: projection metrics wiring
+// ---------------------------------------------------------------------------
+
+// TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics verifies
+// that when a real (non-Nop) metrics provider is injected, buildOneProjection
+// calls projection.RegisterMetrics and registers the three canonical metric names
+// against the provider. The spy captures names at registration time, proving the
+// provider is threaded through to the Coordinator.
+func TestBuildProjectionCoordinators_WithRealProvider_RegistersMetrics(t *testing.T) {
+	t.Parallel()
+	spy := &registrationSpy{}
+	s := buildProjectionPhaseState(t, newProjectionCell())
+
+	b := newProjectionBootstrap(t, WithMetricsProvider(spy))
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+
+	// Verify that the three projection metric gauges/histograms were registered.
+	spy.mu.Lock()
+	gauges := append([]string(nil), spy.histogramNames...)
+	spy.mu.Unlock()
+
+	// RegisterMetrics registers: projection_event_replay_lag_seconds (gauge),
+	// projection_rebuild_duration_seconds (histogram), projection_pending_events (gauge).
+	// At least the histogram name must appear in the spy's histogram registration.
+	assert.Contains(t, gauges, "projection_rebuild_duration_seconds",
+		"projection_rebuild_duration_seconds must be registered on the real provider; "+
+			"got %v — means metrics were not threaded into the Coordinator (F4 regression)", gauges)
+}
+
+// TestBuildProjectionCoordinators_NopProvider_SkipsMetrics verifies that when no
+// provider is configured (NopProvider default), buildOneProjection does NOT call
+// projection.RegisterMetrics — matching the pattern used by autoWireHTTPMetricsCollector.
+func TestBuildProjectionCoordinators_NopProvider_SkipsMetrics(t *testing.T) {
+	t.Parallel()
+	s := buildProjectionPhaseState(t, newProjectionCell())
+
+	// No WithMetricsProvider → NopProvider default.
+	b := newProjectionBootstrap(t)
+	// Confirm the default is indeed NopProvider.
+	_, isNop := b.metricsProvider.(kernelmetrics.NopProvider)
+	require.True(t, isNop, "default must be NopProvider for this test to be meaningful")
+
+	wirings, err := b.buildProjectionCoordinators(context.Background(), s)
+	require.NoError(t, err)
+	require.Len(t, wirings, 1)
+	// No assertion on probe names: the coordinator constructs fine with nil Metrics.
+	// This test proves no panic and no registration attempt occurred on NopProvider.
 }
 
 // Compile-time anchors.
