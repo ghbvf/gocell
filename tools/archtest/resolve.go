@@ -191,28 +191,16 @@ func BuildContextPredicate(extraTags ...string) func(string) bool {
 // constraint.Expr. Use this function when you need the raw Expr for multi-
 // predicate evaluation.
 //
+// This stays a free function (NOT folded into a Pass method) on purpose: its
+// callers run outside a Pass over files that are *out of default build scope*
+// (e.g. *_integration_test.go gated by //go:build integration) and evaluate
+// the constraint under several tag-set predicates. A Pass iterates only the
+// default-context in-scope files, so it structurally cannot reach those files
+// nor express the multi-predicate evaluation. #1037 deliberately kept this and
+// [BuildContextPredicate] exported for that reason.
+//
 // Thin delegation to [typeseval.ParseBuildConstraint]. filePath must be an
 // absolute OS-native path (pass.Abs(f) is a suitable source).
 func ParseBuildConstraint(filePath string) (constraint.Expr, error) {
 	return typeseval.ParseBuildConstraint(filePath)
-}
-
-// IsGeneratedRelPath reports whether rel is a codegen output path under the
-// repo's generated/ tree. rel must be a module-relative slash path (as
-// returned by pass.Rel(f) or pkgFileRel).
-//
-// Returns true when rel begins with "generated/" (top-level only). The repo
-// reserves exactly one generated/ directory at module root; a "generated/"
-// prefix inside a hand-written package would be a layout violation and is
-// intentionally not matched.
-//
-// Use [Pass.IsGenerated] when the path is derived from a *ast.File in
-// pass.Files — it calls pass.Rel(f) automatically. Use this function when
-// the module-relative path string is already available (e.g. iterating a
-// resolver's packages outside a Pass-Driver rule, as in the loader anchor
-// test TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3).
-//
-// Thin delegation to [typeseval.IsGeneratedRelPath].
-func IsGeneratedRelPath(rel string) bool {
-	return typeseval.IsGeneratedRelPath(rel)
 }

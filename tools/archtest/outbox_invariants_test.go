@@ -1726,9 +1726,8 @@ func TestOutboxHandleResultFactoryPreferred_GeneratedLoadAnchor_Wave3(t *testing
 			return nil
 		}
 		for _, file := range p.Files {
-			rel := p.Rel(file)
-			if IsGeneratedRelPath(rel) {
-				generatedFiles = append(generatedFiles, rel)
+			if p.IsGenerated(file) {
+				generatedFiles = append(generatedFiles, p.Rel(file))
 			}
 		}
 		return nil
