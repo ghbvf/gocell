@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	platformaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
-	platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
+	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/runtime/composition"
 )
@@ -47,9 +47,9 @@ func TestStarterBuildSucceeds(t *testing.T) {
 
 	app, err := composition.New().
 		With(
-			platformauditcore.Module(),
-			platformaccesscore.Module(),
-			platformconfigcore.Module(),
+			cellmodulesauditcore.Module(),
+			cellmodulesaccesscore.Module(),
+			cellmodulesconfigcore.Module(),
 		).
 		Build(ctx, shared, starterRuntimeOptions(shared))
 
@@ -81,9 +81,9 @@ func TestStarterBootsAndRespondsHealthz(t *testing.T) {
 
 	app, err := composition.New().
 		With(
-			platformauditcore.Module(),
-			platformaccesscore.Module(),
-			platformconfigcore.Module(),
+			cellmodulesauditcore.Module(),
+			cellmodulesaccesscore.Module(),
+			cellmodulesconfigcore.Module(),
 		).
 		Build(ctx, shared, starterRuntimeOptions(shared))
 	require.NoError(t, err)
@@ -142,9 +142,9 @@ func TestStarterHealthzHTTP(t *testing.T) {
 
 	app, err := composition.New().
 		With(
-			platformauditcore.Module(),
-			platformaccesscore.Module(),
-			platformconfigcore.Module(),
+			cellmodulesauditcore.Module(),
+			cellmodulesaccesscore.Module(),
+			cellmodulesconfigcore.Module(),
 		).
 		Build(ctx, shared, starterRuntimeOptions(shared))
 	require.NoError(t, err)

@@ -504,7 +504,7 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 // TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin is the
 // concurrency regression guard for PR #595 / B2-PROVISIONER-MUTEX-REVIEW.
 //
-// Problem: the mem-mode composition root in cmd/corebundle/access_module.go
+// Problem: the mem-mode composition root in cellmodules/accesscore/module.go
 // previously did NOT wire accesscore.WithTxManager(persistence.WrapForCell(
 // userMemStore.TxRunner())).  Cell.Init fell through to the
 // outbox.DemoCellTxManager fallback, whose RunInTx is a no-op pass-through.
@@ -543,7 +543,7 @@ func TestService_CreateAdmin_Concurrent_StoreTxRunner_ExactlyOneAdmin(t *testing
 	svc, err := setup.NewService(
 		clock.Real(), prov, discardLogger(),
 		// Store-paired TxRunner: RunInTx holds store.mu for the entire closure.
-		// This is the wiring that cmd/corebundle/access_module.go must supply
+		// This is the wiring that cellmodules/accesscore/module.go must supply
 		// so that concurrent first-admin setup requests are serialized.
 		setup.WithTxManager(persistence.WrapForCell(store.TxRunner())),
 		setup.WithSetupLock(noopSetupLock{}),

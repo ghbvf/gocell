@@ -51,7 +51,7 @@ const (
 // are package-local and are reused by walkthrough_test.go (same package
 // main) as the single source of truth for the demo Basic Auth header.
 // Production deployments inject credentials via GOCELL_BOOTSTRAP_ADMIN_*
-// env (see cmd/corebundle/access_module.go); the demo path never reads
+// env (see cellmodules/accesscore/module.go); the demo path never reads
 // the env in order to keep `go run ./examples/ssobff` self-contained.
 const (
 	ssobffBootstrapUsername = "ssobff-ops"
@@ -315,7 +315,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
 // ledger.Protocol is owned by the composition root; cells never hold the raw
-// HMAC key. Mirrors cmd/corebundle/audit_module.go durable path but uses
+// HMAC key. Mirrors cellmodules/auditcore/module.go durable path but uses
 // in-source demo HMAC keys (production deployments must inject from a secret
 // manager).
 //

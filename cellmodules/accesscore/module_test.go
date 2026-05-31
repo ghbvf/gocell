@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cellmodules/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -52,7 +52,7 @@ func TestModule_Provide_MemMode(t *testing.T) {
 
 	// auditcore must run first: it exports BootstrapLedgerStore, which accesscore
 	// consumes via the typed ModuleExports handoff.
-	_, exports, _, _, err := platformauditcore.Module().Provide(ctx, shared, composition.ModuleExports{})
+	_, exports, _, _, err := cellmodulesauditcore.Module().Provide(ctx, shared, composition.ModuleExports{})
 	require.NoError(t, err, "auditcore.Provide must succeed before accesscore")
 	require.NotNil(t, exports.BootstrapLedgerStore, "auditcore.Provide must export BootstrapLedgerStore")
 

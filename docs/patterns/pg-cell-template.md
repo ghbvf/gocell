@@ -16,7 +16,10 @@
 > 经 `bootstrap.NewTopology(...)` 构造（postgres 强制 real）。**canonical 参考实现见
 > `cellmodules/configcore/module.go` + `cellmodules/configcore/storage.go`**。下文的
 > PG storage 接线逻辑（pool / TxManager / OutboxWriter / migration）仍然准确，只是
-> 承载它的文件位置与组装入口变了——按上述新位置套用。
+> 承载它的文件位置与组装入口变了——按上述新位置套用。**例外：Chapter 4 的资源生命周期
+> 契约本身也变了**（不止文件位置）——资源现在只经 `Provide` 第 4 个返回值
+> `[]lifecycle.ManagedResource` 交还一次，由 `composition.Builder.Build` 统一做失败回滚
+> + 成功移交；详见该章已更新内容。
 
 ---
 
@@ -268,14 +271,23 @@ func buildFooCoreOpts(
 
 ---
 
-## Chapter 4 — 资源生命周期（provisional rollback）
+## Chapter 4 — 资源生命周期（Builder 管理）
 
-`CellModule.Provide` 打开的外部资源（pool、vault client）**必须**同时出现在两处：
+> **#1085 后变更**：旧模型要求模块把资源同时塞进两处（`opts` 里的
+> `bootstrap.WithManagedResource` + `provisional` 列表）。现在 `CellModule.Provide`
+> 只通过**第 4 个返回值 `[]lifecycle.ManagedResource`** 把资源交还一次，两条路径都由
+> `composition.Builder.Build` 统一接管。模块**不再**自行把 `WithManagedResource` 塞进
+> opts ——那是 Builder 的职责。
 
-1. 作为 `bootstrap.WithManagedResource(res)` 追加进 `opts` 返回值——让
-   `bootstrap.Run` 在 happy path 管理生命周期（健康检查 + 后台 worker + LIFO Close）。
-2. 作为 `provisional` slice 元素返回——让 `BuildApp` 在**后续模块 Provide 失败**时
-   逆序 Close 已开启的连接，防止启动失败时泄漏。
+`CellModule.Provide` 打开的外部资源（pool、vault client）通过 `Provide` 的第 4 个返回值
+`[]lifecycle.ManagedResource` 返回。`Builder.Build` 对它做两件事：
+
+1. **失败回滚**：把各模块返回的资源累积进内部 `provisional` 栈；任一后续步骤（下游模块
+   Provide 或 `runtimeOptsFn`）失败时逆序（LIFO）Close 已开启的连接，防止启动失败泄漏。
+2. **成功移交**：Build 成功时，把每个资源 promote 成 `bootstrap.WithManagedResource(res)`
+   追加进 bootstrap opts，使 `bootstrap.Run` 在正常运行期管理其生命周期（健康检查 +
+   后台 worker + phase10 shutdown 时 LIFO Close）。漏掉这步会让 happy-path 资源（如
+   rate-limiter cleanup goroutine）永不停止——这正是 #1385 修复的 F1 缺陷。
 
 后台 worker 型资源（例如 outbox relay）通过独立
 `bootstrap.WithRelay(relayWorker)` 返回，但不塞进 Pool。`WithRelay` 是
@@ -291,18 +303,22 @@ type-mismatch，二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
 relay opts 在后，bootstrap 的 LIFO shutdown 才会先停 relay、再关 pool。
 
 ```
-BuildApp 内部逻辑（简化）:
+composition.Builder.Build 内部逻辑（简化）:
 
-module A Provide → pgResA → provisional = [pgResA]
-module B Provide → pgResB → provisional = [pgResA, pgResB]
+module A Provide → []ManagedResource{pgResA} → provisional = [pgResA]
+module B Provide → []ManagedResource{pgResB} → provisional = [pgResA, pgResB]
 module C Provide → error
-  ↓ rollback:
-  pgResB.Close(ctx)   // LIFO: B 先关
+  ↓ rollback（LIFO）:
+  pgResB.Close(ctx)   // B 先关
   pgResA.Close(ctx)   // 再关 A
+
+—— 或全部成功 ——
+allOpts += WithManagedResource(pgResA), WithManagedResource(pgResB)
+  → bootstrap.Run phase10 shutdown 时 LIFO Close
 ```
 
-这是 T6 review 后（PR-A3）新增的契约。不把资源放入 `provisional` 会导致启动失败
-时 PG pool 泄漏，进程退出前连接不会被释放。
+不把资源经 `Provide` 第 4 个返回值交还会导致两种泄漏：启动失败时 PG pool 不被回滚关闭，
+以及 happy-path 资源（rate-limiter cleanup goroutine 等）在停机时不被 Close。
 
 ---
 

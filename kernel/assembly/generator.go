@@ -124,8 +124,8 @@ type modulesContext struct {
 type modulesCompositionContext struct {
 	AssemblyID    string
 	SourcePath    string   // path to the assembly.yaml that drove generation
-	Modules       []string // Module call expressions, e.g. "platformconfigcore.Module()"
-	ModuleImports []string // aliased import lines, e.g. `platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"`
+	Modules       []string // Module call expressions, e.g. "cellmodulesconfigcore.Module()"
+	ModuleImports []string // aliased import lines, e.g. `cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"`
 	Capabilities  []string
 }
 

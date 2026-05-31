@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"time"
 
-	platformaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
-	platformauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
-	platformconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
+	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -76,9 +76,9 @@ func runStarter(ctx context.Context) error {
 	// assembly.yaml cell order.
 	app, err := composition.New().
 		With(
-			platformauditcore.Module(),
-			platformaccesscore.Module(),
-			platformconfigcore.Module(),
+			cellmodulesauditcore.Module(),
+			cellmodulesaccesscore.Module(),
+			cellmodulesconfigcore.Module(),
 		).
 		Build(ctx, shared, starterRuntimeOptions(shared))
 	if err != nil {
