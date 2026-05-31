@@ -26,8 +26,10 @@
 //   - enumerate build-tag groups for multi-tag SharedResolver loops —
 //     FlatNonDefaultTags / KnownNonDefaultTags;
 //   - extract a file's build constraint expression for 3-way evaluation under
-//     custom tag sets — ParseBuildConstraint;
-//   - test whether a module-relative path is under generated/ — IsGeneratedRelPath.
+//     custom tag sets — ParseBuildConstraint.
+//
+// Generated-path detection is NOT a free re-export: use the Pass.IsGenerated(f)
+// method (#1037 removed the IsGeneratedRelPath free function).
 //
 // Hand-rolling these patterns via raw go/types in each rule is error-prone
 // (missed dot-import bare-Ident path, missed alias form, missed untyped const

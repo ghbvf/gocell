@@ -1,4 +1,6 @@
 // INVARIANT: ARCHTEST-PASS-DRIVER-UNIT-01
+//   - INVARIANT: FACADE-NO-LOADER-LEAK-01
+//   - INVARIANT: FACADE-CONTRACTED-EXPORTS-01
 //
 // ARCHTEST-PASS-DRIVER-UNIT-01 — unit-test coverage for the archtest.Pass
 // driver surface: archtest.Run / archtest.RunTyped / archtest.RunTypedDir
@@ -881,7 +883,8 @@ func facadeBannedExportDiags(p *Pass, banned map[string]bool, reasonSuffix strin
 	return d
 }
 
-// TestFacadeContractedExports — INVARIANT: FACADE-CONTRACTED-EXPORTS-01.
+// TestFacadeContractedExports enforces FACADE-CONTRACTED-EXPORTS-01 (anchored
+// in the file-header CommentGroup).
 //
 // Locks the deliberate façade contraction performed in #1037 Phase 0/1: the
 // three symbols below were removed from the archtest package's exported surface
@@ -900,23 +903,33 @@ func facadeBannedExportDiags(p *Pass, banned map[string]bool, reasonSuffix strin
 //
 // # AI-robust
 //
-//   - downstream: Hard for the most common bypass (direct re-declaration) — a
-//     literal exported name match has no "like-but-not" gray zone; alias-of-alias
-//     re-export is Medium (would need go/types), same ceiling as the sibling
-//     FACADE-NO-LOADER-LEAK-01.
-//   - upstream: Hard — scanner.FileContext / scanner.LoadContentFiles /
-//     typeseval.IsGeneratedRelPath live in internal/ packages; depguard
-//     (PACKAGES-IMPORT-01) Hard-bans business *_test.go from importing them, so
-//     the symbols cannot leak except by a façade re-export, which this test gates.
+// Mirrors the sibling FACADE-NO-LOADER-LEAK-01 grading. The guard is Hard for
+// the most common bypass (direct re-declaration of an exported func / type /
+// var / const carrying a banned name — a literal name match with no
+// "like-but-not" gray zone) and Medium for an alias-of-alias re-export under a
+// DIFFERENT name (would need go/types). "Not in the façade = not expressible at
+// the call site": once these names are absent from the package's exported set, a
+// rule cannot write archtest.IsGeneratedRelPath(...) — the compiler rejects it.
+//
+// This guard governs only the façade's own exported surface; it does not by
+// itself seal every route to the internal equivalents (that is not its job):
+//   - Code outside tools/archtest cannot import tools/archtest/internal/* at all
+//     — Go's internal-package visibility, compiler-enforced (Hard).
+//   - Within tools/archtest (same internal root, so the import IS allowed), a
+//     direct call to typeseval.IsGeneratedRelPath is separately gated by
+//     PASS-FUNNEL-RESOLVE-01 (Medium); scanner.FileContext / scanner.LoadContentFiles
+//     have no such ban, but re-exposing them is the very thing this test forbids.
 //
 // # Blind spots (honest disclosure, per ai-robust.md)
 //
-//   - A symbol re-exported under a DIFFERENT name (e.g. `var X = scanner.FileContext`)
-//     is not caught by the name match. Mitigation: such a re-export still requires
-//     importing the internal package, which depguard rejects; and there is no
+//   - A symbol re-exported under a DIFFERENT name (e.g. `var X = scanner.FileContext`
+//     inside a façade .go file — a legal in-package import) is not caught by the
+//     name match. This is the same Medium alias residue FACADE-NO-LOADER-LEAK-01
+//     carries; no go/types alias resolution is attempted here. There is no
 //     business value in re-exposing these under an alias.
-//   - Re-export from an archtest sub-package: out of scope here — business tests
-//     import only tools/archtest (not sub-packages), enforced by PACKAGES-IMPORT-01.
+//   - Re-export from an archtest sub-package is out of scope: business rules import
+//     only tools/archtest (not its sub-packages), and this scan covers only the
+//     façade's own direct-child .go files (facadeScopeForArchtest).
 func TestFacadeContractedExports(t *testing.T) {
 	contractedExports := map[string]bool{
 		"FileContext":        true,
