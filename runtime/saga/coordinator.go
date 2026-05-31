@@ -227,8 +227,10 @@ type Coordinator struct {
 // Both are idempotent and mutually exclusive via distlock's shared sync.Once:
 // a tickOnce release() after a Stop orphan() is a harmless no-op.
 type inflightDrive struct {
-	release func()
-	orphan  func()
+	release      func()
+	orphan       func()
+	definitionID idutil.SafeID // for per-instance shutdown log fan-out (F4)
+	leaseID      idutil.SafeID // for per-instance shutdown log fan-out (F4)
 }
 
 // NewCoordinator validates required deps and applies opts. Nil required deps
@@ -482,11 +484,19 @@ drain:
 // shutdown (resilient even when the backend is unreachable at shutdown).
 func (c *Coordinator) orphanInflightLocks() {
 	var n int
-	c.inflightLocks.Range(func(_, val any) bool {
-		if d, ok := val.(inflightDrive); ok {
-			d.orphan()
-			n++
+	c.inflightLocks.Range(func(key, val any) bool {
+		d, ok := val.(inflightDrive)
+		if !ok {
+			return true
 		}
+		d.orphan()
+		n++
+		instanceID, _ := key.(idutil.SafeID)
+		c.logger.Debug("saga: orphaned in-flight distlock at shutdown",
+			slog.String("instance_id", string(instanceID)),
+			slog.String("definition_id", string(d.definitionID)),
+			slog.String("lease_id", string(d.leaseID)),
+		)
 		return true
 	})
 	if n > 0 {
@@ -584,8 +594,10 @@ func (c *Coordinator) tickOnce(ctx context.Context) error {
 		// leaseID from ClaimPending is discarded. PG Journal (PR-04) mints
 		// per-instance tokens; using the batch token would break CAS fencing.
 		c.inflightLocks.Store(ci.Instance.ID, inflightDrive{
-			release: release,
-			orphan:  orphan,
+			release:      release,
+			orphan:       orphan,
+			definitionID: ci.Instance.DefinitionID,
+			leaseID:      ci.LeaseID,
 		})
 		if err := c.driveOne(ctx, ci); err != nil {
 			// Sentinel-aware severity: ErrSagaStaleLease (handoff race) →
