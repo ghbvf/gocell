@@ -169,8 +169,8 @@ type Service struct {
 // WithLastAdminProtection option + IDENTITYMANAGE-LAST-ADMIN-PROTECTION-WIRING-01
 // archtest (Medium → Hard). A nil roleRepo is rejected by buildLastAdminGuard,
 // matching the required-dep positional + runtime nil-guard pattern (same ceiling
-// as the clk positional param). roleRepo is retained on the Service for the
-// hasAdminRole leg (see isLastAdminProtected callers below).
+// as the clk positional param). roleRepo is retained on the Service
+// (lastAdminRoleRepo) for the hasAdminRole leg in checkLastAdminRemoval.
 //
 // authzmutator: when not injected via WithAuthzMutator, NewService constructs
 // one from (invalidator, repo, txRunner). This is intentional composition
@@ -704,9 +704,12 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 // kept as a fast pre-check so we do not query CountEffectiveAdmins for users
 // that don't hold admin at all.
 func (s *Service) checkLastAdminRemoval(ctx context.Context, userID string, userStatus domain.UserStatus) error {
-	if s.lastAdminGuard == nil {
-		return nil
-	}
+	// No nil-guard on s.lastAdminGuard: NewService builds it unconditionally
+	// from the required roleRepo positional param (a nil roleRepo fails
+	// construction), so a *Service that reaches this method always holds a
+	// non-nil guard. The former `if s.lastAdminGuard == nil { return nil }`
+	// opt-out skip belonged to the deleted WithLastAdminProtection era and
+	// would silently bypass S4.0 — its removal is what makes the guard Hard.
 	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("identity-manage: last-admin roles: %w", err)

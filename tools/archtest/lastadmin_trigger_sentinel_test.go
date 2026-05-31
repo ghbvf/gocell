@@ -56,7 +56,11 @@ const (
 	lastAdminSentinelConstPkg = PlatformModulePath + "/cells/accesscore/internal/adapters/postgres"
 	lastAdminSentinelConstRel = "cells/accesscore/internal/adapters/postgres/lastadmin.go"
 
-	// lastAdminMigrationsDir is the flat migrations directory (NNN_xxx.sql).
+	// lastAdminMigrationsDir is the flat migrations directory (NNN_xxx.sql). This
+	// is a module-root-relative filesystem path for EachContentFile, NOT a Go
+	// import path, so it is a bare literal — ARCHTEST-MODULE-PATH-FUNNEL-01 only
+	// governs Go package paths (which is why lastAdminSentinelConstPkg above
+	// derives from PlatformModulePath but this one does not).
 	lastAdminMigrationsDir = "adapters/postgres/migrations"
 )
 

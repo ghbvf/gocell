@@ -39,10 +39,17 @@ func adminCtxForService() context.Context {
 	return auth.TestContext("test-admin", []string{"admin"})
 }
 
-// inertRoleRepo returns a fresh, empty RoleRepository so identitymanage.NewService's
-// mandatory last-admin guard is constructed but inert (no admin roles exist → the
-// guard never trips). Tests that specifically exercise last-admin protection wire a
-// real, admin-seeded roleRepo instead (see the dedicated last-admin helper).
+// inertRoleRepo returns a fresh, empty RoleRepository from a SEPARATE mem.Store
+// (deliberately not the test's user store). Because checkLastAdminRemoval reads
+// admin-role membership from this repo via GetByUserID, an empty+isolated repo
+// reports no admins for any user → the mandatory last-admin guard is constructed
+// but never trips, regardless of what the test's own UserRepository contains.
+// This makes it behavior-preserving for tests that do not exercise last-admin
+// protection (the old code had no guard at all on these paths).
+//
+// Tests that DO exercise last-admin protection must instead use
+// newLastAdminProtectedService, which wires a real, admin-seeded roleRepo from
+// the SAME store as the user repo so CountEffectiveAdmins sees both.
 func inertRoleRepo() ports.RoleRepository {
 	return mem.NewStore(clock.Real()).RoleRepository()
 }
@@ -97,6 +104,25 @@ func TestNewService_TxRunnerRequired(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
+// TestNewService_RoleRepoRequired asserts that the required positional roleRepo
+// param fails fast when nil — completing the required-dep test symmetry with
+// TxRunner / tokenIssuer. roleRepo is positional (not a gocell:"required" tag),
+// so its guard lives in buildLastAdminGuard rather than validateRequired.
+func TestNewService_RoleRepoRequired(t *testing.T) {
+	userRepo := mem.NewStore(clock.Real()).UserRepository()
+	sessionStore := testutil.RealSessionRepo(t)
+	refreshStore := newIdentityRefreshStore()
+	svc, err := NewService(clock.Real(), userRepo, newInvalidator(t, userRepo, sessionStore, refreshStore), slog.Default(),
+		nil, // nil roleRepo — must be rejected by buildLastAdminGuard
+		WithTokenIssuer(minimalStubIssuer), WithTxManager(persistence.WrapForCell(simpleTxRunner{})))
+	require.Error(t, err, "NewService with nil roleRepo must fail")
+	assert.Nil(t, svc)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	assert.Contains(t, err.Error(), "role repository")
 }
 
 // TestNewService_RequiresTokenIssuer asserts that NewService returns a non-nil
