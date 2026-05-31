@@ -205,3 +205,113 @@ func TestPlaceOrder_CompensateOnChargeFail(t *testing.T) {
 		t.Errorf("shipment should not be recorded after compensation, but was for orderID=%s", orderID)
 	}
 }
+
+// TestPlaceOrder_HappyPath_EventSequence asserts the full journal event sequence
+// for the happy path: four forward steps complete in order, terminal is Succeeded.
+// F4: event sequence assertion for saga orchestration.
+func TestPlaceOrder_HappyPath_EventSequence(t *testing.T) {
+	ts := setup(t)
+
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, false)
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	waitTerminal(t, ts.ctx, ts.jrnl, idutil.SafeID(orderID))
+
+	events, err := ts.jrnl.Load(ts.ctx, idutil.SafeID(orderID))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Extract the step names from KindStepCompleted events in order.
+	var completedSteps []string
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompleted {
+			completedSteps = append(completedSteps, string(ev.StepName))
+		}
+	}
+
+	wantSteps := []string{"reserveInventory", "chargePayment", "ship", "notifyUser"}
+	if len(completedSteps) != len(wantSteps) {
+		t.Errorf("completed steps = %v (len %d), want %v (len %d)",
+			completedSteps, len(completedSteps), wantSteps, len(wantSteps))
+	} else {
+		for i, want := range wantSteps {
+			if completedSteps[i] != want {
+				t.Errorf("step[%d] = %q, want %q", i, completedSteps[i], want)
+			}
+		}
+	}
+
+	// No compensation events on the happy path.
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompensated || ev.Kind == journal.KindCompensationStarted {
+			t.Errorf("unexpected compensation event kind=%s step=%s on happy path", ev.Kind, ev.StepName)
+		}
+	}
+}
+
+// TestPlaceOrder_CompensateOnChargeFail_EventSequence asserts the journal event
+// sequence when chargePayment fails: KindCompensationStarted is written (the
+// coordinator transitions to Compensating without writing KindStepFailed — see
+// coordinator.go routeOutcome: shouldCompensate branch skips commitStepFailed),
+// then only CompensateReserveInventory fires, and the saga reaches terminal
+// KindSagaCompensated.
+// F4: compensation sequence assertion.
+func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
+	ts := setup(t)
+
+	orderID, err := ts.svc.PlaceOrder(ts.ctx, "widget", 1299, true)
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	waitTerminal(t, ts.ctx, ts.jrnl, idutil.SafeID(orderID))
+
+	events, err := ts.jrnl.Load(ts.ctx, idutil.SafeID(orderID))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// When shouldCompensate=true, coordinator does NOT write KindStepFailed for
+	// chargePayment. Instead it writes KindCompensationStarted and begins rollback.
+	// Verify chargePayment was never completed.
+	for _, ev := range events {
+		if string(ev.StepName) == "chargePayment" && ev.Kind == journal.KindStepCompleted {
+			t.Error("chargePayment should not have a KindStepCompleted event when paymentShouldFail=true")
+		}
+	}
+
+	// KindCompensationStarted must appear (coordinator signals rollback entry).
+	var sawCompensationStarted bool
+	for _, ev := range events {
+		if ev.Kind == journal.KindCompensationStarted {
+			sawCompensationStarted = true
+		}
+	}
+	if !sawCompensationStarted {
+		t.Error("expected KindCompensationStarted event in journal for chargePayment failure")
+	}
+
+	// Verify compensate sequence: only reserveInventory was compensated.
+	var compensatedSteps []string
+	for _, ev := range events {
+		if ev.Kind == journal.KindStepCompensated {
+			compensatedSteps = append(compensatedSteps, string(ev.StepName))
+		}
+	}
+	if len(compensatedSteps) != 1 || compensatedSteps[0] != "reserveInventory" {
+		t.Errorf("compensated steps = %v, want [reserveInventory]", compensatedSteps)
+	}
+
+	// ship and notifyUser must have no completed or compensated events.
+	for _, ev := range events {
+		name := string(ev.StepName)
+		if (name == "ship" || name == "notifyUser") &&
+			(ev.Kind == journal.KindStepCompleted || ev.Kind == journal.KindStepCompensated) {
+			t.Errorf("unexpected event kind=%s for step=%s after chargePayment failure", ev.Kind, name)
+		}
+	}
+}
+

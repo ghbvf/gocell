@@ -21,28 +21,29 @@ import (
 	ksaga "github.com/ghbvf/gocell/kernel/saga"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Option configures the placeorder Service.
 type Option func(*Service)
 
 // WithOrderRepository sets the order repository.
-// A nil value is a silent noop; the factory will fail-fast if the repo
+// Typed-nil inputs are not stored; the factory will fail-fast if the repo
 // remains unset.
 func WithOrderRepository(r ports.OrderRepository) Option {
 	return func(s *Service) {
-		if r != nil {
+		if !validation.IsNilInterface(r) {
 			s.orders = r
 		}
 	}
 }
 
 // WithJournal sets the saga journal for enrolling instances.
-// A nil value is a silent noop; the factory will fail-fast if the journal
+// Typed-nil inputs are not stored; the factory will fail-fast if the journal
 // remains unset.
 func WithJournal(j journal.JournalCore) Option {
 	return func(s *Service) {
-		if j != nil {
+		if !validation.IsNilInterface(j) {
 			s.journal = j
 		}
 	}

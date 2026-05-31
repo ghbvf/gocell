@@ -1,0 +1,14 @@
+id: orderstatus
+belongsToCell: orderfulfillmentcell
+consistencyLevel: L3
+lifecycle: experimental
+contractUsages:
+  - contract: http.orderfulfillment.orderstatus.v1
+    role: serve
+verify:
+  unit:
+    - unit.orderstatus.service
+  contract:
+    - contract.http.orderfulfillment.orderstatus.v1.serve
+allowedFiles:
+  - examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus/**

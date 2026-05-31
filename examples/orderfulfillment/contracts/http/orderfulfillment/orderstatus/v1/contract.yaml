@@ -1,0 +1,31 @@
+id: http.orderfulfillment.orderstatus.v1
+kind: http
+ownerCell: orderfulfillmentcell
+consistencyLevel: L3
+lifecycle: active
+codegen: true
+endpoints:
+  server: orderfulfillmentcell
+  http:
+    method: GET
+    path: /api/v1/orders/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+        # No format: uuid — order IDs carry an "ord-" prefix and are not bare UUIDs.
+        # CH-05 ParseUUIDPathParam is not required when format is omitted.
+    successStatus: 200
+    noContent: false
+    auth:
+      public: true  # demo-only: production must set public: false and configure a JWT plan
+    responses:
+      404:
+        description: "Not found — order with the given ID does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

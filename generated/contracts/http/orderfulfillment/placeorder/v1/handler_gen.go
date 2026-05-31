@@ -28,7 +28,7 @@ var contractSpec = contractspec.ContractSpec{
 
 // requestSchemaJSON is the embedded request schema for runtime validation.
 // Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.orderfulfillment.placeorder.v1.request\",\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"amountCents\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"paymentShouldFail\":{\"type\":\"boolean\"}},\"required\":[\"item\",\"amountCents\"],\"additionalProperties\":false}")
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.orderfulfillment.placeorder.v1.request\",\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256},\"amountCents\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"paymentShouldFail\":{\"type\":\"boolean\",\"description\":\"demo-only test hook: forces payment failure to exercise compensation\"}},\"required\":[\"item\",\"amountCents\"],\"additionalProperties\":false}")
 
 // Handler wires HTTP decode/encode + auth.Mount for http.orderfulfillment.placeorder.v1.
 type Handler struct {

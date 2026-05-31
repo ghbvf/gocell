@@ -49,7 +49,7 @@ No external dependencies required.
 go run ./examples/orderfulfillment
 ```
 
-The server starts on `:8083` (primary listener). **Demo mode**: the primary listener is unauthenticated (`auth.public: true`) for local exploration only — do not expose to untrusted networks.
+The server starts on `127.0.0.1:8083` (primary listener, loopback only). **Demo mode**: the primary listener is unauthenticated (`auth.public: true`) for local exploration only — do not expose to untrusted networks.
 
 Internal and health listeners are bound to `127.0.0.1` (loopback only).
 
@@ -58,7 +58,7 @@ Internal and health listeners are bound to `127.0.0.1` (loopback only).
 The example pre-seeds inventory with `"widget": 100` and `"gadget": 100` units.
 
 ```bash
-curl -X POST http://localhost:8083/api/v1/orders/ \
+curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
   -H 'Content-Type: application/json' \
   -d '{"item":"widget","amountCents":1299}'
 ```
@@ -66,7 +66,7 @@ curl -X POST http://localhost:8083/api/v1/orders/ \
 Response (202 Accepted):
 
 ```json
-{"data":{"orderId":"ord-..."}}
+{"data":{"orderId":"ord-...","status":"accepted"}}
 ```
 
 The saga runs asynchronously. Check the server logs for `saga enrolled` → `step completed` entries.
@@ -76,28 +76,52 @@ The saga runs asynchronously. Check the server logs for `saga enrolled` → `ste
 Set `paymentShouldFail: true` to force the `chargePayment` step to return a conflict error, causing the coordinator to compensate in reverse over **completed steps only**:
 
 ```bash
-curl -X POST http://localhost:8083/api/v1/orders/ \
+curl -X POST http://127.0.0.1:8083/api/v1/orders/ \
   -H 'Content-Type: application/json' \
   -d '{"item":"widget","amountCents":1299,"paymentShouldFail":true}'
 ```
 
 The saga reaches `KindSagaCompensated`: `CompensateReserveInventory` releases the inventory reservation (restoring stock to 100); no payment or shipment is ever recorded because those steps were never reached.
 
+### Query order status (F10 closed)
+
+After placing an order, you can query the saga terminal state via GET:
+
+```bash
+curl http://127.0.0.1:8083/api/v1/orders/<orderId>
+```
+
+Response (200 OK):
+
+```json
+{"data":{"orderId":"ord-...","status":"accepted"}}
+```
+
+The `status` field reflects the saga state:
+
+| Value | Meaning |
+|-------|---------|
+| `accepted` | Order enrolled; coordinator has not yet started forward steps |
+| `running` | One or more forward steps have started |
+| `succeeded` | All four steps completed (`KindSagaSucceeded`) |
+| `compensated` | At least one step failed and all prior steps were rolled back (`KindSagaCompensated`) |
+| `failed` | Saga failed without full compensation (`KindSagaFailed` / expired / compensation failed) |
+
 ## Health
 
 ```bash
 # Liveness — always 200 when the process is running
-curl http://localhost:9093/healthz
+curl http://127.0.0.1:9093/healthz
 
 # Readiness — 200 when the saga coordinator journal is healthy
-curl http://localhost:9093/readyz
+curl http://127.0.0.1:9093/readyz
 ```
 
 The `/readyz` probe includes `orderfulfillmentcell_repo_ready` (coordinator journal liveness) registered via the `WithCoordinator` option.
 
 ## Security
 
-The primary listener at `:8083` uses `auth.public: true` — **all requests are unauthenticated**. This is intentional for local demo exploration only. Production deployments must:
+The primary listener at `127.0.0.1:8083` uses `auth.public: true` — **all requests are unauthenticated**. This is intentional for local demo exploration only. Production deployments must:
 - Set `auth.public: false` and configure a JWT plan.
 - Restrict access to `:8083` to trusted network segments or an API gateway.
 - Replace the in-memory journal and no-op outbox with durable implementations.

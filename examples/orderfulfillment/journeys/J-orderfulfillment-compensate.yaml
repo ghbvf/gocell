@@ -14,8 +14,9 @@ contracts:
   - http.orderfulfillment.placeorder.v1
   - saga.orderfulfillment.v1
 passCriteria:
-  - text: "POST /api/v1/orders/ with paymentShouldFail=true returns 202 Accepted with orderId (enrollment is immediate; compensation is async)"
-    mode: manual
+  - text: "POST /api/v1/orders/ with paymentShouldFail=true returns 202 Accepted; saga reaches KindSagaCompensated and releases all acquired resources"
+    mode: auto
+    checkRef: journey.J-orderfulfillment-compensate.compensate-on-charge-fail
   - text: "chargePayment step returns a conflict error; coordinator enters Compensating phase; saga reaches terminal KindSagaCompensated; verified by integration test TestPlaceOrder_CompensateOnChargeFail"
     mode: manual
   - text: "CompensateReserveInventory releases the inventory reservation: Available(widget) returns to its original value"

@@ -22,9 +22,11 @@ import (
 	kauth "github.com/ghbvf/gocell/kernel/auth"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	rtsaga "github.com/ghbvf/gocell/runtime/saga"
 )
 
@@ -70,6 +72,14 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		return fmt.Errorf("register saga: %w", err)
 	}
 
+	// Build the saga step metrics observer.
+	// Demo mode uses NopProvider (discards metrics) — production wiring would
+	// pass a real Prometheus provider from bootstrap.MetricsProvider().
+	sagaObs, err := obmetrics.NewSagaStepCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
+	if err != nil {
+		return fmt.Errorf("create saga step collector: %w", err)
+	}
+
 	// Build the saga Coordinator.
 	// outbox.DemoTxRunner{} is a pass-through TxRunner (no real DB).
 	// outbox.NewNoopEmitter() discards outbox events (demo mode).
@@ -80,6 +90,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		reg,
 		clk,
 		rtsaga.WithLogger(logger),
+		rtsaga.WithObserver(sagaObs),
 	)
 	if err != nil {
 		return fmt.Errorf("create saga coordinator: %w", err)
@@ -110,11 +121,16 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		}
 	}
 
+	// F8: capture lifecycle.Append errors so they bubble to runOrderfulfillment.
+	// WithLifecycle callback has no error return (thorough fix = error-first API;
+	// tracked in backlog). Closure variable is read before app.Run.
+	var lifecycleAppendErr error
 	app := bootstrap.New(
 		clk,
 		bootstrap.WithAssembly(asm),
 		// Primary listener: demo mode, no JWT required.
-		bootstrap.WithListener(cell.PrimaryListener, ":8083",
+		// Bound to loopback only — demo mode must not expose to untrusted networks.
+		bootstrap.WithListener(cell.PrimaryListener, "127.0.0.1:8083",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
 		// Internal listener: demo loopback.
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9083",
@@ -127,7 +143,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		// Coordinator.Start blocks, so spawn in a background goroutine and
 		// return immediately from OnStart.
 		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
-			_ = lc.Append(bootstrap.Hook{
+			lifecycleAppendErr = lc.Append(bootstrap.Hook{
 				Name: "saga-coordinator",
 				OnStart: func(ownerCtx context.Context) error {
 					go func() {
@@ -152,9 +168,12 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 			})
 		}),
 	)
+	if lifecycleAppendErr != nil {
+		return fmt.Errorf("orderfulfillment: register saga-coordinator lifecycle hook: %w", lifecycleAppendErr)
+	}
 
 	logger.Warn("orderfulfillment: demo mode — unauthenticated primary listener + in-memory journal + discarded outbox events")
-	logger.Info("orderfulfillment: starting on :8083 (demo mode, no auth required)")
+	logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (demo mode, loopback only)")
 	return app.Run(ctx)
 }
 

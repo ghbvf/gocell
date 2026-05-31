@@ -14,32 +14,36 @@ import (
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
+	orderstatusslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
+	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	placeorderslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
 	placeordergen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/placeorder/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/healthz"
 	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Option configures an OrderCell.
 type Option func(*OrderCell)
 
 // WithJournal injects the saga journal used for instance enrollment.
-// A nil value is a silent noop.
+// Typed-nil inputs are not stored; the cell initInternal will fail-fast if
+// journal remains unset.
 func WithJournal(j journal.JournalCore) Option {
 	return func(c *OrderCell) {
-		if j != nil {
+		if !validation.IsNilInterface(j) {
 			c.journal = j
 		}
 	}
 }
 
 // WithOrderRepo injects the order repository.
-// A nil value is a silent noop.
+// Typed-nil inputs are not stored; initInternal falls back to in-memory repo.
 func WithOrderRepo(r ports.OrderRepository) Option {
 	return func(c *OrderCell) {
-		if r != nil {
+		if !validation.IsNilInterface(r) {
 			c.repo = r
 		}
 	}
@@ -57,10 +61,10 @@ func WithLogger(l *slog.Logger) Option {
 // WithCoordinator injects the saga Coordinator as a healthz.RepoProber so
 // the cell can register it with /readyz. The coordinator's RepoReady probe
 // checks that the journal is reachable and the tick loop is healthy.
-// A nil value is a silent noop.
+// Typed-nil inputs are not stored; initInternal will fail-fast if coord remains unset.
 func WithCoordinator(p healthz.RepoProber) Option {
 	return func(c *OrderCell) {
-		if p != nil {
+		if !validation.IsNilInterface(p) {
 			c.coord = p
 		}
 	}
@@ -85,6 +89,13 @@ type OrderCell struct {
 
 	// placeorderSvc holds the slice service for slice metadata wiring.
 	placeorderSvc *placeorderslice.Service
+
+	// orderstatusHandler is built in initInternal and mounted by the RouteGroup
+	// declared in initInternal.
+	orderstatusHandler *orderstatusgen.Handler
+
+	// orderstatusSvc holds the orderstatus slice service for slice metadata wiring.
+	orderstatusSvc *orderstatusslice.Service
 }
 
 // NewOrderCell creates a new OrderCell with the given options.
@@ -105,12 +116,16 @@ func NewOrderCell(opts ...Option) *OrderCell {
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error {
-	// Register saga coordinator readiness probe when a coordinator was injected.
-	// This makes /readyz reflect coordinator health (journal reachable + tick loop alive).
-	if c.coord != nil {
-		if err := RegisterReadiness(reg, c.coord); err != nil {
-			return fmt.Errorf("orderfulfillmentcell: register coordinator readiness: %w", err)
-		}
+	// Coordinator is required: a cell that can accept orders must have a
+	// coordinator readiness probe so /readyz reflects coordinator liveness.
+	// Medium guard — hand-written validation.IsNilInterface; Hard path = gocell:"required"
+	// tag funnel (currently covers Service structs, not cell/coordinator wiring),
+	// tracked in gh #1317.
+	if validation.IsNilInterface(c.coord) {
+		return fmt.Errorf("orderfulfillmentcell: saga coordinator required; inject via WithCoordinator")
+	}
+	if err := RegisterReadiness(reg, c.coord); err != nil {
+		return fmt.Errorf("orderfulfillmentcell: register coordinator readiness: %w", err)
 	}
 
 	// Default to in-memory repository if none injected.
@@ -133,6 +148,19 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.placeorderHandler = placeordergen.NewHandler(placeorderslice.NewHandler(svc))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(placeorderslice.SliceMetadata()))
 
+	// Build the orderstatus service using the shared repo and journal.
+	statusSvc, err := orderstatusslice.NewService(clock.Real(),
+		orderstatusslice.WithOrderRepository(c.repo),
+		orderstatusslice.WithJournal(c.journal),
+		orderstatusslice.WithLogger(c.logger),
+	)
+	if err != nil {
+		return fmt.Errorf("orderfulfillmentcell: orderstatus service: %w", err)
+	}
+	c.orderstatusSvc = statusSvc
+	c.orderstatusHandler = orderstatusgen.NewHandler(orderstatusslice.NewHandler(statusSvc))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderstatusslice.SliceMetadata()))
+
 	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "/api/v1",
@@ -145,6 +173,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 			}
 			mux.Route("/orders", func(s cell.RouteMux) {
 				captureErr(c.placeorderHandler.RegisterRoutes(s))
+				captureErr(c.orderstatusHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

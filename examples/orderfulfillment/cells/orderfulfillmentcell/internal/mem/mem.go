@@ -22,8 +22,13 @@ func NewOrderRepository() *OrderRepository {
 	return &OrderRepository{orders: make(map[string]*domain.Order)}
 }
 
-// Create stores the order. Returns an error if the ID is empty.
+// Create stores the order. Returns ErrValidationFailed if the ID is empty,
+// matching the godoc contract that requires a non-empty order.ID.
 func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
+	if order.ID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"mem.OrderRepository.Create: order ID must not be empty")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := *order

@@ -62,6 +62,20 @@ func TestOrderRepository(t *testing.T) {
 			t.Error("Create stored a reference, not a copy")
 		}
 	})
+
+	t.Run("create_empty_id_returns_error", func(t *testing.T) {
+		t.Parallel()
+		r := mem.NewOrderRepository()
+		order := &domain.Order{ID: "", Item: "widget", AmountCents: 100, CreatedAt: time.Now()}
+		err := r.Create(context.Background(), order)
+		if err == nil {
+			t.Fatal("expected error for empty ID, got nil")
+		}
+		var ec *errcode.Error
+		if !errors.As(err, &ec) || ec.Kind != errcode.KindInvalid {
+			t.Errorf("expected KindInvalid, got %v", err)
+		}
+	})
 }
 
 func TestInventoryStore(t *testing.T) {
