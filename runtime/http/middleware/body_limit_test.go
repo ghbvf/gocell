@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -183,6 +185,46 @@ func TestBodyLimit_UnmatchedRoutesDoNotExpandCardinality(t *testing.T) {
 	}
 	assert.Equal(t, int64(len(paths)), snap.BodyLimitRejections[key],
 		"all unmatched-route rejections must fold into the _runtime/unmatched bucket")
+}
+
+// TestBodyLimit_StreamingOverrun_Via_HttputilWriteError proves that when a
+// handler uses httputil.WriteError to propagate *http.MaxBytesError, the
+// framework path produces a 413 response with the canonical ERR_BODY_TOO_LARGE
+// code. This validates the claim in the BodyLimit godoc that "framework-
+// generated handlers produce a 413 captured in http_requests_total{status=413}"
+// via RecordRequest — the 413 originates from WriteError, not from BodyLimit.
+func TestBodyLimit_StreamingOverrun_Via_HttputilWriteError(t *testing.T) {
+	// A handler that reads the body and propagates any error through WriteError,
+	// mimicking what framework-generated handlers do.
+	frameworkLikeHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			httputil.WriteError(context.Background(), w, err)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := BodyLimit(10, nil)(frameworkLikeHandler)
+
+	// Send a body larger than the limit, without a matching Content-Length
+	// (so the fast-path does not trigger — only MaxBytesReader kicks in).
+	body := bytes.Repeat([]byte("x"), 20)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", bytes.NewReader(body))
+	req.ContentLength = -1 // unknown → skip fast-path
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// The framework path via httputil.WriteError maps MaxBytesError → 413.
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code,
+		"streaming overrun with httputil.WriteError propagation must produce 413")
+
+	var respBody map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&respBody)
+	require.NoError(t, err)
+	errObj, ok := respBody["error"].(map[string]any)
+	require.True(t, ok, "response must have 'error' object")
+	assert.Equal(t, "ERR_BODY_TOO_LARGE", errObj["code"],
+		"error code must be ERR_BODY_TOO_LARGE for MaxBytesError via WriteError")
 }
 
 // TestBodyLimit_CellFromContext ensures the production code uses

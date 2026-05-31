@@ -18,14 +18,20 @@ const DefaultBodyLimit int64 = 1 << 20
 // BodyLimit restricts the request body to at most maxBytes bytes.
 // If the Content-Length header exceeds the limit, a 413 JSON error response is
 // returned immediately (fast-path) and the rejection is recorded via collector
-// when collector is non-nil. Streaming overruns after MaxBytesReader kicks in
-// are captured by http_requests_total{status=413} through RecordRequest.
+// when collector is non-nil.
+//
+// Streaming overruns (MaxBytesReader kick-in after the body starts being read)
+// are handler-dependent: the handler receives *http.MaxBytesError when reading
+// the body. Framework-generated handlers propagate this error through
+// pkg/httputil.WriteError, which maps it to a 413 response captured in
+// http_requests_total{status="413"} via the Metrics middleware's RecordRequest.
+// Custom handlers that do not call httputil.WriteError will not produce a 413
+// in http_requests_total.
+//
 // Pass 0 or a negative value to use DefaultBodyLimit.
 //
 // collector=nil disables only the body-limit fast-path rejection counter
 // (RecordBodyLimitRejection); it does not affect streaming 413 accounting.
-// Streaming overruns are independently recorded by the Metrics middleware via
-// RecordRequest and remain observable regardless of the collector value here.
 func BodyLimit(maxBytes int64, collector metrics.Collector) func(http.Handler) http.Handler {
 	if maxBytes <= 0 {
 		maxBytes = DefaultBodyLimit

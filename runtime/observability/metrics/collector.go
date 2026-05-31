@@ -35,8 +35,15 @@ type Collector interface {
 	// RecordBodyLimitRejection increments the body-limit rejection counter for
 	// the given cell and route. It is called only on the Content-Length
 	// fast-path reject (r.ContentLength > maxBytes before the request body is
-	// read). Streaming overruns after MaxBytesReader kicks in are already
-	// captured by http_requests_total{status=413} via RecordRequest.
+	// read).
+	//
+	// Streaming overruns (MaxBytesReader kick-in, after the body has started
+	// being read) are handler-dependent: the handler receives
+	// *http.MaxBytesError when it reads the body, and if it propagates the
+	// error through pkg/httputil.WriteError, the framework maps it to a 413
+	// response captured in http_requests_total{status="413"} via RecordRequest.
+	// Framework-generated handlers follow this path; custom handlers that do not
+	// call httputil.WriteError will not produce a 413 in http_requests_total.
 	//
 	// cellID follows the same semantics as RecordRequest: use the owning cell
 	// ID or RuntimeCellIDSentinel ("_runtime") for framework paths.

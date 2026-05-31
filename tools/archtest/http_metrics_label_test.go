@@ -411,19 +411,42 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 //  1. Reads the cell label from ctxkeys.CellIDFrom.
 //  2. Falls back to RuntimeCellIDSentinel when the ctx key is absent.
 //  3. Calls collector.RecordBodyLimitRejection AFTER the CellIDFrom read.
+//  4. Derives the route label via RouteFor (not a bare string literal or URL path).
+//  5. Passes ctx (derived from r.Context()) as the first argument to
+//     RecordBodyLimitRejection so OTel exemplar/baggage correlation is preserved.
+//  6. Passes a named route variable (not a bare RouteFor call expression) as
+//     the third argument to RecordBodyLimitRejection.
 //
 // AI-robust rating: Medium (AST form check + position ordering; Hard path =
 // sealed collector interface that forces routing through a typed funnel,
 // tracked in gh #1398).
 //
-// Blind spots:
-//   - Does not trace through function-value fields (the collector argument is
-//     passed as a parameter, not stored in a named struct field).
-//   - Does not verify that the ctx passed to RecordBodyLimitRejection equals
-//     r.Context() — only that RecordBodyLimitRejection is called.
+// # Covered forms (reverse self-tests assert these are the only forms present)
+//
+//   - ctxkeys.CellIDFrom appears in the helper body before RecordBodyLimitRejection.
+//   - RuntimeCellIDSentinel appears in the helper body before RecordBodyLimitRejection.
+//   - RouteFor is called in the helper body (route is not a bare literal or URL path).
+//   - RecordBodyLimitRejection arg[0] is an *ast.Ident (ctx variable, not a call expr
+//     such as context.Background() or r.Context() directly).
+//   - RecordBodyLimitRejection arg[2] is an *ast.Ident (route variable, not a bare
+//     RouteFor call expression inlined into the argument).
+//
+// # Blind spots (forms not locked by this archtest)
+//
+//   - B1. The archtest does not trace function-value fields: collector is a
+//     parameter, not a struct field, so pointer-chasing is unnecessary.
+//   - B2. The archtest does not verify that the ctx identifier was initialized
+//     from r.Context() vs some other source (e.g. context.Background()). This
+//     is partially mitigated by the AST check that arg[0] is an identifier (not
+//     a call expression), combined with the naming convention enforced by the
+//     reverse self-check on BodyLimit's outer body.
+//   - B3. The archtest does not verify that the route variable was produced by
+//     RouteFor (not e.g. a constant). It only asserts RouteFor is called
+//     somewhere in the helper body and that the call-site arg[2] is an ident.
 //
 // Reverse self-check: asserts the old shape (inline ctxkeys read without
-// SafeObserve) does not appear in body_limit.go production code.
+// SafeObserve) does not appear in body_limit.go production code, and that
+// BodyLimit's outer function does not bypass the helper.
 func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
 	target := filepath.Join(root, "runtime", "http", "middleware", "body_limit.go")
@@ -437,12 +460,15 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	helperFn := findHTTPMetricsFuncDecl(t, file, "recordBodyLimitRejection")
 
 	var (
-		readsCellIDFrom     bool
-		usesRuntimeSentinel bool
-		callsRecordBLR      bool
-		ctxCellIDPos        token.Pos
-		runtimeSentinelPos  token.Pos
-		recordBLRPos        token.Pos
+		readsCellIDFrom      bool
+		usesRuntimeSentinel  bool
+		callsRecordBLR       bool
+		callsRouteFor        bool
+		recordBLRArg0IsCtx   bool // arg[0] is an identifier (ctx var, not a call expr)
+		recordBLRArg2IsIdent bool // arg[2] is an identifier (route var, not inline call)
+		ctxCellIDPos         token.Pos
+		runtimeSentinelPos   token.Pos
+		recordBLRPos         token.Pos
 	)
 
 	scanner.EachInSubtree[ast.CallExpr](helperFn.Body, func(v *ast.CallExpr) {
@@ -450,9 +476,28 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 			readsCellIDFrom = true
 			rememberFirstPos(&ctxCellIDPos, v.Pos())
 		}
+		if isIdent(v.Fun, "RouteFor") || isSelectorCall(v, "middleware", "RouteFor") {
+			callsRouteFor = true
+		}
+		// RouteFor may also be called as a plain identifier in the same package.
+		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "RouteFor" {
+			callsRouteFor = true
+		}
 		if isSelectorCall(v, "collector", "RecordBodyLimitRejection") {
 			callsRecordBLR = true
 			rememberFirstPos(&recordBLRPos, v.Pos())
+			// arg[0]: must be an identifier (the ctx variable, not a call expr).
+			if len(v.Args) > 0 {
+				if _, ok := v.Args[0].(*ast.Ident); ok {
+					recordBLRArg0IsCtx = true
+				}
+			}
+			// arg[2]: must be an identifier (the route variable, not an inline call).
+			if len(v.Args) > 2 {
+				if _, ok := v.Args[2].(*ast.Ident); ok {
+					recordBLRArg2IsIdent = true
+				}
+			}
 		}
 	})
 	scanner.EachInSubtree[ast.Ident](helperFn.Body, func(v *ast.Ident) {
@@ -470,6 +515,19 @@ func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, callsRecordBLR,
 		"%s: %s — recordBodyLimitRejection must call collector.RecordBodyLimitRejection",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, callsRouteFor,
+		"%s: %s — recordBodyLimitRejection must derive route via RouteFor (not a bare literal or URL path)",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, recordBLRArg0IsCtx,
+		"%s: %s — RecordBodyLimitRejection arg[0] must be an identifier (the ctx variable), "+
+			"not a call expression such as r.Context() or context.Background() directly; "+
+			"ctx must be extracted before the SafeObserve closure so the ctx is bound at "+
+			"the outer scope (OTel exemplar/baggage correlation preserved)",
+		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
+	assert.Truef(t, recordBLRArg2IsIdent,
+		"%s: %s — RecordBodyLimitRejection arg[2] must be an identifier (the route variable), "+
+			"not an inline RouteFor call expression",
 		rel, ruleHTTPMetricsLabelBodyLimitCtxSource01)
 	assert.Truef(t, ctxCellIDPos.IsValid() && recordBLRPos.IsValid() && ctxCellIDPos < recordBLRPos,
 		"%s: %s — ctxkeys.CellIDFrom must be called before collector.RecordBodyLimitRejection",

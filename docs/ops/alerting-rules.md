@@ -67,8 +67,11 @@ metric_relabel_configs:
 ## HTTP Body-Limit 拒绝计数器
 
 `gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
-因 Content-Length 超限（fast-path）返回 413 的次数。流式超限（MaxBytesReader）已通过
-`gocell_http_requests_total{status="413"}` 覆盖，不重复计数。
+因 Content-Length 超限（fast-path）返回 413 的次数。流式超限（MaxBytesReader 在读
+body 时触发）依赖 handler 将 `*http.MaxBytesError` 通过 `pkg/httputil.WriteError`
+映射为 413：框架生成的 handler 走此路径，其产生的 413 会计入
+`gocell_http_requests_total{status="413"}`；自定义 handler 若不调用 `httputil.WriteError`
+则不会产生 413 计数。两路 413 计数来源不同，不重复。
 
 Label 语义：
 
@@ -93,7 +96,11 @@ Label 语义：
       with Content-Length > body limit at >1/sec for 5m.
       Possible causes: client sending oversized payloads, misconfigured body limit,
       or DDoS amplification attempt.
-      Check slog for "request body too large" and review WithBodyLimit configuration.
+      排查：通过结构化日志字段定位拒绝请求（注意 4xx 日志默认每 100 条采样一条）：
+        code=ERR_BODY_TOO_LARGE status=413 cell_id=<cell> route=<route>
+      其中 cell_id 字段对应 kernel/ctxkeys.CellIDFrom（access log 记为 cell_id，
+      非 cell），request_id 字段可关联同一请求的跨日志记录。
+      同步检查 BodyLimit 配置（WithBodyLimit 参数）与客户端 Content-Length 分布。
 ```
 
 调试 PromQL：
