@@ -15,8 +15,8 @@ import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	orderstatusslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus"
-	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	placeorderslice "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
+	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
 	placeordergen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/placeorder/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -136,7 +136,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 
 	// Build the placeorder service.
 	// The journal must be injected via WithJournal by the composition root.
-	svc, err := placeorderslice.NewService(clock.Real(),
+	svc, err := placeorderslice.NewService(
+		clock.Real(),
 		placeorderslice.WithOrderRepository(c.repo),
 		placeorderslice.WithJournal(c.journal),
 		placeorderslice.WithLogger(c.logger),
@@ -149,7 +150,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(placeorderslice.SliceMetadata()))
 
 	// Build the orderstatus service using the shared repo and journal.
-	statusSvc, err := orderstatusslice.NewService(clock.Real(),
+	statusSvc, err := orderstatusslice.NewService(
+		clock.Real(),
 		orderstatusslice.WithOrderRepository(c.repo),
 		orderstatusslice.WithJournal(c.journal),
 		orderstatusslice.WithLogger(c.logger),

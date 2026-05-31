@@ -25,7 +25,7 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository, *journal.MemJournal) {
+func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository) {
 	t.Helper()
 	clk := clock.Real()
 	repo := mem.NewOrderRepository()
@@ -33,7 +33,8 @@ func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository, *journa
 	if err != nil {
 		t.Fatalf("NewMemJournal: %v", err)
 	}
-	svc, err := orderstatus.NewService(clk,
+	svc, err := orderstatus.NewService(
+		clk,
 		orderstatus.WithOrderRepository(repo),
 		orderstatus.WithJournal(jrnl),
 	)
@@ -41,7 +42,7 @@ func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository, *journa
 		t.Fatalf("NewService: %v", err)
 	}
 	h := orderstatusgen.NewHandler(orderstatus.NewHandler(svc))
-	return h, repo, jrnl
+	return h, repo
 }
 
 // TestHttpOrderfulfillmentOrderstatusV1Serve verifies the orderstatus contract:
@@ -50,7 +51,7 @@ func newContractSetup(t testing.TB) (http.Handler, *mem.OrderRepository, *journa
 func TestHttpOrderfulfillmentOrderstatusV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "orderfulfillment")
 	c := contracttest.LoadByID(t, root, "http.orderfulfillment.orderstatus.v1")
-	h, repo, _ := newContractSetup(t)
+	h, repo := newContractSetup(t)
 
 	orderID := "ord-test-contract-01"
 	order := &domain.Order{ID: orderID, Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
@@ -75,7 +76,7 @@ func TestHttpOrderfulfillmentOrderstatusV1Serve(t *testing.T) {
 func TestHttpOrderfulfillmentOrderstatusV1Serve_NotFound(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "orderfulfillment")
 	c := contracttest.LoadByID(t, root, "http.orderfulfillment.orderstatus.v1")
-	h, _, _ := newContractSetup(t)
+	h, _ := newContractSetup(t)
 
 	missingID := "ord-does-not-exist"
 	path := fmt.Sprintf("/api/v1/orders/%s", missingID)

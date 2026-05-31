@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	sagaimpl "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/sagaimpl"
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestSagaOrderfulfillmentV1Orchestrate asserts the registered saga definition
@@ -52,7 +53,7 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 		t.Errorf("Definition.ID = %q, want %q", defn.ID, of.DefinitionID)
 	}
 
-	wantTimeout := 30 * time.Second
+	wantTimeout := testtime.D30s
 	if defn.Timeout != wantTimeout {
 		t.Errorf("Definition.Timeout = %v, want %v", defn.Timeout, wantTimeout)
 	}
@@ -63,7 +64,7 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 			defn.RetryPolicy.MaxAttempts, wantRetryMaxAttempts)
 	}
 
-	wantBaseInterval := 100 * time.Millisecond
+	wantBaseInterval := testtime.D100ms
 	if defn.RetryPolicy.BaseInterval != wantBaseInterval {
 		t.Errorf("Definition.RetryPolicy.BaseInterval = %v, want %v",
 			defn.RetryPolicy.BaseInterval, wantBaseInterval)
@@ -78,7 +79,7 @@ func TestSagaOrderfulfillmentV1Orchestrate(t *testing.T) {
 	}
 
 	wantSteps := []stepSpec{
-		{name: "reserveInventory", compensable: true, timeout: 5 * time.Second},
+		{name: "reserveInventory", compensable: true, timeout: testtime.D5s},
 		{name: "chargePayment", compensable: true, timeout: 0},
 		{name: "ship", compensable: true, timeout: 0},
 		{name: "notifyUser", compensable: false, timeout: 0},

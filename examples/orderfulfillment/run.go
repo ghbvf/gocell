@@ -47,78 +47,15 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 
 	clk := clock.Real()
 
-	// Build in-memory stores. Single DemoStores instance is shared across the
-	// cell (placeorder service) and the saga coordinator (Impl), so orders
-	// created via HTTP are visible to saga steps.
-	stores := ordercell.NewDemoStores(map[string]int{
-		"widget": 100,
-		"gadget": 100,
-	})
-
-	// Shared MemJournal — injected into both the placeorder service (for
-	// enrollment) and the Coordinator (for execution).
-	jrnl, err := journal.NewMemJournal(clk)
+	coord, oc, err := buildSagaComponents(clk, assemblyID, logger)
 	if err != nil {
-		return fmt.Errorf("create journal: %w", err)
+		return err
 	}
-
-	// Build and register the saga definition.
-	sagaImpl, err := ordercell.NewSagaImpl(stores)
-	if err != nil {
-		return fmt.Errorf("build saga impl: %w", err)
-	}
-	reg, err := of.Register(sagaImpl)
-	if err != nil {
-		return fmt.Errorf("register saga: %w", err)
-	}
-
-	// Build the saga step metrics observer.
-	// Demo mode uses NopProvider (discards metrics) — production wiring would
-	// pass a real Prometheus provider from bootstrap.MetricsProvider().
-	sagaObs, err := obmetrics.NewSagaStepCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
-	if err != nil {
-		return fmt.Errorf("create saga step collector: %w", err)
-	}
-
-	// Build the saga Coordinator.
-	// outbox.DemoTxRunner{} is a pass-through TxRunner (no real DB).
-	// outbox.NewNoopEmitter() discards outbox events (demo mode).
-	coord, err := rtsaga.NewCoordinator(
-		jrnl,
-		outbox.DemoTxRunner{},
-		outbox.NewNoopEmitter(),
-		reg,
-		clk,
-		rtsaga.WithLogger(logger),
-		rtsaga.WithObserver(sagaObs),
-	)
-	if err != nil {
-		return fmt.Errorf("create saga coordinator: %w", err)
-	}
-
-	// Build the cell, injecting the shared journal, order repository, and coordinator
-	// for /readyz health reporting.
-	oc := ordercell.NewOrderCell(
-		ordercell.WithJournal(jrnl),
-		ordercell.WithOrderRepo(stores.OrderRepository()),
-		ordercell.WithLogger(logger),
-		ordercell.WithCoordinator(coord),
-	)
 
 	// Build the assembly and register the cell.
 	asm := assembly.New(clk, assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
 		return fmt.Errorf("register orderfulfillmentcell: %w", err)
-	}
-
-	// Health routes configuration: verbose disabled for demo (no token configured).
-	healthOpts := []bootstrap.HealthRouteGroupOption{
-		bootstrap.WithReadyzVerboseDisabled(),
-	}
-	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		healthOpts = []bootstrap.HealthRouteGroupOption{
-			bootstrap.WithReadyzVerboseToken(tok),
-		}
 	}
 
 	// F8: capture lifecycle.Append errors so they bubble to runOrderfulfillment.
@@ -138,35 +75,8 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		// Health listener: /healthz, /readyz, /metrics.
 		bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9093",
 			[]kauth.ListenerAuth{kauth.AuthNone{}}),
-		bootstrap.WithHealthRoutes(healthOpts...),
-		// Wire the saga Coordinator lifecycle via WithLifecycle.
-		// Coordinator.Start blocks, so spawn in a background goroutine and
-		// return immediately from OnStart.
-		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
-			lifecycleAppendErr = lc.Append(bootstrap.Hook{
-				Name: "saga-coordinator",
-				OnStart: func(ownerCtx context.Context) error {
-					go func() {
-						if err := coord.Start(ownerCtx); err != nil {
-							logger.Error("saga coordinator stopped with error",
-								slog.Any("error", err),
-								slog.String("assembly_id", assemblyID))
-						}
-					}()
-					// Block until the coordinator's first tick completes (ready to
-					// claim and drive saga instances), so HTTP can accept orders
-					// only after the coordinator is ticking.
-					select {
-					case <-coord.Ready():
-					case <-ownerCtx.Done():
-					}
-					return nil
-				},
-				OnStop: func(stopCtx context.Context) error {
-					return coord.Stop(stopCtx)
-				},
-			})
-		}),
+		bootstrap.WithHealthRoutes(demoHealthOpts()...),
+		bootstrap.WithLifecycle(buildSagaLifecycle(coord, assemblyID, logger, &lifecycleAppendErr)),
 	)
 	if lifecycleAppendErr != nil {
 		return fmt.Errorf("orderfulfillment: register saga-coordinator lifecycle hook: %w", lifecycleAppendErr)
@@ -175,6 +85,115 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 	logger.Warn("orderfulfillment: demo mode — unauthenticated primary listener + in-memory journal + discarded outbox events")
 	logger.Info("orderfulfillment: starting on 127.0.0.1:8083 (demo mode, loopback only)")
 	return app.Run(ctx)
+}
+
+// buildSagaComponents constructs the in-memory stores, MemJournal, saga
+// coordinator, and orderfulfillment cell for demo mode.
+func buildSagaComponents(clk clock.Clock, assemblyID string, logger *slog.Logger) (*rtsaga.Coordinator, *ordercell.OrderCell, error) {
+	// Build in-memory stores. Single DemoStores instance is shared across the
+	// cell (placeorder service) and the saga coordinator (Impl), so orders
+	// created via HTTP are visible to saga steps.
+	stores := ordercell.NewDemoStores(map[string]int{
+		"widget": 100,
+		"gadget": 100,
+	})
+
+	// Shared MemJournal — injected into both the placeorder service (for
+	// enrollment) and the Coordinator (for execution).
+	jrnl, err := journal.NewMemJournal(clk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create journal: %w", err)
+	}
+
+	// Build and register the saga definition.
+	sagaImpl, err := ordercell.NewSagaImpl(stores)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build saga impl: %w", err)
+	}
+	reg, err := of.Register(sagaImpl)
+	if err != nil {
+		return nil, nil, fmt.Errorf("register saga: %w", err)
+	}
+
+	// Build the saga step metrics observer.
+	// Demo mode uses NopProvider (discards metrics) — production wiring would
+	// pass a real Prometheus provider from bootstrap.MetricsProvider().
+	sagaObs, err := obmetrics.NewSagaStepCollector(kernelmetrics.NopProvider{}, "orderfulfillmentcell")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create saga step collector: %w", err)
+	}
+
+	// Build the saga Coordinator.
+	// outbox.DemoTxRunner{} is a pass-through TxRunner (no real DB).
+	// outbox.NewNoopEmitter() discards outbox events (demo mode).
+	coord, err := rtsaga.NewCoordinator(
+		jrnl,
+		outbox.DemoTxRunner{},
+		outbox.NewNoopEmitter(),
+		reg,
+		clk,
+		rtsaga.WithLogger(logger),
+		rtsaga.WithObserver(sagaObs),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create saga coordinator: %w", err)
+	}
+
+	// Build the cell, injecting the shared journal, order repository, and coordinator
+	// for /readyz health reporting.
+	oc := ordercell.NewOrderCell(
+		ordercell.WithJournal(jrnl),
+		ordercell.WithOrderRepo(stores.OrderRepository()),
+		ordercell.WithLogger(logger),
+		ordercell.WithCoordinator(coord),
+	)
+	_ = assemblyID // reserved for future per-assembly labeling
+	return coord, oc, nil
+}
+
+// demoHealthOpts returns health route options for demo mode: verbose readyz
+// is disabled unless GOCELL_READYZ_VERBOSE_TOKEN is set in the environment.
+func demoHealthOpts() []bootstrap.HealthRouteGroupOption {
+	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
+		return []bootstrap.HealthRouteGroupOption{bootstrap.WithReadyzVerboseToken(tok)}
+	}
+	return []bootstrap.HealthRouteGroupOption{bootstrap.WithReadyzVerboseDisabled()}
+}
+
+// buildSagaLifecycle returns a WithLifecycle callback that wires the saga
+// Coordinator into the bootstrap lifecycle. Errors from lc.Append are written
+// to *appendErr, which the caller checks after bootstrap.New returns.
+func buildSagaLifecycle(
+	coord *rtsaga.Coordinator,
+	assemblyID string,
+	logger *slog.Logger,
+	appendErr *error,
+) func(bootstrap.Lifecycle) {
+	return func(lc bootstrap.Lifecycle) {
+		*appendErr = lc.Append(bootstrap.Hook{
+			Name: "saga-coordinator",
+			OnStart: func(ownerCtx context.Context) error {
+				go func() {
+					if err := coord.Start(ownerCtx); err != nil {
+						logger.Error("saga coordinator stopped with error",
+							slog.Any("error", err),
+							slog.String("assembly_id", assemblyID))
+					}
+				}()
+				// Block until the coordinator's first tick completes (ready to
+				// claim and drive saga instances), so HTTP can accept orders
+				// only after the coordinator is ticking.
+				select {
+				case <-coord.Ready():
+				case <-ownerCtx.Done():
+				}
+				return nil
+			},
+			OnStop: func(stopCtx context.Context) error {
+				return coord.Stop(stopCtx)
+			},
+		})
+	}
 }
 
 // runOrderfulfillmentModules validates that assembly.yaml cells (assemblyCellIDs)
@@ -194,13 +213,15 @@ func assertModuleIDsMatch(assemblyID string, cellIDs []string, mods []CellModule
 	if len(cellIDs) != len(mods) {
 		return fmt.Errorf(
 			"%s: assembly.yaml cells (%d) ↔ modules_gen.go (%d) length mismatch; %s",
-			assemblyID, len(cellIDs), len(mods), hint)
+			assemblyID, len(cellIDs), len(mods), hint,
+		)
 	}
 	for i, want := range cellIDs {
 		if got := mods[i].ID(); got != want {
 			return fmt.Errorf(
 				"%s: assembly.yaml cells[%d]=%q ↔ modules_gen.go=%q drift; %s",
-				assemblyID, i, want, got, hint)
+				assemblyID, i, want, got, hint,
+			)
 		}
 	}
 	return nil

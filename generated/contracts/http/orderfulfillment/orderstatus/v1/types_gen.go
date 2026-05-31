@@ -62,6 +62,19 @@ func (r Orderstatus200JSONResponse) visitOrderstatusResponse(ctx context.Context
 	return nil
 }
 
+// Orderstatus400ErrorResponse renders an HTTP 400 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Orderstatus400ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Orderstatus400ErrorResponse) visitOrderstatusResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 400, &r.Body)
+	return nil
+}
+
 // Orderstatus404ErrorResponse renders an HTTP 404 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json

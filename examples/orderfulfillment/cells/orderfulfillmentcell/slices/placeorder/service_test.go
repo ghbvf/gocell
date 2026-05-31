@@ -26,7 +26,8 @@ func newTestServiceBundle(t *testing.T) testServiceBundle {
 	jrnl, err := journal.NewMemJournal(clk)
 	require.NoError(t, err)
 	repo := mem.NewOrderRepository()
-	svc, err := placeorder.NewService(clk,
+	svc, err := placeorder.NewService(
+		clk,
 		placeorder.WithOrderRepository(repo),
 		placeorder.WithJournal(jrnl),
 	)
@@ -104,7 +105,8 @@ func TestNewService_MissingOrders(t *testing.T) {
 	jrnl, err := journal.NewMemJournal(clk)
 	require.NoError(t, err)
 
-	_, err = placeorder.NewService(clk,
+	_, err = placeorder.NewService(
+		clk,
 		placeorder.WithJournal(jrnl),
 		// orders NOT injected
 	)
@@ -117,7 +119,8 @@ func TestNewService_MissingJournal(t *testing.T) {
 	clk := clock.Real()
 	repo := mem.NewOrderRepository()
 
-	_, err := placeorder.NewService(clk,
+	_, err := placeorder.NewService(
+		clk,
 		placeorder.WithOrderRepository(repo),
 		// journal NOT injected
 	)

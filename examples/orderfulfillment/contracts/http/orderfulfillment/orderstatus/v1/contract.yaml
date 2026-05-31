@@ -21,6 +21,9 @@ endpoints:
     auth:
       public: true  # demo-only: production must set public: false and configure a JWT plan
     responses:
+      400:
+        description: "Bad request — malformed path parameter or validation failure"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — order with the given ID does not exist"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

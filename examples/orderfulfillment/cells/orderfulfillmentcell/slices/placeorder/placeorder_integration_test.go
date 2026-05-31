@@ -314,4 +314,3 @@ func TestPlaceOrder_CompensateOnChargeFail_EventSequence(t *testing.T) {
 		}
 	}
 }
-

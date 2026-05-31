@@ -22,7 +22,8 @@ func newContractHandler(t testing.TB) http.Handler {
 	jrnl, err := journal.NewMemJournal(clk)
 	require.NoError(t, err)
 	repo := mem.NewOrderRepository()
-	svc, err := placeorder.NewService(clk,
+	svc, err := placeorder.NewService(
+		clk,
 		placeorder.WithOrderRepository(repo),
 		placeorder.WithJournal(jrnl),
 	)

@@ -16,10 +16,9 @@ package orderstatus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
-
-	"errors"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -120,7 +119,8 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (string, e
 	}
 
 	status := deriveStatus(events)
-	s.logger.Debug("orderstatus: status derived",
+	s.logger.Debug(
+		"orderstatus: status derived",
 		slog.String("order_id", orderID),
 		slog.String("status", status),
 	)
@@ -149,4 +149,3 @@ func deriveStatus(events []journal.Event) string {
 	}
 	return StatusAccepted
 }
-

@@ -109,7 +109,8 @@ func (s *Service) PlaceOrder(ctx context.Context, item string, amountCents int64
 		return "", fmt.Errorf("placeorder: enqueue saga: %w", err)
 	}
 
-	s.logger.Info("placeorder: order placed, saga enrolled",
+	s.logger.Info(
+		"placeorder: order placed, saga enrolled",
 		slog.String("order_id", order.ID),
 		slog.String("definition_id", string(of.DefinitionID)),
 	)

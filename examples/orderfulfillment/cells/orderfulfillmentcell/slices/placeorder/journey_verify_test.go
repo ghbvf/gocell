@@ -32,7 +32,8 @@ func newJourneyHandler(t testing.TB) http.Handler {
 		t.Fatalf("NewMemJournal: %v", err)
 	}
 	repo := mem.NewOrderRepository()
-	svc, err := placeorder.NewService(clk,
+	svc, err := placeorder.NewService(
+		clk,
 		placeorder.WithOrderRepository(repo),
 		placeorder.WithJournal(jrnl),
 	)

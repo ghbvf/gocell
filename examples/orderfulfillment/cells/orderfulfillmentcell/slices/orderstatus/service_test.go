@@ -14,7 +14,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func newService(t *testing.T) (*orderstatus.Service, *mem.OrderRepository, *journal.MemJournal) {
+func newService(t *testing.T) (*orderstatus.Service, *mem.OrderRepository) {
 	t.Helper()
 	clk := clock.Real()
 	repo := mem.NewOrderRepository()
@@ -22,19 +22,20 @@ func newService(t *testing.T) (*orderstatus.Service, *mem.OrderRepository, *jour
 	if err != nil {
 		t.Fatalf("NewMemJournal: %v", err)
 	}
-	svc, err := orderstatus.NewService(clk,
+	svc, err := orderstatus.NewService(
+		clk,
 		orderstatus.WithOrderRepository(repo),
 		orderstatus.WithJournal(jrnl),
 	)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return svc, repo, jrnl
+	return svc, repo
 }
 
 func TestGetOrderStatus_NotFound(t *testing.T) {
 	t.Parallel()
-	svc, _, _ := newService(t)
+	svc, _ := newService(t)
 	_, err := svc.GetOrderStatus(context.Background(), "ord-nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent order, got nil")
@@ -47,7 +48,7 @@ func TestGetOrderStatus_NotFound(t *testing.T) {
 
 func TestGetOrderStatus_Accepted(t *testing.T) {
 	t.Parallel()
-	svc, repo, _ := newService(t)
+	svc, repo := newService(t)
 	order := &domain.Order{ID: "ord-1", Item: "widget", AmountCents: 1000, CreatedAt: time.Now()}
 	if err := repo.Create(context.Background(), order); err != nil {
 		t.Fatalf("Create: %v", err)
