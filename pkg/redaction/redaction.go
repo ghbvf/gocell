@@ -283,10 +283,14 @@ func RedactPanic(v any) string {
 // 是 fail-closed 的接受代价：任何含 key=value 形态的 struct 字符串化结果都会被
 // mask，结构信息不可恢复，但比 passthrough 泄漏 PII 更安全）。
 //
-// KindLogValuer 调用 Resolve() 后递归脱敏，保留结构化展开（如 readyz
-// SlogDependencyEntry 仍为 KindGroup，会被 Group 分支递归处理）；若 Resolve
-// 后类型仍为 KindLogValuer（自引用），fmt.Sprint 兜底（防无限递归不等价于无限深度
-// 展开，slog 标准库本身也对 LogValuer.LogValue 有调用深度限制）。
+// KindLogValuer 刻意走 passthrough（不 Resolve）。唯一的生产 LogValuer 是 readyz
+// SlogDependencyEntry，其 error_msg 在构造期已经过 newRedactedErrorMsg→RedactString
+// 自脱敏（HEALTH-REDACTED-ERROR-MSG-FUNNEL-01），再 Resolve 重脱敏零安全收益；而
+// Resolve 会把 typed value 拍平成 KindGroup，破坏 ops-diagnostics 侧
+// `slog.Any(name, SlogDependencyEntry)` → type-assert 回 SlogDependencyEntry 的读取
+// 链路（runtime/http/health/healthtest）。业务若未来注入携密的自定义 LogValuer，由
+// contract-fanout 纪律 + 此处 known-gap 兜底（与 KindAny 的 fail-closed 取舍不同：
+// LogValuer 是显式实现的类型，作者可控，非 recover() 的不可控 any）。
 func RedactSlogAttr(attr slog.Attr) slog.Attr {
 	if IsSensitiveKey(attr.Key) {
 		return slog.Attr{Key: attr.Key, Value: slog.StringValue(Mask)}
@@ -308,18 +312,13 @@ func redactSlogValue(v slog.Value) slog.Value {
 	case slog.KindAny:
 		// Stringify and redact: any struct/error/interface in a slog.Any call
 		// is converted to its string representation and scrubbed. This is a
-		// fail-closed design — structure is lost but PII is masked.
+		// fail-closed design — structure is lost but PII is masked. Covers the
+		// panic path slog.Any("panic", recover()) where the value is an
+		// uncontrolled any.
 		return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
-	case slog.KindLogValuer:
-		// Resolve LogValuer once and recurse. If the resolved value is still a
-		// LogValuer (self-referential), fall back to stringify to break the
-		// cycle.
-		resolved := v.Resolve()
-		if resolved.Kind() == slog.KindLogValuer {
-			return slog.StringValue(RedactString(fmt.Sprint(v.Any())))
-		}
-		return redactSlogValue(resolved)
 	default:
+		// KindLogValuer and any future kinds pass through unchanged. See the
+		// RedactSlogAttr godoc "Known limitations" for the KindLogValuer rationale.
 		return v
 	}
 }

@@ -761,12 +761,16 @@ func (secretLeakingLogValuer) LogValue() slog.Value {
 // Scalar kinds (bool, int64, float64, time.Time) pass through as the same kind —
 // the regex pipeline only matches `key=value` text shapes which scalars cannot carry.
 //
-// KindAny (struct, error, interface{}) is now stringified via fmt.Sprint and passed
-// through RedactString — fail-closed: structure is lost but PII is masked.
+// KindAny (struct, error, interface{}) is stringified via fmt.Sprint and passed
+// through RedactString — fail-closed: structure is lost but PII is masked. This
+// covers the panic path slog.Any("panic", recover()).
 //
-// KindLogValuer is Resolved once and recursed; sensitive LogValuer results (those
-// whose resolved string matches a sensitive key=value pattern) are now redacted.
-// Benign LogValuers produce their resolved string value, unmasked.
+// KindLogValuer passes through unchanged (NOT resolved). See the RedactSlogAttr
+// godoc: the sole production LogValuer (readyz SlogDependencyEntry) self-redacts
+// at construction, and resolving would flatten its typed value and break the
+// ops-diagnostics capture chain. A caller-controlled LogValuer carrying a secret
+// is a documented known-gap (the secret leaks), distinct from the uncontrolled
+// any of KindAny.
 func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 	t.Parallel()
 
@@ -809,21 +813,21 @@ func TestRedactSlogAttr_PassthroughKinds(t *testing.T) {
 			wantValue: "{1}",
 		},
 		{
-			// KindLogValuer is Resolved and recursed. Benign LogValuer resolves
-			// to a non-sensitive string; output is that string, kind KindString.
-			name:      "logvaluer benign resolved — output is resolved string",
-			attr:      slog.Any("v", customLogValuer{}),
-			wantKind:  slog.KindString,
-			wantValue: "logvaluer-resolved-value",
+			// KindLogValuer passes through unchanged (kind stays KindLogValuer);
+			// the inner slog handler resolves it at serialization time.
+			name:     "logvaluer benign passthrough — kind unchanged",
+			attr:     slog.Any("v", customLogValuer{}),
+			wantKind: slog.KindLogValuer,
 		},
 		{
-			// KindLogValuer resolving to a sensitive key=value string IS now
-			// redacted. The fail-open boundary in earlier versions has been
-			// closed by the KindLogValuer → Resolve → recurse path.
-			name:     "logvaluer with secret resolved — now redacted (fail-closed)",
+			// Documented known-gap: a caller-controlled LogValuer whose resolved
+			// string carries a secret passes through UN-redacted. Distinct from
+			// KindAny (uncontrolled recover() value), which IS stringify+redacted.
+			// The sole production LogValuer (SlogDependencyEntry) self-redacts.
+			name:     "logvaluer with secret passthrough — known-gap, not masked",
 			attr:     slog.Any("config", secretLeakingLogValuer{}),
-			wantKind: slog.KindString,
-			wantMask: true,
+			wantKind: slog.KindLogValuer,
+			wantMask: false,
 		},
 		{
 			// Control: string with sensitive key IS redacted (unchanged behavior).

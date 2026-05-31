@@ -49,8 +49,12 @@ type contextHandler struct {
 	inner slog.Handler
 }
 
-// NewHandler creates a slog.Handler that extracts GoCell context values and
-// adds them as structured fields to every log record.
+// NewHandler creates a slog.Handler that redacts every record (fail-closed)
+// and enriches it with GoCell context values. It builds a fresh JSON/Text sink
+// writing to opts.Writer (default os.Stdout). Production entrypoints install
+// the result as slog.Default; building a fresh sink (rather than wrapping the
+// stdlib default) avoids the slog↔log recursion that wrapping the default
+// handler would trigger.
 func NewHandler(opts Options) slog.Handler {
 	if opts.Level == nil {
 		opts.Level = slog.LevelInfo

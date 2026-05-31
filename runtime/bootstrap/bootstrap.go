@@ -35,7 +35,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/ghbvf/gocell/runtime/observability/logging"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -159,14 +158,6 @@ type Bootstrap struct {
 	devtoolsRoot          string                     // displayed in Document.Root
 	devtoolsPkgGraph      *kerneldepgraph.Graph      // build-time generated package dep graph (nil = omit packageDeps block)
 	devtoolsWireSummaries []metadata.CellWireSummary // optional; nil → wireSummary omitted from all Cell entities
-
-	// --- logging: sink-side redacting slog.Handler ---
-	// loggingOpts controls format/level/writer only; redaction is always active.
-	// loggingConfigured is set when WithLogging is explicitly called; only then
-	// does New() install a new slog.Default() to preserve test isolation (tests
-	// that set slog.Default before New must not be overridden by bootstrap).
-	loggingOpts       logging.Options
-	loggingConfigured bool
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard
@@ -346,22 +337,13 @@ func New(clk clock.Clock, opts ...Option) *Bootstrap {
 	}
 	clock.MustHaveClock(clk, "bootstrap.New")
 
-	// Install the sink-side redacting slog.Handler as the process-global
-	// default logger only when WithLogging was explicitly called. This preserves
-	// test-isolation: bootstrap tests that install a custom slog.Default before
-	// New (e.g. TestTripleListener_MidBindFailure_RollsBackEarlierBindings) must
-	// not be overridden. Production assemblies (iotdevice/todoorder/ssobff) call
-	// WithLogging explicitly, so they get the sealed redacting handler.
-	// Callers that install a test capture handler between New and Run are also
-	// safe: they override slog.Default after New, and Run does not touch it.
-	if b.loggingConfigured {
-		slog.SetDefault(slog.New(logging.NewHandler(b.loggingOpts)))
-	}
-
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
+	// slog.Default is already the sink-side redacting handler: production
+	// entrypoints (runCorebundle / example runXxx) seal it before bootstrap.New
+	// runs (see logging.NewHandler + SLOG-HANDLER-SEALED-FUNNEL-01).
 	logger := slog.Default()
 	b.lifecycle = NewLifecycle(b.clock, LifecycleConfig{
 		DefaultStartTimeout: b.defaultStartTimeout,
