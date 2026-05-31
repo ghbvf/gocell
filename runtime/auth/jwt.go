@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -207,6 +208,26 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	// independently distinguishable in structured logs.
 	if err := v.checkIssuer(claims); err != nil {
 		return Claims{}, err
+	}
+	// Tenant claim validation (fail-closed) — armed at the single unbypassable
+	// chokepoint: VerifyIntent is the sole producer of Claims (mapClaimsToClaims
+	// is reachable only through parseAndVerify→VerifyIntent), so EVERY path that
+	// turns a JWT into a Principal (the HTTP AuthMiddleware path AND the
+	// NewJWTAuthenticator path) sees an already-validated, canonical tenant.
+	// A present-but-malformed tenant_id is a broken/forged token; reject it with
+	// the generic unauthorized envelope (enumeration defense), distinguishable
+	// only in server-side logs. Absent tenant is the single-tenant path and
+	// passes through. Downstream therefore sees either an empty tenant or a
+	// canonical lowercase UUID — never an unvalidated string.
+	if claims.TenantID != "" {
+		tid, perr := tenant.ParseTenantID(claims.TenantID)
+		if perr != nil {
+			return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+				"invalid token",
+				errcode.WithInternal(errcode.InternalAttr("_", "tenant_id claim is not a valid UUID")),
+				errcode.WithCategory(errcode.CategoryAuth))
+		}
+		claims.TenantID = tid.String()
 	}
 	return claims, nil
 }

@@ -163,7 +163,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 //   - session_id = p.Claims["sid"] — server-side session binding, when present.
 //   - tenant_id  = p.TenantID — the tenant isolation boundary, sourced from the
 //     JWT "tenant_id" claim (already validated + canonicalized by the JWT
-//     authenticator). Empty for service principals (a service token's callerCell
+//     verifier, JWTVerifier.VerifyIntent). Empty for service principals (a service token's callerCell
 //     is NOT a tenant — spec §service-token: tenant must come from a subject/
 //     tenant claim, never the caller cell id), anonymous principals, and
 //     single-tenant deployments.

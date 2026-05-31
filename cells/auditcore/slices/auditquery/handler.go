@@ -165,18 +165,16 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // generation time, so SessionID cannot re-enter ResponseDataItem via schema.
 //
 // TenantID is not exposed, and — critically — this is NOT a tenant-isolation
-// security guarantee (#1289, INV-SINGLE-TENANT-ONLY). develop is single-tenant:
-// no producer writes principal.TenantID (the auth middleware never calls
-// ctxkeys.WithTenantID — CTXKEYS-PRINCIPAL-WRITE-CALLER-01 locks the only writer
-// to consumer-side RestoreToContext), so the column is always empty and there is
-// nothing to scope by. The earlier "type-system Hard isolation by absence"
-// framing was an over-claim and has been removed: "no tenantId query parameter"
-// is not the same as "queries are isolated by tenant". This endpoint performs NO
-// tenant scoping whatsoever. Real multi-tenant isolation — a JWT tenant claim
-// producer source, AuditFilters.TenantID, and a tenant-scoped WHERE — is tracked
-// by epic #1296; the appender carries an INV-SINGLE-TENANT-ONLY tripwire
-// (cells/auditcore/internal/appender) that fires loudly if a non-empty tenant
-// ever reaches audit persistence before #1296 wires that filtering.
+// security guarantee (#1289, INV-SINGLE-TENANT-ONLY). As of multi-tenancy PR-1
+// (#1339) the auth bridge DOES write principal.TenantID from the JWT tenant_id
+// claim, so the audit column is no longer guaranteed empty — but this endpoint
+// still performs NO tenant scoping whatsoever (no tenantId query parameter, no
+// AuditFilters.TenantID, no tenant-scoped WHERE). "No tenantId query parameter"
+// is not the same as "queries are isolated by tenant". Real multi-tenant
+// isolation — AuditFilters.TenantID + a tenant-scoped WHERE + tenantId exposure —
+// lands in PR-2/PR-12 of epic #1337. Until then the appender carries the
+// INV-SINGLE-TENANT-ONLY tripwire (cells/auditcore/internal/appender) that fires
+// loudly when a non-empty tenant reaches audit persistence.
 func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// Both audit-evidence timestamps use RFC3339Nano: sub-second precision is
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond

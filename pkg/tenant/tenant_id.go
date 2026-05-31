@@ -33,15 +33,25 @@ import (
 // expression. The type-system Hard guarantee ("漏传 tenant 编译失败") comes from
 // repo methods taking TenantID as a mandatory positional parameter (PR-2).
 //
-// ref: pkg/idutil.SafeID — sealed-newtype + UnmarshalJSON-fail-close范式.
+// ref: pkg/idutil.SafeID — sealed-newtype + UnmarshalJSON fail-closed pattern.
 type TenantID string
+
+// canonicalUUIDLen is the length of a canonical dashed UUID
+// (8-4-4-4-12 = 36 chars). The non-dashed/brace/urn variants that
+// github.com/google/uuid.Parse also accepts are rejected — see parseCanonical.
+const canonicalUUIDLen = 36
 
 // String returns the underlying string.
 func (t TenantID) String() string { return string(t) }
 
-// Validate returns nil only for a non-empty, canonical-or-parseable UUID.
+// Validate returns nil only for a non-empty, canonical (36-char dashed) UUID.
 // The empty value is rejected (a tenant boundary cannot be absent at the
-// point a TenantID is required); any non-UUID string is rejected.
+// point a TenantID is required); any non-canonical-UUID string is rejected.
+//
+// Validate only CHECKS validity; it does NOT normalize the receiver. A value
+// that passes Validate is already canonical only if it was produced by
+// ParseTenantID / UnmarshalJSON. To obtain the canonical lowercase form from a
+// raw string, use ParseTenantID.
 func (t TenantID) Validate() error {
 	return validateTenantIDString(string(t))
 }
@@ -75,10 +85,19 @@ func ParseTenantID(s string) (TenantID, error) {
 }
 
 // parseCanonical is the single source of truth for TenantID's invariant:
-// non-empty + valid UUID, normalized to canonical lowercase form.
+// non-empty + canonical 36-char dashed UUID, normalized to lowercase.
+//
+// The explicit length guard is load-bearing: github.com/google/uuid.Parse is
+// lenient — it also accepts 32-char compact ("3f25...3301"), brace-wrapped
+// ("{...}"), and "urn:uuid:..." forms. A tenant boundary identifier must have a
+// single canonical shape (the one the PostgreSQL uuid column / RLS cast round-
+// trips), so anything that is not exactly 36 chars is rejected before Parse.
 func parseCanonical(s string) (TenantID, error) {
 	if s == "" {
 		return "", fmt.Errorf("tenant: TenantID required (empty)")
+	}
+	if len(s) != canonicalUUIDLen {
+		return "", fmt.Errorf("tenant: TenantID must be a canonical 36-char dashed UUID")
 	}
 	u, err := uuid.Parse(s)
 	if err != nil {

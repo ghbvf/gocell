@@ -73,13 +73,22 @@ type Principal struct {
 	// user and anonymous principals.
 	CallerCellID string
 	// TenantID is the tenant isolation boundary the request belongs to, sourced
-	// from the JWT "tenant_id" claim. The JWT authenticator has already
-	// validated and canonicalized it via pkg/tenant.ParseTenantID (a malformed
-	// claim is rejected before a Principal is built), so a non-empty value is a
+	// from the JWT "tenant_id" claim. JWTVerifier.VerifyIntent (the single
+	// unbypassable chokepoint for JWT→Claims) has already validated and
+	// canonicalized it via pkg/tenant.ParseTenantID (a malformed claim is
+	// rejected before any Principal is built), so a non-empty value is a
 	// canonical lowercase UUID. Empty for service principals (a service token's
 	// callerCell is NOT a tenant), anonymous principals, and single-tenant
 	// deployments. injectPrincipalCtxKeys propagates a non-empty value to
 	// ctxkeys.TenantID for the outbox principal envelope.
+	//
+	// Deliberately typed string, not pkg/tenant.TenantID: the ctx/wire principal
+	// bridge is type-uniform string/SafeID (ctxkeys.With{Actor,Subject,Tenant,
+	// Session}ID all take string; outbox.PrincipalMetadata.TenantID is a frozen
+	// idutil.SafeID). tenant.TenantID is the REPO-layer typed parameter (PR-2's
+	// "漏传=compile error" Hard funnel); threading it through the wire path would
+	// only add string↔TenantID↔SafeID conversions. The repo layer re-types this
+	// string via tenant.ParseTenantID at its boundary.
 	TenantID string
 	// Claims is a read-only snapshot of supplementary JWT claims (e.g. "sid",
 	// "iss", "token_use"). Callers must treat Claims as a read-only snapshot;

@@ -38,8 +38,9 @@
 //     terminal branch by construction. The fanout review (#1339) confirmed the
 //     only PrincipalKind switch today is String(); the if-chains in authz.go are
 //     correct for PrincipalDevice without change (device is neither user nor
-//     service). Asserted indirectly: the reverse fixture proves the scanner
-//     fires on a real switch, and the production pass proves String() is covered.
+//     service). This blind spot is proven a non-false-positive by
+//     TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned (a non-exhaustive
+//     if-chain fixture must yield ZERO diagnostics).
 //   - Nested switches: only direct CaseClause children of the matched SwitchStmt
 //     are read (sw.Body.List), so a PrincipalKind switch nested inside a case of
 //     an unrelated switch is still evaluated on its own tag — no contamination.
@@ -107,6 +108,27 @@ func TestPrincipalKindExhaustiveSwitch01_ReverseFixture(t *testing.T) {
 	}
 	assert.Contains(t, joined.String(), "PrincipalDevice",
 		"the missing-case diagnostic must name the newly-added kind")
+}
+
+// TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned is the blind-spot
+// reverse self-check: a non-exhaustive if/else-if chain over PrincipalKind (no
+// switch) MUST yield zero diagnostics — proving the rule's switch-only scope is
+// a deliberate non-false-positive, not an accidental gap.
+func TestPrincipalKindExhaustiveSwitch01_IfChainNotScanned(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	diags := RunTypedFixture(t, FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/principalkindifchainfixture/..."},
+		func(p *Pass) []Diagnostic {
+			if !p.Typed() {
+				return nil
+			}
+			return scanPrincipalKindSwitches(p)
+		})
+	assert.Empty(t, diags,
+		"if/else-if chains over PrincipalKind are out of scope and must not be flagged")
 }
 
 // scanPrincipalKindSwitches reports every production switch whose tag type is

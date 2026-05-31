@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
@@ -100,19 +99,10 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 		if claims.Subject == "" {
 			return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
 		}
-		// Validate + canonicalize the tenant claim at the request trust
-		// boundary (fail-closed): a present-but-malformed tenant_id is a broken
-		// or forged token, mapped to the generic unauthorized response like
-		// every other verify failure (enumeration defense). Absent tenant is
-		// the single-tenant path and passes through. Downstream therefore sees
-		// either an empty tenant or a canonical lowercase UUID.
-		if claims.TenantID != "" {
-			tid, err := tenant.ParseTenantID(claims.TenantID)
-			if err != nil {
-				return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token")
-			}
-			claims.TenantID = tid.String()
-		}
+		// claims.TenantID is already validated + canonicalized by the verifier
+		// (JWTVerifier.VerifyIntent, the single unbypassable chokepoint); no
+		// per-authenticator tenant check is needed or wanted here (a second
+		// validation site would be a redundant truth source).
 		return jwtClaimsToPrincipal(claims), true, nil
 	})
 }
@@ -120,7 +110,9 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 // jwtClaimsToPrincipal converts verified JWT Claims to a Principal.
 // Roles is a defensive copy so callers cannot mutate the underlying slice.
 // The Claims map contains exactly three entries (sid, iss, token_use);
-// other JWT fields (aud, exp, iat, …) are intentionally excluded.
+// other JWT fields (aud, exp, iat, …) are intentionally excluded. TenantID is
+// carried in the dedicated Principal.TenantID field (already canonicalized by
+// the verifier), not in the Claims map.
 func jwtClaimsToPrincipal(c Claims) *Principal {
 	roles := append([]string(nil), c.Roles...)
 	return &Principal{

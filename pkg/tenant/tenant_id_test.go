@@ -27,6 +27,11 @@ func TestTenantID_Validate(t *testing.T) {
 		{"safe-charset but not uuid rejected", TenantID("acme-tenant"), true},
 		{"uppercase uuid accepted by parser", TenantID(validTenantUUIDUp), false},
 		{"injection chars rejected", TenantID("3f2504e0-4f89-41d3-9a0c-0305e82c3301\n"), true},
+		// Forms google/uuid.Parse accepts but the canonical 36-char guard rejects:
+		{"compact 32-char rejected", TenantID("3f2504e04f8941d39a0c0305e82c3301"), true},
+		{"brace-wrapped rejected", TenantID("{3f2504e0-4f89-41d3-9a0c-0305e82c3301}"), true},
+		{"urn-prefixed rejected", TenantID("urn:uuid:3f2504e0-4f89-41d3-9a0c-0305e82c3301"), true},
+		{"leading-space rejected", TenantID(" 3f2504e0-4f89-41d3-9a0c-0305e82c330"), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,6 +66,18 @@ func TestParseTenantID(t *testing.T) {
 		t.Parallel()
 		_, err := ParseTenantID("garbage")
 		assert.Error(t, err)
+	})
+
+	t.Run("non-canonical UUID forms rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, in := range []string{
+			"3f2504e04f8941d39a0c0305e82c3301",              // compact 32
+			"{3f2504e0-4f89-41d3-9a0c-0305e82c3301}",        // brace
+			"urn:uuid:3f2504e0-4f89-41d3-9a0c-0305e82c3301", // urn
+		} {
+			_, err := ParseTenantID(in)
+			assert.Error(t, err, "non-canonical form %q must be rejected", in)
+		}
 	})
 
 	t.Run("uppercase normalized to canonical lowercase", func(t *testing.T) {
