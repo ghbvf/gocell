@@ -3,11 +3,11 @@
 package main
 
 import (
+	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
+	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
+	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
-	platformconfigcore "github.com/ghbvf/gocell/platform/configcore"
-	platformauditcore "github.com/ghbvf/gocell/platform/auditcore"
-	platformaccesscore "github.com/ghbvf/gocell/platform/accesscore"
 )
 
 func generatedCellModules() []composition.CellModule {

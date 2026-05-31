@@ -3,11 +3,11 @@
 package main
 
 import (
-	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/composition"
 {{- range .PlatformImports}}
 	{{.}}
 {{- end}}
+	"github.com/ghbvf/gocell/runtime/capability"
+	"github.com/ghbvf/gocell/runtime/composition"
 )
 
 func generatedCellModules() []composition.CellModule {

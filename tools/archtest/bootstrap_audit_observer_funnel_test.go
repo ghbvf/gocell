@@ -100,14 +100,14 @@ const (
 	ruleBootstrapAuditObserverFunnelDownstreamHard01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-DOWNSTREAM-HARD-01"
 	ruleBootstrapAuditObserverFunnelUpstreamMedium01 = "BOOTSTRAP-AUDIT-OBSERVER-FUNNEL-UPSTREAM-MEDIUM-01"
 
-	auditPkgSuffix             = "/runtime/audit"
-	authPkgSuffix              = "/runtime/auth"
-	corebundlePkgSuffix        = "/cmd/corebundle"
-	ssobffPkgSuffix            = "/examples/ssobff"
+	auditPkgSuffix              = "/runtime/audit"
+	authPkgSuffix               = "/runtime/auth"
+	corebundlePkgSuffix         = "/cmd/corebundle"
+	ssobffPkgSuffix             = "/examples/ssobff"
 	platformAccesscorePkgSuffix = "/platform/accesscore"
-	observerFnName             = "NewBootstrapAuthFailObserver"
-	appendFnName               = "AppendBootstrapAuthFail"
-	bootstrapMiddlewareName    = "NewBootstrapMiddleware"
+	observerFnName              = "NewBootstrapAuthFailObserver"
+	appendFnName                = "AppendBootstrapAuthFail"
+	bootstrapMiddlewareName     = "NewBootstrapMiddleware"
 )
 
 // TestBootstrapAuditObserverFunnelDownstreamHard01 enforces the downstream
@@ -417,8 +417,8 @@ func TestBootstrapAuditObserverFunnelUpstreamMedium01(t *testing.T) {
 	ssobffPkgPath := modPath + ssobffPkgSuffix
 	platformAccesscorePkgPath := modPath + platformAccesscorePkgSuffix
 	scanPaths := map[string]bool{
-		corebundlePkgPath:         true,
-		ssobffPkgPath:             true,
+		corebundlePkgPath: true,
+		ssobffPkgPath:     true,
 		// platform/accesscore is a composition-root layer (#1085) that wires the
 		// bootstrap auth-fail observer; it must route through audit.NewBootstrapAuthFailObserver.
 		platformAccesscorePkgPath: true,

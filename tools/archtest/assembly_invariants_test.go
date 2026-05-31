@@ -542,12 +542,13 @@ func findStructDecl(af *ast.File, name string) *ast.StructType {
 // TestAssemblyCellModuleTypePresent enforces ASSEMBLY-CELLMODULE-TYPE-04:
 // whenever an assembly entrypoint directory contains modules_gen.go, the
 // package must either:
-//   (a) declare a top-level type named "CellModule" (legacy form, used by
-//       examples/ that keep a local CellModule interface/struct), or
-//   (b) import a package that exports "CellModule" via a selector expression
-//       in the modules_gen.go return type (composition API form, used by
-//       assemblies with build.compositionAPI: true like corebundle, where
-//       the return type is []composition.CellModule from runtime/composition).
+//
+//	(a) declare a top-level type named "CellModule" (legacy form, used by
+//	    examples/ that keep a local CellModule interface/struct), or
+//	(b) import a package that exports "CellModule" via a selector expression
+//	    in the modules_gen.go return type (composition API form, used by
+//	    assemblies with build.compositionAPI: true like corebundle, where
+//	    the return type is []composition.CellModule from runtime/composition).
 //
 // The intent is: "the module list has a well-typed element type whose definition
 // is reachable from the package." A qualified import of the public interface
@@ -642,9 +643,10 @@ func TestAssemblyCellModuleType_ScopeCoversExamples(t *testing.T) {
 
 // checkCellModuleTypePresentInDir scans all non-test *.go files in entrypointDir
 // for either:
-//   (a) a top-level type declaration named "CellModule" (legacy form), or
-//   (b) a modules_gen.go function whose return type is []<qualifier>.CellModule
-//       (composition API form — the type is from an imported package).
+//
+//	(a) a top-level type declaration named "CellModule" (legacy form), or
+//	(b) a modules_gen.go function whose return type is []<qualifier>.CellModule
+//	    (composition API form — the type is from an imported package).
 //
 // It reports an ASSEMBLY-CELLMODULE-TYPE-04 violation when neither is found.
 // entrypointDir is an absolute path to the assembly composition root (e.g.
