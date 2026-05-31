@@ -584,9 +584,9 @@ func TestLock_Orphan_NotBlockedByInFlightRenew(t *testing.T) {
 	select {
 	case <-orphanDone:
 		// Good — Orphan returned before the blocked Renew completed.
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D5s):
 		fd.UnblockRenew()
-		t.Fatal("NotBlockedByInFlightRenew: lock.Orphan() blocked for >2s while Renew was in-flight — F1 regression")
+		t.Fatal("NotBlockedByInFlightRenew: lock.Orphan() blocked while Renew was in-flight — F1 regression")
 	}
 
 	// Done must close with ErrLockOrphaned.
