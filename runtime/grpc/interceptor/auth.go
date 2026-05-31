@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -122,7 +123,7 @@ func callPredicate(ctx context.Context, pred func(string) bool, method string) (
 		if v := recover(); v != nil {
 			slog.ErrorContext(ctx, "grpc auth predicate panicked",
 				slog.String("method", method),
-				slog.Any("panic", v),
+				slog.Any("panic", redaction.RedactAny(v)),
 			)
 			result = false
 			err = status.Error(codes.Internal, "internal server error")

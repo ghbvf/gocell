@@ -137,8 +137,9 @@ import (
 )
 
 // grpcInterceptorPkgPath is the import path of the package that owns the unary
-// interceptor constructors and the NewUnaryChain composition site.
-const grpcInterceptorPkgPath = "github.com/ghbvf/gocell/runtime/grpc/interceptor"
+// interceptor constructors and the NewUnaryChain composition site. Anchored to
+// [PlatformModulePath] so a module rename updates exactly one place.
+const grpcInterceptorPkgPath = PlatformModulePath + "/runtime/grpc/interceptor"
 
 // grpcPkgPath is the third-party gRPC package owning ChainUnaryInterceptor.
 const grpcPkgPath = "google.golang.org/grpc"

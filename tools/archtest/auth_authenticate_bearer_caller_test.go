@@ -108,7 +108,8 @@ import (
 )
 
 // authPkgPath is the import path of the package owning AuthenticateBearer.
-const authPkgPath = "github.com/ghbvf/gocell/runtime/auth"
+// Anchored to [PlatformModulePath] so a module rename updates exactly one place.
+const authPkgPath = PlatformModulePath + "/runtime/auth"
 
 // authenticateBearerCallerAllowlist is the set of production files allowed to
 // reference runtime/auth.AuthenticateBearer — the two transport request-boundary
