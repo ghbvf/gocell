@@ -63,9 +63,12 @@ import (
 
 const (
 	ruleDistlockOrphanNoDriverIO01 = "DISTLOCK-ORPHAN-NO-DRIVER-IO-01"
-	distlockMgrPkgPath             = "github.com/ghbvf/gocell/runtime/distlock"
-	handleOrphanFuncName           = "handleOrphan"
-	driverIfaceName                = "Driver"
+	// distlockMgrPkgPath is a GoCell platform symbol path, anchored to
+	// PlatformModulePath so a module rename / /v2 bump updates exactly one
+	// place and ARCHTEST-MODULE-PATH-FUNNEL-01 stays green (no bare literal).
+	distlockMgrPkgPath   = PlatformModulePath + "/runtime/distlock"
+	handleOrphanFuncName = "handleOrphan"
+	driverIfaceName      = "Driver"
 )
 
 // TestDistlockOrphanNoDriverIO01 asserts that handleOrphan in runtime/distlock
