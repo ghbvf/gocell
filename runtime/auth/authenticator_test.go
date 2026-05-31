@@ -56,6 +56,7 @@ func TestJWTClaimsToPrincipal_Shape(t *testing.T) {
 		TokenUse:              TokenIntentAccess,
 		Audience:              []string{"gocell"},
 		PasswordResetRequired: true,
+		TenantID:              tenantClaimUUID,
 		ExpiresAt:             exp,
 	}
 
@@ -73,7 +74,7 @@ func TestJWTClaimsToPrincipal_Shape(t *testing.T) {
 }
 
 // assertJWTPrincipalScalars verifies scalar fields (Kind, Subject, AuthMethod,
-// PasswordResetRequired) on the Principal produced by jwtClaimsToPrincipal.
+// TenantID, PasswordResetRequired) on the Principal produced by jwtClaimsToPrincipal.
 func assertJWTPrincipalScalars(t *testing.T, p *Principal, claims Claims) {
 	t.Helper()
 	if p.Kind != PrincipalUser {
@@ -84,6 +85,9 @@ func assertJWTPrincipalScalars(t *testing.T, p *Principal, claims Claims) {
 	}
 	if p.AuthMethod != "jwt" {
 		t.Errorf("expected AuthMethod=%q, got %q", "jwt", p.AuthMethod)
+	}
+	if p.TenantID != claims.TenantID {
+		t.Errorf("expected TenantID=%q, got %q", claims.TenantID, p.TenantID)
 	}
 	if !p.PasswordResetRequired {
 		t.Error("expected PasswordResetRequired=true")

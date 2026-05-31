@@ -72,8 +72,29 @@ handler, err := adapterws.UpgradeHandler(hub, cfg)
 // 适合：服务端直连（curl、native app、后端 worker）
 // 限制：浏览器 JS WebSocket API 无法设置 Authorization header
 // verifier 类型为 auth.IntentTokenVerifier，实现 VerifyIntent(ctx, token, expected TokenIntent) (Claims, error)
-authenticator := auth.NewJWTAuthenticator(verifier)
+authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, bool, error) {
+    parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+    if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+        return nil, false, nil // 无 Bearer 凭据 → 由上层 fail-closed
+    }
+    claims, err := verifier.VerifyIntent(r.Context(), strings.TrimSpace(parts[1]), auth.TokenIntentAccess)
+    if err != nil {
+        return nil, false, err
+    }
+    if claims.Subject == "" {
+        return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token subject missing")
+    }
+    return &auth.Principal{
+        Kind:       auth.PrincipalUser,
+        Subject:    claims.Subject,
+        Roles:      claims.Roles,
+        AuthMethod: "jwt",
+        ExpiresAt:  claims.ExpiresAt,
+    }, true, nil
+})
 ```
+
+> WebSocket 挂在已有 JWT listener 之后时优先用 `auth.NewContextAuthenticator()`（下节），避免重复验签。上面的内联校验仅用于 WebSocket 独占端口、listener 未做 JWT 校验的场景。
 
 #### listener middleware 已鉴权后透传（推荐 `/api/v1/*`）
 
@@ -189,11 +210,12 @@ handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
     Authenticator:  auth.NewContextAuthenticator(),
 })
 
-// 选二：JWTAuthenticator（独立端口，需 Bearer token）
+// 选二：自定义 AuthenticatorFunc（独立端口，Bearer header 自校验）
+// 见 §3.1「Bearer token via Authorization header」的内联实现；
 // verifier 实现 auth.IntentTokenVerifier 接口
 handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
     AllowedOrigins: []string{"https://app.example.com"},
-    Authenticator:  auth.NewJWTAuthenticator(verifier),
+    Authenticator:  bearerHeaderAuthenticator(verifier), // §3.1 的 AuthenticatorFunc
 })
 
 // 选三：AnonymousAuthenticator（广播频道，无认证）
